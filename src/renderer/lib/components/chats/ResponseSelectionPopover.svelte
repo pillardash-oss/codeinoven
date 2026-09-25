@@ -10,6 +10,9 @@
     text: string
     x: number
     y: number
+    /** What the selection was taken from, for the toolbar's accessible name.
+     *  A conversation quotes a response; a document panel quotes a passage. */
+    selectionLabel?: string
     onAdd: () => void
     /** Opening a nested temp chat makes no sense inside one; hidden when omitted. */
     onElaborate?: () => void
@@ -20,7 +23,17 @@
     onClose: () => void
   }
 
-  let { text, x, y, onAdd, onElaborate, onQuickChat, onNewThread, onClose }: Props = $props()
+  let {
+    text,
+    x,
+    y,
+    selectionLabel = 'response',
+    onAdd,
+    onElaborate,
+    onQuickChat,
+    onNewThread,
+    onClose
+  }: Props = $props()
 </script>
 
 <button
@@ -35,7 +48,7 @@
   style:left={`${x}px`}
   style:top={`${y}px`}
   role="toolbar"
-  aria-label={`Actions for selected response: ${text}`}
+  aria-label={`Actions for the selected ${selectionLabel}: ${text}`}
 >
   <button
     type="button"

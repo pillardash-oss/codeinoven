@@ -1,22 +1,24 @@
-import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
+import {
+  isResponseSelection,
+  type ResponseReferenceAnchor
+} from '$lib/stores/response-references.svelte'
 
 /**
  * DOM geometry for quoted response annotations.
  *
- * Everything here works on live DOM ranges: turning a selection into a
- * candidate anchor, rebuilding a highlight range from persisted offsets, and
- * measuring where the comment bubble for each anchor belongs. No component
- * state lives in this module, so the geometry can be reasoned about on its own.
+ * Everything here works on live DOM ranges of an assistant response: turning a
+ * response selection into a candidate anchor and rebuilding a highlight range
+ * from persisted offsets. The parts that any annotated surface shares (offsets,
+ * range rebuilding, highlight publishing, bubble measurement) live in
+ * `$lib/selection-anchors`; what stays here is the response-specific half: which
+ * element owns a selection, and how a selection action bubble is placed.
  */
 
 export const RESPONSE_HIGHLIGHT_NAME = 'response-annotation'
-export const RESPONSE_BUBBLE_SIZE = 44
-export const RESPONSE_BUBBLE_HEIGHT = 24
 /** Widest the selection action bubble may be before the viewport clamps it. */
 const SELECTION_BUBBLE_WIDTH = 430
 const SELECTION_BUBBLE_HEIGHT = 48
 const VIEWPORT_MARGIN = 12
-const BUBBLE_EDGE_MARGIN = 8
 
 export interface ResponseSelectionCandidate {
   text: string
@@ -26,12 +28,6 @@ export interface ResponseSelectionCandidate {
   endOffset: number
   x: number
   y: number
-}
-
-export interface ResponseBubblePosition {
-  x: number
-  y: number
-  visible: boolean
 }
 
 /** The assistant response element that owns a DOM node, if any. */
@@ -74,9 +70,10 @@ export function responseRangeFor(
   container: ParentNode | null | undefined,
   reference: ResponseReferenceAnchor
 ): Range | null {
-  // A design reference points at an element in a served page, not at an excerpt
-  // of an assistant response, so it has no range to rebuild.
-  if (reference.kind === 'design') return null
+  // Only an excerpt of an assistant response has a range inside the
+  // conversation: a design reference points at an element in a served page and a
+  // document annotation at a passage of a file, so neither is rebuilt here.
+  if (!isResponseSelection(reference)) return null
   if (reference.messageId === undefined) return null
   if (reference.startOffset === undefined || reference.endOffset === undefined) return null
   const response = Array.from(
@@ -148,76 +145,4 @@ export function responseRangeIsCurrent(
   if (!range) return false
   if (!range.startContainer.isConnected || !range.endContainer.isConnected) return false
   return range.toString().trim() === reference.text.trim()
-}
-
-/**
- * Publish the live highlight ranges to the CSS Custom Highlight registry.
- *
- * The registry is document-global and keyed by one name, so ownership is
- * tracked: only the view that published the current highlight may clear it.
- * Without that, a conversation view being torn down (a thread switch, a side
- * chat panel closing) wiped the highlight a sibling view had just published for
- * its own thread, leaving the annotations unhighlighted until something else
- * re-published them.
- */
-let highlightPublisher: object | null = null
-
-export function applyResponseHighlights(
-  ranges: ReadonlyMap<string, Range>,
-  publisher: object
-): void {
-  if (typeof Highlight === 'undefined' || !CSS.highlights) return
-  if (ranges.size === 0) {
-    if (highlightPublisher === publisher) {
-      CSS.highlights.delete(RESPONSE_HIGHLIGHT_NAME)
-      highlightPublisher = null
-    }
-    return
-  }
-  CSS.highlights.set(RESPONSE_HIGHLIGHT_NAME, new Highlight(...ranges.values()))
-  highlightPublisher = publisher
-}
-
-/** Drop this view's highlight, leaving any other view's registration intact. */
-export function releaseResponseHighlights(publisher: object): void {
-  if (highlightPublisher !== publisher) return
-  CSS.highlights?.delete(RESPONSE_HIGHLIGHT_NAME)
-  highlightPublisher = null
-}
-
-/**
- * Recompute the viewport position of each reference's comment bubble from the
- * live highlight ranges so the bubbles track scroll and layout.
- */
-export function measureResponseBubblePositions(
-  container: HTMLElement | null | undefined,
-  ranges: ReadonlyMap<string, Range>
-): Record<string, ResponseBubblePosition> {
-  const next: Record<string, ResponseBubblePosition> = {}
-  const containerRect = container?.getBoundingClientRect()
-  for (const [id, range] of ranges) {
-    const rect = range.getBoundingClientRect()
-    if (rect.width === 0 && rect.height === 0) continue
-    const visible = containerRect
-      ? rect.top < containerRect.bottom - 8 && rect.bottom > containerRect.top + 8
-      : true
-    const x = Math.max(
-      BUBBLE_EDGE_MARGIN,
-      Math.min(
-        Math.round(rect.left + rect.width / 2 - RESPONSE_BUBBLE_SIZE / 2),
-        window.innerWidth - RESPONSE_BUBBLE_SIZE - BUBBLE_EDGE_MARGIN
-      )
-    )
-    const above = rect.top - RESPONSE_BUBBLE_HEIGHT - 1
-    const below = rect.bottom + 6
-    const y = Math.max(
-      BUBBLE_EDGE_MARGIN,
-      Math.min(
-        above >= BUBBLE_EDGE_MARGIN ? above : below,
-        window.innerHeight - RESPONSE_BUBBLE_HEIGHT - BUBBLE_EDGE_MARGIN
-      )
-    )
-    next[id] = { x, y, visible }
-  }
-  return next
 }

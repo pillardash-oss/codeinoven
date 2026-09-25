@@ -16,7 +16,7 @@
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import SpecStudioDocument from './SpecStudioDocument.svelte'
-  import { offsetsForQuote, offsetsForRange } from './studio-annotation-anchors'
+  import { offsetsForQuote, offsetsForRange } from '$lib/selection-anchors'
   import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type { PendingOverlayAnchor } from './studio-annotation-overlay.svelte'

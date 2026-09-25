@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Pencil, SquareDashedMousePointer, Trash2, X } from '@lucide/svelte'
+  import { FileText, Pencil, SquareDashedMousePointer, Trash2, X } from '@lucide/svelte'
   import type { PromptReference } from '$shared/types'
+  import { isResponseSelection } from '$lib/stores/response-references.svelte'
   import { summarizeComposerReferences } from './composer-reference-summary'
 
   interface Props {
@@ -45,6 +46,7 @@
     {#each references as reference, referenceIndex (reference.id)}
       {@const number = referenceIndex + 1}
       {@const isElement = reference.kind === 'design'}
+      {@const isAnnotation = reference.kind === 'file'}
       <div class="flex items-start gap-2 rounded-lg px-2 py-1.5">
         <span
           class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[0.625rem] font-semibold text-accent tabular-nums"
@@ -56,6 +58,8 @@
           <p class="flex items-center gap-1 text-[0.6875rem] font-medium text-foreground">
             {#if isElement}
               <SquareDashedMousePointer size={10} class="shrink-0 text-accent" />
+            {:else if isAnnotation}
+              <FileText size={10} class="shrink-0 text-accent" />
             {/if}
             <span class="truncate">{reference.label}</span>
           </p>
@@ -69,7 +73,7 @@
           </p>
         </div>
         <div class="flex shrink-0 items-center gap-0.5">
-          {#if onEdit && !isElement}
+          {#if onEdit && isResponseSelection(reference)}
             <button
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"

@@ -205,8 +205,10 @@
             aria-expanded={selectionPopoverOpen}
             onclick={onToggleSelectionPopover}
           >
-            {#if referenceSummary.elements > 0 && referenceSummary.selections === 0}
+            {#if referenceSummary.elements > 0 && referenceSummary.selections === 0 && referenceSummary.annotations === 0}
               <SquareDashedMousePointer size={11} class="shrink-0 text-accent" />
+            {:else if referenceSummary.annotations > 0 && referenceSummary.elements === 0 && referenceSummary.selections === 0}
+              <FileText size={11} class="shrink-0 text-accent" />
             {:else}
               <MessageSquare size={11} class="shrink-0 text-accent" />
             {/if}

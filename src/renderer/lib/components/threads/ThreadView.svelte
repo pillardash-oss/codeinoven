@@ -170,6 +170,7 @@
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import {
+    isResponseSelection,
     responseReferencesState,
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
@@ -281,14 +282,17 @@
     type SubagentPart
   } from './thread-turn-parts'
   import {
-    applyResponseHighlights,
+    applyAnnotationHighlights,
+    measureAnnotationBubbles,
+    releaseAnnotationHighlights,
+    ANNOTATION_BUBBLE_SIZE,
+    type AnnotationBubblePosition
+  } from '$lib/selection-anchors'
+  import {
     captureResponseSelection,
-    measureResponseBubblePositions,
-    releaseResponseHighlights,
     responseRangeFor,
     responseRangeIsCurrent,
-    RESPONSE_BUBBLE_SIZE,
-    type ResponseBubblePosition,
+    RESPONSE_HIGHLIGHT_NAME,
     type ResponseSelectionCandidate
   } from './thread-response-ranges'
   import {
@@ -1996,7 +2000,7 @@
    *  teardown can never clear highlights another view published. */
   const responseHighlightOwner = {}
   /** Viewport position for the comment bubble of each reference anchor. */
-  let responseBubblePositions = $state<Record<string, ResponseBubblePosition>>({})
+  let responseBubblePositions = $state<Record<string, AnnotationBubblePosition>>({})
   let commentEditorReferenceId = $state<string | null>(null)
   let messageEditEditor = $state<RichMarkdownEditor>()
 
@@ -2013,7 +2017,11 @@
 
   /** Republish the live annotation ranges to the CSS Custom Highlight registry. */
   function refreshResponseHighlights(): void {
-    applyResponseHighlights(responseReferenceRanges, responseHighlightOwner)
+    applyAnnotationHighlights(
+      responseReferenceRanges,
+      responseHighlightOwner,
+      RESPONSE_HIGHLIGHT_NAME
+    )
   }
 
   /** Re-measure where each annotation's comment bubble belongs in the viewport. */
@@ -2022,7 +2030,7 @@
     // reading every range rect costs, so the common conversation pays nothing.
     if (responseReferenceRanges.size === 0 && Object.keys(responseBubblePositions).length === 0)
       return
-    responseBubblePositions = measureResponseBubblePositions(scrollEl, responseReferenceRanges)
+    responseBubblePositions = measureAnnotationBubbles(scrollEl, responseReferenceRanges)
   }
 
   let responseBubblePositionFrame = 0
@@ -2151,9 +2159,13 @@
 
   /** Jump back to a selection's highlight and open its comment editor. */
   function editResponseReference(id: string): void {
-    // A design element's comment is edited on the page, by its own pin, so it has
-    // no response highlight to jump to and no bubble to anchor a comment editor.
-    if (responseReferences.find((reference) => reference.id === id)?.kind === 'design') return
+    // Only a response selection has a highlight in the conversation to jump
+    // back to. A design element's comment is edited on the page by its own pin,
+    // and a document annotation in the file panel that shows the passage.
+    if (
+      !responseReferences.some((reference) => reference.id === id && isResponseSelection(reference))
+    )
+      return
     commentEditorReferenceId = id
     void tick().then(() => {
       updateResponseBubblePositions()
@@ -2217,10 +2229,11 @@
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user quoted excerpts from your earlier response as references, and may also have picked elements from a design open in the app browser. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
+      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser, and may have annotated passages of a project document in the file panel. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
-        const tag = reference.kind === 'design' ? 'element' : 'selection'
+        const tag =
+          reference.kind === 'design' ? 'element' : reference.kind === 'file' ? 'file' : 'selection'
         return `[${reference.label}]\n${comment}<${tag}>\n${reference.text}\n</${tag}>`
       })
     ].join('\n\n')
@@ -10600,7 +10613,7 @@
   })
 
   onDestroy(() => {
-    releaseResponseHighlights(responseHighlightOwner)
+    releaseAnnotationHighlights(responseHighlightOwner, RESPONSE_HIGHLIGHT_NAME)
     imageUrls.destroy()
     // Signal the main process that this thread's composer is gone so the
     // draft-timer never fires for a composer that no longer exists.
@@ -10659,7 +10672,7 @@
     : undefined}
   {#if editorReference && editorPosition}
     <ResponseAnnotationComment
-      x={editorPosition.x + RESPONSE_BUBBLE_SIZE / 2}
+      x={editorPosition.x + ANNOTATION_BUBBLE_SIZE / 2}
       y={editorPosition.y}
       initialComment={editorReference.comment ?? ''}
       targetId={`response-comment-${thread.id}-${editorReference.id}`}

@@ -264,11 +264,12 @@ export interface PromptReference {
    *
    * `selection` (the default when absent) is an excerpt of an assistant
    * response; `design` is an element the user picked from a design in the
-   * in-app browser. Main validates only `id`, `label`, `text` and `comment`, so
-   * this drives presentation rather than the send: a design reference reaches
-   * the model the same way a selection does.
+   * in-app browser; `file` is a passage the user annotated in a project
+   * document's preview, whose `label` names that document's path. Main validates
+   * only `id`, `label`, `text` and `comment`, so this drives presentation rather
+   * than the send: every kind reaches the model the same way a selection does.
    */
-  kind?: 'selection' | 'design'
+  kind?: 'selection' | 'design' | 'file'
 }
 
 /** A project-relative file or directory visibly attached to an outgoing prompt. */

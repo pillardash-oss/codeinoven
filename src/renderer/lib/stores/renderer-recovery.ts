@@ -272,13 +272,19 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
   if (typeof value.id !== 'string') return false
   if (typeof value.label !== 'string') return false
   if (typeof value.text !== 'string') return false
-  if (value.kind !== undefined && value.kind !== 'selection' && value.kind !== 'design')
+  if (
+    value.kind !== undefined &&
+    value.kind !== 'selection' &&
+    value.kind !== 'design' &&
+    value.kind !== 'file'
+  )
     return false
   if (value.messageId !== undefined && typeof value.messageId !== 'string') return false
   if (value.startOffset !== undefined && typeof value.startOffset !== 'number') return false
   if (value.endOffset !== undefined && typeof value.endOffset !== 'number') return false
   if (value.selector !== undefined && typeof value.selector !== 'string') return false
   if (value.tabId !== undefined && typeof value.tabId !== 'string') return false
+  if (value.filePath !== undefined && typeof value.filePath !== 'string') return false
   if (value.comment !== undefined && typeof value.comment !== 'string') return false
   return true
 }
