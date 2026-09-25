@@ -45,6 +45,13 @@ import { buildBoundedQuery } from './bounded-query'
 /** Main-thread SQLite work above one 60 Hz frame is diagnostic-worthy. */
 export const MAIN_THREAD_DATABASE_WARNING_MS = 16.7
 
+/** `db_meta` key: '1' once the narrow search mirror is fully backfilled. */
+const SEARCH_META_READY_KEY = 'agent_message_search_meta_ready'
+/** `db_meta` key: highest agent_messages rowid already mirrored by the backfill. */
+const SEARCH_META_CURSOR_KEY = 'agent_message_search_meta_cursor'
+/** Rows mirrored per serialized worker batch while backfilling. */
+const SEARCH_META_BATCH_ROWS = 2000
+
 /**
  * Database   synchronous SQLite wrapper for the Electron main process.
  *
@@ -58,6 +65,13 @@ export class Database {
   private readonly path: string
   private maintenanceWorker: DatabaseWorker | null = null
   private readonly workerFactory: DatabaseWorkerFactory | undefined
+  /**
+   * Whether `agent_message_search_meta` is fully backfilled, so thread search
+   * can rank against the narrow mirror instead of joining agent_messages per
+   * match. False until the batched backfill reports done (see
+   * `backfillAgentMessageSearchMeta`).
+   */
+  private searchMetaReady = false
 
   constructor(path?: string, workerFactory?: DatabaseWorkerFactory) {
     this.path = path ?? getConfigRoot() + '/codeinoven.db'
@@ -83,11 +97,20 @@ export class Database {
     await this.migrateIndependentUsageLedger()
     await this.migrateUsageEventFeatures()
     this.db.pragma('optimize = 0x10002')
+    // Non-blocking: the mirror is brought up to date on the worker in small
+    // serialized batches, so init never waits on it and the main thread stays
+    // free. Until it reports ready, search uses the legacy (correct) query.
+    void this.backfillAgentMessageSearchMeta()
 
     Logger.info('SQLite database initialised', {
       path: this.path,
       durationMs: this.roundDuration(performance.now() - startedAt)
     })
+  }
+
+  /** Whether thread search may rank against the narrow search mirror. */
+  isSearchMetaReady(): boolean {
+    return this.searchMetaReady
   }
 
   /**
@@ -115,6 +138,86 @@ export class Database {
   /** Whether the database connection is currently open. */
   isOpen(): boolean {
     return this.db !== null
+  }
+
+  /**
+   * Bring `agent_message_search_meta` up to date with agent_messages.
+   *
+   * The mirror is what makes thread search fast: without it the FTS query has
+   * to read agent_messages once per match (random rowid order, hundreds of
+   * megabytes) just to apply its visibility filter and rank by recency.
+   *
+   * Backfilling runs on the worker's connection as a sequence of small
+   * serialized batches, each its own request, so an interactive query slots in
+   * between batches instead of waiting for the whole rebuild. Progress is
+   * resumable through `db_meta`; the ready flag is written only once the whole
+   * table has been mirrored, because new messages keep the mirror current
+   * through the schema triggers from then on.
+   */
+  private async backfillAgentMessageSearchMeta(): Promise<void> {
+    const worker = this.maintenanceWorker
+    if (!worker?.isRunning()) return
+    if (this.metaFlag(SEARCH_META_READY_KEY)) {
+      this.searchMetaReady = true
+      return
+    }
+    try {
+      let cursor = Number(this.metaFlag(SEARCH_META_CURSOR_KEY) ?? 0)
+      for (;;) {
+        if (!worker.isRunning() || !this.isOpen()) return
+        const batch = await worker.query(
+          'SELECT rowid AS rowid FROM agent_messages WHERE rowid > ? ORDER BY rowid LIMIT ?',
+          [cursor, SEARCH_META_BATCH_ROWS],
+          SEARCH_META_BATCH_ROWS
+        )
+        if (!batch.ok) {
+          Logger.error('Search mirror backfill read failed', batch.error)
+          return
+        }
+        const rows = batch.rows ?? []
+        if (rows.length === 0) break
+        // Mirror exactly the range the batch read, so a concurrent delete inside
+        // the batch can never leave a rowid gap the next cursor would skip.
+        const lastRowid = Number(rows[rows.length - 1]?.rowid ?? cursor)
+        const inserted = await worker.execute(
+          `INSERT OR IGNORE INTO agent_message_search_meta(
+             rowid, thread_id, role, visibility, session_id, created_at
+           )
+           SELECT rowid, thread_id, role, visibility, session_id, created_at
+           FROM agent_messages WHERE rowid > ? AND rowid <= ?`,
+          [cursor, lastRowid]
+        )
+        if (!inserted.ok) {
+          Logger.error('Search mirror backfill write failed', inserted.error)
+          return
+        }
+        cursor = lastRowid
+        this.setMetaFlag(SEARCH_META_CURSOR_KEY, String(cursor))
+      }
+      this.setMetaFlag(SEARCH_META_READY_KEY, '1')
+      this.searchMetaReady = true
+      Logger.info('Agent message search mirror ready', { throughRowid: cursor })
+    } catch (error) {
+      // Search keeps working through the legacy query; it is only slower.
+      Logger.error('Search mirror backfill failed', error)
+    }
+  }
+
+  /** Read a `db_meta` value, or null when the key is absent (or the db is closed). */
+  private metaFlag(key: string): string | null {
+    if (!this.isOpen()) return null
+    const row = this.get<{ value: string }>('SELECT value FROM db_meta WHERE key = ?', key)
+    return row?.value ?? null
+  }
+
+  /**
+   * Write a `db_meta` value. The connection can close underneath the backfill
+   * (its waits are on the worker), so a closed database turns this into a no-op
+   * rather than an error on a normal quit.
+   */
+  private setMetaFlag(key: string, value: string): void {
+    if (!this.isOpen()) return
+    this.run('INSERT OR REPLACE INTO db_meta(key, value) VALUES(?, ?)', key, value)
   }
 
   /** Close the primary connection only; the maintenance worker is retained. */

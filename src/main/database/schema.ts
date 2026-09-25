@@ -9,6 +9,8 @@
  *   project_fts       FTS5 virtual table on projects.name
  *   agent_messages    Mirrored agent conversation messages
  *   agent_messages_fts   FTS5 virtual table on agent_messages.search_text
+ *   agent_message_search_meta  Narrow search mirror of agent_messages
+ *                              (thread/role/visibility/session/created_at)
  *   settings          Global app config (key/value)
  *   db_meta           Internal database metadata
  */
@@ -427,6 +429,50 @@ CREATE TRIGGER IF NOT EXISTS agent_messages_fts_update AFTER UPDATE ON agent_mes
 WHEN new.search_text != old.search_text BEGIN
   INSERT INTO agent_messages_fts(agent_messages_fts, rowid, search_text) VALUES('delete', old.rowid, old.search_text);
   INSERT INTO agent_messages_fts(rowid, search_text) VALUES (new.rowid, new.search_text);
+END;`
+
+export const AGENT_MESSAGE_SEARCH_META_SQL = `
+-- ─── Agent Message Search Metadata ──────────────────────────────────────
+-- Narrow mirror of the agent_messages columns thread search filters, joins
+-- and orders by. agent_messages_fts is external content, so a search that
+-- reads a column per FTS match (visibility, session_id, thread_id, role,
+-- created_at) has to read that many rows of the big messages table in random
+-- rowid order. The mirror keeps those columns in a compact table whose rowid
+-- is the message rowid, so ranking/filtering costs a narrow-row read and the
+-- messages table is only touched for the rows that actually return a snippet.
+-- Kept in sync by the triggers below (fresh installs and existing databases).
+CREATE TABLE IF NOT EXISTS agent_message_search_meta (
+  rowid      INTEGER PRIMARY KEY,
+  thread_id  TEXT NOT NULL,
+  role       TEXT NOT NULL,
+  visibility TEXT NOT NULL,
+  session_id TEXT,
+  created_at INTEGER NOT NULL
+);`
+
+export const AGENT_MESSAGE_SEARCH_META_TRIGGERS_SQL = `
+CREATE TRIGGER IF NOT EXISTS agent_message_search_meta_insert AFTER INSERT ON agent_messages BEGIN
+  INSERT INTO agent_message_search_meta(rowid, thread_id, role, visibility, session_id, created_at)
+  VALUES (new.rowid, new.thread_id, new.role, new.visibility, new.session_id, new.created_at);
+END;
+
+CREATE TRIGGER IF NOT EXISTS agent_message_search_meta_delete AFTER DELETE ON agent_messages BEGIN
+  DELETE FROM agent_message_search_meta WHERE rowid = old.rowid;
+END;
+
+DROP TRIGGER IF EXISTS agent_message_search_meta_update;
+CREATE TRIGGER IF NOT EXISTS agent_message_search_meta_update
+AFTER UPDATE OF thread_id, role, visibility, session_id, created_at ON agent_messages
+WHEN new.thread_id IS NOT old.thread_id
+  OR new.role IS NOT old.role
+  OR new.visibility IS NOT old.visibility
+  OR new.session_id IS NOT old.session_id
+  OR new.created_at IS NOT old.created_at
+BEGIN
+  UPDATE agent_message_search_meta
+  SET thread_id = new.thread_id, role = new.role, visibility = new.visibility,
+      session_id = new.session_id, created_at = new.created_at
+  WHERE rowid = new.rowid;
 END;`
 
 export const MISC_TABLES_SQL = `
@@ -906,6 +952,8 @@ export const DATABASE_SCHEMA_SQL = [
   ATTACHMENT_GRANTS_SQL,
   AGENT_MESSAGES_FTS_SQL,
   AGENT_MESSAGES_FTS_TRIGGERS_SQL,
+  AGENT_MESSAGE_SEARCH_META_SQL,
+  AGENT_MESSAGE_SEARCH_META_TRIGGERS_SQL,
   MISC_TABLES_SQL,
   PERSISTENCE_SQL,
   HARNESS_USAGE_SQL,
