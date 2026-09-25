@@ -63,6 +63,35 @@ export class DesignRepo {
     return { directory: row.directory, entry: row.entry, updatedAt: row.updated_at }
   }
 
+  /**
+   * The recorded folder of each of these threads, in one query.
+   *
+   * A list of thread rows asks about every thread it draws, so the read is batched
+   * rather than per row: one `forThread` per row would be one query per row, on the
+   * path that renders the sidebar.
+   *
+   * Scoped by project so a caller cannot read a folder recorded for another one.
+   */
+  forThreads(projectId: string, threadIds: readonly string[]): Map<string, ThreadDesignCurrent> {
+    const found = new Map<string, ThreadDesignCurrent>()
+    if (threadIds.length === 0) return found
+    const placeholders = threadIds.map(() => '?').join(', ')
+    const rows = this.db.all<ThreadDesignRow>(
+      `SELECT thread_id, project_id, directory, entry, updated_at FROM thread_designs
+       WHERE project_id = ? AND thread_id IN (${placeholders})`,
+      projectId,
+      ...threadIds
+    )
+    for (const row of rows) {
+      found.set(row.thread_id, {
+        directory: row.directory,
+        entry: row.entry,
+        updatedAt: row.updated_at
+      })
+    }
+    return found
+  }
+
   deleteThread(threadId: string): void {
     this.db.run('DELETE FROM thread_designs WHERE thread_id = ?', threadId)
   }

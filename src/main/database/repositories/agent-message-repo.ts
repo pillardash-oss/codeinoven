@@ -16,6 +16,16 @@ import type {
 } from '../../../lib/types'
 import { attachmentGrantStatements, syncAttachmentGrants } from './attachment-grant-repo'
 
+/**
+ * One user message read across a list of threads, with the thread it came from.
+ *
+ * A batched read has to say which thread each row belongs to, because the caller groups
+ * by thread rather than reading one thread at a time.
+ */
+export interface ThreadUserMessage extends UserMessageSummary {
+  threadId: string
+}
+
 /** Plain-text content of a user-authored agent message (mirrors the renderer). */
 function userMessageText(partsJson: string): string {
   const parts = JSON.parse(partsJson) as AgentPart[]
@@ -868,6 +878,53 @@ export class AgentMessageRepo {
       threadId
     )
     return rows.map((row) => ({
+      id: row.id,
+      content: userMessageText(row.parts),
+      createdAt: row.created_at
+    }))
+  }
+
+  /**
+   * Every user-authored message of these threads whose stored parts mention one of
+   * `markers`, oldest to newest, with the thread each came from.
+   *
+   * For a caller that has to ask the same question of a whole list of threads. Reading
+   * `loadUserMessagesByThread` once per thread would load and parse every user message
+   * of every thread, which is the expensive part, so the markers narrow the rows in
+   * SQLite first and only a matching row's parts are parsed.
+   *
+   * The markers are matched as plain substrings, so this is a prefilter and not the
+   * rule: a caller that needs the exact rule applies its own detector to `content`,
+   * which is what makes a quoted mention still not count.
+   */
+  loadUserMessagesMentioning(
+    projectId: string,
+    threadIds: readonly string[],
+    markers: readonly string[]
+  ): ThreadUserMessage[] {
+    if (threadIds.length === 0 || markers.length === 0) return []
+    const threadPlaceholders = threadIds.map(() => '?').join(', ')
+    const markerClause = markers.map(() => 'm.parts LIKE ?').join(' OR ')
+    const rows = this.db.all<{
+      id: string
+      thread_id: string
+      parts: string
+      created_at: number
+    }>(
+      `SELECT m.id, m.thread_id, m.parts, m.created_at
+       FROM agent_messages m
+       JOIN threads t ON t.id = m.thread_id
+       WHERE t.project_id = ? AND m.thread_id IN (${threadPlaceholders})
+         AND m.session_id IS NULL AND m.role = 'user'
+         AND m.visibility IN ('conversation', 'working_trace')
+         AND (${markerClause})
+       ORDER BY m.created_at ASC, m.id ASC`,
+      projectId,
+      ...threadIds,
+      ...markers.map((marker) => `%${marker}%`)
+    )
+    return rows.map((row) => ({
+      threadId: row.thread_id,
       id: row.id,
       content: userMessageText(row.parts),
       createdAt: row.created_at

@@ -18,8 +18,8 @@ import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
 import { DesignRepo } from '../database/repositories/design-repo'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
-import { isCioDesignRequest } from '../utilities/cio-design-prompt'
-import { isCioVideoRequest } from '../utilities/cio-video-prompt'
+import { isCioDesignRequest, CIO_DESIGN_TAG } from '../utilities/cio-design-prompt'
+import { isCioVideoRequest, CIO_VIDEO_TAG } from '../utilities/cio-video-prompt'
 import { openVideoPreview } from '../video/video-preview-session'
 import { listProjectWorkFolders } from './design-listing'
 import { openDesignPreview } from './design-preview-session'
@@ -76,6 +76,23 @@ function requireId(value: unknown, label: string): string {
   return value
 }
 
+/**
+ * Ceiling on how many threads one marker read may name.
+ *
+ * A list of thread rows is bounded by what the sidebar draws, so this is a guard on
+ * the boundary rather than a limit the app reaches: it stops a malformed or hostile
+ * call from asking for the whole history in one query.
+ */
+const MAX_MARKER_THREADS = 400
+
+/** Identifier-list validation for the batched marker read. */
+function requireThreadIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > MAX_MARKER_THREADS) {
+    throw new TypeError('thread ids are invalid')
+  }
+  return value.map((entry) => requireId(entry, 'thread id'))
+}
+
 export interface DesignServiceOptions {
   database: Database
   previews: DirectoryPreviewService
@@ -107,6 +124,9 @@ export class DesignService {
   registerIpc(): void {
     ipcMain.handle('design:state', async (_event, rawProjectId, rawThreadId) =>
       this.stateFor(requireId(rawProjectId, 'project id'), requireId(rawThreadId, 'thread id'))
+    )
+    ipcMain.handle('design:kinds', async (_event, rawProjectId, rawThreadIds) =>
+      this.sessionKinds(requireId(rawProjectId, 'project id'), requireThreadIds(rawThreadIds))
     )
     ipcMain.handle(
       'design:open',
@@ -188,6 +208,71 @@ export class DesignService {
       entry: entryWithinOrigin(url, origin)
     })
     return kind === 'design' ? { directory, origin } : null
+  }
+
+  /**
+   * Which authored-work session each of these threads is in, for a list of thread rows.
+   *
+   * The same two facts {@link stateFor} weighs, read for many threads at once: the
+   * folder a thread last previewed and the session tags it typed. The caller draws the
+   * ids from the rows on screen, so the cost follows the list rather than the project's
+   * history, and the answer is the app's own notion of a session rather than a second
+   * one that could disagree with the coordinator board.
+   *
+   * A thread in neither is left out instead of defaulting to a design: the caller's
+   * fallback is its own evidence, and answering "design" here would put a marker on an
+   * ordinary thread.
+   */
+  sessionKinds(projectId: string, threadIds: readonly string[]): Record<string, AuthoredWorkKind> {
+    requireLocalProject(this.options.database, projectId)
+    const ids = [...new Set(threadIds)]
+    const kinds: Record<string, AuthoredWorkKind> = {}
+    if (ids.length === 0) return kinds
+    const folders = this.designs.forThreads(projectId, ids)
+    const tags = this.latestSessionTags(projectId, ids)
+    for (const threadId of ids) {
+      const folder = folders.get(threadId) ?? null
+      const tag = tags.get(threadId) ?? null
+      if (folder === null && tag === null) continue
+      kinds[threadId] = this.kindFor(folder, tag)
+    }
+    return kinds
+  }
+
+  /**
+   * The later session tag of each thread, read for many threads in one query.
+   *
+   * The same rule as {@link latestSessionTag}, applied to a batched read: video wins a
+   * same-timestamp tie so a compound invocation reads the same way every time, and
+   * otherwise the later message wins. The rows come back with only the messages whose
+   * stored parts mention a tag, so the exact detectors still decide.
+   */
+  private latestSessionTags(
+    projectId: string,
+    threadIds: readonly string[]
+  ): Map<string, SessionTag> {
+    const latest = new Map<string, SessionTag>()
+    const messages = this.messages.loadUserMessagesMentioning(projectId, threadIds, [
+      CIO_DESIGN_TAG,
+      CIO_VIDEO_TAG
+    ])
+    for (const message of messages) {
+      const found = latest.get(message.threadId)
+      if (
+        isCioVideoRequest(message.content) &&
+        (found === undefined || message.createdAt >= found.at)
+      ) {
+        latest.set(message.threadId, { kind: 'video', at: message.createdAt })
+        continue
+      }
+      if (
+        isCioDesignRequest(message.content) &&
+        (found === undefined || message.createdAt > found.at)
+      ) {
+        latest.set(message.threadId, { kind: 'design', at: message.createdAt })
+      }
+    }
+    return latest
   }
 
   forgetProject(projectId: string): void {

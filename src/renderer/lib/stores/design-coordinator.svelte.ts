@@ -1,6 +1,9 @@
-import { Clapperboard, Palette } from '@lucide/svelte'
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
+import {
+  AUTHORED_WORK_ICON_BY_KIND,
+  AUTHORED_WORK_NAME_BY_KIND
+} from '$lib/authored-work-presentation'
 import type { AuthoredWorkKind, ThreadDesignState } from '$shared/ipc-contract'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { coordinatorDockState } from './coordinator-dock.svelte'
@@ -24,15 +27,12 @@ import { coordinatorDockState } from './coordinator-dock.svelte'
 
 /** Rail tooltip and tab title per session, so a video thread is never called a design. */
 const COORDINATOR_LABEL_BY_KIND: Record<AuthoredWorkKind, string> = {
-  design: 'Design coordinator',
-  video: 'Video coordinator'
+  design: `${AUTHORED_WORK_NAME_BY_KIND.design} coordinator`,
+  video: `${AUTHORED_WORK_NAME_BY_KIND.video} coordinator`
 }
 
 /** Rail icon per session, for the same reason: a composition is not a design. */
-const COORDINATOR_ICON_BY_KIND: Record<AuthoredWorkKind, typeof Palette> = {
-  design: Palette,
-  video: Clapperboard
-}
+const COORDINATOR_ICON_BY_KIND = AUTHORED_WORK_ICON_BY_KIND
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}\u0000${threadId}`
