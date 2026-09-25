@@ -20,7 +20,10 @@
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
-  import { responseReferencesState } from '$lib/stores/response-references.svelte'
+  import {
+    mergeReferenceById,
+    responseReferencesState
+  } from '$lib/stores/response-references.svelte'
   import { designElementReference } from '$lib/design-element-reference'
   import type {
     BrowserDevToolsState,
@@ -372,10 +375,14 @@
     }
     if (event.kind === 'pick') {
       const reference = designElementReference(event.id, event.target, pageState.design, tabId)
-      responseReferencesState.setForThread(tabProjectId, tabThreadId, [
-        ...responseReferencesState.forThread(tabProjectId, tabThreadId),
-        reference
-      ])
+      // A pick's id is the id of the page marker it created, so the same pick can
+      // only ever name one reference. Folding it in by id keeps a repeated report
+      // of one pick from adding a second entry with the same key.
+      responseReferencesState.setForThread(
+        tabProjectId,
+        tabThreadId,
+        mergeReferenceById(responseReferencesState.forThread(tabProjectId, tabThreadId), reference)
+      )
       return
     }
     if (event.kind === 'comment') {

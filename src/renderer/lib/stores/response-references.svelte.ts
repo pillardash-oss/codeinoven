@@ -39,6 +39,47 @@ export function isResponseSelection(reference: Pick<PromptReference, 'kind'>): b
   return reference.kind === undefined || reference.kind === 'selection'
 }
 
+/**
+ * One entry per reference id.
+ *
+ * A reference id is an identity, not a position: a picked design element's id is
+ * the page marker's id, and a selection's is generated once when it is created.
+ * Two entries with the same id are therefore the same reference, and every
+ * surface renders the list as a keyed block, which rejects a repeated key
+ * outright. The first occurrence wins, so a duplicate can never reach a renderer.
+ */
+export function uniqueReferencesById(
+  references: readonly ResponseReferenceAnchor[]
+): ResponseReferenceAnchor[] {
+  const unique: ResponseReferenceAnchor[] = []
+  for (const reference of references) {
+    // The list is capped at a couple of dozen entries, so a scan beats pulling a
+    // reactive collection into a pure helper.
+    if (unique.some((entry) => entry.id === reference.id)) continue
+    unique.push(reference)
+  }
+  return unique
+}
+
+/**
+ * Fold one reference into a list: replace the entry with the same id, or append
+ * it when the id is new.
+ *
+ * A pick is reported by the id of the page marker it created, so the same pick
+ * delivered twice names one reference. Replacing keeps that true and leaves the
+ * list's keys unique.
+ */
+export function mergeReferenceById(
+  references: readonly ResponseReferenceAnchor[],
+  reference: ResponseReferenceAnchor
+): ResponseReferenceAnchor[] {
+  const index = references.findIndex((entry) => entry.id === reference.id)
+  if (index < 0) return [...references, reference]
+  return references.map((entry, position) =>
+    position === index ? { ...entry, ...reference } : entry
+  )
+}
+
 /** Called with the thread whose references changed. */
 type ReferencesListener = (projectId: string, threadId: string) => void
 
@@ -78,20 +119,22 @@ class ResponseReferencesState {
         const oldestKey = Object.keys(next)[0]
         if (oldestKey) delete next[oldestKey]
       }
-      stored = references.slice(0, MAX_REFERENCES_PER_THREAD).map((reference, index) => ({
-        ...reference,
-        // A response selection is named by its position, and so is a picked
-        // design element: both are shown as a number by the popover, and the
-        // number has to agree with the surface that pins them (a highlight
-        // bubble, a page pin). A document annotation keeps the label it was
-        // created with instead: its path names it on the document pin and in
-        // the prompt, and it is what the model needs to find the passage.
-        label: isResponseSelection(reference)
-          ? `Selection ${index + 1}`
-          : reference.kind === 'file'
-            ? reference.label
-            : `Design element ${index + 1}`
-      }))
+      stored = uniqueReferencesById(references)
+        .slice(0, MAX_REFERENCES_PER_THREAD)
+        .map((reference, index) => ({
+          ...reference,
+          // A response selection is named by its position, and so is a picked
+          // design element: both are shown as a number by the popover, and the
+          // number has to agree with the surface that pins them (a highlight
+          // bubble, a page pin). A document annotation keeps the label it was
+          // created with instead: its path names it on the document pin and in
+          // the prompt, and it is what the model needs to find the passage.
+          label: isResponseSelection(reference)
+            ? `Selection ${index + 1}`
+            : reference.kind === 'file'
+              ? reference.label
+              : `Design element ${index + 1}`
+        }))
       next[key] = stored
     }
     this.references = next
