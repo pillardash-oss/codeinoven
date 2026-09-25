@@ -25,6 +25,8 @@ export interface McpConnectionRequest {
   credentials?: readonly UtilityCredentialMetadata[]
   /** Omit to keep the raw client failure, e.g. inside a turn that reports its own context. */
   owner?: McpConnectionOwner
+  /** Turn that started the server, so the task manager attributes its row. */
+  context?: { projectId?: string | null; threadId?: string | null }
 }
 
 /**
@@ -35,13 +37,26 @@ export interface McpConnectionRequest {
  */
 export async function connectMcpServer(request: McpConnectionRequest): Promise<McpClient> {
   const { config, environment, owner } = request
+  const projectId = request.context?.projectId ?? null
+  const threadId = request.context?.threadId ?? null
+  const clientOwner = {
+    ...(owner?.name ? { name: owner.name } : {}),
+    scope: threadId ? ('thread' as const) : projectId ? ('project' as const) : ('app' as const),
+    projectId,
+    threadId
+  }
   if (config.transport === 'stdio') {
     if (!config.command) throw new Error('stdio MCP command is not configured')
     try {
-      return await StdioMcpClient.connect(config.command, config.args ?? [], {
-        ...config.environment,
-        ...environment
-      })
+      return await StdioMcpClient.connect(
+        config.command,
+        config.args ?? [],
+        {
+          ...config.environment,
+          ...environment
+        },
+        clientOwner
+      )
     } catch (error) {
       if (!owner) throw error
       throw mcpStartupFailure(owner, environment, error)
@@ -50,7 +65,8 @@ export async function connectMcpServer(request: McpConnectionRequest): Promise<M
   if (!config.url) throw new Error('Remote MCP URL is not configured')
   return RemoteMcpClient.connect(
     config.url,
-    resolveMcpHeaders(config, environment, request.credentials)
+    resolveMcpHeaders(config, environment, request.credentials),
+    clientOwner
   )
 }
 

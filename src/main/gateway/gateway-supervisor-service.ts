@@ -18,6 +18,7 @@ import type { StorageEngine } from '../storage/storage-engine'
 import type { SecretVault } from '../storage/secret-vault'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
+import { appServiceRegistry } from '../system/app-service-registry'
 import { OwnedProcessJournal } from '../system/owned-process-journal'
 import {
   buildProcessEnvironment,
@@ -62,6 +63,11 @@ interface RunningInstance {
 }
 
 export type GatewayStateListener = (status: GatewayStatus) => void
+
+/** Registry id for one supervised gateway in the task manager. */
+function gatewayServiceId(pluginId: string): string {
+  return `gateway:${pluginId}`
+}
 
 /**
  * Owns the full lifecycle of managed local gateway processes: app-owned
@@ -288,11 +294,26 @@ export class GatewaySupervisorService {
 
       child.once('exit', () => {
         this.running.delete(pluginId)
+        appServiceRegistry.unregister(gatewayServiceId(pluginId))
         this.journal?.unregister(child.pid ?? 0)
         void this.handleUnexpectedExit(pluginId, stderrTail())
       })
 
       await this.awaitHealthy(adapter, port, child)
+      // The gateway is live now, so the task manager shows its process and port.
+      appServiceRegistry.register({
+        id: gatewayServiceId(pluginId),
+        kind: 'gateway',
+        name: `Model gateway: ${adapter.name}`,
+        detail: `http://127.0.0.1:${port}`,
+        scope: 'app',
+        pid: child.pid ?? null,
+        port,
+        url: `http://127.0.0.1:${port}`,
+        stop: async () => {
+          await this.stop(pluginId)
+        }
+      })
       const snapshot = await this.fetchCatalog(adapter, port)
       await this.persistCatalog(pluginId, snapshot)
       this.catalogCache.set(pluginId, snapshot)
@@ -317,6 +338,7 @@ export class GatewaySupervisorService {
       this.setProgress(pluginId, undefined)
       this.running.get(pluginId)?.child.kill('SIGTERM')
       this.running.delete(pluginId)
+      appServiceRegistry.unregister(gatewayServiceId(pluginId))
       const message = error instanceof Error ? error.message : String(error)
       const state = await this.mutateState(pluginId, (current) => ({
         ...current,
@@ -347,6 +369,7 @@ export class GatewaySupervisorService {
         child.kill('SIGTERM')
       })
       this.running.delete(pluginId)
+      appServiceRegistry.unregister(gatewayServiceId(pluginId))
       this.journal?.unregister(child.pid ?? 0)
     }
     // The endpoint is dead either way: synced harness provider records must not

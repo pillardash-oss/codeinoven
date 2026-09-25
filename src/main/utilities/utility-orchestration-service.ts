@@ -54,6 +54,7 @@ import {
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
 import { gatewayHarnessTimeoutMs, type UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { Logger } from '../system/logger'
+import { appServiceRegistry } from '../system/app-service-registry'
 import { UTILITY_EVENTS_LOG_FILE, dailyLogRelativePath } from '../system/log-paths'
 import type { AgentSecretResolution } from './agent-secret-service'
 import {
@@ -1091,6 +1092,17 @@ export class UtilityOrchestrationService {
         }
         this.gatewayServer = server
         this.gatewayBaseUrl = `http://127.0.0.1:${address.port}`
+        // The gateway is app-lifetime infrastructure, so the task manager shows
+        // its loopback endpoint without offering a stop it must not honour.
+        appServiceRegistry.register({
+          id: 'utility-gateway',
+          kind: 'server',
+          name: 'Utility gateway',
+          detail: 'Loopback endpoint that serves activated utilities to a turn',
+          scope: 'app',
+          port: address.port,
+          url: this.gatewayBaseUrl
+        })
         resolve(this.gatewayBaseUrl)
       })
     })
@@ -1109,6 +1121,7 @@ export class UtilityOrchestrationService {
     this.gatewayServer = null
     this.gatewayBaseUrl = null
     this.gatewayStarting = null
+    appServiceRegistry.unregister('utility-gateway')
     if (!server) return
     await new Promise<void>((resolve) => {
       if (!server.listening) {
@@ -1403,7 +1416,7 @@ export class UtilityOrchestrationService {
         // downgrading a full_access one.
         await this.cuaBridge.claimDaemonMode(state.request.permissionLevel, state.id)
       }
-      client = await this.mcpClient(resolved.utility)
+      client = await this.mcpClient(state, resolved.utility)
       state.clients.set(utilityId, client)
     }
     if (this.isComputerUseUtility(resolved) && !state.cuaSessionIds.has(utilityId)) {
@@ -1755,13 +1768,23 @@ export class UtilityOrchestrationService {
   }
 
   private async mcpClient(
+    state: TurnState,
     utility: UtilityDefinitionFor<'mcp'> | UtilityDefinitionFor<'computer_use'>
   ): Promise<McpClient> {
     if (utility.kind === 'computer_use') {
       if (!utility.config.endpoint) {
         throw new Error(`Computer-use utility "${utility.name}" requires an MCP endpoint`)
       }
-      return RemoteMcpClient.connect(utility.config.endpoint, {})
+      return RemoteMcpClient.connect(
+        utility.config.endpoint,
+        {},
+        {
+          name: utility.name,
+          scope: 'thread',
+          projectId: state.request.projectId,
+          threadId: state.request.threadId
+        }
+      )
     }
     // One shared starter, which the Utilities connection test calls too, so a
     // server that tests green is a server this gateway can start.
@@ -1769,7 +1792,10 @@ export class UtilityOrchestrationService {
       config: utility.config,
       environment: await this.credentialEnvironment(utility),
       credentials: utility.credentials,
-      owner: { name: utility.name, credentials: utility.credentials }
+      owner: { name: utility.name, credentials: utility.credentials },
+      // Attribute the running server to the turn that started it, so the task
+      // manager can say which thread an MCP belongs to.
+      context: { projectId: state.request.projectId, threadId: state.request.threadId }
     })
   }
 

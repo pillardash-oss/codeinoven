@@ -58,8 +58,52 @@ export interface TaskManagerProcess extends AgentRunningProcess {
   threadTitle?: string | null
 }
 
+/**
+ * Kind of app-owned runtime a `TaskManagerService` describes. `server` is an
+ * in-process loopback listener with no child process, `mcp` is a stdio MCP
+ * server, `gateway` is a supervised local model gateway, and `worker` is any
+ * other app-owned helper. Distinct from `TaskManagerProcess` because a service
+ * may have no pid at all.
+ */
+export type TaskManagerServiceKind = 'server' | 'mcp' | 'gateway' | 'worker'
+
+/**
+ * App-wide runtime row surfaced by the task manager alongside OS processes.
+ *
+ * OS processes come from `AgentProcessService`; this covers everything that has
+ * no tracked child process, so in-process loopback servers (the prototype
+ * preview server, a previewed folder's static host, the utility gateway) and
+ * spawned MCP servers are visible instead of absent. Project and thread names
+ * are resolved at IPC time.
+ */
+export interface TaskManagerService {
+  id: string
+  kind: TaskManagerServiceKind
+  name: string
+  /** A URL, command line, or folder that says what the service is. */
+  detail: string | null
+  /** `thread`/`project` when the service belongs to one; `app` when shared. */
+  scope: 'app' | 'project' | 'thread'
+  projectId: string | null
+  threadId: string | null
+  /** OS pid when the service is backed by a process; `null` for in-process servers. */
+  pid: number | null
+  /** Loopback port the service listens on, when it listens. */
+  port: number | null
+  /** Origin URL a user can open, when the service serves HTTP. */
+  url: string | null
+  startedAt: number
+  /** True when the service can be ended from the task manager. */
+  stoppable: boolean
+  /** Display name of the owning project, resolved at IPC time. */
+  projectName?: string | null
+  /** Display title of the owning thread, resolved at IPC time. */
+  threadTitle?: string | null
+}
+
 export interface TaskManagerSnapshot {
   processes: TaskManagerProcess[]
+  services: TaskManagerService[]
   power: {
     source: 'ac' | 'battery'
     thermalState: 'unknown' | 'nominal' | 'fair' | 'serious' | 'critical'

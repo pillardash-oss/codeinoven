@@ -3,14 +3,17 @@
     ArrowDownUp,
     BatteryCharging,
     BatteryMedium,
+    Cog,
     Cpu,
     Check,
     ChevronDown,
     ExternalLink,
     MemoryStick,
     MessagesSquare,
+    Network,
     Plug,
     RefreshCw,
+    Server,
     SquareTerminal,
     Thermometer,
     Trash2,
@@ -19,6 +22,7 @@
   import { DropdownMenu } from 'bits-ui'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
@@ -30,7 +34,13 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import type { Project, TaskManagerProcess, TaskManagerSnapshot } from '$shared/types'
+  import type {
+    Project,
+    TaskManagerProcess,
+    TaskManagerService,
+    TaskManagerServiceKind,
+    TaskManagerSnapshot
+  } from '$shared/types'
   import { posixBasename } from '$shared/paths'
 
   interface Props {
@@ -57,6 +67,7 @@
   let { open, onClose }: Props = $props()
 
   let processes = $state<TaskManagerProcess[]>([])
+  let services = $state<TaskManagerService[]>([])
   let power = $state<TaskManagerSnapshot['power']>({ source: 'ac', thermalState: 'unknown' })
   let sampledAt = $state(0)
   /** True only during the initial open-time snapshot or an explicit refresh. */
@@ -72,6 +83,9 @@
   let ending = $state(false)
   let forceEndTargets = $state<readonly TaskManagerProcess[]>([])
   let forceEnding = $state(false)
+  /** Service awaiting stop confirmation; null when no dialog is open. */
+  let stopTarget = $state<TaskManagerService | null>(null)
+  let stopping = $state(false)
   let projectIconsRequest: Promise<void> | null = null
   const projectsById = new SvelteMap<string, Project>()
   const projectIconUrls = new SvelteMap<string, string>()
@@ -88,6 +102,27 @@
       : processes
     return filtered.toSorted(compareFor(sortMode))
   })
+
+  /**
+   * App-owned runtimes that have no tracked OS process row, so they would
+   * otherwise be absent: loopback servers and the MCP servers a turn started.
+   * App-scoped services carry no project, so a project filter never hides them.
+   */
+  const visibleServices = $derived.by(() => {
+    const filtered = filterProjectId
+      ? services.filter((service) => !service.projectId || service.projectId === filterProjectId)
+      : services
+    return filtered.toSorted((left, right) =>
+      left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
+    )
+  })
+
+  const SERVICE_KIND_LABELS: Record<TaskManagerServiceKind, string> = {
+    server: 'Server',
+    mcp: 'MCP',
+    gateway: 'Gateway',
+    worker: 'Worker'
+  }
 
   function compareFor(
     mode: TaskSortMode
@@ -123,6 +158,7 @@
     try {
       const snapshot = await invoke('taskManager:list')
       processes = snapshot.processes
+      services = snapshot.services
       power = snapshot.power
       sampledAt = snapshot.sampledAt
       pruneSelection()
@@ -141,6 +177,7 @@
     try {
       const snapshot = await invoke('taskManager:list')
       processes = snapshot.processes
+      services = snapshot.services
       power = snapshot.power
       sampledAt = snapshot.sampledAt
       pruneSelection()
@@ -422,6 +459,36 @@
       forceEnding = false
     }
   }
+
+  function serviceLocationLabel(service: TaskManagerService): string {
+    if (service.threadTitle && service.projectName) {
+      return `${service.projectName} · ${service.threadTitle}`
+    }
+    if (service.projectName) return service.projectName
+    return 'App-wide'
+  }
+
+  /** Stopping a service ends a loopback server or MCP child, so confirm first. */
+  function requestStopService(service: TaskManagerService): void {
+    if (!service.stoppable || stopping) return
+    stopTarget = service
+  }
+
+  async function confirmStopService(): Promise<void> {
+    const target = stopTarget
+    if (!target || stopping) return
+    stopping = true
+    error = ''
+    try {
+      await invoke('taskManager:stopService', target.id)
+      stopTarget = null
+      await load()
+    } catch (stopError) {
+      error = stopError instanceof Error ? stopError.message : 'The service could not be stopped.'
+    } finally {
+      stopping = false
+    }
+  }
 </script>
 
 <Modal {open} title="Task Manager" {onClose} size="xl" fill contentClass="p-0">
@@ -443,177 +510,259 @@
           ></span>
           <p class="text-xs text-dimmed">Checking running processes…</p>
         </div>
-      {:else if visibleProcesses.length === 0}
+      {:else if visibleServices.length === 0 && visibleProcesses.length === 0}
         <div class="flex h-full items-center justify-center px-8 text-center">
           <div class="max-w-64">
             <Plug size={20} class="mx-auto text-muted" />
-            <p class="mt-3 text-sm font-semibold text-foreground">No matching processes</p>
+            <p class="mt-3 text-sm font-semibold text-foreground">Nothing is running</p>
             <p class="mt-1 text-xs leading-relaxed text-dimmed">
-              No project processes match the current filter. Shared servers always stay visible.
-            </p>
-          </div>
-        </div>
-      {:else if processes.length === 0}
-        <div class="flex h-full items-center justify-center px-8 text-center">
-          <div class="max-w-64">
-            <Plug size={20} class="mx-auto text-muted" />
-            <p class="mt-3 text-sm font-semibold text-foreground">No running processes</p>
-            <p class="mt-1 text-xs leading-relaxed text-dimmed">
-              Processes started by the app will appear here while they are running.
+              {filterProjectId
+                ? 'No processes or services match the current filter. Shared runtimes always stay visible.'
+                : 'Processes and services the app starts will appear here while they are running.'}
             </p>
           </div>
         </div>
       {:else}
-        <ul class="divide-y divide-border">
-          {#each visibleProcesses as process (process.pid)}
-            {@const harnessId = harnessIdFor(process.command)}
-            {@const projectIcon = projectIconFor(process)}
-            {#snippet processContent()}
-              <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-2">
-                  <p class="truncate text-sm font-semibold text-foreground">
-                    {processName(process.command)}
-                  </p>
-                  {#if process.ports.length > 0}
-                    <span
-                      class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
+        {#if visibleServices.length > 0}
+          <section aria-label="Running services">
+            <header
+              class="flex items-center justify-between border-b border-border bg-surface px-5 py-2"
+            >
+              <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Services</h3>
+              <span class="text-[0.625rem] text-dimmed tabular-nums">{visibleServices.length}</span>
+            </header>
+            <ul class="divide-y divide-border">
+              {#each visibleServices as service (service.id)}
+                <li class="flex items-start gap-3 px-5 py-3">
+                  <span
+                    class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                  >
+                    {#if service.kind === 'mcp'}
+                      <Plug size={15} />
+                    {:else if service.kind === 'gateway'}
+                      <Network size={15} />
+                    {:else if service.kind === 'worker'}
+                      <Cog size={15} />
+                    {:else}
+                      <Server size={15} />
+                    {/if}
+                  </span>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <p class="truncate text-sm font-semibold text-foreground">{service.name}</p>
+                      {#if service.port !== null}
+                        <span
+                          class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
+                        >
+                          :{service.port}
+                        </span>
+                      {/if}
+                      <span
+                        class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] tracking-wide text-muted uppercase"
+                      >
+                        {SERVICE_KIND_LABELS[service.kind]}
+                      </span>
+                    </div>
+                    {#if service.detail}
+                      <p
+                        class="mt-1 truncate font-mono text-[0.625rem] text-dimmed"
+                        title={service.detail}
+                      >
+                        {service.detail}
+                      </p>
+                    {/if}
+                    <div
+                      class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.625rem] text-dimmed tabular-nums"
                     >
-                      :{process.ports[0]}
-                      {#if process.ports.length > 1}
-                        <span class="text-dimmed">+{process.ports.length - 1}</span>
+                      {#if service.pid !== null}
+                        <span>PID {service.pid}</span>
+                      {/if}
+                      <span>{formatDuration(service.startedAt)}</span>
+                      <span class="shrink-0">{serviceLocationLabel(service)}</span>
+                    </div>
+                  </div>
+                  <div class="mt-0.5 flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={!service.stoppable || stopping}
+                      title={service.stoppable
+                        ? `Stop ${service.name}`
+                        : 'This runtime is owned by the app for its whole session'}
+                      aria-label={`Stop ${service.name}`}
+                      onclick={() => requestStopService(service)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </li>
+              {/each}
+            </ul>
+          </section>
+        {/if}
+        {#if visibleProcesses.length > 0}
+          <section aria-label="Running processes">
+            <header
+              class="flex items-center justify-between border-b border-border bg-surface px-5 py-2"
+            >
+              <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Processes</h3>
+              <span class="text-[0.625rem] text-dimmed tabular-nums">{visibleProcesses.length}</span
+              >
+            </header>
+            <ul class="divide-y divide-border">
+              {#each visibleProcesses as process (process.pid)}
+                {@const harnessId = harnessIdFor(process.command)}
+                {@const projectIcon = projectIconFor(process)}
+                {#snippet processContent()}
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <p class="truncate text-sm font-semibold text-foreground">
+                        {processName(process.command)}
+                      </p>
+                      {#if process.ports.length > 0}
+                        <span
+                          class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
+                        >
+                          :{process.ports[0]}
+                          {#if process.ports.length > 1}
+                            <span class="text-dimmed">+{process.ports.length - 1}</span>
+                          {/if}
+                        </span>
+                      {/if}
+                      <span
+                        class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted {process.scope ===
+                        'app'
+                          ? 'uppercase tracking-wide'
+                          : ''}"
+                      >
+                        {process.scope === 'app' ? 'Shared' : 'Running'}
+                      </span>
+                    </div>
+                    <p
+                      class="mt-1 truncate font-mono text-[0.625rem] text-dimmed"
+                      title={process.command}
+                    >
+                      {process.command}
+                    </p>
+                    <div
+                      class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.625rem] text-dimmed tabular-nums"
+                    >
+                      <span
+                        class="inline-flex items-center gap-1 text-muted"
+                        title={process.resourceScope === 'tree'
+                          ? 'CPU used by this process and its descendants'
+                          : 'CPU used by this process'}
+                      >
+                        <Cpu size={11} />
+                        {formatCpu(process.cpuPercent)}
+                      </span>
+                      <span
+                        class="inline-flex items-center gap-1 text-muted"
+                        title={process.resourceScope === 'tree'
+                          ? 'Memory used by this process and its descendants'
+                          : 'Memory used by this process'}
+                      >
+                        <MemoryStick size={11} />
+                        {formatMemory(process.memoryBytes)}
+                      </span>
+                      <span>PID {process.pid}</span>
+                      <span>{formatDuration(process.startedAt)}</span>
+                      <span class="min-w-0 truncate" title={process.cwd ?? undefined}>
+                        {shortPath(process.cwd)}
+                      </span>
+                      <span class="shrink-0">{locationLabel(process)}</span>
+                    </div>
+                  </div>
+                {/snippet}
+                <li
+                  class="flex items-start gap-3 px-5 py-3 transition-colors {selected.has(
+                    process.pid
+                  )
+                    ? 'bg-elevated'
+                    : 'hover:bg-elevated'}"
+                >
+                  <Switch
+                    checked={selected.has(process.pid)}
+                    onchange={(value) => {
+                      if (value) selected.add(process.pid)
+                      else selected.delete(process.pid)
+                    }}
+                    aria-label={`Select ${processName(process.command)} (PID ${process.pid})`}
+                    title={`Select ${processName(process.command)}`}
+                    class="mt-1 shrink-0"
+                  />
+                  <button
+                    type="button"
+                    class="flex min-w-0 flex-1 cursor-pointer items-start gap-3 text-left"
+                    title={`Select ${processName(process.command)} (PID ${process.pid})`}
+                    aria-pressed={selected.has(process.pid)}
+                    onclick={() => toggleSelected(process)}
+                  >
+                    <span
+                      class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                    >
+                      {#if harnessId}
+                        <AgentIcon agentId={harnessId} size={16} />
+                      {:else if projectIcon}
+                        <img
+                          src={projectIcon}
+                          alt=""
+                          class="h-4 w-4 rounded-sm object-contain grayscale"
+                          onerror={(event) => handleProjectIconError(event, process.projectId)}
+                        />
+                      {:else}
+                        <SquareTerminal size={15} />
                       {/if}
                     </span>
-                  {/if}
-                  <span
-                    class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted {process.scope ===
-                    'app'
-                      ? 'uppercase tracking-wide'
-                      : ''}"
-                  >
-                    {process.scope === 'app' ? 'Shared' : 'Running'}
-                  </span>
-                </div>
-                <p
-                  class="mt-1 truncate font-mono text-[0.625rem] text-dimmed"
-                  title={process.command}
-                >
-                  {process.command}
-                </p>
-                <div
-                  class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.625rem] text-dimmed tabular-nums"
-                >
-                  <span
-                    class="inline-flex items-center gap-1 text-muted"
-                    title={process.resourceScope === 'tree'
-                      ? 'CPU used by this process and its descendants'
-                      : 'CPU used by this process'}
-                  >
-                    <Cpu size={11} />
-                    {formatCpu(process.cpuPercent)}
-                  </span>
-                  <span
-                    class="inline-flex items-center gap-1 text-muted"
-                    title={process.resourceScope === 'tree'
-                      ? 'Memory used by this process and its descendants'
-                      : 'Memory used by this process'}
-                  >
-                    <MemoryStick size={11} />
-                    {formatMemory(process.memoryBytes)}
-                  </span>
-                  <span>PID {process.pid}</span>
-                  <span>{formatDuration(process.startedAt)}</span>
-                  <span class="min-w-0 truncate" title={process.cwd ?? undefined}>
-                    {shortPath(process.cwd)}
-                  </span>
-                  <span class="shrink-0">{locationLabel(process)}</span>
-                </div>
-              </div>
-            {/snippet}
-            <li
-              class="flex items-start gap-3 px-5 py-3 transition-colors {selected.has(process.pid)
-                ? 'bg-elevated'
-                : 'hover:bg-elevated'}"
-            >
-              <Switch
-                checked={selected.has(process.pid)}
-                onchange={(value) => {
-                  if (value) selected.add(process.pid)
-                  else selected.delete(process.pid)
-                }}
-                aria-label={`Select ${processName(process.command)} (PID ${process.pid})`}
-                title={`Select ${processName(process.command)}`}
-                class="mt-1 shrink-0"
-              />
-              <button
-                type="button"
-                class="flex min-w-0 flex-1 cursor-pointer items-start gap-3 text-left"
-                title={`Select ${processName(process.command)} (PID ${process.pid})`}
-                aria-pressed={selected.has(process.pid)}
-                onclick={() => toggleSelected(process)}
-              >
-                <span
-                  class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
-                >
-                  {#if harnessId}
-                    <AgentIcon agentId={harnessId} size={16} />
-                  {:else if projectIcon}
-                    <img
-                      src={projectIcon}
-                      alt=""
-                      class="h-4 w-4 rounded-sm object-contain grayscale"
-                      onerror={(event) => handleProjectIconError(event, process.projectId)}
-                    />
-                  {:else}
-                    <SquareTerminal size={15} />
-                  {/if}
-                </span>
-                <span class="min-w-0 flex-1">
-                  {@render processContent()}
-                </span>
-              </button>
-              <div class="mt-0.5 flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={process.ports.length === 0 || !process.projectId}
-                  title={process.ports.length === 0
-                    ? 'No port detected'
-                    : process.projectId
-                      ? 'Open in in-app browser'
-                      : 'No project associated with this process'}
-                  aria-label={`Open ${processName(process.command)} in the in-app browser`}
-                  onclick={() => void openInBrowser(process)}
-                >
-                  <ExternalLink size={15} />
-                </button>
-                <button
-                  type="button"
-                  class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={!process.projectId}
-                  title={process.projectId
-                    ? 'Open path in in-app terminal'
-                    : 'No project associated with this process'}
-                  aria-label={`Open ${processName(process.command)} path in the in-app terminal`}
-                  onclick={() => void openInTerminal(process)}
-                >
-                  <SquareTerminal size={15} />
-                </button>
-                <button
-                  type="button"
-                  class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={!process.threadId}
-                  title={process.threadId
-                    ? `Open the thread responsible for ${processName(process.command)}`
-                    : 'No thread associated with this process'}
-                  aria-label={`Open the thread responsible for ${processName(process.command)}`}
-                  onclick={() => void navigateToProcess(process)}
-                >
-                  <MessagesSquare size={15} />
-                </button>
-              </div>
-            </li>
-          {/each}
-        </ul>
+                    <span class="min-w-0 flex-1">
+                      {@render processContent()}
+                    </span>
+                  </button>
+                  <div class="mt-0.5 flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={process.ports.length === 0 || !process.projectId}
+                      title={process.ports.length === 0
+                        ? 'No port detected'
+                        : process.projectId
+                          ? 'Open in in-app browser'
+                          : 'No project associated with this process'}
+                      aria-label={`Open ${processName(process.command)} in the in-app browser`}
+                      onclick={() => void openInBrowser(process)}
+                    >
+                      <ExternalLink size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={!process.projectId}
+                      title={process.projectId
+                        ? 'Open path in in-app terminal'
+                        : 'No project associated with this process'}
+                      aria-label={`Open ${processName(process.command)} path in the in-app terminal`}
+                      onclick={() => void openInTerminal(process)}
+                    >
+                      <SquareTerminal size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={!process.threadId}
+                      title={process.threadId
+                        ? `Open the thread responsible for ${processName(process.command)}`
+                        : 'No thread associated with this process'}
+                      aria-label={`Open the thread responsible for ${processName(process.command)}`}
+                      onclick={() => void navigateToProcess(process)}
+                    >
+                      <MessagesSquare size={15} />
+                    </button>
+                  </div>
+                </li>
+              {/each}
+            </ul>
+          </section>
+        {/if}
       {/if}
     </div>
   </div>
@@ -649,7 +798,7 @@
           {#if selected.size > 0}
             {selected.size} of {processes.length} selected
           {:else}
-            {processes.length} running
+            {processes.length} processes · {services.length} services
           {/if}
         </p>
         <span
@@ -834,6 +983,29 @@
     </button>
   {/snippet}
 </Modal>
+
+<ConfirmDialog
+  open={stopTarget !== null}
+  title="Stop service?"
+  confirmLabel="Stop service"
+  busy={stopping}
+  onCancel={() => {
+    if (!stopping) stopTarget = null
+  }}
+  onConfirm={confirmStopService}
+>
+  {#if stopTarget}
+    <p>
+      Stop <span class="font-medium text-foreground">{stopTarget.name}</span>?
+    </p>
+    {#if stopTarget.detail}
+      <p class="truncate font-mono text-xs text-dimmed" title={stopTarget.detail}>
+        {stopTarget.detail}
+      </p>
+    {/if}
+    <p>Anything using it loses this runtime until it starts again.</p>
+  {/if}
+</ConfirmDialog>
 
 <style>
   .task-manager-spinner {

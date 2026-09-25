@@ -2,8 +2,9 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { mkdirSync } from 'fs'
-import { join } from 'path'
+import { basename, join } from 'path'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { appServiceRegistry } from '../system/app-service-registry'
 import { getConfigRoot } from '../../lib/utils'
 
 export const MCP_TIMEOUT_MS = 30_000
@@ -39,6 +40,18 @@ export interface McpClient {
   close(): Promise<void>
   /** Filled once the handshake completes; a connection test reports it back. */
   readonly serverInfo?: McpServerInfo
+}
+
+/**
+ * Who started an MCP server, so the task manager can attribute the row.
+ * `name` is the utility or service it belongs to; the project/thread fields name
+ * the turn that started it, and are omitted for app-lifetime clients.
+ */
+export interface McpClientOwner {
+  name?: string
+  scope?: 'app' | 'project' | 'thread'
+  projectId?: string | null
+  threadId?: string | null
 }
 
 /** Read `result.serverInfo` from an `initialize` response, ignoring a malformed one. */
@@ -91,6 +104,9 @@ export class StdioMcpClient implements McpClient {
     { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
   >()
 
+  /** Registry id of the task-manager row for this server, once announced. */
+  private serviceId: string | null = null
+
   private constructor(
     private readonly child: ChildProcessWithoutNullStreams,
     private readonly command: string
@@ -102,14 +118,18 @@ export class StdioMcpClient implements McpClient {
     child.stderr.on('data', (chunk: Buffer) => this.recordStderr(chunk.toString()))
     // `close` rather than `exit`: it fires once the stdio streams are drained, so the
     // tail above is complete by the time the failure is reported.
-    child.on('close', (code, signal) => this.rejectPending(this.exitError(code, signal)))
+    child.on('close', (code, signal) => {
+      this.retireService()
+      this.rejectPending(this.exitError(code, signal))
+    })
     child.on('error', (error) => this.rejectPending(error))
   }
 
   static async connect(
     command: string,
     args: string[],
-    environment: Record<string, string>
+    environment: Record<string, string>,
+    owner: McpClientOwner = {}
   ): Promise<StdioMcpClient> {
     const client = new StdioMcpClient(
       spawn(command, args, {
@@ -127,7 +147,34 @@ export class StdioMcpClient implements McpClient {
       })
     )
     client.notify('notifications/initialized', {})
+    client.announceService(command, args, owner)
     return client
+  }
+
+  /**
+   * Publish the running server so the task manager lists it while it lives.
+   * Before this, a turn's MCP child existed only as an untracked process of the
+   * Electron main process and was invisible to the operator.
+   */
+  private announceService(command: string, args: string[], owner: McpClientOwner): void {
+    const reported = this.serverInfo.name?.trim()
+    const label = owner.name?.trim() || reported || basename(command) || 'MCP server'
+    this.serviceId = appServiceRegistry.register({
+      kind: 'mcp',
+      name: `MCP server: ${label}`,
+      detail: [command, ...args].join(' '),
+      scope: owner.scope ?? 'app',
+      projectId: owner.projectId ?? null,
+      threadId: owner.threadId ?? null,
+      pid: this.child.pid ?? null,
+      stop: () => this.close()
+    })
+  }
+
+  private retireService(): void {
+    if (!this.serviceId) return
+    appServiceRegistry.unregister(this.serviceId)
+    this.serviceId = null
   }
 
   async listTools(): Promise<McpTool[]> {
@@ -152,6 +199,7 @@ export class StdioMcpClient implements McpClient {
   }
 
   async close(): Promise<void> {
+    this.retireService()
     this.rejectPending(new Error('MCP client closed'))
     this.child.kill()
   }

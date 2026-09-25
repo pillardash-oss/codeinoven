@@ -26,6 +26,7 @@ import type { Contract } from './contract-helpers'
 export const invokeThreadContract = {
   'taskManager:list': {} as Contract<[], TaskManagerSnapshot>,
   'taskManager:killProcess': {} as Contract<[pid: number, force: boolean], void>,
+  'taskManager:stopService': {} as Contract<[id: string], void>,
   'temporary-chat:convertToThread': {} as Contract<
     [
       projectId: string,

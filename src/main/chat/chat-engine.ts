@@ -176,6 +176,7 @@ import {
 import { refreshCustomProviderModels } from '../providers/base-url-model-refresh'
 import { AgentProcessService } from '../agents/agent-process-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
+import { appServiceRegistry } from '../system/app-service-registry'
 import { UtilityOrchestrationService } from '../utilities/utility-orchestration-service'
 import {
   createDesignAssignmentExecutor,
@@ -1838,6 +1839,12 @@ export class ChatEngine {
         throw new TypeError('Process ID must be a positive integer')
       }
       return this.killTaskManagerProcess(pid, force === true)
+    })
+    ipcMain.handle('taskManager:stopService', (_, id: unknown) => {
+      if (typeof id !== 'string' || id.trim().length === 0) {
+        throw new TypeError('Service id must be a non-empty string')
+      }
+      return this.stopTaskManagerService(id)
     })
     ipcMain.handle('capabilities:readSkill', (_, source: AgentCapabilitySource) =>
       this.capabilityDiscovery.readSkill(source)
@@ -5515,10 +5522,12 @@ export class ChatEngine {
   /** App-wide process list for the task manager (all projects and app scope). */
   async listTaskManagerProcesses(): Promise<TaskManagerSnapshot> {
     const processes = await this.agentProcesses.listAll()
+    const services = appServiceRegistry.list()
     const projectNames = new Map<string, string>()
     const threadTitles = new Map<string, string>()
-    for (const process of processes) {
-      const { projectId, threadId } = process
+    // One resolution pass across both lists, so a project or thread that owns a
+    // process and a service is read from the database once.
+    const resolveOwner = async (projectId: string | null, threadId: string | null) => {
       if (projectId && !projectNames.has(projectId)) {
         const project = await this.projectManager.getProject(projectId)
         projectNames.set(projectId, project?.name ?? projectId)
@@ -5528,13 +5537,21 @@ export class ChatEngine {
         threadTitles.set(threadId, thread?.title ?? threadId)
       }
     }
+    for (const process of processes) await resolveOwner(process.projectId, process.threadId)
+    for (const service of services) await resolveOwner(service.projectId, service.threadId)
     const resolvedProcesses = processes.map((process) => ({
       ...process,
       ...(process.projectId ? { projectName: projectNames.get(process.projectId) ?? null } : {}),
       ...(process.threadId ? { threadTitle: threadTitles.get(process.threadId) ?? null } : {})
     }))
+    const resolvedServices = services.map((service) => ({
+      ...service,
+      ...(service.projectId ? { projectName: projectNames.get(service.projectId) ?? null } : {}),
+      ...(service.threadId ? { threadTitle: threadTitles.get(service.threadId) ?? null } : {})
+    }))
     return {
       processes: resolvedProcesses,
+      services: resolvedServices,
       power: {
         source: powerMonitor.isOnBatteryPower() ? 'battery' : 'ac',
         thermalState:
@@ -5550,6 +5567,11 @@ export class ChatEngine {
       throw new TypeError('Process ID must be a positive integer')
     }
     return this.agentProcesses.killProcessGlobal(pid, force)
+  }
+
+  /** Stop one registered app service through the action it registered with. */
+  stopTaskManagerService(id: string): Promise<void> {
+    return appServiceRegistry.stop(id)
   }
 
   /** Register a PTY-backed terminal or action and its descendants with the
