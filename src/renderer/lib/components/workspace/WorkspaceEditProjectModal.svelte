@@ -19,6 +19,7 @@
   open={dialogs.showEditModal}
   title="Edit Project"
   onClose={() => (dialogs.showEditModal = false)}
+  size="lg"
 >
   {#if dialogs.editProject}
     <form

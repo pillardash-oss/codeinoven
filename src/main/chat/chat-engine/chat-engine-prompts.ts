@@ -358,7 +358,7 @@ export const FILE_SYSTEM_CHAT_SYSTEM_PROMPT = [
 ].join(' ')
 
 /** Tools available to a plain (web-only) chat thread   no file-system tools. */
-export const CHAT_WEB_ONLY_TOOLS = ['question', 'webfetch', 'websearch', 'gemini_quota']
+export const CHAT_WEB_ONLY_TOOLS = ['question', 'webfetch', 'websearch']
 
 /** The utility gateway's MCP transport name, as every harness registers it. */
 const CHAT_GATEWAY_TRANSPORT_NAME = 'utilities'

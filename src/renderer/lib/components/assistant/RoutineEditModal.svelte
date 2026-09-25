@@ -95,7 +95,7 @@
   }
 </script>
 
-<Modal open={routine !== null} title="Edit routine" {onClose}>
+<Modal open={routine !== null} size="lg" title="Edit routine" {onClose}>
   <form
     id="edit-routine-form"
     class="space-y-4"
