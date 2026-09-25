@@ -1,5 +1,6 @@
 import { toast } from 'svelte-sonner'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { playInAppAlert } from '$lib/notification-sound'
 import {
   captureError,
   errorHeadline,
@@ -20,6 +21,7 @@ import { threadNotesState } from '$lib/stores/thread-notes.svelte'
 import { updaterState } from '$lib/stores/updater.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { DEFAULT_THREAD_TITLE, type OpenedPath, type Project, type Thread } from '$shared/types'
+import { notificationSoundKind } from '$shared/ipc-contract'
 import type {
   AgentNotificationPayload,
   CloseConfirmationPayload,
@@ -81,6 +83,10 @@ function showAgentNotification(
   if (onSelectedThread) {
     return
   }
+  // The toast is shown from here, so this is the only place the in-app alert is
+  // played: the cue exists exactly when the card does, and a suppressed toast
+  // (the user is already on this thread) stays silent.
+  playInAppAlert(notificationSoundKind(payload.kind))
   notificationPanelState.add(payload)
   const id = payload.id
   const options = {

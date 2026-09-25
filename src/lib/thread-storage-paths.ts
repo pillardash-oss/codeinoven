@@ -1,6 +1,6 @@
 import { join } from 'path'
-import { getConfigRoot } from './utils'
-import { PROJECT_DATA_DIRECTORY } from './project-artifacts'
+import { getConfigRoot, getRoutinePath } from './utils'
+import { ASSISTANT_CWD_DIR, PROJECT_DATA_DIRECTORY } from './project-artifacts'
 import type { Project } from './types'
 
 /**
@@ -46,4 +46,15 @@ export function threadOwnedDirectories(
     dirs.push(join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments', threadId))
   }
   return dirs
+}
+
+/**
+ * Every app-owned directory one routine owns on disk: its icon and how-to
+ * checkpoint folder, and the workspace every task in it mounts. Deleting a
+ * routine removes both, so its artifacts never outlive the container the user
+ * removed. Callers should remove these with `{ recursive: true, force: true }`
+ * since either may be absent.
+ */
+export function routineOwnedDirectories(routineId: string): string[] {
+  return [getRoutinePath(routineId), join(getConfigRoot(), ASSISTANT_CWD_DIR, routineId)]
 }

@@ -1,55 +1,131 @@
-import { toast } from 'svelte-sonner'
-import { showToastWarning } from '$lib/stores/app-errors.svelte'
-import type { DanglingReference, GitSyncResult } from '$shared/types'
+import type { GitPullStrategy, GitSyncDirection, GitSyncResult } from '$shared/types'
+import type { GitSyncJob } from '$lib/stores/git-sync-jobs.svelte'
 
 /**
- * Report a completed sync exactly once, in the words the picker used for the
- * other end.
+ * What one sync is about to do, in one line: the strategy, the direction, and
+ * the end it trades commits with, named the way the chooser named it.
  *
- * Both surfaces that can start a sync (the Git panel and a scope's own menu)
- * report through here, so the same operation can never describe itself
- * differently depending on where the user clicked. A conflicted integration is
- * a warning rather than an error: the commits are on disk to reconcile, and the
- * conflict UI is the next step, not a retry.
+ * The chooser's footer, the checklist line of the run panel and its dock chip
+ * all read this, so a strategy the user picked is described identically after
+ * the modal is gone.
  */
-export function reportSyncResult(result: GitSyncResult): void {
+export function syncIntegrationLabel(
+  direction: GitSyncDirection,
+  strategy: GitPullStrategy,
+  peerLabel: string
+): string {
+  if (direction === 'from') {
+    if (strategy === 'rebase') return `Rebasing this checkout onto ${peerLabel}`
+    if (strategy === 'ff-only') return `Fast-forwarding from ${peerLabel}`
+    return `Merging ${peerLabel} into this checkout`
+  }
+  if (strategy === 'rebase')
+    return `Rebasing this checkout onto ${peerLabel}, then fast-forwarding it`
+  if (strategy === 'ff-only') return `Fast-forwarding ${peerLabel} to this branch`
+  return `Merging this branch into ${peerLabel}`
+}
+
+/**
+ * What a finished sync reports: how it ended, what moved, and what it left
+ * behind.
+ *
+ * The run panel is the only surface a sync reports through, so the outcome is
+ * described here once and rendered there, whatever started the run.
+ */
+export interface SyncOutcomeCopy {
+  /**
+   * Whether the commits landed cleanly. `attention` means something about this
+   * run needs the user: conflicts to resolve, a remote ref that could not be
+   * refreshed, or work the integration left behind in one of the checkouts.
+   */
+  tone: 'success' | 'attention'
+  /** One sentence: what moved, or why it did not. */
+  summary: string
+  /** One line each for what to do or look at next; empty when there is nothing. */
+  notes: string[]
+  /** One line per thing the integration left behind; empty when it left nothing. */
+  findings: string[]
+}
+
+/** What a finished sync reports, in the words the chooser used for the other end. */
+export function syncOutcomeCopy(result: GitSyncResult): SyncOutcomeCopy {
   const peer = result.peerLabel
+  const findings = integrationFindings(result)
+  const tone = findings.length > 0 ? 'attention' : 'success'
+  /**
+   * What the checkout the integration wrote into needs before it is usable again.
+   * Named by this run's direction rather than by the peer's label, which is a noun
+   * phrase and would read as a sentence starting mid-thought.
+   */
+  const leftBehind =
+    result.direction === 'from'
+      ? 'This checkout needs attention before its next build or start.'
+      : 'The other end needs attention before its next build or start.'
 
   if (result.status.conflicted.length > 0) {
-    showToastWarning(
-      result.direction === 'from'
-        ? `Syncing from ${peer} hit conflicts. Resolve them in this checkout.`
-        : `Rebasing onto ${result.peerBranch} hit conflicts. Resolve them here, then sync to ${peer} again.`
-    )
-    return
+    return {
+      tone: 'attention',
+      summary:
+        result.direction === 'from'
+          ? `Syncing from ${peer} hit conflicts`
+          : `Rebasing onto ${result.peerBranch} hit conflicts`,
+      notes: [
+        result.direction === 'from'
+          ? 'Resolve them in this checkout, then continue the integration.'
+          : `Resolve them here, then sync to ${peer} again.`
+      ],
+      findings
+    }
   }
 
   if (result.direction === 'from') {
     const summary =
       result.incoming === 0
         ? `Already up to date with ${peer}`
-        : `Synced ${String(result.incoming)} commit${result.incoming === 1 ? '' : 's'} from ${peer}`
+        : `Synced ${counted(result.incoming, 'commit')} from ${peer}`
     if (result.remote && !result.fetched) {
-      showToastWarning(`${summary}. ${result.remote}/${result.peerBranch} could not be refreshed.`)
-      return
+      return {
+        tone: 'attention',
+        summary,
+        notes: [
+          `${result.remote}/${result.peerBranch} could not be refreshed, so this run compared the local ref.`,
+          ...(findings.length > 0 ? [leftBehind] : [])
+        ],
+        findings
+      }
     }
-    if (reportIntegrationFindings(summary, result)) return
-    toast.success(summary)
-    return
+    return { tone, summary, notes: findings.length > 0 ? [leftBehind] : [], findings }
   }
 
   const summary =
     result.incoming === 0
       ? `Nothing to send: ${peer} already has ${result.branch}'s commits`
-      : `Sent ${String(result.incoming)} commit${result.incoming === 1 ? '' : 's'} to ${peer}`
-  if (result.peerAhead > 0) {
-    toast.success(
-      `${summary}. ${result.peerBranch} has ${String(result.peerAhead)} unpushed commit${result.peerAhead === 1 ? '' : 's'}.`
-    )
-    return
+      : `Sent ${counted(result.incoming, 'commit')} to ${peer}`
+  return {
+    tone,
+    summary,
+    notes: [
+      ...(result.peerAhead > 0
+        ? [`${result.peerBranch} has ${counted(result.peerAhead, 'unpushed commit')}.`]
+        : []),
+      ...(findings.length > 0 ? [leftBehind] : [])
+    ],
+    findings
   }
-  if (reportIntegrationFindings(summary, result)) return
-  toast.success(summary)
+}
+
+/**
+ * What the run panel and its dock chip say the run is doing, or how it ended.
+ *
+ * A finished run reports its own outcome, so a docked chip never summarizes a
+ * failed sync as "Failed" when git already named what happened.
+ */
+export function gitSyncJobStatusLabel(job: GitSyncJob): string {
+  if (job.result) return syncOutcomeCopy(job.result).summary
+  if (job.status === 'running') {
+    return syncIntegrationLabel(job.direction, job.strategy, job.peerLabel)
+  }
+  return 'Failed'
 }
 
 /**
@@ -57,7 +133,7 @@ export function reportSyncResult(result: GitSyncResult): void {
  * mean the same thing in both directions, so the sentences are chosen by
  * direction rather than composed from a fragment.
  */
-export function syncStrategyNotes(direction: 'from' | 'to'): { label: string; note: string }[] {
+export function syncStrategyNotes(direction: GitSyncDirection): { label: string; note: string }[] {
   if (direction === 'from') {
     return [
       {
@@ -90,50 +166,39 @@ export function syncStrategyNotes(direction: 'from' | 'to'): { label: string; no
   ]
 }
 
-/** How many broken imports a toast names before it counts the rest. */
+/** How many broken imports a panel names before it counts the rest. */
 const MAX_LISTED_REFERENCES = 3
 
 /**
- * Report what the integration left behind, in the checkout the commits landed
- * in, and return true when it warned instead of reporting a plain success.
+ * What the integration left behind, in the checkout it wrote into, one line
+ * each.
  *
  * Both findings are silent by nature: git reports a clean integration either
  * way, and the breakage only shows up in the checkout's next build or start.
+ * `from` writes this checkout, so the setup to run again is this one's; `to`
+ * writes the peer, so the peer is the checkout that is stale.
  */
-function reportIntegrationFindings(summary: string, result: GitSyncResult): boolean {
-  const references = result.danglingReferences
-  const manifests = result.changedDependencyManifests
-  if (references.length === 0 && manifests.length === 0) return false
-
+function integrationFindings(result: GitSyncResult): string[] {
   const findings: string[] = []
-  if (references.length > 0) {
-    findings.push(`${String(references.length)} broken import${references.length === 1 ? '' : 's'}`)
+  const references = result.danglingReferences
+  const listed = references.slice(0, MAX_LISTED_REFERENCES)
+  for (const reference of listed) {
+    findings.push(`${reference.file} imports ${reference.specifier}, which the integration removed`)
   }
-  if (manifests.length > 0) {
+  const remaining = references.length - listed.length
+  if (remaining > 0) findings.push(`and ${counted(remaining, 'more broken import')}`)
+  if (result.changedDependencyManifests.length > 0) {
+    const manifests = result.changedDependencyManifests.join(', ')
     findings.push(
-      `${String(manifests.length)} changed dependency manifest${manifests.length === 1 ? '' : 's'}`
+      result.direction === 'from'
+        ? `Run this checkout's setup again: ${manifests} changed`
+        : `Run the setup for ${result.peerLabel} again: ${manifests} changed`
     )
   }
-
-  showToastWarning(`${summary}, leaving ${findings.join(' and ')}.`, {
-    duration: 20_000,
-    description: describeIntegrationFindings(references, manifests)
-  })
-  return true
+  return findings
 }
 
-/**
- * One line, because a toast description is a single line: what is broken, and
- * what has to run before this checkout is usable again.
- */
-function describeIntegrationFindings(references: DanglingReference[], manifests: string[]): string {
-  const listed = references
-    .slice(0, MAX_LISTED_REFERENCES)
-    .map((reference) => `${reference.file} imports ${reference.specifier}, which was removed`)
-  const remaining = references.length - listed.length
-  if (remaining > 0) listed.push(`and ${String(remaining)} more`)
-  if (manifests.length > 0) {
-    listed.push(`Run the setup for this checkout again: ${manifests.join(', ')} changed`)
-  }
-  return listed.join('. ')
+/** `1 commit`, `3 commits`. */
+function counted(count: number, noun: string): string {
+  return `${String(count)} ${noun}${count === 1 ? '' : 's'}`
 }

@@ -4,36 +4,17 @@ import { opendir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { mimeTypeForPath } from '../../lib/mime-types'
 import { PROTOTYPE_ASSET_BYTE_LIMIT } from '../../lib/prototypes/prototype-artifacts'
+import {
+  STRICT_PROTOTYPE_CDN_POLICY,
+  prototypePreviewCsp,
+  type PrototypeCdnPolicy
+} from '../../lib/prototypes/prototype-cdn'
 
 /** 16x16 amber placeholder served when a browser asks the origin root for a favicon. */
 const DEFAULT_FAVICON_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAG0lEQVR4nGN41WXznxLMMGrAaBiMpoP/wyQMANVNrx/VZr2aAAAAAElFTkSuQmCC',
   'base64'
 )
-
-/**
- * Dev-preview posture for agent-generated prototypes: prototypes are self-contained
- * static HTML that rely on inline scripts, inline event handlers, and demo forms that
- * post back to their own URL, so same-origin interactivity is allowed. Everything that
- * would let prototype content reach outside this loopback origin stays locked down:
- * no external script/CDN origins, no framing from other documents, no base-url
- * hijacking, no plugin content.
- */
-const PREVIEW_CSP = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  "media-src 'self' data: blob:",
-  "connect-src 'self'",
-  "worker-src 'self' blob:",
-  "frame-src 'self'",
-  "object-src 'none'",
-  "frame-ancestors 'none'",
-  "base-uri 'none'",
-  "form-action 'self'"
-].join('; ')
 
 function inside(root: string, target: string): boolean {
   const rel = relative(root, target)
@@ -44,6 +25,21 @@ export class PrototypePreviewService {
   private server: Server | null = null
   private starting: Promise<number> | null = null
   private readonly roots = new Map<string, string>()
+  /**
+   * The header the next response carries. Strict until the app applies the
+   * configured policy, so a service nobody configured stays closed rather than
+   * silently opening the network.
+   */
+  private csp = prototypePreviewCsp(STRICT_PROTOTYPE_CDN_POLICY)
+
+  /**
+   * Apply the external CDN policy from settings. Resolved on apply rather than
+   * per response, so one settings change costs one recomputation and every
+   * following request already carries the new header.
+   */
+  setCdnPolicy(policy: PrototypeCdnPolicy): void {
+    this.csp = prototypePreviewCsp(policy)
+  }
 
   async register(previewSlug: string, canonicalRoot: string): Promise<void> {
     if (!/^[a-z0-9][a-z0-9-]{0,160}$/u.test(previewSlug)) {
@@ -135,7 +131,7 @@ export class PrototypePreviewService {
     response.setHeader('X-Content-Type-Options', 'nosniff')
     response.setHeader('Referrer-Policy', 'no-referrer')
     response.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
-    response.setHeader('Content-Security-Policy', PREVIEW_CSP)
+    response.setHeader('Content-Security-Policy', this.csp)
     try {
       const parsed = new URL(url, 'http://127.0.0.1')
       if (parsed.pathname === '/favicon.ico') {

@@ -1,8 +1,15 @@
-import { MCP_TIMEOUT_MS } from '../../agents/mcp-stdio-client'
-import type { JsonRpcResponse, McpClient, McpTool } from '../../agents/mcp-stdio-client'
+import { MCP_TIMEOUT_MS, parseMcpServerInfo } from '../../agents/mcp-stdio-client'
+import type {
+  JsonRpcResponse,
+  McpClient,
+  McpServerInfo,
+  McpTool
+} from '../../agents/mcp-stdio-client'
 import { isRecord, recordValue } from './utility-input'
 
 export class RemoteMcpClient implements McpClient {
+  serverInfo: McpServerInfo = {}
+
   private nextId = 1
   private sessionId: string | undefined
 
@@ -13,11 +20,13 @@ export class RemoteMcpClient implements McpClient {
 
   static async connect(url: string, headers: Record<string, string>): Promise<RemoteMcpClient> {
     const client = new RemoteMcpClient(url, headers)
-    await client.request('initialize', {
-      protocolVersion: '2025-03-26',
-      capabilities: {},
-      clientInfo: { name: 'codeinoven-utility-gateway', version: '1' }
-    })
+    client.serverInfo = parseMcpServerInfo(
+      await client.request('initialize', {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'codeinoven-utility-gateway', version: '1' }
+      })
+    )
     await client.notify('notifications/initialized', {})
     return client
   }

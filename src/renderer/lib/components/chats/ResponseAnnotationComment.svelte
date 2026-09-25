@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Check, Trash2, X } from '@lucide/svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { draggablePopover } from '$lib/draggable-popover.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
@@ -64,11 +65,11 @@
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
+    if (keymapState.matches('chat-annotation-close', event)) {
       event.preventDefault()
       onClose()
     }
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+    if (keymapState.matches('chat-annotation-comment', event)) {
       event.preventDefault()
       submit()
     }

@@ -1,4 +1,5 @@
 import type { EngineeringSpec } from '$shared/types'
+import { formatDateTimeCompact } from '$shared/date-time-format'
 
 export function statusLabel(status: EngineeringSpec['status']): string {
   return status.replace('_', ' ')
@@ -12,10 +13,5 @@ export function statusClass(status: EngineeringSpec['status']): string {
 }
 
 export function formatDate(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  }).format(timestamp)
+  return formatDateTimeCompact(timestamp)
 }

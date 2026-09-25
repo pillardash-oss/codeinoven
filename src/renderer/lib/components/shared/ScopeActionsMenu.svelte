@@ -1,4 +1,10 @@
 <script lang="ts">
+  import { osFileManagerLabel } from '$lib/os-file-manager'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
+  import { isScopeWorktreeHealthRepairable } from '$shared/scope-worktree-health'
+  import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
   import {
     Archive,
     ArchiveRestore,
@@ -6,24 +12,18 @@
     FolderInput,
     FolderOpen,
     GitBranch,
+    GitCompare,
     GitMerge,
-    GitPullRequestArrow,
     PanelsLeftBottom,
     Pencil,
     Pin,
     PinOff,
-    Trash2,
     RefreshCw,
+    Trash2,
     Wrench
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component, Snippet } from 'svelte'
-  import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
-  import { scopeState } from '$lib/stores/scope.svelte'
-  import { isScopeWorktreeHealthRepairable } from '$shared/scope-worktree-health'
-  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-  import { osFileManagerLabel } from '$lib/os-file-manager'
   import type { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
 
   interface Props {
@@ -188,8 +188,8 @@
           run: () => actions.askMerge(bucket)
         })
         list.push({
-          label: 'Merge from project…',
-          icon: GitPullRequestArrow,
+          label: 'Sync Worktree',
+          icon: GitCompare,
           run: () => actions.askSyncFrom(bucket)
         })
         if (setupFailed || setupStale) {

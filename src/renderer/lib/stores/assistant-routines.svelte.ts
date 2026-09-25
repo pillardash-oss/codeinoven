@@ -5,6 +5,7 @@ import {
   type CreateRoutineInput,
   type MissedRun,
   type Routine,
+  type RoutineDeletionResult,
   type RoutineSchedule,
   type Thread,
   type UpdateRoutineInput
@@ -34,23 +35,40 @@ class AssistantRoutinesState {
   missedRuns: MissedRun[] = $state([])
   /** Custom icon data URLs for routines that store one, keyed by routine id. */
   iconUrls: SvelteMap<string, string> = $state(new SvelteMap())
+  /**
+   * Getting started checkpoints by routine id: what the authoring interview has
+   * agreed so far. `null` means the interview has not saved one yet. Pushed by
+   * `routine:checkpointChanged` and read on demand by the how-to panel, so an
+   * open panel follows the interview instead of waiting to be reopened.
+   */
+  checkpoints: SvelteMap<string, string | null> = $state(new SvelteMap())
   /** Routine id -> stored icon filename. A mutation both broadcasts
    *  `routine:changed` and runs an explicit `refresh()`, so without this every
    *  mutation re-fetched each routine's icon over IPC twice. */
   private iconSignatures = new Map<string, string>()
   private initialized = false
   private disposers: Array<() => void> = []
+  /**
+   * Routine ids the user already removed from the UI while the main process
+   * finishes the background cleanup. A routine list pushed in that window (a
+   * scheduler tick, a checkpoint write, another window's mutation) must not
+   * resurrect the container the user just removed.
+   */
+  private removing = new Set<string>()
 
   initialize(): void {
     if (this.initialized) return
     this.initialized = true
     this.disposers.push(
       subscribe('routine:changed', (routines) => {
-        this.routines = routines
+        this.publishRoutines(routines)
         void this.refreshIcons()
       }),
       subscribe('assistant:missedRunsChanged', (runs) => {
         this.missedRuns = runs
+      }),
+      subscribe('routine:checkpointChanged', (routineId) => {
+        void this.refreshCheckpoint(routineId)
       })
     )
     void this.ensureSpace().catch(() => undefined)
@@ -65,8 +83,19 @@ class AssistantRoutinesState {
   }
 
   async refresh(): Promise<void> {
-    this.routines = await invoke('routine:list')
+    this.publishRoutines(await invoke('routine:list'))
     await this.refreshIcons()
+  }
+
+  /**
+   * Publish a routine list from the main process, minus any routine the user
+   * already removed from the UI and whose cleanup is still running.
+   */
+  private publishRoutines(routines: Routine[]): void {
+    this.routines =
+      this.removing.size === 0
+        ? routines
+        : routines.filter((routine) => !this.removing.has(routine.id))
   }
 
   /**
@@ -169,9 +198,31 @@ class AssistantRoutinesState {
     return routine
   }
 
-  async deleteRoutine(routineId: string): Promise<void> {
-    await invoke('routine:delete', routineId)
-    await this.refresh()
+  /**
+   * Remove a routine: the container and its pending missed runs leave the UI at
+   * once, and the main process does the cleanup in the background   its threads
+   * and their runs, the scheduler's records, the database rows, and the
+   * routine's artifact folder. The promise resolves with what the sweep removed
+   * so the caller can report it, and a failed sweep puts the routine back rather
+   * than leaving a container that silently reappears on the next refresh.
+   */
+  async removeRoutine(routineId: string): Promise<RoutineDeletionResult> {
+    this.removing.add(routineId)
+    this.routines = this.routines.filter((routine) => routine.id !== routineId)
+    this.missedRuns = this.missedRuns.filter((run) => run.routineId !== routineId)
+    this.checkpoints.delete(routineId)
+    try {
+      return await invoke('routine:delete', routineId)
+    } catch (error) {
+      // The main process still has the routine, so restore it instead of
+      // pretending it is gone.
+      this.removing.delete(routineId)
+      await this.refresh()
+      await this.refreshMissedRuns()
+      throw error
+    } finally {
+      this.removing.delete(routineId)
+    }
   }
 
   async setRoutinePinned(routineId: string, pinned: boolean): Promise<Routine> {
@@ -196,6 +247,27 @@ class AssistantRoutinesState {
    */
   howToThread(routineId: string): Promise<Thread | null> {
     return invoke('assistant:howToThread', routineId)
+  }
+
+  /**
+   * The routine's Getting started checkpoint, or null while the interview has
+   * not saved one. Read-only: the authoring agent's own turn writes it.
+   */
+  gettingStartedCheckpoint(routineId: string): Promise<string | null> {
+    return invoke('routine:gettingStartedCheckpoint', routineId)
+  }
+
+  /**
+   * Load one routine's checkpoint into the store. Best-effort: a read that fails
+   * leaves the last known value in place rather than blanking a panel that is
+   * showing the interview's agreed state.
+   */
+  async refreshCheckpoint(routineId: string): Promise<void> {
+    try {
+      this.checkpoints.set(routineId, await this.gettingStartedCheckpoint(routineId))
+    } catch {
+      // Nothing to surface: the panel simply keeps what it already shows.
+    }
   }
 
   /** Hide or reveal a routine's how-to thread. It stays pinned either way. */

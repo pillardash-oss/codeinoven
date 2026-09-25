@@ -3,6 +3,7 @@
   import { mergeWorkingParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
   import { formatDurationMs } from '$lib/format/duration'
   import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
+  import { formatTime } from '$shared/date-time-format'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -1469,6 +1470,21 @@
       category: 'command',
       source: applicationActionSource,
       keywords: ['cio', 'utility', 'utilities', 'setup', 'install', 'skill', 'mcp', 'debug'],
+      slashCommand: true,
+      ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+
+    // CodeInOven design session   the slash spelling of the @cio-design composer
+    // tag. The tag promotes the app-owned design capability to an active
+    // capability for the turn, so the agent starts designing instead of first
+    // looking for a tool that designs.
+    actions.push({
+      id: 'command:cio-design',
+      title: '/cio-design',
+      description: 'Start a design session: design an interface and watch it render in the browser',
+      category: 'command',
+      source: applicationActionSource,
+      keywords: ['cio', 'design', 'designer', 'prototype', 'ui', 'landing', 'page', 'wireframe'],
       slashCommand: true,
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
@@ -3810,11 +3826,6 @@
     })
   }
 
-  function formatTime(ts: number): string {
-    if (!ts) return ''
-    return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  }
-
   /** For a user message that follows an assistant turn (a steer), return the
    *  previous turn's start/end timestamps and total duration so it can be
    *  rendered as an audit line above the user's message. */
@@ -5932,6 +5943,14 @@
     sendComposerMessage(request ? `@cio-utility ${request}` : '@cio-utility', [])
   }
 
+  /** Open a design session   the slash spelling of the @cio-design composer tag.
+   *  The main process owns the design contract and the capability that goes with
+   *  it, so this only has to send the tag and whatever the user typed after it. */
+  function triggerCioDesignTurn(args: string): void {
+    const request = args.trim()
+    sendComposerMessage(request ? `@cio-design ${request}` : '@cio-design', [])
+  }
+
   /** Ask the agent to load and follow a skill by name. This is the route for
    *  skills with no runnable native command in the current conversation (a
    *  side chat owns no thread row, and a global or CodeInOven skill is not a
@@ -6138,6 +6157,10 @@
       triggerCioUtilityTurn(args)
       return
     }
+    if (commandId === 'command:cio-design') {
+      triggerCioDesignTurn(args)
+      return
+    }
     if (commandId.startsWith('cio-skill:')) {
       triggerCapabilitySkill(commandId, args)
       return
@@ -6241,9 +6264,13 @@
       return
     }
 
-    // App-owned slash commands (/cio-utility and capability skills) route
-    // through the same handler the composer's submit path uses.
-    if (action.id === 'command:cio-utility' || action.id.startsWith('cio-skill:')) {
+    // App-owned slash commands (/cio-utility, /cio-design and capability skills)
+    // route through the same handler the composer's submit path uses.
+    if (
+      action.id === 'command:cio-utility' ||
+      action.id === 'command:cio-design' ||
+      action.id.startsWith('cio-skill:')
+    ) {
       await executeHarnessCommand(action.id, '')
       return
     }
@@ -10111,6 +10138,18 @@
     )
   }
 
+  /**
+   * Pause a secret card's countdown while the user reads a temporary chat: the
+   * same interaction that pauses a question (an update with no next index)
+   * clears the request's deadline. Best-effort, so the chat still opens when the
+   * request is already resolving.
+   */
+  function handleSecretPause(requestId: string, questionIndex: number): void {
+    void handleQuestionUpdate(requestId, questionIndex, [], undefined).catch(() => {
+      // The request may already be resolving; the chat still opens.
+    })
+  }
+
   async function handleQuestionUpdate(
     requestId: string,
     questionIndex: number,
@@ -10146,16 +10185,15 @@
    *  the question timeout; here we populate the chat and set a question-specific
    *  auto prompt. */
   function handleQuestionExplain(_requestId: string, question: AgentQuestion): void {
-    const selection = formatQuestionForTemporaryChat(question)
     contextSidebarState.openTemporaryChat(
       thread.projectId,
       thread.id,
       'elaborate',
-      selection,
+      formatQuestionForTemporaryChat(question),
       temporaryConversationContext(),
       settings,
       true,
-      EXPLAIN_QUESTION_PROMPT
+      question.secretRequest ? EXPLAIN_SECRET_PROMPT : EXPLAIN_QUESTION_PROMPT
     )
   }
 
@@ -10175,11 +10213,23 @@
   const EXPLAIN_QUESTION_PROMPT =
     'Explain this question and all of its options clearly so the user can understand it and make a more informed decision. Base the explanation on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral   do not recommend a specific answer. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this question and its options.'
 
+  const EXPLAIN_SECRET_PROMPT =
+    'Explain this secret request clearly so the user can understand what the agent needs, why it needs it, and where the user can obtain or create it, based on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral: never invent, guess, or suggest an actual secret value, and do not recommend a specific provider or credential unless the context already names one. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this secret request.'
+
   function formatQuestionForTemporaryChat(question: AgentQuestion): string {
     const parts: string[] = []
     if (question.header) parts.push(`Question: ${question.header}`)
     if (question.prompt) parts.push(`Prompt: ${question.prompt}`)
     if (question.description) parts.push(`Description: ${question.description}`)
+    if (question.secretRequest) {
+      if (question.secretEnvironmentVariable) {
+        parts.push(`Exposed to the agent as: ${question.secretEnvironmentVariable}`)
+      }
+      if (question.secretUtilityId) parts.push(`Bound to utility: ${question.secretUtilityId}`)
+      parts.push(
+        '(The user pastes the value; it is stored in the encrypted vault and is never sent to the model.)'
+      )
+    }
     if (question.richOptions && question.richOptions.length > 0) {
       parts.push(
         'Options:',
@@ -11956,12 +12006,14 @@
                         class="size-7 rounded-[0.375rem] object-cover"
                       />
                     {/if}
-                    {project?.name ?? 'New thread'}
+                    {chatMode ? 'Start a new chat' : (project?.name ?? 'New thread')}
                   </h1>
                   <p class="mt-1 text-[0.875rem] text-muted">
-                    {centeredModelName
-                      ? `What should ${centeredModelName} work on?`
-                      : 'How can CIO serve you today?'}
+                    {chatMode
+                      ? 'Send a message to begin no project needed'
+                      : centeredModelName
+                        ? `What should ${centeredModelName} work on?`
+                        : 'How can CIO serve you today?'}
                   </p>
                 </div>
               {/if}
@@ -12147,6 +12199,9 @@
                     onSubmit={handleSecretSubmit}
                     onAlternative={handleSecretAlternative}
                     onDismiss={handleQuestionDismiss}
+                    onExplain={handleQuestionExplain}
+                    onQuickChat={handleQuestionQuickChat}
+                    onPause={handleSecretPause}
                   />
                 {:else}
                   <AgentQuestionCard

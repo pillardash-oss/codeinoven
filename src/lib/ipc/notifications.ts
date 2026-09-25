@@ -39,8 +39,38 @@ export interface CloseConfirmationPayload {
 
 export type AgentNotificationKind = 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
 
-/** Which bundled alert the renderer should play for a notification. */
+/** Which bundled alert a notification maps to. */
 export type NotificationSoundKind = 'default' | 'attention'
+
+/**
+ * How long the app stays quiet after it played an alert. Only the first
+ * notification of a burst is announced; the rest still show their card and
+ * toast but stay silent, so a burst never machine-guns beeps.
+ *
+ * Both alert surfaces share this window: the main process gates the off-app
+ * alert it dispatches, and the renderer sound module gates the in-app alert it
+ * plays alongside the toast.
+ */
+export const NOTIFICATION_SOUND_DEDUP_MS = 2_500
+
+/**
+ * Which alert an event maps to. An attention request and a failure both mean
+ * the user has to act, so they share the attention alert; everything else is
+ * the default alert. The off-app card and the in-app toast derive their alert
+ * from this one rule, so the same event never sounds different per surface.
+ */
+export function notificationSoundKind(kind: AgentNotificationKind): NotificationSoundKind {
+  return kind === 'attention' || kind === 'error' ? 'attention' : 'default'
+}
+
+/**
+ * Which in-app alert group a sound kind belongs to. Success covers everything
+ * that finished or is ready to review; an attention alert and a failure both
+ * mean the user has to act, so they share the issue alert.
+ */
+export function inAppSoundGroup(kind: NotificationSoundKind): 'success' | 'issue' {
+  return kind === 'attention' ? 'issue' : 'success'
+}
 
 /** Where a notification originated: a project thread, the global chat (inbox)
  *  or a temporary (side) chat piped through a parent thread. */

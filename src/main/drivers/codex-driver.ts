@@ -667,13 +667,33 @@ export class CodexDriver extends PersistentCliDriver {
     const existing = this.authenticationRestartsByProjectPath.get(projectPath)
     if (existing) return existing
 
-    const restart = this.restartAppServerForAuthentication(projectPath).finally(() => {
+    const restart = this.restartAppServer(
+      projectPath,
+      'Codex app-server restarting after provider sign-in'
+    ).finally(() => {
       if (this.authenticationRestartsByProjectPath.get(projectPath) === restart) {
         this.authenticationRestartsByProjectPath.delete(projectPath)
       }
     })
     this.authenticationRestartsByProjectPath.set(projectPath, restart)
     return restart
+  }
+
+  /**
+   * Rebuild every resident app-server so the next turn spawns the Codex binary
+   * currently on disk. A harness update replaces `codex` but not the app-server
+   * already running from the old install, and that process is what every turn
+   * in the project talks to. The native threads live in Codex's own store, so
+   * the rebuilt server resumes them.
+   */
+  override async restartRuntime(): Promise<void> {
+    for (const projectPath of [...this.hostsByProjectPath.keys()]) {
+      await this.restartAppServer(
+        projectPath,
+        'Codex app-server restarted to pick up a harness update'
+      )
+    }
+    super.restartRuntime()
   }
 
   override async deleteSession(projectPath: string, sessionId: string): Promise<void> {
@@ -714,7 +734,7 @@ export class CodexDriver extends PersistentCliDriver {
     super.dispose()
   }
 
-  private async restartAppServerForAuthentication(projectPath: string): Promise<void> {
+  private async restartAppServer(projectPath: string, reason: string): Promise<void> {
     const starting = this.hostsStartingByProjectPath.get(projectPath)
     if (starting) await starting.catch(() => undefined)
 
@@ -722,7 +742,6 @@ export class CodexDriver extends PersistentCliDriver {
     if (!host) return
 
     this.hostsByProjectPath.delete(projectPath)
-    const reason = 'Codex app-server restarting after provider sign-in'
     await this.failAppServerHost(host, reason)
     if (!host.child.killed) host.child.kill()
   }

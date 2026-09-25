@@ -1,4 +1,5 @@
 import type { AgentDefaultsConfig, AuxiliaryAgentConfig, RankingJudgeConfig } from './agent'
+import type { AgentModelSelection } from './common'
 import type { GitPullPreference, PrMergeMethod } from './git'
 
 export interface WorkflowStage {
@@ -179,6 +180,66 @@ export interface MemoryImportPreview {
   entries: MemoryEntry[]
 }
 
+/**
+ * Which in-app (toast) alerts play a sound while the app is focused.
+ *
+ * While the app is in the background the same notifications deliver an OS card
+ * and the louder off-app alert, which is not configurable. When the app is in
+ * front the user only sees the toast, so this quieter alert announces the exact
+ * same events. The two groups are independent: a user may keep just one.
+ */
+export interface InAppNotificationSoundSettings {
+  /** Agent finished, chat finished, or a specification is ready to review. */
+  success: boolean
+  /** An agent needs attention or a run failed. */
+  issue: boolean
+}
+
+/** Both in-app alert groups on: the quieter alert is an attention cue, not a chime. */
+export const DEFAULT_IN_APP_NOTIFICATION_SOUND: InAppNotificationSoundSettings = {
+  success: true,
+  issue: true
+}
+
+/**
+ * What a design assignment produces, which is what decides how a session
+ * reaches it.
+ *
+ * `text` work is answered by the assigned model itself. A media output names the
+ * model the user wants for that media, because not every model generates a
+ * picture or a clip, and the ones that do are usually picked for exactly that.
+ */
+export type DesignAssignmentOutput = 'text' | 'image' | 'video' | 'audio'
+
+/**
+ * One named piece of design work and the model the user assigned to it.
+ *
+ * The model is the user's choice and is never chosen by the app or by an agent
+ * working in a design session: an assignment with no model is inert rather than
+ * routed somewhere plausible.
+ */
+export interface DesignAssignment {
+  /** Stable handle an agent names in a tool call, e.g. `image-generation`. */
+  id: string
+  /** Human name shown in settings, e.g. `Image generation`. */
+  label: string
+  /**
+   * What the work produces. A stored assignment written before this field
+   * existed has none, which reads as `text`.
+   */
+  produces?: DesignAssignmentOutput
+  /** Standing guidance handed to the assigned model with every call. */
+  instructions?: string
+  /** The model that does this work. */
+  selection: AgentModelSelection
+}
+
+/** Design work the user routed to a model of their own choosing. */
+export interface DesignConfig {
+  /** User-authored assignments. Empty means nothing is delegated anywhere. */
+  assignments: DesignAssignment[]
+}
+
 export interface AppConfig {
   theme: ThemePreference
   /** Font family id used across the app UI. */
@@ -211,6 +272,8 @@ export interface AppConfig {
   agentDefaults: AgentDefaultsConfig
   /** Model each harness uses for auxiliary work, keyed by the harness a thread runs on. */
   auxiliaryAgents: AuxiliaryAgentConfig
+  /** Model the user assigned to each named design assignment (images, copy, video). */
+  design: DesignConfig
   /** Model that judges ranking conversations, and whether it is pinned at all. */
   rankingJudge: RankingJudgeConfig
   /** Editable default behavior prompt for project Engineering implementation turns. */
@@ -245,6 +308,15 @@ export interface AppConfig {
   maxConflictFileBytes: number
   /** Route loopback development links into the app-scoped test browser. */
   openLocalhostInCioBrowser: boolean
+  /**
+   * Let prototype previews load fonts, styles, and scripts from the approved
+   * CDNs. Off confines every prototype to assets inlined in its own folder.
+   */
+  allowPrototypeExternalCdn: boolean
+  /** Extra CDN origins the user approved, merged after the app's own list. */
+  prototypeCdnAllowlist: string[]
+  /** Quieter in-app alert played with the toast while the app is focused. */
+  inAppNotificationSound: InAppNotificationSoundSettings
   /** Local speech capture, cleanup, model, cue, history, and playback preferences. */
   sound: import('../speech/types').SpeechSettings
 }
@@ -275,6 +347,7 @@ export type AppConfigPatch = Partial<
     | 'memory'
     | 'agentDefaults'
     | 'auxiliaryAgents'
+    | 'design'
     | 'rankingJudge'
     | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'
@@ -289,6 +362,9 @@ export type AppConfigPatch = Partial<
     | 'maxDiffLines'
     | 'maxConflictFileBytes'
     | 'openLocalhostInCioBrowser'
+    | 'allowPrototypeExternalCdn'
+    | 'prototypeCdnAllowlist'
+    | 'inAppNotificationSound'
     | 'sound'
   >
 >

@@ -878,6 +878,7 @@ CREATE TABLE IF NOT EXISTS routines (
   icon                TEXT,
   icon_type           TEXT,
   schedule            TEXT,
+  schedule_updated_at INTEGER,
   how_to              TEXT NOT NULL DEFAULT '',
   how_to_updated_at   INTEGER,
   connections         TEXT NOT NULL DEFAULT '[]',

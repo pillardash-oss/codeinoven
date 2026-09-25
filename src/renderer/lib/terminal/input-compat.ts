@@ -1,4 +1,5 @@
 import type { Terminal } from 'ghostty-web'
+import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
 interface TerminalInputCompatOptions {
   term: Terminal
@@ -44,22 +45,24 @@ export function buildPasteData(term: Terminal, text: string): string {
  *    bracketed-paste wrapping the shell negotiated, exactly like a desktop
  *    terminal, regardless of which internal element holds focus.
  *
- * 2. Option/control+Arrow word hopping: the WASM key encoder emits CSI-modified
- *    cursor sequences (`ESC[1;3D`, `ESC[1;5C`, ...) which work in full-screen
- *    apps (vim) but are unbound in zsh/readline. In plain shell mode those are
- *    translated to the `ESC b` / `ESC f` word-move sequences the line
- *    editors bind by default. Full-screen apps on the alternate screen (vim,
- *    less, tmux panes) keep the encoder's own sequences.
+ * 2. Word hopping: the WASM key encoder emits CSI-modified cursor sequences
+ *    (`ESC[1;3D`, `ESC[1;5C`, ...) which work in full-screen apps (vim) but are
+ *    unbound in zsh/readline. In plain shell mode the gesture is translated to
+ *    the `ESC b` / `ESC f` word-move sequences the line editors bind by default.
+ *    The gesture itself is the registry's `terminal-word-hop` binding, which is
+ *    platform-specific (Option+Arrow on macOS, Ctrl+Arrow on Windows/Linux) and
+ *    user-remappable, so this reads the registry instead of modifier literals.
+ *    Full-screen apps on the alternate screen (vim, less, tmux panes) keep the
+ *    encoder's own sequences.
  */
 export function attachTerminalInputCompat(
   { term, host }: TerminalInputCompatOptions,
   send: (data: string) => void
 ): () => void {
   const onKeydown = (event: KeyboardEvent): void => {
-    if (event.metaKey) return
-    const isWordMove =
-      (event.altKey || event.ctrlKey) && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
-    if (!isWordMove) return
+    // Matching is exact, so Shift/Cmd held with the word key falls through to the
+    // encoder (text selection, line jump) instead of being swallowed here.
+    if (!keymapState.matches('terminal-word-hop', event)) return
     // A full-screen app owns the keyboard on the alternate screen (vim, less,
     // htop...). Leave those keys for the app's own (working) bindings; only
     // translate in a plain shell. Application cursor keys (DECCKM, mode 1) are

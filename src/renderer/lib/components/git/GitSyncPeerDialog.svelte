@@ -1,16 +1,25 @@
 <script lang="ts">
+  /**
+   * The sync chooser: which end to trade commits with, which way, and how.
+   *
+   * Choosing a strategy is the end of this dialog. The run leaves through
+   * `gitSyncJobs`, which reports it in a dockable panel at the app root, so a
+   * refusal or a conflicted integration never holds the window on a modal the
+   * user has to dismiss before they can keep working. What this file reads is
+   * the list of ends, which is a fast question about the repository.
+   */
   import { onMount } from 'svelte'
   import { Loader2, Search } from '@lucide/svelte'
   import { gitState } from '$lib/stores/git.svelte'
+  import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import { ipcErrorMessage } from '$lib/ipc-errors'
   import Modal from '$lib/components/ui/Modal.svelte'
-  import { reportSyncResult, syncStrategyNotes } from './git-sync-copy'
+  import { syncStrategyNotes } from './git-sync-copy'
   import type {
     GitPullStrategy,
     GitSyncDirection,
     GitSyncPeer,
-    GitSyncPeerOption,
-    GitSyncResult
+    GitSyncPeerOption
   } from '$shared/types'
 
   interface Props {
@@ -22,10 +31,24 @@
     /** End to preselect, when the caller already knows the intent. */
     initialPeer?: GitSyncPeer
     onClose: () => void
-    onDone: (result: GitSyncResult) => void
+    /** Called the moment a strategy is chosen: the run has left, and this is done. */
+    onStarted: () => void
+    /**
+     * Called once the run settles, for a caller that keeps something
+     * client-side that a moved ref invalidates (a rendered commit list, say).
+     */
+    onSettled?: () => void
   }
 
-  let { projectId, scopeBucketId, initialDirection, initialPeer, onClose, onDone }: Props = $props()
+  let {
+    projectId,
+    scopeBucketId,
+    initialDirection,
+    initialPeer,
+    onClose,
+    onStarted,
+    onSettled
+  }: Props = $props()
 
   /** One end that can be picked, plus everything the copy needs about it. */
   interface Entry {
@@ -52,7 +75,6 @@
   let selectedKey = $state<string | null>(null)
   let query = $state('')
   let loadError = $state('')
-  let syncError = $state('')
 
   const busy = $derived(gitState.isBusy('sync'))
   const own = $derived(options.find((option) => option.self) ?? null)
@@ -148,28 +170,32 @@
 
   function flip(next: GitSyncDirection): void {
     direction = next
-    syncError = ''
     // A branch cannot receive commits, so flipping to `to` re-validates instead
     // of leaving a selection the footer would silently refuse.
     selectedKey = keepOrReplace(selectedKey, buildEntries(options, next))
   }
 
-  async function run(strategy: GitPullStrategy): Promise<void> {
+  /**
+   * Hand the chosen strategy to the sync job and close this chooser.
+   *
+   * The run itself never reports here: it leaves as a background job
+   * (`gitSyncJobs`), so a refusal or a conflicted integration is answered in the
+   * docked panel instead of holding the window on a dialog the user has to
+   * dismiss before they can keep working.
+   */
+  function run(strategy: GitPullStrategy): void {
     const target = chosen
     if (!target) return
-    syncError = ''
-    const result = await gitState.syncWith(projectId, scopeBucketId, {
+    gitSyncJobs.start({
+      projectId,
+      scopeBucketId,
       direction,
+      strategy,
       peer: target.option.peer,
-      strategy
+      peerLabel: target.option.label,
+      ...(onSettled ? { onSettled: () => onSettled() } : {})
     })
-    if (!result) {
-      syncError = gitState.error ?? 'The sync failed'
-      gitState.error = null
-      return
-    }
-    reportSyncResult(result)
-    onDone(result)
+    onStarted()
   }
 </script>
 
@@ -261,7 +287,6 @@
                   disabled={!entry.selectable || busy}
                   onclick={() => {
                     selectedKey = entry.key
-                    syncError = ''
                   }}
                 >
                   <span class="min-w-0 flex-1">
@@ -286,20 +311,6 @@
       </div>
     {/if}
 
-    {#if syncError}
-      <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
-        <p class="text-xs font-semibold text-danger">
-          {direction === 'from' ? 'Nothing was brought in' : 'Nothing was sent out'}
-        </p>
-        <p class="mt-0.5 whitespace-pre-wrap break-words text-xs leading-relaxed text-danger">
-          {syncError}
-        </p>
-        <p class="mt-1 text-xs leading-relaxed text-dimmed">
-          Choose another strategy below, or cancel without changing anything further.
-        </p>
-      </div>
-    {/if}
-
     <div class="space-y-1 text-xs leading-relaxed text-dimmed">
       {#each notes as note (note.label)}
         <p>
@@ -307,6 +318,10 @@
           {note.note}
         </p>
       {/each}
+      <p>
+        The run reports in its own panel, so you can keep working while it trades commits with that
+        end.
+      </p>
     </div>
   </div>
 
@@ -331,7 +346,7 @@
           ]}
           data-modal-primary={strategy.value === 'merge' ? '' : undefined}
           disabled={busy || loading || chosen === null}
-          onclick={() => void run(strategy.value)}
+          onclick={() => run(strategy.value)}
         >
           {strategy.label}
         </button>

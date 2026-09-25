@@ -4,6 +4,7 @@
   import DiffRows from './DiffRows.svelte'
   import { DEFAULT_CONTEXT_LINES, diffDetails, type DiffHunk, type DiffLine } from './file-diff'
   import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     diff: TurnCheckpointFileDiff
@@ -91,7 +92,7 @@
     class="flex h-8 cursor-pointer items-center gap-2 bg-elevated px-3 text-[0.625rem]"
     onclick={() => toggleHunkFold(hunk.id)}
     onkeydown={(e: KeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === ' ') {
+      if (keymapState.matches('ui-activate', e)) {
         e.preventDefault()
         toggleHunkFold(hunk.id)
       }

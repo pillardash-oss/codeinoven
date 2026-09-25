@@ -12,6 +12,7 @@
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { validateAssignment } from '$shared/assignment/assignment-validation'
   import { exportAssignmentMarkdown } from '$shared/assignment/assignment-markdown'
@@ -496,7 +497,7 @@
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (readOnly || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 's') return
+    if (readOnly || !keymapState.matches('studio-save', event)) return
     event.preventDefault()
     void saveDraft()
   }

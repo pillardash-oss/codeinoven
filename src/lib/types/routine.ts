@@ -70,6 +70,15 @@ export interface Routine {
   /** Default schedule for the routine's tasks; a task may override it. */
   schedule?: RoutineSchedule | null
   /**
+   * When the schedule last became active (epoch ms). A schedule slot that came
+   * due before this moment was never really due: the routine (or its schedule)
+   * did not exist yet, so the scheduler must not fire it or record it as
+   * missed. Stamped when the schedule changes and when a routine first becomes
+   * runnable (its how-to is written), since the authoring flow saves both
+   * together.
+   */
+  scheduleUpdatedAt?: number
+  /**
    * Agent-authored how-to   the routine's prompt context. The UI never calls
    * this a "system prompt". An empty how-to marks the routine Incomplete.
    */
@@ -202,4 +211,31 @@ export function routineAgentsComplete(routine: Pick<Routine, 'agents'>): boolean
 /** A routine is ready to run once both its how-to and its model set exist. */
 export function routineReady(routine: Pick<Routine, 'howTo' | 'agents'>): boolean {
   return routineHowToComplete(routine) && routineAgentsComplete(routine)
+}
+
+/**
+ * What removing one routine swept, so the caller can clear the scheduler's
+ * records for it and tell the user what went with the routine.
+ */
+export interface RoutineDeletionResult {
+  /**
+   * Every thread removed with the routine: its tasks, its hidden how-to thread,
+   * and the runs swept with the task they ran. The scheduler matches its missed
+   * records against these ids, so a pending miss of a removed task stops
+   * badging at once instead of surviving until the next launch.
+   */
+  removedThreadIds: string[]
+  /**
+   * Task threads removed. The hidden how-to thread is not a task and is not
+   * counted here, so the number matches what the user saw in the sidebar.
+   */
+  taskCount: number
+  /** Run threads swept with the task they ran. */
+  runCount: number
+  /**
+   * Whether the routine's artifact folder was deleted from disk. False only
+   * when a removal genuinely failed, since an already-missing folder counts as
+   * removed.
+   */
+  artifactsRemoved: boolean
 }

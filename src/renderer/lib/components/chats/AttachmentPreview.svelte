@@ -11,6 +11,7 @@
   import type { PromptAttachment } from '$shared/types'
   import { attachmentPreviewKind } from '$lib/mime'
   import { documentPreviewFrame } from '$lib/document-preview-frame'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     attachment: PromptAttachment
@@ -128,7 +129,7 @@
 <svelte:window
   onkeydown={(e: KeyboardEvent) => {
     // Shift is excluded so Cmd/Ctrl+Shift+S stays the right-sidebar toggle.
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 's' && editableText) {
+    if (keymapState.matches('files-save', e) && editableText) {
       e.preventDefault()
       void saveText()
     }
@@ -228,7 +229,7 @@
       class="relative flex flex-1 items-center justify-center"
       onclick={requestClose}
       onkeydown={(e: KeyboardEvent) => {
-        if (e.key === 'Enter' || e.key === ' ') requestClose()
+        if (keymapState.matches('ui-activate', e)) requestClose()
       }}
     >
       <div

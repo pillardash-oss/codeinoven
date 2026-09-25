@@ -13,7 +13,6 @@ Thumbs.db
 !.env.example
 
 # Agents
-/agent-out
 /.qoder
 /.cio
 /.opencode

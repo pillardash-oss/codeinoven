@@ -9,6 +9,7 @@
   import { FolderTree } from '@lucide/svelte'
   import ScopeBadge from './ScopeBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ScopePickerMenu from './ScopePickerMenu.svelte'
   import ScopeCreateModal from '$lib/components/scope/ScopeCreateModal.svelte'
   import type { ScopeChoice } from '$shared/types'
@@ -120,7 +121,7 @@
         tabindex={-1}
         onCloseAutoFocus={(event) => event.preventDefault()}
         onkeydown={(event: KeyboardEvent) => {
-          if (event.key === 'Escape') open = false
+          if (keymapState.matches('palette-close', event)) open = false
         }}
       >
         <ScopePickerMenu

@@ -13,13 +13,16 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
+  import McpConnectionTester from './McpConnectionTester.svelte'
   import type {
     AgentCapabilityEntry,
+    McpProbeTarget,
     NativeMcpContent,
     Project,
     Thread,
     ThreadSettings,
     UtilityBundleInstallRequest,
+    UtilityCredentialMetadata,
     UtilityDefinition,
     UtilityDefinitionInput,
     UtilityDefinitionPatch,
@@ -33,12 +36,13 @@
   import UtilityEditorModalFooter from './UtilityEditorModalFooter.svelte'
   import UtilityEditorModalHarnessSelector from './UtilityEditorModalHarnessSelector.svelte'
   import UtilityEditorModalPluginBundle from './UtilityEditorModalPluginBundle.svelte'
-  import { canToggleUtilityEnabled } from '$shared/utility-ids'
+  import { canToggleUtilityEnabled, isComputerUseUtility } from '$shared/utility-ids'
   import {
     allHarnessBinding,
     buildBindings,
     buildConfig,
     buildCredential,
+    buildMcpConnectionConfig,
     buildScope,
     effectiveActivation,
     emptyDraft,
@@ -84,11 +88,15 @@
   let pluginManifest = $state('')
   let deleteTarget = $state<UtilityEditorTarget | null>(null)
   let draft = $state<UtilityDraft>(emptyDraft())
-  let credentialId = $state('')
-  let credentialLabel = $state('')
+  /** Credential the secret form writes to; `null` adds a brand-new secret. */
+  let credentialTargetId = $state<string | null>(null)
   let credentialValue = $state('')
-  let credentialRequired = $state(false)
   let credentialEnvironmentVariable = $state('')
+  /** Set while the confirmation dialog for removing a stored secret is open. */
+  let credentialDeleteTarget = $state<{
+    utilityId: string
+    credential: UtilityCredentialMetadata
+  } | null>(null)
   let projects = $state<Project[]>([])
   let threads = $state<Thread[]>([])
   let projectIconUrls = $state<Record<string, string>>({})
@@ -141,13 +149,11 @@
   /** Installed, supported harnesses the editor may bind a capability to.
    *  Follows the model picker's protocol: the provider catalog (persisted
    *  snapshot + background refresh, never a cold Harnesses-page probe) decides
-   *  which harnesses exist, while `providerStore` supplies canonical names and
-   *  drops harnesses whose installed version is unsupported. Probing status is
+   *  which harnesses exist, while `providerStore` supplies canonical names. Probing status is
    *  only ever additive   a confirmed `available` harness stays listed. */
   let availableHarnesses = $derived.by((): Array<{ id: string; name: string }> => {
     const catalogIds = new Set(providerCatalog.allCached().map((catalog) => catalog.harnessId))
     return providerStore.providers
-      .filter((provider) => !providerStore.isUnsupported(provider.id))
       .filter(
         (provider) =>
           provider.status === 'available' ||
@@ -184,8 +190,21 @@
   let selectedScopeProject = $derived(
     projectOptions.find((project) => project.id === draft.projectId) ?? null
   )
-  let editedUtility = $derived(
-    draft.id ? utilities.find((utility) => utility.id === draft.id) : undefined
+  /** Secrets the utility being edited already declares, in registry order. */
+  let editedCredentials = $derived(
+    (draft.id ? utilities.find((utility) => utility.id === draft.id)?.credentials : undefined) ?? []
+  )
+  let credentialTarget = $derived(
+    editedCredentials.find((credential) => credential.id === credentialTargetId) ?? null
+  )
+  /**
+   * A computer-use connection is only ever started by the run that claimed the
+   * desktop daemon, so it has no standalone test: the Cua Driver status card is
+   * what reports its state.
+   */
+  let computerUseConnection = $derived(
+    draft.kind === 'mcp' &&
+      isComputerUseUtility({ id: draft.id ?? '', harnessBindings: draft.bindings })
   )
 
   let title = $derived.by(() => {
@@ -196,12 +215,22 @@
     return 'Add capability'
   })
 
-  function resetCredential(): void {
-    credentialId = ''
-    credentialLabel = ''
+  /** Aim the secret form at one stored credential, keeping its identity. */
+  function targetCredential(credential: UtilityCredentialMetadata): void {
+    credentialTargetId = credential.id
+    credentialEnvironmentVariable = credential.environmentVariable ?? credential.id
     credentialValue = ''
-    credentialRequired = false
+  }
+
+  /** Aim the secret form at a credential that does not exist yet. */
+  function addCredential(): void {
+    credentialTargetId = null
     credentialEnvironmentVariable = ''
+    credentialValue = ''
+  }
+
+  function resetCredential(): void {
+    addCredential()
   }
 
   function selectAllHarnesses(): void {
@@ -243,12 +272,7 @@
     draft = utilityToDraft(utility)
     resetCredential()
     const storedCredential = utility.credentials[0]
-    if (storedCredential) {
-      credentialId = storedCredential.id
-      credentialLabel = storedCredential.label
-      credentialRequired = storedCredential.required
-      credentialEnvironmentVariable = storedCredential.environmentVariable ?? ''
-    }
+    if (storedCredential) targetCredential(storedCredential)
     editorError = ''
     setupPreset = null
   }
@@ -408,13 +432,37 @@
     onClose()
   }
 
+  /**
+   * The secret the form currently describes. The id comes from the credential
+   * the user selected and never from the variable name they typed, so writing a
+   * second secret can no longer overwrite the first one's stored value.
+   */
   function credentialDraft(): CredentialDraft {
     return {
-      id: credentialId,
-      label: credentialLabel,
+      id: credentialTarget?.id ?? '',
+      label: credentialTarget?.label ?? '',
       value: credentialValue,
-      required: credentialRequired,
+      required: credentialTarget?.required ?? false,
       environmentVariable: credentialEnvironmentVariable
+    }
+  }
+
+  /**
+   * Test the MCP connection the editor is showing, which is what a save would
+   * store: the saved utility still supplies its stored credentials, and a value
+   * typed into an unsaved draft is used for this test only.
+   */
+  function mcpProbeTarget(): McpProbeTarget {
+    const environmentVariable = credentialEnvironmentVariable.trim()
+    const typed =
+      credentialValue && environmentVariable
+        ? [{ environmentVariable, value: credentialValue }]
+        : []
+    return {
+      kind: 'inline',
+      config: buildMcpConnectionConfig(draft),
+      ...(draft.id ? { baseUtilityId: draft.id } : {}),
+      ...(typed.length > 0 ? { credentials: typed } : {})
     }
   }
 
@@ -463,15 +511,31 @@
     }
   }
 
-  async function removeCredential(utilityId: string, id: string): Promise<void> {
+  /** Removing a stored secret destroys it, so it always confirms first. */
+  function requestCredentialRemoval(utilityId: string, credentialId: string): void {
+    const credential = editedCredentials.find((entry) => entry.id === credentialId)
+    if (credential) credentialDeleteTarget = { utilityId, credential }
+  }
+
+  async function removeCredential(): Promise<void> {
+    const target = credentialDeleteTarget
+    if (!target) return
+    saving = true
     editorError = ''
     try {
-      const updated = await invoke('utilities:removeCredential', utilityId, id)
+      const updated = await invoke(
+        'utilities:removeCredential',
+        target.utilityId,
+        target.credential.id
+      )
       utilities = utilities.map((utility) => (utility.id === updated.id ? updated : utility))
+      credentialDeleteTarget = null
       openRegistryEdit(updated)
     } catch (removeError) {
       editorError =
         removeError instanceof Error ? removeError.message : 'The credential could not be removed.'
+    } finally {
+      saving = false
     }
   }
 
@@ -656,6 +720,7 @@
           <UtilityEditorModalHarnessSelector
             bindings={draft.bindings}
             {availableHarnesses}
+            disabled={saving}
             onSelectAll={selectAllHarnesses}
             onToggleHarness={toggleHarness}
           />
@@ -756,14 +821,26 @@
 
         <UtilityEditorModalConfigFields bind:draft {isNative} />
 
-        {#if !isNative && !isAppOwned && (draft.kind === 'web_search' || draft.kind === 'web_fetch' || (draft.kind === 'mcp' && (editedUtility?.credentials.length ?? 0) > 0))}
+        {#if draft.kind === 'mcp' && !computerUseConnection}
+          <McpConnectionTester
+            variant="panel"
+            subject={draft.name.trim() || 'MCP server'}
+            probe={mcpProbeTarget}
+            disabled={saving}
+          />
+        {/if}
+
+        {#if !isNative && !isAppOwned && (draft.kind === 'mcp' || draft.kind === 'web_search' || draft.kind === 'web_fetch')}
           <UtilityEditorModalCredentialFields
             {draft}
             {utilities}
             {secureStorageAvailable}
-            bind:credentialEnvironmentVariable
-            bind:credentialValue
-            onRemoveCredential={(utilityId, id) => void removeCredential(utilityId, id)}
+            targetId={credentialTargetId}
+            bind:environmentVariable={credentialEnvironmentVariable}
+            bind:value={credentialValue}
+            onSelectCredential={targetCredential}
+            onAddCredential={addCredential}
+            onRemoveCredential={requestCredentialRemoval}
           />
         {/if}
 
@@ -797,6 +874,25 @@
     {/snippet}
   </Modal>
 {/if}
+
+<ConfirmDialog
+  open={credentialDeleteTarget !== null}
+  title="Remove stored secret"
+  confirmLabel="Remove"
+  busy={saving}
+  onCancel={() => (credentialDeleteTarget = null)}
+  onConfirm={removeCredential}
+>
+  <p>
+    Remove
+    <strong class="text-foreground">{credentialDeleteTarget?.credential.label}</strong>? Its value
+    is deleted from encrypted device storage, so the capability stops receiving
+    <span class="font-mono">
+      {credentialDeleteTarget?.credential.environmentVariable ??
+        credentialDeleteTarget?.credential.id}
+    </span>.
+  </p>
+</ConfirmDialog>
 
 <ConfirmDialog
   open={deleteTarget !== null}

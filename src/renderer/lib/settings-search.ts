@@ -7,6 +7,7 @@ import {
   Keyboard,
   MessageSquareCode,
   MonitorUp,
+  Palette,
   Plug,
   Puzzle,
   Router,
@@ -70,6 +71,28 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Agent names, audits, and per-agent behavior.',
     keywords: ['workers', 'audit'],
     icon: UsersRound
+  },
+  {
+    id: 'design',
+    section: 'design',
+    title: 'Design',
+    description: 'Who does each kind of design work: copy, images, video, voice-over.',
+    keywords: [
+      'design',
+      'assignments',
+      'copywriter',
+      'illustrator',
+      'video editor',
+      'voice-over',
+      'copy',
+      'seo',
+      'script',
+      'storyboard',
+      'delegate',
+      'image generation',
+      'video'
+    ],
+    icon: Palette
   },
   {
     id: 'cio-prompts',
@@ -191,8 +214,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-notifications',
     title: 'Notifications',
-    description: 'System notification alerts and permission status.',
-    keywords: ['alerts', 'permission', 'test'],
+    description: 'System notification alerts, in-app notification sounds, and permission status.',
+    keywords: ['alerts', 'permission', 'test', 'sound', 'in-app', 'toast'],
     icon: SlidersHorizontal
   },
   {
@@ -200,8 +223,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-browser',
     title: 'Browser',
-    description: 'Open localhost links in CIO’s browser.',
-    keywords: ['localhost', 'links'],
+    description:
+      'Open localhost links in CIO’s browser, and approve the CDNs prototype previews may load.',
+    keywords: ['localhost', 'links', 'prototype', 'preview', 'cdn', 'fonts', 'allowlist'],
     icon: SlidersHorizontal
   },
   {

@@ -160,8 +160,7 @@ function sanitizeDelivery(value: unknown): RoutineDelivery | null {
   const typed = channel as RoutineDeliveryChannel
   const target =
     typeof record.target === 'string' ? record.target.trim().slice(0, MAX_DELIVERY_TARGET) : ''
-  const note =
-    typeof record.note === 'string' ? record.note.trim().slice(0, MAX_DELIVERY_NOTE) : ''
+  const note = typeof record.note === 'string' ? record.note.trim().slice(0, MAX_DELIVERY_NOTE) : ''
   return {
     channel: typed,
     ...(target && typed !== 'in-app' ? { target } : {}),
@@ -301,10 +300,16 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   })
 
   ipcMain.handle('routine:delete', async (_, routineId: unknown) => {
-    // The routine's threads   its hidden how-to thread included   are deleted
-    // with it; the thread:deleted broadcasts prune every open surface.
-    await routineManager.deleteRoutine(validateEntityId(routineId, 'Routine ID'))
+    // The routine's threads   its hidden how-to thread and each task's runs
+    // included   are deleted with it, through the same canonical path as
+    // `thread:delete`, and its artifact folder goes with them. The scheduler
+    // then forgets the routine so no pending missed run keeps badging for a task
+    // that no longer exists.
+    const safeId = validateEntityId(routineId, 'Routine ID')
+    const result = await routineManager.deleteRoutine(safeId)
+    routineScheduler?.forgetRoutine(safeId, result.removedThreadIds)
     broadcastRoutines()
+    return result
   })
 
   ipcMain.handle('routine:reorder', (_, orderedIds: unknown) => {
@@ -350,6 +355,16 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('assistant:howToThread', (_, routineId: unknown) =>
     routineManager.howToThread(validateEntityId(routineId, 'Routine ID'))
   )
+
+  /**
+   * The getting-started checkpoint the authoring agent keeps current, for the
+   * how-to panel. Read-only: the interview's own turn owns the write.
+   */
+  ipcMain.handle('routine:gettingStartedCheckpoint', (_, routineId: unknown) => {
+    const chatEngine = ctx.chatEngine
+    if (!chatEngine) return null
+    return chatEngine.readRoutineCheckpoint(validateEntityId(routineId, 'Routine ID'))
+  })
 
   ipcMain.handle('assistant:setHowToHidden', (_, routineId: unknown, hidden: unknown) => {
     if (typeof hidden !== 'boolean') throw new TypeError('How-to hidden state must be a boolean')

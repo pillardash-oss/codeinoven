@@ -428,6 +428,24 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     }
   }
 
+  /**
+   * Stop every in-flight turn process so the next turn spawns the harness
+   * binary currently on disk.
+   *
+   * These harnesses run one process per turn, so between turns nothing holds
+   * the old install and the next turn already picks up a new one; the running
+   * turn is the only thing left to restart. The durable session record stays,
+   * so the conversation resumes exactly as it was   only the turn in flight is
+   * interrupted, which is what the caller's confirmation warned about.
+   */
+  restartRuntime(): void {
+    for (const [sessionId, child] of [...this.activeProcesses]) {
+      if (child.killed) continue
+      Logger.info(`${this.name} turn process stopped for a harness restart`, { sessionId })
+      child.kill()
+    }
+  }
+
   async sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, opts.sessionId)
     // A previous turn can leave a lingering process behind (e.g. a CLI hung on
@@ -647,7 +665,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   ): string {
     const reason = describeHarnessExit('Harness process', code, signal)
     if (!signal || producedOutput || requestedStop) return reason
-    return `${reason} before it produced any output, so ${this.name} could not start on this machine. Its install is the likeliest cause: reinstall it under Settings, Harnesses, or pick a different harness and retry.`
+    return `${reason} before it produced any output, so ${this.name} could not start on this machine. Its install is the likeliest cause: uninstall it under Settings, Harnesses, then install it again   or pick a different harness and retry.`
   }
 
   /**

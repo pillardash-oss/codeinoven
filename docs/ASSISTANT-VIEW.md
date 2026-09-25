@@ -186,7 +186,19 @@ the app's clock for Assistant View.
 - **No auto catch-up.** A slot that came due while the app was closed (or a
   machine slept through it) is recorded as a missed run, never run in a burst.
   The grace window is `MISS_GRACE_MS`; a fire before process start is always a
-  miss.
+  miss. Each record carries a `reason`   `app-closed` when the app was not
+  running at the due time, `delayed` when it was running but could not start the
+  run in time   and both surfaces state it instead of always claiming the app
+  was closed.
+- **A slot before the schedule existed is never due.** The scheduler floors a
+  due slot at the later of the task's last fire and the moment its schedule
+  became active (`Routine.scheduleUpdatedAt`, stamped when the schedule changes
+  and when a routine first becomes runnable, since the authoring flow saves the
+  how-to and the schedule together). A routine created in the afternoon can
+  never badge a morning slot as missed, and a half-configured routine with no
+  how-to is not evaluated at all. Persisted misses that predate the schedule
+  (or whose task is gone) are dropped on load (`pruneStaleMisses`), so a record
+  written before this rule existed cannot keep badging.
 - **Missed-run persistence.** `MissedRunStore`
   (`src/main/scheduler/missed-run-store.ts`) writes
   `scheduler/missed-runs.json` through the storage engine. Records are
@@ -227,7 +239,9 @@ default:
 - the **Missed Runs section** of the notification panel (`Assistants` tab),
   grouped per routine, with per-entry **Dismiss** and **Run now** actions. The
   Assistants tab exposes no sub-filter buttons; with no miss it shows only a
-  neutral empty state.
+  neutral empty state. Each entry states why the fire was not run
+  (`missedRunReasonText` in `assistant-view.ts`), so the copy never claims the
+  app was closed when the machine simply slept through the window.
 
 The renderer state lives in `assistantRoutines`
 (`src/renderer/lib/stores/assistant-routines.svelte.ts`), fed by the
@@ -266,8 +280,9 @@ icon swaps to a chevron on hover, and hover reveals a search-in-routine control,
 a new-task button, and an ellipsis menu (also opened by right-clicking the row)
 with How to, Edit routine, Pin/Unpin, and Remove. Rows are draggable to reorder, and a
 task dragged onto a routine is grouped into it. Hovering a routine reveals a
-popover with its status, schedule type, next run, task count, and a how-to
-preview (`AssistantRoutineHoverPopover.svelte`). **Remove** deletes the routine
+popover with its status, schedule type, next run, task count, a how-to preview,
+and when it was created and last updated (`AssistantRoutineHoverPopover.svelte`).
+**Remove** deletes the routine
 and every thread it owns, the hidden getting-started thread included, through the
 same thread-deletion path a plain thread delete uses (`RoutineManager` is handed
 the canonical thread deleter by `src/main/ipc/ipc-handlers.ts`), so a routine
@@ -414,6 +429,21 @@ prompt"; the user-facing term is how-to.
   the way back: its **Show how-to thread** action reveals the thread through
   `assistant:howToThread` (which finds the routine's thread even while hidden,
   because archived rows never reach the hydrated thread list) and opens it.
+- **The agent finishes the setup instead of describing it.** The contract makes
+  connection setup a phase that completes before the recap. It names the
+  assistant role and a patient tone, requires every connection to be verified as
+  working in the session (or reduced to the single step only the user can take),
+  and forbids presenting a plan as ready while a connection it depends on is
+  unverified. A connection that returns an authorization error is not set up.
+  For each service the agent installs the capability, reads its own docs
+  (`cio_util_docs_lookup`) and the official setup guide online, walks the user
+  through obtaining what only they can provide in plain numbered steps, collects
+  every value in one `cio_ask_secret` call, then re-activates the capability
+  (`cio_util_init`) to verify it. Every turn must end with the setup advanced or
+  one specific answerable request, never a bare "not ready yet". This is the
+  fix for the observed failure: the agent installed Slack, hit a 401, and asked
+  the user to confirm the plan instead of walking them through OAuth and asking
+  for the credentials.
 - The authoring contract asks the agent to agree on the instructions, the
   schedule, the connections, and how the routine reports back, then present a
   short **recap** plus **two** fenced blocks: the how-to itself (tag `how-to`)
@@ -431,12 +461,42 @@ prompt"; the user-facing term is how-to.
   stored on the routine connection (`RoutineConnection.setup`) and prefills the
   **Set up** button in the panel's Connections tab, so the user only picks a
   model and runs the setup instead of describing the capability again.
-- The contract belongs to the thread, so the chat engine attaches it to the
-  hidden context of every user turn while the routine's how-to is missing
-  (`ChatEngine.routineAuthoringHiddenContext`, text in
+- The contract belongs to the thread, so the chat engine composes it into the
+  system prompt of every user turn while the routine's how-to is missing
+  (`ChatEngine.routineAuthoringInstruction`, text in
   `src/lib/routine-authoring.ts`). The composer does not assemble it. A turn
   that arrives from the message editor's resend, a steer, or a queued delivery
   therefore reaches the agent with the same contract as a fresh composer send.
+- **The interview keeps app-owned checkpoints.** A Getting started conversation
+  is an interview, so what it agreed cannot live only in the harness transcript:
+  a model or harness switch rotates the session and replays a budgeted recap, and
+  a compaction drops the oldest exchanges. Two app-owned records ride beside the
+  contract on every authoring turn instead, and both are instructions for that
+  turn's behavior, so they ride the system prompt and never accumulate in the
+  harness transcript:
+  - the **checkpoint** the agent keeps current, saved through the app-owned
+    `cio:routine-authoring` capability (`save_checkpoint { markdown }`, bound to
+    the live authoring turn and never banked or installed) and stored at
+    `routines/<routineId>/getting-started.md`
+    (`RoutineAuthoringCheckpoints`, `src/main/chat/routine-authoring-checkpoints.ts`);
+  - the **resolved decisions**: every answer the user actually submitted, read
+    back verbatim from the stored question cards (`formatInterviewDecisions`,
+    `src/main/chat/chat-engine/chat-engine-message-text.ts`), because the app's
+    record of an answer is exact even when it is not the shape the question
+    asked for.
+
+  Together they are what makes the interview survive a mid-way switch: a
+  replacement session starts from the app's record of the interview rather than
+  from transcript context alone, so it resumes instead of re-asking. The
+  contract spells out the consequence (never re-ask a resolved decision, never
+  re-offer its choices) and the ask itself: the two priority brackets are two
+  separate single-choice questions, because one question carrying both brackets
+  produces a combined answer no turn can resolve back into brackets.
+- The how-to panel shows that checkpoint under **Agreed so far** while the
+  how-to is incomplete, so the interview is auditable from the panel instead of
+  only from the thread. The main process broadcasts `routine:checkpointChanged`
+  (routine id only; the body is read on demand by `routine:gettingStartedCheckpoint`)
+  so an open panel follows the interview.
 - The agent then asks the user to confirm it never saves the routine itself
   and never tells the user to run a command. Confirming is one click on the
   **recap card** (`RoutineRecapCard.svelte`) that appears above the composer
@@ -483,7 +543,7 @@ prompt"; the user-facing term is how-to.
 - The how-to authoring thread carries the CodeInOven utility gateway from the
   start: `sendPrompt` grants the same management contract an explicit
   `@cio-utility` invocation does whenever the thread is a routine whose how-to
-  is still missing (`routineAuthoringHiddenContext`), so the agent can search the
+  is still missing (`routineAuthoringInstruction`), so the agent can search the
   library with `cio_util_find`, research compatible skills/MCPs/plugins, and
   install them itself with `cio_util_manage` once the user agrees. The grant is
   derived from the thread every turn, never memoized, so it ends the moment the
@@ -734,7 +794,8 @@ what it found; the routine's value is the agreed default, not a fixed label.
 
 `routineAuthoringContext` (`src/lib/routine-authoring.ts`) asks for both, in the
 reporting order that matters: whether the routine reports to the user at all,
-which channel, which destination, and then both priority brackets, with the
+which channel, which destination, and then both priority brackets as two
+separate single-choice questions, with the
 choices listed and their meanings spelled out. The agent may decide the brackets
 itself when the user would rather not, but it must say which it picked and why,
 and it must leave `delivery` out entirely for an action-only routine. The plan

@@ -18,6 +18,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { APP_NAME } from '$shared/brand'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     step: number
@@ -53,7 +54,7 @@
       selector: '[data-onboarding="view-switcher"]',
       eyebrow: 'View switcher',
       title: 'One dropdown, every view',
-      description: `This dropdown switches how the workspace is organized. Projects groups conversations by folder (${viewKey('1')}). Threads lists every project conversation (${viewKey('2')}). Scoped threads opens the scope sidebar over Projects (${viewKey('3')}), Scope Board opens the full-page board (${viewKey('4')}), and Chats is for work that does not need a project (${viewKey('0')}).`
+      description: `This dropdown switches how the workspace is organized. Projects groups conversations by folder (${viewKey('1')}). Threads lists every project conversation (${viewKey('2')}). Scoped threads opens the scope sidebar over Projects (${viewKey('3')}), Scope Board opens the full-page board (${viewKey('4')}), Chats is for work that does not need a project (${viewKey('0')}), and Assistant holds routines and tasks (${viewKey('9')}).`
     },
     {
       step: 2,
@@ -104,9 +105,7 @@
   let installError = $state('')
 
   const pi = $derived(providerStore.providers.find((provider) => provider.id === 'pi'))
-  const piReady = $derived(
-    pi?.status === 'available' && pi.integration === 'ready' && pi.unsupportedReason === undefined
-  )
+  const piReady = $derived(pi?.status === 'available' && pi.integration === 'ready')
   const piChecking = $derived(pi?.status === 'checking')
   const piBundled = $derived(pi?.executionTarget?.kind === 'bundled')
 
@@ -199,7 +198,7 @@
 <svelte:window
   onresize={measureTarget}
   onkeydown={(event: KeyboardEvent) => {
-    if (event.key === 'Escape') onFinish()
+    if (keymapState.matches('ui-close-modal', event)) onFinish()
   }}
 />
 

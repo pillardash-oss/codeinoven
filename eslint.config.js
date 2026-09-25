@@ -10,7 +10,6 @@ export default defineConfig(
   globalIgnores([
     '.cio/**',
     '.svelte-check/**',
-    'agent-out/**',
     'dist/**',
     'node_modules/**',
     'out/**',

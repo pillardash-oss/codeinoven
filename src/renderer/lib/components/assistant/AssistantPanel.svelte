@@ -59,6 +59,7 @@
     parseHowToSections,
     resolveConnections,
     serializeHowToSections,
+    missedRunReasonText,
     type ConnectionView,
     type HowToSection
   } from './assistant-view'
@@ -512,6 +513,10 @@
       howToThread = null
       return
     }
+    // The same target drives the interview checkpoint: the panel is looking at
+    // this routine's how-to, so the state its authoring conversation agreed is
+    // worth having loaded (and the store keeps it fresh from then on).
+    void assistantRoutines.refreshCheckpoint(routineIdValue)
     let cancelled = false
     void assistantRoutines
       .howToThread(routineIdValue)
@@ -527,6 +532,16 @@
   })
 
   const howToThreadHidden = $derived(howToThread?.archived === true)
+
+  /**
+   * What this routine's Getting started conversation has agreed so far, as the
+   * agent recorded it. The store keeps it current: it loads one when the panel
+   * targets a routine and refreshes it on `routine:checkpointChanged`, so this
+   * is a plain read.
+   */
+  const gettingStartedCheckpoint = $derived(
+    routine ? (assistantRoutines.checkpoints.get(routine.id) ?? null) : null
+  )
 
   /**
    * Hide or reveal the how-to thread. It stays pinned either way, so this is
@@ -697,6 +712,19 @@
       and when it should run. The plan you agree on shows up here.
     </p>
   </div>
+  {#if gettingStartedCheckpoint}
+    <div class="px-3 pb-3">
+      <div class="rounded-lg border border-border bg-elevated p-2.5">
+        <p class="mb-1 text-[0.6875rem] font-medium text-foreground">Agreed so far</p>
+        <p class="mb-1.5 text-[0.625rem] leading-relaxed text-dimmed">
+          What you and the agent have agreed for this routine so far.
+        </p>
+        <div class="text-[0.6875rem] text-muted">
+          <MarkdownView text={gettingStartedCheckpoint} class="markdown-body-card" />
+        </div>
+      </div>
+    </div>
+  {/if}
 {/snippet}
 
 {#snippet noRoutineState()}
@@ -848,8 +876,8 @@
               {/if}
             </div>
             <p class="text-[0.625rem] leading-relaxed text-dimmed">
-              Where this routine's output goes, and how urgent it is. Agree it with the agent, or set
-              it here.
+              Where this routine's output goes, and how urgent it is. Agree it with the agent, or
+              set it here.
             </p>
 
             <div class="flex flex-col gap-1.5">
@@ -1059,7 +1087,7 @@
                     </span>
                   </div>
                   <p class="mt-1 text-[0.625rem] text-dimmed">
-                    Was due {formatDateTime(run.dueAt)} while the app was closed.
+                    Was due {formatDateTime(run.dueAt)}. {missedRunReasonText(run.reason)}
                   </p>
                   <div class="mt-2 flex justify-end gap-1.5">
                     <button

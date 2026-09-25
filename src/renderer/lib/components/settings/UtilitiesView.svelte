@@ -31,6 +31,7 @@
   import { publicAssetUrl } from '$lib/static-assets'
   import Switch from '../ui/Switch.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import McpConnectionTester from './McpConnectionTester.svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
   import SkillInstalledBadge from './SkillInstalledBadge.svelte'
   import UtilityEditorModal, { type UtilityEditorTarget } from './UtilityEditorModal.svelte'
@@ -40,13 +41,14 @@
   import type {
     AgentCapabilityEntry,
     AgentToolDefinition,
+    McpProbeTarget,
     SkillMarketEntry,
     UtilityBundleInstallRequest,
     UtilityDefinition,
     UtilityKind
   } from '$shared/types'
   import { ALL_HARNESSES_BINDING_ID } from '$shared/types'
-  import { canToggleUtilityEnabled } from '$shared/utility-ids'
+  import { canToggleUtilityEnabled, isComputerUseUtility } from '$shared/utility-ids'
 
   /** Sections of the Utilities page; the selected one lives in the settings route. */
   export type UtilitiesTab = 'all' | 'skills' | 'bookmarks' | 'mcp' | 'plugins' | 'web' | 'tools'
@@ -293,6 +295,26 @@
     if (kind === 'mcp') return Server
     if (kind === 'computer_use') return Monitor
     return Globe2
+  }
+
+  /** An MCP server is a live connection, so its row offers a reachability test. */
+  function isMcpRow(row: UtilityRowItem): boolean {
+    return row.src === 'registry' ? row.utility.kind === 'mcp' : row.entry.kind === 'mcp'
+  }
+
+  /** Test exactly the saved capability the row stands for, with its stored credentials. */
+  function mcpProbeTarget(row: UtilityRowItem): McpProbeTarget {
+    return row.src === 'registry'
+      ? { kind: 'registry', utilityId: row.utility.id }
+      : { kind: 'native', source: row.entry.source }
+  }
+
+  /**
+   * A computer-use connection is only started by the run that claimed the
+   * desktop daemon, so it has no standalone test of its own.
+   */
+  function isComputerUseRow(row: UtilityRowItem): boolean {
+    return row.src === 'registry' && isComputerUseUtility(row.utility)
   }
 
   function rowKindBadge(row: UtilityRowItem): string {
@@ -951,6 +973,20 @@
                       </span>
                     {/if}
                   </div>
+                  {#if isMcpRow(row)}
+                    {#if isComputerUseRow(row)}
+                      <p class="mt-2 text-[0.6875rem] text-dimmed">
+                        Started by each computer-use run, so Cua Driver settings report this
+                        connection.
+                      </p>
+                    {:else}
+                      <McpConnectionTester
+                        variant="row"
+                        subject={row.name}
+                        probe={() => mcpProbeTarget(row)}
+                      />
+                    {/if}
+                  {/if}
                 </div>
                 <div class="flex shrink-0 items-center gap-1">
                   {#if row.src === 'registry' && canToggleUtilityEnabled(row.utility)}

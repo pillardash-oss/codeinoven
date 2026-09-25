@@ -20,14 +20,14 @@ export interface ProviderConnectionInfo {
   executionTarget?: HarnessExecutionTarget
   /** First line of `<command> --version` output, when the probe succeeds. */
   version?: string
+  /**
+   * The probed command actually being driven, when it differs from `command`.
+   * Set for harnesses with aliases (OpenCode's `opencode2`): the app reports the
+   * name it resolved so install/update/auth act on the binary in use.
+   */
+  activeCommand?: string
   /** Human-readable detail for error/not_found states. */
   detail?: string
-  /**
-   * When set, the harness is installed but its detected version is not yet
-   * supported by CodeInOven (e.g. OpenCode V2). The harness is treated as not
-   * installed everywhere except the Harnesses page, which surfaces a notice.
-   */
-  unsupportedReason?: 'opencode-v2'
 }
 
 /** Where a confirmed harness-manifest behavior override came from. */
@@ -126,6 +126,12 @@ export interface HarnessAccount {
   providerName: string
   label: string
   containerKind: 'legacy-default' | 'managed'
+  /**
+   * Identity of the credential this legacy row mirrors (a harness credential
+   * id or slug). One provider can hold several credentials, and this is what
+   * keeps their mirrored rows apart across reconciliations.
+   */
+  sourceId?: string
   /** Marks the user's preferred account for this harness+provider. When unset,
    *  the earliest created account acts as the default. */
   isDefault?: boolean
@@ -176,6 +182,12 @@ export interface ProviderAccountLoginHandoff {
   args: string[]
   /** Bounded credential-home overrides applied only to this login process. */
   environment?: Record<string, string>
+  /**
+   * Account whose credential home this login writes into. Absent only when the
+   * harness has no account to bind to, which leaves the harness's shared
+   * (default-home) credential store as the login target.
+   */
+  accountId?: string
   title: string
   mutatesGlobalCredentials: boolean
 }
@@ -250,6 +262,20 @@ export interface HarnessUninstallHandoff {
   title: string
   /** The install method the uninstall command targets. */
   method: HarnessInstallMethod
+}
+
+/**
+ * Outcome of asking CodeInOven to restart a harness's resident transports so
+ * the next turn runs the harness binary currently on disk.
+ */
+export interface HarnessRuntimeRestartResult {
+  harnessId: string
+  /** Resident transports were torn down; the next turn spawns a fresh process. */
+  restarted: boolean
+  /** Sessions that were mid-turn when a forced restart took their transport. */
+  interruptedSessions: number
+  /** Present when nothing was restarted, explaining why. */
+  detail?: string
 }
 
 /** A provider a harness offers for connection, surfaced from its catalog. */

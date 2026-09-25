@@ -23,6 +23,11 @@ import {
   ADB_CAPABILITY_SUMMARY
 } from '../../lib/adb-skill'
 import {
+  DESIGN_CAPABILITY_DOCS,
+  DESIGN_CAPABILITY_NAME,
+  DESIGN_CAPABILITY_SUMMARY
+} from '../../lib/design-skill'
+import {
   SCOPE_CAPABILITY_DOCS,
   SCOPE_CAPABILITY_NAME,
   SCOPE_CAPABILITY_SUMMARY
@@ -36,6 +41,7 @@ import {
   APP_ADB_UTILITY_ID,
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
+  APP_DESIGN_UTILITY_ID,
   APP_SCOPE_UTILITY_ID,
   canToggleUtilityEnabled
 } from '../../lib/utility-ids'
@@ -43,6 +49,7 @@ export {
   APP_ADB_UTILITY_ID,
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
+  APP_DESIGN_UTILITY_ID,
   APP_SCOPE_UTILITY_ID
 }
 
@@ -233,6 +240,30 @@ export class UtilityRegistryService {
         activation: 'on_demand',
         scope: { level: 'global' },
         config: { instructions: ADB_CAPABILITY_DOCS },
+        credentials: [],
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'skill' as const
+          }
+        ],
+        appOwned: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        // The design pass is the substance. The app adds one operation on top of
+        // it, `preview`, which serves the design folder on the app's own loopback
+        // origin and opens it in the thread's browser tab, so a design can be
+        // looked at while the turn that produced it is still running.
+        id: APP_DESIGN_UTILITY_ID,
+        kind: 'skill',
+        name: DESIGN_CAPABILITY_NAME,
+        description: DESIGN_CAPABILITY_SUMMARY,
+        enabled: true,
+        activation: 'on_demand',
+        scope: { level: 'global' },
+        config: { instructions: DESIGN_CAPABILITY_DOCS },
         credentials: [],
         harnessBindings: [
           {

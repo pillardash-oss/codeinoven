@@ -1,4 +1,5 @@
 import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
+import { formatTime as formatClock } from '$shared/date-time-format'
 import type {
   AgentMessage,
   AgentPart,
@@ -45,10 +46,7 @@ export function workingParts(message: AgentMessage): AgentPart[] {
 }
 
 export function formatTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString([], {
-    hour: 'numeric',
-    minute: '2-digit'
-  })
+  return formatClock(timestamp)
 }
 
 /** Provider-neutral issue for a failure reported without any structured detail. */

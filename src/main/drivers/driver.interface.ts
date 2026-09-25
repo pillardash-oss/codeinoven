@@ -244,6 +244,8 @@ export interface HarnessLoginHandoff {
   command: string
   args: string[]
   environment?: Record<string, string>
+  /** Account whose credential home the login writes into, when main bound one. */
+  accountId?: string
   title: string
   mutatesGlobalCredentials: boolean
 }
@@ -579,6 +581,26 @@ export interface HarnessDriver {
    * processes that need to be rebuilt.
    */
   restartAfterAuthentication?(projectPath: string): Promise<void> | void
+
+  /**
+   * Tear down every resident transport this driver keeps so the next turn
+   * spawns the harness binary currently on disk.
+   *
+   * CodeInOven holds long-lived harness processes (OpenCode's `serve`, Codex's
+   * app-server daemon, Pi's per-session RPC client). A harness self-update
+   * replaces the CLI on disk but not those processes, so without a restart the
+   * app keeps talking to the build it started from   and the version probe, which
+   * re-runs against the new binary, reports the update as applied while
+   * sessions still run the old one. One-process-per-turn harnesses keep nothing
+   * resident, so they implement this as "stop any in-flight turn process";
+   * their next turn already spawns the new binary.
+   *
+   * Sessions persist in the harness's own store and are resumed after the
+   * restart, so this is not a session reset. A turn that is mid-flight when a
+   * forced restart runs loses its transport. Best-effort: the caller isolates
+   * per-driver failures.
+   */
+  restartRuntime?(): Promise<void> | void
 
   /** List available providers and their models. */
   listProviders(projectPath: string): Promise<ProviderCatalog[]>

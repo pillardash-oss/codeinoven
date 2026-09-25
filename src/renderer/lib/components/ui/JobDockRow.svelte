@@ -2,7 +2,7 @@
   /**
    * One dock row for every minimized background job.
    *
-   * The shared chip row both job owners report through, so several runs across
+   * The shared chip row every job owner reports through, so several runs across
    * projects can never stack on top of each other. Presentational: the owner maps
    * its jobs to `JobDockEntry`s and says what expanding one means.
    */

@@ -128,6 +128,12 @@ export type AgentEvent =
       /** Token accounting reported when the harness closes the turn. */
       tokens?: AgentTokenUsage
       normalizedUsage?: NormalizedUsage
+      /** Harness that owns the session, stamped by the engine. A live streamed
+       *  row carries no provenance of its own, so this is what lets usage
+       *  consumers attribute it before the persisted mirror catches up. */
+      harnessId?: string
+      /** Provider the turn was dispatched with, stamped alongside `harnessId`. */
+      providerId?: string
       /** Effective model context window reported when the harness closes the turn. */
       contextWindow?: number
       /** Cumulative tokens currently occupying the model context, when available. */
@@ -149,6 +155,10 @@ export type AgentEvent =
       type: 'usage.updated'
       sessionId: string
       messageId: string
+      /** Harness that owns the session, stamped by the engine. */
+      harnessId?: string
+      /** Provider the turn was dispatched with, stamped alongside `harnessId`. */
+      providerId?: string
       tokens?: AgentTokenUsage
       normalizedUsage?: NormalizedUsage
       contextWindow?: number

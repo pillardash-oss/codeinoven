@@ -39,9 +39,7 @@
   /** Harnesses CodeInOven can actually drive right now; unsupported builds
    *  behave exactly as if the harness were not installed. */
   let installedProviders = $derived(
-    providerStore.providers.filter(
-      (provider) => provider.status !== 'not_found' && provider.unsupportedReason === undefined
-    )
+    providerStore.providers.filter((provider) => provider.status !== 'not_found')
   )
 
   let rows: AuxiliaryRow[] = $derived.by(() => {

@@ -15,12 +15,16 @@ import type {
   HarnessInstallHandoff,
   HarnessInstallInfo,
   HarnessManifestEntry,
+  HarnessRuntimeRestartResult,
   HarnessUninstallHandoff,
   HarnessUpdateHandoff,
   HarnessUpdateStatus,
+  McpConnectionTestResult,
+  McpProbeTarget,
   NativeMcpContent,
   NativeSkillContent,
   OfferedProvider,
+  OpenCodeV2DiscoveryResult,
   PendingHarnessAccount,
   ProviderAccountAuthStatus,
   ProviderAccountLoginHandoff,
@@ -74,6 +78,7 @@ export const invokeProviderContract = {
   'cioPrompts:reset': {} as Contract<[id: CioPromptId], CioPromptSetting[]>,
   'workerNames:getSettings': {} as Contract<[], WorkerNameSettings>,
   'workerNames:saveCustom': {} as Contract<[names: string[]], void>,
+  'opencode:discoverCatalog': {} as Contract<[force?: boolean], OpenCodeV2DiscoveryResult>,
   'providers:check': {} as Contract<[providerId: string], ProviderConnectionInfo>,
   'providers:checkAll': {} as Contract<[force?: boolean], ProviderConnectionInfo[]>,
   'providers:getStatus': {} as Contract<[], ProviderConnectionInfo[]>,
@@ -83,6 +88,10 @@ export const invokeProviderContract = {
   'harnessInstall:getInfo': {} as Contract<[harnessId: string], HarnessInstallInfo>,
   'harnessInstall:handoff': {} as Contract<[harnessId: string], HarnessInstallHandoff>,
   'harnessUninstall:handoff': {} as Contract<[harnessId: string], HarnessUninstallHandoff>,
+  'harnessRuntime:restart': {} as Contract<
+    [harnessId: string, options?: { force?: boolean }],
+    HarnessRuntimeRestartResult
+  >,
   'harnessManifest:list': {} as Contract<[], HarnessManifestEntry[]>,
   'harnessManifest:confirm': {} as Contract<
     [input: { harnessId: string; behavior: string; value: boolean }],
@@ -91,8 +100,12 @@ export const invokeProviderContract = {
   'harnessManifest:reset': {} as Contract<[input: { harnessId: string; behavior: string }], void>,
   'harnessAutoUpdate:list': {} as Contract<[], Record<string, boolean>>,
   'harnessAutoUpdate:set': {} as Contract<[input: { harnessId: string; value: boolean }], void>,
+  /**
+   * Harness authentication status. With `accountId`, the read is scoped to that
+   * account's own credential home instead of the merged default-home view.
+   */
   'providerAccounts:getAuthStatus': {} as Contract<
-    [harnessId: string, projectPath?: string],
+    [harnessId: string, projectPath?: string, accountId?: string],
     ProviderAccountAuthStatus
   >,
   'providerAccounts:list': {} as Contract<
@@ -116,6 +129,7 @@ export const invokeProviderContract = {
   /** Mark an account as its harness's default for the account's provider.
    *  Returns the harness's full account list so callers can refresh caches. */
   'providerAccounts:setDefault': {} as Contract<[accountId: string], HarnessAccount[]>,
+  'providerAccounts:activate': {} as Contract<[accountId: string], void>,
   'providerAccounts:remove': {} as Contract<[accountId: string], boolean>,
   'providerAccounts:beginLogin': {} as Contract<
     [harnessId: string, options?: ProviderAccountLoginOptions],
@@ -207,6 +221,7 @@ export const invokeProviderContract = {
     UtilityDefinition
   >,
   'utilities:resolve': {} as Contract<[context: UtilityResolutionContext], ResolvedUtility[]>,
+  'utilities:testMcp': {} as Contract<[target: McpProbeTarget], McpConnectionTestResult>,
   'computerUse:getCuaStatus': {} as Contract<[], CuaBridgeStatus>,
   'computerUse:setCuaEnabled': {} as Contract<[enabled: boolean], CuaBridgeStatus>,
   /**

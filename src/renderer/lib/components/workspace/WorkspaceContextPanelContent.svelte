@@ -21,7 +21,12 @@
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { INBOX_PROJECT_ID, type AgentPart, type Project } from '$shared/types'
+  import {
+    INBOX_PROJECT_ID,
+    usesThreadWorkspaceMount,
+    type AgentPart,
+    type Project
+  } from '$shared/types'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
   interface Props {
@@ -61,6 +66,27 @@
   }: Props = $props()
 
   let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
+
+  /**
+   * Identity of the surface the active sidebar tab mounts.
+   *
+   * Every other kind is keyed by its own tab id, so selecting another tab of the
+   * same kind starts that panel fresh. A files panel is keyed by what its body
+   * actually depends on instead: the project, and the thread whose own workspace
+   * the tree mounts for a chat or an assistant task. Its sidebar tab changes on
+   * every file the user opens, so keying it by the tab id unmounted and remounted
+   * the whole panel on each file switch, and the full screen file viewer it owns
+   * went with it. The entire surface then flashed, its file tree lost its scroll
+   * position, and the editor it was showing was rebuilt from scratch.
+   */
+  let activePanelKey = $derived.by(() => {
+    const tab = activeContextTab
+    if (!tab) return ''
+    if (tab.kind !== 'files') return tab.id
+    const mountThreadId = usesThreadWorkspaceMount(tab.projectId) ? tab.threadId : 'project'
+    return `files:${tab.projectId}:${mountThreadId}`
+  })
+
   let gitPanelThreadId = $derived(
     activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : ''
   )
@@ -129,7 +155,7 @@
   {/key}
 {/if}
 {#if activeContextTab}
-  {#key activeContextTab.id}
+  {#key activePanelKey}
     {#if activeContextTab.kind === 'files'}
       {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
         <ProjectFilesPanel

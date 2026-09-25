@@ -5,17 +5,12 @@ import { sidebarState } from '$lib/stores/sidebar.svelte'
 import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
 import { type MainView } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
+import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
+import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
 import { type Project, type Thread } from '$shared/types'
 import { SvelteSet } from 'svelte/reactivity'
-import {
-  BotMessageSquare,
-  FolderKanban,
-  Kanban,
-  MessageSquare,
-  SquareDashedKanban,
-  Timeline
-} from '@lucide/svelte'
+import { FolderKanban, Kanban, SquareDashedKanban, Timeline } from '@lucide/svelte'
 
 export type HeaderViewOptionId =
   'projects' | 'threads' | 'scoped-threads' | 'scope-board' | 'chats' | 'assistant'
@@ -209,7 +204,7 @@ export class AppHeaderNavigationController {
         id: 'projects',
         label: 'Projects',
         icon: FolderKanban,
-        keys: ['mod', '1'],
+        keys: keymapState.keysFor('nav-projects'),
         select: () => {
           if (scopeState.sidebarContext) scopeState.clearSidebarContext()
           void this.onPrimaryNavClick('projects')
@@ -219,35 +214,35 @@ export class AppHeaderNavigationController {
         id: 'threads',
         label: 'Threads',
         icon: Timeline,
-        keys: ['mod', '2'],
+        keys: keymapState.keysFor('nav-threads'),
         select: () => void this.onPrimaryNavClick('threads')
       },
       {
         id: 'scoped-threads',
         label: 'Scoped threads',
         icon: SquareDashedKanban,
-        keys: ['mod', '3'],
+        keys: keymapState.keysFor('nav-projects-with-scope'),
         select: () => void this.toggleScopedThreads()
       },
       {
         id: 'scope-board',
         label: 'Scope Board',
         icon: Kanban,
-        keys: ['mod', '4'],
+        keys: keymapState.keysFor('nav-scope'),
         select: () => void this.onPrimaryNavClick('scope')
       },
       {
         id: 'chats',
         label: 'Chats',
-        icon: MessageSquare,
-        keys: ['mod', '0'],
+        icon: CONTENT_FAMILY_ICONS.chats,
+        keys: keymapState.keysFor('nav-chats'),
         select: () => void this.onPrimaryNavClick('chats')
       },
       {
         id: 'assistant',
         label: 'Assistant',
-        icon: BotMessageSquare,
-        keys: ['mod', '5'],
+        icon: CONTENT_FAMILY_ICONS.assistant,
+        keys: keymapState.keysFor('nav-assistant'),
         select: () => void this.onPrimaryNavClick('assistant')
       }
     ]

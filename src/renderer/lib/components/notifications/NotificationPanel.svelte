@@ -21,12 +21,13 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import { groupMissedRunsByRoutine } from '$lib/components/assistant/assistant-view'
+  import { groupMissedRunsByRoutine, missedRunReasonText } from '$lib/components/assistant/assistant-view'
   import { SvelteSet } from 'svelte/reactivity'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     onOpenThread?: (
@@ -514,7 +515,7 @@
                       >
                     </div>
                     <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-muted">
-                      A scheduled run was due while the app was closed.
+                      {missedRunReasonText(run.reason)}
                     </p>
                   </div>
                   <div class="flex shrink-0 items-center gap-1">
@@ -572,7 +573,7 @@
               // Ignore keys that belong to a nested control (the stack-trace
               // toggle), which would otherwise navigate away on Enter.
               if (e.target !== e.currentTarget) return
-              if (e.key === 'Enter' || e.key === ' ') {
+              if (keymapState.matches('chat-notification-open', e)) {
                 e.preventDefault()
                 void navigateToNotification(n)
               }

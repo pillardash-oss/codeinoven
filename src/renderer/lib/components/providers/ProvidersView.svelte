@@ -4,11 +4,14 @@
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { displayShortcutLabel } from '$lib/shortcut-display'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { APP_NAME } from '$shared/brand'
+  import { canRestartHarness, canUninstallHarness } from '$shared/harness-actions'
+  import { isOpenCodeV2Version } from '$shared/opencode-version'
   import type {
     HarnessManifestEntry,
     ProviderAccountAuthStatus,
@@ -27,6 +30,7 @@
     Plug,
     Plug2,
     RefreshCw,
+    RotateCcw,
     Search,
     Trash2,
     X
@@ -38,18 +42,16 @@
   import type { MenuItem } from '../shared/ThreadDropdown.svelte'
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
   import Modal from '../ui/Modal.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Switch from '../ui/Switch.svelte'
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
   import AuxiliaryAgentsPanel from './AuxiliaryAgentsPanel.svelte'
   import TypesafeDecisionsCard from './TypesafeDecisionsCard.svelte'
+
+  import OpenCodeV2CatalogPanel from './OpenCodeV2CatalogPanel.svelte'
   import ProviderConnectFlow from './ProviderConnectFlow.svelte'
 
-  /** Where users can browse existing PRs / open one for a V2 support effort. */
-  const OPENCODE_V2_PRS_URL = 'https://github.com/pillardash-oss/codeinoven/pulls'
-  /** Human copy shown for an installed-but-unsupported harness. */
-  const OPENCODE_V2_NOTICE =
-    'Open Code V2 support is not available at the moment. Pending the release of the stable release of Open Code V2.'
   /** How often the "last checked" relative label re-renders. */
   const RELATIVE_TIME_TICK_MS = 20_000
   /** How long a copy confirmation stays visible on the Path column. */
@@ -65,6 +67,9 @@
   let uninstallLoading = $state(false)
   let uninstallError = $state('')
   let uninstallBusy = $state(false)
+  /** Harness awaiting a restart confirmation, whose in-session threads may stop. */
+  let restartTarget = $state<ProviderConnectionInfo | null>(null)
+  let restartBusy = $state(false)
   /** Confirmed/effective harness behavior manifests, keyed by harness id. */
   let manifestEntries = $state.raw<Record<string, HarnessManifestEntry>>({})
   let manifestSaving = $state<Record<string, boolean>>({})
@@ -155,6 +160,14 @@
     )
   }
 
+  /**
+   * True when this row is an OpenCode V2 install. One `opencode` harness covers
+   * both lines, so the V2-only catalog panel is gated on the detected version.
+   */
+  function isOpenCodeV2Row(provider: ProviderConnectionInfo): boolean {
+    return provider.id === 'opencode' && isOpenCodeV2Version(provider.version ?? '')
+  }
+
   function manifestFor(harnessId: string): HarnessManifestEntry | undefined {
     return manifestEntries[harnessId]
   }
@@ -168,13 +181,6 @@
 
   /** Single, mutually-exclusive status badge per harness row. */
   function badgeFor(provider: ProviderConnectionInfo): BadgeInfo {
-    if (provider.unsupportedReason === 'opencode-v2') {
-      return {
-        Icon: AlertTriangle,
-        label: 'Not supported yet',
-        classes: 'border-warning/30 bg-warning/10 text-warning'
-      }
-    }
     if (provider.status === 'error') {
       return {
         Icon: AlertTriangle,
@@ -240,14 +246,18 @@
         onClick: () => void checkOne(provider.id)
       }
     ]
-    if (provider.unsupportedReason === 'opencode-v2') {
+    if (canRestartHarness(provider) || canUninstallHarness(provider)) {
+      items.push({ label: `divider-${provider.id}`, divider: true })
+    }
+    if (canRestartHarness(provider)) {
       items.push({
-        label: 'Check PRs',
-        onClick: () => void openInBrowser(OPENCODE_V2_PRS_URL)
+        label: 'Restart harness',
+        icon: RotateCcw,
+        disabled: harnessLifecycleStore.isRunning(provider.id),
+        onClick: () => requestRestart(provider)
       })
     }
-    if (provider.status === 'available' && provider.executionTarget?.kind !== 'bundled') {
-      items.push({ label: `divider-${provider.id}`, divider: true })
+    if (canUninstallHarness(provider)) {
       items.push({
         label: 'Uninstall',
         icon: Trash2,
@@ -384,6 +394,33 @@
     uninstallError = ''
   }
 
+  /**
+   * Replace the harness process CodeInOven holds so the version installed on
+   * disk is the one the next turn runs. Always confirmed first: restarting takes
+   * the transport away from any thread that is mid-turn.
+   */
+  function requestRestart(provider: ProviderConnectionInfo): void {
+    if (harnessLifecycleStore.isRunning(provider.id)) return
+    restartTarget = provider
+  }
+
+  async function confirmRestart(): Promise<void> {
+    const target = restartTarget
+    if (!target || restartBusy) return
+    restartBusy = true
+    try {
+      await harnessLifecycleStore.restartHarnessNow(target.id)
+      restartTarget = null
+    } finally {
+      restartBusy = false
+    }
+  }
+
+  function cancelRestart(): void {
+    if (restartBusy) return
+    restartTarget = null
+  }
+
   function customCountFor(harnessId: string): number {
     return baseUrlProviderStore.providers.filter(
       (provider) => provider.harnessId === harnessId && provider.enabled
@@ -450,7 +487,7 @@
   /** Intercept the global ⌘K/Ctrl+K (normally the command palette) to focus search while this tab is active. */
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (activeTab !== 'harnesses') return
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    if (keymapState.matches('nav-command-palette', event)) {
       event.preventDefault()
       event.stopPropagation()
       searchInputEl?.focus()
@@ -886,15 +923,6 @@
             </div>
           </div>
 
-          {#if provider.unsupportedReason === 'opencode-v2'}
-            <div class="mt-3 flex items-start gap-1.5 border-t border-border pt-2">
-              <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
-              <span class="min-w-0 break-words text-xs font-medium text-warning">
-                {OPENCODE_V2_NOTICE}
-              </span>
-            </div>
-          {/if}
-
           {#if expanded}
             <div
               class="mt-3 space-y-2.5 border-t border-border pt-3"
@@ -968,6 +996,11 @@
                     />
                   </div>
                 </div>
+                {#if isOpenCodeV2Row(provider)}
+                  <div class="border-t border-border pt-2.5">
+                    <OpenCodeV2CatalogPanel harnessName={provider.name} />
+                  </div>
+                {/if}
               {/if}
             </div>
           {/if}
@@ -1027,6 +1060,25 @@
 
 {#if addTarget}
   <ProviderConnectFlow harness={addTarget} onClose={() => (addTarget = null)} />
+{/if}
+
+{#if restartTarget}
+  <ConfirmDialog
+    open
+    title={`Restart ${restartTarget.name}?`}
+    confirmLabel="Restart harness"
+    variant="danger"
+    busy={restartBusy}
+    onCancel={cancelRestart}
+    onConfirm={confirmRestart}
+    note="Any thread that is actively in session may stop working."
+  >
+    <p>
+      This closes the {restartTarget.name} process {APP_NAME} is holding and starts a fresh one from the
+      version installed on your machine, so an update takes effect without restarting {APP_NAME}.
+    </p>
+    <p>Threads keep their conversations; a turn that is running right now is interrupted.</p>
+  </ConfirmDialog>
 {/if}
 
 {#if uninstallTarget}

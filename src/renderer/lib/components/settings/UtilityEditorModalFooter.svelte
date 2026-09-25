@@ -64,6 +64,7 @@
       <button
         class="flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground"
         type="button"
+        data-modal-dismiss
         onclick={onBack}
       >
         <ChevronLeft size={14} /> Back
@@ -75,6 +76,7 @@
       <button
         class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
         type="button"
+        data-modal-dismiss
         onclick={onClose}
       >
         {agentReport ? 'Done' : 'Cancel'}
@@ -99,6 +101,7 @@
         <button
           class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="button"
+          data-modal-primary
           disabled={saving || !canRunAgentSetup}
           onclick={onRunAgentSetup}
         >
@@ -110,6 +113,7 @@
       <button
         class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
         type="button"
+        data-modal-dismiss
         onclick={onClose}
       >
         Cancel
@@ -117,6 +121,7 @@
       <button
         class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
         type="button"
+        data-modal-primary
         disabled={saving || !canImportPlugin}
         onclick={onImportPlugin}
       >
@@ -127,13 +132,14 @@
       <button
         class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
         type="button"
+        data-modal-dismiss
         onclick={onClose}
       >
         {hasDraftId || isNative || setupPreset !== null ? 'Cancel' : 'Close'}
       </button>
       {#if (hasDraftId || isNative) && !isAppOwned}
         <button
-          class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+          class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-danger hover:bg-danger-hover disabled:opacity-50"
           type="button"
           disabled={saving}
           onclick={onRequestDelete}
@@ -147,6 +153,7 @@
           class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"
           form="utility-editor-form"
+          data-modal-primary
           disabled={saving}
         >
           {#if saving}<Loader2 size={13} class="animate-spin" />{/if}

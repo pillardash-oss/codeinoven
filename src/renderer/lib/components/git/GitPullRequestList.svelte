@@ -22,6 +22,7 @@
   import { relativeTime } from '$lib/format/relative-time'
   import { githubAppInstallUrl } from '$lib/github-references'
   import { githubDisplayLogin } from '$lib/format/github-login'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import PrListOptionsMenu from './PrListOptionsMenu.svelte'
   import PrRowContextMenu from './PrRowContextMenu.svelte'
@@ -214,7 +215,7 @@
    * back, so a panel with no selection still answers Escape itself.
    */
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape' || selectedItems.length === 0) return
+    if (!keymapState.matches('git-pr-clear-selection', event) || selectedItems.length === 0) return
     event.stopPropagation()
     clearSelection()
   }
@@ -513,7 +514,7 @@
                   onOpen(pr)
                 }}
                 onkeydown={(event: KeyboardEvent) => {
-                  if (event.key === 'Enter') onOpen(pr)
+                  if (keymapState.matches('ui-activate', event)) onOpen(pr)
                 }}
               >
                 <span

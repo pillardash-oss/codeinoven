@@ -1,6 +1,7 @@
 import { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { CIO_PROMPT_MAX_LENGTH, isCioPromptId } from '../../../lib/cio-prompts'
+import { prototypeCdnPolicyFromConfig } from '../../../lib/prototypes/prototype-cdn'
 import { normalizeWorkerNames } from '../../../lib/assignment/worker-names'
 import type {
   ProjectAction,
@@ -299,6 +300,9 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     }
     const config = { ...(await storage.getConfig()), ...patch }
     await storage.saveConfig(config)
+    // The preview server resolves the header when the policy is applied, so this
+    // keeps a settings change effective for the very next prototype request.
+    options.prototypePreviewService?.setCdnPolicy(prototypeCdnPolicyFromConfig(config))
     if (patch.zoomLevel !== undefined) {
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
       if (win && !win.isDestroyed()) win.webContents.setZoomFactor(config.zoomLevel)

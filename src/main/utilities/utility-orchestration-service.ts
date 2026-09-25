@@ -11,7 +11,7 @@ import type {
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
-import { APP_ADB_UTILITY_ID } from '../../lib/utility-ids'
+import { APP_ADB_UTILITY_ID, APP_DESIGN_UTILITY_ID } from '../../lib/utility-ids'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_IMAGE_DESCRIPTOR_UTILITY_ID,
@@ -19,6 +19,7 @@ import {
   UtilityRegistryService
 } from './utility-registry-service'
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
+import type { DesignSessionMode } from './cio-design-prompt'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -31,9 +32,13 @@ import {
 } from '../../lib/gateway-tools'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
+import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
+import { designAssignmentsFromConfig } from '../../lib/design-assignments'
+import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
+import { resultWithImageParts } from '../../lib/image-payload'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
-import { StdioMcpClient, type McpClient } from '../agents/mcp-stdio-client'
+import { type McpClient } from '../agents/mcp-stdio-client'
 import {
   WEB_TOOL_INPUT_SCHEMAS,
   WEB_TOOL_OUTPUT_SCHEMAS,
@@ -57,6 +62,12 @@ import {
   BRAINSTORM_ALIGNMENT_NOTE_LIMIT,
   brainstormAlignmentUtility
 } from '../../lib/brainstorm/brainstorm-alignment'
+import {
+  ROUTINE_AUTHORING_UTILITY_ID,
+  ROUTINE_AUTHORING_OPERATIONS,
+  ROUTINE_AUTHORING_CHECKPOINT_LIMIT,
+  routineAuthoringUtility
+} from '../../lib/routine-authoring'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import {
   matchesUtilityKinds,
@@ -73,6 +84,7 @@ import {
 } from './utility-orchestration/utility-turn-state'
 import {
   BROWSER_UTILITY_TOOLS,
+  DESIGN_UTILITY_TOOLS,
   BRIDGE_SCRIPT_PATH,
   buildCuaSessionId,
   buildUtilityGatewayScript,
@@ -85,11 +97,14 @@ import {
   readJsonBody,
   recordValue,
   requiredDatabase,
-  requiredString,
-  resolveEnvironmentReferences
+  requiredString
 } from './utility-orchestration/utility-input'
 import { normalizeBundleDefinitions } from './utility-orchestration/utility-bundle-input'
 import { RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
+import {
+  connectMcpServer,
+  credentialEnvironment as resolveCredentialEnvironment
+} from './mcp-connection'
 
 const CUA_UTILITY_ID = 'cio:cua-driver'
 
@@ -115,8 +130,20 @@ export interface UtilityTurnRequest {
   resolveExecutingModelVisionCapable?: () => Promise<boolean>
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
+  /**
+   * Whether this turn belongs to a design session the user opened with
+   * `@cio-design`. A session promotes the app-owned design capability to an
+   * active capability for the turn, so the playbook is already in context and
+   * its preview operation is callable without a search and an activation.
+   */
+  designSession?: DesignSessionMode
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
+  /**
+   * Present only for a routine's Getting started interview; the callback owns
+   * the checkpoint path and replaces its content.
+   */
+  saveRoutineCheckpoint?: (markdown: string) => Promise<{ path: string }>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -185,6 +212,20 @@ export interface UtilityTurnGateway {
 }
 
 export type BrowserUtilityExecutor = (
+  operation: string,
+  input: Record<string, unknown>,
+  context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+/**
+ * Runs one gateway invocation of the app-owned design capability for the turn
+ * that made it. The app supplies one of these per operation group, because the
+ * three halves have different owners: `preview` composes the loopback directory
+ * preview with the in-app browser, `delegate` runs a prompt on the model the
+ * user assigned to that design work, and `save-media` writes a generated asset
+ * into the project as a file the design can reference.
+ */
+export type DesignCapabilityExecutor = (
   operation: string,
   input: Record<string, unknown>,
   context: { projectId: string; threadId: string }
@@ -283,6 +324,9 @@ export class UtilityOrchestrationService {
   private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
+  private designPreviewExecutor: DesignCapabilityExecutor | null = null
+  private designAssignmentExecutor: DesignCapabilityExecutor | null = null
+  private designMediaExecutor: DesignCapabilityExecutor | null = null
   private scopeToolExecutor: ScopeToolExecutor | null = null
   private secretRequestExecutor: SecretRequestExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
@@ -344,6 +388,37 @@ export class UtilityOrchestrationService {
 
   setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
     this.browserExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-owned `cio:design` capability's
+   * `preview` operation. The design pass itself is text; what the app adds is
+   * the ability to serve the folder it produced and show it in the thread's
+   * browser tab.
+   */
+  setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.designPreviewExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the design capability's `delegate` operation,
+   * which runs one prompt on the model the user assigned to a piece of design
+   * work. The chat engine supplies it because it owns drivers, accounts and the
+   * resolved project path, and because the assignment is a user decision the
+   * app must never make on the agent's behalf.
+   */
+  setDesignAssignmentExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.designAssignmentExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the design capability's `save-media`
+   * operation, which writes a generated image, video or sound file into the
+   * project so the design references a file rather than a link that expires.
+   * The app supplies it because it owns the project root the file lands in.
+   */
+  setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.designMediaExecutor = executor
   }
 
   /**
@@ -413,12 +488,19 @@ export class UtilityOrchestrationService {
       nativeCapabilities: request.nativeCapabilities,
       includeOnDemand: true
     })
-    // This capability is bound to the live interview, never installed globally.
-    eligible = eligible.filter(({ utility }) => utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID)
+    // These capabilities are bound to the live interview, never installed globally.
+    eligible = eligible.filter(
+      ({ utility }) =>
+        utility.id !== BRAINSTORM_ALIGNMENT_UTILITY_ID &&
+        utility.id !== ROUTINE_AUTHORING_UTILITY_ID
+    )
     if (request.saveBrainstormNotes) {
       eligible.push(
         brainstormAlignmentUtility(request.harnessId, request.projectId, request.threadId)
       )
+    }
+    if (request.saveRoutineCheckpoint) {
+      eligible.push(routineAuthoringUtility(request.harnessId, request.projectId, request.threadId))
     }
     if (this.hasNativeComputerUse(request)) {
       // Existing registries may predate the computer-use capability binding,
@@ -468,6 +550,21 @@ export class UtilityOrchestrationService {
     const always = eligible.filter(
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
+    // A design session was opened by the user, so the design capability is active
+    // from the first token: the playbook travels with the turn and the preview
+    // operation is callable at once. Its instructions are resolved from live
+    // settings here for the same reason activation resolves them, because the
+    // seeded copy cannot know which CDN origins the user has approved.
+    if (request.designSession && request.designSession !== 'off') {
+      const design = eligible.find(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)
+      if (design && !always.some(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)) {
+        const instructions = await this.designPlaybook()
+        always.push({
+          binding: design.binding,
+          utility: { ...design.utility, kind: 'skill', config: { instructions } }
+        })
+      }
+    }
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
     // The app-owned scope utility is advertised as a one-line pointer, never as
     // a schema: whether it is offered at all is the registry's call, so
@@ -477,6 +574,10 @@ export class UtilityOrchestrationService {
     // than a schema. It is knowledge an agent applies with its own shell, so the
     // only thing a turn needs from the app is to know the playbook exists.
     const hasAdbCapability = eligible.some(({ utility }) => utility.id === APP_ADB_UTILITY_ID)
+    // The design capability is advertised the same way: the app wants an agent
+    // that is about to design an interface to know the guidance and the preview
+    // exist, without carrying the design pass in every turn's context.
+    const hasDesignCapability = eligible.some(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)
     const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
       if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
         return request.allowManagement === true
@@ -540,6 +641,11 @@ export class UtilityOrchestrationService {
       ...(hasAdbCapability
         ? [
             `The app-owned Android device skill (utility \`${APP_ADB_UTILITY_ID}\`) is knowledge, not a tool, and it is not in your tool list. When a task involves an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the result before you probe the device by hand: it carries the verified recipes, the traps, and the evidence standard. Load it again with ${UTILITY_DOCS_TOOL_NAME} if it leaves your context. It is a baseline, not an authority: if the project or your harness already provides its own Android or adb skill or runbook, follow that one and use this only for what it does not cover.`
+          ]
+        : []),
+      ...(hasDesignCapability
+        ? [
+            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus three operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, and a \`save-media\` operation that saves a generated image, video or sound file into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
           ]
         : []),
       ...(hasOnDemand
@@ -689,7 +795,7 @@ export class UtilityOrchestrationService {
   /**
    * Record one utility in its thread's bank the first time it is activated.
    * Transient per-turn capabilities (the gateway itself, interview-bound
-   * alignment) are never banked.
+   * alignment notes, and the getting-started checkpoint) are never banked.
    */
   private async registerThreadBankEntry(
     state: TurnState,
@@ -697,7 +803,8 @@ export class UtilityOrchestrationService {
   ): Promise<void> {
     if (
       utility.id.startsWith('cio:utility-gateway:') ||
-      utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID
+      utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID ||
+      utility.id === ROUTINE_AUTHORING_UTILITY_ID
     ) {
       return
     }
@@ -1207,6 +1314,25 @@ export class UtilityOrchestrationService {
     }
   }
 
+  /**
+   * The design capability's playbook, with the external-asset paragraph rebuilt
+   * from the current settings policy and the delegation section rebuilt from the
+   * user's current assignments.
+   *
+   * Resolved rather than seeded because both facts are user settings: the CDN
+   * allowlist decides which hosts will actually load, and the assignments decide
+   * which models a design turn is allowed to delegate to. All paths that hand the
+   * playbook to a model   activation, and the promotion a `@cio-design` session
+   * performs at turn start   come through here, so they cannot disagree.
+   */
+  private async designPlaybook(): Promise<string> {
+    const config = await this.storage.getConfig()
+    return designCapabilityDocs(
+      prototypeCdnPolicyFromConfig(config),
+      designAssignmentsFromConfig(config.design)
+    )
+  }
+
   /** Build the capability payload (tools, operations, or instructions) that
    *  activation and cio_util_docs_lookup hand back to the model. Shared so a
    *  post-compaction docs re-dump is byte-identical to the original listing. */
@@ -1214,9 +1340,20 @@ export class UtilityOrchestrationService {
     if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
       return { tools: BRAINSTORM_ALIGNMENT_OPERATIONS }
     }
+    if (resolved.utility.id === ROUTINE_AUTHORING_UTILITY_ID) {
+      return { tools: ROUTINE_AUTHORING_OPERATIONS }
+    }
     if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
       return { tools: BROWSER_UTILITY_TOOLS }
+    }
+    if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
+      // The operation catalog travels with the playbook, because unlike the scope
+      // capability this one is invoked with typed fields.
+      return {
+        instructions: await this.designPlaybook(),
+        tools: DESIGN_UTILITY_TOOLS
+      }
     }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
@@ -1349,9 +1486,42 @@ export class UtilityOrchestrationService {
         BRAINSTORM_ALIGNMENT_NOTE_LIMIT
       )
       result = await state.request.saveBrainstormNotes(markdown)
+    } else if (resolved.utility.id === ROUTINE_AUTHORING_UTILITY_ID) {
+      if (operation !== 'save_checkpoint' || !state.request.saveRoutineCheckpoint) {
+        throw new Error(
+          'The getting-started checkpoint is only available while a routine\u2019s how-to is being written'
+        )
+      }
+      const markdown = requiredString(
+        operationInput['markdown'],
+        'markdown',
+        ROUTINE_AUTHORING_CHECKPOINT_LIMIT
+      )
+      result = await state.request.saveRoutineCheckpoint(markdown)
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')
+      result = await executor(operation, operationInput, {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId
+      })
+    } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
+      // One capability, three operation groups with different owners: `preview`
+      // serves the design folder, `delegate` runs the model the user assigned,
+      // and `save-media` brings a generated asset in as a file.
+      const executors = new Map<string, DesignCapabilityExecutor | null>([
+        ['preview', this.designPreviewExecutor],
+        ['delegate', this.designAssignmentExecutor],
+        ['save-media', this.designMediaExecutor]
+      ])
+      const executor = executors.get(operation)
+      if (!executor) {
+        throw new Error(
+          executors.has(operation)
+            ? `The design capability's "${operation}" operation is unavailable`
+            : `The design capability has no operation named "${operation}"`
+        )
+      }
       result = await executor(operation, operationInput, {
         projectId: state.request.projectId,
         threadId: state.request.threadId
@@ -1404,7 +1574,13 @@ export class UtilityOrchestrationService {
       throw new Error(`Utility kind "${resolved.utility.kind}" does not expose runtime operations`)
     }
     await this.audit(state, 'utility.invoked', { utilityId, operation })
-    return result
+    // A picture that travels inline as base64 is billed as text, at roughly one
+    // token per character; the same bytes delivered as an image content part are
+    // billed on the pixels they cover, which measured about 22x cheaper on a real
+    // screenshot (40,788 tokens against 1,844 at 1568px). Both bridges forward a
+    // `content` array verbatim, so an image-bearing result is handed back in that
+    // shape and everything else keeps its existing form.
+    return resultWithImageParts(result) ?? result
   }
 
   /**
@@ -1587,65 +1763,19 @@ export class UtilityOrchestrationService {
       }
       return RemoteMcpClient.connect(utility.config.endpoint, {})
     }
-    const environment = await this.credentialEnvironment(utility)
-    if (utility.config.transport === 'stdio') {
-      if (!utility.config.command) throw new Error('stdio MCP command is not configured')
-      try {
-        return await StdioMcpClient.connect(utility.config.command, utility.config.args ?? [], {
-          ...utility.config.environment,
-          ...environment
-        })
-      } catch (error) {
-        throw this.mcpStartupFailure(utility, environment, error)
-      }
-    }
-    if (!utility.config.url) throw new Error('Remote MCP URL is not configured')
-    return RemoteMcpClient.connect(
-      utility.config.url,
-      resolveEnvironmentReferences(utility.config.headers ?? {}, environment)
-    )
-  }
-
-  /**
-   * Turn a stdio MCP startup failure into something the agent can act on.
-   *
-   * A server that exits before it answers `initialize` usually died over missing setup, and
-   * the exit message alone does not say which utility or which credential. Naming both here
-   * is what stops a missing token from reading as a broken MCP server.
-   */
-  private mcpStartupFailure(
-    utility: UtilityDefinition,
-    environment: Record<string, string>,
-    error: unknown
-  ): Error {
-    const message = error instanceof Error ? error.message : String(error)
-    const missing = utility.credentials
-      .map((credential) => credential.environmentVariable)
-      .filter(
-        (name): name is string => typeof name === 'string' && name !== '' && !environment[name]
-      )
-    if (missing.length === 0) {
-      return new Error(`Utility \`${utility.name}\` could not start: ${message}`, { cause: error })
-    }
-    return new Error(
-      `Utility \`${utility.name}\` could not start: ${message}. Set its credential ${
-        missing.length > 1 ? 'variables' : 'variable'
-      } ${missing.map((name) => `\`${name}\``).join(', ')} in Utilities`,
-      { cause: error }
-    )
+    // One shared starter, which the Utilities connection test calls too, so a
+    // server that tests green is a server this gateway can start.
+    return connectMcpServer({
+      config: utility.config,
+      environment: await this.credentialEnvironment(utility),
+      owner: { name: utility.name, credentials: utility.credentials }
+    })
   }
 
   private async credentialEnvironment(utility: UtilityDefinition): Promise<Record<string, string>> {
-    const environment: Record<string, string> = {}
-    for (const credential of utility.credentials) {
-      if (!credential.environmentVariable) continue
-      try {
-        environment[credential.environmentVariable] = await this.vault.resolve(credential.secretRef)
-      } catch (error) {
-        if (credential.required) throw error
-      }
-    }
-    return environment
+    return resolveCredentialEnvironment(utility.credentials, (secretRef) =>
+      this.vault.resolve(secretRef)
+    )
   }
 
   private async audit(

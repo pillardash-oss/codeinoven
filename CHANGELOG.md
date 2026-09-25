@@ -7,6 +7,88 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Added
 
+- **OpenCode is one harness, driven at whichever version is installed.**
+  OpenCode V1 and V2 both install as the `opencode` command (the vendor's V2
+  installer replaces a package-managed V1 binary, and a package-managed V2
+  install may add an `opencode2` alias). The app probes `opencode` and
+  `opencode2`, keeps the newest version, and drives the transport that matches
+  it, so a V2 machine streams over the V2 `/api/*` HTTP+SSE surface and a V1
+  machine keeps the V1 server API. There is no second harness entry and no
+  version picker: the Harnesses page shows one **OpenCode** row with its
+  detected version, and its install/update/uninstall channels now target the
+  current release.
+
+  The V2 transport is fully drivable: threads stream text and reasoning, run
+  tools, ask interactive questions through V2's form surface, answer or dismiss
+  them, accept mid-turn steering, mirror their native transcript, compact on
+  demand, run slash commands, and stop on interrupt. Model, agent, and
+  thinking-level selection are applied per turn (V2 scopes them to the session),
+  attachments are supported, and the model picker reads the server's own
+  catalog. Thread titles, turn grading, cheap-model one-shots, heartbeats, and
+  every disposable flow (temporary chats, transcription, image description,
+  brainstorm/spec/assignment offshoots) run on private V2 servers that are torn
+  down when they end, and a delegated sub-agent is surfaced as a child-agent
+  card (V2 announces the child session with a non-null `parentID`).
+  `opencode auth list/login/logout` backs the provider account UI at both
+  version lines, and a V2 integration that holds several keys reports each
+  connection as its own account. CodeInOven's account containers still isolate
+  V2 completely: the container environment relocates V2's config and its SQLite
+  store, so each account keeps its own credentials and state.
+
+  Custom base-URL providers are claimed for the single entry. V2 cannot restrict
+  `read` in a session permission ruleset (its own provider entitlement is
+  evaluated through the same ruleset), so a restricted V2 turn denies everything
+  that mutates instead of every tool. Token and cost usage is read from the V2
+  session stats and message payloads, and the account's Go quota windows are read
+  from OpenCode's own usage API (`https://opencode.ai/zen/go/v1/usage`) for
+  whichever line is installed: V1 from its `auth.json`, V2 from its SQLite
+  credential store. The local **OpenUsage** integration remains the fallback that
+  answers the same question for any provider, so account quota is a local
+  capability. Only the hosted Console workspace budgets and CSV export stay a
+  separate service-account product. Structured output is not claimed for either
+  line (V2 has no JSON-schema mode, and V1 deliberately keeps deterministic JSON
+  flows off its history endpoint).
+
+- An end-to-end suite for the OpenCode harness is committed and gated on
+  `OPENCODE_E2E_BINARY`: with a real install it proves the app selects the
+  transport matching the detected line, that the V2 catalog is read over the
+  HTTP API (waiting out the server's first-boot window), and that a real turn
+  streams and mirrors its history. It reports as skipped wherever no OpenCode
+  binary is present, so CI stays green.
+
+- **OpenCode's own multi-account and provider hiding are first-class again.**
+  The harness manifest now declares a `multipleAccounts` behavior, and the auth
+  capabilities are derived from that declaration instead of a hardcoded default:
+  OpenCode reports native multi-account support, and account activation is
+  enabled only when the installed line actually has a switch command
+  (`opencode auth switch <integration> <credential>`, V2 only; V1's `auth` has
+  only `list`, `login`, and `logout`). Selecting an account that lives in
+  OpenCode's own default store makes it the active credential, so a turn uses
+  the account the user picked rather than whichever one OpenCode last had
+  active. Accounts the user creates inside OpenCode itself are read by
+  `opencode auth list`, one row per stored connection, and stay separately
+  actionable on the connect screen: a provider with two keys gets two rows with
+  their own disconnect, matched by the credential id each row mirrors. Because
+  that list never reports which connection is active, the flag is read from
+  OpenCode's store and the account list's default badge follows it, so the app
+  shows the account a turn will really use even after a switch made inside
+  OpenCode.
+
+- Provider hiding works at both OpenCode lines again, with the toggle restored on
+  the provider connect screen (it was dropped when the account and model pickers
+  were unified). V1 keeps writing `disabled_providers`. V2 writes the documented
+  replacement from [the V2 policies guide](https://opencode.ai/v2/docs/policies/),
+  an `experimental.policies` statement
+  `{action:'provider.use', resource:<id>, effect:'deny'}`, which removes the
+  provider from the catalog and from model selection even with valid
+  credentials; denies are appended last, where the last matching statement wins.
+  A V2 read is the union of that list and `disabled_providers`, because a V2
+  install still translates a V1 list it finds, and a V2 write mirrors the same
+  set back into `disabled_providers` so the user's hiding survives a switch to a
+  V1 install. Unrelated policy statements and the rest of the config file
+  round-trip untouched, and the cached provider catalog is invalidated so the
+  model picker updates immediately.
+
 - The agent can now collect secrets without ever seeing them. A new
   `cio_ask_secret` **gateway** tool (the utility gateway every harness already
   reaches, not a per-harness tool) asks for one or more values by title and
@@ -24,14 +106,21 @@ All notable changes to CodeInOven are documented here. This project follows
 - The secret card now offers **Provide alternative**, the same escape hatch the
   permission card has. A user who cannot reach a value they already supplied
   answers with an instruction instead of pasting, and the app resolves every
-  requested name from state the device already holds   this thread's registry, a
-  credential bound to an installed utility, or another thread's registry   adopts
+  requested name from state the device already holds this thread's registry, a
+  credential bound to an installed utility, or another thread's registry adopts
   it for the current thread and exposes it exactly like a pasted value (session
   environment and owner-only file, or the utility credential). The user may name
   the stored variable when it was saved under a different spelling. Names with
   nothing stored behind them are reported back as `unresolved_environment_variables`
   together with the instruction, so the agent adapts instead of asking for the
   same key twice.
+
+- The secret card now offers **Explain** and **Quick chat** at the bottom left of
+  its footer, matching the question card. Both open the temporary read-only side
+  chat with the request attached as its selection, and opening either pauses the
+  card's countdown so it cannot expire while the user reads. The explain chat is
+  told what the request is for and that an actual value must never be invented or
+  guessed.
 
 ### Changed
 

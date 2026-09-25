@@ -130,22 +130,6 @@ class ProviderStore {
     return this.providers.filter((p) => p.status === 'available').length
   }
 
-  /** Harness ids whose installed version is unsupported (e.g. OpenCode V2). */
-  get unsupportedHarnessIds(): ReadonlySet<string> {
-    return new Set(
-      this.providers
-        .filter((provider) => provider.unsupportedReason !== undefined)
-        .map((provider) => provider.id)
-    )
-  }
-
-  /** True when a harness is detected but its version is not yet supported. */
-  isUnsupported(harnessId: string): boolean {
-    return this.providers.some(
-      (provider) => provider.id === harnessId && provider.unsupportedReason !== undefined
-    )
-  }
-
   /** True when a harness can take provider credentials right now. */
   canAddProvider(provider: ProviderConnectionInfo): boolean {
     return provider.integration === 'ready' && provider.status === 'available'

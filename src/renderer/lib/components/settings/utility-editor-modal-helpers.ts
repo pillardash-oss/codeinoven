@@ -1,5 +1,6 @@
 import type {
   HarnessUtilityBinding,
+  McpUtilityConfig,
   UtilityActivation,
   UtilityConfigMap,
   UtilityCredentialInput,
@@ -230,25 +231,8 @@ export function effectiveActivation(draft: UtilityDraft): UtilityActivation {
 
 export function buildConfig(draft: UtilityDraft): UtilityConfigMap[UtilityKind] {
   switch (draft.kind) {
-    case 'mcp': {
-      const environment = parseRecord(draft.environment, 'Environment')
-      const headers = parseRecord(draft.headers, 'Headers')
-      return {
-        transport: draft.transport,
-        ...(draft.command.trim() ? { command: draft.command.trim() } : {}),
-        ...(draft.args.trim()
-          ? {
-              args: draft.args
-                .split('\n')
-                .map((item) => item.trim())
-                .filter(Boolean)
-            }
-          : {}),
-        ...(draft.url.trim() ? { url: draft.url.trim() } : {}),
-        ...(environment ? { environment } : {}),
-        ...(headers ? { headers } : {})
-      }
-    }
+    case 'mcp':
+      return buildMcpConnectionConfig(draft)
     case 'skill':
       return { instructions: draft.instructions.trim() }
     case 'web_search':
@@ -280,6 +264,30 @@ export function buildConfig(draft: UtilityDraft): UtilityConfigMap[UtilityKind] 
   }
 }
 
+/**
+ * The MCP connection a draft describes. Shared by the save path and the
+ * connection test, so a tested draft is the configuration that would be saved.
+ */
+export function buildMcpConnectionConfig(draft: UtilityDraft): McpUtilityConfig {
+  const environment = parseRecord(draft.environment, 'Environment')
+  const headers = parseRecord(draft.headers, 'Headers')
+  return {
+    transport: draft.transport,
+    ...(draft.command.trim() ? { command: draft.command.trim() } : {}),
+    ...(draft.args.trim()
+      ? {
+          args: draft.args
+            .split('\n')
+            .map((item) => item.trim())
+            .filter(Boolean)
+        }
+      : {}),
+    ...(draft.url.trim() ? { url: draft.url.trim() } : {}),
+    ...(environment ? { environment } : {}),
+    ...(headers ? { headers } : {})
+  }
+}
+
 export function buildBindings(
   draft: UtilityDraft,
   installedHarnessIds: string[]
@@ -303,6 +311,12 @@ export function buildBindings(
     }))
 }
 
+/**
+ * The secret the user is writing. `credential.id` is the identity of the
+ * credential being replaced, so a form that keeps editing the first credential
+ * cannot silently rewrite another one: leave the id empty to register a new
+ * credential, whose id is derived from its variable name instead.
+ */
 export function buildCredential(
   draft: UtilityDraft,
   credential: CredentialDraft

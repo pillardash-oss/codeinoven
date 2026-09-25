@@ -4,6 +4,19 @@ import {
   normalizeVoiceRecordingShortcut
 } from '../../../lib/speech/types'
 import { THINKING_LEVEL_ORDER } from '../../../lib/thinking-presets'
+import {
+  MAX_PROTOTYPE_CDN_ORIGINS,
+  normalizePrototypeCdnOrigin
+} from '../../../lib/prototypes/prototype-cdn'
+import {
+  DESIGN_ASSIGNMENT_ID_MAX_LENGTH,
+  DESIGN_ASSIGNMENT_INSTRUCTIONS_MAX_LENGTH,
+  DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH,
+  DESIGN_ASSIGNMENT_OUTPUTS,
+  MAX_DESIGN_ASSIGNMENTS,
+  isDesignAssignmentId,
+  isDesignAssignmentOutput
+} from '../../../lib/design-assignments'
 import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
 import { validateMemoryConfig } from '../../chat/memory-service'
 import { MAX_MAX_CONFLICT_FILE_BYTES, MIN_MAX_CONFLICT_FILE_BYTES } from '../../../lib/types'
@@ -14,6 +27,8 @@ import type {
   AgentModelSelection,
   AppConfigPatch,
   AuxiliaryAgentConfig,
+  DesignAssignment,
+  DesignConfig,
   EditorId,
   HeartbeatConfig,
   LocalProfileAnalyticsRange,
@@ -121,6 +136,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'memory',
   'agentDefaults',
   'auxiliaryAgents',
+  'design',
   'rankingJudge',
   'agentBehaviorPrompt',
   'autoDownloadUpdates',
@@ -135,6 +151,9 @@ const CONFIG_PATCH_FIELDS = new Set([
   'maxDiffLines',
   'maxConflictFileBytes',
   'openLocalhostInCioBrowser',
+  'allowPrototypeExternalCdn',
+  'prototypeCdnAllowlist',
+  'inAppNotificationSound',
   'sound'
 ])
 
@@ -244,9 +263,76 @@ export function validateAuxiliaryAgents(value: unknown): AuxiliaryAgentConfig {
   return auxiliaryAgents
 }
 
-const RANKING_JUDGE_KINDS = new Set<RankingJudgeKind>(['automatic', 'typesafe', 'model'])
+/** Fields one design assignment may carry, and no others. */
+const DESIGN_ASSIGNMENT_FIELDS = new Set(['id', 'label', 'produces', 'instructions', 'selection'])
 
-/** Fields that describe the pinned model, and therefore apply to `model` only. */
+/**
+ * Validate the user's design assignments.
+ *
+ * Every row must name the model that does the work: an assignment without a
+ * complete harness, provider and model would be routed somewhere the user never
+ * chose, so it is rejected at the boundary instead of being stored inert.
+ * Ids are unique because an agent resolves an assignment by id, and two rows
+ * sharing one would make the call ambiguous.
+ */
+function validateDesignConfig(value: unknown): DesignConfig {
+  if (!isRecord(value)) throw new TypeError('Design settings must be an object')
+  for (const field of Object.keys(value)) {
+    if (field !== 'assignments') throw new TypeError(`Unsupported design settings field: ${field}`)
+  }
+  const assignments = value.assignments
+  if (!Array.isArray(assignments)) {
+    throw new TypeError('Design assignments must be an array')
+  }
+  if (assignments.length > MAX_DESIGN_ASSIGNMENTS) {
+    throw new TypeError(`Design assignments accept at most ${MAX_DESIGN_ASSIGNMENTS} rows`)
+  }
+  const seen = new Set<string>()
+  const validated: DesignAssignment[] = assignments.map((entry: unknown, index: number) => {
+    const label = `Design assignment ${index + 1}`
+    if (!isRecord(entry)) throw new TypeError(`${label} must be an object`)
+    for (const field of Object.keys(entry)) {
+      if (!DESIGN_ASSIGNMENT_FIELDS.has(field)) {
+        throw new TypeError(`Unsupported ${label} field: ${field}`)
+      }
+    }
+    const id = requireString(entry.id, `${label} ID`)
+    if (id.length > DESIGN_ASSIGNMENT_ID_MAX_LENGTH || !isDesignAssignmentId(id)) {
+      throw new TypeError(`${label} ID must be a short lowercase handle like "image-generation"`)
+    }
+    if (seen.has(id)) throw new TypeError(`Design assignments repeat the ID "${id}"`)
+    seen.add(id)
+    const name = requireString(entry.label, `${label} name`)
+    if (name.length > DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH) {
+      throw new TypeError(`${label} name is too long`)
+    }
+    const instructions = entry.instructions
+    if (
+      instructions !== undefined &&
+      (typeof instructions !== 'string' ||
+        instructions.length > DESIGN_ASSIGNMENT_INSTRUCTIONS_MAX_LENGTH)
+    ) {
+      throw new TypeError(`${label} guidance is too long`)
+    }
+    const produces = entry.produces
+    if (produces !== undefined && !isDesignAssignmentOutput(produces)) {
+      throw new TypeError(`${label} output must be one of ${DESIGN_ASSIGNMENT_OUTPUTS.join(', ')}`)
+    }
+    return {
+      id,
+      label: name,
+      // Copywriting is the default and the only output a config written before
+      // this field existed could mean, so storing it would add a word to every
+      // row.
+      ...(produces === undefined || produces === 'text' ? {} : { produces }),
+      ...(instructions === undefined || instructions.trim().length === 0 ? {} : { instructions }),
+      selection: validateAgentModelSelection(entry.selection, `${label} model`)
+    }
+  })
+  return { assignments: validated }
+}
+
+const RANKING_JUDGE_KINDS = new Set<RankingJudgeKind>(['automatic', 'typesafe', 'model'])
 const RANKING_JUDGE_MODEL_FIELDS = [
   'harnessId',
   'providerId',
@@ -450,6 +536,53 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.openLocalhostInCioBrowser = value.openLocalhostInCioBrowser
   }
 
+  if ('allowPrototypeExternalCdn' in value) {
+    if (typeof value.allowPrototypeExternalCdn !== 'boolean') {
+      throw new TypeError('Prototype external CDN must be a boolean')
+    }
+    patch.allowPrototypeExternalCdn = value.allowPrototypeExternalCdn
+  }
+
+  if ('prototypeCdnAllowlist' in value) {
+    const allowlist = value.prototypeCdnAllowlist
+    if (!Array.isArray(allowlist)) {
+      throw new TypeError('Prototype CDN allowlist must be an array')
+    }
+    if (allowlist.length > MAX_PROTOTYPE_CDN_ORIGINS) {
+      throw new TypeError(
+        `Prototype CDN allowlist accepts at most ${MAX_PROTOTYPE_CDN_ORIGINS} origins`
+      )
+    }
+    // Stored normalized and deduplicated, so a rejected spelling never reaches
+    // the config file and the same origin cannot be approved twice.
+    const origins: string[] = []
+    for (const entry of allowlist) {
+      if (typeof entry !== 'string') {
+        throw new TypeError('Prototype CDN origins must be strings')
+      }
+      const origin = normalizePrototypeCdnOrigin(entry)
+      if (!origin) {
+        throw new TypeError(`Not a usable HTTPS CDN origin: ${entry.trim()}`)
+      }
+      if (!origins.includes(origin)) origins.push(origin)
+    }
+    patch.prototypeCdnAllowlist = origins
+  }
+
+  if ('inAppNotificationSound' in value) {
+    const sound = value.inAppNotificationSound
+    if (!isRecord(sound)) throw new TypeError('In-app notification sound must be an object')
+    for (const field of Object.keys(sound)) {
+      if (field !== 'success' && field !== 'issue') {
+        throw new TypeError(`Unsupported in-app notification sound field: ${field}`)
+      }
+    }
+    if (typeof sound.success !== 'boolean' || typeof sound.issue !== 'boolean') {
+      throw new TypeError('In-app notification sound toggles must be booleans')
+    }
+    patch.inAppNotificationSound = { success: sound.success, issue: sound.issue }
+  }
+
   if ('sound' in value) {
     if (!isRecord(value.sound)) throw new TypeError('Sound settings must be an object')
     const sound = value.sound
@@ -560,6 +693,10 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   if ('auxiliaryAgents' in value) {
     patch.auxiliaryAgents = validateAuxiliaryAgents(value.auxiliaryAgents)
+  }
+
+  if ('design' in value) {
+    patch.design = validateDesignConfig(value.design)
   }
 
   if ('rankingJudge' in value) {

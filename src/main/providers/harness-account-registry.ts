@@ -6,6 +6,7 @@ import type {
   ProviderAccountAuthEntry
 } from '../../lib/types'
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
+import { harnessSupportsMultipleAccounts } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 
 const REGISTRY_PATH = 'provider-accounts/accounts.json'
@@ -22,8 +23,13 @@ export function legacyHarnessAccountId(harnessId: string): string {
   return `${harnessId}.default`
 }
 
-function additionalLegacyAccountId(harnessId: string, providerId: string): string {
-  const digest = createHash('sha256').update(providerId).digest('hex').slice(0, 16)
+function additionalLegacyAccountId(
+  harnessId: string,
+  providerId: string,
+  sourceId?: string
+): string {
+  const identity = sourceId ? `${providerId}\0${sourceId}` : providerId
+  const digest = createHash('sha256').update(identity).digest('hex').slice(0, 16)
   return `${harnessId}.default.${digest}`
 }
 
@@ -55,6 +61,13 @@ export class HarnessAccountRegistry {
           (account) => account.active !== false && !isCodeInOvenCustomProviderId(account.providerId)
         )
         .sort((left, right) => left.providerId.localeCompare(right.providerId))
+      // A harness that keeps several credentials in its own store decides which
+      // one is active (OpenCode V2's `auth switch`). Mirroring that onto the
+      // default badge keeps the app showing the account a turn will actually
+      // use, including after the user switched inside OpenCode itself.
+      const harnessActiveSourceIds = harnessSupportsMultipleAccounts(harnessId)
+        ? new Set(active.filter((entry) => entry.active === true).map((entry) => entry.id))
+        : new Set<string>()
       const managed = registry.accounts.filter(
         (account) => account.harnessId === harnessId && account.containerKind === 'managed'
       )
@@ -65,15 +78,39 @@ export class HarnessAccountRegistry {
       const labels = new Set(managed.map((account) => account.label.toLocaleLowerCase('en-US')))
       const now = Date.now()
       const legacy: HarnessAccount[] = []
+      // Each prior row may be claimed by one discovered credential. Consuming it
+      // keeps a second credential on the same provider from reusing the first
+      // one's id (V2 reports one account per connection, not per provider).
+      const availablePrior = [...priorLegacy]
       for (const [index, discovered] of active.entries()) {
-        const existing = priorLegacy.find((account) => account.providerId === discovered.providerId)
+        const sourceId = discovered.id
+        let matchIndex = sourceId
+          ? availablePrior.findIndex((account) => account.sourceId === sourceId)
+          : -1
+        if (matchIndex < 0) {
+          matchIndex = availablePrior.findIndex(
+            (account) => account.providerId === discovered.providerId
+          )
+        }
+        const existing = matchIndex >= 0 ? availablePrior.splice(matchIndex, 1)[0] : undefined
         const mayUseHarnessDefault = active.length === 1
-        const id =
-          existing && (mayUseHarnessDefault || existing.id !== legacyHarnessAccountId(harnessId))
-            ? existing.id
-            : mayUseHarnessDefault && !occupiedIds.has(legacyHarnessAccountId(harnessId))
-              ? legacyHarnessAccountId(harnessId)
-              : additionalLegacyAccountId(harnessId, discovered.providerId)
+        let id: string
+        if (
+          existing &&
+          (mayUseHarnessDefault || existing.id !== legacyHarnessAccountId(harnessId))
+        ) {
+          id = existing.id
+        } else if (mayUseHarnessDefault && !occupiedIds.has(legacyHarnessAccountId(harnessId))) {
+          id = legacyHarnessAccountId(harnessId)
+        } else {
+          id = additionalLegacyAccountId(harnessId, discovered.providerId, sourceId)
+          // A provider that appears twice still needs two distinct ids.
+          let salt = 0
+          while (occupiedIds.has(id)) {
+            salt += 1
+            id = additionalLegacyAccountId(harnessId, discovered.providerId, `${sourceId}\0${salt}`)
+          }
+        }
         occupiedIds.add(id)
         const providerName = discovered.label || discovered.providerId
         const existingLabelWasGenerated =
@@ -98,6 +135,8 @@ export class HarnessAccountRegistry {
           providerName,
           label,
           containerKind: 'legacy-default',
+          ...(sourceId ? { sourceId } : {}),
+          ...(sourceId && harnessActiveSourceIds.has(sourceId) ? { isDefault: true } : {}),
           createdAt: existing?.createdAt ?? now + index,
           updatedAt: existing?.updatedAt ?? now
         })

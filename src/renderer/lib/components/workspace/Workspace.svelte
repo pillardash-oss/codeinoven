@@ -23,7 +23,7 @@
     SquareTerminal,
     StickyNote
   } from '@lucide/svelte'
-  import { keymapKeys } from '$lib/keymap/keymap'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
@@ -58,6 +58,7 @@
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
+  import { contentThreadFamily } from '$lib/content-view-threads'
   import { chatDraft } from '$lib/stores/chat-draft'
   import {
     assistantEffectiveSettings,
@@ -93,6 +94,7 @@
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { toast } from 'svelte-sonner'
   import { logRendererError } from '$lib/system/renderer-logger'
   import {
     threadSort,
@@ -1855,7 +1857,7 @@
                 icon: Plus,
                 ariaLabel: `New thread in ${activeProject.name}`,
                 title: `New thread in ${activeProject.name}`,
-                shortcut: keymapKeys('nav-new-thread'),
+                shortcut: keymapState.keysFor('nav-new-thread'),
                 run: () => void createThreadInProject(activeProject)
               } satisfies ViewActionItem
             ]
@@ -1886,7 +1888,7 @@
           icon: SquarePen,
           ariaLabel: 'New chat',
           title: 'New chat',
-          shortcut: keymapKeys('nav-new-thread'),
+          shortcut: keymapState.keysFor('nav-new-thread'),
           run: startNewChat
         }
       ]
@@ -1915,7 +1917,7 @@
           icon: Plus,
           ariaLabel: 'New thread in this scope',
           title: 'New thread in this scope',
-          shortcut: keymapKeys('nav-new-thread'),
+          shortcut: keymapState.keysFor('nav-new-thread'),
           run: () => newThreadInScopeContext()
         },
         {
@@ -1951,7 +1953,7 @@
           icon: Clock1,
           ariaLabel: 'New task',
           title: 'New task',
-          shortcut: keymapKeys('assistant-new-task'),
+          shortcut: keymapState.keysFor('assistant-new-task'),
           run: () => void createAssistantTaskFromShortcut()
         }
       ]
@@ -2958,6 +2960,36 @@
     workspaceState.clearThread()
   }
 
+  /** Create a standalone (project-less) chat thread inside the hidden inbox. */
+  async function createInboxThread(): Promise<{ thread: Thread; inbox: Project }> {
+    const inbox = await invoke('project:ensureInbox')
+    const thread = await invoke('thread:create', {
+      projectId: inbox.id,
+      providerId: 'pi',
+      title: DEFAULT_THREAD_TITLE,
+      workingDirectory: '',
+      settings: chatEffectiveSettings(threadSettings.lastUsed)
+    })
+    return { thread, inbox }
+  }
+
+  /**
+   * In-flight creation of the welcome composer's inbox thread. The draft
+   * hand-off (first keystroke) and the first send share it, so a send landing
+   * while the hand-off is still creating the thread can never make a second
+   * one   both wait for the same thread and open it.
+   */
+  let welcomeChatThreadPromise: Promise<{ thread: Thread; inbox: Project }> | null = null
+
+  function ensureWelcomeChatThread(): Promise<{ thread: Thread; inbox: Project }> {
+    if (!welcomeChatThreadPromise) {
+      welcomeChatThreadPromise = createInboxThread().finally(() => {
+        welcomeChatThreadPromise = null
+      })
+    }
+    return welcomeChatThreadPromise
+  }
+
   /** Create a standalone (project-less) chat from the composer's first message. */
   async function createStandaloneChat(
     message: string,
@@ -2966,25 +2998,61 @@
     const msg = message.trim()
     if (!msg && files.length === 0) return
 
+    // Publish the hand-off before awaiting the thread: when a draft hand-off is
+    // already creating it, ThreadView mounts for that same thread and picks the
+    // message up, instead of a second thread being created here.
+    chatDraft.message = msg
+    chatDraft.attachments = files
     try {
-      const inbox = await invoke('project:ensureInbox')
-      const thread = await invoke('thread:create', {
-        projectId: inbox.id,
-        providerId: 'pi',
-        title: DEFAULT_THREAD_TITLE,
-        workingDirectory: '',
-        settings: chatEffectiveSettings(threadSettings.lastUsed)
-      })
+      const { thread, inbox } = await ensureWelcomeChatThread()
+      // Seed the empty conversation so the composer renders on the first frame
+      // and the hand-off message is sent without a loading flash.
+      threadMessages.seedEmpty(INBOX_PROJECT_ID, thread.id)
       upsertThreadInList(thread)
-      chatDraft.message = msg
-      chatDraft.attachments = files
       workspaceState.openThread(thread, inbox)
     } catch (error) {
+      chatDraft.message = ''
+      chatDraft.attachments = []
       // The thread was never created, so the message cannot appear anywhere.
       // Put it back in the composer so the user doesn't lose their first message.
       rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', msg, files)
       chatsComposerRestoreKey += 1
       reportError(error, 'The chat could not be started.')
+    }
+  }
+
+  /**
+   * Turn the welcome composer's unsent draft into a real inbox thread so the
+   * chat surfaces in the Chats sidebar as a draft, exactly like a project's
+   * New thread row. The draft is read again after the thread exists, so words
+   * typed while it was being created are carried over, then it is moved off the
+   * welcome composer and onto the thread before that thread mounts. Nothing is
+   * sent: the draft stays a draft, and the next New chat starts another one.
+   */
+  async function startChatDraft(): Promise<void> {
+    const draft = rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')
+    const attachments = rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+    if (!draft.trim() && attachments.length === 0) return
+
+    try {
+      const { thread, inbox } = await ensureWelcomeChatThread()
+      // The thread is seeded empty so its conversation renders the composer on
+      // the first frame   the welcome composer never flashes a loading state.
+      threadMessages.seedEmpty(INBOX_PROJECT_ID, thread.id)
+      // Re-read: the composer is authoritative and may have taken more
+      // keystrokes (or been cleared by a send) while the thread was created.
+      rendererRecovery.setDraft(
+        INBOX_PROJECT_ID,
+        thread.id,
+        rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
+        rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+      )
+      rendererRecovery.clearDraft(INBOX_PROJECT_ID, 'new-chat')
+      upsertThreadInList(thread)
+      workspaceState.openThread(thread, inbox)
+    } catch (error) {
+      // The draft stays in the welcome composer, so nothing the user typed is lost.
+      reportError(error, 'The chat draft could not be saved.')
     }
   }
 
@@ -3209,9 +3277,10 @@
   /** Remove a routine and every thread it owns, its hidden how-to thread included. */
   async function deleteAssistantRoutine(routineId: string): Promise<void> {
     const affected = allThreads.filter((thread) => thread.routineId === routineId)
-    await assistantRoutines.deleteRoutine(routineId)
-    // `thread:deleted` prunes the rows; drop them here too so the sidebar is
-    // correct immediately, the same way a plain thread delete behaves.
+    // The container and its rows leave the sidebar first: the removal must not
+    // wait on the database sweep. The main process then deletes the threads and
+    // their runs, forgets the routine in the scheduler, and removes its artifact
+    // folder; the toast reports what went with it.
     for (const thread of affected) {
       allThreads = allThreads.filter((candidate) => candidate.id !== thread.id)
       scopeState.removeThread(thread.id)
@@ -3219,6 +3288,28 @@
     }
     // The routine is gone, so its how-to panel has nothing left to configure.
     contextSidebarState.close(`assistant-how-to:${ASSISTANT_SPACE_ID}:${routineId}`)
+    try {
+      const result = await assistantRoutines.removeRoutine(routineId)
+      toast.success('Routine removed', {
+        description: removalSummary(result.taskCount, result.runCount, result.artifactsRemoved)
+      })
+    } catch (error) {
+      reportError(error, 'The routine could not be removed.')
+    }
+  }
+
+  /**
+   * What one routine removal swept, in one sentence. The artifact folder is
+   * called out because it can hold files the agent produced, so the user knows
+   * they went with the routine.
+   */
+  function removalSummary(taskCount: number, runCount: number, artifactsRemoved: boolean): string {
+    const parts = [`${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}`]
+    if (runCount > 0) parts.push(`${runCount} ${runCount === 1 ? 'run' : 'runs'}`)
+    const swept = `${parts.join(' and ')} deleted`
+    return artifactsRemoved
+      ? `${swept}, along with the routine's artifact folder.`
+      : `${swept}. Its artifact folder could not be removed.`
   }
 
   async function toggleAssistantRoutinePin(routine: Routine): Promise<void> {
@@ -3311,16 +3402,26 @@
     contextSidebarState.openAssistantHowTo(ASSISTANT_SPACE_ID, anchor.id, routine.id, routine.name)
   }
 
+  /**
+   * A Ctrl+Tab selection is a deliberate jump to one specific thread, so the
+   * shell lands in the view that owns that thread's family: a chat is only ever
+   * shown by Chats, an assistant task only by Assistant, and a project thread by
+   * Projects (or by the scope state, which the projects family owns). Without
+   * this the switcher could select a thread in a view that does not own it, leaving
+   * the wrong sidebar and that view's own tools on screen for it.
+   */
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
-    if (thread.projectId === INBOX_PROJECT_ID) navigate('chats')
-    else if (mode === 'chats') navigate('projects')
+    const family = contentThreadFamily(thread)
+    if (family === 'chats') navigate('chats')
+    else if (family === 'assistant') navigate('assistant')
+    else if (mode === 'chats' || mode === 'assistant') navigate('projects')
     // The scope store reads its own activeProjectId / sidebarContext, not the
     // workspace selection, so a cross-project Ctrl+Tab jump must sync it
     // otherwise the scope view tabs and the scope-state sidebar stay stuck on
     // the previous project. On the Scope page the view itself follows the
     // thread's project; an active scope-state sidebar follows the thread and
-    // its own scope bucket.
-    if (thread.projectId !== INBOX_PROJECT_ID) {
+    // its own scope bucket. Only the projects family has a scope state.
+    if (family === 'projects') {
       if (scopeViewActive) {
         void scopeState.activateProject(thread.projectId)
       } else if (scopeState.sidebarContext) {
@@ -3335,7 +3436,7 @@
     // the restore + folder expansion have settled.
     sidebarRevealSuppressed = false
     clearTimeout(sidebarRevealSuppressTimer)
-    if (thread.projectId !== INBOX_PROJECT_ID) sidebar.expandedFolders.add(thread.projectId)
+    if (family === 'projects') sidebar.expandedFolders.add(thread.projectId)
     void tick().then(() => revealThreadInSidebar(thread.id))
   }
 
@@ -3625,6 +3726,7 @@
         onProjectCreated={handleChatProjectCreated}
         onOpenScopeView={(thread) => void openThreadScopeView(thread)}
         onSendChat={createStandaloneChat}
+        onStartChatDraft={startChatDraft}
         onRequestAddProject={(kind) => {
           projectCreateTriggerKind = kind
           workspaceState.requestAddProject()

@@ -1,4 +1,5 @@
 import { SvelteDate, SvelteMap } from 'svelte/reactivity'
+import { APP_LOCALE } from '$shared/date-time-format'
 import type {
   LocalProfileAnalytics,
   LocalProfileModelRanking,
@@ -13,6 +14,8 @@ import {
   type ModelRankMetric,
   type RankingSortKey
 } from './profile-settings-format'
+
+const MONTH_FORMATTER = new Intl.DateTimeFormat(APP_LOCALE, { month: 'short' })
 
 export function rankingSortValue(
   entry: LocalProfileModelRanking,
@@ -67,8 +70,7 @@ export function buildCalendarWeeks(
     firstDay.setDate(start.getDate() + weekIndex * 7)
     if (firstDay.getTime() > end.getTime()) break
     const month = firstDay.getMonth()
-    const monthLabel =
-      month !== previousMonth ? firstDay.toLocaleDateString(undefined, { month: 'short' }) : ''
+    const monthLabel = month !== previousMonth ? MONTH_FORMATTER.format(firstDay) : ''
     previousMonth = month
 
     for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {

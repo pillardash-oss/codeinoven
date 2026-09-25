@@ -5,7 +5,10 @@ import type { StorageEngine } from '../storage/storage-engine'
 import { validateEntityId } from './ipc-validation'
 import type { HarnessAuthAccount, HarnessAuthStatus } from '../drivers/driver.interface'
 import { ProviderAccountOrchestrator } from '../providers/provider-account-orchestrator'
-import { HarnessAccountRegistry } from '../providers/harness-account-registry'
+import {
+  HarnessAccountRegistry,
+  legacyHarnessAccountId
+} from '../providers/harness-account-registry'
 
 const LOGIN_FIELDS = new Set(['mode', 'accountHint', 'sso', 'providerId', 'accountId'])
 const LOGIN_MODES = new Set(['default', 'subscription', 'console', 'device'])
@@ -24,7 +27,7 @@ export function registerProviderAccountIpc(
       if (rawHarnessId === undefined) return accounts.list()
       const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
       const refresh = rawRefresh === undefined ? false : boolean(rawRefresh, 'Refresh')
-      const capabilities = auth.capabilities(harnessId)
+      const capabilities = await auth.capabilities(harnessId)
       const shouldSync = refresh || Date.now() - (lastAccountSync.get(harnessId) ?? 0) >= 30_000
       if (capabilities && shouldSync) {
         const status = await auth.getStatus(harnessId)
@@ -66,7 +69,7 @@ export function registerProviderAccountIpc(
     const pending = accounts.pendingAccountById(
       validateEntityId(rawPendingAccountId, 'Pending account ID', 256)
     )
-    const capabilities = auth.capabilities(pending.harnessId)
+    const capabilities = await auth.capabilities(pending.harnessId)
     return {
       capabilities,
       ...(await auth.getStatus(pending.harnessId, undefined, accounts.environment(pending)))
@@ -109,6 +112,23 @@ export function registerProviderAccountIpc(
   ipcMain.handle('providerAccounts:setDefault', async (_, rawAccountId: unknown) => {
     const account = await accounts.setDefault(validateEntityId(rawAccountId, 'Account ID', 256))
     return accounts.list(account.harnessId)
+  })
+  ipcMain.handle('providerAccounts:activate', async (_, rawAccountId: unknown) => {
+    const accountId = validateEntityId(rawAccountId, 'Account ID', 256)
+    const account = (await accounts.list()).find((candidate) => candidate.id === accountId)
+    if (!account) throw new Error('The selected account no longer exists.')
+    // Only the harness's own default store holds several credentials that a
+    // switch can pick between; a managed container is already isolated, and a
+    // harness without a switch command has nothing to activate.
+    if (account.containerKind !== 'legacy-default' || !account.sourceId) return
+    const capabilities = await auth.capabilities(account.harnessId)
+    if (!capabilities?.accountActivation) return
+    await auth.activateAccount(
+      account.harnessId,
+      account.providerId,
+      account.sourceId,
+      accounts.environment(account)
+    )
   })
   ipcMain.handle('providerAccounts:remove', (_, rawAccountId: unknown) =>
     (removeAccount ?? ((accountId: string) => accounts.remove(accountId)))(
@@ -162,16 +182,40 @@ export function registerProviderAccountIpc(
 
   ipcMain.handle(
     'providerAccounts:getAuthStatus',
-    async (_, rawHarnessId: unknown, rawProjectPath?: unknown) => {
+    async (_, rawHarnessId: unknown, rawProjectPath?: unknown, rawAccountId?: unknown) => {
       const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
       const projectPath = parseOptionalAbsolutePath(rawProjectPath)
-      const capabilities = auth.capabilities(harnessId)
+      const capabilities = await auth.capabilities(harnessId)
       if (!capabilities) {
         return {
           capabilities: null,
           state: 'unsupported' as const,
           accounts: [],
           detail: `Authentication is not supported for harness: ${harnessId}`
+        }
+      }
+      // An account-scoped read answers "is THIS account signed in?" against the
+      // account's own credential home. The unscoped read merges the default home
+      // with every container and cannot say which of them a sign-in wrote.
+      const accountId =
+        rawAccountId === undefined ? undefined : validateEntityId(rawAccountId, 'Account ID', 256)
+      if (accountId !== undefined) {
+        // An id the registry does not know is not automatically wrong: the
+        // legacy default id names the harness's shared credential home and is
+        // legitimate without a row. Every other unknown id is a stale binding.
+        const account = (await accounts.list(harnessId)).find(
+          (candidate) => candidate.id === accountId
+        )
+        if (!account && accountId !== legacyHarnessAccountId(harnessId)) {
+          throw new Error('The selected account no longer exists.')
+        }
+        return {
+          capabilities,
+          ...(await auth.getStatus(
+            harnessId,
+            projectPath,
+            account ? accounts.environment(account) : {}
+          ))
         }
       }
       const status = await mergedAuthStatus(harnessId, projectPath)
@@ -183,13 +227,12 @@ export function registerProviderAccountIpc(
     async (_, rawHarnessId: unknown, rawOptions?: unknown) => {
       const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
       const options = parseLoginOptions(rawOptions)
-      const account = options.accountId
-        ? await resolveCredentialAccount(accounts, harnessId, options.accountId)
-        : undefined
+      const account = await loginAccount(accounts, harnessId, options)
       return auth.beginLogin(
         harnessId,
-        options,
-        account ? accounts.environment(account) : undefined
+        account.providerId ? { ...options, providerId: account.providerId } : options,
+        accounts.environment(account),
+        account.id
       )
     }
   )
@@ -373,9 +416,41 @@ async function resolveCredentialAccount(
   // longer implies the account is still in-memory pending. Resolve persisted
   // accounts first, then fall back to the in-memory pending store for accounts
   // that have not been finalized yet (e.g. mid add-provider login flow).
-  const persisted = (await accounts.list(harnessId)).find(
-    (account) => account.id === accountId
-  )
+  const persisted = (await accounts.list(harnessId)).find((account) => account.id === accountId)
   if (persisted) return persisted
   return accounts.pendingAccount(harnessId, accountId)
+}
+
+/**
+ * The account a sign-in must write into.
+ *
+ * A login is always about one account, and it has to be the account the next turn
+ * on this harness reads: credentials written anywhere else are attributed to
+ * whichever account tracks that store, which is how a re-authentication used to
+ * land on an account the user never picked while the expired one stayed signed
+ * out. The runtime's own resolution is therefore the authority here, and an
+ * in-memory pending container - the one account the registry cannot resolve yet,
+ * during the add-provider flow - is the single honored exception.
+ */
+async function loginAccount(
+  accounts: HarnessAccountRegistry,
+  harnessId: string,
+  options: ProviderAccountLoginOptions
+): Promise<HarnessAccount> {
+  if (options.accountId?.startsWith('pending-')) {
+    const persisted = (await accounts.list(harnessId)).find(
+      (account) => account.id === options.accountId
+    )
+    // `finalizePending` promotes a pending entry while keeping its id, so a
+    // persisted row wins when the registry and the in-memory store both know it.
+    return persisted ?? accounts.pendingAccount(harnessId, options.accountId)
+  }
+  try {
+    return await accounts.resolveForProvider(harnessId, options.providerId, options.accountId)
+  } catch {
+    // Only a dangling selection on a multi-account harness reaches here (the
+    // other paths degrade to the harness default). Stale thread data must not
+    // block the user from signing in again, so resolve without the account id.
+    return accounts.resolveForProvider(harnessId, options.providerId)
+  }
 }

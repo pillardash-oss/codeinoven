@@ -5,6 +5,7 @@ import {
   routineHowToComplete,
   type AgentCapabilityCatalog,
   type MissedRun,
+  type MissedRunReason,
   type Routine,
   type RoutineConnection,
   type RoutineSchedule,
@@ -39,6 +40,17 @@ import {
 /** The Missed runs tab only exists when at least one run was missed. */
 export function missedTabVisible(runs: readonly MissedRun[]): boolean {
   return runs.length > 0
+}
+
+/**
+ * Why a missed fire was not run, as one sentence for the surfaces. A record
+ * written before the reason existed is treated as `app-closed`, which is what
+ * every miss meant then.
+ */
+export function missedRunReasonText(reason: MissedRunReason | undefined): string {
+  return reason === 'delayed'
+    ? 'The app was open but could not start this run in time.'
+    : 'The app was not running when this run was due.'
 }
 
 /** Group key for missed runs whose task belongs to no routine. */

@@ -2,13 +2,7 @@
   import { MessageSquareText } from '@lucide/svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-
-  function formatTime(timestamp: number): string {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: 'numeric',
-      minute: '2-digit'
-    }).format(timestamp)
-  }
+  import { formatTime } from '$shared/date-time-format'
 </script>
 
 <div class="flex min-h-full flex-col gap-2" aria-label="Spec conversation">

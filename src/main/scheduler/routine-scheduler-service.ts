@@ -95,6 +95,9 @@ export class RoutineSchedulerService {
   async start(): Promise<void> {
     await this.missed.load()
     this.missed.pruneSettled()
+    // Drop records that predate their schedule (or whose task is gone) before
+    // anything else, so a miss written by an older build cannot keep badging.
+    this.pruneStaleMisses()
     this.startedAt = this.now()
     // Detect misses that happened while the app was closed before ticking, so a
     // slot that comes due only after startup is fired, not mis-recorded.
@@ -115,6 +118,24 @@ export class RoutineSchedulerService {
   dismissMissedRun(id: string): void {
     this.missed.dismiss(id)
     this.notifyChange()
+  }
+
+  /**
+   * Forget everything the scheduler holds for a routine that is being removed:
+   * its pending missed runs, which would otherwise keep badging until the next
+   * launch, and the in-flight run bookkeeping of its tasks.
+   *
+   * Nothing else needs resetting. Every tick re-reads the assistant tasks from
+   * the database, so a removed task is never evaluated, fired, or recorded as
+   * missed again, and a run already in flight is stopped by the deletion of its
+   * run thread through the canonical thread path.
+   */
+  forgetRoutine(routineId: string, removedThreadIds: readonly string[]): void {
+    const threads = new Set(removedThreadIds)
+    for (const [runThreadId, taskId] of this.inFlightRuns) {
+      if (threads.has(taskId) || threads.has(runThreadId)) this.inFlightRuns.delete(runThreadId)
+    }
+    if (this.missed.removeForRoutine(routineId, removedThreadIds) > 0) this.notifyChange()
   }
 
   /**
@@ -216,6 +237,26 @@ export class RoutineSchedulerService {
     }
   }
 
+  /**
+   * Drop persisted misses that are no longer real: a slot that predates its
+   * schedule's activation (the routine or its schedule did not exist then), or
+   * one whose task is gone. A schedule cannot have missed a fire that predates
+   * it, so such a record is misinformation rather than a pending run.
+   */
+  private pruneStaleMisses(): void {
+    const tasks = new Map(this.deps.routines.listAssistantTasks().map((task) => [task.id, task]))
+    for (const run of this.missed.list()) {
+      const task = tasks.get(run.threadId)
+      if (!task) {
+        this.missed.remove(run.id)
+        continue
+      }
+      if (run.dueAt < this.deps.routines.resolveTaskScheduleAnchor(task)) {
+        this.missed.remove(run.id)
+      }
+    }
+  }
+
   /** Await pending missed-run writes and dispatched runs (used by shutdown and tests). */
   async flush(): Promise<void> {
     await this.missed.flush()
@@ -248,22 +289,32 @@ export class RoutineSchedulerService {
   private evaluateTask(task: Thread, allowDispatch: boolean): void {
     // A paused routine keeps its tasks and how-to but never fires.
     if (this.deps.routines.isTaskPaused(task)) return
+    // A routine with no how-to cannot run: there is nothing to fire and nothing
+    // to miss until it is set up. Gating here also keeps a half-configured
+    // routine from badging a "missed run" for a slot it could never have run.
+    if (this.deps.routines.resolveTaskHowTo(task).trim() === '') return
     const schedule = this.deps.routines.resolveTaskSchedule(task)
     if (!scheduleIsActive(schedule)) return
     const now = this.now()
     const due = previousDueAt(schedule, now)
     if (due === null) return
-    const last = task.lastRunAt ?? 0
-    if (due <= last) return
+    // The floor is the later of the task's last fire and the moment its
+    // schedule became active. A slot before the schedule existed was never
+    // really due, so it is neither fired nor recorded as missed.
+    const anchor = this.deps.routines.resolveTaskScheduleAnchor(task)
+    const floor = Math.max(task.lastRunAt ?? 0, anchor)
+    if (due <= floor) return
 
-    const isMissed = due < this.startedAt || now - due > MISS_GRACE_MS
+    const appClosed = due < this.startedAt
+    const isMissed = appClosed || now - due > MISS_GRACE_MS
     if (isMissed) {
       const before = this.missed.list().length
       this.missed.record({
         threadId: task.id,
         routineId: task.routineId,
         dueAt: due,
-        title: task.title
+        title: task.title,
+        reason: appClosed ? 'app-closed' : 'delayed'
       })
       // Claim the slot so a repeated tick cannot re-detect the same fire.
       this.recordLastRun(task.id, due)

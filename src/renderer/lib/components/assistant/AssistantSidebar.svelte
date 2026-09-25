@@ -82,7 +82,6 @@
 
   let editTarget = $state<Routine | null>(null)
   let deleteTarget = $state<Routine | null>(null)
-  let deleteBusy = $state(false)
 
   const EMPTY_RUNS: readonly Thread[] = []
   const EMPTY_TASKS: readonly Thread[] = []
@@ -259,16 +258,17 @@
     editTarget = routine
   }
 
-  async function submitDelete(): Promise<void> {
+  /**
+   * Close the dialog and hand the removal to the workspace, which drops the
+   * container from the sidebar immediately and cleans up in the background. The
+   * dialog never waits on the sweep, so the removal feels like the plain UI
+   * action it is.
+   */
+  function submitDelete(): void {
     const target = deleteTarget
     if (!target) return
-    deleteBusy = true
-    try {
-      await onDeleteRoutine(target.id)
-      deleteTarget = null
-    } finally {
-      deleteBusy = false
-    }
+    deleteTarget = null
+    void onDeleteRoutine(target.id)
   }
 </script>
 
@@ -445,12 +445,12 @@
   open={deleteTarget !== null}
   title="Remove routine"
   confirmLabel="Remove routine"
-  busy={deleteBusy}
   onCancel={() => (deleteTarget = null)}
   onConfirm={submitDelete}
+  note="This cannot be undone."
 >
   <p>
-    Remove <strong class="text-foreground">{deleteTarget?.name ?? ''}</strong>? Its tasks survive as
-    routine-less tasks.
+    Remove <strong class="text-foreground">{deleteTarget?.name ?? ''}</strong>? Its tasks, the runs
+    they produced, and its artifact folder are deleted with it.
   </p>
 </ConfirmDialog>

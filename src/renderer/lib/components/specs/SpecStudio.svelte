@@ -38,6 +38,7 @@
     type SpecDraftEdits
   } from './spec-studio-draft-edits'
   import { compactViewport } from '$lib/compact-viewport.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import type {
     CapturableSpecContextType,
@@ -696,18 +697,13 @@
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
+    if (keymapState.matches('studio-cancel-annotation', event)) {
       closePendingAnnotation()
       closeAnnotation()
       pendingAction = null
       return
     }
-    const saveShortcut =
-      event.key.toLowerCase() === 's' &&
-      (event.metaKey || event.ctrlKey) &&
-      !event.altKey &&
-      !event.shiftKey
-    if (!saveShortcut || event.repeat || event.isComposing) return
+    if (!keymapState.matches('studio-save', event) || event.repeat || event.isComposing) return
     const activeElement = document.activeElement
     event.preventDefault()
     if (

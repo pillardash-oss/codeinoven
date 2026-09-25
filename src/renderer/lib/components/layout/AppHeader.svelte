@@ -8,6 +8,7 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
@@ -134,26 +135,28 @@
    *  flow (Escape cancels inside the shared ThreadDeleteConfirm dialog).
    *  Cmd/Ctrl+0-4 switch
    *  primary views: 0 chats, 1 projects, 2 threads, 3 projects with scope state,
-   *  4 scope. */
+   *  4 scope, 9 assistant. Every chord resolves from the keymap registry. */
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.repeat || event.isComposing) return
-    const modifier = event.metaKey || event.ctrlKey
-    if (!modifier || event.altKey || event.shiftKey) return
-    const key = event.key.toLowerCase()
-    if (key === 'd') {
+    if (keymapState.matches('nav-delete-thread', event)) {
       if (!workspaceState.selectedThread) return
       event.preventDefault()
       threadActionsMenu.startDelete()
       return
     }
-    if (key === '0' || key === '1' || key === '2' || key === '3' || key === '4' || key === '5') {
+    const viewShortcuts: Array<[string, () => void]> = [
+      ['nav-chats', () => void navigation.navigateToView('chats')],
+      ['nav-projects', () => void navigation.navigateToView('projects')],
+      ['nav-threads', () => void navigation.navigateToView('threads')],
+      ['nav-projects-with-scope', () => void navigation.openProjectWithScopeState()],
+      ['nav-scope', () => void navigation.navigateToView('scope')],
+      ['nav-assistant', () => void navigation.navigateToView('assistant')]
+    ]
+    for (const [id, run] of viewShortcuts) {
+      if (!keymapState.matches(id, event)) continue
       event.preventDefault()
-      if (key === '0') void navigation.navigateToView('chats')
-      else if (key === '1') void navigation.navigateToView('projects')
-      else if (key === '2') void navigation.navigateToView('threads')
-      else if (key === '3') void navigation.openProjectWithScopeState()
-      else if (key === '4') void navigation.navigateToView('scope')
-      else void navigation.navigateToView('assistant')
+      run()
+      return
     }
   }
 

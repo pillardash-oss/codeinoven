@@ -6,6 +6,7 @@ import {
   Brain,
   ChartColumn,
   FileSearch,
+  FolderKanban,
   FolderOpen,
   FolderPlus,
   GitBranch,
@@ -187,6 +188,16 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       icon: FolderPlus,
       shortcut: ['Ctrl', 'Shift', 'N'],
       keywords: ['add', 'folder', 'repository', 'ssh', 'remote']
+    },
+    {
+      id: 'app:switch-project',
+      title: 'Switch project',
+      description: 'Pick a project to focus on',
+      category: 'navigation',
+      source: applicationSource,
+      icon: FolderKanban,
+      keywords: ['focus', 'open', 'change', 'select', 'workspace', 'project'],
+      ...(projectRecords.length === 0 ? { disabledReason: 'No projects yet' } : {})
     },
     {
       id: 'app:notifications',

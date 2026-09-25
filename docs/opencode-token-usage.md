@@ -6,12 +6,21 @@ sets prune heavy tool/skill schemas server-side. Engineering/implementation
 modes keep the full built-in opencode experience and are deliberately
 untouched.
 
+The same app-managed agents serve both OpenCode lines. V1 declares them under
+`agents` with an object `permission` map; the V2 transport projects each one into
+V2's `agents` entry (`system` instead of `prompt`, and an ordered `permissions`
+rule array). V2 evaluates its own provider entitlement through the same ruleset,
+so a blanket `*: deny` or a `read: deny` would break every V2 turn; the V2
+projection therefore expands a catch-all deny into explicit denies over the
+restrictable tool actions and drops `read` denies, keeping everything that
+mutates denied.
+
 ## Why agents, not app-side string surgery
 
 A plain `hello` in a project thread costs ≈22k input tokens. The dominant
-overhead is the harness's injected per-turn load   base system prompt, default
+overhead is the harness's injected per-turn load base system prompt, default
 tool schemas, the `@sveltejs/opencode` plugin registration, the repo's
-`AGENTS.md`, and the available-skills block   which cannot be cut from the
+`AGENTS.md`, and the available-skills block which cannot be cut from the
 application side. Lean agents declared in `~/.config/opencode/opencode.json` are
 a config surface the app already owns and edits safely.
 
@@ -22,14 +31,14 @@ attributable to denied tool schemas and the pruned skills/instruction block.
 
 ## Trimmed modes and agents
 
-| Mode                        | Agent            | Allowed tools                                         | Scoped write/bash               |
-| --------------------------- | ---------------- | ----------------------------------------------------- | ------------------------------- |
-| Inbox chat                  | `cio-chat`       | webfetch, websearch, question                         | none                            |
-| File-system chat            | `cio-chat-fs`    | read, glob, grep, list, webfetch, websearch, question | none                            |
-| Ephemeral session           | `cio-eph`        | read, glob, grep, list, webfetch, websearch, question | none                            |
-| Image description           | `cio-img-desc`   | read                                                  | none                            |
+| Mode                        | Agent            | Allowed tools                                         | Scoped write/bash                  |
+| --------------------------- | ---------------- | ----------------------------------------------------- | ---------------------------------- |
+| Inbox chat                  | `cio-chat`       | webfetch, websearch, question                         | none                               |
+| File-system chat            | `cio-chat-fs`    | read, glob, grep, list, webfetch, websearch, question | none                               |
+| Ephemeral session           | `cio-eph`        | read, glob, grep, list, webfetch, websearch, question | none                               |
+| Image description           | `cio-img-desc`   | read                                                  | none                               |
 | PR compose                  | `cio-pr-compose` | read, glob, grep, list                                | bash read-only `git` commands only |
-| Brainstorm (session report) | `cio-brainstorm` | read, glob, grep, list, webfetch, websearch, question | edit `.cio/specs/*/versions/**` |
+| Brainstorm (session report) | `cio-brainstorm` | read, glob, grep, list, webfetch, websearch, question | edit `.cio/specs/*/versions/**`    |
 
 Every lean agent sets an explicit `"*": "deny"` catch-all first, then
 `allow` entries for exactly the documented tools (last-match wins). Every heavy
@@ -46,7 +55,7 @@ permission defaults.
   `.cio/specs/*/versions/`; PR compose returns its JSON result without writing.
 - `bash` for PR compose allows **only read-only git commands** (an explicit
   allowlist: `git status/diff/log/show/rev-parse/ls-files/ls-tree`, `git
-  branch --show-current`, `git remote -v/show`). Everything else, including
+branch --show-current`, `git remote -v/show`). Everything else, including
   `git push`, `git reset`, `git clean`, and branch deletion, is denied.
 - The `@sveltejs/opencode` plugin weight is deliberately kept as-is; per-agent
   plugin scoping is revisited only if opencode supports it.
@@ -57,7 +66,7 @@ The machine-wide merge into `~/.config/opencode/opencode.json` follows the same
 discipline as the provider-hiding merge (`provider-account-orchestrator`):
 
 - **Plain JSON only.** JSONC configs (comments/trailing commas) are never
-  overwritten   the merge reports a warning and skips.
+  overwritten the merge reports a warning and skips.
 - **Additive and idempotent.** Only CodeInOven's own agent names are touched;
   user agents, the `@sveltejs/opencode` plugin, MCP wiring, and every other key
   are preserved. A second run rewrites nothing (byte-stable across restart).
@@ -77,8 +86,8 @@ skipped with a dev-only warning. Failures are non-fatal.
 ## Dev-only measurement workflow
 
 `src/main/chat/token-usage-attribution.ts` records content-free per-mode
-episodes   only layer hashes, character counts, and heuristic token estimates
-(`~4 chars/token`)   paired with provider-reported totals already recorded in
+episodes only layer hashes, character counts, and heuristic token estimates
+(`~4 chars/token`) paired with provider-reported totals already recorded in
 `harness_usage`. Recording is inert in production (`NODE_ENV === 'production'`)
 and logs exclusively through `Logger.dev` (never `console.*`); no layer content
 ever ships in production prompts or logs.
@@ -125,12 +134,12 @@ the CodeInOven agent entries are stripped and user-owned config is preserved.
 
 ## Code map
 
-- `src/main/opencode/opencode-agent-definitions.ts`   lean agent payloads + deny matrix
-- `src/main/opencode/opencode-global-config.ts`   merge + rollback service
-- `src/main/opencode/opencode-agent-service.ts`   startup orchestration
-- `src/main/opencode/opencode-deny-probe.ts`   harness compliance probe
-- `src/main/chat/token-usage-attribution.ts`   dev-only measurement
-- `src/main/chat/chat-engine.ts`   mode→agent wiring + prompt slim-down
-- `tests/main/opencode-agent-definitions.test.ts`   golden deny-matrix
-- `tests/main/opencode-global-config.test.ts`   merge safety
-- `tests/main/opencode-deny-compliance.test.ts`   harness compliance gate
+- `src/main/opencode/opencode-agent-definitions.ts` lean agent payloads + deny matrix
+- `src/main/opencode/opencode-global-config.ts` merge + rollback service
+- `src/main/opencode/opencode-agent-service.ts` startup orchestration
+- `src/main/opencode/opencode-deny-probe.ts` harness compliance probe
+- `src/main/chat/token-usage-attribution.ts` dev-only measurement
+- `src/main/chat/chat-engine.ts` mode→agent wiring + prompt slim-down
+- `tests/main/opencode-agent-definitions.test.ts` golden deny-matrix
+- `tests/main/opencode-global-config.test.ts` merge safety
+- `tests/main/opencode-deny-compliance.test.ts` harness compliance gate

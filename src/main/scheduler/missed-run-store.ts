@@ -19,6 +19,9 @@ function isValidRun(value: unknown): value is MissedRun {
     typeof record.dueAt === 'number' &&
     typeof record.detectedAt === 'number' &&
     typeof record.title === 'string' &&
+    (record.reason === undefined ||
+      record.reason === 'app-closed' ||
+      record.reason === 'delayed') &&
     (record.status === 'pending' ||
       record.status === 'dismissed' ||
       record.status === 'run')
@@ -91,6 +94,7 @@ export class MissedRunStore {
     routineId?: string
     dueAt: number
     title: string
+    reason?: MissedRun['reason']
     detectedAt?: number
   }): MissedRun {
     const id = missedRunId(input.threadId, input.dueAt)
@@ -103,6 +107,7 @@ export class MissedRunStore {
       dueAt: input.dueAt,
       detectedAt: input.detectedAt ?? Date.now(),
       title: input.title,
+      reason: input.reason,
       status: 'pending'
     }
     this.runs.set(id, run)
@@ -116,6 +121,36 @@ export class MissedRunStore {
     if (!existing) return
     this.runs.set(id, { ...existing, status: 'dismissed' })
     this.persist()
+  }
+
+  /**
+   * Drop a record outright, for a miss that is no longer real (its slot
+   * predates the schedule, or its task is gone). Unlike `dismiss`, no trace is
+   * kept, so it can never resurface in a task-scoped list.
+   */
+  remove(id: string): void {
+    if (!this.runs.delete(id)) return
+    this.persist()
+  }
+
+  /**
+   * Drop every record belonging to a routine that is being removed, matched by
+   * the record's own routine id and by the ids of that routine's threads.
+   *
+   * Both are needed: a record keeps the routine id it was detected under, so a
+   * task moved into this routine after its miss was recorded is only reachable
+   * by thread id. Returns how many records were dropped.
+   */
+  removeForRoutine(routineId: string, threadIds: readonly string[]): number {
+    const threads = new Set(threadIds)
+    let removed = 0
+    for (const [id, run] of this.runs) {
+      if (run.routineId !== routineId && !threads.has(run.threadId)) continue
+      this.runs.delete(id)
+      removed += 1
+    }
+    if (removed > 0) this.persist()
+    return removed
   }
 
   /** Mark a missed run as run (Run Now dispatched it successfully). */

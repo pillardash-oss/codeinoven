@@ -203,8 +203,13 @@ export class ProjectManager {
     return project
   }
 
+  /**
+   * One project, read on the database worker. Called from every interaction
+   * path that needs a project (scope resolution, the chat engine, PTY spawns,
+   * `project:get`), so it must not run SQLite on the Electron main thread.
+   */
   async getProject(projectId: string): Promise<Project | null> {
-    return this.projectRepo.get(projectId)
+    return this.projectRepo.getViaWorker(projectId)
   }
 
   async findByPath(path: string): Promise<Project | null> {

@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { DropdownMenu, Popover } from 'bits-ui'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { Brain, Check, Cpu, Star, UserRound, Zap } from '@lucide/svelte'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
@@ -14,7 +15,6 @@
     FIRST_RUN_PROVIDER_SEARCH,
     providerConnectFlow
   } from '$lib/stores/provider-connect-flow.svelte'
-  import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import type {
     HarnessAccount,
@@ -141,13 +141,11 @@
     projectId ? (providerCatalog.cached(projectId) ?? providers) : providers
   )
   /** Current-project entries win when present without dropping harnesses that
-   * are still pending from its background catalog enrichment. Harnesses whose
-   * installed version is unsupported (e.g. OpenCode V2) are dropped so they
-   * behave exactly as if not installed. */
+   * are still pending from its background catalog enrichment. */
   let displayProviders = $derived(
-    mergeProviderCatalogEntries([...cachedProviders, ...providers, ...currentProviders])
-      .filter((provider) => !providerStore.isUnsupported(provider.harnessId))
-      .filter((provider) => !harnessFilter || provider.harnessId === harnessFilter)
+    mergeProviderCatalogEntries([...cachedProviders, ...providers, ...currentProviders]).filter(
+      (provider) => !harnessFilter || provider.harnessId === harnessFilter
+    )
   )
   let selectedProvider = $derived(
     displayProviders.find(
@@ -381,12 +379,18 @@
   function chooseAccount(account: HarnessAccount): void {
     onSelect(providerId, modelId, harnessId, account.id)
     onSelectAccount?.(account)
+    // A harness that keeps several credentials in its own store (OpenCode) has
+    // to be told which one is active, or the turn would use a stale one.
+    void harnessAccountCache
+      .activate(account)
+      .catch((error) => reportError(error, 'The active account was not switched.'))
   }
 
   /** Mark an account as its harness's default for this provider. */
   async function setDefaultAccount(account: HarnessAccount): Promise<void> {
     try {
       await harnessAccountCache.setDefault(account)
+      await harnessAccountCache.activate(account)
     } catch (setDefaultError) {
       reportError(setDefaultError, 'The default account was not saved.')
     }
@@ -586,7 +590,7 @@
         tabindex={-1}
         onCloseAutoFocus={(event) => event.preventDefault()}
         onkeydown={(event: KeyboardEvent) => {
-          if (event.key === 'Escape') close()
+          if (keymapState.matches('palette-close', event)) close()
         }}
       >
         <ModelPickerList

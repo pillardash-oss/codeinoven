@@ -7,7 +7,7 @@
  * machine's clock, so a "daily 9am" cadence means 9am wherever the app runs.
  */
 
-import { formatDateTime } from '../date-time-format'
+import { formatDateTime, formatTimeOfDay } from '../date-time-format'
 
 export type ScheduleCadence = 'once' | 'hourly' | 'daily' | 'weekdays' | 'weekly'
 
@@ -23,6 +23,16 @@ export interface RoutineSchedule {
   onceAt?: number
 }
 
+/**
+ * Why a scheduled fire was not run.
+ *
+ * `app-closed`   the app was not running at the due time (this launch began
+ * after it). `delayed`   the app was running but could not start the run
+ * within the grace window, typically because the machine slept or a tick was
+ * held up.
+ */
+export type MissedRunReason = 'app-closed' | 'delayed'
+
 /** A scheduled fire the app was not open to run. Surfaced, never auto-run. */
 export interface MissedRun {
   /** Stable identity: one record per (task, intended fire time). */
@@ -37,6 +47,12 @@ export interface MissedRun {
   detectedAt: number
   /** Title snapshot so the list renders without re-reading the thread. */
   title: string
+  /**
+   * Why the fire was not run, so the surfaces can state what actually happened
+   * instead of always claiming the app was closed. Absent on records written
+   * before this field existed; treated as `app-closed`.
+   */
+  reason?: MissedRunReason
   status: 'pending' | 'dismissed' | 'run'
 }
 
@@ -189,10 +205,15 @@ export function previousDueAt(
   return null
 }
 
-/** Human-readable summary used by rows, the schedule editor, and tooltips. */
+/**
+ * Human-readable summary used by rows, the schedule editor, and tooltips.
+ *
+ * Times are stored as `HH:mm` and read as the app's 12-hour clock, so a daily
+ * `08:05` reads `Daily at 8:05 AM`.
+ */
 export function describeSchedule(schedule: RoutineSchedule | null | undefined): string {
   if (!scheduleIsActive(schedule) || !schedule) return 'Not scheduled'
-  const times = normalizedTimes(schedule)
+  const times = normalizedTimes(schedule).map(formatTimeOfDay)
   if (schedule.cadence === 'once') {
     return `Once on ${formatDateTime(schedule.onceAt ?? 0)}`
   }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronRight, ListTodo, Wrench } from '@lucide/svelte'
+  import { ChevronRight, ListTodo, Palette, Wrench } from '@lucide/svelte'
   import type { AssignmentTask, ProjectFileEntry } from '$shared/types'
   import { composerMentionKey, type ComposerMentionEntry } from './composer-mentions'
   import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
@@ -80,57 +80,63 @@
     </div>
   </div>
   <div class="min-h-0 flex-1 overflow-y-auto">
-  {#if entries.length === 0}
-    <p class="px-2 py-2 text-xs text-dimmed">No matching references</p>
-  {:else}
-    {#each entries as mention, index (composerMentionKey(mention))}
-      <button
-        type="button"
-        class={[
-          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none',
-          index === activeIndex ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated',
-          mention.type === 'project' && mention.entry.ignored === true ? 'opacity-45' : ''
-        ]}
-        role="option"
-        aria-selected={index === activeIndex}
-        title={mention.type === 'utility'
-          ? mention.entry.description
-          : mention.type === 'task'
-            ? `Task: ${mention.entry.title} · Worker: ${taskWorker(mention.entry)}`
-            : mention.entry.path}
-        onmousedown={(event: MouseEvent) => event.preventDefault()}
-        onclick={() => onSelect(mention)}
-      >
-        {#if mention.type === 'utility'}
-          <Wrench size={13} class="shrink-0 text-primary" />
-        {:else if mention.type === 'task'}
-          <ListTodo size={13} class="shrink-0 text-info" />
-        {:else if mention.entry.kind === 'directory'}
-          <FolderTypeIcon name={mention.entry.name} size={13} />
-        {:else}
-          <FileTypeIcon path={mention.entry.path} />
-        {/if}
-        <span class="min-w-0 flex-1">
+    {#if entries.length === 0}
+      <p class="px-2 py-2 text-xs text-dimmed">No matching references</p>
+    {:else}
+      {#each entries as mention, index (composerMentionKey(mention))}
+        <button
+          type="button"
+          class={[
+            'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none',
+            index === activeIndex ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated',
+            mention.type === 'project' && mention.entry.ignored === true ? 'opacity-45' : ''
+          ]}
+          role="option"
+          aria-selected={index === activeIndex}
+          title={mention.type === 'utility'
+            ? mention.entry.description
+            : mention.type === 'task'
+              ? `Task: ${mention.entry.title} · Worker: ${taskWorker(mention.entry)}`
+              : mention.entry.path}
+          onmousedown={(event: MouseEvent) => event.preventDefault()}
+          onclick={() => onSelect(mention)}
+        >
           {#if mention.type === 'utility'}
-            <span class="block truncate">{mention.entry.name}</span>
-            <span class="block truncate text-[0.625rem] text-dimmed"> Built-in utility setup </span>
+            {#if mention.entry.id === 'cio-design'}
+              <Palette size={13} class="shrink-0 text-primary" />
+            {:else}
+              <Wrench size={13} class="shrink-0 text-primary" />
+            {/if}
           {:else if mention.type === 'task'}
-            <span class="block truncate">{mention.entry.title}</span>
-            <span class="block truncate text-[0.625rem] capitalize text-dimmed">
-              Task · {mention.entry.status} · {taskWorker(mention.entry)}
-            </span>
+            <ListTodo size={13} class="shrink-0 text-info" />
+          {:else if mention.entry.kind === 'directory'}
+            <FolderTypeIcon name={mention.entry.name} size={13} />
           {:else}
-            <span class="block truncate">{mention.entry.name}</span>
-            <span class="block truncate text-[0.625rem] text-dimmed">
-              {parentPath(mention.entry)}
-            </span>
+            <FileTypeIcon path={mention.entry.path} />
           {/if}
-        </span>
-        {#if mention.type === 'project' && mention.entry.kind === 'directory'}
-          <ChevronRight size={12} class="shrink-0 text-dimmed" />
-        {/if}
-      </button>
-    {/each}
-  {/if}
+          <span class="min-w-0 flex-1">
+            {#if mention.type === 'utility'}
+              <span class="block truncate">{mention.entry.token}</span>
+              <span class="block truncate text-[0.625rem] text-dimmed">
+                {mention.entry.kindLabel}
+              </span>
+            {:else if mention.type === 'task'}
+              <span class="block truncate">{mention.entry.title}</span>
+              <span class="block truncate text-[0.625rem] capitalize text-dimmed">
+                Task · {mention.entry.status} · {taskWorker(mention.entry)}
+              </span>
+            {:else}
+              <span class="block truncate">{mention.entry.name}</span>
+              <span class="block truncate text-[0.625rem] text-dimmed">
+                {parentPath(mention.entry)}
+              </span>
+            {/if}
+          </span>
+          {#if mention.type === 'project' && mention.entry.kind === 'directory'}
+            <ChevronRight size={12} class="shrink-0 text-dimmed" />
+          {/if}
+        </button>
+      {/each}
+    {/if}
   </div>
 </div>

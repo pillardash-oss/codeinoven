@@ -8,6 +8,7 @@ import { RoutineManager } from '../../../src/lib/engines/routine-manager'
 import { ProjectManager } from '../../../src/lib/engines/project-manager'
 import { ThreadManager } from '../../../src/lib/engines/thread-manager'
 import { RoutineSchedulerService } from '../../../src/main/scheduler/routine-scheduler-service'
+import { MissedRunStore } from '../../../src/main/scheduler/missed-run-store'
 import { ASSISTANT_SPACE_ID, type Routine, type Thread } from '../../../src/lib/types'
 
 /** Local-time epoch for a fixed wall clock so tests never depend on TZ. */
@@ -30,7 +31,7 @@ describe('RoutineSchedulerService', () => {
     root = await mkdtemp(join(process.cwd(), '.cio', 'tmp', 'sched-'))
     storage = new StorageEngine(root)
     await storage.initialize()
-    routines = new RoutineManager(db)
+    routines = new RoutineManager(db, () => clock)
     threads = new ThreadManager(db)
     await new ProjectManager(db).ensureAssistantSpace()
     dispatched.length = 0
@@ -44,9 +45,16 @@ describe('RoutineSchedulerService', () => {
 
   async function makeScheduledTask(
     schedule: Routine['schedule'],
-    title = 'Task'
+    title = 'Task',
+    howTo = 'Do the thing.'
   ): Promise<{ task: Thread; routine: Routine }> {
-    const routine = routines.createRoutine({ name: 'Routine', schedule })
+    // The routine and its schedule came into being two hours before the moment
+    // under test, so a due slot after that is a real fire or miss rather than a
+    // slot that predates the schedule.
+    const moment = clock
+    clock = moment - 2 * 60 * 60 * 1000
+    const routine = routines.createRoutine({ name: 'Routine', schedule, howTo })
+    clock = moment
     const task = await threads.createThread({
       projectId: ASSISTANT_SPACE_ID,
       providerId: 'pi',
@@ -219,5 +227,77 @@ describe('RoutineSchedulerService', () => {
     await second.start()
     expect(second.listMissedRuns()).toHaveLength(0)
     second.dispose()
+  })
+
+  it('never records a miss for a slot that predates the schedule', async () => {
+    // The routine (and its schedule) came into being at 10:00, so the 09:00
+    // slot the same day was never due for it. This is the reported bug: a
+    // routine created in the afternoon must not badge a morning slot as missed.
+    const routine = routines.createRoutine({
+      name: 'Routine',
+      schedule: { cadence: 'daily', times: ['09:00'] },
+      howTo: 'Do the thing.'
+    })
+    const task = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Task'
+    })
+    routines.setTaskRoutine(task.id, routine.id)
+    const scheduler = service()
+    await scheduler.start()
+    expect(scheduler.listMissedRuns()).toHaveLength(0)
+    scheduler.dispose()
+  })
+
+  it('drops a persisted miss that predates the schedule on load', async () => {
+    const routine = routines.createRoutine({
+      name: 'Routine',
+      schedule: { cadence: 'daily', times: ['09:00'] },
+      howTo: 'Do the thing.'
+    })
+    const task = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Task'
+    })
+    const grouped = routines.setTaskRoutine(task.id, routine.id)
+    // Simulate a record written by an older build: a slot before the routine
+    // existed. The scheduler must drop it rather than keep badging it.
+    const store = new MissedRunStore(storage)
+    await store.load()
+    store.record({
+      threadId: grouped.id,
+      routineId: routine.id,
+      dueAt: at(2026, 3, 10, 8, 0),
+      title: 'Task'
+    })
+    await store.flush()
+
+    const scheduler = service()
+    await scheduler.start()
+    expect(scheduler.listMissedRuns()).toHaveLength(0)
+    scheduler.dispose()
+  })
+
+  it('never schedules a routine that has no how-to yet', async () => {
+    // A half-configured routine cannot run, so it has nothing to fire or miss.
+    const moment = clock
+    clock = moment - 2 * 60 * 60 * 1000
+    const routine = routines.createRoutine({
+      name: 'Routine',
+      schedule: { cadence: 'daily', times: ['09:00'] }
+    })
+    clock = moment
+    const task = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Task'
+    })
+    routines.setTaskRoutine(task.id, routine.id)
+    const scheduler = service()
+    await scheduler.start()
+    expect(scheduler.listMissedRuns()).toHaveLength(0)
+    scheduler.dispose()
   })
 })

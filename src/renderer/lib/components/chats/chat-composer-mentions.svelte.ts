@@ -1,7 +1,11 @@
 import { invoke } from '$lib/ipc.svelte'
 import { isEntryHiddenByVisibility } from '$lib/stores/cio-search-visibility.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
-import { composerMentionQuery, type ComposerMentionEntry } from './composer-mentions'
+import {
+  composerMentionQuery,
+  COMPOSER_BUILT_IN_TAGS,
+  type ComposerMentionEntry
+} from './composer-mentions'
 import type { AssignmentTask } from '$shared/types'
 
 export interface ComposerMentionSearchOptions {
@@ -31,20 +35,12 @@ export function createComposerMentionSearch(options: ComposerMentionSearchOption
     const currentRequestId = ++requestId
     try {
       const normalizedQuery = nextQuery.trim().toLocaleLowerCase()
-      const utilityEntries: ComposerMentionEntry[] =
-        !normalizedQuery || 'cio-utility'.includes(normalizedQuery)
-          ? [
-              {
-                type: 'utility',
-                entry: {
-                  id: 'cio-utility',
-                  name: '@cio-utility',
-                  description:
-                    'Set up a skill, MCP server, or plugin, or debug an app issue with a CodeInOven agent.'
-                }
-              }
-            ]
-          : []
+      const utilityEntries: ComposerMentionEntry[] = COMPOSER_BUILT_IN_TAGS.filter(
+        (tag) =>
+          !normalizedQuery ||
+          tag.id.includes(normalizedQuery) ||
+          tag.keywords.some((keyword) => keyword.includes(normalizedQuery))
+      ).map((entry) => ({ type: 'utility', entry }))
       const taskEntries: ComposerMentionEntry[] = options
         .getAssignmentTasks()
         .filter((task) => {

@@ -15,6 +15,8 @@ import {
 } from '../system/log-paths'
 import { BrainstormAlignmentNotes } from './brainstorm-alignment-notes'
 import type { BrainstormAlignmentRound } from './brainstorm-alignment-notes'
+import { RoutineAuthoringCheckpoints } from './routine-authoring-checkpoints'
+import { broadcastRoutineCheckpointChanged } from '../scheduler/assistant-events'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
   BRAINSTORM_CREATE_DOCUMENT_ANSWER,
@@ -32,8 +34,12 @@ import { AuditEngine } from '../../lib/engines/audit-engine'
 import { AssignmentEngine, AssignmentEngineError } from '../../lib/engines/assignment-engine'
 import { PrdEngine } from '../../lib/engines/prd-engine'
 import { EngineeringLifecycleEngine } from '../../lib/engines/engineering-lifecycle-engine'
-import { OpenCodeDriver } from '../drivers/opencode-driver'
-import type { IsolatedHandle } from '../drivers/opencode-driver'
+import {
+  createOpenCodeHarnessDriver,
+  isOpenCodeV2Installed
+} from '../drivers/opencode-harness-driver'
+import type { IsolatedSessionHandle } from '../drivers/isolated-session'
+import { supportsIsolatedSessions } from '../drivers/isolated-session'
 import { ClaudeCodeDriver } from '../drivers/claude-code-driver'
 import { CodexDriver } from '../drivers/codex-driver'
 import { ClineDriver } from '../drivers/cline-driver'
@@ -91,7 +97,11 @@ import type { Database } from '../database/database'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
 import { RoutineRepo } from '../database/repositories/routine-repo'
-import { routineAuthoringContext } from '../../lib/routine-authoring'
+import {
+  ROUTINE_AUTHORING_DECISION_LIMIT,
+  routineAuthoringContext,
+  routineAuthoringProgressContext
+} from '../../lib/routine-authoring'
 import { isRoutineNextStepsPrompt } from '../../lib/assistant-next-steps'
 import { composeRoutineInstruction, routineRunContext } from '../../lib/routine-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
@@ -148,7 +158,15 @@ import {
   CIO_UTILITY_SETUP_PROMPT,
   isCioUtilityRequest
 } from '../utilities/cio-utility-prompt'
+import {
+  CIO_DESIGN_CONTINUE_PROMPT,
+  CIO_DESIGN_TURN_PROMPT,
+  isCioDesignRequest,
+  type DesignSessionMode
+} from '../utilities/cio-design-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
+import { McpConnectionTestService } from '../utilities/mcp-connection-test-service'
+import { validateMcpProbeTarget } from '../utilities/mcp-probe-input'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { isCodeInOvenCustomProviderId, underlyingProviderId } from '../../lib/custom-provider-id'
 import {
@@ -159,9 +177,15 @@ import { refreshCustomProviderModels } from '../providers/base-url-model-refresh
 import { AgentProcessService } from '../agents/agent-process-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
 import { UtilityOrchestrationService } from '../utilities/utility-orchestration-service'
+import {
+  createDesignAssignmentExecutor,
+  type DesignAssignmentRunRequest,
+  type DesignAssignmentRunResult
+} from '../design/design-assignment-executor'
 import type { AssignmentWorkerScopeProvisioner } from '../../lib/engines/assignment-worker-scope'
 import type {
   BrowserUtilityExecutor,
+  DesignCapabilityExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
   UtilityResultAttribution,
@@ -242,6 +266,7 @@ import type {
   EngineeringSpec,
   EngineeringSpecContent,
   HarnessCommand,
+  HarnessRuntimeRestartResult,
   HeartbeatConfig,
   ImageDescriptorErrorRequest,
   ImageDescriptorReplyAction,
@@ -346,6 +371,10 @@ import {
   planPrototypeGeneration,
   resolvePrototypeArtifactPaths
 } from '../../lib/prototypes/prototype-artifacts'
+import {
+  prototypeCdnInstruction,
+  prototypeCdnPolicyFromConfig
+} from '../../lib/prototypes/prototype-cdn'
 import { PRD_DOCUMENT_JSON_SCHEMA, parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from '../../lib/brainstorm/brainstorm-validation'
 import { deriveTitleFromText } from './title-generator'
@@ -472,6 +501,7 @@ import {
   formatBrainstormInterviewDecisions,
   formatConversationTranscript,
   formatHistoryRecap,
+  formatInterviewDecisions,
   formatProjectReferenceContext,
   hasTerminalSpecContractMarker,
   mermaidValidationFailureMessage,
@@ -805,6 +835,8 @@ export class ChatEngine {
   private readonly customProviderUsage = new CustomProviderUsageClient()
 
   private sessionRegistry = new Map<string, SessionInfo>()
+  /** Which OpenCode transport `drivers.get('opencode')` currently holds. */
+  private openCodeDriverIsV2 = false
 
   private childSessionOwners = new Map<string, ChildSessionInfo>()
 
@@ -978,6 +1010,13 @@ export class ChatEngine {
   >()
 
   private readonly brainstormAlignmentNotes: BrainstormAlignmentNotes
+
+  /**
+   * The app-owned Getting started checkpoints. One routine keeps one, and it is
+   * re-injected into every authoring turn beside the answers the user already
+   * submitted, so the interview survives a model or harness switch mid-way.
+   */
+  private readonly routineAuthoringCheckpoints: RoutineAuthoringCheckpoints
 
   /** Sessions currently running an explicit context compaction. */
   private activeCompactions = new Set<string>()
@@ -1187,6 +1226,14 @@ export class ChatEngine {
    */
   private releasedProjects = new Set<string>()
 
+  /**
+   * Harnesses whose resident transports must be restarted as soon as no thread
+   * is using them. A harness update that lands while a thread is still running
+   * may not take that thread's transport away, so the restart is remembered and
+   * the idle reaper applies it once the harness goes quiet.
+   */
+  private deferredHarnessRestarts = new Set<string>()
+
   private idleReaperTimer: ReturnType<typeof setInterval> | null = null
 
   /** How long to wait without SSE activity before checking provider history. */
@@ -1264,6 +1311,9 @@ export class ChatEngine {
   private agentSecrets: AgentSecretService
 
   private capabilityDiscovery: CapabilityDiscoveryService
+
+  /** Proves an MCP server connects, on demand from the Utilities page and editor. */
+  private mcpConnectionTest: McpConnectionTestService
 
   private baseUrlProviders: BaseUrlProviderService
 
@@ -1355,6 +1405,11 @@ export class ChatEngine {
    *  repeating the invocation. */
   private cioUtilityThreads = new Map<string, true>()
 
+  /** Threads whose user has opened a design session with @cio-design (current
+   *  turn or history). A design is edited over many messages, so the session
+   *  keeps the design capability active until the user leaves the thread. */
+  private cioDesignThreads = new Map<string, true>()
+
   constructor(
     private storage: StorageEngine,
     private database: Database,
@@ -1413,12 +1468,28 @@ export class ChatEngine {
     this.utilityRegistry = new UtilityRegistryService(storage)
     this.agentSecrets = new AgentSecretService(this.secretVault, this.utilityRegistry, storage)
     this.capabilityDiscovery = new CapabilityDiscoveryService()
+    this.mcpConnectionTest = new McpConnectionTestService({
+      registry: this.utilityRegistry,
+      resolveSecret: (secretRef) => this.secretVault.resolve(secretRef),
+      readNativeMcp: (source) => this.capabilityDiscovery.readMcp(source)
+    })
     this.baseUrlProviders = new BaseUrlProviderService(storage)
     this.accountRegistry = new HarnessAccountRegistry(storage)
     this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
     this.brainstormAlignmentNotes = new BrainstormAlignmentNotes(storage)
+    this.routineAuthoringCheckpoints = new RoutineAuthoringCheckpoints(storage)
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
+    )
+    // Design work the user routed to a model of their own choosing. The config
+    // is read per call, so re-assigning a model applies to the next delegation
+    // rather than the next app run, and the app never substitutes a model.
+    this.utilityOrchestration.setDesignAssignmentExecutor(
+      createDesignAssignmentExecutor({
+        database,
+        designConfig: async () => (await this.storage.getConfig()).design,
+        run: (request) => this.runDesignAssignment(request)
+      })
     )
     // Secret collection is an app-owned gateway tool, so the tool call has to be
     // able to wait for the user: the engine registers the card and settles a
@@ -1449,7 +1520,7 @@ export class ChatEngine {
     // the single source of truth   so the model list and providers settings
     // page agree. Only harnesses with an integrated driver are instantiated.
     const driverFactories: Record<string, () => HarnessDriver> = {
-      opencode: () => new OpenCodeDriver(this.baseUrlProviders, this.secretVault),
+      opencode: () => createOpenCodeHarnessDriver(this.baseUrlProviders, this.secretVault),
       codex: () => new CodexDriver(storage, this.baseUrlProviders, this.secretVault),
       'claude-code': () => new ClaudeCodeDriver(storage, this.baseUrlProviders, this.secretVault),
       pi: () => new PiDriver(storage, this.baseUrlProviders, this.secretVault),
@@ -1461,6 +1532,9 @@ export class ChatEngine {
       const create = driverFactories[harness.id]
       if (create) this.drivers.set(harness.id, create())
     }
+    // Remember which OpenCode transport the map was built for, so a runtime
+    // install/upgrade can swap it without rebuilding the whole map.
+    this.openCodeDriverIsV2 = isOpenCodeV2Installed()
 
     // Wire each driver's event output to the broadcast + permission policy.
     for (const driver of this.drivers.values()) {
@@ -1472,7 +1546,7 @@ export class ChatEngine {
   private createAccountDriver(harnessId: string, environment: NodeJS.ProcessEnv): HarnessDriver {
     switch (harnessId) {
       case 'opencode':
-        return new OpenCodeDriver(this.baseUrlProviders, this.secretVault, environment)
+        return createOpenCodeHarnessDriver(this.baseUrlProviders, this.secretVault, environment)
       case 'codex':
         return new CodexDriver(this.storage, this.baseUrlProviders, this.secretVault, environment)
       case 'claude-code':
@@ -1597,6 +1671,24 @@ export class ChatEngine {
   }
 
   /**
+   * Register the executor behind the app-owned design capability's `preview`
+   * operation. The chat engine owns the turn's project and thread, so it is the
+   * app surface that hands the executor those two ids.
+   */
+  setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.utilityOrchestration.setDesignPreviewExecutor(executor)
+  }
+
+  /**
+   * Register the executor behind the design capability's `save-media`
+   * operation. It needs the database rather than the chat engine's own state,
+   * because the one thing it resolves is the project root the file lands in.
+   */
+  setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.utilityOrchestration.setDesignMediaExecutor(executor)
+  }
+
+  /**
    * Land a utility registry change in the turns that are already running.
    *
    * Called by the renderer boundary after every successful write, so switching a
@@ -1646,6 +1738,13 @@ export class ChatEngine {
   }
 
   register(): void {
+    ipcMain.handle(
+      'harnessRuntime:restart',
+      (_, harnessId: unknown, options?: { force?: boolean }) =>
+        this.restartHarnessRuntime(this.requireHarnessId(harnessId), {
+          force: options?.force === true
+        })
+    )
     ipcMain.handle('agent:compact', (_, projectId: string, threadId: string) =>
       this.compactSession(projectId, threadId)
     )
@@ -1760,6 +1859,11 @@ export class ChatEngine {
       this.capabilityDiscovery.deleteMcp(source)
     )
     ipcMain.handle('capabilities:listAll', () => this.listAllCapabilities())
+    // A saved MCP configuration says nothing about whether its server answers:
+    // the Utilities page and editor test the live connection through here.
+    ipcMain.handle('utilities:testMcp', (_, target: unknown) =>
+      this.mcpConnectionTest.test(validateMcpProbeTarget(target))
+    )
     ipcMain.handle(
       'agent:ensureSession',
       (_, projectId: string, threadId: string, requestedDriverId?: string) =>
@@ -2985,6 +3089,25 @@ export class ChatEngine {
   }
 
   /**
+   * Whether a design session was opened in this thread, now or earlier, and
+   * whether this turn is the one that opened it. The same memo-and-rescan shape
+   * as the utility tag, so an edit or rollback that removes the tag takes the
+   * session with it.
+   */
+  private async designSessionFor(
+    projectId: string,
+    threadId: string,
+    requestedThisTurn: boolean
+  ): Promise<DesignSessionMode> {
+    if (requestedThisTurn) return 'start'
+    if (this.cioDesignThreads.has(threadId)) return 'continue'
+    const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
+    const opened = userMessages.some((message) => isCioDesignRequest(message.content))
+    if (opened) this.cioDesignThreads.set(threadId, true)
+    return opened ? 'continue' : 'off'
+  }
+
+  /**
    * Publish the plan and progress this thread is executing so a driver-owned
    * checkpoint can rebuild context from them when a transcript can no longer be
    * summarized. Best-effort: a thread with no plan publishes an empty snapshot,
@@ -3106,7 +3229,20 @@ export class ChatEngine {
      * request. Mutually exclusive with `explicitUtilityInvocation`, which wins
      * when the user typed @cio-utility on the same turn.
      */
-    assistantRoutineTurn = false
+    assistantRoutineTurn = false,
+    /**
+     * The routine whose Getting started interview this turn belongs to, when it
+     * is one. Binds the checkpoint capability to the turn so the agent can save
+     * the interview state the app re-injects.
+     */
+    authoringRoutineId: string | null = null,
+    /**
+     * Whether this turn belongs to a design session the user opened with
+     * `@cio-design`. `start` is the turn that typed the tag, `continue` is every
+     * later turn of the same thread. Both promote the design capability to an
+     * active capability for the turn and add the matching session contract.
+     */
+    designSession: DesignSessionMode = 'off'
   ): Promise<string> {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
@@ -3135,8 +3271,8 @@ export class ChatEngine {
     const applyRuntime = driver.applyPreparedUtilityRuntime?.bind(driver)
     if (!applyRuntime) return ''
     // Capture before the instanceof check below: control-flow analysis widens
-    // `driver` to `HarnessDriver | OpenCodeDriver` afterwards, and the union
-    // hides this optional method.
+    // `driver` to `HarnessDriver | IsolatedSessionDriver` afterwards, and the
+    // union hides this optional method.
     const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
     // A native bridge owns credentials internally. Other harnesses use their
     // existing MCP runtime; prompt prose is never a transport fallback.
@@ -3158,10 +3294,17 @@ export class ChatEngine {
         resolveExecutingModelVisionCapable: () =>
           this.executingModelVisionCapable(projectId, settings),
         allowManagement,
+        designSession,
         ...(brainstormInterview
           ? {
               saveBrainstormNotes: (markdown: string) =>
                 this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
+            }
+          : {}),
+        ...(authoringRoutineId
+          ? {
+              saveRoutineCheckpoint: (markdown: string) =>
+                this.saveRoutineCheckpoint(authoringRoutineId, markdown)
             }
           : {}),
         budgetContext,
@@ -3187,6 +3330,15 @@ export class ChatEngine {
           : explicitUtilityInvocation
             ? CIO_UTILITY_SETUP_PROMPT
             : CIO_UTILITY_REUSE_PROMPT
+      // The design contract is separate from the utility contract because it is
+      // not a setup grant: the capability it activates arrives with the turn
+      // request, and what this adds is how to run the session the user opened.
+      const designContract =
+        designSession === 'start'
+          ? CIO_DESIGN_TURN_PROMPT
+          : designSession === 'continue'
+            ? CIO_DESIGN_CONTINUE_PROMPT
+            : ''
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their
@@ -3195,7 +3347,7 @@ export class ChatEngine {
           await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
         }
         this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
-        return [gateway.directInstructions, utilityContract, ...skillInstructions]
+        return [gateway.directInstructions, utilityContract, designContract, ...skillInstructions]
           .filter(Boolean)
           .join('\n\n')
       }
@@ -3217,7 +3369,7 @@ export class ChatEngine {
         await applyRuntime(projectPath, null, sessionId)
         await gateway.cleanup()
         gateway = undefined
-        return [utilityContract, ...skillInstructions].filter(Boolean).join('\n\n')
+        return [utilityContract, designContract, ...skillInstructions].filter(Boolean).join('\n\n')
       }
       const environment = {
         ...(overlay.env ?? {}),
@@ -3252,7 +3404,7 @@ export class ChatEngine {
         gateway,
         threadId
       })
-      return [gateway.instructions, utilityContract, ...skillInstructions]
+      return [gateway.instructions, utilityContract, designContract, ...skillInstructions]
         .filter(Boolean)
         .join('\n\n')
     } catch (error) {
@@ -3377,9 +3529,14 @@ export class ChatEngine {
     // a saved routine keeps it for the same reason: a steer must not drop the
     // ability to supply a connection the run needs.
     const allowManagement =
-      this.routineAuthoringHiddenContext(steeringThread) !== undefined ||
+      this.isRoutineAuthoringThread(steeringThread) ||
       this.routineRunHiddenContext(steeringThread) !== undefined ||
       (await this.hasCioUtilityInvocation(projectId, threadId))
+    // A steer landing mid-authoring keeps the checkpoint capability alive for
+    // the rest of the turn, so an answer the user steered with is still saved.
+    const authoringRoutineId = this.isRoutineAuthoringThread(steeringThread)
+      ? (steeringThread?.routineId ?? null)
+      : null
     if (this.utilityTurns.has(sessionId)) {
       // A steer that invokes @cio-utility has to manage utilities for the rest of
       // the turn. A gateway fixes its tool set when the turn starts, and the live
@@ -3424,6 +3581,12 @@ export class ChatEngine {
           ? {
               saveBrainstormNotes: (markdown: string) =>
                 this.saveBrainstormAlignmentNotes(projectId, threadId, sessionId, markdown)
+            }
+          : {}),
+        ...(authoringRoutineId
+          ? {
+              saveRoutineCheckpoint: (markdown: string) =>
+                this.saveRoutineCheckpoint(authoringRoutineId, markdown)
             }
           : {}),
         budgetContext,
@@ -3561,6 +3724,173 @@ export class ChatEngine {
     })
     this.catalogInvalidationInFlight = run
     return run
+  }
+
+  /**
+   * Rebuild the single `opencode` driver when the detected install crossed the
+   * V1/V2 line while the app was running (for example right after the user ran
+   * the harness's own updater). A swap mid-turn would route the in-flight turn's
+   * events to the new driver, so it is deferred until the harness is idle; the
+   * next probe change or app restart picks it up otherwise.
+   */
+  refreshOpenCodeHarness(): void {
+    if (!this.drivers.has('opencode')) return
+    const desiredV2 = isOpenCodeV2Installed()
+    if (desiredV2 === this.openCodeDriverIsV2) return
+    if (this.harnessHasActiveTurn('opencode')) return
+    const driver = createOpenCodeHarnessDriver(this.baseUrlProviders, this.secretVault)
+    driver.setProcessObserver?.(this.agentProcesses)
+    driver.onEvent((event) => this.handleDriverEvent(driver.id, event, driver))
+    this.drivers.set('opencode', driver)
+    // Account-scoped drivers cache the transport they were built with, so a
+    // managed account would keep speaking the old API until restart. Drop them
+    // and let the next use rebuild against the detected line.
+    for (const [accountId, accountDriver] of [...this.accountDrivers]) {
+      if (accountDriver.id !== 'opencode') continue
+      accountDriver.dispose()
+      this.accountDrivers.delete(accountId)
+    }
+    this.openCodeDriverIsV2 = desiredV2
+  }
+
+  /**
+   * Restart a harness's resident transports so the next turn runs the harness
+   * binary currently on disk.
+   *
+   * Every long-lived harness process (OpenCode's `serve`, Codex's app-server
+   * daemon, Pi's per-session RPC client) was spawned from the install that was
+   * on disk when the session first needed it, and it keeps that build alive for
+   * as long as it runs. A harness self-update therefore changes nothing for
+   * sessions already using it: the version probe re-reads the new binary and
+   * reports the update as applied while the app keeps talking to the old
+   * process. Restarting is what makes an update take effect without an app
+   * restart.
+   *
+   * Sessions persist in each harness's own store, so a restart resumes them.
+   * `force` restarts even while threads are mid-turn, which stops those turns
+   * (the manual action makes the user confirm exactly that); without it a busy
+   * harness is remembered and restarted by the idle reaper once its threads
+   * have all gone quiet, so a background update still lands.
+   */
+  async restartHarnessRuntime(
+    harnessId: string,
+    options: { force?: boolean } = {}
+  ): Promise<HarnessRuntimeRestartResult> {
+    const drivers = this.harnessDrivers(harnessId)
+    if (drivers.length === 0) {
+      return {
+        harnessId,
+        restarted: false,
+        interruptedSessions: 0,
+        detail: `CodeInOven has no ${harnessId} driver, so there is nothing to restart.`
+      }
+    }
+
+    const busy = this.busySessionsForHarness(harnessId)
+    if (busy.length > 0 && options.force !== true) {
+      this.deferredHarnessRestarts.add(harnessId)
+      return {
+        harnessId,
+        restarted: false,
+        interruptedSessions: 0,
+        detail: `${busy.length} thread${busy.length === 1 ? '' : 's'} still running on ${harnessId}; the restart waits for them to finish.`
+      }
+    }
+
+    this.deferredHarnessRestarts.delete(harnessId)
+    for (const driver of drivers) {
+      try {
+        await driver.restartRuntime?.()
+      } catch (error) {
+        // One container's transport failing to restart must not stop the rest.
+        Logger.error('Harness runtime restart failed:', error)
+      }
+    }
+    Logger.info('Restarted harness runtime', { harnessId, interruptedSessions: busy.length })
+    return { harnessId, restarted: true, interruptedSessions: busy.length }
+  }
+
+  /**
+   * A harness update that landed while a thread was still running is applied
+   * here, once that harness has gone quiet. The reaper already runs on a fixed
+   * cadence and already knows how to tell a busy harness from an idle one, so
+   * the deferred restart rides that check instead of racing the idle
+   * transition it would have to detect itself.
+   */
+  private applyDeferredHarnessRestarts(): void {
+    for (const harnessId of [...this.deferredHarnessRestarts]) {
+      if (this.busySessionsForHarness(harnessId).length > 0) continue
+      void this.restartHarnessRuntime(harnessId).catch((error) => {
+        Logger.error('Deferred harness restart failed:', error)
+      })
+    }
+  }
+
+  /**
+   * Validate the harness id at the IPC boundary: it arrives from the renderer
+   * as untrusted input, like every other privileged channel argument.
+   */
+  private requireHarnessId(value: unknown): string {
+    if (typeof value !== 'string' || value.trim().length === 0 || value.length > 256) {
+      throw new TypeError('Harness ID is invalid')
+    }
+    return value.trim()
+  }
+
+  /**
+   * Sessions the engine still considers busy on a harness: a turn that is
+   * running or waiting on its provider, a card the user has not answered, a
+   * delegated worker inside the harness process, or a turn the engine is still
+   * finalizing. Their transport may not be taken away unannounced.
+   */
+  private busySessionsForHarness(harnessId: string): string[] {
+    const busy = new Set<string>()
+    for (const [sessionId, info] of this.sessionRegistry) {
+      if (info.driverId !== harnessId) continue
+      const state = this.sessionStatuses.get(sessionId)?.state
+      if (state === 'working' || state === 'waiting') busy.add(sessionId)
+    }
+    // A card on screen owns the harness process that asked for it, even once
+    // the session's own status has settled.
+    for (const pending of this.pendingQuestions.values()) {
+      if (pending.driverId === harnessId) busy.add(pending.request.sessionId)
+    }
+    for (const pending of this.pendingPermissions.values()) {
+      if (pending.driverId === harnessId) busy.add(pending.request.sessionId)
+    }
+    for (const [childSessionId, child] of this.childSessionOwners) {
+      if (child.driverId !== harnessId) continue
+      const state = this.sessionStatuses.get(childSessionId)?.state
+      if (state === 'working' || state === 'waiting') busy.add(childSessionId)
+    }
+    for (const sessionId of this.completionWaiters.keys()) {
+      if (this.sessionRegistry.get(sessionId)?.driverId === harnessId) busy.add(sessionId)
+    }
+    for (const sessionId of this.utilityTurns.keys()) {
+      if (this.sessionRegistry.get(sessionId)?.driverId === harnessId) busy.add(sessionId)
+    }
+    return [...busy]
+  }
+
+  /**
+   * Every live driver instance serving a harness: the default one plus each
+   * managed account container's own instance, which holds its own transports.
+   */
+  private harnessDrivers(harnessId: string): HarnessDriver[] {
+    return [this.drivers.get(harnessId), ...this.accountDrivers.values()].filter(
+      (driver): driver is HarnessDriver => driver !== undefined && driver.id === harnessId
+    )
+  }
+
+  /** True when any driver for a harness (default or account-scoped) has a live turn. */
+  private harnessHasActiveTurn(harnessId: string): boolean {
+    for (const driver of this.harnessDrivers(harnessId)) {
+      if (!driver.hasActiveTurn) continue
+      for (const sessionId of this.sessionRegistry.keys()) {
+        if (driver.hasActiveTurn(sessionId)) return true
+      }
+    }
+    return false
   }
 
   /**
@@ -4893,10 +5223,9 @@ export class ChatEngine {
       loopMode: false
     }
     const { driver, projectPath } = await this.resolve(projectId, settings.harnessId, threadId)
-    const isolated =
-      driver instanceof OpenCodeDriver
-        ? await driver.createIsolatedSession(projectPath, 'Transcript cleanup')
-        : undefined
+    const isolated = supportsIsolatedSessions(driver)
+      ? await driver.createIsolatedSession(projectPath, 'Transcript cleanup')
+      : undefined
     const sessionId =
       isolated?.sessionId ?? (await driver.createSession(projectPath, 'Transcript cleanup'))
     this.registerSession(
@@ -4938,14 +5267,14 @@ export class ChatEngine {
         readOnly: true,
         userMessageId: createMessageId()
       }
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(projectPath, request, isolated)
       } else {
         await driver.sendPrompt(projectPath, request)
       }
       await completion
       const messages =
-        isolated && driver instanceof OpenCodeDriver
+        isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(projectPath, sessionId, isolated)
           : await driver.loadMessages(projectPath, sessionId)
       const response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -4963,7 +5292,7 @@ export class ChatEngine {
       this.sessionRegistry.delete(sessionId)
       this.reasoningTimes.delete(sessionId)
       this.toolTimes.delete(sessionId)
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         driver.disposeIsolatedSession(isolated)
       } else if (driver.deleteSession) {
         await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
@@ -5052,10 +5381,9 @@ export class ChatEngine {
       loopMode: false
     }
     const { driver, projectPath } = await this.resolve(projectId, settings.harnessId, threadId)
-    const isolated =
-      driver instanceof OpenCodeDriver
-        ? await driver.createIsolatedSession(projectPath, 'Voice transcription')
-        : undefined
+    const isolated = supportsIsolatedSessions(driver)
+      ? await driver.createIsolatedSession(projectPath, 'Voice transcription')
+      : undefined
     const sessionId =
       isolated?.sessionId ?? (await driver.createSession(projectPath, 'Voice transcription'))
     this.registerSession(
@@ -5087,14 +5415,14 @@ export class ChatEngine {
         readOnly: true,
         userMessageId: createMessageId()
       }
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(projectPath, request, isolated)
       } else {
         await driver.sendPrompt(projectPath, request)
       }
       await completion
       const messages =
-        isolated && driver instanceof OpenCodeDriver
+        isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(projectPath, sessionId, isolated)
           : await driver.loadMessages(projectPath, sessionId)
       const response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -5112,7 +5440,7 @@ export class ChatEngine {
       this.sessionRegistry.delete(sessionId)
       this.reasoningTimes.delete(sessionId)
       this.toolTimes.delete(sessionId)
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         driver.disposeIsolatedSession(isolated)
       } else if (driver.deleteSession) {
         await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
@@ -6387,17 +6715,82 @@ export class ChatEngine {
   }
 
   /**
-   * The how-to authoring contract for a turn in a routine that still has no
-   * how-to. The contract is a property of the thread, so the engine attaches it
-   * rather than the composer: a resend from the message editor, a steer, or a
-   * queued delivery reaches the agent with the same contract as a fresh
-   * composer send.
+   * Whether a turn belongs to a routine's Getting started authoring interview:
+   * an assistant-space thread whose routine has no how-to yet. Derived from the
+   * thread every turn and never memoized, so the interview ends the moment the
+   * how-to is saved.
    */
-  private routineAuthoringHiddenContext(thread: Thread | null | undefined): string | undefined {
-    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return undefined
+  private isRoutineAuthoringThread(thread: Thread | null | undefined): boolean {
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return false
     const routine = this.routineRepo.get(thread.routineId)
-    if (!routine || routineHowToComplete(routine)) return undefined
-    return routineAuthoringContext(routine.name)
+    return routine ? !routineHowToComplete(routine) : false
+  }
+
+  /**
+   * The how-to authoring contract for a turn in a routine that still has no
+   * how-to, with the interview's own app-owned state beside it: the checkpoint
+   * the agent keeps current and every answer the user already submitted.
+   *
+   * The contract is a property of the thread, so the engine composes it rather
+   * than the composer: a resend from the message editor, a steer, or a queued
+   * delivery reaches the agent with the same contract as a fresh composer send.
+   * It rides the system prompt instead of the user message because every
+   * harness rewrites that prompt each turn, while text appended to a user
+   * message is kept in the harness transcript and replayed once more on every
+   * later turn.
+   *
+   * Re-injecting the checkpoint and the decision ledger is what makes the
+   * interview survive a mid-way model or harness switch: the replacement session
+   * starts with the app's record of the interview instead of only a budgeted
+   * recap of the transcript, so it resumes the conversation instead of re-asking
+   * questions the user already answered.
+   */
+  private async routineAuthoringInstruction(
+    projectId: string,
+    threadId: string,
+    thread: Thread | null | undefined
+  ): Promise<string | undefined> {
+    if (!this.isRoutineAuthoringThread(thread) || !thread?.routineId) return undefined
+    const routine = this.routineRepo.get(thread.routineId)
+    if (!routine) return undefined
+    const [checkpoint, messages] = await Promise.all([
+      this.routineAuthoringCheckpoints.read(routine.id).catch((error: unknown): string | null => {
+        Logger.error('Getting started checkpoint could not be read:', error)
+        return null
+      }),
+      this.threadManager.loadMessageRecords(projectId, threadId)
+    ])
+    const decisions = formatInterviewDecisions(messages, ROUTINE_AUTHORING_DECISION_LIMIT)
+    return [
+      routineAuthoringContext(routine.name),
+      routineAuthoringProgressContext({ checkpoint, decisions })
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+  }
+
+  /**
+   * Replace a routine's Getting started checkpoint. The capability that calls
+   * this is bound to the live authoring turn, so the write is app-owned and the
+   * agent never names a path. The open how-to panel is told afterwards, so what
+   * the interview has agreed is visible without reopening it.
+   */
+  private async saveRoutineCheckpoint(
+    routineId: string,
+    markdown: string
+  ): Promise<{ path: string }> {
+    const saved = await this.routineAuthoringCheckpoints.save(routineId, markdown)
+    broadcastRoutineCheckpointChanged(routineId)
+    return saved
+  }
+
+  /**
+   * One routine's Getting started checkpoint, for the how-to panel. Read-only:
+   * only the authoring agent writes it, and only through the capability bound to
+   * its own turn.
+   */
+  async readRoutineCheckpoint(routineId: string): Promise<string | null> {
+    return this.routineAuthoringCheckpoints.read(validateEntityId(routineId, 'Routine ID'))
   }
 
   /**
@@ -6589,6 +6982,7 @@ export class ChatEngine {
       }
     }
 
+    this.applyDeferredHarnessRestarts()
     await this.sweepOrphanedProcesses()
   }
 
@@ -7100,6 +7494,7 @@ export class ChatEngine {
       })
     }
     if (isCioUtilityRequest(text)) this.cioUtilityThreads.set(threadId, true)
+    if (isCioDesignRequest(text)) this.cioDesignThreads.set(threadId, true)
     await this.rearmSteerUtilities(
       driver,
       projectId,
@@ -7117,10 +7512,10 @@ export class ChatEngine {
     const steer = driver.steerPrompt.bind(driver) as (
       projectPath: string,
       opts: SteerPromptOptions,
-      isolated?: IsolatedHandle
+      isolated?: IsolatedSessionHandle
     ) => Promise<void>
     const deliverNow = async (): Promise<void> => {
-      if (activeBrainstorm?.isolated && driver instanceof OpenCodeDriver) {
+      if (activeBrainstorm?.isolated && supportsIsolatedSessions(driver)) {
         await steer(projectPath, steerOptions, activeBrainstorm.isolated)
       } else {
         await steer(projectPath, steerOptions)
@@ -7545,7 +7940,7 @@ export class ChatEngine {
     const routineInstruction = assistantTaskTurn
       ? composeRoutineInstruction(this.routineHowToInstruction(targetThread), routineRun)
       : origin === 'user'
-        ? this.routineAuthoringHiddenContext(targetThread)
+        ? await this.routineAuthoringInstruction(projectId, threadId, targetThread)
         : undefined
     if (origin === 'user') {
       const workerDirective = await this.workerAssignmentTurnDirective(targetThread)
@@ -8059,13 +8454,20 @@ export class ChatEngine {
     }
     const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
     if (utilitySetupRequested) this.cioUtilityThreads.set(threadId, true)
+    // A design session is user-started too, and it lasts for the thread: the
+    // turn that types @cio-design gets the session briefing and promotes the
+    // design capability to an active one, and every later turn keeps the
+    // capability and gets the continuation instead.
+    const designRequested = origin === 'user' && isCioDesignRequest(text)
+    if (designRequested) this.cioDesignThreads.set(threadId, true)
+    const designSession = await this.designSessionFor(projectId, threadId, designRequested)
     // The routine how-to authoring thread carries the utility gateway from the
     // start: the agent has to research and install the skills, MCPs and plugins
     // a routine needs while it writes the how-to, without the user first arming
     // setup by hand. It grants the same contract as an explicit @cio-utility
     // invocation, and it is derived from the thread on every turn rather than
     // memoized, so it ends the moment the how-to is saved.
-    const assistantAuthoringTurn = this.routineAuthoringHiddenContext(targetThread) !== undefined
+    const assistantAuthoringTurn = this.isRoutineAuthoringThread(targetThread)
     // Once @cio-utility has been invoked in this thread (earlier or now), later
     // turns keep the setup + diagnostics contract reusable without repeating
     // the invocation. Other utilities were already freely invocable whenever
@@ -8104,7 +8506,9 @@ export class ChatEngine {
       utilitySetupAllowed,
       activeBrainstormSession,
       utilitySetupRequested || assistantAuthoringTurn,
-      assistantTaskTurn
+      assistantTaskTurn,
+      assistantAuthoringTurn ? (targetThread?.routineId ?? null) : null,
+      designSession
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -8683,10 +9087,9 @@ export class ChatEngine {
         )
       ).id
       const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
-      const isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(projectPath, 'Temporary read-only chat')
-          : undefined
+      const isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(projectPath, 'Temporary read-only chat')
+        : undefined
       const sessionId =
         isolated?.sessionId ?? (await driver.createSession(projectPath, 'Temporary read-only chat'))
       const expiresAt = Date.now() + ChatEngine.TEMPORARY_CHAT_INACTIVITY_MS
@@ -8809,7 +9212,7 @@ export class ChatEngine {
           ]
         })
       )
-      if (temporary.isolated && driver instanceof OpenCodeDriver) {
+      if (temporary.isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(temporary.projectPath, request, temporary.isolated)
       } else {
         await driver.sendPrompt(temporary.projectPath, request)
@@ -8826,7 +9229,7 @@ export class ChatEngine {
       temporary.contextApplied = true
       await completion
       const messages =
-        temporary.isolated && driver instanceof OpenCodeDriver
+        temporary.isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(
               temporary.projectPath,
               temporary.sessionId,
@@ -8909,7 +9312,7 @@ export class ChatEngine {
     const { driver, projectPath } = await this.resolve(projectId, driverId)
     assertHarnessRequestCapabilities(driver, [], settings.permissionLevel)
     const isolated =
-      driver instanceof OpenCodeDriver &&
+      supportsIsolatedSessions(driver) &&
       (options.isolateOpenCode ?? options.utilityManagement === true)
         ? await driver.createIsolatedSession(projectPath, title)
         : undefined
@@ -8977,14 +9380,14 @@ export class ChatEngine {
         prompt: SendPromptOptions,
         completion: Promise<unknown | undefined>
       ): Promise<AgentMessage> => {
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.sendPrompt(projectPath, prompt, isolated)
         } else {
           await driver.sendPrompt(projectPath, prompt)
         }
         await completion
         const messages =
-          isolated && driver instanceof OpenCodeDriver
+          isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
         const response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -9055,7 +9458,7 @@ export class ChatEngine {
       }
       return response
     } catch (error) {
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
       } else {
         await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -9069,7 +9472,7 @@ export class ChatEngine {
         await this.agentProcesses
           .releaseThread(projectId, virtualTaskId)
           .catch((error) => Logger.dev('Virtual task process cleanup was incomplete:', error))
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           driver.disposeIsolatedSession(isolated)
         } else if (driver.deleteSession) {
           await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
@@ -9180,10 +9583,10 @@ export class ChatEngine {
     const steerTemporary = driver.steerPrompt.bind(driver) as (
       projectPath: string,
       opts: SteerPromptOptions,
-      isolated?: IsolatedHandle
+      isolated?: IsolatedSessionHandle
     ) => Promise<void>
     const deliverTemporarySteer = async (): Promise<void> => {
-      if (temporary.isolated && driver instanceof OpenCodeDriver) {
+      if (temporary.isolated && supportsIsolatedSessions(driver)) {
         await steerTemporary(temporary.projectPath, steerOptions, temporary.isolated)
       } else {
         await steerTemporary(temporary.projectPath, steerOptions)
@@ -9263,7 +9666,7 @@ export class ChatEngine {
     const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (driver) {
       try {
-        if (temporary.isolated && driver instanceof OpenCodeDriver) {
+        if (temporary.isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(temporary.projectPath, temporary.sessionId, temporary.isolated)
         } else {
           await driver.abort(temporary.projectPath, temporary.sessionId)
@@ -9376,7 +9779,7 @@ export class ChatEngine {
     const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     const messages =
-      temporary.isolated && driver instanceof OpenCodeDriver
+      temporary.isolated && supportsIsolatedSessions(driver)
         ? await driver.loadMessages(temporary.projectPath, temporary.sessionId, temporary.isolated)
         : await driver.loadMessages(temporary.projectPath, temporary.sessionId)
     this.applyReasoningStamps(temporary.sessionId, messages)
@@ -9538,7 +9941,7 @@ export class ChatEngine {
     this.toolTimes.delete(temporary.sessionId)
     const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) return true
-    if (temporary.isolated && driver instanceof OpenCodeDriver) {
+    if (temporary.isolated && supportsIsolatedSessions(driver)) {
       try {
         await driver.abort(temporary.projectPath, temporary.sessionId, temporary.isolated)
       } catch (error) {
@@ -9820,10 +10223,9 @@ export class ChatEngine {
       assignmentMode: false,
       loopMode: false
     }
-    const isolated =
-      driver instanceof OpenCodeDriver
-        ? await driver.createIsolatedSession(request.projectPath, 'Image description')
-        : undefined
+    const isolated = supportsIsolatedSessions(driver)
+      ? await driver.createIsolatedSession(request.projectPath, 'Image description')
+      : undefined
     const sessionId =
       isolated?.sessionId ?? (await driver.createSession(request.projectPath, 'Image description'))
     this.registerSession(
@@ -9865,14 +10267,14 @@ export class ChatEngine {
         userMessageId: createMessageId(),
         structuredOutput: { schema: IMAGE_DESCRIPTOR_BATCH_OUTPUT_SCHEMA }
       }
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(request.projectPath, requestOptions, isolated)
       } else {
         await driver.sendPrompt(request.projectPath, requestOptions)
       }
       await completion
       const messages =
-        isolated && driver instanceof OpenCodeDriver
+        isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(request.projectPath, sessionId, isolated)
           : await driver.loadMessages(request.projectPath, sessionId)
       response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -9910,7 +10312,7 @@ export class ChatEngine {
       this.sessionStatuses.delete(sessionId)
       this.reasoningTimes.delete(sessionId)
       this.toolTimes.delete(sessionId)
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         driver.disposeIsolatedSession(isolated)
       } else {
         try {
@@ -10219,10 +10621,9 @@ export class ChatEngine {
       assignmentMode: false,
       loopMode: false
     }
-    const isolated =
-      driver instanceof OpenCodeDriver
-        ? await driver.createIsolatedSession(projectPath, 'Image description')
-        : undefined
+    const isolated = supportsIsolatedSessions(driver)
+      ? await driver.createIsolatedSession(projectPath, 'Image description')
+      : undefined
     const sessionId =
       isolated?.sessionId ?? (await driver.createSession(projectPath, 'Image description'))
     this.registerSession(
@@ -10275,14 +10676,14 @@ export class ChatEngine {
           pieces: [{ title: 'Image descriptor prompt', content: imageDescriptionPrompt }]
         })
       )
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(projectPath, request, isolated)
       } else {
         await driver.sendPrompt(projectPath, request)
       }
       await completion
       const messages =
-        isolated && driver instanceof OpenCodeDriver
+        isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(projectPath, sessionId, isolated)
           : await driver.loadMessages(projectPath, sessionId)
       response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -10329,7 +10730,7 @@ export class ChatEngine {
       this.sessionStatuses.delete(sessionId)
       this.reasoningTimes.delete(sessionId)
       this.toolTimes.delete(sessionId)
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         driver.disposeIsolatedSession(isolated)
       } else {
         try {
@@ -10608,6 +11009,63 @@ export class ChatEngine {
         assignmentMode: false,
         loopMode: false
       }
+    }
+  }
+
+  /**
+   * Run one delegated prompt on the model the user assigned to a named piece of
+   * design work.
+   *
+   * This is the same disposable one-shot lane the auxiliary roles use: the
+   * assigned harness, a session that carries only the assigned model as its
+   * candidate, no tools, and minimal reasoning unless the user chose a level.
+   * The assignment is never overridden, never upgraded to a stronger model and
+   * never failed over to another provider: a design assignment is a model the
+   * user picked, so a model that fails is reported as a failure rather than
+   * quietly replaced.
+   */
+  private async runDesignAssignment(
+    request: DesignAssignmentRunRequest
+  ): Promise<DesignAssignmentRunResult> {
+    const selection = request.selection
+    const account = await this.accountRegistry.resolveForProvider(
+      selection.harnessId,
+      selection.providerId,
+      selection.accountId
+    )
+    const { driver, projectPath } = await this.resolve(
+      request.projectId,
+      selection.harnessId,
+      request.threadId,
+      account.id
+    )
+    const result = await driver.provideCheapModel(projectPath, {
+      settings: {
+        harnessId: selection.harnessId,
+        accountId: account.id,
+        providerId: selection.providerId,
+        modelId: selection.modelId,
+        thinkingLevel: selection.thinkingLevel ?? 'minimal',
+        permissionLevel: 'auto_review',
+        assignmentMode: false,
+        loopMode: false
+      },
+      purpose: `Design assignment: ${request.label}`,
+      prompt: request.prompt,
+      candidates: [{ providerId: selection.providerId, modelId: selection.modelId }]
+    })
+    const text = result.text?.trim()
+    if (!text) {
+      const failure = result.attempts.at(-1)?.failure
+      throw new Error(
+        `The model assigned to "${request.label}" (${selection.harnessId}/${selection.providerId}/${selection.modelId}) returned nothing.${failure ? ` ${failure}` : ' Check that the assigned model is available on that account, or assign a different model in Settings, Design.'}`
+      )
+    }
+    return {
+      text,
+      harnessId: selection.harnessId,
+      providerId: selection.providerId,
+      modelId: selection.modelId
     }
   }
 
@@ -11147,7 +11605,7 @@ export class ChatEngine {
       markNotificationAborting(projectId, threadId)
       this.userAbortedBrainstormOperations.add(brainstormKey)
       this.userAbortedSessions.add(activeBrainstorm.sessionId)
-      if (activeBrainstorm.isolated && activeBrainstorm.driver instanceof OpenCodeDriver) {
+      if (activeBrainstorm.isolated && supportsIsolatedSessions(activeBrainstorm.driver)) {
         await activeBrainstorm.driver.abort(
           activeBrainstorm.projectPath,
           activeBrainstorm.sessionId,
@@ -11170,7 +11628,7 @@ export class ChatEngine {
       markNotificationAborting(projectId, threadId)
       this.userAbortedInitialSpecOperations.add(brainstormKey)
       this.userAbortedSessions.add(activeInitialSpec.sessionId)
-      if (activeInitialSpec.isolated && activeInitialSpec.driver instanceof OpenCodeDriver) {
+      if (activeInitialSpec.isolated && supportsIsolatedSessions(activeInitialSpec.driver)) {
         await activeInitialSpec.driver.abort(
           activeInitialSpec.projectPath,
           activeInitialSpec.sessionId,
@@ -11195,7 +11653,7 @@ export class ChatEngine {
       this.userAbortedSessions.add(activeAssignmentDraft.sessionId)
       if (
         activeAssignmentDraft.isolated &&
-        activeAssignmentDraft.driver instanceof OpenCodeDriver
+        supportsIsolatedSessions(activeAssignmentDraft.driver)
       ) {
         await activeAssignmentDraft.driver.abort(
           activeAssignmentDraft.projectPath,
@@ -13821,12 +14279,11 @@ export class ChatEngine {
     ].join('\n\n')
     const structured = driver.capabilities?.structuredOutput === true
     let sessionId = ''
-    let isolated: IsolatedHandle | undefined
+    let isolated: IsolatedSessionHandle | undefined
     try {
-      isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(projectPath, `PRD ${new Date().toISOString()}`)
-          : undefined
+      isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(projectPath, `PRD ${new Date().toISOString()}`)
+        : undefined
       sessionId =
         isolated?.sessionId ??
         (await driver.createSession(projectPath, `PRD ${new Date().toISOString()}`))
@@ -13873,7 +14330,7 @@ export class ChatEngine {
           ? { structuredOutput: { schema: PRD_DOCUMENT_JSON_SCHEMA, retryCount: 2 } }
           : {})
       }
-      if (isolated && driver instanceof OpenCodeDriver) {
+      if (isolated && supportsIsolatedSessions(driver)) {
         await driver.sendPrompt(projectPath, prompt, isolated)
       } else {
         await driver.sendPrompt(projectPath, prompt)
@@ -13881,7 +14338,7 @@ export class ChatEngine {
       const streamed = await completion
       const generatedMessages =
         streamed === undefined
-          ? isolated && driver instanceof OpenCodeDriver
+          ? isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
           : []
@@ -13940,7 +14397,7 @@ export class ChatEngine {
       return created
     } catch (error) {
       if (sessionId) {
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -13995,7 +14452,7 @@ export class ChatEngine {
         this.reasoningTimes.delete(sessionId)
         this.toolTimes.delete(sessionId)
       }
-      if (isolated && driver instanceof OpenCodeDriver) driver.disposeIsolatedSession(isolated)
+      if (isolated && supportsIsolatedSessions(driver)) driver.disposeIsolatedSession(isolated)
     }
   }
 
@@ -14404,6 +14861,12 @@ export class ChatEngine {
         : []
     if (brainstormWriteRoute) {
       featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
+      // The preview server is serving the same approved origins, so the turn is
+      // told exactly which external hosts will load and which will not.
+      const prototypeCdnGuidance =
+        prototypeBatches.length > 0
+          ? prototypeCdnInstruction(prototypeCdnPolicyFromConfig(await this.storage.getConfig()))
+          : ''
       const revisionRelativePath = toPosixPath(
         join(
           featureArtifactDirectory(featureSlug),
@@ -14418,7 +14881,7 @@ export class ChatEngine {
         ...(prototypeBatches.length > 0
           ? [
               '',
-              'Prototype work was explicitly requested. Generate dependency-free HTML/CSS/JavaScript without installing packages. Reuse the existing project stack only when it is already available without setup.',
+              prototypeCdnGuidance,
               ...prototypeBatches
                 .flat()
                 .map(
@@ -14542,13 +15005,9 @@ export class ChatEngine {
     const operationKey = `${projectId}:${threadId}`
     for (const [attemptIndex, attempt] of attempts.entries()) {
       const useStructuredOutput = attempt === 'structured'
-      const isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(
-              projectPath,
-              `Brainstorm ${new Date().toISOString()}`
-            )
-          : undefined
+      const isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(projectPath, `Brainstorm ${new Date().toISOString()}`)
+        : undefined
       const sessionId =
         isolated?.sessionId ??
         (await driver.createSession(projectPath, `Brainstorm ${new Date().toISOString()}`))
@@ -14643,7 +15102,7 @@ export class ChatEngine {
           })
         )
         traceLeanAgent('brainstorm', sessionId, driverId)
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.sendPrompt(projectPath, prompt, isolated)
         } else {
           await driver.sendPrompt(projectPath, prompt)
@@ -14653,7 +15112,7 @@ export class ChatEngine {
           return finish(parseBrainstormGeneratedOutput(streamed, useStructuredOutput))
         }
         const generated =
-          isolated && driver instanceof OpenCodeDriver
+          isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
         const response = [...generated].reverse().find((message) => message.role === 'assistant')
@@ -14685,7 +15144,7 @@ export class ChatEngine {
           )
         )
       } catch (error) {
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -14745,7 +15204,7 @@ export class ChatEngine {
         if (this.activeBrainstormSessions.get(operationKey)?.sessionId === sessionId) {
           this.activeBrainstormSessions.delete(operationKey)
         }
-        if (isolated && driver instanceof OpenCodeDriver) driver.disposeIsolatedSession(isolated)
+        if (isolated && supportsIsolatedSessions(driver)) driver.disposeIsolatedSession(isolated)
       }
     }
     const failure = repairError ?? lastError ?? new Error('The Brainstorm agent failed.')
@@ -14949,13 +15408,9 @@ export class ChatEngine {
     let repairError: GeneratedSpecOutputError | null = null
 
     for (const useStructuredOutput of formatModes) {
-      const isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(
-              projectPath,
-              `Spec draft ${new Date().toISOString()}`
-            )
-          : undefined
+      const isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(projectPath, `Spec draft ${new Date().toISOString()}`)
+        : undefined
       const sessionId =
         isolated?.sessionId ??
         (await driver.createSession(projectPath, `Spec draft ${new Date().toISOString()}`))
@@ -14998,7 +15453,7 @@ export class ChatEngine {
       if (this.userAbortedInitialSpecOperations.has(workflowKey)) {
         this.activeInitialSpecSessions.delete(workflowKey)
         this.sessionRegistry.delete(sessionId)
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           driver.disposeIsolatedSession(isolated)
         } else {
           await driver.deleteSession?.(projectPath, sessionId).catch(() => undefined)
@@ -15031,7 +15486,7 @@ export class ChatEngine {
               }
             : {})
         }
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.sendPrompt(projectPath, prompt, isolated)
         } else {
           await driver.sendPrompt(projectPath, prompt)
@@ -15041,7 +15496,7 @@ export class ChatEngine {
           return validateGeneratedSpecContent(streamedStructuredOutput, assignmentRequired)
         }
         const messages =
-          isolated && driver instanceof OpenCodeDriver
+          isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
         const response = [...messages].reverse().find((message) => message.role === 'assistant')
@@ -15056,7 +15511,7 @@ export class ChatEngine {
           .join('\n')
         return parseGeneratedSpecContent(text, assignmentRequired)
       } catch (error) {
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -15109,7 +15564,7 @@ export class ChatEngine {
         this.sessionRegistry.delete(sessionId)
         this.reasoningTimes.delete(sessionId)
         this.toolTimes.delete(sessionId)
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           driver.disposeIsolatedSession(isolated)
         }
         if (this.activeInitialSpecSessions.get(workflowKey)?.sessionId === sessionId) {
@@ -15366,13 +15821,12 @@ export class ChatEngine {
     const draftKey = `${projectId}:${coordinatorThreadId}`
 
     for (const useStructuredOutput of structured ? [true, false] : [false]) {
-      const isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(
-              projectPath,
-              `Assignment draft ${new Date().toISOString()}`
-            )
-          : undefined
+      const isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(
+            projectPath,
+            `Assignment draft ${new Date().toISOString()}`
+          )
+        : undefined
       const sessionId =
         isolated?.sessionId ??
         (await driver.createSession(projectPath, `Assignment draft ${new Date().toISOString()}`))
@@ -15411,7 +15865,7 @@ export class ChatEngine {
             ? { structuredOutput: { schema: ASSIGNMENT_PLAN_SCHEMA, retryCount: 2 } }
             : {})
         }
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.sendPrompt(projectPath, request, isolated)
         } else {
           await driver.sendPrompt(projectPath, request)
@@ -15419,7 +15873,7 @@ export class ChatEngine {
         const streamed = await completion
         if (streamed !== undefined) return parseGeneratedAssignmentContent(streamed)
         const generated =
-          isolated && driver instanceof OpenCodeDriver
+          isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
         const response = [...generated].reverse().find((message) => message.role === 'assistant')
@@ -15436,7 +15890,7 @@ export class ChatEngine {
           parseGeneratedJson(text, 'The Sr. Engineer returned invalid Assignment JSON')
         )
       } catch (error) {
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -15465,7 +15919,7 @@ export class ChatEngine {
         this.sessionRegistry.delete(sessionId)
         this.reasoningTimes.delete(sessionId)
         this.toolTimes.delete(sessionId)
-        if (isolated && driver instanceof OpenCodeDriver) driver.disposeIsolatedSession(isolated)
+        if (isolated && supportsIsolatedSessions(driver)) driver.disposeIsolatedSession(isolated)
         if (this.activeAssignmentDraftSessions.get(draftKey)?.sessionId === sessionId) {
           this.activeAssignmentDraftSessions.delete(draftKey)
         }
@@ -20348,6 +20802,14 @@ export class ChatEngine {
     }
     if (eventOwner && (event.type === 'message.completed' || event.type === 'usage.updated')) {
       const selection = this.sessionModelIds.get(event.sessionId)
+      // Attribute the event to the session's own harness and provider. A live
+      // streamed assistant row is built from part events, which carry no
+      // provenance, so without this stamp the row stays unattributed until the
+      // turn lands in the persisted mirror. The context meter only counts usage
+      // reported by the thread's current harness and provider, so an
+      // unattributed row is invisible to it for the whole run.
+      event.harnessId ??= driverId
+      if (selection) event.providerId ??= selection.providerId
       if (event.contextWindow === undefined && selection) {
         const contextWindow = this.modelContextWindow(
           eventOwner.projectId,
@@ -23787,11 +24249,11 @@ export class ChatEngine {
     sessionId: string
     projectPath: string
     driver: HarnessDriver
-    isolated?: IsolatedHandle
+    isolated?: IsolatedSessionHandle
   }): Promise<void> {
     try {
       const messages =
-        input.isolated && input.driver instanceof OpenCodeDriver
+        input.isolated && supportsIsolatedSessions(input.driver)
           ? await input.driver.loadMessages(input.projectPath, input.sessionId, input.isolated)
           : await input.driver.loadMessages(input.projectPath, input.sessionId)
       for (const message of messages) {
@@ -26475,13 +26937,12 @@ export class ChatEngine {
     let lastError: Error | null = null
 
     for (const [formatIndex, structured] of formatModes.entries()) {
-      const isolated =
-        driver instanceof OpenCodeDriver
-          ? await driver.createIsolatedSession(
-              projectPath,
-              `Memory proposal ${new Date().toISOString()}`
-            )
-          : undefined
+      const isolated = supportsIsolatedSessions(driver)
+        ? await driver.createIsolatedSession(
+            projectPath,
+            `Memory proposal ${new Date().toISOString()}`
+          )
+        : undefined
       const sessionId =
         isolated?.sessionId ??
         (await driver.createSession(projectPath, `Memory proposal ${new Date().toISOString()}`))
@@ -26520,14 +26981,14 @@ export class ChatEngine {
           allowedTools: [],
           ...(structured ? { structuredOutput: { schema: proposalSchema, retryCount: 2 } } : {})
         }
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.sendPrompt(projectPath, prompt, isolated)
         } else {
           await driver.sendPrompt(projectPath, prompt)
         }
         const streamed = await completion
         const messages =
-          isolated && driver instanceof OpenCodeDriver
+          isolated && supportsIsolatedSessions(driver)
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
         response = [...messages].reverse().find((candidate) => candidate.role === 'assistant')
@@ -26548,7 +27009,7 @@ export class ChatEngine {
         )
       } catch (error) {
         attemptFailure = rawErrorMessage(error)
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
@@ -26574,7 +27035,7 @@ export class ChatEngine {
         this.sessionRegistry.delete(sessionId)
         this.reasoningTimes.delete(sessionId)
         this.toolTimes.delete(sessionId)
-        if (isolated && driver instanceof OpenCodeDriver) {
+        if (isolated && supportsIsolatedSessions(driver)) {
           driver.disposeIsolatedSession(isolated)
         } else if (driver.deleteSession) {
           await driver.deleteSession(projectPath, sessionId).catch(() => undefined)

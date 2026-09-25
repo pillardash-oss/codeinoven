@@ -34,6 +34,14 @@ export function chatThreadArtifactDirectory(threadId: string): string {
 }
 
 /**
+ * Storage-root-relative workspace directory every task of one routine mounts.
+ * A routine behaves like a project, so its tasks share one folder.
+ */
+export function assistantRoutineWorkspaceDirectory(routineId: string): string {
+  return join(ASSISTANT_CWD_DIR, routineId)
+}
+
+/**
  * Storage-root-relative workspace directory of one assistant task. A routine
  * behaves like a project, so every task in it shares `assistant-cwd/<routineId>`;
  * a routine-less task falls back to its own thread id so it still lives under
@@ -43,7 +51,7 @@ export function assistantThreadWorkspaceDirectory(
   threadId: string,
   routineId?: string | null
 ): string {
-  return join(ASSISTANT_CWD_DIR, routineId ?? threadId)
+  return assistantRoutineWorkspaceDirectory(routineId ?? threadId)
 }
 
 const PROJECT_GITIGNORE_BLOCK = `# ${APP_NAME} agent scratch space (context, reports, temp work)\n.cio/\n`

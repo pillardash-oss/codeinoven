@@ -118,11 +118,16 @@ describe('describeSchedule', () => {
   it('labels empty schedules and each cadence', () => {
     expect(describeSchedule(null)).toBe('Not scheduled')
     expect(describeSchedule({ cadence: 'hourly', times: [] })).toBe('Every hour')
-    expect(describeSchedule(daily(['09:00', '17:00']))).toBe('Daily at 09:00, 17:00')
-    expect(describeSchedule({ cadence: 'weekdays', times: ['09:00'] })).toBe(
-      'Weekdays at 09:00'
-    )
-    expect(describeSchedule(weekly([1, 3], ['09:00']))).toBe('Weekly on Mon, Wed at 09:00')
+    expect(describeSchedule(daily(['09:00', '17:00']))).toBe('Daily at 9:00 AM, 5:00 PM')
+    expect(describeSchedule({ cadence: 'weekdays', times: ['09:00'] })).toBe('Weekdays at 9:00 AM')
+    expect(describeSchedule(weekly([1, 3], ['09:00']))).toBe('Weekly on Mon, Wed at 9:00 AM')
+  })
+
+  it('reads a stored HH:mm time as the app clock, never as 24-hour', () => {
+    expect(describeSchedule(daily(['00:00']))).toBe('Daily at 12:00 AM')
+    expect(describeSchedule(daily(['12:00']))).toBe('Daily at 12:00 PM')
+    expect(describeSchedule(daily(['8:05', '20:30']))).toBe('Daily at 8:05 AM, 8:30 PM')
+    expect(describeSchedule(daily(['23:59']))).toBe('Daily at 11:59 PM')
   })
 })
 

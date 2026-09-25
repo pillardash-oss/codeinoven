@@ -2,6 +2,7 @@
   import { Archive, Bell, Check, ChevronDown, CircleDot, History, Pencil, Save, TriangleAlert } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
+  import { formatDateTimeCompact } from '$shared/date-time-format'
   import type { Component } from 'svelte'
 
   interface Props {
@@ -45,15 +46,6 @@
     onRedo,
     onSave
   }: Props = $props()
-
-  function formatDate(timestamp: number): string {
-    return new Intl.DateTimeFormat(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    }).format(timestamp)
-  }
 
   /** Equivalent single-glyph stand-in for the status badge in compact headers. */
   function statusIcon(statusLabel: string | undefined): Component | null {
@@ -109,11 +101,11 @@
 </DropdownMenu.Root>
 {/if}
 <StudioHistoryControls {canUndo} {canRedo} onUndo={onUndo} onRedo={onRedo} />
-<span class="updated-text">Updated {formatDate(updatedAt)}</span>
+<span class="updated-text">Updated {formatDateTimeCompact(updatedAt)}</span>
 <span
   class="updated-icon text-muted"
-  title={`Updated ${formatDate(updatedAt)}`}
-  aria-label={`Updated ${formatDate(updatedAt)}`}>
+  title={`Updated ${formatDateTimeCompact(updatedAt)}`}
+  aria-label={`Updated ${formatDateTimeCompact(updatedAt)}`}>
   <Bell size={12} />
 </span>
 {#if statusLabel}

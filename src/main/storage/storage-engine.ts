@@ -13,7 +13,7 @@ import {
   resolveWithinRoot
 } from '../../lib/utils'
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
-import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../lib/types'
+import { DEFAULT_MAX_CONFLICT_FILE_BYTES, DEFAULT_IN_APP_NOTIFICATION_SOUND } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import {
   CIO_PROMPT_DEFINITIONS,
@@ -43,6 +43,8 @@ import {
   normalizeWorkerNames
 } from '../../lib/assignment/worker-names'
 import type { WorkerNameSettings } from '../../lib/assignment/worker-names'
+import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '../../lib/prototypes/prototype-cdn'
+import { MAX_DESIGN_ASSIGNMENTS, isUsableDesignAssignment } from '../../lib/design-assignments'
 import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
 import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/image-descriptor'
 
@@ -62,6 +64,7 @@ const DEFAULT_CONFIG: AppConfig = {
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
+  design: { assignments: [] },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
@@ -76,6 +79,9 @@ const DEFAULT_CONFIG: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
+  allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
+  prototypeCdnAllowlist: [],
+  inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
   sound: DEFAULT_SPEECH_SETTINGS
 }
 
@@ -164,11 +170,28 @@ export class StorageEngine {
         ...(config?.agentDefaults ?? {})
       },
       auxiliaryAgents: { ...(config?.auxiliaryAgents ?? {}) },
+      // Assignments are read straight off the config file, so the array is
+      // filtered here too: only a complete selection on a valid id survives, and
+      // a hand-edited entry can never reach a model the user did not name.
+      design: {
+        assignments: (Array.isArray(config?.design?.assignments) ? config.design.assignments : [])
+          .filter(isUsableDesignAssignment)
+          .slice(0, MAX_DESIGN_ASSIGNMENTS)
+      },
       memory: {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),
         entries: config?.memory?.entries ?? []
       },
+      inAppNotificationSound: {
+        ...DEFAULT_IN_APP_NOTIFICATION_SOUND,
+        ...(config?.inAppNotificationSound ?? {})
+      },
+      prototypeCdnAllowlist: Array.isArray(config?.prototypeCdnAllowlist)
+        ? config.prototypeCdnAllowlist.filter(
+            (origin): origin is string => typeof origin === 'string'
+          )
+        : DEFAULT_CONFIG.prototypeCdnAllowlist,
       sound: {
         ...DEFAULT_CONFIG.sound,
         ...(config?.sound ?? {}),

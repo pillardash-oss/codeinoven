@@ -4,6 +4,7 @@ import type {
   UtilityDefinitionFor
 } from '../../../lib/types'
 import { GATEWAY_TOOLS } from '../../../lib/gateway-tools'
+import { DESIGN_OUTPUT_ROOT } from '../../../lib/design-skill'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
 
@@ -106,8 +107,17 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'screenshot',
     description:
-      'Capture the browser page as a PNG data URL at its current viewport, whether the tab is on screen or parked offscreen.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+      'Capture the browser page at its current viewport, whether the tab is on screen or parked offscreen, and return it as an image the model can afford. The capture is capped in size and a page unchanged since the previous capture is reported as unchanged rather than sent again; pass {"force":true} to capture it regardless.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        force: {
+          type: 'boolean',
+          description: 'Capture even when the page is unchanged since the previous screenshot.'
+        }
+      },
+      additionalProperties: false
+    }
   },
   {
     name: 'reload',
@@ -119,6 +129,91 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
     description:
       'Read console messages and browser runtime errors from the current project and thread tab.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  }
+]
+
+/**
+ * Operations of the app-owned design capability (`cio:design`).
+ *
+ * Three, and all of them are things the agent cannot do with its own tools: show
+ * the design on the app's own origin, run the model the user assigned to a piece
+ * of design work, and turn a generated asset into a file beside the design.
+ * Looking at the result is deliberately not repeated here: the browser capability
+ * already owns screenshots, viewports and console reads, and the docs point at
+ * it.
+ */
+export const DESIGN_UTILITY_TOOLS: McpTool[] = [
+  {
+    name: 'preview',
+    description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab. The folder's own scripts and stylesheets run, so an HTML design renders as written, and the tab is mounted offscreen at a real viewport whether or not the user is looking at it. Aim it at the folder holding the design's entry file.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: `Project-relative folder to serve. Defaults to ${DESIGN_OUTPUT_ROOT}.`
+        },
+        entry: {
+          type: 'string',
+          description:
+            'File inside that folder to load, relative to it. Defaults to index.html when that file exists; otherwise the folder listing is shown.'
+        },
+        attention: {
+          type: 'string',
+          enum: ['focus', 'background'],
+          description:
+            'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'delegate',
+    description:
+      "Run one prompt on the model the user assigned to a named piece of design work: long-form copy, an SEO pass, a script, a storyboard, the prompts a generator will be given. The assigned model did not see this conversation, so the prompt has to carry every detail it needs. This lane answers with text only, so a picture, a clip or a track is a file rather than an answer: produce one of those with a generation capability from the utilities bank and save it with save-media. Assignments that share one craft are the user's own alternatives and are tried in the order they are listed. Never choose a model yourself and never stand in for one.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        assignment: {
+          type: 'string',
+          description:
+            'The design work to delegate, named by its handle or its title. The playbook lists the assignments the user set up.'
+        },
+        prompt: {
+          type: 'string',
+          description:
+            'The complete brief for the assigned model: the subject, the tone, the format, and every constraint, written as if to a stranger who has seen nothing of this work.'
+        }
+      },
+      required: ['assignment', 'prompt'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'save-media',
+    description: `Save a generated image, video or sound file into the project, so the design references a file of its own instead of a link that expires. Give it the https link the generation service answered with; the file is named after the source unless you name it. The reply carries the relative path to use in the markup.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: {
+          type: 'string',
+          description:
+            'The https link the generation service returned for the asset. Only an https link with a media type, from a public host, is accepted.'
+        },
+        name: {
+          type: 'string',
+          description:
+            'Optional file name without an extension, such as hero. Defaults to the name in the source URL.'
+        },
+        directory: {
+          type: 'string',
+          description: `Project-relative folder to save into. Defaults to ${DESIGN_OUTPUT_ROOT}, so name the design's own folder when the asset belongs to a design.`
+        }
+      },
+      required: ['source'],
+      additionalProperties: false
+    }
   }
 ]
 

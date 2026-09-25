@@ -1,8 +1,13 @@
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { app } from 'electron'
 import { isAbsolute, relative } from 'node:path'
-import type { HarnessUpdateHandoff, HarnessUpdateStatus } from '../../lib/types'
+import type {
+  HarnessUpdateHandoff,
+  HarnessUpdateStatus,
+  ProviderConnectionInfo
+} from '../../lib/types'
 import { findHarness, listHarnesses } from './harness-registry'
+import { parseMajorVersion, compareVersions } from '../../lib/version-compare'
 import type { ProviderConnectionService } from '../providers/provider-connection'
 import { Logger } from '../system/logger'
 import {
@@ -35,7 +40,9 @@ type UpdateSource = NpmSource | GitHubSource
  *  - Antigravity ships a standalone binary; its releases are published on GitHub.
  */
 const UPDATE_SOURCES: Record<string, UpdateSource> = {
-  opencode: { kind: 'npm', package: 'opencode-ai' },
+  // OpenCode V2 is the current release and installs under the same `opencode`
+  // command, so the latest published version lives on the V2 npm package.
+  opencode: { kind: 'npm', package: '@opencode/cli' },
   codex: { kind: 'npm', package: '@openai/codex' },
   'claude-code': { kind: 'npm', package: '@anthropic-ai/claude-code' },
   cline: { kind: 'npm', package: 'cline' },
@@ -57,6 +64,25 @@ const UPDATE_ARGS: Record<string, string[]> = {
   muse: ['update']
 }
 
+/**
+ * The command that moves an OpenCode install to the current release.
+ *
+ * V1 and V2 share the `opencode` command but are separate version lines; the
+ * vendor's own V2 installer replaces a package-managed V1 binary, so a V1
+ * install updates through that installer rather than `opencode upgrade` (which
+ * would only advance it within the V1 line). A V2 install self-updates.
+ */
+function openCodeUpdateHandoff(
+  provider: ProviderConnectionInfo | undefined
+): { command: string; args: string[] } | null {
+  const major = provider?.version ? parseMajorVersion(provider.version) : Number.NaN
+  if (Number.isFinite(major) && major >= 2) return null
+  if (process.platform === 'win32') {
+    return { command: 'npm', args: ['install', '-g', '@opencode/cli'] }
+  }
+  return { command: 'sh', args: ['-lc', 'curl -fsSL https://opencode.ai/v2/install | bash'] }
+}
+
 const VERSION_PATTERN = /\b(v?\d+\.\d+\.\d+)/u
 
 /**
@@ -69,7 +95,8 @@ function isAppOwnedInstall(resolvedPath: string | undefined): boolean {
   if (!resolvedPath) return false
   const appRoot = app.getAppPath()
   const relativePath = relative(appRoot, resolvedPath)
-  const inside = relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
+  const inside =
+    relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath))
   if (inside || process.platform !== 'win32') return inside
   // Windows is case-insensitive; a differing drive-letter casing would
   // otherwise report an app-owned path as user-owned.
@@ -80,22 +107,6 @@ function isAppOwnedInstall(resolvedPath: string | undefined): boolean {
 /** Pull the first `major.minor.patch` sequence out of a `--version` line. */
 function extractVersion(output: string): string | undefined {
   return output.match(VERSION_PATTERN)?.[1]?.replace(/^v/u, '')
-}
-
-/**
- * Three-part numeric semver compare (prerelease/build metadata ignored). Returns
- * > 0 when `a` is newer than `b`, < 0 when older, 0 when equal.
- */
-function compareVersions(a: string, b: string): number {
-  const parse = (value: string): [number, number, number] => {
-    const [major, minor, patch] = value.split('.').map((part) => Number.parseInt(part, 10))
-    return [major ?? 0, minor ?? 0, patch ?? 0]
-  }
-  const [aMajor, aMinor, aPatch] = parse(a)
-  const [bMajor, bMinor, bPatch] = parse(b)
-  if (aMajor !== bMajor) return aMajor - bMajor
-  if (aMinor !== bMinor) return aMinor - bMinor
-  return aPatch - bPatch
 }
 
 async function fetchLatest(source: UpdateSource): Promise<string> {
@@ -218,10 +229,7 @@ export class HarnessUpdateService {
     }
 
     const currentVersion = provider.version ? extractVersion(provider.version) : undefined
-    if (
-      provider.executionTarget?.kind === 'bundled' ||
-      isAppOwnedInstall(provider.resolvedPath)
-    ) {
+    if (provider.executionTarget?.kind === 'bundled' || isAppOwnedInstall(provider.resolvedPath)) {
       return this.settle(harnessId, {
         ...base,
         currentVersion,
@@ -287,6 +295,14 @@ export class HarnessUpdateService {
     ) {
       throw new Error(`${definition.name} is bundled with CodeInOven   it updates with the app.`)
     }
+    // OpenCode is the one harness whose current release is a different version
+    // line under the same command, so a V1 install updates through the V2
+    // installer instead of its own `upgrade`. WSL keeps the harness's own
+    // command (the installer handoff cannot run there).
+    const openCodeOverride =
+      harnessId === 'opencode' && provider?.executionTarget?.kind !== 'wsl'
+        ? openCodeUpdateHandoff(provider)
+        : null
     const prepared =
       provider?.executionTarget?.kind === 'wsl' && provider.resolvedPath
         ? prepareWslTerminalHandoff(
@@ -294,7 +310,10 @@ export class HarnessUpdateService {
             provider.resolvedPath,
             args
           )
-        : await prepareHarnessTerminalHandoff(definition.command, args)
+        : await prepareHarnessTerminalHandoff(
+            openCodeOverride?.command ?? definition.command,
+            openCodeOverride?.args ?? args
+          )
     return {
       kind: 'terminal',
       command: prepared.command,

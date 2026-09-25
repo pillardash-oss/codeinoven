@@ -25,7 +25,9 @@
    *   - the stacking layer (`z-60`), above the app's floating panels
    *   - the panel shell: header, scrolling body, and a footer that never scrolls
    *   - initial focus: the first text field, else the primary action
-   *   - Escape, the backdrop, and Cmd/Ctrl+W (`registerOverlayClose`)
+   *   - Escape, the backdrop, and Cmd/Ctrl+W (`registerOverlayClose`), with
+   *     `onEscapeKeydown` letting a surface claim Escape before the shell
+   *     dismisses (`preventDefault()` keeps the panel up)
    *   - Cmd/Ctrl+Enter (`registerModalPrimaryAction`)
    *   - browser-view suppression while a full-window surface is up, unless the
    *     surface is the one displaying that view (`blocksBrowserView`)
@@ -39,7 +41,7 @@
    * contract rather than a placement.
    */
   type ModalPlacement = 'center' | 'right' | 'bottom' | 'palette' | 'fullscreen'
-  type ModalSize = 'md' | 'lg' | 'xl' | 'full'
+  export type ModalSize = 'md' | 'lg' | 'xl' | 'full'
 
   const INPUT_FIELD_SELECTOR = [
     'input:not([type="hidden"]):not([disabled]):not([readonly])',
@@ -140,6 +142,11 @@
     trapFocus?: boolean
     /** Whether Escape dismisses. Off for a surface that owns Escape itself. */
     escapeCloses?: boolean
+    /** Inspect Escape before the shell decides. The shell dismisses only when
+     *  the event is not prevented, so a surface whose Escape means "go back"
+     *  calls `preventDefault()` and takes over. Only the topmost layer is ever
+     *  called, so a popover opened inside the panel still closes on its own. */
+    onEscapeKeydown?: (event: KeyboardEvent) => void
     /** Detach the browser's native view while this modal is open.
      *
      *  The native view floats above every DOM surface, so a modal that does not
@@ -175,6 +182,7 @@
     closeOnBackdrop = true,
     trapFocus = true,
     escapeCloses = true,
+    onEscapeKeydown,
     blocksBrowserView = true,
     claimInitialFocus,
     onCloseAutoFocus,
@@ -248,6 +256,7 @@
         onOpenAutoFocus={focusInitialElement}
         {onCloseAutoFocus}
         onEscapeKeydown={(event) => {
+          onEscapeKeydown?.(event)
           if (!escapeCloses) event.preventDefault()
         }}
         onInteractOutside={(event) => {

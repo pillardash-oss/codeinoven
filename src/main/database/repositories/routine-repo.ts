@@ -17,6 +17,7 @@ interface RoutineRow {
   icon: string | null
   icon_type: string | null
   schedule: string | null
+  schedule_updated_at: number | null
   how_to: string
   how_to_updated_at: number | null
   connections: string
@@ -121,6 +122,7 @@ function rowToRoutine(row: RoutineRow): Routine {
     icon: row.icon ?? undefined,
     iconType: row.icon_type ?? undefined,
     schedule: parseSchedule(row.schedule),
+    scheduleUpdatedAt: row.schedule_updated_at ?? undefined,
     howTo: row.how_to ?? '',
     howToUpdatedAt: row.how_to_updated_at ?? undefined,
     connections: parseConnections(row.connections),
@@ -142,10 +144,10 @@ export class RoutineRepo {
   upsert(routine: Routine): void {
     this.db.run(
       `INSERT INTO routines(
-        id, name, description, color, icon, icon_type, schedule, how_to, how_to_updated_at,
-        connections, delivery, priority, agents, paused, pinned, pinned_at, sort_order,
-        created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        id, name, description, color, icon, icon_type, schedule, schedule_updated_at, how_to,
+        how_to_updated_at, connections, delivery, priority, agents, paused, pinned, pinned_at,
+        sort_order, created_at, updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         description = excluded.description,
@@ -153,6 +155,7 @@ export class RoutineRepo {
         icon = excluded.icon,
         icon_type = excluded.icon_type,
         schedule = excluded.schedule,
+        schedule_updated_at = excluded.schedule_updated_at,
         how_to = excluded.how_to,
         how_to_updated_at = excluded.how_to_updated_at,
         connections = excluded.connections,
@@ -172,6 +175,7 @@ export class RoutineRepo {
       routine.icon ?? null,
       routine.iconType ?? null,
       routine.schedule ? JSON.stringify(routine.schedule) : null,
+      routine.scheduleUpdatedAt ?? null,
       routine.howTo ?? '',
       routine.howToUpdatedAt ?? null,
       JSON.stringify(routine.connections ?? []),

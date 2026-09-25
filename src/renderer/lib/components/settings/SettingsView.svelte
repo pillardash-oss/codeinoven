@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { isOverlayOpen } from '$lib/overlay-close.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import {
     FONT_FAMILY_OPTIONS,
@@ -62,6 +63,8 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
+  import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
+  import PrototypeCdnSettings from './PrototypeCdnSettings.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
   import SoundSettingsTab from './SoundSettingsTab.svelte'
@@ -189,7 +192,7 @@
   }
 
   const escHandler = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
+    if (keymapState.matches('nav-settings-back', e)) {
       // The settings spotlight owns Escape while it is open, and so does any
       // open overlay (modal, palette): Escape closes only the topmost surface,
       // never the settings page underneath. bits-ui palettes preventDefault the
@@ -438,6 +441,14 @@
 
   function openNotificationSettings(): void {
     void invoke('notification:openSettings')
+  }
+
+  /** Toggle one in-app alert group; the two groups are independent. */
+  function setInAppNotificationSound(group: 'success' | 'issue', enabled: boolean): void {
+    const next = { ...config.inAppNotificationSound }
+    if (group === 'success') next.success = enabled
+    else next.issue = enabled
+    void updateConfig({ inAppNotificationSound: next })
   }
 
   onMount(() => {
@@ -764,6 +775,44 @@
                 Test notification
               </button>
             </div>
+
+            <div class="mt-4 border-t pt-4">
+              <p class="text-sm font-medium">In-app notification sounds</p>
+              <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
+                A softer alert with the in-app toast, played only when that toast actually appears
+                while the app is in front. The off-app alert for the same event is unchanged.
+              </p>
+              <div class="mt-3 space-y-3">
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Success</p>
+                    <p class="text-xs leading-relaxed text-dimmed">
+                      An agent finished, a chat replied, or a specification is ready to review
+                    </p>
+                  </div>
+                  <Switch
+                    checked={config.inAppNotificationSound.success}
+                    onchange={(checked) => setInAppNotificationSound('success', checked)}
+                    aria-label="Toggle the in-app notification sound for success notifications"
+                    disabled={!settingsReady}
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Needs attention or failed</p>
+                    <p class="text-xs leading-relaxed text-dimmed">
+                      An agent is waiting on you or a run stopped with an error
+                    </p>
+                  </div>
+                  <Switch
+                    checked={config.inAppNotificationSound.issue}
+                    onchange={(checked) => setInAppNotificationSound('issue', checked)}
+                    aria-label="Toggle the in-app notification sound for attention and error notifications"
+                    disabled={!settingsReady}
+                  />
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Browser -->
@@ -786,6 +835,7 @@
                 disabled={!settingsReady}
               />
             </div>
+            <PrototypeCdnSettings {config} {settingsReady} {updateConfig} />
           </div>
 
           <!-- Power -->
@@ -1036,6 +1086,19 @@
       </div>
     {:else if section === 'audits'}
       <AuditSettingsTab {config} {settingsReady} {updateConfig} />
+    {:else if section === 'design'}
+      <div class="p-6 pb-24">
+        <div class="mb-6">
+          <h1 class="text-xl font-bold tracking-tight">Design</h1>
+          <p class="mt-0.5 text-sm text-muted">Assign a model to each kind of design work.</p>
+          {#if error}
+            <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+              {error}
+            </p>
+          {/if}
+        </div>
+        <DesignAssignmentsSettings {config} {settingsReady} {updateConfig} />
+      </div>
     {:else if section === 'cio-prompts'}
       <CioPromptsSettings />
     {:else if section === 'heartbeat'}

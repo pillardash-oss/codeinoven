@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { FileSearch, MessagesSquare } from '@lucide/svelte'
+  import { FileSearch, FolderKanban, MessagesSquare } from '@lucide/svelte'
+  import type { CommandPaletteProps } from '$lib/components/actions/CommandPalette.svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
@@ -39,6 +40,7 @@
   import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
@@ -53,6 +55,7 @@
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
+  import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import type { ActionSelection } from '$lib/actions'
@@ -65,6 +68,7 @@
   import {
     DEFAULT_SCOPE_BUCKET_ID,
     INBOX_PROJECT_ID,
+    isOrchestrationChildThread,
     isThreadWorking,
     threadTracksReadStatus,
     type AppConfig,
@@ -85,6 +89,7 @@
   import { defaultConfig } from './app-defaults'
   import { FileSearchPaletteController } from './app-file-search.svelte'
   import { ThreadSearchPaletteController } from './app-thread-search.svelte'
+  import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
   import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
   import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
 
@@ -100,6 +105,9 @@
   const fileSearch = new FileSearchPaletteController()
   const threadSearch = new ThreadSearchPaletteController({
     openThread: (thread) => void openThreadFromSearch(thread)
+  })
+  const projectSwitch = new ProjectSwitchPaletteController({
+    focusProject: (project) => focusProjectFromSpotlight(project)
   })
 
   const osHandoffDeps: OsHandoffDeps = {
@@ -133,6 +141,108 @@
     // menus   the global Cmd+K surface keeps app-level and cross-harness actions.
     ...actionContext.actions.filter((action) => action.source.kind !== 'harness')
   ])
+
+  /** The spotlight is one surface, not four. `actions` is its home screen; the
+   *  other three open from it and only ever show inside the same shell. */
+  type SpotlightScreenId = 'actions' | 'files' | 'threads' | 'projects'
+
+  /** The screen on top. A nested screen outranks the actions list, because
+   *  picking one closes the actions list in the same flush. */
+  function resolveSpotlightScreen(): SpotlightScreenId | null {
+    if (fileSearch.paletteOpen) return 'files'
+    if (threadSearch.paletteOpen) return 'threads'
+    if (projectSwitch.paletteOpen) return 'projects'
+    if (commandPaletteOpen) return 'actions'
+    return null
+  }
+
+  let spotlightScreenId = $derived(resolveSpotlightScreen())
+
+  /**
+   * The props for the single mounted palette, for whichever screen is on top.
+   *
+   * Swapping the screen must not tear the shell down: unmounting one palette and
+   * mounting the next threw the scrim, the panel, the scroll lock and the focus
+   * away and built them again, which is what made the surface flash on every hop
+   * between the home screen and a nested one. One instance with `screenKey`
+   * swapped instead keeps the panel and leaves the query input focused.
+   */
+  let spotlightPalette = $derived.by((): CommandPaletteProps => {
+    /** What every spotlight screen shares; each screen adds its own list. */
+    const shell: Omit<CommandPaletteProps, 'actions' | 'onSelect'> = {
+      open: true,
+      screenKey: spotlightScreenId ?? 'actions',
+      onClose: closeSpotlight,
+      onRestoreFocus: restorePaletteFocus
+    }
+
+    switch (spotlightScreenId) {
+      case 'files':
+        return {
+          ...shell,
+          actions: fileSearch.actions,
+          title: 'Search files across projects',
+          placeholder: 'Type at least two characters…',
+          emptyLabel: fileSearch.loading ? 'Searching project files…' : 'No matching files',
+          headerIcon: FileSearch,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
+          serverFiltered: true,
+          projects: scopeState.projects,
+          selectedProjectIds: fileSearch.projectIds,
+          onSelectedProjectsChange: (projectIds) => fileSearch.setScope(projectIds),
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => fileSearch.handleQuery(query),
+          onSelect: (selection) => fileSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'threads':
+        return {
+          ...shell,
+          actions: threadSearch.actions,
+          title: 'Search threads across projects',
+          placeholder: 'Search thread titles and messages across all projects…',
+          emptyLabel: threadSearch.loading
+            ? 'Searching threads…'
+            : 'Type at least two characters to search all projects',
+          headerIcon: MessagesSquare,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
+          serverFiltered: true,
+          projects: scopeState.projects,
+          selectedProjectIds: threadSearch.projectIds,
+          onSelectedProjectsChange: (projectIds) => threadSearch.setScope(projectIds),
+          onBack: backToSpotlightHome,
+          onQueryChange: (query) => threadSearch.handleQuery(query),
+          onSelect: (selection) => threadSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'projects':
+        return {
+          ...shell,
+          actions: projectSwitch.actions,
+          title: 'Switch project',
+          placeholder: 'Search projects…',
+          emptyLabel: 'No matching projects',
+          headerIcon: FolderKanban,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-success/25 bg-success/10 text-success',
+          onBack: backToSpotlightHome,
+          onSelect: (selection) => projectSwitch.select(selection),
+          closeOnSelect: false
+        }
+      default:
+        return {
+          ...shell,
+          actions: paletteActions,
+          title: 'Search actions',
+          placeholder: 'Search actions, threads, and files…',
+          emptyLabel: 'No matching actions',
+          onSelect: handlePaletteSelection,
+          shortcutLabel: 'Ctrl K'
+        }
+    }
+  })
 
   /** Content view to return to when leaving Settings or Scope   persisted in the
    *  recovery snapshot so a restart made while on a Settings page or the Scope
@@ -424,6 +534,9 @@
       case 'app:new-project':
         openNewProjectSpotlight()
         return
+      case 'app:switch-project':
+        projectSwitch.openPalette()
+        return
       case 'app:new-chat':
         navigate('chats')
         workspaceState.requestNewChat()
@@ -531,27 +644,30 @@
   }
 
   function toggleCommandPalette(): void {
-    if (fileSearch.paletteOpen) {
-      fileSearch.close()
+    // A nested screen steps back to the actions list; the actions list closes.
+    if (spotlightScreenId === 'actions') {
+      closeSpotlight()
+      return
     }
-    if (threadSearch.paletteOpen) {
-      threadSearch.close()
-    }
-    if (commandPaletteOpen) {
-      commandPaletteOpen = false
+    if (spotlightScreenId) {
+      backToSpotlightHome()
       return
     }
     capturePaletteFocus()
     commandPaletteOpen = true
   }
 
-  function backToCommandPaletteFromFileSearch(): void {
-    fileSearch.close()
-    commandPaletteOpen = true
+  /** Close the whole spotlight, whichever screen is on top. */
+  function closeSpotlight(): void {
+    commandPaletteOpen = false
+    if (fileSearch.paletteOpen) fileSearch.close()
+    if (threadSearch.paletteOpen) threadSearch.close()
+    if (projectSwitch.paletteOpen) projectSwitch.close()
   }
 
-  function backToCommandPaletteFromThreadSearch(): void {
-    threadSearch.close()
+  /** Step back to the actions list from a nested spotlight screen. */
+  function backToSpotlightHome(): void {
+    closeSpotlight()
     commandPaletteOpen = true
   }
 
@@ -659,6 +775,61 @@
     }
   }
 
+  /**
+   * Focus a project picked from the Switch project spotlight.
+   *
+   * The scoped threads view keeps its docked sidebar: the picked project becomes
+   * the docked scope and the conversation is cleared, so the sidebar shows the
+   * new project's scoped threads. Every other view lands on the Projects view
+   * with the project's most recent thread open, matching how focusing a project
+   * already works elsewhere (OS hand-off, existing-project spotlight, header tabs).
+   */
+  function focusProjectFromSpotlight(project: Project): void {
+    const scopedThreadsActive =
+      (activeView === 'projects' || activeView === 'projects-scope') &&
+      scopeState.sidebarContext !== null
+    const iconUrl =
+      scopeState.projects.find((candidate) => candidate.id === project.id)?.iconUrl ?? null
+
+    if (scopedThreadsActive) {
+      void scopeState.activateProject(project.id)
+      workspaceState.clearThread()
+      workspaceState.activeProject = project
+      workspaceState.activeProjectIconUrl = iconUrl
+      rendererRecovery.setSelectedProject(project.id)
+      scopeState.showSidebarForProject(project.id)
+      return
+    }
+
+    // Navigate before selecting the thread so the shell's content-view reconcile
+    // never paints the Projects family's remembered thread for a frame.
+    const wasOnProjectsView = activeView === 'projects' || activeView === 'projects-scope'
+    if (!wasOnProjectsView) navigate('projects')
+    void scopeState.activateProject(project.id)
+
+    // Picking the project that is already focused keeps the conversation the user
+    // is reading instead of jumping to its latest thread.
+    if (wasOnProjectsView && workspaceState.selectedThread?.projectId === project.id) return
+
+    const thread =
+      scopeState.allScopeThreads
+        .filter(
+          (candidate) =>
+            candidate.projectId === project.id &&
+            !candidate.archived &&
+            !isOrchestrationChildThread(candidate)
+        )
+        .sort((left, right) => right.lastActivity - left.lastActivity)[0] ?? null
+    if (thread) {
+      workspaceState.openThread(thread, project, iconUrl)
+    } else {
+      workspaceState.clearThread()
+      workspaceState.activeProject = project
+      workspaceState.activeProjectIconUrl = iconUrl
+      rendererRecovery.setSelectedProject(project.id)
+    }
+  }
+
   function updateOnboardingStep(step: number): void {
     if (step === 4) navigate('chats')
     onboardingStep = step
@@ -690,26 +861,34 @@
   }
 
   /**
-   * Open a thread from a notification while preserving the current view:
+   * Open a thread from a notification while preserving the current view.
+   *
+   * The target view follows the thread's own family, so a deep link can never
+   * select a thread in a content view that does not own it:
+   * - Chat thread → switch to the chats view.
+   * - Assistant task → switch to the assistant view.
    * - Regular project view → stay there (no scope sidebar).
    * - Scope state / scope view → stay there and reveal the thread in the sidebar.
-   * - Threads view → stay there (no scope sidebar).
-   * - Chat notification → switch to the chats view.
+   * - Threads view → stay there (no scope sidebar), the project family's own timeline.
+   * - Settings or any other view → return to Projects for the thread.
    */
   async function openThreadFromNotification(
     thread: Thread,
     project: Project | null,
     temporaryChatId?: string
   ): Promise<void> {
-    const isChat = thread.projectId === INBOX_PROJECT_ID
+    const family = contentThreadFamily(thread)
     const inScopeState =
       activeView === 'scope' ||
       activeView === 'projects-scope' ||
       (activeView === 'projects' && Boolean(scopeState.sidebarContext))
 
-    if (isChat) {
-      // Chat notifications always land in the chats view.
+    if (family === 'chats') {
+      // A chat is only ever shown by the chats view.
       navigate('chats')
+    } else if (family === 'assistant') {
+      // An assistant task is only ever shown by the assistant view.
+      navigate('assistant')
     } else if (inScopeState) {
       // Stay in the scope state: reveal the thread in the scope sidebar.
       if (activeView !== 'projects') navigate('projects')
@@ -719,11 +898,10 @@
       // Stay in the threads view without entering the scope state.
       scopeState.clearSidebarContext()
     } else {
-      // Regular project view or a non-content view (chats or a settings page):
-      // stay or return to the last content view, never entering the scope state.
-      const target =
-        activeView === 'projects' || lastContentView === 'chats' ? 'projects' : lastContentView
-      if (target !== activeView) navigate(target)
+      // A project thread belongs in Projects, so return to it from Settings, the
+      // chats view, the assistant view, or any other out-of-family view rather
+      // than leaving it selected somewhere that cannot own it.
+      if (activeView !== 'projects') navigate('projects')
       scopeState.clearSidebarContext()
     }
 
@@ -816,17 +994,10 @@
    * actions and the native window close control.
    */
   function handleCloseShortcut(): void {
-    // App-managed palettes first   they float above every view.
-    if (fileSearch.paletteOpen) {
-      fileSearch.close()
-      return
-    }
-    if (threadSearch.paletteOpen) {
-      threadSearch.close()
-      return
-    }
-    if (commandPaletteOpen) {
-      commandPaletteOpen = false
+    // The spotlight is one surface: the close chord closes it whole, whichever
+    // screen is on top. Escape is the key that steps back between screens.
+    if (spotlightScreenId) {
+      closeSpotlight()
       return
     }
     // Reusable modals (Modal / DockableModal) register their close behavior.
@@ -944,7 +1115,7 @@
   /** Global application shortcuts. */
   function onKeydown(e: KeyboardEvent): void {
     const isMac = window.api?.windowInfo?.platform === 'darwin'
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    if (keymapState.matches('ui-modal-primary-action', e)) {
       // ⌘/Ctrl+Enter runs the topmost open modal's primary action. The shared
       // LIFO registry (modal-primary-action.svelte.ts) resolves which modal is
       // in focus; when no modal claims the chord, composers (chat send, git
@@ -959,7 +1130,7 @@
         return
       }
     }
-    if (e.key.toLowerCase() === 'w' && (isMac ? e.metaKey : e.ctrlKey)) {
+    if (keymapState.matches('nav-close-surface', e)) {
       // Primary path is the main process `before-input-event` → the
       // `window:closeShortcut` event. This is a fallback for platforms where
       // the key still reaches the renderer (the main process preventDefaults
@@ -973,13 +1144,13 @@
       handleCloseShortcut()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    if (keymapState.matches('nav-find', e)) {
       e.preventDefault()
       if (e.repeat) return
       handleFind()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 's') {
+    if (keymapState.matches('nav-toggle-right-sidebar', e)) {
       // Cmd/Ctrl+Shift+S toggles the right sidebar. Which panel it shows is
       // decided inside Workspace, which owns what the on-screen thread actually
       // offers (file tree, git, terminal, sources...), so the chord only
@@ -991,7 +1162,7 @@
       workspaceState.requestToggleContextSidebar()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 's') {
+    if (keymapState.matches('nav-toggle-left-sidebar', e)) {
       // On the plain workspace (no studio, no conflict being resolved, no dirty
       // file tab, no edited file opened from the OS) the Cmd/Ctrl+S save chord
       // is otherwise unused, so it folds/unfolds the left sidebar. Anywhere a
@@ -1017,13 +1188,13 @@
       sidebarState.toggle()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    if (keymapState.matches('nav-command-palette', e)) {
       e.preventDefault()
       if (e.repeat) return
       toggleCommandPalette()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+    if (keymapState.matches('nav-settings', e)) {
       e.preventDefault()
       navigate('settings')
     }
@@ -1033,30 +1204,33 @@
     // back/forward gesture API for non-Apple mice. Alt+Left/Alt+Right mirrors
     // the same convention on Windows/Linux.
     if (
-      (isMac && e.metaKey && (e.key === '[' || e.key === ']')) ||
-      (!isMac && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight'))
+      keymapState.matches('nav-history-back', e) ||
+      keymapState.matches('nav-history-forward', e)
     ) {
       e.preventDefault()
       if (e.repeat) return
-      if (e.key === '[' || e.key === 'ArrowLeft') void goBack()
+      if (keymapState.matches('nav-history-back', e)) void goBack()
       else void goForward()
     }
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+    if (
+      keymapState.matches('nav-new-project', e) ||
+      keymapState.matches('assistant-new-routine', e)
+    ) {
       e.preventDefault()
       if (e.repeat) return
       // The Assistant view owns Cmd/Ctrl+Shift+N for a new routine.
       if (activeView === 'assistant') {
-        if (commandPaletteOpen) commandPaletteOpen = false
+        if (spotlightScreenId) closeSpotlight()
         workspaceState.requestAssistantRoutine()
         return
       }
       // Cmd/Ctrl+Shift+N → new-project spotlight from any view except chats (inbox).
       if (activeView === 'chats') return
-      if (commandPaletteOpen) commandPaletteOpen = false
+      if (spotlightScreenId) closeSpotlight()
       openNewProjectSpotlight()
       return
     }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+    if (keymapState.matches('nav-new-thread', e) || keymapState.matches('assistant-new-task', e)) {
       e.preventDefault()
       if (e.repeat) return
 
@@ -1216,67 +1390,9 @@
       </div>
     {/if}
   </main>
-  {#if commandPaletteOpen}
+  {#if spotlightScreenId}
     {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
-      <CommandPalette
-        open={commandPaletteOpen}
-        actions={paletteActions}
-        title="Search actions"
-        placeholder="Search actions, threads, and files…"
-        emptyLabel="No matching actions"
-        onSelect={handlePaletteSelection}
-        onClose={() => (commandPaletteOpen = false)}
-        onRestoreFocus={restorePaletteFocus}
-        shortcutLabel="Ctrl K"
-      />
-    {/await}
-  {/if}
-  {#if fileSearch.paletteOpen}
-    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: FileSearchPalette }}
-      <FileSearchPalette
-        open={fileSearch.paletteOpen}
-        actions={fileSearch.actions}
-        title="Search files across projects"
-        placeholder="Type at least two characters…"
-        emptyLabel={fileSearch.loading ? 'Searching project files…' : 'No matching files'}
-        headerIcon={FileSearch}
-        headerIconBadge
-        headerIconBadgeClass="border-warning/25 bg-warning/10 text-warning"
-        serverFiltered
-        projects={scopeState.projects}
-        selectedProjectIds={fileSearch.projectIds}
-        onSelectedProjectsChange={(projectIds) => fileSearch.setScope(projectIds)}
-        onBack={backToCommandPaletteFromFileSearch}
-        onQueryChange={(query) => fileSearch.handleQuery(query)}
-        onSelect={(selection) => fileSearch.select(selection)}
-        closeOnSelect={false}
-        onClose={() => fileSearch.close()}
-      />
-    {/await}
-  {/if}
-  {#if threadSearch.paletteOpen}
-    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: ThreadSearchPalette }}
-      <ThreadSearchPalette
-        open={threadSearch.paletteOpen}
-        actions={threadSearch.actions}
-        title="Search threads across projects"
-        placeholder="Search thread titles and messages across all projects…"
-        emptyLabel={threadSearch.loading
-          ? 'Searching threads…'
-          : 'Type at least two characters to search all projects'}
-        headerIcon={MessagesSquare}
-        headerIconBadge
-        headerIconBadgeClass="border-info/25 bg-info/10 text-info"
-        serverFiltered
-        projects={scopeState.projects}
-        selectedProjectIds={threadSearch.projectIds}
-        onSelectedProjectsChange={(projectIds) => threadSearch.setScope(projectIds)}
-        onBack={backToCommandPaletteFromThreadSearch}
-        onQueryChange={(query) => threadSearch.handleQuery(query)}
-        onSelect={(selection) => threadSearch.select(selection)}
-        closeOnSelect={false}
-        onClose={() => threadSearch.close()}
-      />
+      <CommandPalette {...spotlightPalette} />
     {/await}
   {/if}
   {#if newProjectSpotlightOpen}
@@ -1374,6 +1490,13 @@
     <!-- Floats above every view so a confirmed batch keeps closing pull requests while the user works. -->
     {#await import('$lib/components/git/PrBatchDockHost.svelte') then { default: PrBatchDockHost }}
       <PrBatchDockHost />
+    {/await}
+  {/if}
+
+  {#if gitSyncJobs.jobs.length}
+    <!-- Floats above every view so a sync between two checkouts reports itself, and its outcome is never a dialog. -->
+    {#await import('$lib/components/git/GitSyncDockHost.svelte') then { default: GitSyncDockHost }}
+      <GitSyncDockHost />
     {/await}
   {/if}
 

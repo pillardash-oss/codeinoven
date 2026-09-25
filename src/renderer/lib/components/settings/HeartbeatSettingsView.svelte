@@ -21,6 +21,7 @@
   import Modal from '../ui/Modal.svelte'
   import type { HeartbeatConfig, ProviderCatalog, ThinkingLevel } from '$shared/types'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
+  import { formatDateTimeCompact, formatTimeOfDay } from '$shared/date-time-format'
 
   let providers = $state<ProviderCatalog[]>([])
   let providersLoading = $state(true)
@@ -63,22 +64,9 @@
     return catalog?.models.find((model) => model.id === modelId)?.name ?? modelId
   }
 
-  function formatTime(time: string): string {
-    const [hours, minutes] = time.split(':').map(Number)
-    return new Date(2000, 0, 1, hours, minutes).toLocaleTimeString(undefined, {
-      hour: 'numeric',
-      minute: '2-digit'
-    })
-  }
-
   function formatLastRun(config: HeartbeatConfig): string {
     if (!config.lastRun) return 'Never sent'
-    const when = new Date(config.lastRun.at).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit'
-    })
+    const when = formatDateTimeCompact(config.lastRun.at)
     return config.lastRun.success ? `Ponged ${when}` : `Failed ${when}`
   }
 
@@ -287,7 +275,7 @@
             <div class="mt-1.5 flex flex-wrap gap-1">
               {#each config.times as time (time)}
                 <span class="rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
-                  {formatTime(time)}
+                  {formatTimeOfDay(time)}
                 </span>
               {/each}
             </div>
@@ -436,11 +424,11 @@
             <span
               class="flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-[0.6875rem] text-muted"
             >
-              {formatTime(time)}
+              {formatTimeOfDay(time)}
               <button
                 type="button"
                 class="text-dimmed hover:text-foreground"
-                aria-label="Remove {formatTime(time)}"
+                aria-label="Remove {formatTimeOfDay(time)}"
                 onclick={() => removeDraftTime(time)}
               >
                 ×

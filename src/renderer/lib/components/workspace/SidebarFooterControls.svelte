@@ -10,7 +10,7 @@
     RefreshCw,
     Settings
   } from '@lucide/svelte'
-  import { keymapKeys } from '$lib/keymap/keymap'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { preloadSettingsChunk } from '$lib/page-preload'
   import { updaterState } from '$lib/stores/updater.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
@@ -30,7 +30,7 @@
     type="button"
     class="flex h-8 flex-1 items-center gap-2 rounded-lg px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
     title="Open settings"
-    data-shortcut={keymapKeys('nav-settings').join(',')}
+    data-shortcut={keymapState.keysFor('nav-settings').join(',')}
     onmouseenter={preloadSettingsChunk}
     onclick={() => navigate('settings')}
   >

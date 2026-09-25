@@ -1191,6 +1191,24 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
+   * Restart every session's RPC process so the next turn spawns the Pi runtime
+   * currently on disk. A session's client is long-lived (`pi --mode rpc` keeps
+   * the resumed native transcript in memory), so without this an updated Pi
+   * binary only reaches the app at the next launch.
+   */
+  override restartRuntime(): void {
+    for (const sessionId of [...this.rpcClients.keys()]) {
+      Logger.info('Restarting the Pi RPC process for a harness restart', { sessionId })
+      // Dispose first so the exit event the kill raises cannot re-enter the
+      // teardown, then run the same settlement a crashed process gets: a turn
+      // that was mid-flight must not stay "working" until the watchdog fires.
+      this.rpcClients.get(sessionId)?.dispose()
+      this.settleDeadRpcClient(sessionId)
+    }
+    super.restartRuntime()
+  }
+
+  /**
    * Quota telemetry for the battery popover: the latest provider rate-limit
    * windows (keyed by pi provider id, shared across projects) plus prepaid
    * credits for known gateways, and live context stats when a session for
@@ -2204,6 +2222,16 @@ export class PiDriver extends PersistentCliDriver {
     // delivering its exit event. Never let that stale callback dispose the
     // replacement client or turn its next request into "Pi process disposed".
     if (this.rpcClients.get(sessionId) !== exitedClient) return
+    this.settleDeadRpcClient(sessionId)
+  }
+
+  /**
+   * Tear down everything that belonged to a session whose RPC process is gone:
+   * the client record, its nested workers, and any turn it still owned. Shared
+   * by a crashed process and a deliberate harness restart so both settle the
+   * same way instead of leaving a mid-turn session stuck.
+   */
+  private settleDeadRpcClient(sessionId: string): void {
     // Drop the dead client so the next turn spawns a fresh RPC process and
     // resumes the persisted native transcript instead of failing on a dead
     // pipe (or worse, silently continuing a context-less session).

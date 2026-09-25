@@ -19,8 +19,13 @@
   import { formatRemaining } from '../shared/card-timer'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import AgentCardChatActions from './AgentCardChatActions.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
-  import type { AgentSecretSubmission, PendingAgentQuestionRequest } from '$shared/types'
+  import type {
+    AgentQuestion,
+    AgentSecretSubmission,
+    PendingAgentQuestionRequest
+  } from '$shared/types'
 
   interface Props {
     request: PendingAgentQuestionRequest
@@ -34,9 +39,24 @@
     onAlternative: (requestId: string, alternative: string) => Promise<void>
     onDismiss: (requestId: string) => Promise<void>
     scope: SpeechScope
+    /** Opens the explain side chat for the current secret, pausing its timeout. */
+    onExplain?: (requestId: string, question: AgentQuestion) => void
+    /** Opens a quick chat for the current secret, pausing its timeout. */
+    onQuickChat?: (requestId: string, question: AgentQuestion) => void
+    /** Pauses the request countdown while a temporary chat is open. */
+    onPause?: (requestId: string, questionIndex: number) => void
   }
 
-  let { request, onSubmit, onAlternative, onDismiss, scope }: Props = $props()
+  let {
+    request,
+    onSubmit,
+    onAlternative,
+    onDismiss,
+    scope,
+    onExplain,
+    onQuickChat,
+    onPause
+  }: Props = $props()
 
   // The parent keys this component by request id, so these drafts belong to one
   // authoritative pending request for the lifetime of the component.
@@ -90,6 +110,17 @@
   function cancelAlternative(): void {
     showingAlternative = false
     alternative = ''
+  }
+
+  /**
+   * Open a temporary chat for the current secret. The countdown is paused first
+   * (the same interaction the question card makes) so the card cannot expire
+   * while the user reads the chat.
+   */
+  function openSecretChat(onOpen: (requestId: string, question: AgentQuestion) => void): void {
+    if (working) return
+    onPause?.(request.requestId, currentIndex)
+    onOpen(request.requestId, question)
   }
 
   async function handleAlternative(): Promise<void> {
@@ -329,11 +360,27 @@
     </div>
   {/if}
 
-  <div class="flex min-w-0 items-center justify-between gap-3 border-t px-4 py-2.5">
-    <p class="flex min-w-0 items-center gap-1.5 text-xs text-muted">
-      <ShieldCheck size={13} class="shrink-0 text-primary" />
-      <span class="min-w-0 truncate">Secrets are not sent to the agent</span>
-    </p>
+  <div
+    class="secret-card-footer flex min-w-0 items-center justify-between gap-3 border-t px-4 py-2.5"
+  >
+    <div class="flex min-w-0 items-center gap-2">
+      <AgentCardChatActions
+        onExplain={onExplain ? () => openSecretChat(onExplain) : undefined}
+        onQuickChat={onQuickChat ? () => openSecretChat(onQuickChat) : undefined}
+        subject="secret request"
+        disabled={working}
+      />
+      <p
+        class="flex min-w-0 items-center gap-1.5 text-xs text-muted"
+        title="Secrets are stored in your encrypted vault and are never sent to the agent"
+        aria-label="Secrets are stored in your encrypted vault and are never sent to the agent"
+      >
+        <ShieldCheck size={13} class="shrink-0 text-primary" />
+        <span class="agent-card-footer-note-text min-w-0 truncate"
+          >Secrets are not sent to the agent</span
+        >
+      </p>
+    </div>
     <div class="flex min-w-0 shrink items-center justify-end gap-2">
       {#if showingAlternative}
         <button
@@ -390,3 +437,20 @@
     </div>
   </div>
 </section>
+
+<style>
+  /*
+    Same footer contract as the question card: the row is the query container so
+    the shared chat actions (and the security note here) give way before the
+    card's own controls. The shield keeps its tooltip when the note text hides.
+  */
+  .secret-card-footer {
+    container: agent-card-footer / inline-size;
+  }
+
+  @container agent-card-footer (max-width: 40rem) {
+    .agent-card-footer-note-text {
+      display: none;
+    }
+  }
+</style>

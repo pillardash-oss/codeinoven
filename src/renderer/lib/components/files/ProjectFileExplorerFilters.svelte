@@ -1,5 +1,6 @@
 <script lang="ts">
   import { FileDiff, GitMerge, Search, X } from '@lucide/svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Switch from '../ui/Switch.svelte'
 
   interface Props {
@@ -71,7 +72,8 @@
         placeholder="Search files and folders…"
         value={filterQuery}
         oninput={onFilterInput}
-        onkeydown={(event: KeyboardEvent) => event.key === 'Escape' && onCloseFilter()}
+        onkeydown={(event: KeyboardEvent) =>
+          keymapState.matches('files-tree-filter-close', event) && onCloseFilter()}
       />
       <button
         type="button"

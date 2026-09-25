@@ -167,7 +167,7 @@ Each store is the composition root over its own prefixed modules:
 `git.svelte.ts` over the `git-store-*` modules.
 
 **App shell and Spec Studio**
-`src/renderer/App.svelte` composes `app-{defaults,palette-actions,file-search,thread-search,os-handoff,ipc-subscriptions}`.
+`src/renderer/App.svelte` composes `app-{defaults,palette-actions,file-search,thread-search,project-switch,os-handoff,ipc-subscriptions}`.
 `components/specs/SpecStudio.svelte` composes
 `SpecStudio{Document,ResolutionSection,ContextSection,EditableListSection,EditableMiniList,AnnotationBubbles}.svelte`
 plus `spec-studio-{document-anchors,draft-edits,formatting,context-picker}`.
@@ -264,7 +264,7 @@ Reuse before you create:
 - **Tooltips are never native.** The native `title` tooltip is unreliable. The custom tooltip system (`Tooltip`/`TooltipHost`) shows a reliable tooltip after 1500ms of hover for every element with a `title` attribute, so keep using `title`/`aria-label` and never build ad-hoc tooltip behavior.
 - If a component will be used in two or more places, make it reusable.
 - Use `StatusPill` for statuses instead of freeform colored text.
-- **One modal shell, many placements.** Every surface that blocks the window renders through the canonical `Modal` (`src/renderer/lib/components/ui/Modal.svelte`), directly or as a thin variant on top of it: `ConfirmDialog`, `SideSheet`, `BottomSheet`, `ActionSheet`, the full screen editors and readers, the media lightbox, and the command palettes. The base owns the portal, the scrim, the `z-60` layer, the panel shell (header, scrolling body, and a footer that never scrolls), initial focus, Escape, the backdrop, Cmd/Ctrl+W and Cmd/Ctrl+Enter, and browser-view suppression. A variant only picks a `placement` (`center`, `right`, `bottom`, `palette`, `fullscreen`), a `size`, and whether it draws the canonical `chrome` or owns its own header. Never hand-roll an overlay, and never import bits-ui's `Dialog` outside `Modal`. `DockableModal` is the exception: it is a draggable, dockable, non-blocking panel, not a modal.
+- **One modal shell, many placements.** Every surface that blocks the window renders through the canonical `Modal` (`src/renderer/lib/components/ui/Modal.svelte`), directly or as a thin variant on top of it: `ConfirmDialog`, `SideSheet`, `BottomSheet`, `ActionSheet`, the full screen editors and readers, the media lightbox, and the command palettes. The base owns the portal, the scrim, the `z-60` layer, the panel shell (header, scrolling body, and a footer that never scrolls), initial focus, Escape, the backdrop, Cmd/Ctrl+W and Cmd/Ctrl+Enter, and browser-view suppression. A variant only picks a `placement` (`center`, `right`, `bottom`, `palette`, `fullscreen`), a `size`, and whether it draws the canonical `chrome` or owns its own header. A surface whose Escape means "go back" claims the key through the base's `onEscapeKeydown` hook (the command palette's nested screens do this: the first Escape returns to the actions list, the next one closes the palette) instead of hand-rolling an Escape listener. Never hand-roll an overlay, and never import bits-ui's `Dialog` outside `Modal`. `DockableModal` is the exception: it is a draggable, dockable, non-blocking panel, not a modal.
 - Destructive actions confirm through the shared `ConfirmDialog` (`src/renderer/lib/components/ui/ConfirmDialog.svelte`) instead of a hand-rolled modal footer.
 - Empty states must explain what is missing and offer one concrete next action.
 
@@ -286,6 +286,7 @@ Reuse before you create:
 - Side sheets for focused editing and detail workflows.
 - Backdrops use tokenized overlays with light blur where established.
 - Navigation is instant and app-like   never full page reloads for in-app actions.
+- **The spotlight is one mounted surface, not one per screen.** Its home screen and its nested screens (file search, thread search, switch project) are content swapped inside a single `Modal` shell, driven by one screen id in `src/renderer/App.svelte`. Unmounting one palette and mounting the next threw the scrim, the panel, the scroll lock and the focus away and rebuilt them, which flashed on every hop; one instance with a swapped `screenKey` keeps the panel, the query input and its focus in place.
 - Route/view metadata should live in a central registry; header titles derive from the active view, never hardcoded copies that can drift.
 
 ### 3.8 Motion
@@ -311,6 +312,7 @@ Motion is subtle and functional:
 - Empty states say what is missing and what to do next.
 - No generic marketing copy inside the app.
 - Absolute dates and times read the same on every machine: `src/lib/date-time-format.ts` renders `Sep 23, 2026, 8:05 AM`. Never hand a date to a bare `toLocaleString()`, which falls back to the operating system's locale and its numeric, seconds-bearing `9/23/2026, 8:05:00 AM` shape.
+- Clocks are 12-hour with am/pm on every machine. The same module owns the shapes (`formatTime` renders `8:05 AM`), and a time persisted in the machine format `HH:mm` goes through `formatTimeOfDay`, so a stored `08:05` reads `8:05 AM` and never `08:05`. Never leave the locale argument as `undefined` or `[]`: that hands the clock to the operating system, and a 24-hour locale prints `08:05`.
 
 ### 3.11 Accessibility
 
@@ -364,12 +366,6 @@ Unless explicitly asked to run against the whole project:
 | Auto-fix formatting | `bun run format [FILES]` |
 | Tests               | `bun run test [FILES]`   |
 
-- **Never run `bun run dev`** as a verification step; use `bun run check` instead.
-- Only check/lint/format/test the files you worked on and the files that import them.
-- Run existing tests **before** changing code (baseline) and **after** (regression check).
-- Test output goes to `agent-out/test-result/` named `(feature)-baseline.txt`, `(feature)-(n).txt`, or `(feature)-final.txt`. Grep out only the failures/warnings you need   do not flood context with full logs.
-- Do not write new tests unless explicitly asked.
-- Before declaring any work done: run the applicable check, lint, format, and test commands and fix all errors.
 
 ### 4.4 Architecture rules
 
@@ -437,7 +433,7 @@ These rules bind every AI agent contributing to this repository. The operational
 
 - Before starting a task: write a plan file with the current phase declared at the top, checkbox tasks, and mark items in-progress/completed as you go.
 - After finishing: update the progress file with what was done and what's next.
-- All documentation output (plan*.md, progress*.md, test output, walkthroughs) lives in `agent-out/`   never pollute the repo root.
+- All documentation output (plan*.md, progress*.md, test output, walkthroughs) lives under `.cio/`   never pollute the repo root.
 - If plan/progress files were overwritten by someone else since your last edit, create `plan-[feature].md` / `progress-[feature].md` instead. Never destroy another agent's records.
 - Work phases to exhaustion   don't stop halfway through a declared phase.
 - If confused at any point, **ask clarifying questions. Never assume.**

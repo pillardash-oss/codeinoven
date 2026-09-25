@@ -1,6 +1,11 @@
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
+import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '$shared/prototypes/prototype-cdn'
 import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
-import { DEFAULT_MAX_CONFLICT_FILE_BYTES, type AppConfig } from '$shared/types'
+import {
+  DEFAULT_MAX_CONFLICT_FILE_BYTES,
+  DEFAULT_IN_APP_NOTIFICATION_SOUND,
+  type AppConfig
+} from '$shared/types'
 
 /** Baseline configuration used until the main process returns the persisted one. */
 export const defaultConfig: AppConfig = {
@@ -19,6 +24,7 @@ export const defaultConfig: AppConfig = {
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
+  design: { assignments: [] },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
@@ -33,5 +39,8 @@ export const defaultConfig: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
+  allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
+  prototypeCdnAllowlist: [],
+  inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
   sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
 }

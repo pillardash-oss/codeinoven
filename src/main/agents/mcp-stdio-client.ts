@@ -24,10 +24,29 @@ export interface McpTool {
   inputSchema?: Record<string, unknown>
 }
 
+/** What a server reported about itself while answering `initialize`. */
+export interface McpServerInfo {
+  name?: string
+  version?: string
+}
+
 export interface McpClient {
   listTools(): Promise<McpTool[]>
   callTool(name: string, input: Record<string, unknown>): Promise<unknown>
   close(): Promise<void>
+  /** Filled once the handshake completes; a connection test reports it back. */
+  readonly serverInfo?: McpServerInfo
+}
+
+/** Read `result.serverInfo` from an `initialize` response, ignoring a malformed one. */
+export function parseMcpServerInfo(result: unknown): McpServerInfo {
+  if (!isRecord(result)) return {}
+  const info = result['serverInfo']
+  if (!isRecord(info)) return {}
+  return {
+    ...(typeof info['name'] === 'string' ? { name: info['name'] } : {}),
+    ...(typeof info['version'] === 'string' ? { version: info['version'] } : {})
+  }
 }
 
 /**
@@ -36,6 +55,8 @@ export interface McpClient {
  * owns one spawned child process.
  */
 export class StdioMcpClient implements McpClient {
+  serverInfo: McpServerInfo = {}
+
   private nextId = 1
   private buffer = ''
   private stderrTail = ''
@@ -71,11 +92,13 @@ export class StdioMcpClient implements McpClient {
       }),
       command
     )
-    await client.request('initialize', {
-      protocolVersion: '2025-03-26',
-      capabilities: {},
-      clientInfo: { name: 'codeinoven-utility-gateway', version: '1' }
-    })
+    client.serverInfo = parseMcpServerInfo(
+      await client.request('initialize', {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'codeinoven-utility-gateway', version: '1' }
+      })
+    )
     client.notify('notifications/initialized', {})
     return client
   }

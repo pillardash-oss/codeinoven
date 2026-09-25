@@ -6,6 +6,7 @@ import type {
   SessionAgentEvent
 } from '../../../lib/types'
 import { parseRecord } from '../../../lib/agent-interactions'
+import { base64Kilobytes } from '../../../lib/image-payload'
 import {
   classifyProviderIssue,
   parseUsageResetAt,
@@ -89,6 +90,18 @@ function serializeContent(value: unknown): string | undefined {
       .map((entry) => {
         if (typeof entry === 'string') return entry
         const item = record(entry)
+        // An image entry reaches `JSON.stringify` below as its whole base64
+        // payload, and this text is what every durable store then keeps: the
+        // driver session record, the SQLite mirror, and the durable stream log.
+        // One measured 4K capture contributed 1.31M characters, which the driver
+        // session rewrote on every persist of an 11.6MB file. No reader wants
+        // those bytes: the model is handed the picture as a real image content
+        // part, and the trace renders the output as collapsed text. The durable
+        // record keeps the media type and the size instead.
+        if (item?.['type'] === 'image' && typeof item['data'] === 'string') {
+          const data = item['data']
+          return `[image omitted from the persisted record: ${stringValue(item['mimeType']) ?? 'image'}, ${base64Kilobytes(data.length)} KB]`
+        }
         return (
           stringValue(item?.['text']) ?? stringValue(item?.['thinking']) ?? JSON.stringify(item)
         )
@@ -98,6 +111,52 @@ function serializeContent(value: unknown): string | undefined {
     return text || undefined
   }
   return undefined
+}
+
+/**
+ * Signature of one published terminal tool result.
+ *
+ * `turn_end` repeats every tool result after `tool_execution_end` already
+ * published it, exactly as it repeats the final request's usage. A matching
+ * signature therefore marks a repeat rather than a new result. Status and
+ * lengths are enough to tell them apart: both branches serialize the same Pi
+ * result for the same call id, so a repeat is byte-identical, and any result
+ * that differs still publishes because its signature differs.
+ */
+function toolResultSignature(
+  status: AgentToolStatus,
+  output: string | undefined,
+  error: string | undefined
+): string {
+  return `${status}|${output?.length ?? 0}|${error?.length ?? 0}`
+}
+
+/** Record that this turn already published a call's terminal tool result. */
+function markToolResultPublished(
+  turnState: PiTurnState,
+  callId: string,
+  status: AgentToolStatus,
+  output: string | undefined,
+  error: string | undefined
+): void {
+  const published = turnState.publishedToolResults ?? new Set<string>()
+  turnState.publishedToolResults = published
+  published.add(`${callId}|${toolResultSignature(status, output, error)}`)
+}
+
+/** True when this turn already published exactly this terminal tool result. */
+function toolResultAlreadyPublished(
+  turnState: PiTurnState,
+  callId: string,
+  status: AgentToolStatus,
+  output: string | undefined,
+  error: string | undefined
+): boolean {
+  return (
+    turnState.publishedToolResults?.has(
+      `${callId}|${toolResultSignature(status, output, error)}`
+    ) === true
+  )
 }
 
 /** Find the running tool part for a call id so results preserve its input. */
@@ -218,6 +277,7 @@ export function mapPiRecord(
     turnState.announcedStreamParts?.clear()
     turnState.usageTotals = undefined
     turnState.usageSignature = undefined
+    turnState.publishedToolResults = undefined
     return { events: [] }
   }
 
@@ -450,6 +510,11 @@ export function mapPiRecord(
     const endArgs = record(entry['args'])
     const input =
       endArgs && Object.keys(endArgs).length > 0 ? endArgs : (existing?.state.input ?? {})
+    const status: AgentToolStatus = failed ? 'error' : 'completed'
+    const error = failed ? stringValue(result?.['error']) : undefined
+    // This is the terminal result for the call, so the `turn_end` repeat below
+    // can recognize it and skip a second identical record.
+    markToolResultPublished(turnState, callId, status, output, error)
     return {
       events: [
         {
@@ -462,10 +527,10 @@ export function mapPiRecord(
             callID: callId,
             tool: toolName,
             state: {
-              status: failed ? 'error' : 'completed',
+              status,
               input,
               ...(output ? { output } : {}),
-              ...(failed ? { error: stringValue(result?.['error']) } : {})
+              ...(failed ? { error } : {})
             }
           }
         }
@@ -519,6 +584,13 @@ export function mapPiRecord(
         continue
       }
       const existing = existingToolPart
+      const status: AgentToolStatus = failed ? 'error' : 'completed'
+      const error = failed ? serializeContent(result?.['content']) : undefined
+      // `turn_end` repeats every tool result that `tool_execution_end` already
+      // published, which wrote a second identical record per call to the durable
+      // stream log   ~100KB for one 4K screenshot. A result no end event covered,
+      // as in a resumed transcript, is not marked and still publishes.
+      if (toolResultAlreadyPublished(turnState, callId, status, output, error)) continue
       events.push({
         type: 'message.part.updated',
         sessionId: context.sessionId,
@@ -529,10 +601,10 @@ export function mapPiRecord(
           callID: callId,
           tool: existing?.tool ?? stringValue(result?.['toolName']) ?? 'tool',
           state: {
-            status: failed ? 'error' : 'completed',
+            status,
             input: existing?.state.input ?? {},
             ...(output ? { output } : {}),
-            ...(failed ? { error: serializeContent(result?.['content']) } : {})
+            ...(failed ? { error } : {})
           }
         }
       })

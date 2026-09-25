@@ -1,15 +1,5 @@
 <script lang="ts">
-  import {
-    Check,
-    ChevronLeft,
-    ChevronRight,
-    Clock,
-    HelpCircle,
-    MessageSquareDashed,
-    Paperclip,
-    Send,
-    X
-  } from '@lucide/svelte'
+  import { Check, ChevronLeft, ChevronRight, Clock, Paperclip, Send, X } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import { onDestroy } from 'svelte'
   import { SvelteSet, createSubscriber } from 'svelte/reactivity'
@@ -29,6 +19,8 @@
     ThreadSettings
   } from '$shared/types'
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
+  import AgentCardChatActions from './AgentCardChatActions.svelte'
+  import { fitQuestionCard } from './question-card-fit'
 
   interface Props {
     request: PendingAgentQuestionRequest
@@ -390,13 +382,14 @@
   out:slide={dismissSlide()}
   data-drop-region={question.fileRequest ? 'file-request-card' : undefined}
   class={[
-    'relative overflow-hidden rounded-xl border bg-surface shadow-sm',
+    'relative flex flex-col overflow-hidden rounded-xl border bg-surface shadow-sm',
     draggingFiles && 'border-primary'
   ]}
   aria-label="Agent question"
   ondragover={handleCardDragOver}
   ondragleave={handleCardDragLeave}
   ondrop={handleCardDrop}
+  {@attach fitQuestionCard}
 >
   {#if draggingFiles}
     <div
@@ -408,7 +401,7 @@
     </div>
   {/if}
 
-  <div class="flex items-center justify-between gap-3 border-b px-4 py-2.5">
+  <div class="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2.5">
     <div class="min-w-0">
       <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
         {question.header ?? 'Question'}
@@ -461,8 +454,10 @@
   </div>
 
   {#if !folded}
-    <div transition:slide={foldSlide()}>
-      <div class="space-y-3 p-4">
+    <div class="flex min-h-0 flex-1 flex-col" transition:slide={foldSlide()}>
+      <!-- The scrollable half: the question, its options and the custom answer
+         give way first, while the header above and the footer below stay put. -->
+      <div class="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-4">
         <div class="space-y-1">
           <!-- Card-scale markdown: the same renderer the transcript uses, sized by
              the text utility on the surface around it. -->
@@ -658,38 +653,16 @@
          The chat actions give way first, the speech control keeps its slot, and
          the model switch ellipsizes instead of pushing into its neighbour. -->
       <div
-        class="question-card-footer flex min-w-0 items-center justify-between gap-3 border-t px-4 py-2.5"
+        class="question-card-footer flex min-w-0 shrink-0 items-center justify-between gap-3 border-t px-4 py-2.5"
       >
         <div class="flex min-w-0 items-center gap-2">
           {#if onExplain || onQuickChat}
-            <div class="flex min-w-0 items-center gap-1">
-              {#if onExplain}
-                <button
-                  type="button"
-                  class="flex h-7 min-w-0 shrink items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={working}
-                  onclick={() => openQuestionChat(onExplain)}
-                  title="Explain this question to help you decide"
-                  aria-label="Explain this question in a temporary read-only chat"
-                >
-                  <HelpCircle size={13} class="shrink-0" />
-                  <span class="question-footer-action-label min-w-0 truncate">Explain</span>
-                </button>
-              {/if}
-              {#if onQuickChat}
-                <button
-                  type="button"
-                  class="flex h-7 min-w-0 shrink items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                  disabled={working}
-                  onclick={() => openQuestionChat(onQuickChat)}
-                  title="Start a temporary read-only quick chat about this question"
-                  aria-label="Start a temporary read-only quick chat about this question"
-                >
-                  <MessageSquareDashed size={13} class="shrink-0" />
-                  <span class="question-footer-action-label min-w-0 truncate">Quick chat</span>
-                </button>
-              {/if}
-            </div>
+            <AgentCardChatActions
+              onExplain={onExplain ? () => openQuestionChat(onExplain) : undefined}
+              onQuickChat={onQuickChat ? () => openQuestionChat(onQuickChat) : undefined}
+              subject="question"
+              disabled={working}
+            />
           {:else}
             <p class="min-w-0 truncate text-[0.6875rem] text-muted">
               {#if !currentAnswers.length}
@@ -740,19 +713,24 @@
 
 <style>
   /*
-    The footer row is the query container so its controls retreat before the row
-    runs out of room (a wide side panel, a split pane). The chat actions drop
-    their words first: the glyph and the tooltip always still say what they do,
-    which leaves the speech control and the model switch their space instead of
-    letting one control overlap the other.
+    The card never grows past the room its conversation pane offers, which
+    `question-card-fit` measures and writes here; the viewport clamp is the
+    fallback for the first frame and for a host that renders no pane. The body
+    scrolls inside this ceiling, so a long option list stays reachable and the
+    header and footer stay pinned.
   */
-  .question-card-footer {
-    container: question-card-footer / inline-size;
+  section {
+    max-height: var(--question-card-max-height, calc(100dvh - 6rem));
   }
 
-  @container question-card-footer (max-width: 40rem) {
-    .question-footer-action-label {
-      display: none;
-    }
+  /*
+    The footer row is the query container so its controls retreat before the row
+    runs out of room (a wide side panel, a split pane). The shared chat actions
+    (`AgentCardChatActions`) drop their words first: the glyph and the tooltip
+    always still say what they do, which leaves the speech control and the model
+    switch their space instead of letting one control overlap the other.
+  */
+  .question-card-footer {
+    container: agent-card-footer / inline-size;
   }
 </style>

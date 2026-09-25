@@ -39,6 +39,46 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+/** A `projects` row exactly as SQLite hands it back (`ProjectRepo` maps snake_case). */
+function projectRow(path: string) {
+  return {
+    id: 'p1',
+    name: 'Project',
+    path,
+    source: 'local',
+    host: null,
+    provider_id: 'openai',
+    workflow_id: 'default',
+    thread_limit: 10,
+    hidden: 0,
+    pinned: 0,
+    sort_order: null,
+    icon: null,
+    color: null,
+    icon_type: null,
+    change_tracking_mode: 'manual',
+    has_deployments: 0,
+    created_at: Date.now(),
+    updated_at: Date.now()
+  }
+}
+
+/**
+ * Database double for the PTY paths under test. `ProjectManager.getProject`
+ * reads the project on the database worker, so the double has to answer
+ * `queryViaWorker` with the same bounded result shape the real `Database` does.
+ */
+function fakeDatabase(path: string) {
+  const row = projectRow(path)
+  return {
+    get: vi.fn().mockReturnValue(row),
+    run: vi.fn(),
+    init: vi.fn().mockResolvedValue(undefined),
+    close: vi.fn(),
+    queryViaWorker: vi.fn().mockResolvedValue({ ok: true, rows: [row], truncated: false })
+  }
+}
+
 function fakePty() {
   const handlers: Record<string, () => void> = {}
   return {
@@ -55,23 +95,7 @@ describe('PtyService scope roots', () => {
   it('creates sessions in the requested scope root and keeps it for the lifetime', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cio-pty-'))
     const worktree = mkdtempSync(join(tmpdir(), 'cio-pty-wt-'))
-    const db = {
-      get: vi.fn().mockReturnValue({
-        id: 'p1',
-        name: 'Project',
-        path: root,
-        source: 'local',
-        hidden: false,
-        providerId: 'openai',
-        workflowId: 'default',
-        threadLimit: 10,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      }),
-      run: vi.fn(),
-      init: vi.fn().mockResolvedValue(undefined),
-      close: vi.fn()
-    }
+    const db = fakeDatabase(root)
     const scopeRoots = {
       resolve: vi.fn().mockResolvedValue({ ok: true, root: worktree })
     }
@@ -95,23 +119,7 @@ describe('PtyService scope roots', () => {
 
   it('falls back to the project directory without a scope', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cio-pty-fb-'))
-    const db = {
-      get: vi.fn().mockReturnValue({
-        id: 'p1',
-        name: 'Project',
-        path: root,
-        source: 'local',
-        hidden: false,
-        providerId: 'openai',
-        workflowId: 'default',
-        threadLimit: 10,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      }),
-      run: vi.fn(),
-      init: vi.fn().mockResolvedValue(undefined),
-      close: vi.fn()
-    }
+    const db = fakeDatabase(root)
     const storage = new StorageEngine(root)
     ptySpawn.mockImplementation(() => fakePty())
     const service = new PtyService(storage, db as never, undefined)

@@ -1,4 +1,4 @@
-import { isLocalDevelopmentUrl } from '../../lib/local-development-url'
+import { isBlockedFetchHost } from '../../lib/local-development-url'
 import { fetchImageAsDataUrl } from '../editor/favicon-service'
 import { Logger } from '../system/logger'
 
@@ -118,49 +118,8 @@ function validatedImageUrl(rawUrl: string): URL | null {
   }
   if (url.protocol !== 'https:') return null
   if (url.hostname.length === 0) return null
-  if (isBlockedHost(url)) return null
+  if (isBlockedFetchHost(url)) return null
   return url
-}
-
-/**
- * Whether the host is this machine, the local network or a link-local address.
- *
- * The WHATWG URL parser already normalizes exotic IPv4 spellings (`0x7f.1`,
- * `2130706433`) to dotted decimal, so a literal check on the serialized hostname
- * cannot be spelled around. `isLocalDevelopmentUrl` owns the repository's notion of
- * loopback/RFC1918/`.localhost`; this adds the ranges that matter for an outbound
- * fetch but not for a browser address bar: link-local IPv4 (where cloud metadata
- * services live), IPv6 link-local/unique-local, and IPv4-mapped IPv6.
- *
- * This is a literal-IP guard only, applied to the URL the markdown names. It does
- * not resolve DNS and it does not re-check redirects, so a public hostname that
- * resolves (or redirects) to an internal address is not covered. That is the
- * honest limit of a dependency-free check at this boundary; the allow-list still
- * turns a trivial `https://127.0.0.1/...` payload into a null without a request.
- */
-function isBlockedHost(url: URL): boolean {
-  if (isLocalDevelopmentUrl(url.href)) return true
-
-  const host = url.hostname
-    .toLowerCase()
-    .replace(/^\[|\]$/gu, '')
-    .replace(/\.$/u, '')
-
-  const octets = host.split('.')
-  if (octets.length === 4 && octets.every((part) => /^\d{1,3}$/u.test(part))) {
-    const first = Number(octets[0])
-    const second = Number(octets[1])
-    // Link-local 169.254.0.0/16, the range cloud metadata endpoints answer on.
-    if (first === 169 && second === 254) return true
-  }
-
-  if (host.includes(':')) {
-    // IPv6 link-local `fe80::/10`, unique-local `fc00::/7`, IPv4-mapped `::ffff:0:0/96`.
-    if (/^(?:fe[89ab]|f[cd])/u.test(host)) return true
-    if (host.startsWith('::ffff:')) return true
-  }
-
-  return false
 }
 
 /** How long a successful fetch stays warm, by how immutable the bytes behind it are. */

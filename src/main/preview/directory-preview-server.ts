@@ -1,8 +1,9 @@
-import { createReadStream } from 'node:fs'
+import { createReadStream, watch, type FSWatcher } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { readdir, realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
 import { APP_NAME } from '../../lib/brand'
+import { APP_LOCALE } from '../../lib/date-time-format'
 import { mimeTypeForPath } from '../../lib/mime-types'
 import { Logger } from '../system/logger'
 
@@ -21,6 +22,12 @@ import { Logger } from '../system/logger'
  * listing for every directory, streams any file with its real media type, and
  * sets no Content-Security-Policy, because running the previewed page's own
  * scripts and stylesheets is the feature.
+ *
+ * It also watches what it serves. A preview that only changes when someone
+ * reloads it is the wrong shape for a design being edited in front of the user,
+ * so a batched change notification goes out and the app refreshes the tab
+ * showing this origin. Nothing is injected into the served page: the page stays
+ * exactly the file on disk, and the browser is told to reload it.
  */
 
 /** Upper bound on rendered listing rows; larger directories list names only. */
@@ -30,11 +37,57 @@ const LISTING_STAT_CONCURRENCY = 48
 const STREAM_HIGH_WATER_MARK = 256 * 1024
 const MAX_RANGE_HEADER_LENGTH = 128
 
+/**
+ * Events for one served directory are coalesced for this long before the preview
+ * is refreshed, so a burst of agent writes costs one reload rather than one per
+ * file. Matches the project index watcher's window for the same reason.
+ */
+const WATCH_BATCH_MS = 300
+
+/**
+ * A preview also refreshes once this long after its watcher starts.
+ *
+ * macOS delivers nothing for the first fraction of a second of a recursive
+ * watcher's life, and an edit landing in that window is dropped rather than
+ * delayed: measured on macOS 15, a write 10ms after `watch()` produced no event
+ * at all, while the same write one second later produced one. An agent that
+ * previews its first screen and keeps writing hits exactly that window, so the
+ * preview would sit on a stale page until the next edit. One refresh on a
+ * preview that was just opened costs a single page load and closes the hole.
+ */
+const WATCH_SETTLE_MS = 600
+
+/**
+ * Directory names whose contents never change what a preview shows. Dependencies
+ * and VCS internals churn constantly during installs and commits, and reloading
+ * the preview for them would be noise.
+ */
+const WATCH_EXCLUDED_DIRECTORIES: ReadonlySet<string> = new Set(['.git', 'node_modules'])
+
+/** A listing's modified column reads the app's pinned locale, so it is the same
+ *  12-hour clock on every machine. Built once: every listing request renders
+ *  through it. */
+const LISTING_TIME_FORMATTER = new Intl.DateTimeFormat(APP_LOCALE, {
+  dateStyle: 'short',
+  timeStyle: 'short'
+})
+
 export interface DirectoryPreviewEndpoint {
   /** Origin URL to open in a browser (`http://127.0.0.1:<port>/`). */
   url: string
   port: number
 }
+
+/** One served directory that changed, with the origin a browser is showing it on. */
+export interface DirectoryPreviewChange {
+  /** Canonical directory that changed. */
+  root: string
+  /** Origin URL to refresh. */
+  url: string
+}
+
+/** Called after a served directory changes; the app refreshes the preview tab. */
+export type DirectoryPreviewChangeListener = (change: DirectoryPreviewChange) => void
 
 interface ListingEntry {
   name: string
@@ -397,10 +450,18 @@ export class DirectoryPreviewServer {
   private endpoint: DirectoryPreviewEndpoint | null = null
   private starting: Promise<DirectoryPreviewEndpoint> | null = null
   private disposed = false
+  private watcher: FSWatcher | null = null
+  private watchTimer: ReturnType<typeof setTimeout> | undefined
+  private settleTimer: ReturnType<typeof setTimeout> | undefined
+  /** Whether the platform watcher has delivered anything since it started. */
+  private sawWatchEvent = false
+  private readonly onChange: DirectoryPreviewChangeListener | undefined
 
-  /** @param directory the directory to serve; canonicalized on `start()`. */
-  constructor(directory: string) {
+  /** @param directory the directory to serve; canonicalized on `start()`.
+   *  @param onChange notified once per batch of changes to the served tree. */
+  constructor(directory: string, onChange?: DirectoryPreviewChangeListener) {
     this.root = directory
+    this.onChange = onChange
   }
 
   /** Canonical path of the served directory once the server has started. */
@@ -432,6 +493,7 @@ export class DirectoryPreviewServer {
           throw new Error('Directory preview port unavailable')
         }
         this.endpoint = { url: `http://127.0.0.1:${address.port}/`, port: address.port }
+        this.startWatching()
         return this.endpoint
       } catch (error) {
         if (this.server === server) this.server = null
@@ -449,6 +511,16 @@ export class DirectoryPreviewServer {
 
   async dispose(): Promise<void> {
     this.disposed = true
+    if (this.watchTimer) {
+      clearTimeout(this.watchTimer)
+      this.watchTimer = undefined
+    }
+    if (this.settleTimer) {
+      clearTimeout(this.settleTimer)
+      this.settleTimer = undefined
+    }
+    this.watcher?.close()
+    this.watcher = null
     await this.starting?.catch(() => undefined)
     const server = this.server
     this.server = null
@@ -460,6 +532,74 @@ export class DirectoryPreviewServer {
       server.closeAllConnections()
       server.close(() => resolveClosed())
     })
+  }
+
+  /**
+   * Watch the served tree so the preview refreshes itself as files change.
+   *
+   * One kernel-backed recursive watcher per served root (FSEvents on macOS,
+   * ReadDirectoryChangesW on Windows), not a watcher per path, for the reason the
+   * project index gives: a per-path watcher exhausts the file-descriptor table on
+   * a large tree. `persistent: false` keeps a preview from holding the process
+   * open by itself, and a platform without recursive watching (inotify on Linux)
+   * simply gets no automatic refresh, because a preview that cannot be watched
+   * still serves and the user can reload it.
+   */
+  private startWatching(): void {
+    if (this.watcher || this.disposed) return
+    try {
+      const watcher = watch(this.root, { recursive: true, persistent: false })
+      watcher.on('change', (_event, eventPath) => {
+        const relativePath = typeof eventPath === 'string' ? eventPath : ''
+        if (relativePath && this.isExcludedWatchPath(relativePath)) return
+        this.sawWatchEvent = true
+        this.queueReload()
+      })
+      watcher.on('error', (error) => {
+        Logger.info('Directory preview watcher error', {
+          root: this.root,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      })
+      watcher.on('close', () => {
+        if (this.watcher === watcher) this.watcher = null
+      })
+      this.watcher = watcher
+      // The start-up window the platform swallows, covered once. A watcher that
+      // has already delivered an event is working, so the extra refresh is
+      // skipped rather than reloading a page that just refreshed itself.
+      this.settleTimer = setTimeout(() => {
+        this.settleTimer = undefined
+        if (this.sawWatchEvent) return
+        this.notifyChange()
+      }, WATCH_SETTLE_MS)
+      if (typeof this.settleTimer.unref === 'function') this.settleTimer.unref()
+    } catch (error) {
+      Logger.info('Directory preview watcher could not be started', {
+        root: this.root,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  private isExcludedWatchPath(relativePath: string): boolean {
+    return relativePath.split(/[\\/]+/u).some((segment) => WATCH_EXCLUDED_DIRECTORIES.has(segment))
+  }
+
+  private queueReload(): void {
+    if (this.watchTimer) clearTimeout(this.watchTimer)
+    this.watchTimer = setTimeout(() => {
+      this.watchTimer = undefined
+      this.notifyChange()
+    }, WATCH_BATCH_MS)
+    // A pending batch must not be a reason for the process to stay alive.
+    if (typeof this.watchTimer.unref === 'function') this.watchTimer.unref()
+  }
+
+  private notifyChange(): void {
+    const endpoint = this.endpoint
+    if (this.disposed || !endpoint) return
+    this.onChange?.({ root: this.root, url: endpoint.url })
   }
 
   private async respond(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -515,10 +655,7 @@ export class DirectoryPreviewServer {
           directory: actual,
           relativePath,
           listing: await readDirectoryListing(actual),
-          timeFormatter: new Intl.DateTimeFormat(undefined, {
-            dateStyle: 'short',
-            timeStyle: 'short'
-          })
+          timeFormatter: LISTING_TIME_FORMATTER
         })
         const body = Buffer.from(html, 'utf8')
         response.statusCode = 200

@@ -97,7 +97,12 @@ if (checkedFiles.length === 0) {
   fail('No .ts or .svelte files were found in the requested paths.')
 }
 
-const checkOutputDirectory = join(projectRoot, 'agent-out')
+// The scoped tsconfigs reference project files with paths relative to this
+// scratch directory. svelte-check rewrites those specs for its overlay by
+// prefixing them with `svelte/`, which only resolves when the temporary
+// tsconfig sits exactly two levels below the project root (`.cio/.check-<id>`).
+// Keep the scratch directory under `.cio/` rather than the repo root.
+const checkOutputDirectory = join(projectRoot, '.cio')
 await mkdir(checkOutputDirectory, { recursive: true })
 const temporaryDirectory = await mkdtemp(join(checkOutputDirectory, '.check-'))
 

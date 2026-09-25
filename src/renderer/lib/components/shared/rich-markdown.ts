@@ -785,6 +785,132 @@ function replaceInlineMatch(
   selection.addRange(range)
 }
 
+interface InlineCodeScan {
+  /** The last matched pair, or null while every single backtick is unpaired. */
+  pair: { start: number; end: number; content: string } | null
+  /** Index of the single backtick still waiting for an end, or -1. */
+  opener: number
+}
+
+/** Scan single backticks left to right the way the renderer pairs them: each
+ *  backtick closes the nearest one still waiting for a partner. Runs of two or
+ *  more backticks (fences, empty pairs, prose) never partner a single backtick,
+ *  and a pair only counts when it has real content between its delimiters. */
+function scanInlineCode(prefix: string): InlineCodeScan {
+  let opener = -1
+  let pair: { start: number; end: number; content: string } | null = null
+  let index = 0
+  while (index < prefix.length) {
+    if (prefix[index] !== '`') {
+      index += 1
+      continue
+    }
+    let runEnd = index
+    while (prefix[runEnd] === '`') runEnd += 1
+    if (runEnd - index > 1) {
+      opener = -1
+      index = runEnd
+      continue
+    }
+    if (opener === -1) {
+      opener = index
+    } else {
+      const content = prefix.slice(opener + 1, index)
+      if (content.length > 0 && !content.includes('`') && !content.includes('\n')) {
+        pair = { start: opener, end: runEnd, content }
+        opener = -1
+      } else {
+        // An empty span (``) or one split by another run: the earlier backtick is
+        // plain text, so the one just seen opens the next candidate.
+        opener = index
+      }
+    }
+    index = runEnd
+  }
+  return { pair, opener }
+}
+
+/**
+ * Typing between the two backticks of a fresh pair opens the inline code span
+ * around what was typed   the mirror of `applyEmptyPairCodeRule`, which only
+ * sees content typed *after* the pair. Going back inside a pair and typing used
+ * to leave the backticks literal, so the run never read as a span and a later
+ * backtick could re-pair with one of its backticks and swallow the sentence.
+ */
+function applyInsidePairCodeRule(root: HTMLElement): boolean {
+  const selection = selectionInside(root)
+  if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
+  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
+
+  const textNode = selection.anchorNode
+  const endOffset = selection.anchorOffset
+  const prefix = textNode.data.slice(0, endOffset)
+  const suffix = textNode.data.slice(endOffset)
+  // The span's closing backtick sits right after the caret, and it is a single
+  // backtick (``` and `` are delimiters of their own).
+  if (suffix[0] !== '`' || suffix[1] === '`') return false
+
+  const { opener } = scanInlineCode(prefix)
+  if (opener === -1 || (opener > 0 && prefix[opener - 1] === '`')) return false
+  const content = prefix.slice(opener + 1)
+  if (!content || content.includes('`') || content.includes('\n')) return false
+
+  const range = document.createRange()
+  range.setStart(textNode, opener)
+  range.setEnd(textNode, endOffset + 1)
+  const selectionRanges = window.getSelection()
+  if (selectionRanges) {
+    selectionRanges.removeAllRanges()
+    selectionRanges.addRange(range)
+  }
+  // The caret belongs inside the span: this is the run the user is writing.
+  insertInlineCode(root, content, true)
+  return true
+}
+
+/** Wrap a matched backtick pair in an inline code element and leave the caret
+ *  where the user's typing put it. Converting the pair consumes its two
+ *  delimiters, so a caret sitting past the span slides back by that much. */
+function replaceInlineCodePair(
+  root: HTMLElement,
+  textNode: Text,
+  pair: { start: number; end: number; content: string },
+  caretOffset: number
+): void {
+  const range = document.createRange()
+  range.setStart(textNode, pair.start)
+  range.setEnd(textNode, pair.end)
+  range.deleteContents()
+
+  const element = document.createElement('code')
+  element.className = INLINE_CODE_CLASS
+  element.textContent = pair.content
+  range.insertNode(element)
+
+  // A zero-width anchor before the element keeps the caret from getting trapped
+  // when it becomes the first content of its block   without one, browsers refuse
+  // to move the caret left out of the element.
+  const block = currentBlock(root, element)
+  if (block && isFirstContentInBlock(block, element)) {
+    element.before(document.createTextNode('\u200b'))
+  }
+  const caretAnchor = document.createTextNode('\u200b')
+  element.after(caretAnchor)
+
+  const selection = window.getSelection()
+  if (!selection) return
+  const trailingOffset = caretOffset - pair.end
+  const trailing = caretAnchor.nextSibling
+  if (trailingOffset > 0 && trailing instanceof Text) {
+    range.setStart(trailing, Math.min(trailingOffset, trailing.data.length))
+  } else {
+    range.setStart(caretAnchor, 1)
+  }
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
 /** Create an inline code element (optionally empty) and place the caret where
  *  `caretInsideCode` says: inside the element for a fresh empty span the user is
  *  about to type into, otherwise after it (with a zero-width anchor). */
@@ -881,6 +1007,7 @@ function applyInlineRule(root: HTMLElement): boolean {
   // fence. Skipped while a fence is being built: a trailing triple after the
   // caret means the closing ``` of the tag-end-then-open flow, not content.
   if (!suffix.includes('```') && applyEmptyPairCodeRule(root)) return true
+  if (applyInsidePairCodeRule(root)) return true
 
   // Opening-backtick-last flow: the user tagged the end of a run with a backtick
   // first, moved the caret before the run, and now types the opening backtick.
@@ -905,13 +1032,12 @@ function applyInlineRule(root: HTMLElement): boolean {
     return true
   }
 
-  const rules: Array<[RegExp, 'strong' | 'em' | 'del' | 'code']> = [
+  const rules: Array<[RegExp, 'strong' | 'em' | 'del']> = [
     [/\*\*([^*\n]+)\*\*$/, 'strong'],
     [/(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__$/, 'strong'],
     [/~~([^~\n]+)~~$/, 'del'],
     [/(?<!\*)\*([^*\n]+)\*$/, 'em'],
-    [/(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_$/, 'em'],
-    [/`([^`\n]+)`$/, 'code']
+    [/(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_$/, 'em']
   ]
 
   for (const [pattern, tag] of rules) {
@@ -919,6 +1045,21 @@ function applyInlineRule(root: HTMLElement): boolean {
     if (!match) continue
     replaceInlineMatch(root, textNode, endOffset, match, tag)
     return true
+  }
+
+  // Inline code pairs single backticks left to right, exactly like the renderer:
+  // the backtick the user just typed closes the nearest backtick still waiting
+  // for a partner, and a pair left literal earlier in the run is recognized at
+  // the same time. Matching the run before the caret with one greedy regex used
+  // to let a backtick typed for the *next* word re-pair with the backtick that
+  // had already closed an earlier span, which swallowed the whole sentence into
+  // one inline code span and left the earlier pair unread as a pair.
+  if (prefix.endsWith('`')) {
+    const pair = scanInlineCode(prefix).pair
+    if (pair) {
+      replaceInlineCodePair(root, textNode, pair, endOffset)
+      return true
+    }
   }
   return false
 }

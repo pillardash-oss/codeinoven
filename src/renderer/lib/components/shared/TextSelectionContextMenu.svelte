@@ -17,6 +17,7 @@
   import { terminalEntryForHost, type TerminalHostEntry } from '$lib/terminal/host-registry'
   import { buildPasteData } from '$lib/terminal/input-compat'
   import { selectWordAt } from '$lib/terminal/word-select'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   type MenuKind = 'text' | 'editable' | 'terminal'
 
@@ -209,7 +210,7 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') close()
+    if (keymapState.matches('palette-close', event)) close()
   }
 
   function refocusEditable(element: TextMenuTarget['editable']): void {

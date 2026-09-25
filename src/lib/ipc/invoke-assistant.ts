@@ -3,6 +3,7 @@ import type {
   MissedRun,
   Project,
   Routine,
+  RoutineDeletionResult,
   RoutineSchedule,
   Thread,
   UpdateRoutineInput
@@ -23,7 +24,12 @@ export const invokeAssistantContract = {
   'routine:list': {} as Contract<[], Routine[]>,
   'routine:create': {} as Contract<[input: CreateRoutineInput], Routine>,
   'routine:update': {} as Contract<[routineId: string, input: UpdateRoutineInput], Routine>,
-  'routine:delete': {} as Contract<[routineId: string], void>,
+  /**
+   * Remove a routine with everything it owns: its tasks, the runs they produced,
+   * its hidden how-to thread, the scheduler's records for them, and its artifact
+   * folder. Returns what was swept, so the caller can report it to the user.
+   */
+  'routine:delete': {} as Contract<[routineId: string], RoutineDeletionResult>,
   'routine:reorder': {} as Contract<[orderedIds: string[]], Routine[]>,
   /** Pin or unpin a routine so it sorts above the rest. */
   'routine:setPinned': {} as Contract<[routineId: string, pinned: boolean], Routine>,
@@ -41,6 +47,12 @@ export const invokeAssistantContract = {
    * thread list, so the how-to panel asks for its own routine's thread here.
    */
   'assistant:howToThread': {} as Contract<[routineId: string], Thread | null>,
+  /**
+   * The Getting started checkpoint the authoring agent keeps current, or null
+   * while the interview has not saved one. The panel shows it so the interview's
+   * agreed state is auditable without opening the thread.
+   */
+  'routine:gettingStartedCheckpoint': {} as Contract<[routineId: string], string | null>,
   /**
    * Hide or reveal a routine's how-to thread. The thread stays pinned in both
    * states; archiving is only what takes it out of the sidebar's lists.

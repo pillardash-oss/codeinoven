@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     applyCodeFenceOnEnter,
     applyEmptyPairCodeRule,
@@ -377,18 +378,15 @@
 
   function handleKeydown(event: KeyboardEvent): void {
     if (!editor) return
-    const modifier = event.metaKey || event.ctrlKey
-    const key = event.key.toLowerCase()
 
-    if (modifier && key === 'z') {
-      event.preventDefault()
-      if (event.shiftKey) history.redo()
-      else history.undo()
-      return
-    }
-    if (event.ctrlKey && !event.metaKey && key === 'y') {
+    if (keymapState.matches('editor-redo', event)) {
       event.preventDefault()
       history.redo()
+      return
+    }
+    if (keymapState.matches('editor-undo', event)) {
+      event.preventDefault()
+      history.undo()
       return
     }
 
@@ -396,7 +394,7 @@
     // moves after the span instead of the backtick nesting inside the code.
     // Only for a collapsed caret sitting at the span's very end   mid-span and
     // multi-selection typing stays literal.
-    if (event.key === '`') {
+    if (keymapState.matches('editor-inline-code-close', event)) {
       const selection = window.getSelection()
       const codeEl = selection?.anchorNode?.parentElement?.closest?.('code')
       if (
@@ -413,10 +411,16 @@
       }
     }
 
-    if (modifier && (key === 'b' || key === 'i' || key === 'e')) {
-      const tag = key === 'b' ? 'strong' : key === 'i' ? 'em' : 'code'
+    const formatTag = keymapState.matches('editor-bold', event)
+      ? 'strong'
+      : keymapState.matches('editor-italic', event)
+        ? 'em'
+        : keymapState.matches('editor-code', event)
+          ? 'code'
+          : null
+    if (formatTag) {
       const historyEntry = history.captureEntry()
-      if (formatRichSelection(editor, tag)) {
+      if (formatRichSelection(editor, formatTag)) {
         event.preventDefault()
         emitEditorValue()
         history.commit(historyEntry)
@@ -483,7 +487,7 @@
       }
     }
 
-    if (event.key === 'Backspace') {
+    if (keymapState.matches('editor-unlist', event)) {
       const selection = window.getSelection()
       if (!selection?.isCollapsed || !selection.anchorNode) return
       const node = selection.anchorNode
@@ -513,7 +517,7 @@
         '[data-editor-codeblock]'
       ) as HTMLElement | null
 
-      if (codeBlock) {
+      if (codeBlock && keymapState.matches('editor-codeblock-newline', event)) {
         event.preventDefault()
 
         const langSpan = selection?.anchorNode?.parentElement?.closest?.('.code-lang-indicator')
@@ -546,9 +550,12 @@
       // message into the live turn mid-turn. Checked before the Shift+Enter
       // soft-break branch so the modifier combos always submit instead of
       // inserting a newline. A bare Enter never submits.
-      if (modifier && onSubmit) {
+      if (
+        onSubmit &&
+        (keymapState.matches('chat-send', event) || keymapState.matches('chat-steer', event))
+      ) {
         event.preventDefault()
-        onSubmit(event.shiftKey)
+        onSubmit(keymapState.matches('chat-steer', event))
         return
       }
 
@@ -557,29 +564,30 @@
       // whose text is ```lang, ```content``` or ```lang\ncontent``` becomes a
       // code block), and Enter on an empty list item leaves the list instead of
       // appending another empty item.
-      if (!event.shiftKey) {
-        const historyEntry = history.captureEntry()
-        if (applyCodeFenceOnEnter(editor)) {
-          event.preventDefault()
-          emitEditorValue(true)
-          history.commit(historyEntry)
-          publishCaretText()
-          return
-        }
-        if (exitEmptyListItemOnEnter(editor)) {
-          event.preventDefault()
-          emitEditorValue()
-          history.commit(historyEntry)
-          publishCaretText()
-          return
-        }
+      const historyEntry = history.captureEntry()
+      if (keymapState.matches('editor-code-fence', event) && applyCodeFenceOnEnter(editor)) {
+        event.preventDefault()
+        emitEditorValue(true)
+        history.commit(historyEntry)
+        publishCaretText()
+        return
+      }
+      if (
+        keymapState.matches('editor-exit-empty-list', event) &&
+        exitEmptyListItemOnEnter(editor)
+      ) {
+        event.preventDefault()
+        emitEditorValue()
+        history.commit(historyEntry)
+        publishCaretText()
+        return
       }
 
       const blockTag = selectedBlockTag(editor)
 
       // Shift+Enter always inserts a soft line break (never a new list item,
       // never a submit)   regardless of whether this editor can submit.
-      if (event.shiftKey) {
+      if (keymapState.matches('chat-soft-break', event)) {
         const historyEntry = history.captureEntry()
         if (insertMarkdownLineBreak(editor)) {
           event.preventDefault()

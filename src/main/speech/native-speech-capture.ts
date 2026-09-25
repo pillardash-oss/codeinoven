@@ -67,8 +67,18 @@ export class NativeSpeechCapture {
 
   async stop(sessionId: string): Promise<void> {
     if (this.currentSessionId !== sessionId) return
-    await this.request({ id: randomUUID(), operation: 'stop' })
-    this.currentSessionId = null
+    try {
+      await this.request({ id: randomUUID(), operation: 'stop' })
+    } finally {
+      // A rejected stop (the worker exited or wedged) still ends this session's
+      // claim on the microphone. Leaving the claim set would fail every later
+      // `start()` with "a native recording is already active" and strand the
+      // renderer on its browser capture path, where the microphone is held by
+      // `getUserMedia` and a reconfigured audio device revokes the track, for
+      // the rest of the run. The worker stops its own previous engine on every
+      // `start`, so clearing here can never leave two recordings running.
+      this.currentSessionId = null
+    }
   }
 
   async dispose(): Promise<void> {

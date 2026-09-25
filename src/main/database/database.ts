@@ -744,6 +744,7 @@ export class Database {
       this.migrateRoutineAgentsAndPause(connection)
       this.migrateRoutineDescription(connection)
       this.migrateRoutineReporting(connection)
+      this.migrateRoutineScheduleAnchor(connection)
     })()
   }
 
@@ -850,6 +851,36 @@ export class Database {
     if (!columns.has('priority')) {
       connection.exec('ALTER TABLE routines ADD COLUMN priority TEXT')
     }
+  }
+
+  /**
+   * Add the routine schedule-anchor column to databases created before the
+   * scheduler could tell a real missed fire from a slot that predates the
+   * schedule. Fresh databases already carry it, and the guarded `ALTER TABLE`
+   * is idempotent.
+   *
+   * The backfill stamps each scheduled routine from its how-to write time,
+   * which is when the authoring flow set the schedule alongside the how-to,
+   * falling back to the routine's creation. Without it an existing schedule
+   * would look active since the epoch, and a slot that came due before the
+   * routine existed would read as missed.
+   */
+  private migrateRoutineScheduleAnchor(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('schedule_updated_at')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN schedule_updated_at INTEGER')
+    }
+    connection
+      .prepare(
+        `UPDATE routines
+            SET schedule_updated_at = COALESCE(how_to_updated_at, created_at)
+          WHERE schedule IS NOT NULL AND schedule_updated_at IS NULL`
+      )
+      .run()
   }
 
   /**

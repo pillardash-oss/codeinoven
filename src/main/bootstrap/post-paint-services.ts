@@ -16,6 +16,7 @@ import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
+import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { assistantRunTitle } from '../../lib/routine-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
@@ -129,6 +130,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.computerUsePipService = new ComputerUsePipService(storage)
   state.harnessManifestService = new HarnessManifestService(storage)
   state.modelPricingService = new ModelPricingService(storage)
+  // Resolve which OpenCode line is installed before the chat engine builds its
+  // driver map, so a V2-only machine never starts a turn on the V1 transport.
+  // Bounded and non-fatal: a missing binary just leaves the canonical default.
+  const { detectOpenCodeInstallation } = await import('../agents/opencode-installation')
+  await detectOpenCodeInstallation().catch((error) =>
+    Logger.dev('opencode install detection failed (non-fatal):', error)
+  )
   state.chatEngine = new ChatEngine(
     storage,
     database,
@@ -299,6 +307,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     () => state.mainWindow?.webContents ?? null
   )
   state.prototypePreviewService = new PrototypePreviewService()
+  try {
+    state.prototypePreviewService.setCdnPolicy(
+      prototypeCdnPolicyFromConfig(await storage.getConfig())
+    )
+  } catch {
+    // The strict policy stands until the config can be read.
+  }
   state.directoryPreviewService = new DirectoryPreviewService()
   state.chatEngine.setPrototypePreviewRegistrar(
     (previewSlug, canonicalRoot) =>
@@ -344,6 +359,30 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       service.executeUtility(operation, input, browserContext)
     )
   }
+  // The design capability's `preview` operation composes the two services above:
+  // the loopback static host that serves a folder and the thread's browser tab
+  // that shows it. Serving must keep working with no window to host a tab, so the
+  // browser is read lazily and a missing one degrades to a URL in the reply.
+  const { createDesignPreviewExecutor } = await import('../preview/design-preview-executor')
+  state.chatEngine.setDesignPreviewExecutor(
+    createDesignPreviewExecutor({
+      previews: state.directoryPreviewService,
+      database,
+      browser: () => state.browserService
+    })
+  )
+  // Generation services answer with a link and those links expire, so the design
+  // capability can bring a generated image, video or sound file into the project
+  // as a file the design references by relative path.
+  const { createDesignMediaExecutor } = await import('../design/design-media-executor')
+  state.chatEngine.setDesignMediaExecutor(createDesignMediaExecutor({ database }))
+  // A previewed folder refreshes itself: the preview server reports a batched
+  // change for the directory it serves, and the tab showing that origin reloads.
+  // The browser is read lazily because it exists only while the app has a window,
+  // and a missing one simply means there is no tab to refresh.
+  state.directoryPreviewService.setChangeListener(({ url }) =>
+    state.browserService?.reloadPreviewOrigin(url)
+  )
   // Keep the device awake while a scheduled auto-retry is due within the wake
   // window, so a usage-limit reset fires even when the user is away.
   state.powerWakeService.attachRetryScheduler(state.retryScheduler)
@@ -370,6 +409,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     githubAuthService,
     skillUpdates: skillUpdateService,
     directoryPreviewService: state.directoryPreviewService,
+    prototypePreviewService: state.prototypePreviewService ?? undefined,
     powerWakeService: state.powerWakeService,
     retryScheduler: state.retryScheduler,
     heartbeatScheduler: state.heartbeatScheduler,
@@ -413,6 +453,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const [
       { PtyService },
       { ProviderConnectionService },
+      { OpenCodeV2Service },
       { HarnessUpdateService },
       { HarnessInstallService },
       { HarnessAutoUpdateService },
@@ -420,6 +461,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     ] = await Promise.all([
       import('../system/pty-service'),
       import('../providers/provider-connection'),
+      import('../opencode-v2/opencode-v2-service'),
       import('../agents/harness-update-service'),
       import('../agents/harness-install-service'),
       import('../agents/harness-auto-update-service'),
@@ -447,10 +489,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       }
     )
     // A probe that changes a harness's install state (new install, version
-    // bump) invalidates cached provider catalogs so the model picker reflects it.
+    // bump) invalidates cached provider catalogs so the model picker reflects
+    // it, and rebuilds the `opencode` driver when the detected line changed.
     state.providerConnection = new ProviderConnectionService(() => {
       void state.chatEngine?.invalidateProviderCatalogs()
+      state.chatEngine?.refreshOpenCodeHarness()
     })
+    state.openCodeV2Service = new OpenCodeV2Service()
     state.harnessUpdateService = new HarnessUpdateService(state.providerConnection)
     state.harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
     state.harnessInstallService = new HarnessInstallService(state.providerConnection)
@@ -464,6 +509,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     }
     state.ptyService.register()
     state.providerConnection.register()
+    state.openCodeV2Service.register()
     state.harnessUpdateService.register()
     state.harnessAutoUpdateService.register()
     state.harnessInstallService.register()

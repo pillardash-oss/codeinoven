@@ -38,6 +38,7 @@
   import { projectFilesWorkspace, type ProjectFileTab } from '$lib/stores/project-files.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import EditorOpenControl from './EditorOpenControl.svelte'
   import FileDiffView from './FileDiffView.svelte'
@@ -502,8 +503,7 @@
 
   function handleGlobalKeydown(event: KeyboardEvent): void {
     if (
-      (event.metaKey || event.ctrlKey) &&
-      event.key.toLowerCase() === 'g' &&
+      keymapState.matches('files-goto-line', event) &&
       activeTab &&
       (activeSession || deletedAtCheckpoint)
     ) {
@@ -515,12 +515,7 @@
       goToLineFocusTrigger += 1
       return
     }
-    if (
-      (event.metaKey || event.ctrlKey) &&
-      !event.shiftKey &&
-      event.key.toLowerCase() === 's' &&
-      conflictController !== null
-    ) {
+    if (keymapState.matches('files-save', event) && conflictController !== null) {
       // The conflict editor owns the chord while it is mounted, even when there
       // is nothing to save yet: consuming it keeps the press from falling
       // through to the workspace's left-sidebar toggle underneath the user.
@@ -532,9 +527,7 @@
       return
     }
     if (
-      (event.metaKey || event.ctrlKey) &&
-      !event.shiftKey &&
-      event.key.toLowerCase() === 's' &&
+      keymapState.matches('files-save', event) &&
       activeTab &&
       activeTab.view !== 'diff' &&
       activeSession &&
@@ -724,6 +717,39 @@
   }
 
   const editorFind = new ProjectFilesPanelFind()
+
+  /**
+   * Clear the one-shot requests and matches the panel hands its editor when the
+   * file on screen changes.
+   *
+   * This panel no longer remounts on a sidebar file-tab switch (see the files
+   * panel key in `WorkspaceContextPanelContent`), so what its remount used to
+   * reset has to be reset here. A `replaceRequest` or an undo/redo request left
+   * over from the previous file would be applied by the editor that mounts for
+   * the new one, because that editor's handled-nonce counters start at zero.
+   *
+   * The active file tab is the trigger and not the sidebar tab: a swap that
+   * keeps the sidebar tab (the full screen "save and continue" hand-over rewrites
+   * its file mapping in place, and `swapFileSilent` retitles the tab) still
+   * changes the file the editor is showing.
+   *
+   * `$effect.pre` and not `$effect`: it has to land before the DOM updates in
+   * the new editor. Svelte flushes every `$effect.pre` before any `$effect`, and
+   * `ProjectTextEditor` reads these requests inside effects.
+   *
+   * Writing these back to their empty state is the point, so this is a reset and
+   * not a value kept in step: the requests are raised by user actions, and an
+   * identity check keeps it from firing on anything but the file changing.
+   */
+  let requestTabId: string | null = null
+  $effect.pre(() => {
+    const nextTabId = activeTab?.id ?? null
+    if (nextTabId === requestTabId) return
+    requestTabId = nextTabId
+    editRequest = null
+    editorFind.reset()
+    goToLineOpen = false
+  })
 
   function submitGoToLine(line: number): void {
     if (!activeTab) return
@@ -1317,25 +1343,27 @@
               onOpenOriginal={() => void openRawConflictSource()}
             />
           {:else}
-            <ProjectTextEditor
-              value={visibleContent}
-              path={activeTab.path}
-              readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
-              ariaLabel={`${deletedAtCheckpoint ? 'View' : 'Edit'} ${activeTab.path} fullscreen`}
-              spellcheck={markdown}
-              {showLineNumbers}
-              wrap={wrapLines}
-              findQuery={findNavState.editorFindOpen ? editorFind.value : ''}
-              findActiveIndex={editorFind.active}
-              findNonce={editorFind.nonce}
-              replaceRequest={editorFind.replaceRequest}
-              {editRequest}
-              focusLine={activeTab.focusLine}
-              focusLineRequest={activeTab.focusLineRequest}
-              onFindMatches={(matches) => editorFind.setMatches(matches)}
-              onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
-              onInput={handleEditorInput}
-            />
+            {#key activeTab.id}
+              <ProjectTextEditor
+                value={visibleContent}
+                path={activeTab.path}
+                readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
+                ariaLabel={`${deletedAtCheckpoint ? 'View' : 'Edit'} ${activeTab.path} fullscreen`}
+                spellcheck={markdown}
+                {showLineNumbers}
+                wrap={wrapLines}
+                findQuery={findNavState.editorFindOpen ? editorFind.value : ''}
+                findActiveIndex={editorFind.active}
+                findNonce={editorFind.nonce}
+                replaceRequest={editorFind.replaceRequest}
+                {editRequest}
+                focusLine={activeTab.focusLine}
+                focusLineRequest={activeTab.focusLineRequest}
+                onFindMatches={(matches) => editorFind.setMatches(matches)}
+                onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
+                onInput={handleEditorInput}
+              />
+            {/key}
           {/if}
         {/if}
       </div>

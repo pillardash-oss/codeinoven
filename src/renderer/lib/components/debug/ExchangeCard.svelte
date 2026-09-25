@@ -1,3 +1,13 @@
+<script module lang="ts">
+  import { APP_LOCALE } from '$shared/date-time-format'
+
+  const TIME_WITH_SECONDS = new Intl.DateTimeFormat(APP_LOCALE, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+</script>
+
 <script lang="ts">
   import type { DebugExchange, DebugEvent } from '$lib/stores/agent-debug.svelte'
   import { copyText } from '$lib/copy-text'
@@ -66,11 +76,7 @@
   }
 
   function timeLabel(ts: number): string {
-    return new Date(ts).toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    })
+    return TIME_WITH_SECONDS.format(ts)
   }
 
   function shortId(id: string): string {

@@ -4,10 +4,7 @@ import type {
   HarnessConfirmationSource,
   HarnessManifestEntry
 } from '../../lib/types'
-import {
-  harnessLoadsAgentsMd,
-  listHarnesses
-} from './harness-registry'
+import { harnessLoadsAgentsMd, listHarnesses } from './harness-registry'
 import type { HarnessManifestBehavior } from './harness-registry'
 import { Logger } from '../system/logger'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -27,7 +24,11 @@ interface PersistedHarnessManifest {
 const EMPTY: PersistedHarnessManifest = { schemaVersion: 1, confirmed: {}, inUse: {} }
 
 function isKnownBehavior(behavior: string): behavior is HarnessManifestBehavior {
-  return behavior === 'loadsAgentsMd' || behavior === 'manualCompaction'
+  return (
+    behavior === 'loadsAgentsMd' ||
+    behavior === 'manualCompaction' ||
+    behavior === 'multipleAccounts'
+  )
 }
 
 /**

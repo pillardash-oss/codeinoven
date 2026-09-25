@@ -51,12 +51,10 @@
    *  start with no project selected) still loads them through the chats root. */
   let catalogProjectId = $derived(rendererRecovery.selectedProjectId ?? INBOX_PROJECT_ID)
 
-  /** Harnesses CodeInOven can actually drive right now; unsupported builds
-   *  behave exactly as if the harness were not installed. */
+  /** Harnesses CodeInOven can actually drive right now: a harness whose binary
+   *  is not on this machine behaves exactly as if it were not installed. */
   let installedProviders = $derived(
-    providerStore.providers.filter(
-      (provider) => provider.status !== 'not_found' && provider.unsupportedReason === undefined
-    )
+    providerStore.providers.filter((provider) => provider.status !== 'not_found')
   )
 
   let savedModel = $derived(preference.kind === 'model' ? preference : undefined)

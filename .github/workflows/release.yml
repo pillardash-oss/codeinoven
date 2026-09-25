@@ -149,7 +149,7 @@ jobs:
       - name: Launch packaged application through workspace readiness
         shell: bash
         run: |
-          command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output "agent-out/startup-smoke-${{ matrix.target }}.json")
+          command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output ".cio/tmp/startup-smoke-${{ matrix.target }}.json")
           exit_code=0
           for attempt in 1 2 3; do
             if [ "${{ matrix.target }}" = "linux" ]; then
@@ -178,7 +178,7 @@ jobs:
             dist/*.deb
             dist/*.blockmap
             dist/*.yml
-            agent-out/startup-smoke-*.json
+            .cio/tmp/startup-smoke-*.json
           if-no-files-found: error
 
   release:

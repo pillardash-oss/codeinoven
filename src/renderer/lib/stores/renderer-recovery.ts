@@ -16,6 +16,7 @@ export type SettingsSection =
   | 'general'
   | 'memory'
   | 'audits'
+  | 'design'
   | 'cio-prompts'
   | 'heartbeat'
   | 'harnesses'
@@ -38,6 +39,7 @@ export type MainView =
   | 'settings-profile'
   | 'settings-memory'
   | 'settings-audits'
+  | 'settings-design'
   | 'settings-cio-prompts'
   | 'settings-heartbeat'
   | 'settings-harnesses'
@@ -152,6 +154,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-profile',
   'settings-memory',
   'settings-audits',
+  'settings-design',
   'settings-cio-prompts',
   'settings-heartbeat',
   'settings-harnesses',
@@ -165,6 +168,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'general',
   'memory',
   'audits',
+  'design',
   'cio-prompts',
   'heartbeat',
   'harnesses',
