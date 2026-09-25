@@ -17,9 +17,10 @@ import { join } from 'node:path'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Project, Thread } from '../../lib/types'
-import { isPreviewOriginUrl } from '../../lib/local-development-url'
+import { isPreviewOriginUrl, originOf } from '../../lib/local-development-url'
 import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../lib/image-payload'
 import type {
+  BrowserCompositionPlayback,
   BrowserConsoleEntry,
   BrowserConsoleLevel,
   BrowserDesignTab,
@@ -29,8 +30,10 @@ import type {
   BrowserPermissionRequest,
   BrowserShortcutAction,
   BrowserShortcutBindings,
+  BrowserTransportCommand,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
+import { isVideoCaptureUrl } from '../../lib/video/project'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
@@ -60,10 +63,12 @@ import {
   AGENT_REVEAL_GRACE_MS,
   BROWSER_PARTITION_PREFIX,
   DEFAULT_PARKED_VIEWPORT,
+  FRAME_RENDER_TIMEOUT_MS,
   MAX_ABANDONED_REVEALS,
   MAX_CONSOLE_ENTRIES,
   MAX_DIALOG_LABEL_LENGTH,
   MAX_PARKED_TABS,
+  MAX_TRANSPORT_ERROR_LENGTH,
   MAX_ZOOM_LEVEL,
   PERMISSION_TIMEOUT_MS,
   RELAX_COOLDOWN_MS,
@@ -88,6 +93,8 @@ import {
   validateSiteMenuPoint,
   validateTabId,
   validateThreadId,
+  validateTransportCommand,
+  validateTransportValue,
   validateViewportRequest
 } from './browser-service/browser-validation'
 import type { BrowserViewport } from './browser-service/browser-types'
@@ -104,11 +111,20 @@ const PANEL_SHORTCUT_TARGETS: Readonly<
   closeTab: 'close-tab',
   newTab: 'new-tab'
 }
+
 import {
-  designTabFor,
-  isSameDesign,
-  type DesignTabRecogniser
-} from './browser-service/browser-design-tab'
+  NO_TAB_MARK,
+  isSameTabMark,
+  tabMarkFor,
+  type BrowserTabMark,
+  type TabMarkRecogniser
+} from './browser-service/browser-tab-mark'
+import {
+  COMPOSITION_TRANSPORT_GLOBAL,
+  compositionTransportCommandScript,
+  compositionTransportScript,
+  compositionTransportStateScript
+} from './browser-service/browser-transport-script'
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -137,8 +153,22 @@ export class BrowserService {
     string,
     { hash: string; width: number; height: number }
   >()
-  /** How a tab is recognised as showing a design, supplied by the app at boot. */
-  private designTabRecogniser: DesignTabRecogniser | null = null
+  /** How a tab is recognised as showing a design or a composition, supplied by
+   *  the app at boot. */
+  private tabMarkRecogniser: TabMarkRecogniser | null = null
+  /**
+   * Where each composition tab's playhead was, kept across a reload.
+   *
+   * A preview refreshes itself whenever the agent writes, which reloads the page
+   * and would otherwise throw the playhead away: the user would be sent back to
+   * the start of the video every time the composition changed, which is the whole
+   * complaint the transport answers. The folder is recorded with the position so a
+   * playhead is only ever restored into the composition it came from.
+   */
+  private readonly playheads = new Map<
+    string,
+    { directory: string; time: number; playing: boolean }
+  >()
   private activeTabId: string | null = null
   /** Chords the browser claims, resolved from the keymap by the renderer. Empty
    *  until that report arrives, which leaves every key to the rest of the app. */
@@ -314,6 +344,14 @@ export class BrowserService {
     ipcMain.handle('browser:reload', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.reload()
     })
+    ipcMain.handle('browser:transport', async (_event, rawTabId, rawCommand, rawValue) => {
+      const tabId = validateTabId(rawTabId)
+      const command = validateTransportCommand(rawCommand)
+      return this.transport(tabId, command, validateTransportValue(command, rawValue))
+    })
+    ipcMain.handle('browser:transportState', (_event, rawTabId) =>
+      this.transportState(validateTabId(rawTabId))
+    )
     ipcMain.handle('browser:reloadIgnoringCache', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.reloadIgnoringCache()
     })
@@ -468,6 +506,7 @@ export class BrowserService {
     this.configuredSessions.clear()
     this.permissionGrants.clear()
     this.permissionDenies.clear()
+    this.playheads.clear()
     this.downloadTracker.dispose()
     this.capture.dispose()
     this.inspector.dispose()
@@ -478,6 +517,9 @@ export class BrowserService {
    *  published state is what makes the panel offer the element inspector, so only
    *  the design capability calls this: it is the one caller that knows a served
    *  folder is a design rather than an arbitrary directory.
+   *
+   *  A composition is recognized rather than marked, because its mark carries the
+   *  timeline its manifest declares and that has to be read.
    */
   markDesignTab(tabId: string, design: BrowserDesignTab): void {
     const tab = this.requireTab(tabId)
@@ -488,37 +530,75 @@ export class BrowserService {
   /**
    * Register how a tab is recognised from the page it is showing.
    *
-   * Without this, a tab is a design only when the design capability marked it, which
+   * Without this, a tab is a design only when a design capability marked it, which
    * is what left a tab the agent opened itself, and a tab the renderer restored after
-   * a restart, showing a design as an ordinary page.
+   * a restart, showing a design as an ordinary page. The same recognition is what
+   * arms a composition's transport, so both marks come from one rule.
    */
-  setDesignTabRecogniser(recogniser: DesignTabRecogniser | null): void {
-    this.designTabRecogniser = recogniser
+  setTabMarkRecogniser(recogniser: TabMarkRecogniser | null): void {
+    this.tabMarkRecogniser = recogniser
   }
 
   /**
-   * Decide, from the origin a tab is showing, whether it is rendering a design.
+   * Decide, from the origin a tab is showing, what the app knows about its folder.
    *
    * Called on every committed navigation and nowhere else, because the origin is the
    * only thing that can change the answer: an in-page navigation cannot move a page
-   * to another origin. A tab that navigated away from its folder therefore stops
-   * being a design tab, and a tab that arrives on a design folder starts being one
-   * whether or not it was opened through the design capability.
+   * to another origin. A tab that navigated away from its folder therefore loses its
+   * mark, and a tab that arrives on an authored-work folder gains one whether or not
+   * a capability opened it.
+   *
+   * The answer is asynchronous because a composition's mark carries the timeline
+   * its manifest declares, so the URL is read again when it lands: a mark for a
+   * document the tab has already left would arm the transport with the wrong video.
    */
-  private refreshDesignTab(tabId: string, tab: BrowserTab): void {
+  private refreshTabMark(tabId: string, tab: BrowserTab): void {
     const contents = tab.view.webContents
     if (contents.isDestroyed()) return
     const url = contents.getURL()
-    let recognised: BrowserDesignTab | null = null
-    try {
-      recognised = this.designTabRecogniser?.(tab.projectId, tab.threadId, url) ?? null
-    } catch (error: unknown) {
-      Logger.error('Browser design recognition failed:', error)
+    const recogniser = this.tabMarkRecogniser
+    if (!recogniser) {
+      this.applyTabMark(tabId, tab, url, NO_TAB_MARK)
+      return
     }
-    const next = designTabFor(url, tab.design, recognised)
-    if (isSameDesign(next, tab.design)) return
-    tab.design = next
-    if (next === null) this.inspector.setArmed(tabId, contents, false)
+    void recogniser(tab.projectId, tab.threadId, url)
+      .then((recognised) => {
+        if (contents.isDestroyed() || contents.getURL() !== url) return
+        this.applyTabMark(tabId, tab, url, recognised)
+      })
+      .catch((error: unknown) => {
+        Logger.error('Browser tab recognition failed:', error)
+      })
+  }
+
+  /**
+   * Land a recognised mark on a tab, and arm or disarm what it governs.
+   *
+   * Arming waits for the document to settle unless it already has: the transport is
+   * installed into the page, and the load's own `did-finish-load` covers the case
+   * where the mark was resolved while the document was still arriving.
+   */
+  private applyTabMark(
+    tabId: string,
+    tab: BrowserTab,
+    url: string,
+    recognised: BrowserTabMark
+  ): void {
+    const previous: BrowserTabMark = { design: tab.design, composition: tab.composition }
+    const next = tabMarkFor(url, previous, recognised)
+    if (isSameTabMark(next, previous)) return
+    tab.design = next.design
+    tab.composition = next.composition
+    if (next.design === null) this.inspector.setArmed(tabId, tab.view.webContents, false)
+    this.publishState(tabId)
+    if (!next.composition) {
+      // A tab that left the composition has no playhead to restore.
+      this.playheads.delete(tabId)
+      return
+    }
+    // Arming is idempotent per document and per timeline, so this needs no guard
+    // against the load's own arm: whichever of the two arrives second does nothing.
+    this.armCompositionQuietly(tabId, tab)
   }
 
   async executeUtility(
@@ -716,14 +796,70 @@ export class BrowserService {
    */
   reloadPreviewOrigin(origin: string): number {
     let reloaded = 0
-    for (const tab of this.tabs.values()) {
+    for (const [tabId, tab] of this.tabs) {
       const contents = tab.view.webContents
       if (contents.isDestroyed()) continue
       if (!isPreviewOriginUrl(contents.getURL(), origin)) continue
-      contents.reload()
+      // Reloading is deferred until the tab's playhead has been read, so a
+      // composition the agent just edited resumes where it was instead of being
+      // thrown back to its first frame. A tab that is not a composition answers
+      // without touching the page.
+      void this.reloadKeepingPlayhead(tabId, tab).catch((error: unknown) => {
+        Logger.error('A preview tab could not refresh itself:', error)
+      })
       reloaded += 1
     }
     return reloaded
+  }
+
+  /**
+   * Refresh one preview tab, keeping a composition's playhead across the reload.
+   *
+   * The document is about to be replaced, so where it was is read first and handed
+   * to the next arming of the transport. The reload still happens when that read
+   * fails: a preview that stops refreshing because playback could not be asked about
+   * would be a worse trade than losing one second of position.
+   */
+  private async reloadKeepingPlayhead(tabId: string, tab: BrowserTab): Promise<void> {
+    if (tab.composition) await this.rememberPlayhead(tabId, tab)
+    const contents = tab.view.webContents
+    if (!contents.isDestroyed()) contents.reload()
+  }
+
+  /** A composition tab's playhead as the page reports it, or null. */
+  private async readPlayhead(tabId: string): Promise<{ time: number; playing: boolean } | null> {
+    const playback = await this.transportState(tabId).catch(() => null)
+    return playback ? { time: playback.time, playing: playback.playing } : null
+  }
+
+  /**
+   * Remember where a composition's playhead is, for the next arming to restore.
+   *
+   * The folder is stored with the position, so a tab reused for another composition
+   * can never restore this one's playhead. A page with no armed transport answers
+   * nothing, and that answer deliberately does not overwrite a position already
+   * remembered: a capture's frozen page is exactly that page, and the position worth
+   * restoring is the one from before it was loaded.
+   */
+  private async rememberPlayhead(tabId: string, tab: BrowserTab): Promise<void> {
+    const directory = tab.composition?.directory
+    if (!directory) return
+    const playback = await this.readPlayhead(tabId)
+    // The tab can be closed while the page is being asked, and a position for a
+    // tab that is gone would never be restored by anything.
+    if (this.tabs.get(tabId) !== tab) return
+    if (playback) this.playheads.set(tabId, { directory, ...playback })
+  }
+
+  /** Take the remembered playhead for one folder, when that is the folder it is for. */
+  private takePlayhead(
+    tabId: string,
+    directory: string
+  ): { time: number; playing: boolean } | null {
+    const saved = this.playheads.get(tabId)
+    if (!saved) return null
+    this.playheads.delete(tabId)
+    return saved.directory === directory ? { time: saved.time, playing: saved.playing } : null
   }
 
   /** The agent tab bound to a project and thread, or null when it has none.
@@ -849,7 +985,14 @@ export class BrowserService {
     if (!tab || tab.view.webContents.isDestroyed()) {
       return { rendered: false, reason: 'the tab is gone' }
     }
-    const result: unknown = await tab.view.webContents.executeJavaScript(`(async () => {
+    const drawn: unknown = tab.view.webContents.executeJavaScript(`(async () => {
+      const transport = globalThis.${COMPOSITION_TRANSPORT_GLOBAL};
+      if (transport && typeof transport.freezeAt === 'function') {
+        const state = transport.freezeAt(${JSON.stringify(seconds)});
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const failure = state && state.error;
+        return failure ? { rendered: false, reason: String(failure) } : { rendered: true };
+      }
       const draw = globalThis.cioRenderFrame;
       if (typeof draw !== 'function') {
         return { rendered: false, reason: 'the page defines no cioRenderFrame function' };
@@ -862,12 +1005,169 @@ export class BrowserService {
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       return { rendered: true };
     })()`)
+    // Bounded, because a page that never settles, or one whose animation frames
+    // are throttled because the tab is parked, would leave this outstanding and
+    // hang the turn that asked for the frame.
+    const expired: unique symbol = Symbol('frame-render-timeout')
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const deadline = new Promise<typeof expired>((resolve) => {
+      timer = setTimeout(() => resolve(expired), FRAME_RENDER_TIMEOUT_MS)
+    })
+    let result: unknown
+    try {
+      result = await Promise.race([drawn, deadline])
+    } finally {
+      if (timer !== null) clearTimeout(timer)
+    }
+    if (result === expired) {
+      return {
+        rendered: false,
+        reason: `the composition did not settle within ${FRAME_RENDER_TIMEOUT_MS / 1000} seconds`
+      }
+    }
     if (typeof result !== 'object' || result === null) return { rendered: false }
     const record = result as Record<string, unknown>
     const reason = typeof record['reason'] === 'string' ? record['reason'] : undefined
     return record['rendered'] === true
       ? { rendered: true }
       : { rendered: false, ...(reason ? { reason } : {}) }
+  }
+
+  /**
+   * Install the playback transport in a composition tab.
+   *
+   * This is the handover that turns a composition from a page that plays itself
+   * into a video: the runtime draws every frame and the panel drives the playhead,
+   * so a piece of work can be paused, scrubbed and replayed instead of watched from
+   * the start every time it is looked at.
+   *
+   * Three rules keep the playhead honest, and each of them exists because of a way
+   * it was being lost:
+   *
+   * - A document is armed once, for the timeline it was armed with. Recognition
+   *   resolves after the load, so a navigation can be armed from the mark the tab
+   *   carried a moment ago and then asked to arm again for the folder it actually
+   *   arrived on; without this, the second install restarts the video.
+   * - A composition is restored from the playhead saved for *its* folder. A tab
+   *   reused for a different composition must not inherit the previous one's
+   *   position.
+   * - A re-arm of a running document takes its position from the page rather than
+   *   from the saved value, which belongs to the document that has already gone.
+   *
+   * A capture URL is armed frozen rather than played. The runtime still declines the
+   * page's own draws, which is what makes the captured frame the frame that was
+   * asked for, but it never starts moving and never restores a playhead: the picture
+   * is the answer there, not playback.
+   */
+  private async armCompositionTransport(tabId: string, tab: BrowserTab): Promise<void> {
+    const composition = tab.composition
+    const contents = tab.view.webContents
+    if (!composition || contents.isDestroyed()) return
+    const url = contents.getURL()
+    // Recognition resolves after the load, so the mark a tab is holding can name the
+    // folder it just left. Every served folder keeps its own loopback origin, so the
+    // origin is what tells the document in front of us from the one the mark
+    // describes: arming on a stale mark would drive this page with another
+    // composition's timeline.
+    if (originOf(url) !== composition.origin) return
+    const frozen = isVideoCaptureUrl(url)
+    const generation = tab.navigationGeneration
+    const armed = tab.transport
+    if (
+      armed !== null &&
+      armed.generation === generation &&
+      armed.url === url &&
+      armed.duration === composition.duration &&
+      armed.fps === composition.fps
+    ) {
+      // The same document, already driven by the same timeline.
+      return
+    }
+    // A re-arm of the document that is on screen right now keeps where the user is
+    // rather than the position saved for a document that has been replaced.
+    const live = armed !== null && armed.url === url ? await this.readPlayhead(tabId) : null
+    const result: unknown = await contents.executeJavaScript(
+      compositionTransportScript({
+        duration: composition.duration,
+        fps: composition.fps,
+        autoplay: !frozen
+      })
+    )
+    const record =
+      typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : null
+    if (record?.['installed'] !== true) {
+      const reason = typeof record?.['reason'] === 'string' ? record['reason'] : 'unknown reason'
+      // A folder listing, or a composition whose page has not defined the render
+      // function yet, is an ordinary thing to be looking at rather than a fault.
+      Logger.dev('Composition playback was not armed:', { tabId, reason })
+      return
+    }
+    // A burst of agent writes reloads a preview more than once, so the document can
+    // be replaced while the runtime is being installed. The position then belongs to
+    // a document that has gone, and a record naming this one would make the next
+    // load believe it was already armed, so neither is kept.
+    if (contents.isDestroyed() || tab.navigationGeneration !== generation) return
+    tab.transport = { generation, url, duration: composition.duration, fps: composition.fps }
+    if (frozen) return
+    const playhead = live ?? this.takePlayhead(tabId, composition.directory)
+    if (!playhead) return
+    await this.sendTransport(tabId, 'seek', playhead.time)
+    if (playhead.playing) await this.sendTransport(tabId, 'play', 0)
+  }
+
+  /** Arm the transport without letting a playback problem fail a page load. */
+  private armCompositionQuietly(tabId: string, tab: BrowserTab): void {
+    void this.armCompositionTransport(tabId, tab).catch((error: unknown) => {
+      Logger.error('A composition preview could not be armed for playback:', error)
+    })
+  }
+
+  /**
+   * Run one playback action on a composition tab and report the state it left.
+   *
+   * The page owns the frame, so the answer is read back rather than assumed: a play
+   * that ended immediately, or a seek the composition clamped to its own length,
+   * shows in the panel exactly as it happened.
+   */
+  async transport(
+    tabId: string,
+    command: BrowserTransportCommand,
+    value: number | boolean
+  ): Promise<BrowserCompositionPlayback | null> {
+    const tab = this.requireTab(tabId)
+    if (!tab.composition) {
+      throw new TypeError('Playback is available on a composition preview only')
+    }
+    return this.sendTransport(tabId, command, value)
+  }
+
+  /**
+   * A composition tab's playhead, or null when the tab is not playing one.
+   *
+   * Read without changing anything, because this is what the panel polls to move the
+   * scrubber. A tab that is gone, or is not a composition, answers null rather than
+   * throwing: the panel can outlive the tab it was reading.
+   */
+  async transportState(tabId: string): Promise<BrowserCompositionPlayback | null> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || !tab.composition || tab.view.webContents.isDestroyed()) return null
+    const result: unknown = await tab.view.webContents.executeJavaScript(
+      compositionTransportStateScript()
+    )
+    return toCompositionPlayback(result)
+  }
+
+  private async sendTransport(
+    tabId: string,
+    command: BrowserTransportCommand,
+    value: number | boolean
+  ): Promise<BrowserCompositionPlayback | null> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return null
+    const result: unknown = await tab.view.webContents.executeJavaScript(
+      compositionTransportCommandScript(command, value)
+    )
+    return toCompositionPlayback(result)
   }
 
   /**
@@ -1025,7 +1325,10 @@ export class BrowserService {
       consoleEntries: [],
       favicon: null,
       viewport: { ...DEFAULT_PARKED_VIEWPORT },
-      design: null
+      design: null,
+      composition: null,
+      transport: null,
+      navigationGeneration: 0
     }
     this.tabs.set(tabId, tab)
 
@@ -1058,6 +1361,10 @@ export class BrowserService {
       // The dom-ready install can race the document it runs in; watching again is
       // idempotent per frame and covers that case.
       this.watchCaptureMainFrame(tabId, view.webContents)
+      // A composition is armed on the document that just arrived, which is what
+      // covers a preview reloading itself: the folder is recognised on the
+      // navigation, and the playback runtime is installed here.
+      if (tab.composition) this.armCompositionQuietly(tabId, tab)
     })
     view.webContents.on(
       'did-frame-finish-load',
@@ -1074,7 +1381,14 @@ export class BrowserService {
     view.webContents.on('devtools-opened', publish)
     view.webContents.on('devtools-closed', publish)
     view.webContents.on('did-start-loading', publish)
-    view.webContents.on('did-stop-loading', publish)
+    view.webContents.on('did-stop-loading', () => {
+      publish()
+      // The safety net for a mark that resolved while the document was still
+      // arriving, which `did-finish-load` cannot see because recognition is
+      // asynchronous. Arming is idempotent, so this costs nothing when the load's
+      // own arm already happened.
+      if (tab.composition) this.armCompositionQuietly(tabId, tab)
+    })
     view.webContents.on('did-navigate', () => {
       // A new document starts without an icon; the old site's favicon must not linger.
       tab.favicon = null
@@ -1088,7 +1402,11 @@ export class BrowserService {
       // Recognition is decided from the page that just committed, not from a record
       // of who opened the tab last: that is what keeps a design a design across a
       // restart, and what covers a tab the agent opened itself.
-      this.refreshDesignTab(tabId, tab)
+      // Whatever runtime the document that just ended had went with it, and the
+      // next document is a new one even when it is the same URL loaded again.
+      tab.navigationGeneration += 1
+      tab.transport = null
+      this.refreshTabMark(tabId, tab)
       // The dialog shim lived in the document that just went away, so the next
       // report has to install it again rather than trust the old record.
       this.injectedDialogLabels.delete(tabId)
@@ -1445,6 +1763,23 @@ export class BrowserService {
 
   private load(tabId: string, url: string): void {
     const tab = this.requireTab(tabId)
+    // Where a composition was is read before the document is replaced, so a capture
+    // round trip does not send the user back to the first frame, and the ordering
+    // cannot depend on which IPC the renderer happens to handle first.
+    if (tab.composition && !tab.view.webContents.isDestroyed()) {
+      void this.rememberPlayhead(tabId, tab).then(
+        () => this.navigateTo(tabId, url),
+        () => this.navigateTo(tabId, url)
+      )
+      return
+    }
+    this.navigateTo(tabId, url)
+  }
+
+  /** Start one navigation, reporting a failure rather than rejecting. */
+  private navigateTo(tabId: string, url: string): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return
     void tab.view.webContents.loadURL(url).catch((error: unknown) => {
       Logger.dev('Browser navigation did not complete:', { tabId, url, error })
       this.publishState(tabId)
@@ -1491,6 +1826,7 @@ export class BrowserService {
       muted: contents.isAudioMuted(),
       capturing: this.capture.isCapturing(tabId),
       design: tab.design,
+      composition: tab.composition,
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward()
     }
@@ -1779,6 +2115,7 @@ export class BrowserService {
     this.forgetParked(tabId)
     this.agentReveals.delete(tabId)
     this.lastScreenshot.delete(tabId)
+    this.playheads.delete(tabId)
     this.capture.forget(tabId)
     this.inspector.forget(tabId)
     this.stage.release(tab.view)
@@ -1799,5 +2136,33 @@ export class BrowserService {
       throw new TypeError(`${field} must be a string${allowEmpty ? '' : ' with content'}`)
     }
     return value
+  }
+}
+
+/**
+ * Read a transport state out of what a composition page answered, or null when it
+ * answered nothing usable.
+ *
+ * The page is a separate document whose shape the app does not control, so every
+ * field is checked rather than trusted. A missing or malformed answer is the same
+ * as no transport being armed, which is what a tab showing a normal site reports.
+ */
+function toCompositionPlayback(value: unknown): BrowserCompositionPlayback | null {
+  if (typeof value !== 'object' || value === null) return null
+  const record = value as Record<string, unknown>
+  const time = record['time']
+  const duration = record['duration']
+  if (typeof time !== 'number' || !Number.isFinite(time)) return null
+  if (typeof duration !== 'number' || !Number.isFinite(duration)) return null
+  const error = record['error']
+  return {
+    time: Math.max(0, time),
+    duration: Math.max(0, duration),
+    playing: record['playing'] === true,
+    loop: record['loop'] === true,
+    error:
+      typeof error === 'string' && error.length > 0
+        ? error.slice(0, MAX_TRANSPORT_ERROR_LENGTH)
+        : null
   }
 }

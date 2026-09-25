@@ -1,7 +1,6 @@
 import { realpathSync } from 'node:fs'
 import { isAbsolute, relative, sep } from 'node:path'
 import { AUTHORED_WORK_ROOT_BY_KIND, authoredWorkKindOf } from '../../lib/design/authored-work'
-import type { BrowserDesignTab } from '../../lib/ipc/browser'
 import type {
   AuthoredWorkKind,
   DesignEntry,
@@ -13,6 +12,7 @@ import type {
 import { originOf } from '../../lib/local-development-url'
 import { requireLocalProject } from '../../lib/project-artifacts'
 import type { BrowserService } from '../browser/browser-service'
+import { NO_TAB_MARK, type BrowserTabMark } from '../browser/browser-service/browser-tab-mark'
 import type { Database } from '../database/database'
 import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
 import { DesignRepo } from '../database/repositories/design-repo'
@@ -21,6 +21,7 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { isCioDesignRequest, CIO_DESIGN_TAG } from '../utilities/cio-design-prompt'
 import { isCioVideoRequest, CIO_VIDEO_TAG } from '../utilities/cio-video-prompt'
 import { openVideoPreview } from '../video/video-preview-session'
+import { readCompositionManifest } from '../video/video-manifest'
 import { listProjectWorkFolders } from './design-listing'
 import { openDesignPreview } from './design-preview-session'
 
@@ -187,31 +188,37 @@ export class DesignService {
   }
 
   /**
-   * The design a tab is showing, recognised from the URL it is on rather than from
-   * who opened it, and recorded so the board follows.
+   * What a tab is showing, recognised from the URL it is on rather than from who
+   * opened it, and recorded so the board follows.
    *
-   * The browser calls this on every committed navigation. A design folder is served
-   * on its own loopback origin, so the URL is enough to answer the question the
-   * board asks: which folder is this thread working in. Recognising it this way
-   * covers the two cases a record of the last preview cannot: a tab the agent
-   * opened itself, and a tab the renderer restored after a restart.
+   * The browser calls this on every committed navigation. An authored-work folder
+   * is served on its own loopback origin, so the URL is enough to answer the
+   * question the board asks: which folder is this thread working in. Recognising it
+   * this way covers the two cases a record of the last preview cannot: a tab the
+   * agent opened itself, and a tab the renderer restored after a restart.
    *
-   * A composition answers null. The tab marker arms the element inspector, and a
-   * composition is a page that moves rather than a design whose elements are picked
-   * out, so it is recorded for the board without being marked as a design.
+   * The two marks differ by what they arm. A design folder arms the element
+   * inspector, because picking an element out of it is how a change is described. A
+   * composition arms the playback transport instead, and carries the timeline its
+   * manifest declares, because a page that moves is watched rather than picked
+   * apart. Either way the folder is recorded for the board.
    */
-  observeShownFolder(projectId: string, threadId: string, url: string): BrowserDesignTab | null {
+  async observeShownFolder(
+    projectId: string,
+    threadId: string,
+    url: string
+  ): Promise<BrowserTabMark> {
     const origin = originOf(url)
-    if (origin === null) return null
+    if (origin === null) return NO_TAB_MARK
     const root = this.options.previews.rootForOrigin(origin)
-    if (root === null) return null
+    if (root === null) return NO_TAB_MARK
     const directory = this.projectRelativeFolder(
       requireLocalProject(this.options.database, projectId).path,
       root
     )
-    if (directory === null) return null
+    if (directory === null) return NO_TAB_MARK
     const kind = authoredWorkKindOf(directory)
-    if (kind === null) return null
+    if (kind === null) return NO_TAB_MARK
     this.rememberShownFolder({
       projectId,
       threadId,
@@ -219,7 +226,22 @@ export class DesignService {
       entry: entryWithinOrigin(url, origin),
       kind
     })
-    return kind === 'design' ? { directory, origin } : null
+    if (kind === 'design') return { design: { directory, origin }, composition: null }
+    // A composition with no readable manifest has no timeline, so there is nothing
+    // to play: it is shown as an ordinary page rather than driven by a guess.
+    const manifest = await readCompositionManifest(root)
+    if (!manifest) return NO_TAB_MARK
+    return {
+      design: null,
+      composition: {
+        directory,
+        origin,
+        duration: manifest.duration,
+        fps: manifest.fps,
+        width: manifest.width,
+        height: manifest.height
+      }
+    }
   }
 
   /**

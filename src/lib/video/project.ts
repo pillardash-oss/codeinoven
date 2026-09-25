@@ -224,6 +224,21 @@ export function videoCaptureUrl(baseUrl: string, seconds: number): string {
   return url.toString()
 }
 
+/**
+ * Whether a URL is the frozen form of a composition rather than a viewing.
+ *
+ * The same parameter that tells a project to draw one frame is what the browser
+ * asks about before it arms playback: a page loaded to be captured must not be
+ * handed a transport that starts it moving again under the screenshot.
+ */
+export function isVideoCaptureUrl(url: string): boolean {
+  try {
+    return new URL(url).searchParams.has(VIDEO_CAPTURE_PARAM)
+  } catch {
+    return false
+  }
+}
+
 /** Seconds on the timeline, clamped to what the manifest says the composition holds. */
 export function videoClampTime(manifest: VideoProjectManifest, seconds: unknown): number {
   if (seconds === undefined || seconds === null) return 0

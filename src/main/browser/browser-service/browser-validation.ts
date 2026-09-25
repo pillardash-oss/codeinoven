@@ -11,6 +11,7 @@ import type {
   BrowserShortcutBindings,
   BrowserShortcutChord,
   BrowserSiteDataScope,
+  BrowserTransportCommand,
   BrowserViewBounds
 } from '../../../lib/ipc-contract'
 import { BROWSER_SHORTCUT_ACTIONS } from '../../../lib/ipc-contract'
@@ -262,6 +263,65 @@ export function validateThreadId(value: unknown): string {
 
 export function browserContextKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
+}
+
+/**
+ * Ceiling on one attempt to draw and settle a composition frame.
+ *
+ * A page that never defines the frame it was asked for, or one whose animation
+ * frames are throttled because the tab is parked, would otherwise leave the call
+ * outstanding forever and hang the agent's turn on a capture that can never
+ * finish. Bounded, the attempt reports and the capture retries or fails with a
+ * sentence.
+ */
+export const FRAME_RENDER_TIMEOUT_MS = 4_000
+
+/**
+ * Ceiling on the transport command set, so the shared contract and the runtime
+ * that answers it cannot drift apart: a command the union declares but the page
+ * does not define would be an eval of an unknown name.
+ */
+const TRANSPORT_COMMANDS = ['play', 'pause', 'toggle', 'stop', 'seek', 'loop'] as const
+
+/** Ceiling on a playback error, so a page that throws a novel on every frame
+ *  cannot push an unbounded message into published tab state. */
+export const MAX_TRANSPORT_ERROR_LENGTH = 400
+
+/**
+ * Validate one playback action on a composition tab.
+ *
+ * The set is closed and every member names a function the injected transport
+ * defines, so a caller's input selects a command rather than becoming code.
+ */
+export function validateTransportCommand(value: unknown): BrowserTransportCommand {
+  if (typeof value !== 'string' || !(TRANSPORT_COMMANDS as readonly string[]).includes(value)) {
+    throw new TypeError('Browser transport command is not a defined playback action')
+  }
+  return value as BrowserTransportCommand
+}
+
+/**
+ * Validate the value one command carries.
+ *
+ * A seek names a non-negative second and a loop change names a boolean, checked
+ * rather than coerced: a seek silently read as zero would look like the scrubber
+ * jumping to the start, which is a bug report about the wrong thing.
+ */
+export function validateTransportValue(
+  command: BrowserTransportCommand,
+  value: unknown
+): number | boolean {
+  if (command === 'seek') {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      throw new TypeError('A browser seek must name a non-negative number of seconds')
+    }
+    return value
+  }
+  if (command === 'loop') {
+    if (typeof value !== 'boolean') throw new TypeError('A browser loop change must be a boolean')
+    return value
+  }
+  return 0
 }
 
 export function validatePermissionRequestId(value: unknown): string {

@@ -28,6 +28,11 @@ export interface BrowserPageState {
    *  it. Non-null is what arms the element inspector, so a tab showing a normal
    *  site never offers it. */
   design: BrowserDesignTab | null
+  /** The video composition this tab is rendering, when its served folder holds a
+   *  `composition.json`. Non-null is what puts the transport in the panel: the
+   *  app owns the playhead, so a composition is paused, scrubbed and stopped the
+   *  way a video is. */
+  composition: BrowserCompositionTab | null
 }
 
 /**
@@ -45,6 +50,56 @@ export interface BrowserDesignTab {
   /** Loopback origin the folder is served on, e.g. `http://127.0.0.1:51234`. */
   origin: string
 }
+
+/**
+ * A video composition rendered in a browser tab, with the timeline the app needs
+ * to drive it.
+ *
+ * A composition is a served folder holding `index.html` and `composition.json`
+ * (`src/lib/video/project.ts`). The manifest is read before the tab is armed,
+ * because how long the composition runs is what a transport needs first, and the
+ * duration published here is the one the page was armed with rather than a second
+ * reading that could disagree with it.
+ */
+export interface BrowserCompositionTab extends BrowserDesignTab {
+  /** Seconds the composition runs, from `composition.json`. */
+  duration: number
+  /** Frames per second, which is the step one frame button moves by. */
+  fps: number
+  /** Frame size in pixels, from the manifest. */
+  width: number
+  /** Frame size in pixels, from the manifest. */
+  height: number
+}
+
+/**
+ * Where a composition's playhead is, as the page reports it.
+ *
+ * The app owns the clock but the page owns the frame, so playback state lives
+ * inside the tab and is read back rather than assumed: a composition that reached
+ * its end without looping reports `playing` false without the app deciding that.
+ */
+export interface BrowserCompositionPlayback {
+  /** Seconds into the timeline. */
+  time: number
+  /** Whether the playhead is moving. */
+  playing: boolean
+  /** Seconds the composition runs, echoed so one read answers the whole question. */
+  duration: number
+  /** Whether the playhead returns to the start at the end. */
+  loop: boolean
+  /** The message from a frame that threw, which is why playback stopped. */
+  error: string | null
+}
+
+/**
+ * One playback action on a composition tab.
+ *
+ * `seek` and `loop` carry a value; the rest take none. The set is closed and a
+ * command names a function the transport defines, so no part of a caller's input
+ * is ever evaluated as code.
+ */
+export type BrowserTransportCommand = 'play' | 'pause' | 'toggle' | 'stop' | 'seek' | 'loop'
 
 /**
  * One element the user picked from a design, reported by the injected inspector.

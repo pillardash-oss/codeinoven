@@ -15,6 +15,7 @@
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { normalizeBrowserUrl } from '$shared/local-development-url'
+  import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
@@ -82,7 +83,8 @@
       audible: false,
       muted: false,
       capturing: false,
-      design: null
+      design: null,
+      composition: null
     }
   }
 
@@ -220,16 +222,6 @@
     if (eventTabId !== tabId || action !== 'focus-address') return
     if (!panelVisible) return
     focusAddress()
-  }
-
-  /** Keep the address input reachable, so a chord the main process claims can
-   *  move focus into it. An attachment rather than `bind:this`: the element
-   *  already binds its value, and this panel only ever needs the node. */
-  const attachAddressInput: Attachment<HTMLInputElement> = (element) => {
-    addressInput = element
-    return () => {
-      if (addressInput === element) addressInput = undefined
-    }
   }
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {
@@ -547,7 +539,7 @@
       <input
         class="h-7 w-full rounded-lg border border-border bg-elevated pl-8 pr-8 text-xs text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
         class:border-danger={addressError !== ''}
-        {@attach attachAddressInput}
+        bind:this={addressInput}
         bind:value={address}
         spellcheck="false"
         autocomplete="url"
@@ -620,6 +612,13 @@
       </button>
     {/if}
   </form>
+  {#if pageState.composition}
+    <BrowserCompositionTransport
+      {tabId}
+      composition={pageState.composition}
+      active={panelVisible}
+    />
+  {/if}
   {#if inspectArmed}
     <p
       class="shrink-0 border-b border-accent/20 bg-accent/10 px-3 py-1 text-[0.6875rem] text-foreground"

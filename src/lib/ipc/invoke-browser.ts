@@ -1,4 +1,5 @@
 import type {
+  BrowserCompositionPlayback,
   BrowserDownload,
   BrowserInspectorMarker,
   BrowserPageState,
@@ -6,6 +7,7 @@ import type {
   BrowserPermissionPromptContext,
   BrowserShortcutBindings,
   BrowserSiteDataScope,
+  BrowserTransportCommand,
   BrowserViewBounds
 } from './browser'
 import type { Contract } from './contract-helpers'
@@ -27,6 +29,18 @@ export const invokeBrowserContract = {
   'browser:goBack': {} as Contract<[tabId: string], void>,
   'browser:goForward': {} as Contract<[tabId: string], void>,
   'browser:reload': {} as Contract<[tabId: string], void>,
+  /**
+   * Run one playback action on a composition tab and answer with the state it
+   * left behind, so the panel shows what happened rather than what it asked for.
+   * Only meaningful on a tab whose `BrowserPageState.composition` is set.
+   */
+  'browser:transport': {} as Contract<
+    [tabId: string, command: BrowserTransportCommand, value: number | boolean],
+    BrowserCompositionPlayback | null
+  >,
+  /** Read a composition tab's playhead without changing it. Null when the tab is
+   *  not a composition, or is showing a page that has not been armed. */
+  'browser:transportState': {} as Contract<[tabId: string], BrowserCompositionPlayback | null>,
   /** Reload bypassing the HTTP cache (hard reload). */
   'browser:reloadIgnoringCache': {} as Contract<[tabId: string], void>,
   'browser:stop': {} as Contract<[tabId: string], void>,
