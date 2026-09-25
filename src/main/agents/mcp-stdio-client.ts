@@ -1,7 +1,10 @@
 /// <reference types="node" />
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
+import { mkdirSync } from 'fs'
+import { join } from 'path'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { getConfigRoot } from '../../lib/utils'
 
 export const MCP_TIMEOUT_MS = 30_000
 
@@ -50,6 +53,29 @@ export function parseMcpServerInfo(result: unknown): McpServerInfo {
 }
 
 /**
+ * The directory an MCP child process runs in: app-owned, and deliberately empty
+ * of any `package.json` or `.npmrc`.
+ *
+ * An `npx`-launched server resolves its package against the working directory,
+ * and the Electron process's own cwd is whatever launched the app. When that cwd
+ * is a source checkout, npm reads that project's `overrides` and `.npmrc`: a
+ * single conflicting override then aborts the install with `EOVERRIDE` before
+ * the MCP server ever starts (the community Slack server died exactly this way
+ * inside CodeInOven's own checkout). A neutral directory keeps the server's
+ * install independent of whichever project the app happens to be sitting in.
+ */
+function mcpWorkingDirectory(): string | undefined {
+  const directory = join(getConfigRoot(), 'runtime', 'mcp-servers')
+  try {
+    mkdirSync(directory, { recursive: true })
+    return directory
+  } catch {
+    // A cwd is an optimization, never a reason an MCP server cannot start.
+    return undefined
+  }
+}
+
+/**
  * Minimal JSON-over-stdio MCP client shared by the per-turn utility gateway
  * and long-lived services (e.g. the computer-use PiP monitor). One instance
  * owns one spawned child process.
@@ -88,6 +114,7 @@ export class StdioMcpClient implements McpClient {
     const client = new StdioMcpClient(
       spawn(command, args, {
         env: { ...buildProcessEnvironment(), ...environment },
+        cwd: mcpWorkingDirectory(),
         stdio: ['pipe', 'pipe', 'pipe']
       }),
       command
