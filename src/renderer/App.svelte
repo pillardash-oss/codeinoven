@@ -149,10 +149,19 @@
   /** The screen on top. A nested screen outranks the actions list, because
    *  picking one closes the actions list in the same flush. */
   function resolveSpotlightScreen(): SpotlightScreenId | null {
-    if (fileSearch.paletteOpen) return 'files'
-    if (threadSearch.paletteOpen) return 'threads'
-    if (projectSwitch.paletteOpen) return 'projects'
-    if (commandPaletteOpen) return 'actions'
+    // Read every flag before deciding. A `$derived` only stays subscribed to
+    // the signals it read on its last run, so a short-circuit that skips a
+    // flag drops that flag from the dependency set: a later change to it no
+    // longer dirties the derived, and the screen it controls never re-renders.
+    // That is what made the spotlight refuse to reopen after a screen hop.
+    const files = fileSearch.paletteOpen
+    const threads = threadSearch.paletteOpen
+    const projects = projectSwitch.paletteOpen
+    const actions = commandPaletteOpen
+    if (files) return 'files'
+    if (threads) return 'threads'
+    if (projects) return 'projects'
+    if (actions) return 'actions'
     return null
   }
 
