@@ -55,10 +55,6 @@
   // svelte-ignore state_referenced_locally
   const tabInitialTitle = tab.title
 
-  // Claim the native view for this tab while this panel is mounted. The claim is
-  // released with the component, so a destroyed panel can never keep the view.
-  $effect(() => browserVisibility.claimTab(tabId, surface))
-
   function initialPageState(): BrowserPageState {
     return {
       tabId,
@@ -341,6 +337,9 @@
   // the pins are elements drawn by an injected script, not a render of state, so
   // the write has to be told to happen, not derived.
   onMount(() => {
+    // Claim the native view for this tab while this panel is mounted. The claim
+    // is released with the component, so a destroyed panel can never keep the view.
+    const releaseBrowserClaim = browserVisibility.claimTab(tabId, surface)
     const unsubscribeSiteMenu = subscribe('browser:siteMenuClosed', () => {
       siteMenuOpen = false
     })
@@ -386,6 +385,7 @@
       cancelAnimationFrame(animationFrame)
       observer.disconnect()
       window.removeEventListener('resize', onWindowResize)
+      releaseBrowserClaim()
       unsubscribeSiteMenu()
       unsubscribeState()
       unsubscribeDevTools()
