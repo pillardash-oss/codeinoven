@@ -382,6 +382,8 @@ import { auxiliarySelectionFor } from '../../lib/auxiliary-agents'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import { createAutoTitleLauncher } from './title-generation-policy'
 import { artifactInstruction, GeneratedArtifactService } from './generated-artifact-service'
+import { writeAssistantReport } from './assistant-report-service'
+import { assistantReportIsTerminal, isAssistantReportThread } from '../../lib/assistant-reports'
 import {
   classifyProviderIssue,
   isUsageLimitNoticeText,
@@ -22195,6 +22197,59 @@ export class ChatEngine {
   }
 
   /**
+   * Publish one settled assistant run's report as a durable Markdown file under
+   * `reports/` in the routine's own workspace.
+   *
+   * A thread is capped and evicted, so a report that only ever lived in the run
+   * transcript disappears with it. Fire-and-forget and swallowed on error: the
+   * durable copy is best-effort bookkeeping and must never block or fail the
+   * turn's finalization.
+   */
+  private captureAssistantReport(
+    thread: Thread,
+    turnAssistant: AgentMessage | undefined,
+    status: ThreadStatus
+  ): void {
+    if (!isAssistantReportThread(thread)) return
+    if (!assistantReportIsTerminal(status)) return
+    if (!turnAssistant) return
+    const report = assistantText(turnAssistant).trim()
+    if (report.length === 0) return
+    void this.writeAssistantReportFor(thread, report, status)
+  }
+
+  private async writeAssistantReportFor(
+    thread: Thread,
+    report: string,
+    status: ThreadStatus
+  ): Promise<void> {
+    try {
+      const routine = thread.routineId ? this.routineRepo.get(thread.routineId) : null
+      // A run's own title is just its start time, so the report's heading uses
+      // the task it ran for. A turn on the task's own thread is already titled.
+      let taskTitle = thread.title
+      if (thread.assistantTaskId) {
+        const task = await this.threadManager.getThread(thread.projectId, thread.assistantTaskId)
+        if (task) taskTitle = task.title
+      }
+      await writeAssistantReport(this.storage, {
+        thread,
+        taskTitle,
+        routineName: routine?.name,
+        priority: routine?.priority,
+        report,
+        status,
+        at: Date.now()
+      })
+    } catch (error) {
+      Logger.error('Assistant report could not be written to disk', {
+        threadId: thread.id,
+        error: rawErrorMessage(error)
+      })
+    }
+  }
+
+  /**
    * Create the fresh thread one assistant run executes on.
    *
    * Every scheduled fire and every manual "Run now" gets its own thread: a run
@@ -23793,6 +23848,12 @@ export class ChatEngine {
       // thread no run was dispatched on.
       if (this.assistantRunSettled && finishedThread && isAssistantThread(finishedThread)) {
         this.assistantRunSettled(finishedThread.id, finalStatus)
+      }
+      // A settled assistant task turn also leaves a durable Markdown report in
+      // the routine's workspace, so the report outlives the evicted thread. The
+      // in-app report and its notification are unchanged.
+      if (finishedThread && isAssistantThread(finishedThread)) {
+        this.captureAssistantReport(finishedThread, turnAssistant, finalStatus)
       }
       if (!failure && !awaitingUser && !contractBlocked && finishedThread) {
         try {

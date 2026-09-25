@@ -792,6 +792,26 @@ delivery whose channel has no ready connection. An action-only routine that
 reports nothing has no delivery, and the contract says so explicitly instead of
 inventing a channel.
 
+### Durable report files
+
+A run thread is capped and evicted, so a report that only ever lived in the
+transcript would eventually disappear. Every assistant task turn that settles
+with a report therefore also lands one Markdown file under `reports/` in the
+routine's own workspace (`assistant-cwd/<routineId>/reports/`), which the
+**Workspace files** panel mounts. `isAssistantReportThread`
+(`src/lib/assistant-reports.ts`) excludes the Getting started authoring thread,
+and `assistantReportIsTerminal` limits the copy to the terminal outcomes
+(`completed`, `failed`); a non-terminal settle (`awaiting_approval`,
+`working-paused`) is still in flight, and an `interrupted` turn was stopped on
+purpose. The file is written in the main process from the turn's final answer
+(`writeAssistantReport`, `src/main/chat/assistant-report-service.ts`, called from
+the chat engine's idle finalization), so it is deterministic and does not depend
+on the model remembering to write a file. `buildAssistantReportDocument` puts a
+short metadata header (run time, status, task, agreed urgency) above the final
+answer, and the file name is the run time plus a short thread suffix so two runs
+that settle in the same second do not collide. The in-app report and its
+notification are unchanged: the file is the copy that outlives the thread.
+
 ### Priority
 
 Urgency is deliberately **two independent brackets**, because "urgent" is two

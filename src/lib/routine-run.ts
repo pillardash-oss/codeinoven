@@ -138,6 +138,9 @@ function reportingLines(routine: Pick<Routine, 'delivery' | 'priority'>): string
       )
     }
     if (delivery.note) lines.push(`Delivery note from the agreement: ${delivery.note}`)
+    lines.push(
+      `However this routine delivers, make your final answer the complete report itself, never a pointer to it: the app saves that answer verbatim to a dated Markdown file under reports/ in this routine's workspace, so the full report survives even after the thread is gone.`
+    )
   }
 
   const priority = routine.priority
