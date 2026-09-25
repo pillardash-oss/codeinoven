@@ -2,13 +2,46 @@ import type { MemoryCategory, MemoryEntry, MemoryPriority, MemoryScope } from '.
 import { memoryAudienceForContainer } from '../../../lib/memory/memory-scopes'
 import { MEMORY_LIMITS, MEMORY_EXTRACTION_LIMITS } from './memory-constants'
 
-/** Standing-preference vocabulary that makes a user turn a durable candidate. */
+/**
+ * Explicit request to keep something, which a work-directive turn can never
+ * override: the user is asking for the information to outlive this task.
+ */
+const EXPLICIT_MEMORY_PATTERN =
+  /\b(?:please remember|remember (?:that|this|to)|keep (?:this|that|it) in mind|for future reference|from now on|going forward|from here on|in future|from today|from this point on|every time|each time|whenever|as a rule|golden rule|standing rule|general rule|reusable rule|persistent rule)\b/iu
+
+/**
+ * Standing-preference vocabulary that makes a user turn a durable candidate.
+ *
+ * Deliberately excludes request phrasing such as "i want you to" and "make sure
+ * to", which open ordinary feature requests and must not gate a work turn into
+ * the memory pipeline on their own.
+ */
 const STANDING_PREFERENCE_PATTERN =
-  /\b(?:always|never|from now on|in future|going forward|from here on|from today|please remember|remember that|i prefer|i like|i don'?t (?:like|want)|i want you to|prefer(?: \w+){0,4} over|make sure (?:to|you)|golden rule|standing rule|general rule|reusable rule|persistent rule)\b/iu
+  /\b(?:always|never|from now on|in future|going forward|from here on|from today|please remember|remember that|i prefer|i like|i don'?t (?:like|want)|prefer(?: \w+){0,4} over|golden rule|standing rule|general rule|reusable rule|persistent rule)\b/iu
 
 /** Durability phrases that signal a rule should outlive the current task. */
 const DURABLE_RULE_PATTERN =
   /\b(?:not a one[ -]?time|not one[ -]?off|not just (?:this|one) time|every time|each time|for every|not a single[ -]?use|ever again|from now|as a rule|one[ -]?time rule)\b/iu
+
+/**
+ * Phrasing that asks for work now rather than stating a rule.
+ *
+ * A request aimed at the current deliverable ("I want you to add ...", "can you
+ * make sure ...", "implement ...") is a feature request or task instruction,
+ * not a standing preference. A turn built this way must never become a
+ * candidate on the strength of its deontic or quantifier wording alone; only an
+ * explicit memory request overrides the guard.
+ */
+const WORK_DIRECTIVE_PATTERN =
+  /\b(?:please\s+)?(?:can|could|would|will)\s+you\b|\bi(?:'d| would)?\s+(?:want|need|like)\s+you\s+to\b|\bi(?:'m| am)\s+asking\s+you\s+to\b|\b(?:let'?s|help me)\b/iu
+
+/** An imperative that opens with a deliverable verb, e.g. "Add a toggle". */
+const IMPERATIVE_TASK_VERB_PATTERN =
+  /^(?:add|implement|create|build|make|write|fix|revert|refactor|rewrite|update|change|rename|remove|delete|move|convert|migrate|wire|integrate|redesign|restyle|adjust|tweak|improve|optimize|patch|install|uninstall|upgrade|downgrade|enable|disable|surface|expose|support|allow|ensure|make sure|double[- ]check|verify)\b/iu
+
+function isWorkDirective(message: string): boolean {
+  return WORK_DIRECTIVE_PATTERN.test(message) || IMPERATIVE_TASK_VERB_PATTERN.test(message.trim())
+}
 
 const UNIVERSAL_QUANTIFIER_PATTERN = /\b(?:anything|everything|every|all)\b/iu
 const DEONTIC_MODAL_PATTERN =
@@ -107,6 +140,31 @@ export function isTrivialUserTurn(message: string): boolean {
   return TRIVIAL_CONTINUATION_PATTERN.test(trimmed)
 }
 
+/**
+ * Whether the turn is a work request that must never become a memory.
+ *
+ * Any request phrasing is a task instruction, including one that carries deontic
+ * wording such as "I want you to never collapse the sidebar"; only an explicit
+ * memory request overrides the guard.
+ */
+export function isWorkDirectiveRequest(message: string): boolean {
+  return isWorkDirective(message) && !EXPLICIT_MEMORY_PATTERN.test(message)
+}
+
+/**
+ * Whether the turn is a bare feature request: request phrasing with no standing
+ * preference vocabulary at all.
+ *
+ * Used to keep even a model that is allowed to judge durability from spending a
+ * call on a clear feature request, while a message that also states a rule
+ * ("add a toggle; never use npm again") is left to that model.
+ */
+export function isBareFeatureRequest(message: string): boolean {
+  return (
+    isWorkDirective(message) && !hasDurableSignal(message) && !EXPLICIT_MEMORY_PATTERN.test(message)
+  )
+}
+
 function categoryForCandidate(message: string, matched: string): MemoryCategory {
   if (/i am\b|my name\b|i work as\b|i'?m a\b/i.test(matched)) return 'identity'
   if (/\bnever\b|\bdon'?t\b|\bdo not\b|make sure\b/i.test(matched)) return 'behavioral'
@@ -162,6 +220,11 @@ export function detectMemoryCandidates(input: {
 }): MemoryCandidate[] {
   const user = input.userMessage.trim()
   if (isTrivialUserTurn(user)) return []
+  // A feature request or task instruction never becomes memory on standing
+  // wording alone. "I want you to never collapse the sidebar" asks for work,
+  // while the same rule stated as a preference ("never collapse the sidebar")
+  // does not. Only an explicit memory request overrides the guard.
+  if (isWorkDirectiveRequest(user)) return []
   const durable = hasDurableSignal(user)
   const frustrated = hasFrustrationSignal(user)
   if (!durable && !frustrated) return []

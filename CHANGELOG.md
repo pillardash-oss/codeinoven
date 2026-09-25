@@ -152,6 +152,14 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- Automatic memory proposals no longer treat feature requests as durable
+  preferences. The deterministic gate stops recognising request phrasing
+  (`i want you to`, `make sure to`) and task imperatives as standing vocabulary,
+  and it refuses a request that states no rule of its own. The decision the
+  model makes now has to clear a floor on its primary "lasting intent" answer,
+  so a first-time request can no longer pass on the strength of merely not being
+  a repeat, and the decision prompt names feature requests and acceptance
+  criteria as current-task work.
 - The vision-model error card is dismissable in every state. A request that the
   engine already settled (its five-minute decision timeout, a newer descriptor
   request superseding it, or its harness session being retired) used to answer
