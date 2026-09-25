@@ -6,9 +6,9 @@
 
   interface Props {
     references: readonly PromptReference[]
-    /** Jump to the selection's highlight and open its comment editor. Only
-     *  offered for a response selection; a design element's comment is edited on
-     *  the page, by its own pin. */
+    /** Jump to the surface that draws a reference and open its comment editor:
+     *  the selection's highlight in the conversation, the document's passage in
+     *  the file panel, or the element's design in the browser. */
     onEdit?: (id: string) => void
     /** Remove the reference immediately. */
     onRemove: (id: string) => void

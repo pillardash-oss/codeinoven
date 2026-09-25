@@ -595,6 +595,23 @@ class ProjectFilesWorkspace {
     if (tab) tab.view = view
   }
 
+  /**
+   * Point the tab showing `path` at a view, preferring the tab that is on screen.
+   *
+   * A document can be asked for in a view by something other than the panel
+   * itself (an annotation sends its document to the annotate view), and by then
+   * the tab usually exists: `openFile` focuses an already-open tab without
+   * touching the view the reader chose for it, so the view has to be set here.
+   */
+  setViewForPath(projectId: string, path: string, view: ProjectFileView): void {
+    const state = this.ensureState(projectId)
+    const active = state.tabs.find(
+      (candidate) => candidate.id === state.activeTabId && candidate.path === path
+    )
+    const tab = active ?? state.tabs.find((candidate) => candidate.path === path)
+    if (tab) tab.view = view
+  }
+
   requestFullscreen(projectId: string): void {
     this.ensureState(projectId).fullscreenActive = true
   }

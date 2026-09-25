@@ -180,14 +180,20 @@
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
   import { toPosixPath } from '$shared/paths'
-  import { revealCitationFile, revealFileInAppTree, revealLocalFile } from '$lib/reveal-file'
+  import {
+    revealCitationFile,
+    revealFileInAppTree,
+    revealLocalFile,
+    revealAnnotatedDocument
+  } from '$lib/reveal-file'
+  import { openPassageInNewThread } from '$lib/quoted-passage'
+  import { documentAnnotationFocusState } from '$lib/stores/document-annotation-focus.svelte'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
-    DEFAULT_THREAD_TITLE,
     isOrchestrationChildThread,
     WORKING_TRACE_PAGE_SIZE
   } from '$shared/types'
@@ -2159,6 +2165,26 @@
   }
 
   /**
+   * Jump to the document one annotation was made in: reveal it in the project tree
+   * and open it in the annotate view, which is the only surface that draws the
+   * annotated passage and its note, then open that note. A document that has since
+   * been deleted has nothing to show, so it is reported rather than opened.
+   */
+  function editDocumentAnnotation(reference: ResponseReferenceAnchor): void {
+    const path = reference.filePath
+    if (!path) return
+    void revealAnnotatedDocument(thread.projectId, path).then((opened) => {
+      if (!opened) {
+        toast.error('The annotated document is no longer in this project.', {
+          description: path
+        })
+        return
+      }
+      documentAnnotationFocusState.request(thread.projectId, thread.id, reference.id)
+    })
+  }
+
+  /**
    * Bring a commented design element back in front of the reader: reveal the
    * browser tab it was picked from, then highlight the element, scroll it into
    * view and open its comment. A tab the user has since closed has nothing to
@@ -2183,15 +2209,17 @@
   function editResponseReference(id: string): void {
     const reference = responseReferences.find((candidate) => candidate.id === id)
     if (!reference) return
-    // A design element's comment is drawn by the browser page, not by the
-    // conversation, so its edit action opens the browser instead of a response
-    // range here.
+    // A document annotation is drawn in the file panel and a design element in
+    // the browser, not in the conversation, so each of their edit actions opens
+    // the surface that draws it instead of a response range here.
+    if (reference.kind === 'file') {
+      editDocumentAnnotation(reference)
+      return
+    }
     if (reference.kind === 'design') {
       editDesignAnnotation(reference)
       return
     }
-    // Only a response selection has a highlight in the conversation to jump
-    // back to.
     if (!isResponseSelection(reference)) return
     commentEditorReferenceId = id
     void tick().then(() => {
@@ -2424,35 +2452,14 @@
     )
   }
 
-  /** Spin the selection off into a brand-new thread in the same project: the
-   *  text is seeded as the fresh composer's draft, wrapped in a txt code block
-   *  with breathing room above and below so the user can add context around
-   *  it, and immediately kick off a task from it. The fence widens when the
-   *  selection itself contains triple backticks so the block stays intact. */
+  /** Spin the selection off into a brand-new thread in the same project, seeded
+   *  as its composer draft. The same hand-off is offered for a passage of an
+   *  annotated document, so both go through one implementation. */
   function openSelectionInNewThread(): void {
     const selection = responseSelection
     if (!selection) return
     closeResponseSelection()
-    const fence = selection.text.includes('```') ? '````' : '```'
-    const draft = `\n${fence}txt\n${selection.text}\n${fence}\n`
-    const project = scopeState.projectRecords.find((p) => p.id === thread.projectId) ?? null
-    invoke('thread:create', {
-      projectId: thread.projectId,
-      providerId: thread.providerId,
-      title: DEFAULT_THREAD_TITLE,
-      workingDirectory: thread.workingDirectory,
-      settings: thread.settings,
-      // Inherit the current thread's scope so the spun-off thread stays in
-      // the same scope instead of dropping to the default bucket.
-      scopeBucketId: thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-    })
-      .then((newThread) => {
-        rendererRecovery.setDraft(newThread.projectId, newThread.id, draft)
-        workspaceState.openThread(newThread, project)
-      })
-      .catch((error) => {
-        reportError(error, 'The new thread could not be created.')
-      })
+    openPassageInNewThread(thread.projectId, thread.id, selection.text)
   }
 
   let spec = $state<EngineeringSpec | null>(null)

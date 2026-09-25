@@ -14,8 +14,13 @@
     type AnnotationBubblePosition
   } from '$lib/selection-anchors'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
+  import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
+  import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import { documentAnnotationFocusState } from '$lib/stores/document-annotation-focus.svelte'
+  import { openPassageInNewThread } from '$lib/quoted-passage'
   import {
     captureDocumentSelection,
+    documentAnnotationChatContext,
     documentAnnotationReference,
     type DocumentSelectionCandidate
   } from './project-files-panel-annotator'
@@ -155,6 +160,43 @@
     closeSelection()
   }
 
+  /**
+   * Open a read-only side chat about the selected passage.
+   *
+   * The document is the pinned context, the way a studio hands its own document
+   * to the same side chat: a passage read on its own is often unreadable without
+   * the section around it, and the context names the file the passage sits in, so
+   * the agent can go and read the live copy rather than trusting the snapshot.
+   *
+   * The settings are the app's last-used project-thread settings, not this
+   * conversation's live ones: the side chat is opened by a panel, which is not the
+   * conversation and owns no settings of its own. That is how every other panel
+   * outside the conversation opens a side chat.
+   */
+  function openPassageChat(mode: 'elaborate' | 'quick'): void {
+    const candidate = pendingSelection
+    if (!candidate) return
+    contextSidebarState.openTemporaryChat(
+      projectId,
+      threadId,
+      mode,
+      candidate.text,
+      documentAnnotationChatContext(path, content),
+      threadSettings.lastUsed,
+      true,
+      mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
+    )
+    closeSelection()
+  }
+
+  /** Spin the selected passage into a thread of its own, seeded as its draft. */
+  function openPassageThread(): void {
+    const candidate = pendingSelection
+    if (!candidate) return
+    closeSelection()
+    openPassageInNewThread(projectId, threadId, candidate.text)
+  }
+
   /** Save or clear the note attached to one annotation. */
   function saveComment(id: string, comment: string): void {
     responseReferencesState.updateComment(projectId, threadId, id, comment)
@@ -187,6 +229,21 @@
       if (destroyed) return
       syncAnnotations()
     })
+  })
+
+  /**
+   * A composer edit action lands here: it names one annotation, and this view is
+   * where that annotation's passage and note are drawn. The request can arrive
+   * before this view exists, because the same click is what opens the document, so
+   * it stays pending until the annotation it names is on screen.
+   */
+  $effect(() => {
+    const request = documentAnnotationFocusState.pending(projectId, threadId)
+    if (!request) return
+    const target = annotations.find((reference) => reference.id === request.referenceId)
+    if (!target) return
+    editingId = target.id
+    documentAnnotationFocusState.consume(request.token)
   })
 
   // A pin is measured in viewport coordinates, so it has to be re-measured when
@@ -246,6 +303,9 @@
     y={pendingSelection.y}
     selectionLabel="passage"
     onAdd={addAnnotation}
+    onElaborate={() => openPassageChat('elaborate')}
+    onQuickChat={() => openPassageChat('quick')}
+    onNewThread={openPassageThread}
     onClose={closeSelection}
   />
 {/if}

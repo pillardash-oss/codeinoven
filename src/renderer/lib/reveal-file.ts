@@ -1,7 +1,11 @@
 import { invoke } from '$lib/ipc.svelte'
 import { isAbsoluteishPath } from '$shared/paths'
 import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
-import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+import {
+  filePreviewFlags,
+  canAnnotateDocument
+} from '$lib/components/files/project-files-panel-preview'
+import { projectFilesWorkspace, type ProjectFileView } from '$lib/stores/project-files.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { toast } from 'svelte-sonner'
@@ -64,11 +68,12 @@ function relativeProjectPath(projectPath: string, citedPath: string): string {
 async function revealEntry(
   projectId: string,
   entry: ProjectFileEntry,
-  focusLine?: number
+  focusLine?: number,
+  view: ProjectFileView = 'source'
 ): Promise<void> {
   if (entry.kind === 'file') {
     await projectFilesWorkspace.revealFile(projectId, entry.path)
-    await projectFilesWorkspace.openFile(projectId, entry.path, 'source', focusLine)
+    await projectFilesWorkspace.openFile(projectId, entry.path, view, focusLine)
     return
   }
   await projectFilesWorkspace.revealDirectory(projectId, entry.path)
@@ -120,6 +125,37 @@ export async function openProjectFileFromAbsolutePath(
   if (!entry) return false
   await ensureProjectFilesReady(projectId)
   await revealEntry(projectId, entry, focusLine)
+  return true
+}
+
+/**
+ * Bring one document on screen to be annotated: reveal it in the project's file
+ * tree and open it in the annotate view, which is the only surface that draws a
+ * document annotation's passage and note. Returns whether the document was
+ * opened, so the caller can report one that has since been deleted instead of
+ * opening an empty editor for it.
+ *
+ * A file that cannot carry a note is opened in its source view instead: only
+ * rendered Markdown has selectable text to anchor an annotation to, so a document
+ * renamed out from under an annotation still opens, just not as an annotator.
+ */
+export async function revealAnnotatedDocument(projectId: string, path: string): Promise<boolean> {
+  if (!path || isAbsoluteishPath(path) || path.split('/').includes('..')) return false
+  // Prepare the file surface before probing the path: a conversation's tree is
+  // mounted on its own workspace directory, and the probe resolves through that
+  // mount. The cost of preparing for a deleted document is a visible file tree,
+  // which is also where the reader learns it is gone.
+  await ensureProjectFilesReady(projectId)
+  const entry = await exactEntry(projectId, path)
+  if (!entry || entry.kind !== 'file') return false
+  const view: ProjectFileView = canAnnotateDocument(filePreviewFlags(entry.path))
+    ? 'annotate'
+    : 'source'
+  await revealEntry(projectId, entry, undefined, view)
+  // `openFile` focuses a document that is already open without touching its
+  // view, so a document the reader left in the diff or source view still has to
+  // be pointed at the annotator.
+  projectFilesWorkspace.setViewForPath(projectId, entry.path, view)
   return true
 }
 
