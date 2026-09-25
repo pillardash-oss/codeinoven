@@ -2135,6 +2135,9 @@
 
   /** Jump back to a selection's highlight and open its comment editor. */
   function editResponseReference(id: string): void {
+    // A design element's comment is edited on the page, by its own pin, so it has
+    // no response highlight to jump to and no bubble to anchor a comment editor.
+    if (responseReferences.find((reference) => reference.id === id)?.kind === 'design') return
     commentEditorReferenceId = id
     void tick().then(() => {
       updateResponseBubblePositions()
@@ -2198,10 +2201,11 @@
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user quoted excerpts from your earlier response as references. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
+      'The user quoted excerpts from your earlier response as references, and may also have picked elements from a design open in the app browser. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
-        return `[${reference.label}]\n${comment}<selection>\n${reference.text}\n</selection>`
+        const tag = reference.kind === 'design' ? 'element' : 'selection'
+        return `[${reference.label}]\n${comment}<${tag}>\n${reference.text}\n</${tag}>`
       })
     ].join('\n\n')
   }

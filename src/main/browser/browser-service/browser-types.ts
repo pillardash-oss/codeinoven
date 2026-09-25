@@ -7,6 +7,7 @@
 import type { WebContentsView } from 'electron'
 import type {
   BrowserConsoleEntry,
+  BrowserDesignTab,
   BrowserDownload,
   BrowserPermissionRequest,
   BrowserSiteDataScope
@@ -30,6 +31,9 @@ export interface BrowserTab {
    *  laid out at the on-screen surface's size instead, and keeps this value for
    *  whenever it is parked again. */
   viewport: BrowserViewport
+  /** The design folder this tab is rendering, when the design capability opened
+   *  it. Non-null is what makes the tab eligible for the element inspector. */
+  design: BrowserDesignTab | null
 }
 
 export interface PendingBrowserPermission {

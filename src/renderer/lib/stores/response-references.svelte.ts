@@ -5,10 +5,21 @@ const MAX_REFERENCES_PER_THREAD = 20
 const MAX_THREADS_WITH_REFERENCES = 200
 
 export interface ResponseReferenceAnchor extends PromptReference {
-  messageId: string
-  startOffset: number
-  endOffset: number
+  /** Response selections anchor to a message range. A design reference has no
+   *  range: it points at an element in a served page, so these are optional. */
+  messageId?: string
+  startOffset?: number
+  endOffset?: number
+  /** Design references: the CSS path the page re-resolves the element by after
+   *  a layout shift, so its pin stays on the element. */
+  selector?: string
+  /** Design references: the browser tab the element was picked from, so the
+   *  panel knows which tab a reference's pin belongs to. */
+  tabId?: string
 }
+
+/** Called with the thread whose references changed. */
+type ReferencesListener = (projectId: string, threadId: string) => void
 
 function referenceKey(projectId: string, threadId: string): string {
   return JSON.stringify([projectId, threadId])
@@ -16,6 +27,20 @@ function referenceKey(projectId: string, threadId: string): string {
 
 class ResponseReferencesState {
   private references = $state<Record<string, ResponseReferenceAnchor[]>>({})
+  /**
+   * Parts of the app that must react to a write rather than to a rendered value.
+   *
+   * The browser panel is the one listener: it owns a page's pins, which are not
+   * a render of this state but a set of elements drawn by an injected script, so
+   * it has to be told when to re-publish them. A subscription keeps that out of
+   * an `$effect`, where the write would be a side effect of a read.
+   */
+  private readonly listeners = new Set<ReferencesListener>()
+
+  subscribe(listener: ReferencesListener): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
 
   forThread(projectId: string, threadId: string): ResponseReferenceAnchor[] {
     return this.references[referenceKey(projectId, threadId)] ?? []
@@ -34,7 +59,11 @@ class ResponseReferencesState {
       }
       stored = references.slice(0, MAX_REFERENCES_PER_THREAD).map((reference, index) => ({
         ...reference,
-        label: `Selection ${index + 1}`
+        // A design reference keeps its own name; only a response selection is
+        // renumbered here. Both carry their one-based position for the popover
+        // and the page's pin, so the numbers agree across both surfaces.
+        label:
+          reference.kind === 'design' ? `Design element ${index + 1}` : `Selection ${index + 1}`
       }))
       next[key] = stored
     }
@@ -42,6 +71,7 @@ class ResponseReferencesState {
     // Mirror into the recovery snapshot so annotations survive thread switches
     // and app restarts, alongside the rest of the composer draft.
     rendererRecovery.setPromptReferences(projectId, threadId, stored)
+    for (const listener of this.listeners) listener(projectId, threadId)
   }
 
   clearThread(projectId: string, threadId: string): void {

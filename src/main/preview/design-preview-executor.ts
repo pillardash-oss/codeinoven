@@ -1,6 +1,7 @@
 import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { requireLocalProject } from '../../lib/project-artifacts'
+import type { BrowserDesignTab } from '../../lib/ipc/browser'
 import { isInsideProject, resolveDesignDirectory } from '../design/design-paths'
 import type { BrowserService } from '../browser/browser-service'
 import type { Database } from '../database/database'
@@ -51,6 +52,13 @@ async function existsAsFile(path: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/** The tab id an in-app browser operation reported, or null when it reported none. */
+function tabIdOf(result: unknown): string | null {
+  if (typeof result !== 'object' || result === null) return null
+  const tabId = (result as Record<string, unknown>)['tabId']
+  return typeof tabId === 'string' && tabId.length > 0 ? tabId : null
 }
 
 /**
@@ -109,22 +117,37 @@ export function createDesignPreviewExecutor(
       ? `${registration.url}${entry.segments.map((segment) => encodeURIComponent(segment)).join('/')}`
       : registration.url
     const attention = input['attention'] === 'background' ? 'background' : 'focus'
+    const design: BrowserDesignTab = {
+      directory: directory.display,
+      origin: new URL(registration.url).origin
+    }
     const browser = options.browser()
     const tabKey = `${context.projectId}\u0000${context.threadId}`
     let tab: 'reused' | 'opened' | null = null
     if (browser) {
       const target = { projectId: context.projectId, threadId: context.threadId }
-      try {
-        if (!previewed.has(tabKey)) throw new Error('no preview tab yet')
-        // One agent tab per thread is the browser service's own model, so a
-        // second preview navigates the tab the first one opened.
-        await browser.executeUtility('navigate', { url }, target)
-        tab = 'reused'
-      } catch {
-        await browser.executeUtility('open', { url, attention }, target)
-        previewed.add(tabKey)
-        tab = 'opened'
+      // One agent tab per thread is the browser service's own model, so a second
+      // preview navigates the tab the first one opened, and only a tab shown for
+      // the first time is "opened".
+      const showDesign = async (): Promise<{ tabId: string | null; how: 'reused' | 'opened' }> => {
+        try {
+          if (!previewed.has(tabKey)) throw new Error('no preview tab yet')
+          return {
+            tabId: tabIdOf(await browser.executeUtility('navigate', { url }, target)),
+            how: 'reused'
+          }
+        } catch {
+          const tabId = tabIdOf(await browser.executeUtility('open', { url, attention }, target))
+          previewed.add(tabKey)
+          return { tabId, how: 'opened' }
+        }
       }
+      const shown = await showDesign()
+      tab = shown.how
+      // Marking the tab is what arms the element inspector: the panel offers
+      // inspection only on a tab that is rendering a design, so this call has to
+      // land before the user can pick anything.
+      if (shown.tabId) browser.markDesignTab(shown.tabId, design)
     }
 
     return {

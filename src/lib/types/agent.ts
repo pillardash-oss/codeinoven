@@ -259,6 +259,16 @@ export interface PromptReference {
   text: string
   /** Optional user comment attached to the selected excerpt. */
   comment?: string
+  /**
+   * How the reference was made.
+   *
+   * `selection` (the default when absent) is an excerpt of an assistant
+   * response; `design` is an element the user picked from a design in the
+   * in-app browser. Main validates only `id`, `label`, `text` and `comment`, so
+   * this drives presentation rather than the send: a design reference reaches
+   * the model the same way a selection does.
+   */
+  kind?: 'selection' | 'design'
 }
 
 /** A project-relative file or directory visibly attached to an outgoing prompt. */

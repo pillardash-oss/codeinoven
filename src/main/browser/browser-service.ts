@@ -19,6 +19,7 @@ import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../lib/image-payload'
 import type {
   BrowserConsoleEntry,
   BrowserConsoleLevel,
+  BrowserDesignTab,
   BrowserDevToolsState,
   BrowserPageState,
   BrowserPermissionRequest,
@@ -31,6 +32,7 @@ import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow, type PromptRequestContext } from './permission-prompt-window'
 import { BrowserDownloadTracker } from './browser-service/browser-downloads'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
+import { BrowserInspector } from './browser-service/browser-inspector'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
 import { dialogContextScript } from './browser-service/browser-dialog-context'
 import {
@@ -66,6 +68,7 @@ import {
   validateBoundedHost,
   validateBrowserUrl,
   validateDownloadId,
+  validateInspectorMarkers,
   validateOptionalBrowserUrl,
   validatePermissionDecision,
   validatePermissionRequestId,
@@ -78,6 +81,16 @@ import {
 } from './browser-service/browser-validation'
 import type { BrowserViewport } from './browser-service/browser-types'
 
+/** The origin of an http(s) URL, or null when it cannot be parsed. Used to tell
+ *  whether a tab is still showing the origin its design folder is served on. */
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin
+  } catch {
+    return null
+  }
+}
+
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
   private readonly tabs = new Map<string, BrowserTab>()
@@ -88,6 +101,9 @@ export class BrowserService {
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
   private readonly downloadTracker: BrowserDownloadTracker
   private readonly capture: BrowserCaptureObserver
+  /** Element inspector for design tabs. Injected page code reports picks and
+   *  comments; the panel drives it through the browser IPC contract. */
+  private readonly inspector: BrowserInspector
   private readonly siteData: BrowserSiteDataService
   private readonly permissionMemory: BrowserPermissionMemory
   private readonly promptWindow: PermissionPromptWindow
@@ -171,6 +187,13 @@ export class BrowserService {
       // A capture change is a tab-level fact the user must see, so it is
       // published on the same state event the tab strip already listens to.
       onChange: (tabId) => this.publishState(tabId)
+    })
+    this.inspector = new BrowserInspector({
+      // Every pick, comment and removal is forwarded to the renderer, which owns
+      // the reference list and turns it back into the page's marker set.
+      onEvent: (tabId, event) => {
+        sendToRenderer(this.window.webContents, 'browser:inspector', tabId, event)
+      }
     })
   }
 
@@ -286,6 +309,22 @@ export class BrowserService {
       contents.openDevTools()
       return true
     })
+    ipcMain.handle('browser:inspectSetArmed', (_event, rawTabId, rawArmed) => {
+      const tabId = validateTabId(rawTabId)
+      const tab = this.requireTab(tabId)
+      if (typeof rawArmed !== 'boolean') {
+        throw new TypeError('Inspect mode must be a boolean')
+      }
+      if (!tab.design && rawArmed) {
+        throw new TypeError('The element inspector is available on a design preview only')
+      }
+      this.inspector.setArmed(tabId, tab.view.webContents, rawArmed)
+    })
+    ipcMain.handle('browser:inspectMarkers', (_event, rawTabId, rawMarkers) => {
+      const tabId = validateTabId(rawTabId)
+      this.requireTab(tabId)
+      this.inspector.syncMarkers(tabId, validateInspectorMarkers(rawMarkers))
+    })
     ipcMain.handle('browser:clearData', async (_event, rawProjectId) => {
       await this.siteData.clearProjectData(validateProjectId(rawProjectId))
     })
@@ -391,6 +430,19 @@ export class BrowserService {
     this.permissionDenies.clear()
     this.downloadTracker.dispose()
     this.capture.dispose()
+    this.inspector.dispose()
+  }
+
+  /**
+   * Record that a tab is rendering a design folder. Non-null `design` on the
+   *  published state is what makes the panel offer the element inspector, so only
+   *  the design capability calls this: it is the one caller that knows a served
+   *  folder is a design rather than an arbitrary directory.
+   */
+  markDesignTab(tabId: string, design: BrowserDesignTab): void {
+    const tab = this.requireTab(tabId)
+    tab.design = { directory: design.directory, origin: design.origin }
+    this.publishState(tabId)
   }
 
   async executeUtility(
@@ -627,7 +679,8 @@ export class BrowserService {
       initialNavigationStarted: false,
       consoleEntries: [],
       favicon: null,
-      viewport: { ...DEFAULT_PARKED_VIEWPORT }
+      viewport: { ...DEFAULT_PARKED_VIEWPORT },
+      design: null
     }
     this.tabs.set(tabId, tab)
 
@@ -671,6 +724,17 @@ export class BrowserService {
       // Capture state belongs to the document that ended here, so the tab must
       // not keep claiming it is recording until the new page says otherwise.
       this.capture.reset(tabId)
+      // The inspector lives in the document that ended here. Its desired mode is
+      // kept (a live preview reloads itself mid-session), but the outstanding
+      // event promise is void and the next arm installs into the new document.
+      this.inspector.reset(tabId)
+      // A tab that navigates away from the design folder it was showing stops
+      // being a design tab, so the panel does not offer inspection for a page
+      // that is no longer a design.
+      if (tab.design && originOf(view.webContents.getURL()) !== tab.design.origin) {
+        tab.design = null
+        this.inspector.setArmed(tabId, tab.view.webContents, false)
+      }
       // The dialog shim lived in the document that just went away, so the next
       // report has to install it again rather than trust the old record.
       this.injectedDialogLabels.delete(tabId)
@@ -1072,6 +1136,7 @@ export class BrowserService {
       audible: contents.isCurrentlyAudible(),
       muted: contents.isAudioMuted(),
       capturing: this.capture.isCapturing(tabId),
+      design: tab.design,
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward()
     }
@@ -1314,6 +1379,7 @@ export class BrowserService {
     this.agentReveals.delete(tabId)
     this.lastScreenshot.delete(tabId)
     this.capture.forget(tabId)
+    this.inspector.forget(tabId)
     this.stage.release(tab.view)
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)

@@ -11,6 +11,7 @@ import type {
 import type {
   BrowserDevToolsState,
   BrowserDownload,
+  BrowserInspectorEvent,
   BrowserOpenRequestContext,
   BrowserPageState,
   BrowserPermissionRequest
@@ -161,6 +162,9 @@ export const IPC_EVENT_CONTRACT = {
   'providers:status': [] as unknown as [payload: ProviderConnectionInfo[]],
   /** DevTools open state changed for a browser tab (open/closed). */
   'browser:devToolsChanged': [] as unknown as [state: BrowserDevToolsState],
+  /** One event from a tab's injected design inspector: a pick, a finished
+   *  comment, a removed pin, or inspect mode ending on its own. */
+  'browser:inspector': [] as unknown as [tabId: string, event: BrowserInspectorEvent],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
   /**
    * Delivered to the native permission-prompt popup window (not the main

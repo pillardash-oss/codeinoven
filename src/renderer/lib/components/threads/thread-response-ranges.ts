@@ -74,6 +74,11 @@ export function responseRangeFor(
   container: ParentNode | null | undefined,
   reference: ResponseReferenceAnchor
 ): Range | null {
+  // A design reference points at an element in a served page, not at an excerpt
+  // of an assistant response, so it has no range to rebuild.
+  if (reference.kind === 'design') return null
+  if (reference.messageId === undefined) return null
+  if (reference.startOffset === undefined || reference.endOffset === undefined) return null
   const response = Array.from(
     container?.querySelectorAll<HTMLElement>('[data-assistant-response]') ?? []
   ).find((element) => element.dataset.messageId === reference.messageId)

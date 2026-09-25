@@ -6,11 +6,13 @@
     HardDrive,
     Image as ImageIcon,
     MessageSquare,
+    SquareDashedMousePointer,
     Video,
     X
   } from '@lucide/svelte'
   import { attachmentPreviewKind } from '$lib/mime'
   import SelectionListPopover from './SelectionListPopover.svelte'
+  import { summarizeComposerReferences } from './composer-reference-summary'
   import type { StartAfterSelection } from './chat-composer-attachments'
   import type { PromptAttachment, PromptReference } from '$shared/types'
 
@@ -70,6 +72,10 @@
     onRemoveReference,
     onRemoveAllReferences
   }: Props = $props()
+
+  /** Wording for the reference count, which carries both response selections and
+   *  picked design elements. */
+  const referenceSummary = $derived(summarizeComposerReferences(references))
 </script>
 
 <!-- Attachment chips (project identity + type + branch now live on the scope shoe) -->
@@ -183,7 +189,7 @@
     {#if references.length > 0}
       <div
         role="group"
-        aria-label="Attached selections"
+        aria-label={referenceSummary.aria}
         class="relative inline-flex"
         onmouseenter={onOpenSelectionPopover}
         onmouseleave={onScheduleSelectionPopoverClose}
@@ -194,23 +200,30 @@
           <button
             type="button"
             class="flex items-center gap-1.5 rounded-l-lg px-2 py-1"
-            title={`${references.length} attached ${references.length === 1 ? 'selection' : 'selections'}   hover to manage`}
-            aria-label={`${references.length} attached ${references.length === 1 ? 'selection' : 'selections'}`}
+            title={`${referenceSummary.aria}   hover to manage`}
+            aria-label={referenceSummary.aria}
             aria-expanded={selectionPopoverOpen}
             onclick={onToggleSelectionPopover}
           >
-            <MessageSquare size={11} class="shrink-0 text-accent" />
+            {#if referenceSummary.elements > 0 && referenceSummary.selections === 0}
+              <SquareDashedMousePointer size={11} class="shrink-0 text-accent" />
+            {:else}
+              <MessageSquare size={11} class="shrink-0 text-accent" />
+            {/if}
             <span>
-              {references.length}
-              {references.length === 1 ? 'selection' : 'selections'}
+              {referenceSummary.label}
             </span>
           </button>
           {#if onRemoveAllReferences}
             <button
               type="button"
               class="flex h-full items-center rounded-r-lg pl-0.5 pr-1.5 text-dimmed transition-colors hover:text-danger"
-              title="Delete all selections"
-              aria-label="Delete all selections"
+              title={referenceSummary.elements > 0
+                ? 'Delete all attached references'
+                : 'Delete all selections'}
+              aria-label={referenceSummary.elements > 0
+                ? 'Delete all attached references'
+                : 'Delete all selections'}
               onclick={onRemoveAllReferences}
             >
               <X size={11} />

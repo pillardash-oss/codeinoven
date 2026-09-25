@@ -9,6 +9,7 @@
     Lock,
     LockOpen,
     RotateCw,
+    SquareDashedMousePointer,
     SquareTerminal,
     X
   } from '@lucide/svelte'
@@ -17,8 +18,12 @@
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
+  import { responseReferencesState } from '$lib/stores/response-references.svelte'
+  import { designElementReference } from '$lib/design-element-reference'
   import type {
     BrowserDevToolsState,
+    BrowserInspectorEvent,
+    BrowserInspectorMarker,
     BrowserPageState,
     BrowserViewBounds
   } from '$shared/ipc-contract'
@@ -67,7 +72,8 @@
       canGoForward: false,
       audible: false,
       muted: false,
-      capturing: false
+      capturing: false,
+      design: null
     }
   }
 
@@ -85,6 +91,12 @@
    *  frame   so this panel never has to combine them itself. */
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
   let devToolsOpen = $state(false)
+  /**
+   * Whether the element inspector is armed on this tab. Kept beside the panel,
+   * not inside the page, because the user turns it on and off and the page can
+   * only report that it ended on its own (Escape).
+   */
+  let inspectArmed = $state(false)
   /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
   /** The site menu is a native OS popup composited above the page view, so
@@ -229,6 +241,9 @@
     if (next.tabId !== tabId) return
     pageState = next
     if (next.url) address = next.url
+    // A tab that navigated away from its design folder is no longer a design
+    // tab, so inspection cannot stay armed for a page that no longer offers it.
+    if (!next.design) inspectArmed = false
     // Also routes the audio and capture state into the tab strip, so the tab's
     // indicator is correct even for the first report of a tab main kept alive
     // across a renderer reload.
@@ -248,6 +263,83 @@
     devToolsOpen = state.open
   }
 
+  /**
+   * The pins this tab's page draws: the thread's design references picked from
+   * this tab, numbered in the same one-based order the composer numbers them.
+   */
+  function designMarkers(): BrowserInspectorMarker[] {
+    return responseReferencesState
+      .forThread(tabProjectId, tabThreadId)
+      .flatMap((reference, index) =>
+        reference.kind === 'design' && reference.tabId === tabId
+          ? [
+              {
+                id: reference.id,
+                number: index + 1,
+                comment: reference.comment ?? '',
+                selector: reference.selector ?? ''
+              }
+            ]
+          : []
+      )
+  }
+
+  /** Push the current pin set to the page. Called when the reference list for
+   *  this thread changes and whenever inspect mode is turned on. */
+  function publishMarkers(): void {
+    if (!inspectArmed) return
+    void invoke('browser:inspectMarkers', tabId, designMarkers()).catch(() => {})
+  }
+
+  /** Arm or disarm the element inspector, and hand the page the current pins. */
+  function toggleInspect(): void {
+    if (!inspectArmed && !pageState.design) return
+    const next = !inspectArmed
+    inspectArmed = next
+    void invoke('browser:inspectSetArmed', tabId, next)
+      .then(() => (next ? invoke('browser:inspectMarkers', tabId, designMarkers()) : undefined))
+      .catch(() => {
+        inspectArmed = false
+      })
+  }
+
+  /**
+   * One report from the page's inspector. A pick becomes a composer reference;
+   * a finished comment updates the reference it belongs to; a removed pin drops
+   * it; `closed` means the page ended inspect mode on its own (Escape) and the
+   * toggle has to follow.
+   */
+  function onInspectorEvent(event: BrowserInspectorEvent): void {
+    if (event.kind === 'closed') {
+      inspectArmed = false
+      return
+    }
+    if (event.kind === 'pick') {
+      const reference = designElementReference(event.id, event.target, pageState.design, tabId)
+      responseReferencesState.setForThread(tabProjectId, tabThreadId, [
+        ...responseReferencesState.forThread(tabProjectId, tabThreadId),
+        reference
+      ])
+      return
+    }
+    if (event.kind === 'comment') {
+      responseReferencesState.updateComment(tabProjectId, tabThreadId, event.id, event.comment)
+      return
+    }
+    responseReferencesState.setForThread(
+      tabProjectId,
+      tabThreadId,
+      responseReferencesState
+        .forThread(tabProjectId, tabThreadId)
+        .filter((reference) => reference.id !== event.id)
+    )
+  }
+
+  // Publish the pin set whenever the reference list changes, so a pick, a
+  // finished comment, or a removal made from the composer moves the pins on the
+  // page. The store notifies on every write rather than an effect watching it:
+  // the pins are elements drawn by an injected script, not a render of state, so
+  // the write has to be told to happen, not derived.
   onMount(() => {
     const unsubscribeSiteMenu = subscribe('browser:siteMenuClosed', () => {
       siteMenuOpen = false
@@ -255,6 +347,13 @@
     let destroyed = false
     const unsubscribeState = subscribe('browser:state', applyPageState)
     const unsubscribeDevTools = subscribe('browser:devToolsChanged', applyDevToolsState)
+    const unsubscribeInspector = subscribe('browser:inspector', (eventTabId, event) => {
+      if (eventTabId === tabId) onInspectorEvent(event)
+    })
+    const unsubscribeReferences = responseReferencesState.subscribe((projectId, threadId) => {
+      if (projectId !== tabProjectId || threadId !== tabThreadId) return
+      publishMarkers()
+    })
     const observer = new ResizeObserver(() => {
       if (!destroyed) void showAtCurrentBounds().catch(() => {})
     })
@@ -290,15 +389,17 @@
       unsubscribeSiteMenu()
       unsubscribeState()
       unsubscribeDevTools()
+      unsubscribeInspector()
+      unsubscribeReferences()
+      // Stop the injected event promise for a panel that is going away, so no
+      // tab keeps reporting picks the user can no longer see.
+      if (inspectArmed) void invoke('browser:inspectSetArmed', tabId, false).catch(() => {})
       void invoke('browser:hide', tabId).catch(() => {})
     }
   })
 </script>
 
-<div
-  {@attach panelVisible && manageNativeBrowserView}
-  class="flex h-full min-h-0 flex-col bg-app"
->
+<div {@attach panelVisible && manageNativeBrowserView} class="flex h-full min-h-0 flex-col bg-app">
   <form
     class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2"
     onsubmit={(event) => {
@@ -410,7 +511,38 @@
         <span>Console</span>
       {/if}
     </button>
+    {#if pageState.design}
+      <button
+        type="button"
+        class={[
+          'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
+          fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
+          inspectArmed
+            ? 'bg-accent/15 text-accent'
+            : 'text-dimmed hover:bg-elevated hover:text-foreground'
+        ]}
+        aria-label={inspectArmed ? 'Stop inspecting elements' : 'Pick an element to comment on'}
+        aria-pressed={inspectArmed}
+        title={inspectArmed
+          ? 'Stop inspecting: hover an element and click to comment, Escape to exit'
+          : 'Pick an element in this design to comment on'}
+        onclick={toggleInspect}
+      >
+        <SquareDashedMousePointer size={13} />
+        {#if fullscreen}
+          <span>Inspect</span>
+        {/if}
+      </button>
+    {/if}
   </form>
+  {#if inspectArmed}
+    <p
+      class="shrink-0 border-b border-accent/20 bg-accent/10 px-3 py-1 text-[0.6875rem] text-foreground"
+      role="status"
+    >
+      Hover an element and click to comment on it. Escape exits.
+    </p>
+  {/if}
   {#if addressError}
     <p
       class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[0.6875rem] text-danger"

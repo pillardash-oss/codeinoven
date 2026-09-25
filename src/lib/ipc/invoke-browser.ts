@@ -1,5 +1,6 @@
 import type {
   BrowserDownload,
+  BrowserInspectorMarker,
   BrowserPageState,
   BrowserPermissionDecision,
   BrowserPermissionPromptContext,
@@ -33,6 +34,19 @@ export const invokeBrowserContract = {
   'browser:setMuted': {} as Contract<[tabId: string, muted: boolean], void>,
   /** Toggle the web page's native DevTools. Returns whether it is now open. */
   'browser:toggleDevTools': {} as Contract<[tabId: string], boolean>,
+  /**
+   * Arm or disarm the element inspector on a design tab. Arming injects the
+   * page-side inspector and starts reporting picks; disarming stops picking but
+   * leaves the pins in place. Only meaningful on a tab whose
+   * `BrowserPageState.design` is set.
+   */
+  'browser:inspectSetArmed': {} as Contract<[tabId: string, armed: boolean], void>,
+  /** Replace the pinned-element set the page draws, after a pick, comment or
+   *  removal changed the composer's references. */
+  'browser:inspectMarkers': {} as Contract<
+    [tabId: string, markers: BrowserInspectorMarker[]],
+    void
+  >,
   'browser:clearData': {} as Contract<[projectId: string], void>,
   'browser:clearSiteData': {} as Contract<
     [projectId: string, scopes: BrowserSiteDataScope[]],

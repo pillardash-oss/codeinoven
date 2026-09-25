@@ -5,6 +5,7 @@
  */
 
 import type {
+  BrowserInspectorMarker,
   BrowserPermissionDecision,
   BrowserSiteDataScope,
   BrowserViewBounds
@@ -36,6 +37,63 @@ export const SCREENSHOT_JPEG_QUALITY = 82
  *  another one. 1280x800 is a plain desktop size that most responsive layouts
  *  treat as a full desktop. */
 export const DEFAULT_PARKED_VIEWPORT: BrowserViewport = { width: 1280, height: 800 }
+
+/** Ceiling on a marker's CSS path, so a hostile or broken page cannot make the
+ *  app carry an unbounded string in its marker set. */
+export const MAX_INSPECTOR_SELECTOR_LENGTH = 2_000
+
+/** Most pins a page may hold at once, so a stuck loop cannot fill the document
+ *  and the marker set the renderer publishes stays bounded. */
+export const MAX_INSPECTOR_MARKERS = 40
+
+/** Ceiling on a design comment, matching the prompt-reference comment cap in
+ *  `chat-engine-pure.ts`, so a comment the panel accepted can never be refused
+ *  by the send path. */
+export const MAX_INSPECTOR_COMMENT_LENGTH = 2_000
+
+const INSPECTOR_MARKER_ID_PATTERN = /^[a-f0-9-]{36}$/u
+
+/**
+ * Validate the marker set the renderer publishes for a tab.
+ *
+ * The renderer owns the truth about which elements are commented, and this is
+ * the boundary it crosses, so every field is checked rather than trusted: the
+ * shape goes straight into an injected page script.
+ */
+export function validateInspectorMarkers(value: unknown): BrowserInspectorMarker[] {
+  if (!Array.isArray(value)) throw new TypeError('Inspector markers must be an array')
+  if (value.length > MAX_INSPECTOR_MARKERS) {
+    throw new TypeError('Inspector marker count exceeds the cap')
+  }
+  return value.map((entry) => {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new TypeError('Inspector marker must be an object')
+    }
+    const record = entry as Record<string, unknown>
+    const id = record['id']
+    if (typeof id !== 'string' || !INSPECTOR_MARKER_ID_PATTERN.test(id)) {
+      throw new TypeError('Inspector marker id is invalid')
+    }
+    const number = record['number']
+    if (
+      typeof number !== 'number' ||
+      !Number.isInteger(number) ||
+      number < 1 ||
+      number > MAX_INSPECTOR_MARKERS
+    ) {
+      throw new TypeError('Inspector marker number is invalid')
+    }
+    const comment = record['comment']
+    if (typeof comment !== 'string' || comment.length > MAX_INSPECTOR_COMMENT_LENGTH) {
+      throw new TypeError('Inspector marker comment is invalid')
+    }
+    const selector = record['selector']
+    if (typeof selector !== 'string' || selector.length > MAX_INSPECTOR_SELECTOR_LENGTH) {
+      throw new TypeError('Inspector marker selector is invalid')
+    }
+    return { id, number, comment, selector }
+  })
+}
 
 /** How many tabs may render offscreen at once. A parked tab renders exactly like
  *  a displayed one, so the set stays bounded and evicts least-recently-used
@@ -99,6 +157,16 @@ export const CAPTURE_REARM_INTERVAL_MS = 120
 /** Consecutive failed arms tolerated for one frame before it is abandoned, so a
  *  frame that cannot run the observer is not retried forever. */
 export const MAX_CAPTURE_ARM_FAILURES = 3
+
+/** Minimum spacing between two re-arms of one tab's design inspector. Each
+ *  answer costs a main-process message and a renderer state event, and a design
+ *  reload can end a document mid-wait, so a floor keeps a reload loop from
+ *  driving arm/catch cycles without pause. */
+export const INSPECTOR_REARM_INTERVAL_MS = 120
+
+/** Consecutive failed arms tolerated for one tab before inspect mode is dropped,
+ *  so a page that cannot run the injected script is not retried forever. */
+export const MAX_INSPECTOR_ARM_FAILURES = 4
 
 export function validateTabId(value: unknown): string {
   if (typeof value !== 'string' || !TAB_ID_PATTERN.test(value)) {
