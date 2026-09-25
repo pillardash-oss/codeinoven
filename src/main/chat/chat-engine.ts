@@ -164,6 +164,12 @@ import {
   isCioDesignRequest,
   type DesignSessionMode
 } from '../utilities/cio-design-prompt'
+import {
+  CIO_VIDEO_CONTINUE_PROMPT,
+  CIO_VIDEO_TURN_PROMPT,
+  isCioVideoRequest,
+  type VideoSessionMode
+} from '../utilities/cio-video-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { McpConnectionTestService } from '../utilities/mcp-connection-test-service'
 import { validateMcpProbeTarget } from '../utilities/mcp-probe-input'
@@ -187,6 +193,7 @@ import type { AssignmentWorkerScopeProvisioner } from '../../lib/engines/assignm
 import type {
   BrowserUtilityExecutor,
   DesignCapabilityExecutor,
+  VideoCapabilityExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
   UtilityResultAttribution,
@@ -1414,6 +1421,11 @@ export class ChatEngine {
    *  keeps the design capability active until the user leaves the thread. */
   private cioDesignThreads = new Map<string, true>()
 
+  /** Threads whose user has opened a video session with @cio-video (current
+   *  turn or history). An edit is worked on over many messages, so the session
+   *  keeps the video capability active until the user leaves the thread. */
+  private cioVideoThreads = new Map<string, true>()
+
   constructor(
     private storage: StorageEngine,
     private database: Database,
@@ -1690,6 +1702,24 @@ export class ChatEngine {
    */
   setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
     this.utilityOrchestration.setDesignMediaExecutor(executor)
+  }
+
+  /**
+   * Register the executor behind the app-owned video capability's `preview`
+   * operation. The chat engine owns the turn's project and thread, so it is the
+   * app surface that hands the executor those two ids.
+   */
+  setVideoPreviewExecutor(executor: VideoCapabilityExecutor | null): void {
+    this.utilityOrchestration.setVideoPreviewExecutor(executor)
+  }
+
+  /**
+   * Register the executor behind the video capability's `capture` operation,
+   * which renders one frame and screenshots it. It needs the browser and the
+   * preview server, both of which the app owns.
+   */
+  setVideoCaptureExecutor(executor: VideoCapabilityExecutor | null): void {
+    this.utilityOrchestration.setVideoCaptureExecutor(executor)
   }
 
   /**
@@ -3118,6 +3148,25 @@ export class ChatEngine {
   }
 
   /**
+   * Whether a video session was opened in this thread, now or earlier, and
+   * whether this turn is the one that opened it. The same memo-and-rescan shape
+   * as the design tag, so an edit or rollback that removes the tag takes the
+   * session with it.
+   */
+  private async videoSessionFor(
+    projectId: string,
+    threadId: string,
+    requestedThisTurn: boolean
+  ): Promise<VideoSessionMode> {
+    if (requestedThisTurn) return 'start'
+    if (this.cioVideoThreads.has(threadId)) return 'continue'
+    const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
+    const opened = userMessages.some((message) => isCioVideoRequest(message.content))
+    if (opened) this.cioVideoThreads.set(threadId, true)
+    return opened ? 'continue' : 'off'
+  }
+
+  /**
    * Publish the plan and progress this thread is executing so a driver-owned
    * checkpoint can rebuild context from them when a transcript can no longer be
    * summarized. Best-effort: a thread with no plan publishes an empty snapshot,
@@ -3252,7 +3301,14 @@ export class ChatEngine {
      * later turn of the same thread. Both promote the design capability to an
      * active capability for the turn and add the matching session contract.
      */
-    designSession: DesignSessionMode = 'off'
+    designSession: DesignSessionMode = 'off',
+    /**
+     * Whether this turn belongs to a video session the user opened with
+     * `@cio-video`. `start` is the turn that typed the tag, `continue` is every
+     * later turn of the same thread. Both promote the video capability to an
+     * active capability for the turn and add the matching session contract.
+     */
+    videoSession: VideoSessionMode = 'off'
   ): Promise<string> {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
@@ -3303,6 +3359,7 @@ export class ChatEngine {
           this.executingModelVisionCapable(projectId, settings),
         allowManagement,
         designSession,
+        videoSession,
         ...(brainstormInterview
           ? {
               saveBrainstormNotes: (markdown: string) =>
@@ -3347,6 +3404,14 @@ export class ChatEngine {
           : designSession === 'continue'
             ? CIO_DESIGN_CONTINUE_PROMPT
             : ''
+      // The video contract is the same shape as the design one, for the same
+      // reason: the capability it activates arrives with the turn request.
+      const videoContract =
+        videoSession === 'start'
+          ? CIO_VIDEO_TURN_PROMPT
+          : videoSession === 'continue'
+            ? CIO_VIDEO_CONTINUE_PROMPT
+            : ''
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their
@@ -3355,7 +3420,13 @@ export class ChatEngine {
           await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
         }
         this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
-        return [gateway.directInstructions, utilityContract, designContract, ...skillInstructions]
+        return [
+          gateway.directInstructions,
+          utilityContract,
+          designContract,
+          videoContract,
+          ...skillInstructions
+        ]
           .filter(Boolean)
           .join('\n\n')
       }
@@ -3377,7 +3448,9 @@ export class ChatEngine {
         await applyRuntime(projectPath, null, sessionId)
         await gateway.cleanup()
         gateway = undefined
-        return [utilityContract, designContract, ...skillInstructions].filter(Boolean).join('\n\n')
+        return [utilityContract, designContract, videoContract, ...skillInstructions]
+          .filter(Boolean)
+          .join('\n\n')
       }
       const environment = {
         ...(overlay.env ?? {}),
@@ -3412,7 +3485,13 @@ export class ChatEngine {
         gateway,
         threadId
       })
-      return [gateway.instructions, utilityContract, designContract, ...skillInstructions]
+      return [
+        gateway.instructions,
+        utilityContract,
+        designContract,
+        videoContract,
+        ...skillInstructions
+      ]
         .filter(Boolean)
         .join('\n\n')
     } catch (error) {
@@ -8480,6 +8559,13 @@ export class ChatEngine {
     const designRequested = origin === 'user' && isCioDesignRequest(text)
     if (designRequested) this.cioDesignThreads.set(threadId, true)
     const designSession = await this.designSessionFor(projectId, threadId, designRequested)
+    // A video session is user-started the same way, and it lasts for the thread:
+    // the turn that types @cio-video gets the session briefing and promotes the
+    // video capability to an active one, and every later turn keeps the
+    // capability and gets the continuation instead.
+    const videoRequested = origin === 'user' && isCioVideoRequest(text)
+    if (videoRequested) this.cioVideoThreads.set(threadId, true)
+    const videoSession = await this.videoSessionFor(projectId, threadId, videoRequested)
     // The routine how-to authoring thread carries the utility gateway from the
     // start: the agent has to research and install the skills, MCPs and plugins
     // a routine needs while it writes the how-to, without the user first arming
@@ -8521,7 +8607,8 @@ export class ChatEngine {
       utilitySetupRequested || assistantAuthoringTurn,
       assistantTaskTurn,
       assistantAuthoringTurn ? (targetThread?.routineId ?? null) : null,
-      designSession
+      designSession,
+      videoSession
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)

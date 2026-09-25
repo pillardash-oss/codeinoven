@@ -5,6 +5,7 @@ import type {
 } from '../../../lib/types'
 import { GATEWAY_TOOLS } from '../../../lib/gateway-tools'
 import { DESIGN_OUTPUT_ROOT } from '../../../lib/design-skill'
+import { VIDEO_OUTPUT_ROOT } from '../../../lib/video-skill'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
 
@@ -212,6 +213,71 @@ export const DESIGN_UTILITY_TOOLS: McpTool[] = [
         }
       },
       required: ['source'],
+      additionalProperties: false
+    }
+  }
+]
+
+/**
+ * Operations of the app-owned video capability (`cio:video`).
+ *
+ * Two operations, because watching and checking are two different acts. `preview`
+ * serves the composition folder and opens it in the browser tab, where the page
+ * runs and the tab refreshes itself as the agent writes. `capture` freezes the
+ * composition at one second and answers with the picture, which is the only way
+ * an agent can tell whether the frame it wrote is the frame it meant.
+ *
+ * Generating an asset is not repeated here: pictures, clips and sound come from a
+ * generation capability the user installed in Utilities, and the design studio's
+ * `save-media` operation is what brings one in as a file.
+ */
+export const VIDEO_UTILITY_TOOLS: McpTool[] = [
+  {
+    name: 'preview',
+    description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab, where the composition runs and is watched. The tab refreshes itself shortly after a file changes, so preview again only when you move to a different folder. Aim it at the folder holding the composition's index.html.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: {
+          type: 'string',
+          description: `Project-relative folder to serve. Defaults to ${VIDEO_OUTPUT_ROOT}.`
+        },
+        entry: {
+          type: 'string',
+          description:
+            'File inside that folder to load, relative to it. Defaults to index.html when that file exists; otherwise the folder listing is shown.'
+        },
+        attention: {
+          type: 'string',
+          enum: ['focus', 'background'],
+          description:
+            'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'capture',
+    description: `Freeze the composition at one second and hand the frame back as a picture you can see. This is how you check your own work: overflowed text, colliding labels, a colour that vanishes into the background and a caption over a busy area are invisible in the code and obvious in a frame. The composition must define window.cioRenderFrame(seconds) and a composition.json declaring its length; the time is clamped to that length. Call it for the first frame, the last frame and every moment something changes.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        time: {
+          type: 'number',
+          description:
+            'Seconds on the timeline to freeze, from 0 to the manifest duration. Defaults to 0.'
+        },
+        directory: {
+          type: 'string',
+          description: `Project-relative folder holding the composition. Defaults to ${VIDEO_OUTPUT_ROOT}.`
+        },
+        entry: {
+          type: 'string',
+          description:
+            'File inside that folder to load, relative to it. Defaults to index.html when that file exists.'
+        }
+      },
       additionalProperties: false
     }
   }

@@ -741,6 +741,45 @@ export class BrowserService {
     }
   }
 
+  /**
+   * Draw one exact frame of a composition and settle the page before a capture.
+   *
+   * A composition owns how a frame is drawn   the render contract is a global
+   * function the project defines   so the app calls it and waits rather than
+   * reimplementing it. The page is asked to draw the frame itself, then two
+   * animation frames are waited out, because a project that redraws from its own
+   * loop during a settle would otherwise be captured mid-paint. A project that
+   * defines no render function is reported rather than captured as a guess.
+   */
+  async renderTabFrame(
+    tabId: string,
+    seconds: number
+  ): Promise<{ rendered: boolean; reason?: string }> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) {
+      return { rendered: false, reason: 'the tab is gone' }
+    }
+    const result: unknown = await tab.view.webContents.executeJavaScript(`(async () => {
+      const draw = globalThis.cioRenderFrame;
+      if (typeof draw !== 'function') {
+        return { rendered: false, reason: 'the page defines no cioRenderFrame function' };
+      }
+      try {
+        await draw(${JSON.stringify(seconds)});
+      } catch (error) {
+        return { rendered: false, reason: String(error) };
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return { rendered: true };
+    })()`)
+    if (typeof result !== 'object' || result === null) return { rendered: false }
+    const record = result as Record<string, unknown>
+    const reason = typeof record['reason'] === 'string' ? record['reason'] : undefined
+    return record['rendered'] === true
+      ? { rendered: true }
+      : { rendered: false, ...(reason ? { reason } : {}) }
+  }
+
   private ensureTab(tabId: string, projectId: string, threadId: string): BrowserTab {
     const existing = this.tabs.get(tabId)
     if (existing) {

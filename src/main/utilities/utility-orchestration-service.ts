@@ -11,7 +11,11 @@ import type {
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
-import { APP_ADB_UTILITY_ID, APP_DESIGN_UTILITY_ID } from '../../lib/utility-ids'
+import {
+  APP_ADB_UTILITY_ID,
+  APP_DESIGN_UTILITY_ID,
+  APP_VIDEO_UTILITY_ID
+} from '../../lib/utility-ids'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_IMAGE_DESCRIPTOR_UTILITY_ID,
@@ -20,6 +24,7 @@ import {
 } from './utility-registry-service'
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
 import type { DesignSessionMode } from './cio-design-prompt'
+import type { VideoSessionMode } from './cio-video-prompt'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -33,6 +38,7 @@ import {
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
+import { VIDEO_CAPABILITY_DOCS, VIDEO_CAPABILITY_SEARCH_QUERY } from '../../lib/video-skill'
 import { designAssignmentsFromConfig } from '../../lib/design-assignments'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { resultWithImageParts } from '../../lib/image-payload'
@@ -86,6 +92,7 @@ import {
 import {
   BROWSER_UTILITY_TOOLS,
   DESIGN_UTILITY_TOOLS,
+  VIDEO_UTILITY_TOOLS,
   BRIDGE_SCRIPT_PATH,
   buildCuaSessionId,
   buildUtilityGatewayScript,
@@ -138,6 +145,13 @@ export interface UtilityTurnRequest {
    * its preview operation is callable without a search and an activation.
    */
   designSession?: DesignSessionMode
+  /**
+   * Whether this turn belongs to a video session the user opened with
+   * `@cio-video`. It does for the video capability what `designSession` does for
+   * the design capability: promotes it to an active capability for the turn, so
+   * the edit pass is in context and `preview` and `capture` are callable at once.
+   */
+  videoSession?: VideoSessionMode
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
   /**
@@ -227,6 +241,18 @@ export type BrowserUtilityExecutor = (
  * into the project as a file the design can reference.
  */
 export type DesignCapabilityExecutor = (
+  operation: string,
+  input: Record<string, unknown>,
+  context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+/**
+ * Runs one gateway invocation of the app-owned video capability for the turn
+ * that made it. The two operations have different owners: `preview` composes the
+ * loopback directory preview with the in-app browser, and `capture` adds the
+ * frame render and the screenshot on top of the same serve-and-show path.
+ */
+export type VideoCapabilityExecutor = (
   operation: string,
   input: Record<string, unknown>,
   context: { projectId: string; threadId: string }
@@ -328,6 +354,8 @@ export class UtilityOrchestrationService {
   private designPreviewExecutor: DesignCapabilityExecutor | null = null
   private designAssignmentExecutor: DesignCapabilityExecutor | null = null
   private designMediaExecutor: DesignCapabilityExecutor | null = null
+  private videoPreviewExecutor: VideoCapabilityExecutor | null = null
+  private videoCaptureExecutor: VideoCapabilityExecutor | null = null
   private scopeToolExecutor: ScopeToolExecutor | null = null
   private secretRequestExecutor: SecretRequestExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
@@ -420,6 +448,26 @@ export class UtilityOrchestrationService {
    */
   setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
     this.designMediaExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the video capability's `preview` operation,
+   * which serves a composition folder on the app's loopback origin and shows it
+   * in the thread's browser tab. The app supplies it because it owns the preview
+   * server and the browser.
+   */
+  setVideoPreviewExecutor(executor: VideoCapabilityExecutor | null): void {
+    this.videoPreviewExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the video capability's `capture` operation,
+   * which freezes the composition at a second and hands the frame back as a
+   * picture. The app supplies it because rendering and capturing a frame is a
+   * browser operation the agent has no other way to reach.
+   */
+  setVideoCaptureExecutor(executor: VideoCapabilityExecutor | null): void {
+    this.videoCaptureExecutor = executor
   }
 
   /**
@@ -566,6 +614,22 @@ export class UtilityOrchestrationService {
         })
       }
     }
+    // A video session works the same way: the user opened it, so the edit pass
+    // travels with the turn and both operations are callable from the first
+    // token. Its playbook is a constant, so nothing is resolved from settings.
+    if (request.videoSession && request.videoSession !== 'off') {
+      const video = eligible.find(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)
+      if (video && !always.some(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)) {
+        always.push({
+          binding: video.binding,
+          utility: {
+            ...video.utility,
+            kind: 'skill',
+            config: { instructions: VIDEO_CAPABILITY_DOCS }
+          }
+        })
+      }
+    }
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
     // The app-owned scope utility is advertised as a one-line pointer, never as
     // a schema: whether it is offered at all is the registry's call, so
@@ -579,6 +643,10 @@ export class UtilityOrchestrationService {
     // that is about to design an interface to know the guidance and the preview
     // exist, without carrying the design pass in every turn's context.
     const hasDesignCapability = eligible.some(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)
+    // The video capability is advertised the same way. Its playbook is heavier
+    // than a pointer would be and belongs to a session, so a turn that is not
+    // making a video learns it exists without carrying the edit pass.
+    const hasVideoCapability = eligible.some(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)
     const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
       if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
         return request.allowManagement === true
@@ -647,6 +715,11 @@ export class UtilityOrchestrationService {
       ...(hasDesignCapability
         ? [
             `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus three operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, and a \`save-media\` operation that saves a generated image, video or sound file into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+          ]
+        : []),
+      ...(hasVideoCapability
+        ? [
+            `The app-owned video capability (utility \`${APP_VIDEO_UTILITY_ID}\`) is knowledge plus two operations, and it is not in your tool list. When the work is to make a video   a title sequence, a walkthrough, a captioned cut, an explainer, a montage   search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the edit pass, a \`preview\` operation that serves the composition folder and opens it in this thread's browser tab, and a \`capture\` operation that freezes the composition at one second and hands the frame back as a picture you can look at. Look at every frame you change. It is a baseline, not an authority: where the project or the user's own skill states a motion language, follow that one.`
           ]
         : []),
       ...(hasOnDemand
@@ -1368,6 +1441,12 @@ export class UtilityOrchestrationService {
         tools: DESIGN_UTILITY_TOOLS
       }
     }
+    if (resolved.utility.id === APP_VIDEO_UTILITY_ID) {
+      // Same shape as the design capability: knowledge plus a typed operation
+      // catalog, handed back together so an activation or a post-compaction
+      // docs re-dump is one payload.
+      return { instructions: VIDEO_CAPABILITY_DOCS, tools: VIDEO_UTILITY_TOOLS }
+    }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
       return { tools: await client.listTools() }
@@ -1533,6 +1612,25 @@ export class UtilityOrchestrationService {
           executors.has(operation)
             ? `The design capability's "${operation}" operation is unavailable`
             : `The design capability has no operation named "${operation}"`
+        )
+      }
+      result = await executor(operation, operationInput, {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId
+      })
+    } else if (resolved.utility.id === APP_VIDEO_UTILITY_ID) {
+      // Two operations with different owners: `preview` serves and shows the
+      // composition folder, `capture` renders one frame and screenshots it.
+      const executors = new Map<string, VideoCapabilityExecutor | null>([
+        ['preview', this.videoPreviewExecutor],
+        ['capture', this.videoCaptureExecutor]
+      ])
+      const executor = executors.get(operation)
+      if (!executor) {
+        throw new Error(
+          executors.has(operation)
+            ? `The video capability's "${operation}" operation is unavailable`
+            : `The video capability has no operation named "${operation}"`
         )
       }
       result = await executor(operation, operationInput, {

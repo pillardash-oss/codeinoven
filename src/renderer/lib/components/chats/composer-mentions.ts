@@ -8,7 +8,7 @@ import { isInsideUnclosedInlineCode, isQuotedMentionPosition } from '$shared/men
  */
 export interface ComposerBuiltInTag {
   /** Tag id, matching the token without its `@`. */
-  id: 'cio-utility' | 'cio-design'
+  id: 'cio-utility' | 'cio-design' | 'cio-video'
   /** The exact token a user types. */
   token: string
   /** What the tag opens, shown under the name in the mention menu. */
@@ -38,6 +38,14 @@ export const COMPOSER_BUILT_IN_TAGS: readonly ComposerBuiltInTag[] = [
     description: 'Design an interface as HTML and watch it render in the browser panel.',
     chipLabel: 'design',
     keywords: ['design', 'designer', 'prototype', 'landing', 'page', 'screen', 'ui', 'wireframe']
+  },
+  {
+    id: 'cio-video',
+    token: '@cio-video',
+    kindLabel: 'Built-in video session',
+    description: 'Make a video as a small web project and watch it render in the browser panel.',
+    chipLabel: 'video',
+    keywords: ['video', 'motion', 'edit', 'cut', 'reel', 'animation', 'composition', 'trailer']
   }
 ]
 

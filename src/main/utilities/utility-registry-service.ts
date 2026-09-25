@@ -32,6 +32,11 @@ import {
   SCOPE_CAPABILITY_NAME,
   SCOPE_CAPABILITY_SUMMARY
 } from '../../lib/scope-tool'
+import {
+  VIDEO_CAPABILITY_DOCS,
+  VIDEO_CAPABILITY_NAME,
+  VIDEO_CAPABILITY_SUMMARY
+} from '../../lib/video-skill'
 import type { StorageEngine } from '../storage/storage-engine'
 // Sourced from the shared `lib/utility-ids` module (and re-exported here for
 // existing consumers) so browser-bound renderer code   which imports these ids
@@ -43,6 +48,7 @@ import {
   APP_CUA_DRIVER_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
   APP_SCOPE_UTILITY_ID,
+  APP_VIDEO_UTILITY_ID,
   canToggleUtilityEnabled
 } from '../../lib/utility-ids'
 export {
@@ -50,7 +56,8 @@ export {
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
-  APP_SCOPE_UTILITY_ID
+  APP_SCOPE_UTILITY_ID,
+  APP_VIDEO_UTILITY_ID
 }
 
 const REGISTRY_PATH = 'utilities/registry.json'
@@ -264,6 +271,31 @@ export class UtilityRegistryService {
         activation: 'on_demand',
         scope: { level: 'global' },
         config: { instructions: DESIGN_CAPABILITY_DOCS },
+        credentials: [],
+        harnessBindings: [
+          {
+            harnessId: ALL_HARNESSES_BINDING_ID,
+            strategy: 'skill' as const
+          }
+        ],
+        appOwned: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        // The edit pass is the substance. The app adds two operations on top of
+        // it: `preview`, which serves the composition folder on the app's own
+        // loopback origin and opens it in the thread's browser tab, and
+        // `capture`, which freezes the composition at a second and hands the
+        // frame back as a picture, so an agent can look at what it made.
+        id: APP_VIDEO_UTILITY_ID,
+        kind: 'skill',
+        name: VIDEO_CAPABILITY_NAME,
+        description: VIDEO_CAPABILITY_SUMMARY,
+        enabled: true,
+        activation: 'on_demand',
+        scope: { level: 'global' },
+        config: { instructions: VIDEO_CAPABILITY_DOCS },
         credentials: [],
         harnessBindings: [
           {

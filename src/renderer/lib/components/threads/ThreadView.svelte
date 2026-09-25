@@ -1489,6 +1489,21 @@
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
+    // CodeInOven video session   the slash spelling of the @cio-video composer
+    // tag. The tag promotes the app-owned video capability to an active
+    // capability for the turn, so the agent starts editing instead of first
+    // looking for a tool that makes video.
+    actions.push({
+      id: 'command:cio-video',
+      title: '/cio-video',
+      description: 'Start a video session: make a video and watch it render in the browser',
+      category: 'command',
+      source: applicationActionSource,
+      keywords: ['cio', 'video', 'motion', 'edit', 'cut', 'reel', 'animation', 'composition'],
+      slashCommand: true,
+      ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+
     // Assistant authoring: the agent drafts the routine how-to in conversation
     // and asks the user to confirm the recap. The recap card commits the agreed
     // draft in one click; this command is only the fallback for when that path
@@ -5955,6 +5970,14 @@
     sendComposerMessage(request ? `@cio-design ${request}` : '@cio-design', [])
   }
 
+  /** Open a video session   the slash spelling of the @cio-video composer tag.
+   *  The main process owns the video contract and the capability that goes with
+   *  it, so this only has to send the tag and whatever the user typed after it. */
+  function triggerCioVideoTurn(args: string): void {
+    const request = args.trim()
+    sendComposerMessage(request ? `@cio-video ${request}` : '@cio-video', [])
+  }
+
   /** Ask the agent to load and follow a skill by name. This is the route for
    *  skills with no runnable native command in the current conversation (a
    *  side chat owns no thread row, and a global or CodeInOven skill is not a
@@ -6165,6 +6188,10 @@
       triggerCioDesignTurn(args)
       return
     }
+    if (commandId === 'command:cio-video') {
+      triggerCioVideoTurn(args)
+      return
+    }
     if (commandId.startsWith('cio-skill:')) {
       triggerCapabilitySkill(commandId, args)
       return
@@ -6268,11 +6295,13 @@
       return
     }
 
-    // App-owned slash commands (/cio-utility, /cio-design and capability skills)
-    // route through the same handler the composer's submit path uses.
+    // App-owned slash commands (/cio-utility, /cio-design, /cio-video and
+    // capability skills) route through the same handler the composer's submit
+    // path uses.
     if (
       action.id === 'command:cio-utility' ||
       action.id === 'command:cio-design' ||
+      action.id === 'command:cio-video' ||
       action.id.startsWith('cio-skill:')
     ) {
       await executeHarnessCommand(action.id, '')

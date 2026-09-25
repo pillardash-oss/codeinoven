@@ -387,6 +387,26 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // as a file the design references by relative path.
   const { createDesignMediaExecutor } = await import('../design/design-media-executor')
   state.chatEngine.setDesignMediaExecutor(createDesignMediaExecutor({ database }))
+  // The video capability composes the same two services: the loopback static
+  // host that serves a composition folder and the thread's browser tab that
+  // shows it. `capture` adds the frame render and the screenshot on top of the
+  // same serve-and-show path, so the two operations cannot drift.
+  const { createVideoPreviewExecutor } = await import('../video/video-preview-executor')
+  state.chatEngine.setVideoPreviewExecutor(
+    createVideoPreviewExecutor({
+      previews: state.directoryPreviewService,
+      database,
+      browser: () => state.browserService
+    })
+  )
+  const { createVideoCaptureExecutor } = await import('../video/video-capture-executor')
+  state.chatEngine.setVideoCaptureExecutor(
+    createVideoCaptureExecutor({
+      previews: state.directoryPreviewService,
+      database,
+      browser: () => state.browserService
+    })
+  )
   // A previewed folder refreshes itself: the preview server reports a batched
   // change for the directory it serves, and the tab showing that origin reloads.
   // The browser is read lazily because it exists only while the app has a window,
