@@ -942,14 +942,18 @@ CREATE TABLE IF NOT EXISTS routines (
 CREATE INDEX IF NOT EXISTS idx_routines_listing ON routines(pinned DESC, sort_order, updated_at DESC);`
 
 /**
- * Which design folder a thread is working on.
+ * Which folder of authored work a thread is working on, and which kind it holds.
  *
- * A design session is user-started (the `@cio-design` tag, which lives in the
- * thread's persisted messages), but the folder the agent wrote into is not
- * derivable from a message, and the app must be able to put a restarted user
- * back on their design. One row per thread: the design has no identity of its
- * own beyond its folder, and a thread works on one at a time. The foreign key
- * makes the row follow the thread's deletion instead of orphaning.
+ * A session is user-started (the `@cio-design` or `@cio-video` tag, which lives in
+ * the thread's persisted messages), but the folder the agent wrote into is not
+ * derivable from a message, and the app must be able to put a restarted user back
+ * on their design or their composition. One row per thread: the work has no
+ * identity of its own beyond its folder, and a thread works on one at a time.
+ *
+ * `kind` is written at preview time rather than recovered from the folder's root,
+ * so a thread that has done design or video work stays marked on its row even when
+ * nothing about the folder can be resolved any more. The foreign key makes the row
+ * follow the thread's deletion instead of orphaning.
  */
 const THREAD_DESIGNS_SQL = `
 CREATE TABLE IF NOT EXISTS thread_designs (
@@ -957,6 +961,7 @@ CREATE TABLE IF NOT EXISTS thread_designs (
   project_id TEXT NOT NULL,
   directory  TEXT NOT NULL,
   entry      TEXT,
+  kind       TEXT NOT NULL DEFAULT 'design' CHECK(kind IN ('design','video')),
   updated_at INTEGER NOT NULL
 );
 

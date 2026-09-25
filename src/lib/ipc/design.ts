@@ -9,10 +9,10 @@
  * differ, so the kind travels with them and every label is chosen from it.
  *
  * Everything here exists so that knowledge outlives the process. The tag lives in
- * the thread's persisted messages, and the folder a thread is working on lives in
- * the `thread_designs` table, so a restart can put the user back on their work
- * instead of leaving them with a browser tab that no longer knows it was showing
- * one.
+ * the thread's persisted messages, and the folder a thread is working on, together
+ * with the kind of work it holds, lives in the `thread_designs` table, so a restart
+ * can put the user back on their work instead of leaving them with a browser tab
+ * that no longer knows it was showing one.
  */
 
 /** Which authored-work session a thread is in. */
@@ -36,6 +36,14 @@ export interface ThreadDesignCurrent {
   directory: string
   /** Entry file inside the folder, or null to show the folder listing. */
   entry: string | null
+  /**
+   * Which session the folder holds, recorded when the folder was written.
+   *
+   * Stored rather than recovered by reading the path, so a thread that has done
+   * design or video work stays marked on its row even when its folder has been
+   * renamed, deleted, or written outside the layout the app documents.
+   */
+  kind: AuthoredWorkKind
   /**
    * When the thread last previewed it (ms). The folder is the newest evidence of
    * which session a thread is in, so the coordinator weighs it against the two
@@ -83,4 +91,12 @@ export interface DesignThumbnail {
   /** Capture size in CSS pixels, for the preview's aspect ratio. */
   width: number
   height: number
+  /**
+   * The browser tab holding the work, or null when there is none.
+   *
+   * The board needs it to reach the tab's own controls. A composition's mute is per
+   * tab, so the board's mute button drives the same state the tab strip shows
+   * rather than keeping a second one that could disagree with it.
+   */
+  tabId: string | null
 }

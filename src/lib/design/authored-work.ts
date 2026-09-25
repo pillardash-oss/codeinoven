@@ -7,15 +7,17 @@ import { VIDEO_PROJECT_ROOT } from '../video/project'
  *
  * A design session writes into `.cio/designs/<name>/` and a video session writes
  * into `.cio/videos/<name>/`, and the root is the only thing that says which is
- * which. Everything else that talks about this work carries a bare path: the
- * `thread_designs` row stores a path, a served origin stores a path, and a
- * browser tab stores the URL it is showing. None of them stores a kind.
+ * which for a folder that carries no record of its own. A `thread_designs` row
+ * carries its kind, so this classifier answers for the places that have none: the
+ * folder a served origin resolves to, and the backfill of rows written before the
+ * kind column existed.
  *
- * So the classifier lives here rather than inside the service that happened to
- * need it first, because three callers now ask the same question: the design
- * service when it decides which session a thread is in, and the browser when it
- * decides whether a tab is rendering a design. A second copy is how a folder ends
- * up being a design to the board and not to the tab.
+ * It lives here rather than inside the service that happened to need it first,
+ * because more than one caller asks the same question: the service when it decides
+ * which session a folder belongs to, the browser when it decides whether a tab is
+ * rendering a design, and the database when it classifies historical rows. A
+ * second copy is how a folder ends up being a design to the board and not to the
+ * tab.
  *
  * Deliberately free of `node:` imports: the renderer imports the roots to label
  * the board, and this module is on that path.

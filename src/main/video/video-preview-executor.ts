@@ -1,4 +1,5 @@
 import { requireLocalProject } from '../../lib/project-artifacts'
+import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import type { BrowserService } from '../browser/browser-service'
 import type { Database } from '../database/database'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
@@ -27,6 +28,7 @@ export interface VideoPreviewExecutorOptions {
     threadId: string
     directory: string
     entry: string | null
+    kind: AuthoredWorkKind
   }) => void
 }
 
@@ -67,7 +69,8 @@ export function createVideoPreviewExecutor(
       projectId: context.projectId,
       threadId: context.threadId,
       directory: result.directory,
-      entry: result.entry
+      entry: result.entry,
+      kind: 'video'
     })
 
     return {

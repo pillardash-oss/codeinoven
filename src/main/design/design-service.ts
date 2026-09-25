@@ -158,19 +158,21 @@ export class DesignService {
   }
 
   /**
-   * Remember the folder a preview showed.
+   * Remember the folder a preview showed, and which kind of work it holds.
    *
    * Both capabilities call this after every preview, so the agent's choice of
-   * folder is what a restarted app restores. The row is kind-agnostic: it holds the
-   * path, and the path's root is what tells the coordinator whether this thread is
-   * on a design or on a composition. A thread works on one folder at a time, so a
-   * later preview re-points the row instead of adding a second one.
+   * folder is what a restarted app restores. The kind is written with the folder
+   * instead of being recovered from it later, so the row keeps saying the thread
+   * did design or video work even when the folder is gone. A thread works on one
+   * folder at a time, so a later preview re-points the row instead of adding a
+   * second one.
    */
   recordPreview(input: {
     projectId: string
     threadId: string
     directory: string
     entry: string | null
+    kind: AuthoredWorkKind
   }): void {
     this.designs.upsert(input)
   }
@@ -205,7 +207,8 @@ export class DesignService {
       projectId,
       threadId,
       directory,
-      entry: entryWithinOrigin(url, origin)
+      entry: entryWithinOrigin(url, origin),
+      kind
     })
     return kind === 'design' ? { directory, origin } : null
   }
@@ -322,8 +325,9 @@ export class DesignService {
     reveal: boolean
   ): Promise<DesignOpenResult> {
     const project = requireLocalProject(this.options.database, projectId)
+    const kind = this.resolveKind(threadId)
     const result = await this.serveWork({
-      kind: this.resolveKind(threadId),
+      kind,
       projectPath: project.path,
       projectId,
       threadId,
@@ -336,7 +340,8 @@ export class DesignService {
       projectId,
       threadId,
       directory: result.directory,
-      entry: result.entry
+      entry: result.entry,
+      kind
     })
     if (!result.tabId) {
       throw new Error('The work opened without a browser tab to show it in.')
@@ -418,9 +423,17 @@ export class DesignService {
     threadId: string
     directory: string
     entry: string | null
+    kind: AuthoredWorkKind
   }): void {
     const current = this.designs.forThread(input.threadId)
-    if (current && current.directory === input.directory && current.entry === input.entry) return
+    if (
+      current &&
+      current.directory === input.directory &&
+      current.entry === input.entry &&
+      current.kind === input.kind
+    ) {
+      return
+    }
     this.designs.upsert(input)
   }
 
@@ -473,16 +486,15 @@ export class DesignService {
    * it last previewed when that folder is newer than either tag, otherwise the tag
    * typed last. The folder is what makes the board follow the agent from a design
    * into a composition (or back) without a reload, and the tags are what make it
-   * appear before the agent has previewed anything at all.
+   * appear before the agent has previewed anything at all. The folder's kind is the
+   * one recorded with it, so this answer does not depend on the folder still
+   * sitting where the app expects it.
    */
   private kindFor(
     current: ThreadDesignCurrent | null,
     tagged: SessionTag | null
   ): AuthoredWorkKind {
-    if (current) {
-      const recorded = authoredWorkKindOf(current.directory)
-      if (recorded !== null && (tagged === null || current.updatedAt >= tagged.at)) return recorded
-    }
+    if (current && (tagged === null || current.updatedAt >= tagged.at)) return current.kind
     return tagged?.kind ?? 'design'
   }
 
