@@ -433,7 +433,7 @@ These rules bind every AI agent contributing to this repository. The operational
 
 - Before starting a task: write a plan file with the current phase declared at the top, checkbox tasks, and mark items in-progress/completed as you go.
 - After finishing: update the progress file with what was done and what's next.
-- All documentation output (plan*.md, progress*.md, test output, walkthroughs) lives under `.cio/`   never pollute the repo root.
+- All documentation output (plan*.md, progress*.md, test output, walkthroughs) lives in the matching `.cio/` subfolder: `.cio/work/<feature>/` for chats, `.cio/specs/<feature-slug>/` in Engineering. Disposable scratch lives in `.cio/tmp/`. Never pollute the repo root, and never drop files at the `.cio/` root.
 - If plan/progress files were overwritten by someone else since your last edit, create `plan-[feature].md` / `progress-[feature].md` instead. Never destroy another agent's records.
 - Work phases to exhaustion   don't stop halfway through a declared phase.
 - If confused at any point, **ask clarifying questions. Never assume.**
