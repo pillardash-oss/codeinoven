@@ -360,6 +360,32 @@ export const FILE_SYSTEM_CHAT_SYSTEM_PROMPT = [
 /** Tools available to a plain (web-only) chat thread   no file-system tools. */
 export const CHAT_WEB_ONLY_TOOLS = ['question', 'webfetch', 'websearch', 'gemini_quota']
 
+/** The utility gateway's MCP transport name, as every harness registers it. */
+const CHAT_GATEWAY_TRANSPORT_NAME = 'utilities'
+
+/**
+ * The gateway's own tools as one harness gates them through a tool allowlist,
+ * appended to a web-only chat so the in-app browser (and any installed web
+ * tool) stays reachable while the chat's file-system tools remain masked.
+ *
+ * Only harnesses that gate MCP tools through this allowlist need an entry:
+ * OpenCode enables a namespaced MCP tool as `<transport>_<tool>` and
+ * claude-code as `mcp__<transport>__<tool>`. Pi and codex carry the gateway as
+ * un-gated custom tools, and the remaining harnesses ignore the list for MCP
+ * tools, so they contribute nothing here   which keeps cline's list exactly the
+ * web set its web-only approval hook keys on.
+ */
+export function chatGatewayAllowedTools(harnessId: string): string[] {
+  const names = [UTILITY_SEARCH_TOOL_NAME, UTILITY_ACTIVATE_TOOL_NAME, UTILITY_INVOKE_TOOL_NAME]
+  if (harnessId === 'opencode') {
+    return names.map((name) => `${CHAT_GATEWAY_TRANSPORT_NAME}_${name}`)
+  }
+  if (harnessId === 'claude-code') {
+    return names.map((name) => `mcp__${CHAT_GATEWAY_TRANSPORT_NAME}__${name}`)
+  }
+  return []
+}
+
 export const SPEC_IMPLEMENT_SYSTEM_PROMPT = [
   `You are implementing a user-approved ${APP_NAME} engineering specification.`,
   'Specification refinement is complete. Begin implementation immediately in this turn; do not defer implementation to a later turn or claim that the app will take over.',

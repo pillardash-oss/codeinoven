@@ -556,6 +556,7 @@ import {
   BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT,
   BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
   CHAT_WEB_ONLY_TOOLS,
+  chatGatewayAllowedTools,
   CONVERSATION_ASSIGNMENT_INSTRUCTION,
   ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION,
   IMAGE_DESCRIPTOR_SYSTEM_NOTE,
@@ -3251,11 +3252,9 @@ export class ChatEngine {
     // A new agent turn begins here   re-enable a user-dismissed PiP so it may
     // show again if CUA is used, and cancel any auto-dismiss from the last turn.
     this.computerUsePip?.notifyTurnStarted(threadId)
-    // A web-only inbox chat masks its tool set to web utilities, so the app
-    // gateway and any materialized utility runtime are never reachable. Skipping
-    // the runtime here keeps the shared `chats-cwd` opencode server alive across
-    // turns instead of restarting it twice per turn (prepare + cleanup), which
-    // is what produced the transient "fetch failed" history-mirror errors.
+    // A turn that owns no utility runtime (a temporary/isolated session with no
+    // gateway) returns before any runtime is materialized, so its shared server
+    // is never restarted on its behalf.
     if (skipRuntime) return ''
     // Re-expose this thread's stored secrets for the turn that is starting: the
     // hook lands before the transport split so a direct-gateway harness (Pi,
@@ -8470,15 +8469,12 @@ export class ChatEngine {
       assistantAuthoringTurn ||
       assistantTaskTurn ||
       (await this.hasCioUtilityInvocation(projectId, threadId))
-    // A web-only chat skips the app gateway only when the harness can search
-    // the web natively (claude-code, codex, cline, antigravity) or cannot host
-    // the gateway at all. Pi has NO native web tools   the gateway is its only
-    // path to web search/fetch   so it must receive the gateway or a
-    // File-System-OFF chat can reach neither the internet nor the file system.
-    const driverHasNativeWebSearch = (driver.capabilities.nativeUtilities ?? []).includes(
-      'web_search'
-    )
-    const driverCanPublishGateway = typeof driver.publishUtilityGatewayEndpoint === 'function'
+    // Every chat, web-only or not, receives the app utility gateway: the
+    // in-app browser (and any installed web tool) is reached through it, and
+    // masking the chat's file-system tools happens on the harness allowlist
+    // below instead of by withholding the gateway. Without the gateway a
+    // web-only chat could reach neither the internet nor the in-app browser on
+    // a harness whose only web path is the gateway.
     const utilityInstructionsPromise = this.prepareTurnUtilities(
       driver,
       projectId,
@@ -8489,10 +8485,7 @@ export class ChatEngine {
       utilityBudgetContext,
       targetThread?.title ?? '',
       targetThread?.scopeBucketId,
-      isChatThread &&
-        !chatFileSystemEnabled &&
-        !utilitySetupAllowed &&
-        (driverHasNativeWebSearch || !driverCanPublishGateway),
+      false,
       utilitySetupAllowed,
       activeBrainstormSession,
       utilitySetupRequested || assistantAuthoringTurn,
@@ -8938,7 +8931,7 @@ export class ChatEngine {
           !utilitySetupAllowed &&
           settings.providerId &&
           settings.modelId
-            ? CHAT_WEB_ONLY_TOOLS
+            ? [...CHAT_WEB_ONLY_TOOLS, ...chatGatewayAllowedTools(driverId)]
             : undefined,
         agent: utilitySetupRequested
           ? leanAgentNameForMode('utility-setup')
