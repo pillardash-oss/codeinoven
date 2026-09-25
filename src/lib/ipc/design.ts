@@ -1,18 +1,26 @@
 /**
- * Shared records for a thread's design session.
+ * Shared records for a thread's authored work.
  *
- * A design session is user-started: the user opens a turn with `@cio-design` and
- * the app-owned design capability writes HTML into `.cio/designs/<name>/`.
- * Everything here exists so that knowledge outlives the process. The tag lives
- * in the thread's persisted messages, and the folder a thread is working on
- * lives in the `thread_designs` table, so a restart can put the user back on
- * their design instead of leaving them with a browser tab that no longer knows
- * it was showing one.
+ * Two sessions have the same shape: a design session (`@cio-design`, written into
+ * `.cio/designs/<name>/`) and a video session (`@cio-video`, written into
+ * `.cio/videos/<name>/`). Both are user-started, both are a folder of HTML the
+ * agent writes, and both need the same answer after a restart: which folder was
+ * this thread working in, and how does the user get back to it. Only the words
+ * differ, so the kind travels with them and every label is chosen from it.
+ *
+ * Everything here exists so that knowledge outlives the process. The tag lives in
+ * the thread's persisted messages, and the folder a thread is working on lives in
+ * the `thread_designs` table, so a restart can put the user back on their work
+ * instead of leaving them with a browser tab that no longer knows it was showing
+ * one.
  */
 
-/** One design folder in a project. */
+/** Which authored-work session a thread is in. */
+export type AuthoredWorkKind = 'design' | 'video'
+
+/** One folder of a thread's authored work: a design, or a video composition. */
 export interface DesignEntry {
-  /** Project-relative folder with forward slashes, e.g. `.cio/designs/hero`. */
+  /** Project-relative folder with forward slashes, e.g. `.cio/videos/title`. */
   directory: string
   /** Folder name, for a label, e.g. `hero`. */
   name: string
@@ -22,27 +30,35 @@ export interface DesignEntry {
   updatedAt: number
 }
 
-/** The design a thread last previewed, if it has one. */
+/** The folder a thread last previewed, if it has one. */
 export interface ThreadDesignCurrent {
   /** Project-relative folder with forward slashes. */
   directory: string
   /** Entry file inside the folder, or null to show the folder listing. */
   entry: string | null
+  /**
+   * When the thread last previewed it (ms). The folder is the newest evidence of
+   * which session a thread is in, so the coordinator weighs it against the two
+   * session tags rather than trusting the order they happen to be scanned in.
+   */
+  updatedAt: number
 }
 
-/** Everything a design coordinator needs to render for one thread. */
+/** Everything a coordinator needs to render one thread's authored work. */
 export interface ThreadDesignState {
   projectId: string
   threadId: string
+  /** Which session the thread is in, which chooses every word on the board. */
+  kind: AuthoredWorkKind
   /**
-   * Whether this thread opened a design session. Derived from the persisted
-   * messages, so it survives a restart and a later edit that removes the tag.
+   * Whether this thread opened a session. Derived from the persisted messages,
+   * so it survives a restart and a later edit that removes the tag.
    */
   active: boolean
-  /** The design this thread last previewed, or null before the first preview. */
+  /** The folder this thread last previewed, or null before the first preview. */
   current: ThreadDesignCurrent | null
-  /** Every design folder in the project, newest first. */
-  designs: DesignEntry[]
+  /** Every folder of `kind` in the project, newest first. */
+  items: DesignEntry[]
   /** Project-relative folder a preview should open when none is chosen. */
   defaultDirectory: string
 }

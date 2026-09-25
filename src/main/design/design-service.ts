@@ -1,11 +1,14 @@
 import { DESIGN_OUTPUT_ROOT } from '../../lib/design-skill'
 import type {
+  AuthoredWorkKind,
   DesignEntry,
   DesignOpenResult,
   DesignThumbnail,
+  ThreadDesignCurrent,
   ThreadDesignState
 } from '../../lib/ipc/design'
 import { requireLocalProject } from '../../lib/project-artifacts'
+import { VIDEO_PROJECT_ROOT } from '../../lib/video/project'
 import type { BrowserService } from '../browser/browser-service'
 import type { Database } from '../database/database'
 import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
@@ -13,29 +16,61 @@ import { DesignRepo } from '../database/repositories/design-repo'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { isCioDesignRequest } from '../utilities/cio-design-prompt'
-import { listProjectDesigns } from './design-listing'
+import { isCioVideoRequest } from '../utilities/cio-video-prompt'
+import { openVideoPreview } from '../video/video-preview-session'
+import { listProjectWorkFolders } from './design-listing'
 import { openDesignPreview } from './design-preview-session'
 
 /**
- * What the app knows about a thread's design, and how the user gets back to it.
+ * What the app knows about a thread's authored work, and how the user gets back to it.
  *
- * A design session is started by the user with `@cio-design` and rendered by the
- * agent into `.cio/designs/<name>/`. Three facts have to survive a restart for
- * the coordinator to be useful:
+ * Two sessions have the same shape, and this is the single service behind their
+ * board: a design session (`@cio-design`, written into `.cio/designs/<name>/`) and
+ * a video session (`@cio-video`, written into `.cio/videos/<name>/`). Three facts
+ * have to survive a restart for a coordinator to be useful:
  *
- *   - that the thread is a design session (the tag, read from the persisted
- *     messages, exactly as the chat engine decides it);
- *   - which design folder the thread is working on (the `thread_designs` row,
- *     written on every preview);
- *   - what designs exist at all (a listing of the project's `.cio/designs`).
+ *   - that the thread is in a session (the tag, read from the persisted messages,
+ *     exactly as the chat engine decides it);
+ *   - which folder the thread is working in (the `thread_designs` row, written on
+ *     every preview by either capability);
+ *   - what folders of that kind exist at all (a listing of the session's root).
  *
  * The first is derived, the second is remembered, the third is read from disk.
- * Nothing here decides anything about the design itself.
+ * Nothing here decides anything about the work itself, and nothing is duplicated
+ * per kind: the kind is a field, not a second service.
  */
 
 /** Ceiling on the thumbnail width a caller may ask for. */
 const MIN_THUMBNAIL_WIDTH = 160
 const MAX_THUMBNAIL_WIDTH = 1_200
+
+/** Where each session's folders live, which is also how a folder is spelled back. */
+const WORK_ROOT_BY_KIND: Record<AuthoredWorkKind, string> = {
+  design: DESIGN_OUTPUT_ROOT,
+  video: VIDEO_PROJECT_ROOT
+}
+
+/** The later of a thread's two session tags. */
+interface SessionTag {
+  kind: AuthoredWorkKind
+  /** When it was typed (ms), so a previewed folder can be weighed against it. */
+  at: number
+}
+
+/**
+ * Which session a recorded folder belongs to, read from its root.
+ *
+ * The row stores only a project-relative path, so the root is what says whether it
+ * holds a design or a composition. A path under neither root claims no kind and
+ * lets the tag decide.
+ */
+function kindOfWorkDirectory(directory: string): AuthoredWorkKind | null {
+  for (const kind of ['design', 'video'] as const) {
+    const root = WORK_ROOT_BY_KIND[kind]
+    if (directory === root || directory.startsWith(`${root}/`)) return kind
+  }
+  return null
+}
 
 /** Identifier validation for the two ids every call carries. */
 function requireId(value: unknown, label: string): string {
@@ -49,6 +84,17 @@ export interface DesignServiceOptions {
   database: Database
   previews: DirectoryPreviewService
   browser: () => BrowserService | null
+}
+
+/** What both serve-and-show paths report, once the kind has chosen which one runs. */
+interface ServedWork {
+  /** Project-relative folder, with forward slashes. */
+  directory: string
+  /** Entry file shown, or null for the folder listing. */
+  entry: string | null
+  /** The loopback URL the tab is showing. */
+  url: string
+  tabId: string | null
 }
 
 export class DesignService {
@@ -88,7 +134,7 @@ export class DesignService {
     )
   }
 
-  /** Forget a thread's design record when the thread itself is gone. */
+  /** Forget a thread's authored-work record when the thread itself is gone. */
   forgetThread(threadId: string): void {
     this.designs.deleteThread(threadId)
   }
@@ -96,9 +142,11 @@ export class DesignService {
   /**
    * Remember the folder a preview showed.
    *
-   * The design capability calls this after every preview, so the agent's choice
-   * of folder is what a restarted app restores. A thread is on one design at a
-   * time, so a later preview re-points the row instead of adding a second one.
+   * Both capabilities call this after every preview, so the agent's choice of
+   * folder is what a restarted app restores. The row is kind-agnostic: it holds the
+   * path, and the path's root is what tells the coordinator whether this thread is
+   * on a design or on a composition. A thread works on one folder at a time, so a
+   * later preview re-points the row instead of adding a second one.
    */
   recordPreview(input: {
     projectId: string
@@ -116,31 +164,37 @@ export class DesignService {
   /**
    * Everything a coordinator renders for one thread.
    *
-   * `active` is true when the thread has ever opened a design session, whether
-   * or not it has previewed anything yet: the user typed the tag, so the design
-   * work exists even before the first screen is written, and the coordinator's
-   * preview button has to be there to open it.
+   * `active` is true when the thread has ever opened a session, whether or not it
+   * has previewed anything yet: the user typed the tag, so the work exists even
+   * before the first screen or the first frame is written, and the board's preview
+   * button has to be there to open it. That is also what makes a session dock the
+   * moment the message lands, rather than when the agent first reaches for its
+   * preview operation.
    */
   async stateFor(projectId: string, threadId: string): Promise<ThreadDesignState> {
     const project = requireLocalProject(this.options.database, projectId)
-    const designs = await this.listDesigns(project.path)
     const current = this.designs.forThread(threadId)
+    const tagged = this.latestSessionTag(threadId)
+    const kind = this.kindFor(current, tagged)
+    const root = WORK_ROOT_BY_KIND[kind]
+    const items = await this.listWorkFolders(project.path, root)
     return {
       projectId,
       threadId,
-      active: current !== null || this.hasDesignTag(threadId),
+      kind,
+      active: current !== null || tagged !== null,
       current,
-      designs,
-      defaultDirectory: current?.directory ?? designs[0]?.directory ?? DESIGN_OUTPUT_ROOT
+      items,
+      defaultDirectory: current?.directory ?? items[0]?.directory ?? root
     }
   }
 
   /**
-   * Show a design in the thread's browser tab at the user's request.
+   * Show a thread's work in its browser tab at the user's request.
    *
    * The folder is validated and the browser opens it in the background, then the
-   * tab is revealed: revealing is one mechanism, not two, so an existing tab and
-   * a brand-new one behave the same way for the user.
+   * tab is revealed: revealing is one mechanism, not two, so an existing tab and a
+   * brand-new one behave the same way for the user.
    */
   async open(
     projectId: string,
@@ -150,18 +204,16 @@ export class DesignService {
     reveal: boolean
   ): Promise<DesignOpenResult> {
     const project = requireLocalProject(this.options.database, projectId)
-    const result = await openDesignPreview(
-      { previews: this.options.previews, browser: this.options.browser },
-      {
-        projectPath: project.path,
-        projectId,
-        threadId,
-        directory,
-        entry,
-        attention: 'background',
-        reveal
-      }
-    )
+    const result = await this.serveWork({
+      kind: this.resolveKind(threadId),
+      projectPath: project.path,
+      projectId,
+      threadId,
+      directory,
+      entry,
+      attention: 'background',
+      reveal
+    })
     this.designs.upsert({
       projectId,
       threadId,
@@ -169,7 +221,7 @@ export class DesignService {
       entry: result.entry
     })
     if (!result.tabId) {
-      throw new Error('The design opened without a browser tab to show it in.')
+      throw new Error('The work opened without a browser tab to show it in.')
     }
     return {
       directory: result.directory,
@@ -180,12 +232,13 @@ export class DesignService {
   }
 
   /**
-   * A small picture of a design, for the coordinator's preview.
+   * A small picture of the work, for the coordinator's preview.
    *
-   * The design is shown in the thread's own tab, off screen, then captured. That
-   * is deliberate: the capture has to come from a page the app is actually
-   * rendering, and a hidden tab is the same page the user would see, at the same
-   * size, without a second browser and without stealing focus.
+   * It is shown in the thread's own tab, off screen, then captured. That is
+   * deliberate: the capture has to come from a page the app is actually rendering,
+   * and a hidden tab is the same page the user would see, at the same size, without
+   * a second browser and without stealing focus. A composition is captured as it
+   * plays, because a frame is what the composition exists to draw.
    */
   async thumbnail(
     projectId: string,
@@ -196,20 +249,18 @@ export class DesignService {
   ): Promise<DesignThumbnail> {
     const project = requireLocalProject(this.options.database, projectId)
     const browser = this.options.browser()
-    const result = await openDesignPreview(
-      { previews: this.options.previews, browser: this.options.browser },
-      {
-        projectPath: project.path,
-        projectId,
-        threadId,
-        directory,
-        // The entry is passed through so the picture is the page the user is
-        // actually looking at, not always the folder's index file.
-        entry,
-        attention: 'background',
-        reveal: false
-      }
-    )
+    const result = await this.serveWork({
+      kind: this.resolveKind(threadId),
+      projectPath: project.path,
+      projectId,
+      threadId,
+      directory,
+      // The entry is passed through so the picture is the page the user is actually
+      // looking at, not always the folder's index file.
+      entry,
+      attention: 'background',
+      reveal: false
+    })
     if (!browser || !result.tabId) {
       return { directory: result.directory, dataUrl: null, width: 0, height: 0 }
     }
@@ -224,26 +275,108 @@ export class DesignService {
   }
 
   /**
-   * Every design folder in a project, newest first.
+   * Every folder of one project under `root`, newest first.
    *
-   * The folder listing is the registry of designs: `.cio/designs/<name>/` is the
-   * documented layout, so a design another thread wrote is found here without
-   * anything having registered it.
+   * The folder listing is the registry: `.cio/designs/<name>/` and
+   * `.cio/videos/<name>/` are the documented layouts, so a folder another thread
+   * wrote is found here without anything having registered it.
    */
-  async listDesigns(projectPath: string): Promise<DesignEntry[]> {
-    return listProjectDesigns(projectPath)
+  async listWorkFolders(projectPath: string, root: string): Promise<DesignEntry[]> {
+    return listProjectWorkFolders(projectPath, root)
+  }
+
+  /** Which session the thread is in, from the record and the persisted tags. */
+  private resolveKind(threadId: string): AuthoredWorkKind {
+    return this.kindFor(this.designs.forThread(threadId), this.latestSessionTag(threadId))
   }
 
   /**
-   * Whether the thread ever opened a design session.
+   * Which session a thread is in, from the two facts that say so.
+   *
+   * A thread can move between the sessions, so the newest evidence wins: the folder
+   * it last previewed when that folder is newer than either tag, otherwise the tag
+   * typed last. The folder is what makes the board follow the agent from a design
+   * into a composition (or back) without a reload, and the tags are what make it
+   * appear before the agent has previewed anything at all.
+   */
+  private kindFor(
+    current: ThreadDesignCurrent | null,
+    tagged: SessionTag | null
+  ): AuthoredWorkKind {
+    if (current) {
+      const recorded = kindOfWorkDirectory(current.directory)
+      if (recorded !== null && (tagged === null || current.updatedAt >= tagged.at)) return recorded
+    }
+    return tagged?.kind ?? 'design'
+  }
+
+  /**
+   * The later of the thread's two session tags, or null when it opened neither.
    *
    * Read from the persisted messages rather than kept in memory, so it survives a
-   * restart and is undone by an edit or rollback that removes the tag. This is
-   * the same rule the chat engine applies when it decides a turn's session mode.
+   * restart and is undone by an edit or rollback that removes the tag. This is the
+   * same rule the chat engine applies when it decides a turn's session mode.
    */
-  private hasDesignTag(threadId: string): boolean {
-    return this.messages
-      .loadUserMessagesByThread(threadId)
-      .some((message) => isCioDesignRequest(message.content))
+  private latestSessionTag(threadId: string): SessionTag | null {
+    let latest: SessionTag | null = null
+    for (const message of this.messages.loadUserMessagesByThread(threadId)) {
+      // One message carrying both tags is a video session: the narrower tag wins
+      // the tie, so a compound invocation reads the same way every time.
+      if (
+        isCioVideoRequest(message.content) &&
+        (latest === null || message.createdAt >= latest.at)
+      ) {
+        latest = { kind: 'video', at: message.createdAt }
+        continue
+      }
+      if (
+        isCioDesignRequest(message.content) &&
+        (latest === null || message.createdAt > latest.at)
+      ) {
+        latest = { kind: 'design', at: message.createdAt }
+      }
+    }
+    return latest
+  }
+
+  /**
+   * Serve one folder of authored work and put it in the thread's browser tab.
+   *
+   * The design path and the video path share every step but the folder resolver
+   * and one design-only side effect (marking the tab, which is what arms the
+   * element inspector), so the choice lives here rather than in each caller: the
+   * capability's own preview, the board's open and the board's thumbnail all have
+   * to agree about which folder is on screen.
+   */
+  private async serveWork(input: {
+    kind: AuthoredWorkKind
+    projectPath: string
+    projectId: string
+    threadId: string
+    directory: unknown
+    entry: unknown
+    attention: 'focus' | 'background'
+    reveal: boolean
+  }): Promise<ServedWork> {
+    const deps = { previews: this.options.previews, browser: this.options.browser }
+    const target = {
+      projectPath: input.projectPath,
+      projectId: input.projectId,
+      threadId: input.threadId,
+      directory: input.directory,
+      entry: input.entry,
+      attention: input.attention,
+      reveal: input.reveal
+    }
+    const result =
+      input.kind === 'video'
+        ? await openVideoPreview(deps, target)
+        : await openDesignPreview(deps, target)
+    return {
+      directory: result.directory,
+      entry: result.entry,
+      url: result.url,
+      tabId: result.tabId
+    }
   }
 }

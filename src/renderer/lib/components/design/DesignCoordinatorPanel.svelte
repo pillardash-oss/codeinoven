@@ -1,21 +1,24 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { ExternalLink, Frame, ImageOff, LoaderCircle, RefreshCw } from '@lucide/svelte'
+  import { ExternalLink, Film, Frame, ImageOff, LoaderCircle, RefreshCw } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { DESIGN_OUTPUT_ROOT } from '$shared/design-skill'
   import type { DesignEntry, ThreadDesignState } from '$shared/ipc-contract'
+  import { VIDEO_PROJECT_ROOT } from '$shared/video/project'
 
   /**
-   * The design coordinator board.
+   * The coordinator board for a thread's authored work.
    *
-   * A design session's work is a folder of HTML, and the user's question after a
-   * restart is "where did my design go?". This panel answers it: the folder in
-   * use, a picture of it, every design the project holds, and one button that
-   * brings the design's browser tab forward.
+   * A session's work is a folder of HTML, and the user's question after a restart is
+   * "where did my design go?" or "where did my video go?". This panel answers it: the
+   * folder in use, a picture of it, every folder of that kind the project holds, and
+   * one button that brings its browser tab forward. A design session and a video
+   * session share the board, so the words come from the kind and nothing else does.
    *
-   * It loads its own state rather than receiving it through props, because the
-   * design outlives the turn that made it: there is no live turn to hand it
-   * anything, and a restarted app has to fill this in from main alone.
+   * It loads its own state rather than receiving it through props, because the work
+   * outlives the turn that made it: there is no live turn to hand it anything, and a
+   * restarted app has to fill this in from main alone.
    */
 
   interface Props {
@@ -37,15 +40,24 @@
   let opening = $state('')
   let error = $state('')
 
-  /** The design being shown: the thread's own, or the newest one it can open. */
+  /** The session's words and icon: a design session and a video session share this
+   *  board, so nothing below hard-codes the word "design". */
+  let video = $derived(designState?.kind === 'video')
+  let noun = $derived(video ? 'composition' : 'design')
+  let nounTitle = $derived(video ? 'Composition' : 'Design')
+  let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
+  let WorkIcon = $derived(video ? Film : Frame)
+  let workRoot = $derived(video ? VIDEO_PROJECT_ROOT : DESIGN_OUTPUT_ROOT)
+
+  /** The folder being shown: the thread's own, or the newest one it can open. */
   let selected = $derived.by(() => {
     const current = designState?.current ?? null
     const directory = current?.directory ?? designState?.defaultDirectory ?? ''
     return { directory, entry: current?.entry ?? null }
   })
-  let designs = $derived(designState?.designs ?? [])
+  let items = $derived(designState?.items ?? [])
   let selectedName = $derived(
-    designs.find((design) => design.directory === selected.directory)?.name ??
+    items.find((item) => item.directory === selected.directory)?.name ??
       selected.directory.split('/').at(-1) ??
       ''
   )
@@ -55,17 +67,18 @@
       designState = await invoke('design:state', projectId, threadId)
       error = ''
     } catch (failure) {
-      error = failure instanceof Error ? failure.message : 'The design state could not be read.'
+      error = failure instanceof Error ? failure.message : 'The work state could not be read.'
     }
   }
 
   /**
-   * Capture the design for the preview.
+   * Capture the work for the preview.
    *
-   * This also puts the design in the thread's browser tab, off screen, which is
+   * This also puts it in the thread's browser tab, off screen, which is
    * deliberate: a picture has to come from a page the app is rendering, and the
    * tab has to exist anyway for the Preview button to be instant. The capture is
-   * asked for on demand, never on a timer.
+   * asked for on demand, never on a timer. A composition is captured as it plays,
+   * because a frame is what a composition exists to draw.
    */
   async function loadThumbnail(): Promise<void> {
     if (selected.directory === '') return
@@ -89,10 +102,10 @@
     }
   }
 
-  /** Serve the design and bring its tab to the user. Main reveals it; the
+  /** Serve the work and bring its tab to the user. Main reveals it; the
    *  workspace opens and focuses the sidebar tab from that event, so this panel
    *  never has to know how the browser is laid out. */
-  async function openDesign(directory: string, entry: string | null): Promise<void> {
+  async function openWork(directory: string, entry: string | null): Promise<void> {
     if (directory === '') return
     opening = directory
     try {
@@ -101,7 +114,7 @@
       await loadThumbnail()
       error = ''
     } catch (failure) {
-      error = failure instanceof Error ? failure.message : 'The design could not be opened.'
+      error = failure instanceof Error ? failure.message : 'The work could not be opened.'
     } finally {
       opening = ''
     }
@@ -111,9 +124,9 @@
     void loadState().then(loadThumbnail)
   })
 
-  function updatedLabel(design: DesignEntry): string {
-    if (design.updatedAt <= 0) return ''
-    return new Date(design.updatedAt).toLocaleString(undefined, {
+  function updatedLabel(item: DesignEntry): string {
+    if (item.updatedAt <= 0) return ''
+    return new Date(item.updatedAt).toLocaleString(undefined, {
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
@@ -126,9 +139,9 @@
   <header class="shrink-0 border-b border-border px-3 py-2">
     <div class="flex items-center justify-between gap-2">
       <span class="flex min-w-0 items-center gap-1.5">
-        <Frame size={13} class="shrink-0 text-accent" />
+        <WorkIcon size={13} class="shrink-0 text-accent" />
         <span class="truncate text-xs font-semibold text-foreground">
-          {selectedName === '' ? 'Design' : selectedName}
+          {selectedName === '' ? nounTitle : selectedName}
         </span>
       </span>
       <span class="flex shrink-0 items-center gap-1">
@@ -136,8 +149,8 @@
           type="button"
           class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={thumbnailBusy || selected.directory === ''}
-          title="Refresh the design preview"
-          aria-label="Refresh the design preview"
+          title={`Refresh the ${noun} preview`}
+          aria-label={`Refresh the ${noun} preview`}
           onclick={() => void loadThumbnail()}
         >
           {#if thumbnailBusy}
@@ -150,21 +163,21 @@
           type="button"
           class="flex h-6 items-center gap-1 rounded-md bg-primary px-2 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
           disabled={opening !== '' || selected.directory === ''}
-          title="Show this design in the in-app browser"
-          aria-label="Show this design in the in-app browser"
-          onclick={() => void openDesign(selected.directory, selected.entry)}
+          title={`Show this ${noun} in the in-app browser`}
+          aria-label={`Show this ${noun} in the in-app browser`}
+          onclick={() => void openWork(selected.directory, selected.entry)}
         >
           {#if opening !== ''}
             <LoaderCircle size={11} class="animate-spin" />
           {:else}
             <ExternalLink size={11} />
           {/if}
-          Preview design
+          Preview {noun}
         </button>
       </span>
     </div>
     <p class="mt-1 truncate text-[0.6875rem] text-muted" title={selected.directory}>
-      {selected.directory === '' ? 'No design yet' : selected.directory}
+      {selected.directory === '' ? `No ${noun} yet` : selected.directory}
     </p>
   </header>
 
@@ -182,14 +195,14 @@
       type="button"
       class="group relative block w-full overflow-hidden rounded-lg border border-border bg-elevated transition-colors hover:border-primary/60 disabled:cursor-default"
       disabled={selected.directory === ''}
-      title="Open this design in the in-app browser"
-      aria-label="Open this design in the in-app browser"
-      onclick={() => void openDesign(selected.directory, selected.entry)}
+      title={`Open this ${noun} in the in-app browser`}
+      aria-label={`Open this ${noun} in the in-app browser`}
+      onclick={() => void openWork(selected.directory, selected.entry)}
     >
       {#if thumbnail !== '' && thumbnailSize}
         <img
           src={thumbnail}
-          alt={`Preview of the design ${selectedName}`}
+          alt={`Preview of the ${noun} ${selectedName}`}
           width={thumbnailSize.width}
           height={thumbnailSize.height}
           class="block h-auto w-full"
@@ -205,12 +218,12 @@
         >
           {#if thumbnailBusy}
             <LoaderCircle size={18} class="animate-spin" />
-            <span class="text-[0.6875rem]">Capturing the design…</span>
+            <span class="text-[0.6875rem]">Capturing the {noun}…</span>
           {:else}
             <ImageOff size={18} />
             <span class="px-4 text-center text-[0.6875rem]">
-              {designs.length === 0
-                ? 'The agent has not written a design yet. It will appear here when it does.'
+              {items.length === 0
+                ? `The agent has not written a ${noun} yet. It will appear here when it does.`
                 : 'No preview captured yet.'}
             </span>
           {/if}
@@ -220,44 +233,44 @@
 
     <div class="mt-3">
       <p class="px-1 pb-1 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
-        Designs in this project ({designs.length})
+        {listLabel} ({items.length})
       </p>
-      {#if designs.length === 0}
+      {#if items.length === 0}
         <p class="px-1 py-1 text-[0.6875rem] text-muted">
-          Nothing under <code>.cio/designs</code> for this project yet.
+          Nothing under <code>{workRoot}</code> for this project yet.
         </p>
       {:else}
         <ul class="flex flex-col">
-          {#each designs as design (design.directory)}
-            {@const isSelected = design.directory === selected.directory}
+          {#each items as item (item.directory)}
+            {@const isSelected = item.directory === selected.directory}
             <li>
               <button
                 type="button"
                 class="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors {isSelected
                   ? 'bg-accent/10'
                   : 'hover:bg-elevated'}"
-                title={design.hasEntry
-                  ? `Open ${design.name} in the in-app browser`
-                  : `Open the folder listing for ${design.name}`}
-                aria-label={`Open ${design.name} in the in-app browser`}
+                title={item.hasEntry
+                  ? `Open ${item.name} in the in-app browser`
+                  : `Open the folder listing for ${item.name}`}
+                aria-label={`Open ${item.name} in the in-app browser`}
                 aria-current={isSelected}
-                onclick={() => void openDesign(design.directory, null)}
+                onclick={() => void openWork(item.directory, null)}
               >
-                <Frame size={12} class="shrink-0 {isSelected ? 'text-accent' : 'text-dimmed'}" />
+                <WorkIcon size={12} class="shrink-0 {isSelected ? 'text-accent' : 'text-dimmed'}" />
                 <span
                   class="min-w-0 flex-1 truncate text-xs {isSelected
                     ? 'font-medium text-foreground'
                     : 'text-muted'}"
                 >
-                  {design.name}
+                  {item.name}
                 </span>
-                {#if !design.hasEntry}
+                {#if !item.hasEntry}
                   <span class="shrink-0 text-[0.625rem] text-dimmed">no index.html</span>
                 {/if}
                 <span class="shrink-0 text-[0.625rem] text-dimmed tabular-nums">
-                  {updatedLabel(design)}
+                  {updatedLabel(item)}
                 </span>
-                {#if opening === design.directory}
+                {#if opening === item.directory}
                   <LoaderCircle size={11} class="shrink-0 animate-spin text-accent" />
                 {/if}
               </button>

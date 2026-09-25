@@ -27,9 +27,10 @@ export type CoordinatorDockPanel =
   | { component: 'assignment'; props: AssignmentCoordinatorPanelProps }
   | { component: 'achievement'; props: AchievementCoordinatorPanelProps }
   | { component: 'independent-audit'; props: IndependentAuditCoordinatorPanelProps }
-  /** The design coordinator: a thread's design, and the way back to it after a
-   *  restart. Published for a thread that opened a design session, whether or not
-   *  any worker exists, because the design is what the user returns to. */
+  /** The authored-work coordinator: a thread's design or video composition, and the
+   *  way back to it after a restart. Published for a thread that opened a session,
+   *  whether or not any worker exists, because the work is what the user returns
+   *  to. */
   | { component: 'design'; props: DesignCoordinatorPanelProps }
 
 export interface CoordinatorDockRegistration {

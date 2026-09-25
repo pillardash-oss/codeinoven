@@ -683,13 +683,13 @@
   )
 
   /**
-   * Keep the design coordinator in step with the on-screen thread.
+   * Keep the coordinator in step with the on-screen thread.
    *
-   * A design session belongs to a thread and survives everything the turn that
-   * started it did, so this re-reads when the thread changes and whenever that
-   * thread sees activity: the `@cio-design` tag can arrive on any later message,
-   * and main is the one that decides from the persisted messages, so the
-   * coordinator docks the moment the tag lands rather than waiting for a reload.
+   * A session belongs to a thread and survives everything the turn that started it
+   * did, so this re-reads when the thread changes and whenever that thread sees
+   * activity: the `@cio-design` or `@cio-video` tag can arrive on any later message,
+   * and main is the one that decides from the persisted messages, so the coordinator
+   * docks the moment the tag lands rather than waiting for a reload.
    */
   $effect(() => {
     const thread = selectedThread

@@ -1,25 +1,38 @@
-import { Palette } from '@lucide/svelte'
+import { Clapperboard, Palette } from '@lucide/svelte'
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
-import type { ThreadDesignState } from '$shared/ipc-contract'
+import type { AuthoredWorkKind, ThreadDesignState } from '$shared/ipc-contract'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { coordinatorDockState } from './coordinator-dock.svelte'
 
 /**
- * The design coordinator's place in the workspace.
+ * The coordinator's place in the workspace.
  *
- * A design session belongs to a thread, and the panel it docks is the user's way
- * back to their design: which folder it is, a picture of it, and a button that
- * brings the browser tab forward. The knowledge lives in main (the `@cio-design`
- * tag in the thread's messages, the `thread_designs` row, and the project's
- * `.cio/designs` listing), so this store's job is only to ask, publish the panel
- * when the answer says the thread is a design session, and dock it.
+ * An authored-work session belongs to a thread, and the panel it docks is the
+ * user's way back to the work: which folder it is, a picture of it, and a button
+ * that brings the browser tab forward. Two sessions share that board, a design
+ * session and a video session, and they differ in the tag, the root and the words.
+ * The knowledge lives in main (the `@cio-design` or `@cio-video` tag in the
+ * thread's messages, the `thread_designs` row, and the session root's listing), so
+ * this store's job is only to ask, publish the panel when the answer says the
+ * thread is in a session, and dock it.
  *
- * Nothing here decides whether a thread is a design session: main does, from
- * persisted data, which is what makes this survive a restart.
+ * Nothing here decides whether a thread is in a session: main does, from persisted
+ * data, which is what makes this survive a restart, and what makes a session dock
+ * the moment its tag lands rather than when the agent first previews something.
  */
 
-const DESIGN_COORDINATOR_LABEL = 'Design coordinator'
+/** Rail tooltip and tab title per session, so a video thread is never called a design. */
+const COORDINATOR_LABEL_BY_KIND: Record<AuthoredWorkKind, string> = {
+  design: 'Design coordinator',
+  video: 'Video coordinator'
+}
+
+/** Rail icon per session, for the same reason: a composition is not a design. */
+const COORDINATOR_ICON_BY_KIND: Record<AuthoredWorkKind, typeof Palette> = {
+  design: Palette,
+  video: Clapperboard
+}
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}\u0000${threadId}`
@@ -64,20 +77,21 @@ class DesignCoordinatorState {
         return
       }
       if (!ownsRow) return
+      const label = COORDINATOR_LABEL_BY_KIND[state.kind]
       coordinatorDockState.register({
         projectId,
         threadId,
-        label: DESIGN_COORDINATOR_LABEL,
-        icon: Palette,
+        label,
+        icon: COORDINATOR_ICON_BY_KIND[state.kind],
         panel: { component: 'design', props: { projectId, threadId } }
       })
-      // Docks itself the first time a design session appears, unless the user
-      // closed it before; later refreshes are no-ops because the tab exists.
+      // Docks itself the first time a session appears, unless the user closed it
+      // before; later refreshes are no-ops because the tab exists.
       if (
         coordinatorDockState.autoOpen &&
         !contextSidebarState.hasCoordinator(projectId, threadId)
       ) {
-        contextSidebarState.openCoordinator(projectId, threadId, DESIGN_COORDINATOR_LABEL)
+        contextSidebarState.openCoordinator(projectId, threadId, label)
       }
     } catch {
       // A failed read leaves the last answer in place rather than blanking a

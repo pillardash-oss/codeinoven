@@ -16,6 +16,18 @@ export interface VideoPreviewExecutorOptions {
   previews: DirectoryPreviewService
   database: Database
   browser: () => BrowserService | null
+  /**
+   * How the preview becomes durable: the composition folder the agent chose is
+   * written to the thread's authored-work row, the same one the design capability
+   * writes. That is what makes the coordinator follow the agent into a video
+   * session live, and what puts a restarted user back on their composition.
+   */
+  record: (input: {
+    projectId: string
+    threadId: string
+    directory: string
+    entry: string | null
+  }) => void
 }
 
 /**
@@ -51,6 +63,12 @@ export function createVideoPreviewExecutor(
         reveal: false
       }
     )
+    options.record({
+      projectId: context.projectId,
+      threadId: context.threadId,
+      directory: result.directory,
+      entry: result.entry
+    })
 
     return {
       url: result.url,

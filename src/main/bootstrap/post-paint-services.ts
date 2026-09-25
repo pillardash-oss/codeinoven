@@ -362,10 +362,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // browser is read lazily and a missing one degrades to a URL in the reply.
   //
   // The design service is the durable side of the same thing: it owns what the
-  // app knows about a thread's design (which folder, and how to get back to it
-  // after a restart) and serves the design coordinator's open and thumbnail
-  // actions. The executor records every preview through it, so the user's design
-  // is not lost when the window that showed it closes.
+  // app knows about a thread's authored work (which folder, and how to get back
+  // to it after a restart) and serves the coordinator's open and thumbnail
+  // actions. Both capabilities record every preview through it, so the user's
+  // design or composition is not lost when the window that showed it closes.
   const { DesignService } = await import('../design/design-service')
   const designService = new DesignService({
     database,
@@ -396,7 +396,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     createVideoPreviewExecutor({
       previews: state.directoryPreviewService,
       database,
-      browser: () => state.browserService
+      browser: () => state.browserService,
+      record: (input) => designService.recordPreview(input)
     })
   )
   const { createVideoCaptureExecutor } = await import('../video/video-capture-executor')
