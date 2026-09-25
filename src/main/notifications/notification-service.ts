@@ -561,7 +561,7 @@ export class NotificationService {
     const focused = this.appFocused()
     if (focused) return
 
-    this.dispatchNotificationSound(notificationSoundKind(payload.kind), windows)
+    this.dispatchNotificationSound(notificationSoundKind(payload.kind, payload.projectId), windows)
 
     const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {

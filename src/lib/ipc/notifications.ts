@@ -1,3 +1,5 @@
+import { ASSISTANT_SPACE_ID } from '../types'
+
 export interface ThreadClickedPayload {
   projectId: string
   threadId: string
@@ -40,7 +42,7 @@ export interface CloseConfirmationPayload {
 export type AgentNotificationKind = 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
 
 /** Which bundled alert a notification maps to. */
-export type NotificationSoundKind = 'default' | 'attention'
+export type NotificationSoundKind = 'default' | 'attention' | 'assistant'
 
 /**
  * How long the app stays quiet after it played an alert. Only the first
@@ -55,18 +57,26 @@ export const NOTIFICATION_SOUND_DEDUP_MS = 2_500
 
 /**
  * Which alert an event maps to. An attention request and a failure both mean
- * the user has to act, so they share the attention alert; everything else is
- * the default alert. The off-app card and the in-app toast derive their alert
- * from this one rule, so the same event never sounds different per surface.
+ * the user has to act, so they share the attention alert; a successful
+ * assistant run (a thread in the assistant space that reached `completed`) has
+ * its own alert; everything else is the default alert. The off-app card and the
+ * in-app toast derive their alert from this one rule, so the same event never
+ * sounds different per surface.
  */
-export function notificationSoundKind(kind: AgentNotificationKind): NotificationSoundKind {
-  return kind === 'attention' || kind === 'error' ? 'attention' : 'default'
+export function notificationSoundKind(
+  kind: AgentNotificationKind,
+  projectId?: string
+): NotificationSoundKind {
+  if (kind === 'attention' || kind === 'error') return 'attention'
+  if (kind === 'completed' && projectId === ASSISTANT_SPACE_ID) return 'assistant'
+  return 'default'
 }
 
 /**
  * Which in-app alert group a sound kind belongs to. Success covers everything
- * that finished or is ready to review; an attention alert and a failure both
- * mean the user has to act, so they share the issue alert.
+ * that finished or is ready to review, including a successful assistant run;
+ * an attention alert and a failure both mean the user has to act, so they share
+ * the issue alert.
  */
 export function inAppSoundGroup(kind: NotificationSoundKind): 'success' | 'issue' {
   return kind === 'attention' ? 'issue' : 'success'
