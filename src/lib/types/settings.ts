@@ -309,6 +309,14 @@ export interface AppConfig {
   /** Route loopback development links into the app-scoped test browser. */
   openLocalhostInCioBrowser: boolean
   /**
+   * Route every other (non-loopback) link into the workspace browser of the
+   * project/thread it was activated in, instead of the system browser. Off by
+   * default. Localhost keeps its own preference because it always belongs to the
+   * surface it was clicked in, while this is the general default that a future
+   * project-less global browser will extend.
+   */
+  openAllLinksInCioBrowser: boolean
+  /**
    * Let prototype previews load fonts, styles, and scripts from the approved
    * CDNs. Off confines every prototype to assets inlined in its own folder.
    */
@@ -362,6 +370,7 @@ export type AppConfigPatch = Partial<
     | 'maxDiffLines'
     | 'maxConflictFileBytes'
     | 'openLocalhostInCioBrowser'
+    | 'openAllLinksInCioBrowser'
     | 'allowPrototypeExternalCdn'
     | 'prototypeCdnAllowlist'
     | 'inAppNotificationSound'

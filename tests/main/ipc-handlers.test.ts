@@ -95,6 +95,7 @@ const defaultConfig: AppConfig = {
   slashCommandMode: 'app',
   preferredEditor: 'system',
   openLocalhostInCioBrowser: true,
+  openAllLinksInCioBrowser: false,
   allowPrototypeExternalCdn: true,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { success: true, issue: true },

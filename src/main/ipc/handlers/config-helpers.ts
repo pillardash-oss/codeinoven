@@ -151,6 +151,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'maxDiffLines',
   'maxConflictFileBytes',
   'openLocalhostInCioBrowser',
+  'openAllLinksInCioBrowser',
   'allowPrototypeExternalCdn',
   'prototypeCdnAllowlist',
   'inAppNotificationSound',
@@ -534,6 +535,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Open localhost in CIO browser must be a boolean')
     }
     patch.openLocalhostInCioBrowser = value.openLocalhostInCioBrowser
+  }
+
+  if ('openAllLinksInCioBrowser' in value) {
+    if (typeof value.openAllLinksInCioBrowser !== 'boolean') {
+      throw new TypeError('Open all links in CIO browser must be a boolean')
+    }
+    patch.openAllLinksInCioBrowser = value.openAllLinksInCioBrowser
   }
 
   if ('allowPrototypeExternalCdn' in value) {

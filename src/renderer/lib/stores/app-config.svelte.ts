@@ -23,6 +23,7 @@ const FONT_STACKS: Record<string, string> = {
 
 let maxDiffLines = $state(DEFAULT_MAX_DIFF_LINES)
 let openLocalhostInCioBrowser = $state(true)
+let openAllLinksInCioBrowser = $state(false)
 let inAppNotificationSound = $state<InAppNotificationSoundSettings>(
   structuredClone(DEFAULT_IN_APP_NOTIFICATION_SOUND)
 )
@@ -56,6 +57,9 @@ export const appConfigState = {
   get openLocalhostInCioBrowser(): boolean {
     return openLocalhostInCioBrowser
   },
+  get openAllLinksInCioBrowser(): boolean {
+    return openAllLinksInCioBrowser
+  },
   /** Which in-app alert groups may play their quieter sound. */
   get inAppNotificationSound(): InAppNotificationSoundSettings {
     return inAppNotificationSound
@@ -78,6 +82,7 @@ export const appConfigState = {
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
     openLocalhostInCioBrowser = config.openLocalhostInCioBrowser
+    openAllLinksInCioBrowser = config.openAllLinksInCioBrowser
     inAppNotificationSound = {
       ...DEFAULT_IN_APP_NOTIFICATION_SOUND,
       ...config.inAppNotificationSound

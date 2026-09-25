@@ -79,6 +79,7 @@ const DEFAULT_CONFIG: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
+  openAllLinksInCioBrowser: false,
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },

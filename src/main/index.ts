@@ -344,25 +344,29 @@ function createWindow(): BrowserWindow {
 
   // External links leave the app through the default browser only when they
   // are safe web URLs. Every popup is denied regardless   the renderer never
-  // spawns a second window.
+  // spawns a second window. A link is routed into the in-app browser when the
+  // matching preference is on: local development links keep their own
+  // preference, every other link follows the general one. The renderer falls
+  // back to the system browser when no project thread can own the tab, so
+  // sending the request is never a dead end.
   window.webContents.setWindowOpenHandler((details) => {
     try {
       const safeUrl = windowBoundaryValidator.validateExternalUrl(details.url)
-      if (isLocalDevelopmentUrl(safeUrl)) {
-        void storage
-          .getConfig()
-          .then((config) => {
-            if (window.isDestroyed() || window.webContents.isDestroyed()) return
-            if (config.openLocalhostInCioBrowser) {
-              sendToRenderer(window.webContents, 'browser:openRequested', safeUrl)
-            } else {
-              void shell.openExternal(safeUrl)
-            }
-          })
-          .catch((error: unknown) => Logger.error('Local link routing failed:', error))
-      } else {
-        void shell.openExternal(safeUrl)
-      }
+      const local = isLocalDevelopmentUrl(safeUrl)
+      void storage
+        .getConfig()
+        .then((config) => {
+          if (window.isDestroyed() || window.webContents.isDestroyed()) return
+          const openInCioBrowser =
+            (local && config.openLocalhostInCioBrowser) ||
+            (!local && config.openAllLinksInCioBrowser)
+          if (openInCioBrowser) {
+            sendToRenderer(window.webContents, 'browser:openRequested', safeUrl)
+          } else {
+            void shell.openExternal(safeUrl)
+          }
+        })
+        .catch((error: unknown) => Logger.error('External link routing failed:', error))
     } catch (error) {
       Logger.error('Window open rejected unsafe URL:', error)
     }

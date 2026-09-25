@@ -835,6 +835,26 @@
                 disabled={!settingsReady}
               />
             </div>
+            <div class="mt-4 border-t pt-4">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Open all other links on CIO's browser</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Send every non-local link to the workspace browser of the current project or
+                    thread instead of your default browser
+                  </p>
+                </div>
+                <Switch
+                  checked={config.openAllLinksInCioBrowser}
+                  onchange={() =>
+                    void updateConfig({
+                      openAllLinksInCioBrowser: !config.openAllLinksInCioBrowser
+                    })}
+                  aria-label="Toggle opening all other links in CIO's browser"
+                  disabled={!settingsReady}
+                />
+              </div>
+            </div>
             <PrototypeCdnSettings {config} {settingsReady} {updateConfig} />
           </div>
 
