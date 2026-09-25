@@ -8,6 +8,29 @@ The maintainable design is a main-process-owned `WebContentsView` using a dedica
 
 This is feasible without weakening the agent workspace, but “zero resource use while browsing” is not possible: a real dashboard executes JavaScript and consumes memory, CPU, GPU, network, and disk. The enforceable target is zero browser renderer/runtime cost while the feature is unused, bounded and observable cost while active, and prompt teardown when closed.
 
+### Scoping as implemented
+
+This document is the original assessment; the shipped browser differs from it in one
+material way, and the difference is deliberate.
+
+- **One persistent Electron session per project**, `persist:codeinoven-browser:<projectId>`
+  (`src/main/browser/browser-service.ts`). A project's conversations therefore share
+  cookies, web storage and logins, which is what keeps the user signed in across
+  threads, routines and agent runs. Splitting the session per agent would be the only
+  way to give each agent its own cookie jar, and it would break that single sign-on,
+  so it is not done.
+- **Agent-to-agent isolation lives at the tab level**, which is where clashes actually
+  happen:
+  - The agent's target tab is addressed per `(projectId, threadId)` (`agentTabIds`), so
+    two threads never drive the same page.
+  - For hidden conversation containers (the inbox and the assistant space) the sidebar
+    tab list is scoped to the open conversation, so a background routine's tabs never
+    surface in another conversation and cannot be closed from there.
+  - Closing a thread destroys exactly that thread's tabs (`browser:destroyThread`).
+
+Treat the rest of this document as the target-state design; the points above describe the
+shipped behavior.
+
 ## Why this fits the current application
 
 - CodeInOven already treats Electron main as the privileged boundary and keeps the Svelte renderer sandboxed, context-isolated, and without Node integration (`src/main/index.ts:690-719`).

@@ -1,4 +1,5 @@
 import { SvelteMap } from 'svelte/reactivity'
+import { isConversationContainer } from '$shared/types'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import type { BrowserPageState } from '$shared/ipc-contract'
 import { reportError } from './app-errors.svelte'
@@ -46,11 +47,23 @@ export class SidebarBrowserTabs {
     subscribe('browser:state', (state) => this.applyPageState(state))
   }
 
-  /** Browser tabs for the active project. */
+  /** Browser tabs for the active container.
+   *
+   *  A project's threads share one browser tab list, so switching between a
+   *  project's threads keeps the browser the user was reading. A hidden
+   *  conversation container (the inbox, the assistant space) is different: it is
+   *  one project holding many independent conversations, so its tabs are scoped
+   *  to the open conversation instead. One agent's tabs then never surface in
+   *  another conversation, and closing them cannot tear down a neighbour's page.
+   *  Switching conversations swaps the browser with the conversation. */
   get activeTabs(): BrowserContextTab[] {
     const projectId = this.host.activeProjectId()
     if (!projectId) return EMPTY_BROWSER_TABS
-    return this.tabs.filter((tab) => tab.projectId === projectId)
+    const projectTabs = this.tabs.filter((tab) => tab.projectId === projectId)
+    if (!isConversationContainer(projectId)) return projectTabs
+    const threadId = this.host.activeThreadId()
+    if (!threadId) return EMPTY_BROWSER_TABS
+    return projectTabs.filter((tab) => tab.threadId === threadId)
   }
 
   has(id: string): boolean {
@@ -285,16 +298,15 @@ export class SidebarBrowserTabs {
     return removedIds
   }
 
-  /** Close one browser tab and fall back to the project's last remaining tab. */
+  /** Close one browser tab and fall back to the last remaining tab of the
+   *  active container (a project's threads or the open chat). */
   close(id: string): void {
     const browserIndex = this.tabs.findIndex((tab) => tab.id === id)
     if (browserIndex < 0) return
-    const closedProjectId = this.tabs[browserIndex].projectId
     this.tabs = this.tabs.filter((tab) => tab.id !== id)
     this.forgetRuntime([id])
     if (this.activeTabId === id) {
-      this.activeTabId =
-        this.tabs.filter((tab) => tab.projectId === closedProjectId).at(-1)?.id ?? null
+      this.activeTabId = this.activeTabs.at(-1)?.id ?? null
     }
     if (this.activeTabs.length === 0) this.visible = false
     this.persist()
@@ -303,6 +315,8 @@ export class SidebarBrowserTabs {
   focus(id: string): void {
     const tab = this.tabs.find((candidate) => candidate.id === id)
     if (!tab || tab.projectId !== this.host.activeProjectId()) return
+    if (isConversationContainer(tab.projectId) && tab.threadId !== this.host.activeThreadId())
+      return
     this.activeTabId = id
     this.visible = true
     this.host.clearNotifications()

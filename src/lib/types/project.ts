@@ -9,13 +9,25 @@ export const INBOX_PROJECT_ID = 'inbox'
 export const ASSISTANT_SPACE_ID = 'assistant'
 
 /**
+ * Fixed hidden containers that hold many independent conversations under one
+ * project id. Every per-conversation surface keys off the open thread inside
+ * them: a standalone chat or an assistant task owns its own file mount and its
+ * own browser tabs, so switching conversations swaps both instead of leaking
+ * one conversation's state into another. A real project keeps one shared
+ * surface across all of its threads.
+ */
+export function isConversationContainer(projectId: string): boolean {
+  return projectId === INBOX_PROJECT_ID || projectId === ASSISTANT_SPACE_ID
+}
+
+/**
  * Whether a conversation browses its own app-owned workspace directory instead
  * of a project root: standalone chats mount `chats-artifacts/<threadId>` and
  * assistant tasks mount `assistant-cwd/<routineId ?? threadId>`. Every file
  * surface keys the mount off the open thread for exactly these containers.
  */
 export function usesThreadWorkspaceMount(projectId: string): boolean {
-  return projectId === INBOX_PROJECT_ID || projectId === ASSISTANT_SPACE_ID
+  return isConversationContainer(projectId)
 }
 
 export type ChangeTrackingMode = 'git' | 'manual'
