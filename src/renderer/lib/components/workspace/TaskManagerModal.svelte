@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    AppWindow,
     ArrowDownUp,
     BatteryCharging,
     BatteryMedium,
@@ -8,6 +9,7 @@
     Check,
     ChevronDown,
     ExternalLink,
+    FolderTree,
     MemoryStick,
     MessagesSquare,
     Network,
@@ -26,6 +28,7 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
+  import TaskManagerNode from './TaskManagerNode.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { formatDurationSeconds } from '$lib/format/duration'
@@ -41,6 +44,7 @@
     TaskManagerServiceKind,
     TaskManagerSnapshot
   } from '$shared/types'
+  import { APP_NAME } from '$shared/brand'
   import { posixBasename } from '$shared/paths'
 
   interface Props {
@@ -64,6 +68,20 @@
 
   const SORT_MODES: readonly TaskSortMode[] = ['memory', 'cpu', 'name']
 
+  /** One foldable owner node: a project or a thread and the processes it owns. */
+  interface OwnerGroup {
+    id: string
+    kind: 'project' | 'thread'
+    label: string
+    /** Project a thread node belongs to; null for a project node. */
+    projectName: string | null
+    projectId: string | null
+    processes: TaskManagerProcess[]
+    pids: number[]
+    memoryBytes: number
+    cpuPercent: number
+  }
+
   let { open, onClose }: Props = $props()
 
   let processes = $state<TaskManagerProcess[]>([])
@@ -80,6 +98,8 @@
   /** Project filter for project-owned processes; null shows everything. */
   let filterProjectId = $state<string | null>(null)
   let selected = new SvelteSet<number>()
+  /** Tree nodes folded away, keyed by node id (`app`, `services`, `group:<id>`). */
+  let collapsed = new SvelteSet<string>()
   let ending = $state(false)
   let forceEndTargets = $state<readonly TaskManagerProcess[]>([])
   let forceEnding = $state(false)
@@ -117,6 +137,104 @@
     )
   })
 
+  /**
+   * Aggregate resource use for a set of rows. A harness root already reports the
+   * totals for its whole tree while its descendants are also listed as their own
+   * rows, so summing every row would count them twice. Only the top-most rows
+   * (whose parent is not itself in the set) are summed, counting each once.
+   */
+  function aggregateResources(rows: readonly TaskManagerProcess[]): {
+    memoryBytes: number
+    cpuPercent: number
+  } {
+    const pids = new Set(rows.map((row) => row.pid))
+    let memoryBytes = 0
+    let cpuPercent = 0
+    for (const row of rows) {
+      if (pids.has(row.parentPid)) continue
+      memoryBytes += row.memoryBytes ?? 0
+      cpuPercent += row.cpuPercent ?? 0
+    }
+    return { memoryBytes, cpuPercent }
+  }
+
+  /**
+   * Visible processes grouped by their most specific owner: a thread node when
+   * the process belongs to a thread (a routine run), otherwise a project node.
+   * App-scoped processes have no owner and render as standalone leaves instead.
+   */
+  const ownerGroups = $derived.by(() => {
+    const groups = new SvelteMap<string, OwnerGroup>()
+    for (const process of visibleProcesses) {
+      if (!process.projectId && !process.threadId) continue
+      const id = process.threadId ? `thread:${process.threadId}` : `project:${process.projectId}`
+      let group = groups.get(id)
+      if (!group) {
+        const isThread = Boolean(process.threadId)
+        group = {
+          id,
+          kind: isThread ? 'thread' : 'project',
+          label: isThread
+            ? (process.threadTitle ?? 'Untitled thread')
+            : (process.projectName ?? 'Untitled project'),
+          projectName: process.projectName ?? null,
+          projectId: process.projectId ?? null,
+          processes: [],
+          pids: [],
+          memoryBytes: 0,
+          cpuPercent: 0
+        }
+        groups.set(id, group)
+      }
+      group.processes.push(process)
+    }
+    const list = [...groups.values()]
+    for (const group of list) {
+      group.pids = group.processes.map((process) => process.pid)
+      const totals = aggregateResources(group.processes)
+      group.memoryBytes = totals.memoryBytes
+      group.cpuPercent = totals.cpuPercent
+    }
+    return list.toSorted(compareGroups)
+  })
+
+  /** App-scoped processes the app owns directly, with no project or thread. */
+  const appScopedProcesses = $derived(
+    visibleProcesses.filter((process) => !process.projectId && !process.threadId)
+  )
+
+  const allProcessPids = $derived(visibleProcesses.map((process) => process.pid))
+
+  function compareGroups(a: OwnerGroup, b: OwnerGroup): number {
+    if (sortMode === 'name') {
+      return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })
+    }
+    if (sortMode === 'cpu') return b.cpuPercent - a.cpuPercent
+    return b.memoryBytes - a.memoryBytes
+  }
+
+  function isCollapsed(key: string): boolean {
+    return collapsed.has(key)
+  }
+
+  function toggleCollapsed(key: string): void {
+    if (collapsed.has(key)) collapsed.delete(key)
+    else collapsed.add(key)
+  }
+
+  function allSelected(pids: readonly number[]): boolean {
+    return pids.length > 0 && pids.every((pid) => selected.has(pid))
+  }
+
+  /** Select every pid not yet selected; clear them all once every one is set. */
+  function toggleGroup(pids: readonly number[]): void {
+    if (allSelected(pids)) {
+      for (const pid of pids) selected.delete(pid)
+      return
+    }
+    for (const pid of pids) selected.add(pid)
+  }
+
   const SERVICE_KIND_LABELS: Record<TaskManagerServiceKind, string> = {
     server: 'Server',
     mcp: 'MCP',
@@ -144,12 +262,10 @@
     else selected.add(process.pid)
   }
 
-  const totalRamBytes = $derived(
-    processes.reduce((sum, process) => sum + (process.memoryBytes ?? 0), 0)
-  )
-  const totalCpuPercent = $derived(
-    processes.reduce((sum, process) => sum + (process.cpuPercent ?? 0), 0)
-  )
+  /** Aggregate use across every managed process, counting a harness tree once. */
+  const processTotals = $derived(aggregateResources(processes))
+  const totalRamBytes = $derived(processTotals.memoryBytes)
+  const totalCpuPercent = $derived(processTotals.cpuPercent)
 
   async function load(): Promise<void> {
     if (checking) return
@@ -523,246 +639,303 @@
           </div>
         </div>
       {:else}
-        {#if visibleServices.length > 0}
-          <section aria-label="Running services">
-            <header
-              class="flex items-center justify-between border-b border-border bg-surface px-5 py-2"
+        {#snippet serviceRow(service: TaskManagerService)}
+          <li class="flex items-start gap-3 px-5 py-3">
+            <span
+              class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
             >
-              <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Services</h3>
-              <span class="text-[0.625rem] text-dimmed tabular-nums">{visibleServices.length}</span>
-            </header>
-            <ul class="divide-y divide-border">
-              {#each visibleServices as service (service.id)}
-                <li class="flex items-start gap-3 px-5 py-3">
+              {#if service.kind === 'mcp'}
+                <Plug size={15} />
+              {:else if service.kind === 'gateway'}
+                <Network size={15} />
+              {:else if service.kind === 'worker'}
+                <Cog size={15} />
+              {:else}
+                <Server size={15} />
+              {/if}
+            </span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <p class="truncate text-sm font-semibold text-foreground">{service.name}</p>
+                {#if service.port !== null}
                   <span
-                    class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                    class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
                   >
-                    {#if service.kind === 'mcp'}
-                      <Plug size={15} />
-                    {:else if service.kind === 'gateway'}
-                      <Network size={15} />
-                    {:else if service.kind === 'worker'}
-                      <Cog size={15} />
-                    {:else}
-                      <Server size={15} />
-                    {/if}
+                    :{service.port}
                   </span>
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2">
-                      <p class="truncate text-sm font-semibold text-foreground">{service.name}</p>
-                      {#if service.port !== null}
-                        <span
-                          class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
-                        >
-                          :{service.port}
-                        </span>
-                      {/if}
-                      <span
-                        class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] tracking-wide text-muted uppercase"
-                      >
-                        {SERVICE_KIND_LABELS[service.kind]}
-                      </span>
-                    </div>
-                    {#if service.detail}
-                      <p
-                        class="mt-1 truncate font-mono text-[0.625rem] text-dimmed"
-                        title={service.detail}
-                      >
-                        {service.detail}
-                      </p>
-                    {/if}
-                    <div
-                      class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.625rem] text-dimmed tabular-nums"
-                    >
-                      {#if service.pid !== null}
-                        <span>PID {service.pid}</span>
-                      {/if}
-                      <span>{formatDuration(service.startedAt)}</span>
-                      <span class="shrink-0">{serviceLocationLabel(service)}</span>
-                    </div>
-                  </div>
-                  <div class="mt-0.5 flex shrink-0 items-center gap-1">
-                    <button
-                      type="button"
-                      class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
-                      disabled={!service.stoppable || stopping}
-                      title={service.stoppable
-                        ? `Stop ${service.name}`
-                        : 'This runtime is owned by the app for its whole session'}
-                      aria-label={`Stop ${service.name}`}
-                      onclick={() => requestStopService(service)}
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-                </li>
-              {/each}
-            </ul>
-          </section>
-        {/if}
-        {#if visibleProcesses.length > 0}
-          <section aria-label="Running processes">
-            <header
-              class="flex items-center justify-between border-b border-border bg-surface px-5 py-2"
-            >
-              <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Processes</h3>
-              <span class="text-[0.625rem] text-dimmed tabular-nums">{visibleProcesses.length}</span
-              >
-            </header>
-            <ul class="divide-y divide-border">
-              {#each visibleProcesses as process (process.pid)}
-                {@const harnessId = harnessIdFor(process.command)}
-                {@const projectIcon = projectIconFor(process)}
-                {#snippet processContent()}
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2">
-                      <p class="truncate text-sm font-semibold text-foreground">
-                        {processName(process.command)}
-                      </p>
-                      {#if process.ports.length > 0}
-                        <span
-                          class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
-                        >
-                          :{process.ports[0]}
-                          {#if process.ports.length > 1}
-                            <span class="text-dimmed">+{process.ports.length - 1}</span>
-                          {/if}
-                        </span>
-                      {/if}
-                      <span
-                        class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted {process.scope ===
-                        'app'
-                          ? 'uppercase tracking-wide'
-                          : ''}"
-                      >
-                        {process.scope === 'app' ? 'Shared' : 'Running'}
-                      </span>
-                    </div>
-                    <p
-                      class="mt-1 truncate font-mono text-[0.625rem] text-dimmed"
-                      title={process.command}
-                    >
-                      {process.command}
-                    </p>
-                    <div
-                      class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.625rem] text-dimmed tabular-nums"
-                    >
-                      <span
-                        class="inline-flex items-center gap-1 text-muted"
-                        title={process.resourceScope === 'tree'
-                          ? 'CPU used by this process and its descendants'
-                          : 'CPU used by this process'}
-                      >
-                        <Cpu size={11} />
-                        {formatCpu(process.cpuPercent)}
-                      </span>
-                      <span
-                        class="inline-flex items-center gap-1 text-muted"
-                        title={process.resourceScope === 'tree'
-                          ? 'Memory used by this process and its descendants'
-                          : 'Memory used by this process'}
-                      >
-                        <MemoryStick size={11} />
-                        {formatMemory(process.memoryBytes)}
-                      </span>
-                      <span>PID {process.pid}</span>
-                      <span>{formatDuration(process.startedAt)}</span>
-                      <span class="min-w-0 truncate" title={process.cwd ?? undefined}>
-                        {shortPath(process.cwd)}
-                      </span>
-                      <span class="shrink-0">{locationLabel(process)}</span>
-                    </div>
-                  </div>
-                {/snippet}
-                <li
-                  class="flex items-start gap-3 px-5 py-3 transition-colors {selected.has(
-                    process.pid
-                  )
-                    ? 'bg-elevated'
-                    : 'hover:bg-elevated'}"
+                {/if}
+                <span
+                  class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] tracking-wide text-muted uppercase"
                 >
-                  <Switch
-                    checked={selected.has(process.pid)}
-                    onchange={(value) => {
-                      if (value) selected.add(process.pid)
-                      else selected.delete(process.pid)
-                    }}
-                    aria-label={`Select ${processName(process.command)} (PID ${process.pid})`}
-                    title={`Select ${processName(process.command)}`}
-                    class="mt-1 shrink-0"
+                  {SERVICE_KIND_LABELS[service.kind]}
+                </span>
+              </div>
+              {#if service.detail}
+                <p
+                  class="mt-1 truncate font-mono text-[0.625rem] text-dimmed"
+                  title={service.detail}
+                >
+                  {service.detail}
+                </p>
+              {/if}
+              <div
+                class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.625rem] text-dimmed tabular-nums"
+              >
+                {#if service.pid !== null}
+                  <span>PID {service.pid}</span>
+                {/if}
+                <span>{formatDuration(service.startedAt)}</span>
+                <span class="shrink-0">{serviceLocationLabel(service)}</span>
+              </div>
+            </div>
+            <div class="mt-0.5 flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!service.stoppable || stopping}
+                title={service.stoppable
+                  ? `Stop ${service.name}`
+                  : 'This runtime is owned by the app for its whole session'}
+                aria-label={`Stop ${service.name}`}
+                onclick={() => requestStopService(service)}
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          </li>
+        {/snippet}
+
+        {#snippet processRow(process: TaskManagerProcess)}
+          {@const harnessId = harnessIdFor(process.command)}
+          {@const projectIcon = projectIconFor(process)}
+          <li
+            class="flex items-start gap-3 px-5 py-3 transition-colors {selected.has(process.pid)
+              ? 'bg-elevated'
+              : 'hover:bg-elevated'}"
+          >
+            <Switch
+              checked={selected.has(process.pid)}
+              onchange={(value) => {
+                if (value) selected.add(process.pid)
+                else selected.delete(process.pid)
+              }}
+              aria-label={`Select ${processName(process.command)} (PID ${process.pid})`}
+              title={`Select ${processName(process.command)}`}
+              class="mt-1 shrink-0"
+            />
+            <button
+              type="button"
+              class="flex min-w-0 flex-1 cursor-pointer items-start gap-3 text-left"
+              title={`Select ${processName(process.command)} (PID ${process.pid})`}
+              aria-pressed={selected.has(process.pid)}
+              onclick={() => toggleSelected(process)}
+            >
+              <span
+                class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+              >
+                {#if harnessId}
+                  <AgentIcon agentId={harnessId} size={16} />
+                {:else if projectIcon}
+                  <img
+                    src={projectIcon}
+                    alt=""
+                    class="h-4 w-4 rounded-sm object-contain grayscale"
+                    onerror={(event) => handleProjectIconError(event, process.projectId)}
                   />
-                  <button
-                    type="button"
-                    class="flex min-w-0 flex-1 cursor-pointer items-start gap-3 text-left"
-                    title={`Select ${processName(process.command)} (PID ${process.pid})`}
-                    aria-pressed={selected.has(process.pid)}
-                    onclick={() => toggleSelected(process)}
-                  >
+                {:else}
+                  <SquareTerminal size={15} />
+                {/if}
+              </span>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <p class="truncate text-sm font-semibold text-foreground">
+                    {processName(process.command)}
+                  </p>
+                  {#if process.ports.length > 0}
                     <span
-                      class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                      class="shrink-0 rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[0.625rem] text-primary"
                     >
-                      {#if harnessId}
-                        <AgentIcon agentId={harnessId} size={16} />
-                      {:else if projectIcon}
-                        <img
-                          src={projectIcon}
-                          alt=""
-                          class="h-4 w-4 rounded-sm object-contain grayscale"
-                          onerror={(event) => handleProjectIconError(event, process.projectId)}
-                        />
-                      {:else}
-                        <SquareTerminal size={15} />
+                      :{process.ports[0]}
+                      {#if process.ports.length > 1}
+                        <span class="text-dimmed">+{process.ports.length - 1}</span>
                       {/if}
                     </span>
-                    <span class="min-w-0 flex-1">
-                      {@render processContent()}
-                    </span>
-                  </button>
-                  <div class="mt-0.5 flex shrink-0 items-center gap-1">
-                    <button
-                      type="button"
-                      class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                      disabled={process.ports.length === 0 || !process.projectId}
-                      title={process.ports.length === 0
-                        ? 'No port detected'
-                        : process.projectId
-                          ? 'Open in in-app browser'
-                          : 'No project associated with this process'}
-                      aria-label={`Open ${processName(process.command)} in the in-app browser`}
-                      onclick={() => void openInBrowser(process)}
-                    >
-                      <ExternalLink size={15} />
-                    </button>
-                    <button
-                      type="button"
-                      class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                      disabled={!process.projectId}
-                      title={process.projectId
-                        ? 'Open path in in-app terminal'
-                        : 'No project associated with this process'}
-                      aria-label={`Open ${processName(process.command)} path in the in-app terminal`}
-                      onclick={() => void openInTerminal(process)}
-                    >
-                      <SquareTerminal size={15} />
-                    </button>
-                    <button
-                      type="button"
-                      class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                      disabled={!process.threadId}
-                      title={process.threadId
-                        ? `Open the thread responsible for ${processName(process.command)}`
-                        : 'No thread associated with this process'}
-                      aria-label={`Open the thread responsible for ${processName(process.command)}`}
-                      onclick={() => void navigateToProcess(process)}
-                    >
-                      <MessagesSquare size={15} />
-                    </button>
-                  </div>
-                </li>
+                  {/if}
+                  <span
+                    class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted {process.scope ===
+                    'app'
+                      ? 'uppercase tracking-wide'
+                      : ''}"
+                  >
+                    {process.scope === 'app' ? 'Shared' : 'Running'}
+                  </span>
+                </div>
+                <p
+                  class="mt-1 truncate font-mono text-[0.625rem] text-dimmed"
+                  title={process.command}
+                >
+                  {process.command}
+                </p>
+                <div
+                  class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.625rem] text-dimmed tabular-nums"
+                >
+                  <span
+                    class="inline-flex items-center gap-1 text-muted"
+                    title={process.resourceScope === 'tree'
+                      ? 'CPU used by this process and its descendants'
+                      : 'CPU used by this process'}
+                  >
+                    <Cpu size={11} />
+                    {formatCpu(process.cpuPercent)}
+                  </span>
+                  <span
+                    class="inline-flex items-center gap-1 text-muted"
+                    title={process.resourceScope === 'tree'
+                      ? 'Memory used by this process and its descendants'
+                      : 'Memory used by this process'}
+                  >
+                    <MemoryStick size={11} />
+                    {formatMemory(process.memoryBytes)}
+                  </span>
+                  <span>PID {process.pid}</span>
+                  <span>{formatDuration(process.startedAt)}</span>
+                  <span class="min-w-0 truncate" title={process.cwd ?? undefined}>
+                    {shortPath(process.cwd)}
+                  </span>
+                  <span class="shrink-0">{locationLabel(process)}</span>
+                </div>
+              </div>
+            </button>
+            <div class="mt-0.5 flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={process.ports.length === 0 || !process.projectId}
+                title={process.ports.length === 0
+                  ? 'No port detected'
+                  : process.projectId
+                    ? 'Open in in-app browser'
+                    : 'No project associated with this process'}
+                aria-label={`Open ${processName(process.command)} in the in-app browser`}
+                onclick={() => void openInBrowser(process)}
+              >
+                <ExternalLink size={15} />
+              </button>
+              <button
+                type="button"
+                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!process.projectId}
+                title={process.projectId
+                  ? 'Open path in in-app terminal'
+                  : 'No project associated with this process'}
+                aria-label={`Open ${processName(process.command)} path in the in-app terminal`}
+                onclick={() => void openInTerminal(process)}
+              >
+                <SquareTerminal size={15} />
+              </button>
+              <button
+                type="button"
+                class="flex h-8 w-8 items-center justify-center rounded-lg border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!process.threadId}
+                title={process.threadId
+                  ? `Open the thread responsible for ${processName(process.command)}`
+                  : 'No thread associated with this process'}
+                aria-label={`Open the thread responsible for ${processName(process.command)}`}
+                onclick={() => void navigateToProcess(process)}
+              >
+                <MessagesSquare size={15} />
+              </button>
+            </div>
+          </li>
+        {/snippet}
+
+        <TaskManagerNode
+          label={APP_NAME}
+          expanded={!isCollapsed('app')}
+          ontoggle={() => toggleCollapsed('app')}
+          count={visibleServices.length + visibleProcesses.length}
+          memoryLabel={formatMemory(processTotals.memoryBytes)}
+          cpuLabel={formatCpu(processTotals.cpuPercent)}
+          switchChecked={allSelected(allProcessPids)}
+          switchLabel={allProcessPids.length > 0
+            ? `Select every process under ${APP_NAME}`
+            : 'No processes to select'}
+          onswitch={allProcessPids.length > 0 ? () => toggleGroup(allProcessPids) : undefined}
+        >
+          {#snippet icon()}
+            <AppWindow size={15} class="shrink-0 text-primary" />
+          {/snippet}
+
+          {#if visibleServices.length > 0}
+            <TaskManagerNode
+              label="Services"
+              expanded={!isCollapsed('services')}
+              ontoggle={() => toggleCollapsed('services')}
+              count={visibleServices.length}
+            >
+              {#snippet icon()}
+                <Server size={14} class="shrink-0 text-primary" />
+              {/snippet}
+              <ul class="divide-y divide-border">
+                {#each visibleServices as service (service.id)}
+                  {@render serviceRow(service)}
+                {/each}
+              </ul>
+            </TaskManagerNode>
+          {/if}
+
+          {#each ownerGroups as group (group.id)}
+            <TaskManagerNode
+              label={group.label}
+              hint={group.kind === 'thread' ? group.projectName : null}
+              expanded={!isCollapsed(group.id)}
+              ontoggle={() => toggleCollapsed(group.id)}
+              count={group.processes.length}
+              memoryLabel={formatMemory(group.memoryBytes)}
+              cpuLabel={formatCpu(group.cpuPercent)}
+              switchChecked={allSelected(group.pids)}
+              switchLabel={`Select every process under ${group.label}`}
+              onswitch={() => toggleGroup(group.pids)}
+            >
+              {#snippet icon()}
+                {@const harnessId =
+                  group.kind === 'thread'
+                    ? harnessIdFor(group.processes[0]?.command ?? '')
+                    : undefined}
+                {@const iconUrl = group.projectId
+                  ? projectIconUrls.get(group.projectId)
+                  : undefined}
+                {#if harnessId}
+                  <AgentIcon agentId={harnessId} size={16} class="shrink-0" />
+                {:else if iconUrl}
+                  <img
+                    src={iconUrl}
+                    alt=""
+                    class="h-4 w-4 shrink-0 rounded-sm object-contain grayscale"
+                    onerror={(event) => handleProjectIconError(event, group.projectId)}
+                  />
+                {:else if group.kind === 'project'}
+                  <FolderTree size={14} class="shrink-0 text-primary" />
+                {:else}
+                  <MessagesSquare size={14} class="shrink-0 text-primary" />
+                {/if}
+              {/snippet}
+              <ul class="divide-y divide-border">
+                {#each group.processes as process (process.pid)}
+                  {@render processRow(process)}
+                {/each}
+              </ul>
+            </TaskManagerNode>
+          {/each}
+
+          {#if appScopedProcesses.length > 0}
+            <ul class="divide-y divide-border">
+              {#each appScopedProcesses as process (process.pid)}
+                {@render processRow(process)}
               {/each}
             </ul>
-          </section>
-        {/if}
+          {/if}
+        </TaskManagerNode>
       {/if}
     </div>
   </div>
