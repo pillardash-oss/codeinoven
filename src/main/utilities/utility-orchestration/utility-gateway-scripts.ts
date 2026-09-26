@@ -12,6 +12,57 @@ import type { McpTool } from '../../agents/mcp-stdio-client'
 export const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 
 /**
+ * The `generate` operation, shared by the design and video capabilities.
+ *
+ * One tool in two capabilities, because making an asset is the same act whether a
+ * page or a composition needs it, and the model is the user's assignment either
+ * way. It exists because the app had no way to produce media at all: a craft
+ * could only staff a text completion, so an agent that needed a music bed had to
+ * improvise one.
+ */
+export const GENERATE_MEDIA_TOOL: McpTool = {
+  name: 'generate',
+  description: `Generate an image, a video clip or an audio file with the model the user assigned to that craft, and save it into the project as a file. The user names the model in Settings, Design, so never choose one yourself: a craft with no assigned model is refused and you should ask the user to assign one. Write the complete brief in prompt. Pass options only when the model needs a provider-specific field (an aspect ratio, a duration, and so on). The reply carries the project-relative path; reference it from the markup and preview to check it renders.`,
+  inputSchema: {
+    type: 'object',
+    properties: {
+      kind: {
+        type: 'string',
+        enum: ['image', 'video', 'audio'],
+        description:
+          'Which craft answers: an image, a video clip, or audio such as a music bed or a voice line.'
+      },
+      prompt: {
+        type: 'string',
+        description:
+          'The complete brief for the generation model: the subject, the style, the mood, the framing, and every constraint, written as if to someone who has seen none of this work.'
+      },
+      prompt_field: {
+        type: 'string',
+        description:
+          'Only when the model documents its prompt input under another name, such as "text". The prompt is sent under this field instead of "prompt", never under both.'
+      },
+      name: {
+        type: 'string',
+        description:
+          'Optional file name without an extension, such as hero or music-bed. The model name is used when you omit it.'
+      },
+      directory: {
+        type: 'string',
+        description: `Project-relative folder to save into. Defaults to ${DESIGN_OUTPUT_ROOT}, so name the design's own folder when the asset belongs to a design.`
+      },
+      options: {
+        type: 'object',
+        description:
+          'Provider-specific input fields passed through as written, such as an aspect ratio or a duration. Only the fields the model documents.'
+      }
+    },
+    required: ['kind', 'prompt'],
+    additionalProperties: false
+  }
+}
+
+/**
  * Absolute cap on one gateway call, enforced by the bridge itself.
  *
  * The harness's own request timeout is the real lifetime bound, because it also sends
@@ -136,14 +187,15 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
 /**
  * Operations of the app-owned design capability (`cio:design`).
  *
- * Three, and all of them are things the agent cannot do with its own tools: show
+ * Four, and all of them are things the agent cannot do with its own tools: show
  * the design on the app's own origin, run the model the user assigned to a piece
- * of design work, and turn a generated asset into a file beside the design.
- * Looking at the result is deliberately not repeated here: the browser capability
- * already owns screenshots, viewports and console reads, and the docs point at
- * it.
+ * of design work, generate an asset with the model assigned to a media craft, and
+ * turn a generated asset into a file beside the design. Looking at the result is
+ * deliberately not repeated here: the browser capability already owns
+ * screenshots, viewports and console reads, and the docs point at it.
  */
 export const DESIGN_UTILITY_TOOLS: McpTool[] = [
+  GENERATE_MEDIA_TOOL,
   {
     name: 'preview',
     description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab. The folder's own scripts and stylesheets run, so an HTML design renders as written, and the tab is mounted offscreen at a real viewport whether or not the user is looking at it. Aim it at the folder holding the design's entry file.`,
@@ -172,7 +224,7 @@ export const DESIGN_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'delegate',
     description:
-      "Run one prompt on the model the user assigned to a named piece of design work: long-form copy, an SEO pass, a script, a storyboard, the prompts a generator will be given. The assigned model did not see this conversation, so the prompt has to carry every detail it needs. This lane answers with text only, so a picture, a clip or a track is a file rather than an answer: produce one of those with a generation capability from the utilities bank and save it with save-media. Assignments that share one craft are the user's own alternatives and are tried in the order they are listed. Never choose a model yourself and never stand in for one.",
+      "Run one prompt on the model the user assigned to a named piece of design work: long-form copy, an SEO pass, a script, a storyboard. The assigned model did not see this conversation, so the prompt has to carry every detail it needs. This lane answers with text only: a craft that produces a picture, a clip or a track is made by the `generate` operation instead, which uses the model the user assigned to that craft. Assignments that share one craft are the user's own alternatives and are tried in the order they are listed. Never choose a model yourself and never stand in for one.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -221,17 +273,17 @@ export const DESIGN_UTILITY_TOOLS: McpTool[] = [
 /**
  * Operations of the app-owned video capability (`cio:video`).
  *
- * Two operations, because watching and checking are two different acts. `preview`
- * serves the composition folder and opens it in the browser tab, where the page
- * runs and the tab refreshes itself as the agent writes. `capture` freezes the
- * composition at one second and answers with the picture, which is the only way
- * an agent can tell whether the frame it wrote is the frame it meant.
- *
- * Generating an asset is not repeated here: pictures, clips and sound come from a
- * generation capability the user installed in Utilities, and the design studio's
- * `save-media` operation is what brings one in as a file.
+ * Three operations, because watching, checking and making are three different
+ * acts. `preview` serves the composition folder and opens it in the browser tab,
+ * where the page runs and the tab refreshes itself as the agent writes. `capture`
+ * freezes the composition at one second and answers with the picture, which is
+ * the only way an agent can tell whether the frame it wrote is the frame it
+ * meant. `generate` produces a clip, a still or a music bed with the model the
+ * user assigned to that craft, which is what a composition's audio track and its
+ * b-roll clips need.
  */
 export const VIDEO_UTILITY_TOOLS: McpTool[] = [
+  GENERATE_MEDIA_TOOL,
   {
     name: 'preview',
     description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab, where the composition runs and is watched. The tab refreshes itself shortly after a file changes, so preview again only when you move to a different folder. Aim it at the folder holding the composition's index.html.`,

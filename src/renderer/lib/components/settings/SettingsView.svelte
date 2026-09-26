@@ -64,6 +64,7 @@
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
+  import MediaGenerationSettings from './MediaGenerationSettings.svelte'
   import PrototypeCdnSettings from './PrototypeCdnSettings.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
@@ -1116,6 +1117,9 @@
               {error}
             </p>
           {/if}
+        </div>
+        <div class="mb-6">
+          <MediaGenerationSettings {config} {settingsReady} {updateConfig} />
         </div>
         <DesignAssignmentsSettings {config} {settingsReady} {updateConfig} />
       </div>

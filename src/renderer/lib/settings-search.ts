@@ -73,6 +73,15 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: UsersRound
   },
   {
+    id: 'design-generation',
+    section: 'design',
+    blockId: 'design-generation',
+    title: 'Generation backend',
+    description: 'The provider that generates images, clips and sound.',
+    keywords: ['replicate', 'generation', 'image', 'video', 'audio', 'token', 'api key', 'media'],
+    icon: Sparkles
+  },
+  {
     id: 'design',
     section: 'design',
     title: 'Design',

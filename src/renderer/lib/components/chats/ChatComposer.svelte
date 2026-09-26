@@ -75,6 +75,8 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { sessionTagKind } from '$shared/session-tags'
   import { expertSessionFor, shouldOfferExpertCard, type ExpertSummary } from '$shared/experts'
+  import { mediaProviderLabel } from '$shared/media-generation'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import type { ExpertDecisionInput, ThreadExpertState } from '$shared/ipc-contract'
   import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../speech/editor-target'
   import type { ActionDefinition, ActionSelection } from '$lib/actions'
@@ -913,13 +915,21 @@
    * catalog so a row reads as one of the models the user can see, not as an id.
    */
   function expertModelLabel(expert: ExpertSummary): string {
+    // A media craft names a generation model rather than a harness model, and
+    // there is no catalog to resolve that against, so the provider's own name is
+    // the whole label.
+    if (expert.mediaModel) {
+      const providerId = appConfigState.mediaGeneration?.providerId
+      return `${providerId ? mediaProviderLabel(providerId) : 'Generation'} ${expert.mediaModel}`
+    }
+    const selection = expert.selection
+    if (!selection) return expert.label
     const provider = resolvedProviders.find(
       (candidate) =>
-        candidate.harnessId === expert.selection.harnessId &&
-        candidate.id === expert.selection.providerId
+        candidate.harnessId === selection.harnessId && candidate.id === selection.providerId
     )
-    const model = provider?.models.find((candidate) => candidate.id === expert.selection.modelId)
-    return `${provider?.name ?? expert.selection.providerId} ${model?.name ?? expert.selection.modelId}`
+    const model = provider?.models.find((candidate) => candidate.id === selection.modelId)
+    return `${provider?.name ?? selection.providerId} ${model?.name ?? selection.modelId}`
   }
 
   /**

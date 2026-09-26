@@ -1,5 +1,6 @@
 import {
   DESIGN_ASSIGNMENT_OUTPUTS,
+  designAssignmentIsMedia,
   designAssignmentOutput,
   designAssignmentOutputDescription,
   designAssignmentOutputLabel,
@@ -40,8 +41,10 @@ export interface ExpertSummary {
   craftWork: string
   /** One line on what the craft delivers. */
   craftDescription: string
-  /** The model the user assigned to this work. */
-  selection: AgentModelSelection
+  /** The harness model the user assigned, for a text craft. */
+  selection?: AgentModelSelection
+  /** The generation model the user assigned, for a media craft. */
+  mediaModel?: string
   /** The standing guidance sent with every call, trimmed. */
   instructions: string
 }
@@ -59,7 +62,9 @@ export function expertSummaries(
       craftLabel: designAssignmentOutputLabel(produces),
       craftWork: designAssignmentOutputWork(produces),
       craftDescription: designAssignmentOutputDescription(produces),
-      selection: assignment.selection,
+      ...(designAssignmentIsMedia(produces)
+        ? { mediaModel: assignment.mediaModel?.trim() ?? '' }
+        : { selection: assignment.selection }),
       instructions: assignment.instructions?.trim() ?? ''
     }
   })
@@ -83,10 +88,11 @@ export function expertSignature(
       [
         expert.id,
         expert.produces,
-        expert.selection.harnessId,
-        expert.selection.providerId,
-        expert.selection.modelId,
-        expert.selection.accountId ?? ''
+        expert.selection?.harnessId ?? '',
+        expert.selection?.providerId ?? '',
+        expert.selection?.modelId ?? '',
+        expert.selection?.accountId ?? '',
+        expert.mediaModel ?? ''
       ].join(':')
     )
     .join('|')

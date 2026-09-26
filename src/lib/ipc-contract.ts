@@ -14,6 +14,7 @@ import { invokeAssistantContract } from './ipc/invoke-assistant'
 import { invokeTypesafeContract } from './ipc/invoke-typesafe'
 import { invokeDesignContract } from './ipc/invoke-design'
 import { invokeExpertContract } from './ipc/invoke-expert'
+import { invokeMediaContract } from './ipc/invoke-media'
 import { IPC_EVENT_CONTRACT } from './ipc/events'
 import type { GitInvocation, GitRefusedOperation } from './types'
 
@@ -21,6 +22,7 @@ export * from './ipc/updater'
 export * from './ipc/browser'
 export * from './ipc/design'
 export * from './ipc/expert'
+export * from './ipc/media'
 export * from './ipc/logging'
 export * from './ipc/notifications'
 export * from './ipc/events'
@@ -41,7 +43,8 @@ export const IPC_INVOKE_CONTRACT = {
   ...invokeTypesafeContract,
   ...invokeAssistantContract,
   ...invokeDesignContract,
-  ...invokeExpertContract
+  ...invokeExpertContract,
+  ...invokeMediaContract
 }
 
 export type IpcInvokeContract = typeof IPC_INVOKE_CONTRACT

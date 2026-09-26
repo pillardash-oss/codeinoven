@@ -65,6 +65,7 @@ const DEFAULT_CONFIG: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
   design: { assignments: [] },
+  mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
@@ -178,6 +179,11 @@ export class StorageEngine {
         assignments: (Array.isArray(config?.design?.assignments) ? config.design.assignments : [])
           .filter(isUsableDesignAssignment)
           .slice(0, MAX_DESIGN_ASSIGNMENTS)
+      },
+      // A provider id a future version wrote is passed through as-is so the
+      // choice is not silently erased; only a missing field falls back.
+      mediaGeneration: {
+        providerId: config?.mediaGeneration?.providerId ?? DEFAULT_CONFIG.mediaGeneration.providerId
       },
       memory: {
         ...DEFAULT_CONFIG.memory,

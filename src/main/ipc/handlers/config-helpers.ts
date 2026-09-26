@@ -14,9 +14,16 @@ import {
   DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH,
   DESIGN_ASSIGNMENT_OUTPUTS,
   MAX_DESIGN_ASSIGNMENTS,
+  designAssignmentIsMedia,
+  designAssignmentOutputWork,
   isDesignAssignmentId,
   isDesignAssignmentOutput
 } from '../../../lib/design-assignments'
+import {
+  MEDIA_PROVIDER_IDS,
+  isValidMediaModel,
+  isMediaProviderId
+} from '../../../lib/media-generation'
 import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
 import { validateMemoryConfig } from '../../chat/memory-service'
 import { MAX_MAX_CONFLICT_FILE_BYTES, MIN_MAX_CONFLICT_FILE_BYTES } from '../../../lib/types'
@@ -35,6 +42,7 @@ import type {
   LocalRankingGradeScope,
   LocalUsageClearInput,
   LocalUsageRecordStore,
+  MediaGenerationConfig,
   RankingJudgeConfig,
   RankingJudgeKind,
   ThinkingLevel
@@ -137,6 +145,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'agentDefaults',
   'auxiliaryAgents',
   'design',
+  'mediaGeneration',
   'rankingJudge',
   'agentBehaviorPrompt',
   'autoDownloadUpdates',
@@ -265,7 +274,14 @@ export function validateAuxiliaryAgents(value: unknown): AuxiliaryAgentConfig {
 }
 
 /** Fields one design assignment may carry, and no others. */
-const DESIGN_ASSIGNMENT_FIELDS = new Set(['id', 'label', 'produces', 'instructions', 'selection'])
+const DESIGN_ASSIGNMENT_FIELDS = new Set([
+  'id',
+  'label',
+  'produces',
+  'instructions',
+  'selection',
+  'mediaModel'
+])
 
 /**
  * Validate the user's design assignments.
@@ -319,18 +335,52 @@ function validateDesignConfig(value: unknown): DesignConfig {
     if (produces !== undefined && !isDesignAssignmentOutput(produces)) {
       throw new TypeError(`${label} output must be one of ${DESIGN_ASSIGNMENT_OUTPUTS.join(', ')}`)
     }
-    return {
+    const output = produces ?? 'text'
+    const common = {
       id,
       label: name,
       // Copywriting is the default and the only output a config written before
       // this field existed could mean, so storing it would add a word to every
       // row.
       ...(produces === undefined || produces === 'text' ? {} : { produces }),
-      ...(instructions === undefined || instructions.trim().length === 0 ? {} : { instructions }),
-      selection: validateAgentModelSelection(entry.selection, `${label} model`)
+      ...(instructions === undefined || instructions.trim().length === 0 ? {} : { instructions })
     }
+    // A craft's model comes from the place that can actually run it: a media
+    // craft names a generation model, a text craft a harness model. Requiring
+    // the wrong one would store a row that can never run.
+    if (designAssignmentIsMedia(output)) {
+      if (!isValidMediaModel(entry.mediaModel)) {
+        throw new TypeError(
+          `${label} needs a generation model like "owner/name" for ${designAssignmentOutputWork(output)}`
+        )
+      }
+      return { ...common, mediaModel: entry.mediaModel.trim() }
+    }
+    return { ...common, selection: validateAgentModelSelection(entry.selection, `${label} model`) }
   })
   return { assignments: validated }
+}
+
+/**
+ * Validate the generation backend choice.
+ *
+ * Only the provider id is configurable: the token lives in the secure vault and
+ * the model for each craft is the user's design assignment, so there is nothing
+ * else here that could point the app at a service the user did not choose.
+ */
+function validateMediaGenerationConfig(value: unknown): MediaGenerationConfig {
+  if (!isRecord(value)) throw new TypeError('Generation settings must be an object')
+  for (const field of Object.keys(value)) {
+    if (field !== 'providerId') {
+      throw new TypeError(`Unsupported generation settings field: ${field}`)
+    }
+  }
+  const providerId = value.providerId
+  if (providerId === undefined || providerId === null) return { providerId: null }
+  if (!isMediaProviderId(providerId)) {
+    throw new TypeError(`Generation provider must be one of ${MEDIA_PROVIDER_IDS.join(', ')}`)
+  }
+  return { providerId }
 }
 
 const RANKING_JUDGE_KINDS = new Set<RankingJudgeKind>(['automatic', 'typesafe', 'model'])
@@ -705,6 +755,10 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   if ('design' in value) {
     patch.design = validateDesignConfig(value.design)
+  }
+
+  if ('mediaGeneration' in value) {
+    patch.mediaGeneration = validateMediaGenerationConfig(value.mediaGeneration)
   }
 
   if ('rankingJudge' in value) {

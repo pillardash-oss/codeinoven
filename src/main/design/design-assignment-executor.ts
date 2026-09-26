@@ -1,14 +1,21 @@
 import {
   designAssignmentCatalogue,
+  designAssignmentIsMedia,
   designAssignmentOutput,
   designAssignmentOutputWork,
+  isUsableDesignSelection,
   resolveDesignAssignment,
   usableDesignAssignments
 } from '../../lib/design-assignments'
 import type { EffectiveExperts } from '../../lib/experts'
 import { requireLocalProject } from '../../lib/project-artifacts'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
-import type { AgentModelSelection, DesignAssignmentOutput, DesignConfig } from '../../lib/types'
+import type {
+  AgentModelSelection,
+  DesignAssignment,
+  DesignAssignmentOutput,
+  DesignConfig
+} from '../../lib/types'
 import type { Database } from '../database/database'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 
@@ -101,6 +108,15 @@ export function createDesignAssignmentExecutor(
     }
     const project = requireLocalProject(options.database, context.projectId)
     const output = designAssignmentOutput(assignment)
+    // A media craft is made, not written: its model is a generation model and the
+    // app calls a provider for it. `delegate` is the completion lane, so it points
+    // at the operation that can actually produce the asset rather than pretending
+    // a text answer is one.
+    if (designAssignmentIsMedia(output)) {
+      throw new Error(
+        `"${assignment.label}" produces ${designAssignmentOutputWork(output)} by generation rather than by a completion. Call the \`generate\` operation with kind "${output}", and the model the user assigned to that craft produces the file; never write the asset yourself.`
+      )
+    }
     // Two assignments with one output are the user's own alternatives for that
     // job, so the one they named is tried first and the rest cover it in their
     // order. This is not the app substituting a model: every candidate here is a
@@ -110,7 +126,7 @@ export function createDesignAssignmentExecutor(
       ...usableDesignAssignments(config).filter(
         (entry) => entry.id !== assignment.id && designAssignmentOutput(entry) === output
       )
-    ]
+    ].filter(isRunnableAssignment)
     const failures: string[] = []
     for (const [index, candidate] of candidates.entries()) {
       const guidance = candidate.instructions?.trim()
@@ -158,14 +174,22 @@ function refusalForNoExpert(availability: EffectiveExperts['availability']): str
   return 'No expert is assigned yet: the user has not put a model on any of the work a design or a composition needs. Do the work with your own tools when you can, and when the work needs something you cannot produce, tell the user plainly which work needs a model and that they assign it in Settings, Design. Never choose a model yourself.'
 }
 
-/** One line on what came back, which differs for copywriting and for the other crafts. */
+/** One line on what came back. The completion lane is text only, so the wording
+ *  names the model rather than the craft's asset. */
 function noteFor(output: DesignAssignmentOutput, usedFallback: boolean): string {
-  const standing = usedFallback
+  void output
+  return usedFallback
     ? 'The first model the user assigned to this work did not answer, so this one did.'
     : 'Produced by the model the user assigned to this work.'
-  return output === 'text'
-    ? standing
-    : `${standing} It was chosen for ${designAssignmentOutputWork(output)}, and this lane answers with text only, so the reply above is not the asset: produce it with a generation capability and save it with save-media.`
+}
+
+/** A text assignment that carries the harness model needed to run it. */
+interface RunnableAssignment extends DesignAssignment {
+  selection: AgentModelSelection
+}
+
+function isRunnableAssignment(assignment: DesignAssignment): assignment is RunnableAssignment {
+  return isUsableDesignSelection(assignment.selection)
 }
 
 function errorMessage(error: unknown): string {

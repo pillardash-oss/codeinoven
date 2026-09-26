@@ -1740,6 +1740,16 @@ export class ChatEngine {
   }
 
   /**
+   * Register the executor behind the `generate` operation the design and video
+   * capabilities share. It needs the database for the project root, the live
+   * config for the craft's model, and the vault for the provider token, all of
+   * which the app owns rather than the turn.
+   */
+  setMediaGenerationExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.utilityOrchestration.setMediaGenerationExecutor(executor)
+  }
+
+  /**
    * Register the executor behind the app-owned video capability's `preview`
    * operation. The chat engine owns the turn's project and thread, so it is the
    * app surface that hands the executor those two ids.

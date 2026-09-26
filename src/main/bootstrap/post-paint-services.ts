@@ -409,6 +409,25 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // as a file the design references by relative path.
   const { createDesignMediaExecutor } = await import('../design/design-media-executor')
   state.chatEngine.setDesignMediaExecutor(createDesignMediaExecutor({ database }))
+  // The engine the app was missing: it turns the prompt an agent writes into a
+  // picture, a clip or a track, using the model the user assigned to that craft
+  // and the provider token the user stored. The bytes land through the same
+  // saver above, so generated media has one writer and one set of ceilings.
+  const { MediaGenerationService } = await import('../media/media-generation-service')
+  const mediaGeneration = new MediaGenerationService({
+    config: () => storage.getConfig(),
+    vault
+  })
+  const { createMediaGenerationExecutor } = await import('../media/media-generation-executor')
+  state.chatEngine.setMediaGenerationExecutor(
+    createMediaGenerationExecutor({
+      database,
+      config: () => storage.getConfig(),
+      service: mediaGeneration
+    })
+  )
+  const { registerMediaGenerationIpc } = await import('../media/media-generation-ipc')
+  registerMediaGenerationIpc(mediaGeneration)
   // The video capability composes the same two services: the loopback static
   // host that serves a composition folder and the thread's browser tab that
   // shows it. `capture` adds the frame render and the screenshot on top of the

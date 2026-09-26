@@ -238,7 +238,8 @@ export type BrowserUtilityExecutor = (
  * that made it. The app supplies one of these per operation group, because the
  * three halves have different owners: `preview` composes the loopback directory
  * preview with the in-app browser, `delegate` runs a prompt on the model the
- * user assigned to that design work, and `save-media` writes a generated asset
+ * user assigned to that design work, `generate` produces media with the model
+ * assigned to a media craft, and `save-media` writes a generated asset
  * into the project as a file the design can reference.
  */
 export type DesignCapabilityExecutor = (
@@ -355,6 +356,7 @@ export class UtilityOrchestrationService {
   private designPreviewExecutor: DesignCapabilityExecutor | null = null
   private designAssignmentExecutor: DesignCapabilityExecutor | null = null
   private designMediaExecutor: DesignCapabilityExecutor | null = null
+  private mediaGenerationExecutor: DesignCapabilityExecutor | null = null
   private videoPreviewExecutor: VideoCapabilityExecutor | null = null
   private videoCaptureExecutor: VideoCapabilityExecutor | null = null
   /** The thread-scoped expert policy, shared with the design delegation executor. */
@@ -462,6 +464,17 @@ export class UtilityOrchestrationService {
    */
   setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
     this.designMediaExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the `generate` operation the design and video
+   * capabilities share, which runs the model the user assigned to a media craft
+   * and saves the result into the project. The app supplies it because it owns
+   * the provider credential, the vault and the folder the file lands in, and
+   * because the model is a user decision the agent must never make.
+   */
+  setMediaGenerationExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.mediaGenerationExecutor = executor
   }
 
   /**
@@ -731,7 +744,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(hasDesignCapability
         ? [
-            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus three operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, and a \`save-media\` operation that saves a generated image, video or sound file into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus four operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, a \`generate\` operation that produces an image, a video clip or an audio file with the model the user assigned to that craft, and a \`save-media\` operation that saves a link a generator elsewhere answered with into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
           ]
         : []),
       ...(hasVideoCapability
@@ -1640,12 +1653,14 @@ export class UtilityOrchestrationService {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
-      // One capability, three operation groups with different owners: `preview`
-      // serves the design folder, `delegate` runs the model the user assigned,
-      // and `save-media` brings a generated asset in as a file.
+      // One capability, four operation groups with different owners: `preview`
+      // serves the design folder, `delegate` runs the model the user assigned to
+      // text work, `generate` produces media with the model assigned to a media
+      // craft, and `save-media` brings a generated asset in as a file.
       const executors = new Map<string, DesignCapabilityExecutor | null>([
         ['preview', this.designPreviewExecutor],
         ['delegate', this.designAssignmentExecutor],
+        ['generate', this.mediaGenerationExecutor],
         ['save-media', this.designMediaExecutor]
       ])
       const executor = executors.get(operation)
@@ -1665,6 +1680,7 @@ export class UtilityOrchestrationService {
       // composition folder, `capture` renders one frame and screenshots it.
       const executors = new Map<string, VideoCapabilityExecutor | null>([
         ['preview', this.videoPreviewExecutor],
+        ['generate', this.mediaGenerationExecutor],
         ['capture', this.videoCaptureExecutor]
       ])
       const executor = executors.get(operation)
