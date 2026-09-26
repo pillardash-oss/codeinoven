@@ -53,6 +53,28 @@ describe('opencode installation detection', () => {
     expect(resolvedOpenCodeCommand()).toBe('opencode2')
   })
 
+  it('lets a v2 alias reporting a prefixed version line supersede a v1 install', async () => {
+    mocks.discoverHarnessRuntimes.mockResolvedValue(
+      new Map([
+        ['opencode', runtime('opencode')],
+        ['opencode2', runtime('opencode2')]
+      ])
+    )
+    // A packaged app launched from the Dock resolves the Homebrew v1 install as
+    // the canonical `opencode`, while the v2 install only answers through the
+    // `opencode2` alias and prints its line with an `opencode v` prefix.
+    mocks.probeHarnessRuntime.mockImplementation(async (target: HarnessRuntime) =>
+      target.command === 'opencode'
+        ? { ok: true, stdout: '1.18.30\n', stderr: '' }
+        : { ok: true, stdout: 'opencode v2.0.18\n', stderr: '' }
+    )
+
+    const installation = await detectOpenCodeInstallation()
+
+    expect(installation).toEqual({ command: 'opencode2', version: 'opencode v2.0.18', major: 2 })
+    expect(resolvedOpenCodeCommand()).toBe('opencode2')
+  })
+
   it('keeps the canonical opencode command when it is the newer install', async () => {
     mocks.discoverHarnessRuntimes.mockResolvedValue(
       new Map([
