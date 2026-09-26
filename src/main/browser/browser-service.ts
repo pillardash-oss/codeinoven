@@ -38,7 +38,7 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
-import { PermissionPromptWindow, type PromptRequestContext } from './permission-prompt-window'
+import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserDownloadTracker } from './browser-service/browser-downloads'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
 import { BrowserInspector } from './browser-service/browser-inspector'
@@ -48,8 +48,10 @@ import { matchBrowserShortcut } from './browser-service/browser-shortcuts'
 import {
   permissionCheckKey,
   permissionGrantKeys,
+  permissionLedgerForPartition,
   permissionOrigin,
   permissionResolutions,
+  permissionSilentGrant,
   rememberedPermissionOutcome,
   type PermissionResolution
 } from './browser-service/browser-permissions'
@@ -1588,10 +1590,11 @@ export class BrowserService {
     const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
     const browserSession = session.fromPartition(partition)
     if (this.configuredSessions.has(partition)) return browserSession
-    const grants = new Set<string>()
-    const denies = new Set<string>()
-    this.permissionGrants.set(partition, grants)
-    this.permissionDenies.set(partition, denies)
+    // Reuse the ledgers the durable memory loaded: a fresh set here would throw
+    // away every decision the user already made, so a site the user allowed in
+    // an earlier run would be prompted again the first time it asked.
+    const grants = permissionLedgerForPartition(this.permissionGrants, partition)
+    const denies = permissionLedgerForPartition(this.permissionDenies, partition)
     browserSession.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
       const origin = permissionOrigin(requestingOrigin)
       if (!origin) return false
@@ -1617,7 +1620,6 @@ export class BrowserService {
         return
       }
       const [tabId] = tabEntry
-      const tab = tabEntry[1]
       const id = crypto.randomUUID()
       const rawMediaTypes: unknown = Reflect.get(details, 'mediaTypes')
       const mediaTypes = Array.isArray(rawMediaTypes)
@@ -1655,20 +1657,66 @@ export class BrowserService {
         PERMISSION_TIMEOUT_MS
       )
       this.pendingPermissions.set(id, { request, callback, timer })
-      // Native OS popup composites above the WebContentsView: the page stays
-      // live and interactive while the prompt is on screen.
-      const context: PromptRequestContext = {
-        request,
-        queueSize: this.pendingPermissions.size,
-        projectLabel: this.permissionLabel(tab)
-      }
-      this.promptWindow.show(context, this.promptAnchor())
+      // Nothing in this instance's ledgers covers the request, but the durable
+      // memory is shared with every other running instance: re-read it before
+      // asking, and answer from it when the decision is already there. The
+      // pending entry (and its timeout) is live while that read is in flight, so
+      // a slow or failed read still ends in the prompt on screen instead of a
+      // stranded request.
+      void this.promptFromDurableMemory(id)
     })
     browserSession.on('will-download', (event, item, contents) => {
       this.downloadTracker.handleDownload(projectId, item, contents.id)
     })
     this.configuredSessions.add(partition)
     return browserSession
+  }
+
+  /**
+   * Answer a pending request from the durable memory when it already holds the
+   * decision, otherwise put the prompt on screen.
+   *
+   * The prompt is shown after the read, so a permission the user already granted
+   * (in this run of another instance, or before a restart) is never asked for
+   * again just because this instance's ledgers had not caught up yet.
+   */
+  private async promptFromDurableMemory(id: string): Promise<void> {
+    const pending = this.pendingPermissions.get(id)
+    if (!pending) return
+    try {
+      await this.permissionMemory.refresh(this.permissionLedgers())
+    } catch (error: unknown) {
+      Logger.error('Browser permission memory could not be refreshed:', error)
+    }
+    // The user may have answered, or the request may have timed out, while the
+    // read was in flight.
+    const remaining = this.pendingPermissions.get(id)
+    if (!remaining) return
+    const partition = `${BROWSER_PARTITION_PREFIX}${remaining.request.projectId}`
+    const outcome = rememberedPermissionOutcome(
+      permissionGrantKeys(remaining.request),
+      this.permissionGrants.get(partition),
+      this.permissionDenies.get(partition)
+    )
+    if (outcome === 'grant') {
+      this.resolvePermission(id, permissionSilentGrant)
+      return
+    }
+    if (outcome === 'deny') {
+      this.resolvePermission(id, permissionResolutions.dismiss)
+      return
+    }
+    // Native OS popup composites above the WebContentsView: the page stays
+    // live and interactive while the prompt is on screen.
+    const tab = this.tabs.get(remaining.request.tabId)
+    this.promptWindow.show(
+      {
+        request: remaining.request,
+        queueSize: this.pendingPermissions.size,
+        projectLabel: tab ? this.permissionLabel(tab) : null
+      },
+      this.promptAnchor()
+    )
   }
 
   /** The live grant/deny ledgers the permission handlers read and write. */
@@ -1698,9 +1746,13 @@ export class BrowserService {
   /** Forget every remembered permission grant or denial for a project. */
   private clearProjectPermissionMemory(projectId: string): void {
     const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
-    this.permissionGrants.get(partition)?.clear()
-    this.permissionDenies.get(partition)?.clear()
-    this.persistPermissionMemory()
+    // The store owns the clear so a permission read already in flight cannot
+    // merge the forgotten keys back after the user asked for them to be gone.
+    void this.permissionMemory
+      .forget(partition, this.permissionLedgers())
+      .catch((error: unknown) => {
+        Logger.error('Browser permission memory could not be saved:', error)
+      })
   }
 
   private resolvePermission(requestId: string, resolution: PermissionResolution): void {
