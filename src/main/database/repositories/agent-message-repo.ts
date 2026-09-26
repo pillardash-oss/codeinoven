@@ -905,24 +905,35 @@ export class AgentMessageRepo {
     if (threadIds.length === 0 || markers.length === 0) return []
     const threadPlaceholders = threadIds.map(() => '?').join(', ')
     const markerClause = markers.map(() => 'm.parts LIKE ?').join(' OR ')
+    // The narrow mirror widens candidate selection from the whole
+    // agent_messages table (whose `parts` column dominates the file size) to the
+    // rows of the listed threads, so `parts` is only read for messages that can
+    // match. Until the mirror is backfilled the legacy join keeps the exact same
+    // rows, just slower.
+    const source = this.db.isSearchMetaReady()
+      ? `SELECT m.id, m.thread_id, m.parts, m.created_at
+         FROM agent_message_search_meta meta
+         JOIN threads t ON t.id = meta.thread_id
+         JOIN agent_messages m ON m.rowid = meta.rowid
+         WHERE t.project_id = ? AND meta.thread_id IN (${threadPlaceholders})
+           AND meta.session_id IS NULL AND meta.role = 'user'
+           AND meta.visibility IN ('conversation', 'working_trace')
+           AND (${markerClause})
+         ORDER BY m.created_at ASC, m.id ASC`
+      : `SELECT m.id, m.thread_id, m.parts, m.created_at
+         FROM agent_messages m
+         JOIN threads t ON t.id = m.thread_id
+         WHERE t.project_id = ? AND m.thread_id IN (${threadPlaceholders})
+           AND m.session_id IS NULL AND m.role = 'user'
+           AND m.visibility IN ('conversation', 'working_trace')
+           AND (${markerClause})
+         ORDER BY m.created_at ASC, m.id ASC`
     const rows = this.db.all<{
       id: string
       thread_id: string
       parts: string
       created_at: number
-    }>(
-      `SELECT m.id, m.thread_id, m.parts, m.created_at
-       FROM agent_messages m
-       JOIN threads t ON t.id = m.thread_id
-       WHERE t.project_id = ? AND m.thread_id IN (${threadPlaceholders})
-         AND m.session_id IS NULL AND m.role = 'user'
-         AND m.visibility IN ('conversation', 'working_trace')
-         AND (${markerClause})
-       ORDER BY m.created_at ASC, m.id ASC`,
-      projectId,
-      ...threadIds,
-      ...markers.map((marker) => `%${marker}%`)
-    )
+    }>(source, projectId, ...threadIds, ...markers.map((marker) => `%${marker}%`))
     return rows.map((row) => ({
       threadId: row.thread_id,
       id: row.id,

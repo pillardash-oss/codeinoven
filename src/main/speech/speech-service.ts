@@ -537,9 +537,13 @@ export class SpeechService {
           ac.signal
         )
         this.touch('asr')
-        // Warm the cleanup stack too so transcription + cleanup never pay a
-        // lazy llama-server spawn after the recording ends.
-        await this.preloadCleanup()
+        // The GGUF cleanup stack is deliberately NOT warmed here. This runs
+        // while the user is still speaking (the renderer calls it ~2s into a
+        // recording), so warming it would allocate the cleanup server's memory
+        // during capture for a model that cannot be used until the recording
+        // ends. It spawns lazily on the first cleanup request instead, inside
+        // the detached post-recording transcription job, which overlaps its
+        // load with ASR rather than with the microphone being open.
       } catch {
         // Warmup is best-effort; transcription will surface real errors.
       } finally {
@@ -1084,41 +1088,6 @@ export class SpeechService {
 
   updateUnloadOptions(options: Partial<Record<SpeechCapability, SpeechUnloadOption>>): void {
     this.eviction.updateUnloadOptions(options)
-  }
-
-  /**
-   * Best-effort preload of the GGUF cleanup stack: resolve the installed
-   * cleanup artifact and ensure its llama-server process is resident with the
-   * model fully loaded before transcription needs it. Failures are logged and
-   * swallowed so a missing cleanup model never blocks ASR warmup.
-   */
-  private async preloadCleanup(): Promise<void> {
-    const resolved = this.selectInstalledCleanupArtifact()
-    if (!resolved) return
-    const backend = this.requireBackend(resolved.runtime)
-    if (!backend.warmup) return
-    const ac = new AbortController()
-    const timer = setTimeout(() => ac.abort(), 15_000)
-    try {
-      await backend.warmup(
-        {
-          id: resolved.artifact.id,
-          directory: this.artifactDirectory(resolved.artifact.id),
-          ...(resolved.artifact.familyId === 's1-cleanup'
-            ? { cleanupProfile: 'normalizer' as const }
-            : {})
-        },
-        ac.signal
-      )
-      this.touch('cleanup')
-    } catch (cause) {
-      Logger.error('Speech cleanup stack preload failed', {
-        artifactId: resolved.artifact.id,
-        cause: cause instanceof Error ? cause.message : String(cause)
-      })
-    } finally {
-      clearTimeout(timer)
-    }
   }
 
   private touch(capability: SpeechCapability): void {

@@ -256,11 +256,14 @@ function createWindow(): BrowserWindow {
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
       autoplayPolicy: 'no-user-gesture-required',
-      // Keep the renderer responsive when the window is hidden or occluded so
-      // background events (e.g. the notification alert played from the
-      // renderer) are handled the moment they arrive instead of after Chromium
-      // throttles the backgrounded page.
-      backgroundThrottling: false,
+      // Chromium throttles a hidden or occluded window by default, and that is
+      // left on deliberately: this window is occluded whenever the user works
+      // in another app, which is most of a long agent run, and an unthrottled
+      // renderer spends that whole time at full timer rate for nothing. The one
+      // behaviour that flag used to buy (the off-app notification alert playing
+      // promptly) is preserved at its own call site instead, which lifts
+      // throttling for the moment the alert is dispatched
+      // (see NotificationService.dispatchNotificationSound).
       preload: getPreloadPath(),
       sandbox: true,
       contextIsolation: true,

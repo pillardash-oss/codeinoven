@@ -148,3 +148,58 @@ export function foldTurnStreamEvents(
   // excluded from the output.
   return parts.filter((part) => (lastActivityTs.get(part.id) ?? 0) >= minTs)
 }
+
+/**
+ * Drop everything streamed before `minTs` except the latest snapshot of each
+ * part the current turn still touches.
+ *
+ * The log is thread-wide and append-only, so a cache that keeps it whole holds
+ * every event the app has ever streamed for a thread, even though the fold only
+ * ever uses the current turn. A snapshot carries a part's whole state, so the
+ * newest one before the boundary is the only pre-boundary event that can still
+ * contribute: it seeds the deltas that arrive after it. Dropping all the other
+ * pre-boundary events leaves the fold identical while bounding the cache to the
+ * current turn. A part the current turn never touches needs no baseline, so its
+ * pre-boundary events are dropped entirely.
+ *
+ * Returns the same array when there is nothing to drop, so a caller can detect a
+ * no-op by identity.
+ */
+export function compactTurnStreamEvents(
+  events: TurnStreamEvent[],
+  minTs: number | undefined
+): TurnStreamEvent[] {
+  if (minTs === undefined || events.length === 0) return events
+  // Part ids the current turn still touches: these are the only ones whose
+  // pre-boundary snapshot can still matter.
+  const liveParts = new Set<string>()
+  let hasPreBoundaryEvent = false
+  for (const event of events) {
+    if (event.ts >= minTs) {
+      liveParts.add(event.kind === 'part.updated' ? event.part.id : event.partId)
+    } else {
+      hasPreBoundaryEvent = true
+    }
+  }
+  if (!hasPreBoundaryEvent) return events
+  const retainedSnapshots = new Map<string, number>()
+  const kept: TurnStreamEvent[] = []
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index]
+    if (!event) continue
+    if (event.ts >= minTs) {
+      kept.push(event)
+      continue
+    }
+    if (event.kind !== 'part.updated' || !liveParts.has(event.part.id)) continue
+    // Later snapshots of the same part supersede earlier ones.
+    const previous = retainedSnapshots.get(event.part.id)
+    if (previous !== undefined) kept[previous] = event
+    else {
+      retainedSnapshots.set(event.part.id, kept.length)
+      kept.push(event)
+    }
+  }
+  if (kept.length === events.length) return events
+  return kept
+}

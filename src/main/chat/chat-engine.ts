@@ -333,7 +333,7 @@ import {
   workflowGroupThreads
 } from '../../lib/engines/thread-manager-lineage'
 import { capPersistedPart } from './bounded-tool-output'
-import { foldTurnStreamEvents } from './turn-stream'
+import { compactTurnStreamEvents, foldTurnStreamEvents } from './turn-stream'
 import type { TurnStreamEvent } from './turn-stream'
 import { pageTurnStreamParts } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
@@ -22186,9 +22186,19 @@ export class ChatEngine {
     }
     entry.consumedBytes = tail.nextByte
 
+    const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
+    // Bound the retained log to the current turn before folding. The parse above
+    // only ever appends, so without this a long-lived thread pins every event it
+    // has streamed since launch. Compaction keeps the fold identical while
+    // collapsing history to one snapshot per part the current turn still touches.
+    const compacted = compactTurnStreamEvents(entry.events, turnStartTs)
+    if (compacted !== entry.events) {
+      entry.events = compacted
+      entry.foldKey = null
+    }
+
     // Fold the latest bound turn PLUS every unbound-turn event. Re-folding is
     // skipped entirely when neither the events nor the turn boundary changed.
-    const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
     const foldKey = `${entry.events.length}:${entry.latestTurnId}:${turnStartTs ?? ''}`
     let folded = entry.folded
     if (entry.foldKey !== foldKey || !folded) {

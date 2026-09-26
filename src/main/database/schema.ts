@@ -448,7 +448,13 @@ CREATE TABLE IF NOT EXISTS agent_message_search_meta (
   visibility TEXT NOT NULL,
   session_id TEXT,
   created_at INTEGER NOT NULL
-);`
+);
+
+-- Reads that ask for a set of threads' messages filtered by role and session
+-- can narrow to the candidate rows on the compact mirror instead of scanning
+-- agent_messages, whose parts column dominates the file size.
+CREATE INDEX IF NOT EXISTS idx_agent_message_search_meta_thread
+  ON agent_message_search_meta(thread_id, role, session_id, created_at);`
 
 export const AGENT_MESSAGE_SEARCH_META_TRIGGERS_SQL = `
 CREATE TRIGGER IF NOT EXISTS agent_message_search_meta_insert AFTER INSERT ON agent_messages BEGIN

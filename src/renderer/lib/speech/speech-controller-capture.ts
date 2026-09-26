@@ -7,6 +7,19 @@ const MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=op
 export const CAPTURE_TIMESLICE_MS = 250
 export const PAUSE_UPLOAD_DEPTH = 4
 export const CAPTURE_STOP_TIMEOUT_MS = 5_000
+/**
+ * Bound on how long the microphone may take to open before the attempt is
+ * settled as failed. Without it a wedged audio device leaves the surface in
+ * `starting` forever, where `stop()` and Escape are both no-ops because no
+ * `ActiveCapture` exists yet.
+ */
+export const CAPTURE_START_TIMEOUT_MS = 10_000
+/**
+ * Bound on draining the serialized chunk-upload chain when a recording stops.
+ * One chunk write that never resolves must not pin `stopping` (and block every
+ * later stop) for the lifetime of the app.
+ */
+export const CAPTURE_UPLOAD_DRAIN_TIMEOUT_MS = 5_000
 
 export function errorMessage(cause: unknown): string {
   if (cause instanceof Error && cause.message.trim()) return cause.message
