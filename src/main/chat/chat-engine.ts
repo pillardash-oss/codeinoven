@@ -337,6 +337,7 @@ import {
 } from '../../lib/engines/thread-manager-lineage'
 import { capPersistedPart } from './bounded-tool-output'
 import { compactTurnStreamEvents, foldTurnStreamEvents } from './turn-stream'
+import { readTurnStreamLog } from './turn-stream-log'
 import type { TurnStreamEvent } from './turn-stream'
 import { pageTurnStreamParts } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
@@ -22301,60 +22302,74 @@ export class ChatEngine {
       this.turnStreamCache.delete(oldest)
     }
 
-    let tail = await this.storage.readRawTail(streamPath, entry.consumedBytes)
-    if (!tail) {
+    const size = await this.storage.rawSize(streamPath)
+    if (size === null) {
       this.turnStreamCache.delete(streamPath)
       return pageTurnStreamParts([], [], query)
     }
+
+    const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
+
     // The log is append-only, so a shrink means the file was rewritten
-    // underneath us   drop every cached event and re-read once from byte 0.
-    if (tail.size < entry.consumedBytes) {
+    // underneath us   drop every cached event and rehydrate from scratch.
+    if (size < entry.consumedBytes) {
       entry.consumedBytes = 0
       entry.events = []
       entry.latestTurnId = ''
       entry.foldKey = null
       entry.folded = null
-      tail = await this.storage.readRawTail(streamPath, 0)
+    }
+
+    if (entry.consumedBytes === 0) {
+      // First hydration for this thread, or right after a rewrite: walk the log
+      // in bounded chunks that yield to the event loop instead of reading it
+      // whole, and retain only what the current turn's fold needs. The log is
+      // thread-wide and append-only, so a long-lived thread reaches hundreds of
+      // megabytes; reading that in one allocation blocked the main process and
+      // spiked memory past a gigabyte, which is what froze the app on a machine
+      // under pressure. This costs latency for a big log, never a frozen app.
+      const hydrated = await readTurnStreamLog(this.storage, streamPath, 0, size, turnStartTs)
+      entry.events = hydrated.events
+      entry.latestTurnId = hydrated.latestTurnId
+      entry.consumedBytes = hydrated.nextByte
+    } else {
+      const tail = await this.storage.readRawTail(streamPath, entry.consumedBytes)
       if (!tail) {
         this.turnStreamCache.delete(streamPath)
         return pageTurnStreamParts([], [], query)
       }
-    }
-    for (const line of tail.content.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      try {
-        const parsed = JSON.parse(trimmed) as TurnStreamEvent
-        if (parsed.kind === 'part.updated' || parsed.kind === 'part.delta') {
-          entry.events.push(parsed)
-          if (parsed.turnId) entry.latestTurnId = parsed.turnId
+      for (const line of tail.content.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        try {
+          const parsed = JSON.parse(trimmed) as TurnStreamEvent
+          if (parsed.kind === 'part.updated' || parsed.kind === 'part.delta') {
+            entry.events.push(parsed)
+            if (parsed.turnId) entry.latestTurnId = parsed.turnId
+          }
+        } catch {
+          // A malformed line must not block rehydration of the rest of the stream.
         }
-      } catch {
-        // A malformed line must not block rehydration of the rest of the stream.
       }
+      entry.consumedBytes = tail.nextByte
     }
-    entry.consumedBytes = tail.nextByte
 
-    const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
     // Bound the retained log to the current turn before folding. The parse above
-    // only ever appends, so without this a long-lived thread pins every event it
-    // has streamed since launch. Compaction keeps the fold identical while
-    // collapsing history to one snapshot per part the current turn still touches.
-    const retainedBefore = entry.events.length
+    // only ever appends, and a streaming turn keeps landing past the boundary
+    // between polls, so this folds those into the same retained set. Compaction
+    // keeps the fold identical while collapsing history to one snapshot per part
+    // the current turn still touches.
     const compacted = compactTurnStreamEvents(entry.events, turnStartTs)
     if (compacted !== entry.events) {
       entry.events = compacted
       entry.foldKey = null
     }
-    // The same compaction on disk. The file is append-only and nothing ever
-    // trimmed it, so a long-lived thread's log reached hundreds of megabytes and
-    // every reopen re-read and re-parsed all of it. Past the cap, rewrite the file
-    // to exactly the events the fold needs, through the append queue, reusing the
-    // bytes this load already parsed.
-    if (
-      tail.size >= ChatEngine.TURN_STREAM_COMPACT_BYTES &&
-      entry.events.length < retainedBefore
-    ) {
+    // The same compaction on disk, so the next reopen is cheap. Nothing else ever
+    // trimmed the file, so past the cap the load rewrites it to exactly the events
+    // the fold needs, through the file's append queue and reusing the bytes this
+    // load already parsed. The rewrite itself decides whether the trim is worth
+    // it, so a log that is already just the current turn is left alone.
+    if (size >= ChatEngine.TURN_STREAM_COMPACT_BYTES) {
       void this.compactTurnStream(streamPath, entry.consumedBytes, entry.events, turnStartTs)
     }
 
@@ -22409,13 +22424,18 @@ export class ChatEngine {
         }
         const compacted = compactTurnStreamEvents(events, turnStartTs)
         const text = compacted.map((event) => `${JSON.stringify(event)}\n`).join('')
-        // Nothing to gain (the turn is one huge segment) leaves the file alone,
-        // so a pathological turn never makes every later load rewrite it.
-        if (text.length === 0 || text.length >= fromByte + appended.length) return null
+        const nextBytes = Buffer.byteLength(text)
+        const currentBytes = fromByte + Buffer.byteLength(appended)
+        // A rewrite only pays off when it materially shrinks the file: a turn that
+        // is one huge segment, or a log that is already just the current turn,
+        // would otherwise be rewritten on every load for no gain. Compare bytes,
+        // not JS string length, so multi-byte text is never misjudged as smaller.
+        if (nextBytes === 0 || nextBytes * 2 > currentBytes) return null
         entry.events = compacted
-        entry.consumedBytes = Buffer.byteLength(text)
+        entry.consumedBytes = nextBytes
         entry.foldKey = null
         entry.folded = null
+        Logger.dev('Trimmed turn stream log', { currentBytes, nextBytes })
         return text
       })
     } catch (error) {
