@@ -550,7 +550,19 @@ class SpeechController {
     const startToken = new AbortController()
     this.startToken = startToken
     try {
-      const nativeStarted = await invoke('speech:beginNativeCapture', scope).catch(() => null)
+      const nativeStarted = await invoke('speech:beginNativeCapture', scope).catch(
+        (cause: unknown) => {
+          // Falling back to the browser recorder is expected on a device without
+          // the native worker, but a failure with the worker present is the real
+          // reason a recording is lost or sounds different, so it is recorded
+          // instead of being swallowed.
+          logRendererError(
+            'Native voice capture did not start; using the browser recorder.',
+            cause
+          )
+          return null
+        }
+      )
       if (startToken.signal.aborted) {
         // The user stopped (or hit Escape) while the native capture was starting:
         // end the session on the way out so a cancelled attempt never lingers in
