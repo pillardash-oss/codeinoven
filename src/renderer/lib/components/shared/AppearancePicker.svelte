@@ -22,7 +22,7 @@
     onColorChange: (color: string | undefined) => void
     onIconTypeChange: (iconType: string | undefined) => void
     onCustomSvgChange?: (svg: string | undefined) => void
-    onAddCustomIcon?: (name: string, svg: string) => Promise<void>
+    onAddCustomIcon?: (svg: string) => Promise<void>
     onUploadImage?: () => void
     onReset: () => void
   }
@@ -47,20 +47,35 @@
   let previewColor = $derived(color ?? PROJECT_COLORS[0].value)
   let hasAppearance = $derived(Boolean(color || iconType || customSvg || fallbackIconUrl))
   let pastedSvg = $state('')
-  let customSvgError = $state<string | null>(null)
   let showSvgInput = $state(false)
-  let customIconName = $state('')
+  let previewSvg = $state<string | null>(null)
+  let previewSvgError = $state<string | null>(null)
   let saveIconError = $state<string | null>(null)
 
-  function applyCustomSvg(): void {
+  function previewCustomSvg(): void {
     try {
-      const normalized = sanitizeCustomSvg(pastedSvg)
-      onCustomSvgChange?.(normalized)
-      onIconTypeChange(undefined)
-      customSvgError = null
-      showSvgInput = false
+      previewSvg = sanitizeCustomSvg(pastedSvg)
+      previewSvgError = null
+      saveIconError = null
     } catch (error) {
-      customSvgError = error instanceof Error ? error.message : 'Could not read this SVG'
+      previewSvg = null
+      previewSvgError = error instanceof Error ? error.message : 'Could not read this SVG'
+    }
+  }
+
+  async function usePreviewIcon(): Promise<void> {
+    if (!previewSvg) return
+    try {
+      await onAddCustomIcon?.(previewSvg)
+      onCustomSvgChange?.(previewSvg)
+      onIconTypeChange(undefined)
+      showSvgInput = false
+      pastedSvg = ''
+      previewSvg = null
+      previewSvgError = null
+      saveIconError = null
+    } catch (error) {
+      saveIconError = error instanceof Error ? error.message : 'Could not save icon'
     }
   }
 </script>
@@ -143,8 +158,8 @@
           customIcon.svg
             ? 'border-foreground bg-elevated'
             : 'border-border'}"
-          title={customIcon.name}
-          aria-label={customIcon.name}
+          title="Custom SVG icon"
+          aria-label="Custom SVG icon"
           aria-pressed={customSvg === customIcon.svg}
           onclick={() => {
             onCustomSvgChange?.(customIcon.svg)
@@ -200,51 +215,44 @@
           class="min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 font-mono text-xs text-foreground placeholder:text-dimmed"
           bind:value={pastedSvg}
           placeholder="Paste SVG markup with a viewBox"
-          aria-describedby={customSvgError ? 'appearance-custom-svg-error' : undefined}></textarea>
-        {#if customSvgError}
+          oninput={(event) => {
+            pastedSvg = event.currentTarget.value
+            previewSvg = null
+            previewSvgError = null
+            saveIconError = null
+          }}
+          aria-describedby={previewSvgError ? 'appearance-custom-svg-error' : undefined}></textarea>
+        <div class="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title="Preview pasted SVG"
+            onclick={previewCustomSvg}>Preview</button
+          >
+          {#if previewSvg}
+            <img
+              src={getCustomSvgDataUrl(previewSvg, previewColor)}
+              alt="Preview of custom icon"
+              class="h-8 w-8 object-contain"
+              draggable="false"
+            />
+          {/if}
+        </div>
+        {#if previewSvgError}
           <p id="appearance-custom-svg-error" class="text-xs text-danger" role="alert">
-            {customSvgError}
+            {previewSvgError}
           </p>
         {/if}
         {#if saveIconError}<p class="text-xs text-danger" role="alert">{saveIconError}</p>{/if}
         <div class="flex items-center justify-between gap-2">
-          {#if onAddCustomIcon}
-            <input
-              class="min-w-0 flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs text-foreground"
-              bind:value={customIconName}
-              placeholder="Name this icon"
-              aria-label="Custom icon name"
-            />
-          {:else}<span></span>{/if}
-          {#if onAddCustomIcon}
-            <button
-              type="button"
-              class="rounded-lg border px-2.5 py-1.5 text-xs text-muted hover:bg-elevated hover:text-foreground"
-              title="Save SVG to the shared icon library"
-              onclick={async () => {
-                try {
-                  if (!customIconName.trim()) throw new Error('Enter a name for this icon')
-                  const normalized = sanitizeCustomSvg(pastedSvg)
-                  await onAddCustomIcon?.(customIconName, normalized)
-                  onCustomSvgChange?.(normalized)
-                  onIconTypeChange(undefined)
-                  customIconName = ''
-                  customSvgError = null
-                  saveIconError = null
-                  showSvgInput = false
-                } catch (error) {
-                  saveIconError = error instanceof Error ? error.message : 'Could not save icon'
-                }
-              }}>Save to library</button
-            >
-          {:else}
-            <button
-              type="button"
-              class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              title="Apply pasted SVG icon"
-              onclick={applyCustomSvg}>Use SVG</button
-            >
-          {/if}
+          <span></span>
+          <button
+            type="button"
+            class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            title="Use this SVG icon"
+            disabled={!previewSvg}
+            onclick={() => void usePreviewIcon()}>Use icon</button
+          >
         </div>
       </div>
     {/if}

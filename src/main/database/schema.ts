@@ -38,7 +38,6 @@ CREATE TABLE IF NOT EXISTS settings (
 -- ─── Shared custom icon library ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS custom_icons (
   id         TEXT PRIMARY KEY NOT NULL,
-  name       TEXT NOT NULL,
   svg        TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );

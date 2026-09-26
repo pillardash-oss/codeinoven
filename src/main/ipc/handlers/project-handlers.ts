@@ -101,25 +101,22 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
 
   ipcMain.handle('icon-library:list', () =>
     database
-      .all<{ id: string; name: string; svg: string; created_at: number }>(
-        'SELECT id, name, svg, created_at FROM custom_icons ORDER BY created_at, id'
+      .all<{ id: string; svg: string; created_at: number }>(
+        'SELECT id, svg, created_at FROM custom_icons ORDER BY created_at, id'
       )
-      .map((icon) => ({ id: icon.id, name: icon.name, svg: icon.svg, createdAt: icon.created_at }))
+      .map((icon) => ({ id: icon.id, svg: icon.svg, createdAt: icon.created_at }))
   )
-  ipcMain.handle('icon-library:add', (_, rawName: unknown, rawSvg: unknown) => {
-    const name = requireString(rawName, 'Icon name').trim().slice(0, 80)
-    if (!name) throw new TypeError('Icon name is required')
+  ipcMain.handle('icon-library:add', (_, rawSvg: unknown) => {
     const svg = sanitizeCustomSvg(requireString(rawSvg, 'Custom SVG'))
     const id = randomUUID()
     const createdAt = Date.now()
     database.run(
-      'INSERT INTO custom_icons(id, name, svg, created_at) VALUES(?, ?, ?, ?)',
+      'INSERT INTO custom_icons(id, svg, created_at) VALUES(?, ?, ?)',
       id,
-      name,
       svg,
       createdAt
     )
-    return { id, name, svg, createdAt }
+    return { id, svg, createdAt }
   })
 
   const worktreeProgressRelay =

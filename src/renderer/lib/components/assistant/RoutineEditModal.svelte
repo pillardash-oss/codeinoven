@@ -22,8 +22,8 @@
     void invoke('icon-library:list').then((icons) => (customIcons = icons))
   })
 
-  async function addCustomIcon(name: string, svg: string): Promise<void> {
-    const icon = await invoke('icon-library:add', name, svg)
+  async function addCustomIcon(svg: string): Promise<void> {
+    const icon = await invoke('icon-library:add', svg)
     customIcons = [...customIcons, icon]
   }
 
