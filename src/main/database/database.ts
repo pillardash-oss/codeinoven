@@ -849,6 +849,7 @@ export class Database {
       this.migrateRoutineDescription(connection)
       this.migrateRoutineReporting(connection)
       this.migrateCustomSvgIcons(connection)
+      this.migrateCustomIconLibrary(connection)
       this.migrateRoutineScheduleAnchor(connection)
       this.migrateThreadDesignKind(connection)
     })()
@@ -865,6 +866,27 @@ export class Database {
         connection.exec(`ALTER TABLE ${table} ADD COLUMN custom_svg TEXT`)
       }
     }
+  }
+
+  /** Remove the obsolete required name column while preserving saved SVGs. */
+  private migrateCustomIconLibrary(connection: DatabaseType): void {
+    const columns = connection.prepare('PRAGMA table_info(custom_icons)').all() as Array<{
+      name: string
+      notnull: number
+    }>
+    if (!columns.some((column) => column.name === 'name' && column.notnull === 1)) return
+
+    connection.exec(`
+      CREATE TABLE custom_icons_without_name (
+        id TEXT PRIMARY KEY NOT NULL,
+        svg TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      INSERT INTO custom_icons_without_name(id, svg, created_at)
+        SELECT id, svg, created_at FROM custom_icons;
+      DROP TABLE custom_icons;
+      ALTER TABLE custom_icons_without_name RENAME TO custom_icons;
+    `)
   }
 
   /**

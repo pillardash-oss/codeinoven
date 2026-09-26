@@ -16,6 +16,7 @@ import { NO_TAB_MARK, type BrowserTabMark } from '../browser/browser-service/bro
 import type { Database } from '../database/database'
 import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
 import { DesignRepo } from '../database/repositories/design-repo'
+import { ProjectRepo } from '../database/repositories/project-repo'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { isCioDesignRequest, CIO_DESIGN_TAG } from '../utilities/cio-design-prompt'
@@ -258,7 +259,8 @@ export class DesignService {
    * ordinary thread.
    */
   sessionKinds(projectId: string, threadIds: readonly string[]): Record<string, AuthoredWorkKind> {
-    requireLocalProject(this.options.database, projectId)
+    const project = new ProjectRepo(this.options.database).get(projectId)
+    if (!project || project.source !== 'local' || !project.path) return {}
     const ids = [...new Set(threadIds)]
     const kinds: Record<string, AuthoredWorkKind> = {}
     if (ids.length === 0) return kinds
@@ -324,6 +326,18 @@ export class DesignService {
    * preview operation.
    */
   async stateFor(projectId: string, threadId: string): Promise<ThreadDesignState> {
+    const storedProject = new ProjectRepo(this.options.database).get(projectId)
+    if (!storedProject || storedProject.source !== 'local' || !storedProject.path) {
+      return {
+        projectId,
+        threadId,
+        kind: 'design',
+        active: false,
+        current: null,
+        items: [],
+        defaultDirectory: AUTHORED_WORK_ROOT_BY_KIND.design
+      }
+    }
     const project = requireLocalProject(this.options.database, projectId)
     const current = this.designs.forThread(threadId)
     const tagged = this.latestSessionTag(threadId)
