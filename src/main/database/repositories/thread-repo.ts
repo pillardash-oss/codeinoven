@@ -710,6 +710,22 @@ export class ThreadRepo {
   }
 
   /**
+   * Every thread id a project owns, read on the database worker.
+   *
+   * For a caller comparing the rows against thread directories on disk, which
+   * must not touch SQLite on the main thread (see `docs/APP-BIBLE.md`).
+   */
+  async listIdsViaWorker(projectId: string): Promise<string[]> {
+    const result = await this.db.queryViaWorker(
+      'SELECT id FROM threads WHERE project_id = ?',
+      [projectId],
+      0
+    )
+    if (!result.ok) return []
+    return result.rows.map((row) => String(row['id']))
+  }
+
+  /**
    * Load cleanup snapshots without harness-usage hydration. Deletion needs the
    * thread tree and session metadata, while the extra usage query would be
    * wasted work and would synchronously touch the primary connection.

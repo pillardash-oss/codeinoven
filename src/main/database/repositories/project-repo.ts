@@ -118,6 +118,18 @@ export class ProjectRepo {
     return rows.map(rowToProject)
   }
 
+  /**
+   * Every registered project id, read on the database worker.
+   *
+   * For a caller that compares the rows against what is on disk and must not
+   * touch SQLite on the main thread (see `docs/APP-BIBLE.md`).
+   */
+  async listIdsViaWorker(): Promise<string[]> {
+    const result = await this.db.queryViaWorker('SELECT id FROM projects', [], 0)
+    if (!result.ok) return []
+    return result.rows.map((row) => String(row['id']))
+  }
+
   delete(id: string): void {
     this.db.run('DELETE FROM projects WHERE id = ?', id)
   }

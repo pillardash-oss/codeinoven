@@ -839,6 +839,15 @@ export class ChatEngine {
   /** Parsed stream-log entries held per thread before the oldest is evicted. */
   private static readonly TURN_STREAM_CACHE_LIMIT = 16
 
+  /**
+   * Size a thread's durable stream log may reach before it is compacted to the
+   * current turn.
+   *
+   * Well above any single turn's events, far below the hundreds of megabytes a
+   * long-lived thread accumulated while the file was never trimmed.
+   */
+  private static readonly TURN_STREAM_COMPACT_BYTES = 32 * 1024 * 1024
+
   private drivers = new Map<string, HarnessDriver>()
 
   /** Managed-account drivers are lazy and isolated by credential container. */
@@ -890,6 +899,13 @@ export class ChatEngine {
   /** Latest high-frequency stream mutations waiting for the next renderer frame. */
   /** Parsed stream-log state per thread so a reopen only parses appended bytes. */
   private turnStreamCache = new Map<string, TurnStreamCacheEntry>()
+
+  /** Thread streams being rewritten right now, so a burst of loads schedules one. */
+  private readonly compactingTurnStreams = new Set<string>()
+
+  /** Streams whose thread was deleted, so a late fire-and-forget append cannot
+   *  recreate the file the deletion just removed. */
+  private readonly deletedTurnStreams = new Set<string>()
 
   private pendingStreamBroadcasts = new Map<string, AgentEvent>()
 
@@ -12268,6 +12284,10 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     await this.agentProcesses.releaseThread(projectId, threadId)
+    // The durable stream log is per-thread and lives in the directory the
+    // deletion removes, so its cache and its queued appends are dropped before
+    // anything else: neither may outlive the file.
+    await this.forgetThreadStream(projectId, threadId)
 
     const tearDownSession = async (
       sessionId: string,
@@ -22142,6 +22162,10 @@ export class ChatEngine {
     owner: SessionInfo,
     event: Extract<AgentEvent, { type: 'message.part.updated' | 'message.part.delta' }>
   ): Promise<void> {
+    const streamPath = turnStreamPath(owner.projectId, owner.threadId)
+    // A deleted thread's append is a no-op: the deletion removed the file, and a
+    // late write would recreate the directory it just freed.
+    if (this.deletedTurnStreams.has(streamPath)) return
     const ts = Date.now()
     const sessionId = event.sessionId
     // Bind the event to the session's active turn; while the active turn is
@@ -22182,10 +22206,7 @@ export class ChatEngine {
       // (e.g. one base64 chunk); persisting it would re-poison the log.
       return
     }
-    await this.storage.appendRaw(
-      turnStreamPath(owner.projectId, owner.threadId),
-      `${JSON.stringify(streamEvent)}\n`
-    )
+    await this.storage.appendRaw(streamPath, `${JSON.stringify(streamEvent)}\n`)
   }
 
   /** Rebuild a bounded window of the working trace from the thread's durable
@@ -22255,10 +22276,22 @@ export class ChatEngine {
     // only ever appends, so without this a long-lived thread pins every event it
     // has streamed since launch. Compaction keeps the fold identical while
     // collapsing history to one snapshot per part the current turn still touches.
+    const retainedBefore = entry.events.length
     const compacted = compactTurnStreamEvents(entry.events, turnStartTs)
     if (compacted !== entry.events) {
       entry.events = compacted
       entry.foldKey = null
+    }
+    // The same compaction on disk. The file is append-only and nothing ever
+    // trimmed it, so a long-lived thread's log reached hundreds of megabytes and
+    // every reopen re-read and re-parsed all of it. Past the cap, rewrite the file
+    // to exactly the events the fold needs, through the append queue, reusing the
+    // bytes this load already parsed.
+    if (
+      tail.size >= ChatEngine.TURN_STREAM_COMPACT_BYTES &&
+      entry.events.length < retainedBefore
+    ) {
+      void this.compactTurnStream(streamPath, entry.consumedBytes, entry.events, turnStartTs)
     }
 
     // Fold the latest bound turn PLUS every unbound-turn event. Re-folding is
@@ -22271,6 +22304,79 @@ export class ChatEngine {
       entry.foldKey = foldKey
     }
     return pageTurnStreamParts(folded, entry.events, query)
+  }
+
+  /**
+   * Trim a thread's durable stream log to the events the fold needs.
+   *
+   * The in-memory compaction is what bounds the parse cache, and the events it
+   * keeps are exactly what a fresh load would read, so writing them back is a
+   * faithful file trim rather than a second, divergent notion of what matters.
+   * The rewrite runs on the file's append queue: an append queued before it is
+   * already on disk and folded in, and one queued after it lands after the trim.
+   * A load that advanced the cache while the rewrite waited aborts it, so the
+   * newer events can never be dropped.
+   */
+  private async compactTurnStream(
+    streamPath: string,
+    fromByte: number,
+    retained: TurnStreamEvent[],
+    turnStartTs: number | undefined
+  ): Promise<void> {
+    if (this.compactingTurnStreams.has(streamPath)) return
+    this.compactingTurnStreams.add(streamPath)
+    try {
+      await this.storage.rewriteRawFrom(streamPath, fromByte, (appended) => {
+        const entry = this.turnStreamCache.get(streamPath)
+        // A load advanced the cache while this rewrite was queued, so its newer
+        // events are not in `retained` and rewriting would drop them. The next
+        // load, which starts from the current offset, compacts instead.
+        if (!entry || entry.consumedBytes !== fromByte) return null
+        const events = retained.slice()
+        for (const line of appended.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          try {
+            const parsed = JSON.parse(trimmed) as TurnStreamEvent
+            if (parsed.kind === 'part.updated' || parsed.kind === 'part.delta') events.push(parsed)
+          } catch {
+            // A malformed line is dropped exactly as the loader drops it.
+          }
+        }
+        const compacted = compactTurnStreamEvents(events, turnStartTs)
+        const text = compacted.map((event) => `${JSON.stringify(event)}\n`).join('')
+        // Nothing to gain (the turn is one huge segment) leaves the file alone,
+        // so a pathological turn never makes every later load rewrite it.
+        if (text.length === 0 || text.length >= fromByte + appended.length) return null
+        entry.events = compacted
+        entry.consumedBytes = Buffer.byteLength(text)
+        entry.foldKey = null
+        entry.folded = null
+        return text
+      })
+    } catch (error) {
+      Logger.dev('Turn stream compaction failed:', error)
+    } finally {
+      this.compactingTurnStreams.delete(streamPath)
+    }
+  }
+
+  /**
+   * Drop one thread's durable stream log with the thread.
+   *
+   * The deletion removes the whole thread directory, so a parse cache keyed by
+   * the path would outlive the file, and a fire-and-forget append queued before
+   * the delete would recreate the directory after it. The tombstone makes the
+   * late append a no-op and the drain lets the writes already queued land before
+   * the directory is removed.
+   */
+  private async forgetThreadStream(projectId: string, threadId: string): Promise<void> {
+    const streamPath = turnStreamPath(projectId, threadId)
+    this.turnStreamCache.delete(streamPath)
+    this.deletedTurnStreams.add(streamPath)
+    await this.storage.drainRaw(streamPath).catch((error: unknown) => {
+      Logger.dev('Turn stream drain failed:', error)
+    })
   }
 
   /** Timestamp of the newest non-activity user message in the mirror   the

@@ -745,5 +745,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     } catch (error) {
       Logger.error('Update/notification startup failed (non-fatal):', error)
     }
+
+    // Reclaim directory trees whose database row is gone. Delayed past the
+    // interactive path and bounded per run, so a large backlog costs a
+    // background task instead of a slower launch.
+    setTimeout(() => {
+      void import('../storage/orphan-artifact-sweep')
+        .then(({ sweepOrphanProjectArtifacts }) => sweepOrphanProjectArtifacts(storage, database))
+        .catch((error: unknown) => Logger.dev('Orphan artifact sweep failed:', error))
+    }, 20_000)
   })()
 }
