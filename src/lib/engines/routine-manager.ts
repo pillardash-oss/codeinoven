@@ -111,8 +111,7 @@ export class RoutineManager {
     // flow saves the how-to and the schedule in one call. A due slot before
     // this moment was never really due, so it is neither fired nor recorded as
     // missed.
-    const becameRunnable =
-      !existing.howTo.trim() && (input.howTo ?? existing.howTo).trim() !== ''
+    const becameRunnable = !existing.howTo.trim() && (input.howTo ?? existing.howTo).trim() !== ''
     const updated: Routine = {
       ...existing,
       name: input.name?.trim() || existing.name,
@@ -121,6 +120,7 @@ export class RoutineManager {
       color: 'color' in input ? (input.color ?? undefined) : existing.color,
       icon: input.icon === null ? undefined : (input.icon ?? existing.icon),
       iconType: 'iconType' in input ? (input.iconType ?? undefined) : existing.iconType,
+      customSvg: 'customSvg' in input ? (input.customSvg ?? undefined) : existing.customSvg,
       schedule: input.schedule !== undefined ? input.schedule : existing.schedule,
       scheduleUpdatedAt: scheduleChanged || becameRunnable ? now : existing.scheduleUpdatedAt,
       howTo: input.howTo ?? existing.howTo,

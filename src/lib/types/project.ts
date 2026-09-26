@@ -63,6 +63,8 @@ export interface Project {
   color?: string
   /** Key of the selected SVG icon type (e.g. 'folder', 'code', 'terminal'). */
   iconType?: string
+  /** Sanitized custom SVG pasted by the user. Dynamic non-neutral colours use currentColor. */
+  customSvg?: string
   /** Optional while loading projects persisted before change tracking was introduced. */
   changeTrackingMode?: ChangeTrackingMode
   /** Whether the repo is known to have GitHub deployments; gates the Deployments tab. */
@@ -82,6 +84,7 @@ export interface CreateProjectInput {
   hidden?: boolean
   color?: string
   iconType?: string
+  customSvg?: string | null
   changeTrackingMode?: ChangeTrackingMode
   hasDeployments?: boolean
 }

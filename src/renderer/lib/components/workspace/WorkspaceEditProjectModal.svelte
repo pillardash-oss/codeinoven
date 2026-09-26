@@ -31,13 +31,23 @@
         name={dialogs.editProjectName}
         color={dialogs.editProjectColor}
         iconType={dialogs.editProjectIconType}
-        fallbackIconUrl={dialogs.editProjectPendingIcon?.dataUrl ??
-          (dialogs.editProject.icon ? (projectIcons.get(dialogs.editProject.id) ?? null) : null)}
+        customSvg={dialogs.editProjectCustomSvg}
+        allowCustomSvg
+        fallbackIconUrl={dialogs.editProjectCustomSvgSelected
+          ? null
+          : (dialogs.editProjectPendingIcon?.dataUrl ??
+            (dialogs.editProject.icon ? (projectIcons.get(dialogs.editProject.id) ?? null) : null))}
         onColorChange={(color) => (dialogs.editProjectColor = color)}
         onIconTypeChange={(iconType) => (dialogs.editProjectIconType = iconType)}
+        onCustomSvgChange={(svg) => {
+          dialogs.editProjectCustomSvg = svg
+          dialogs.editProjectCustomSvgSelected = Boolean(svg)
+        }}
         onReset={() => {
           dialogs.editProjectColor = dialogs.editProject?.color
           dialogs.editProjectIconType = dialogs.editProject?.iconType
+          dialogs.editProjectCustomSvg = dialogs.editProject?.customSvg
+          dialogs.editProjectCustomSvgSelected = false
           dialogs.editProjectPendingIcon = undefined
         }}
       />

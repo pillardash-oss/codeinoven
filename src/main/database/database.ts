@@ -848,9 +848,23 @@ export class Database {
       this.migrateRoutineAgentsAndPause(connection)
       this.migrateRoutineDescription(connection)
       this.migrateRoutineReporting(connection)
+      this.migrateCustomSvgIcons(connection)
       this.migrateRoutineScheduleAnchor(connection)
       this.migrateThreadDesignKind(connection)
     })()
+  }
+
+  private migrateCustomSvgIcons(connection: DatabaseType): void {
+    for (const table of ['projects', 'routines'] as const) {
+      const columns = new Set<string>(
+        (connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+          (column) => column.name
+        )
+      )
+      if (!columns.has('custom_svg')) {
+        connection.exec(`ALTER TABLE ${table} ADD COLUMN custom_svg TEXT`)
+      }
+    }
   }
 
   /**

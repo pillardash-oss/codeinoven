@@ -7,13 +7,7 @@ import type { RoutineSchedule } from './schedule'
  * other channel needs a connection the routine must have first.
  */
 export type RoutineDeliveryChannel =
-  | 'in-app'
-  | 'telegram'
-  | 'whatsapp'
-  | 'signal'
-  | 'slack'
-  | 'email'
-  | 'other'
+  'in-app' | 'telegram' | 'whatsapp' | 'signal' | 'slack' | 'email' | 'other'
 
 /** Where a routine's output goes, and to which concrete destination. */
 export interface RoutineDelivery {
@@ -67,6 +61,8 @@ export interface Routine {
   icon?: string
   /** Key of the selected SVG icon type (mirrors Project.iconType). */
   iconType?: string
+  /** Sanitized custom SVG pasted by the user. Dynamic non-neutral colours use currentColor. */
+  customSvg?: string
   /** Default schedule for the routine's tasks; a task may override it. */
   schedule?: RoutineSchedule | null
   /**
@@ -184,6 +180,8 @@ export interface UpdateRoutineInput {
   icon?: string | null
   /** `null` clears the SVG icon type. */
   iconType?: string | null
+  /** `null` clears the custom SVG icon. */
+  customSvg?: string | null
   schedule?: RoutineSchedule | null
   howTo?: string
   connections?: RoutineConnection[]

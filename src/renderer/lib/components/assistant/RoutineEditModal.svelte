@@ -21,6 +21,8 @@
   let description = $state('')
   let color = $state<string | undefined>(undefined)
   let iconType = $state<string | undefined>(undefined)
+  let customSvg = $state<string | undefined>(undefined)
+  let customSvgSelected = $state(false)
   /** Newly picked image, previewed locally until Save persists it. */
   let pendingIcon = $state<{ path: string; dataUrl: string } | undefined>(undefined)
   let busy = $state(false)
@@ -33,6 +35,8 @@
     description = routine.description ?? ''
     color = routine.color
     iconType = routine.iconType
+    customSvg = routine.customSvg
+    customSvgSelected = false
     pendingIcon = undefined
     error = null
   })
@@ -48,12 +52,15 @@
     // Read the file for local preview only; nothing is persisted until Save.
     const dataUrl = await invoke('file:readAsDataUrl', imagePath)
     if (!dataUrl) return
+    customSvgSelected = false
     pendingIcon = { path: imagePath, dataUrl }
   }
 
   function resetAppearance(): void {
     color = routine?.color
     iconType = routine?.iconType
+    customSvg = routine?.customSvg
+    customSvgSelected = false
     pendingIcon = undefined
   }
 
@@ -67,10 +74,14 @@
         name: name.trim(),
         description: description.trim() || null,
         color: color ?? null,
-        iconType: iconType ?? null
+        iconType: iconType ?? null,
+        customSvg: customSvg ?? null
       }
       let saved: Routine
-      if (pendingIcon) {
+      if (customSvgSelected && customSvg && target.icon) {
+        await assistantRoutines.clearRoutineIcon(target.id)
+        saved = await assistantRoutines.updateRoutine(target.id, appearance)
+      } else if (pendingIcon && !customSvgSelected) {
         // Persist the new image, then the appearance the form holds. An image
         // takes precedence over the SVG icon in the preview, but the colour and
         // icon type still save so clearing the image later restores them, and a
@@ -109,10 +120,20 @@
       {name}
       {color}
       {iconType}
-      fallbackIconUrl={previewIconUrl}
+      {customSvg}
+      allowCustomSvg
+      fallbackIconUrl={customSvgSelected ? null : previewIconUrl}
       onColorChange={(next) => (color = next)}
       onIconTypeChange={(next) => (iconType = next)}
-      onReset={resetAppearance}
+      onCustomSvgChange={(next) => {
+        customSvg = next
+        customSvgSelected = Boolean(next)
+      }}
+      onReset={() => {
+        resetAppearance()
+        customSvg = routine?.customSvg
+        customSvgSelected = false
+      }}
     />
 
     <button

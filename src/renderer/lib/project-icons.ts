@@ -2,6 +2,7 @@ import { invoke } from '$lib/ipc.svelte'
 import type { Project } from '$shared/types'
 import { getIconSvgDataUrl, generateInitialsIconSvg } from './project-svg-icons'
 import { pickColorForSeed } from './project-colors'
+import { getCustomSvgDataUrl } from '../../lib/custom-svg'
 
 /** Minimal project shape needed to resolve an icon. */
 export interface ProjectIconSource {
@@ -9,6 +10,7 @@ export interface ProjectIconSource {
   name: string
   color?: string
   iconType?: string
+  customSvg?: string
 }
 
 /**
@@ -16,9 +18,10 @@ export interface ProjectIconSource {
  *
  * Priority:
  * 1. Stored custom image icon (project.icon file)
- * 2. SVG icon type (project.iconType) with project colour
- * 3. Initials-on-colour-circle fallback using project colour (or deterministic auto-colour)
- * 4. null    the caller falls back to a generic icon
+ * 2. User-pasted SVG, tinted with the project colour
+ * 3. SVG icon type (project.iconType) with project colour
+ * 4. Initials-on-colour-circle fallback using project colour (or deterministic auto-colour)
+ * 5. null    the caller falls back to a generic icon
  */
 export function getProjectIcon(
   project: ProjectIconSource,
@@ -27,8 +30,11 @@ export function getProjectIcon(
   // Priority 1: custom image
   if (storedIconUrl) return storedIconUrl
 
-  // Priority 2: SVG icon type
   const color = project.color
+  const tint = color ?? pickColorForSeed(project.id)
+  if (project.customSvg) return getCustomSvgDataUrl(project.customSvg, tint)
+
+  // Priority 3: SVG icon type
   if (project.iconType && color) {
     return getIconSvgDataUrl(project.iconType, color)
   }

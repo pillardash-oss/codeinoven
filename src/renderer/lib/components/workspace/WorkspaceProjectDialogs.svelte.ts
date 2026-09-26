@@ -39,6 +39,8 @@ export class WorkspaceProjectDialogs {
   editProjectName = $state('')
   editProjectColor = $state<string | undefined>()
   editProjectIconType = $state<string | undefined>()
+  editProjectCustomSvg = $state<string | undefined>()
+  editProjectCustomSvgSelected = $state(false)
   editProjectPendingIcon = $state<{ path: string; dataUrl: string } | undefined>()
 
   constructor(options: WorkspaceProjectDialogsOptions) {
@@ -52,6 +54,8 @@ export class WorkspaceProjectDialogs {
     this.editProjectName = project.name
     this.editProjectColor = project.color
     this.editProjectIconType = project.iconType
+    this.editProjectCustomSvg = project.customSvg
+    this.editProjectCustomSvgSelected = false
     this.editProjectPendingIcon = undefined
     this.showEditModal = true
   }
@@ -68,11 +72,15 @@ export class WorkspaceProjectDialogs {
     const patch = {
       name: this.editProjectName.trim(),
       color: this.editProjectColor,
-      iconType: this.editProjectIconType
+      iconType: this.editProjectIconType,
+      customSvg: this.editProjectCustomSvg
     }
     let updated: Project
 
-    if (this.editProjectPendingIcon) {
+    if (this.editProjectCustomSvgSelected && this.editProjectCustomSvg && editProject.icon) {
+      await invoke('project:clearIcon', editProject.id)
+      updated = await invoke('project:update', editProject.id, patch)
+    } else if (this.editProjectPendingIcon && !this.editProjectCustomSvgSelected) {
       // Persist the new image, then the appearance the form holds. An image wins
       // the preview, but the colour and icon type still save so a colour picked
       // in the same session is never dropped.
@@ -82,7 +90,9 @@ export class WorkspaceProjectDialogs {
       const hadCustomIcon = !!editProject.icon
       // Only clear a custom image when switching to an SVG icon type.
       const switchingToSvgIcon =
-        this.editProjectIconType !== editProject.iconType && this.editProjectIconType !== undefined
+        (this.editProjectIconType !== editProject.iconType &&
+          this.editProjectIconType !== undefined) ||
+        this.editProjectCustomSvgSelected
 
       if (hadCustomIcon && switchingToSvgIcon) {
         await invoke('project:clearIcon', editProject.id)
@@ -141,6 +151,7 @@ export class WorkspaceProjectDialogs {
     // Read the file as a data URL for local preview only   never persist here
     const dataUrl = await invoke('file:readAsDataUrl', imagePath)
     if (!dataUrl) return
+    this.editProjectCustomSvgSelected = false
     this.editProjectPendingIcon = { path: imagePath, dataUrl }
   }
 

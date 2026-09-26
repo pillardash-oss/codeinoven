@@ -26,6 +26,7 @@ import type {
   RoutineTimeliness,
   UpdateRoutineInput
 } from '../../../lib/types'
+import { sanitizeCustomSvg } from '../../../lib/custom-svg'
 
 const CADENCES = new Set(['once', 'hourly', 'daily', 'weekdays', 'weekly'])
 const DELIVERY_CHANNELS = new Set<string>(ROUTINE_DELIVERY_CHANNEL_IDS)
@@ -245,6 +246,12 @@ function validateUpdateInput(value: unknown): UpdateRoutineInput {
       record.iconType === null
         ? null
         : requireString(record.iconType, 'Routine icon type').slice(0, 64)
+  }
+  if (record.customSvg !== undefined) {
+    patch.customSvg =
+      record.customSvg === null
+        ? null
+        : sanitizeCustomSvg(requireString(record.customSvg, 'Routine custom SVG'))
   }
   if (record.schedule !== undefined) patch.schedule = sanitizeSchedule(record.schedule)
   if (record.howTo !== undefined) {
