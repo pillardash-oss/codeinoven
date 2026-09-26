@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, FolderOpen, X } from '@lucide/svelte'
+  import { Check, Code, FolderOpen, X } from '@lucide/svelte'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import {
     PROJECT_SVG_ICONS,
@@ -19,6 +19,7 @@
     onColorChange: (color: string | undefined) => void
     onIconTypeChange: (iconType: string | undefined) => void
     onCustomSvgChange?: (svg: string | undefined) => void
+    onUploadImage?: () => void
     onReset: () => void
   }
 
@@ -32,6 +33,7 @@
     onColorChange,
     onIconTypeChange,
     onCustomSvgChange,
+    onUploadImage,
     onReset
   }: Props = $props()
 
@@ -39,6 +41,7 @@
   let hasAppearance = $derived(Boolean(color || iconType || customSvg || fallbackIconUrl))
   let pastedSvg = $state('')
   let customSvgError = $state<string | null>(null)
+  let showSvgInput = $state(false)
 
   function applyCustomSvg(): void {
     try {
@@ -46,6 +49,7 @@
       onCustomSvgChange?.(normalized)
       onIconTypeChange(undefined)
       customSvgError = null
+      showSvgInput = false
     } catch (error) {
       customSvgError = error instanceof Error ? error.message : 'Could not read this SVG'
     }
@@ -127,44 +131,76 @@
   </div>
 
   {#if allowCustomSvg}
-    <div class="space-y-2">
-      <label class="block text-xs font-medium text-muted" for="appearance-custom-svg"
-        >Custom SVG</label
-      >
-      <textarea
-        id="appearance-custom-svg"
-        class="min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 font-mono text-xs text-foreground placeholder:text-dimmed"
-        bind:value={pastedSvg}
-        placeholder="Paste SVG markup with a viewBox"
-        aria-describedby={customSvgError ? 'appearance-custom-svg-error' : undefined}></textarea>
-      {#if customSvgError}
-        <p id="appearance-custom-svg-error" class="text-xs text-danger" role="alert">
-          {customSvgError}
-        </p>
-      {/if}
-      <div class="flex items-center justify-between gap-2">
-        {#if customSvg}
-          <button
-            type="button"
-            class="rounded-lg px-2 py-1 text-xs text-muted hover:bg-elevated"
-            title="Remove custom SVG icon"
-            aria-label="Remove custom SVG icon"
-            onclick={() => onCustomSvgChange?.(undefined)}
-          >
-            <X size={12} />
-          </button>
-        {:else}<span></span>{/if}
+    <div class="flex gap-2">
+      {#if onUploadImage}
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          title="Apply pasted SVG icon"
-          onclick={applyCustomSvg}
+          class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Upload a custom image icon"
+          onclick={onUploadImage}
         >
-          <Check size={12} />
-          Use SVG
+          <FolderOpen size={12} />
+          Upload image
         </button>
-      </div>
+      {/if}
+      <button
+        type="button"
+        class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title={showSvgInput ? 'Hide custom SVG input' : 'Add a custom SVG icon'}
+        aria-expanded={showSvgInput}
+        aria-controls="appearance-custom-svg-panel"
+        onclick={() => {
+          showSvgInput = !showSvgInput
+          if (showSvgInput && customSvg) pastedSvg = customSvg
+        }}
+      >
+        <Code size={12} />
+        {showSvgInput ? 'Hide SVG' : customSvg ? 'Edit SVG' : 'Add SVG'}
+      </button>
     </div>
+    {#if showSvgInput}
+      <div id="appearance-custom-svg-panel" class="space-y-2">
+        <label class="block text-xs font-medium text-muted" for="appearance-custom-svg"
+          >Paste SVG</label
+        >
+        <textarea
+          id="appearance-custom-svg"
+          class="min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 font-mono text-xs text-foreground placeholder:text-dimmed"
+          bind:value={pastedSvg}
+          placeholder="Paste SVG markup with a viewBox"
+          aria-describedby={customSvgError ? 'appearance-custom-svg-error' : undefined}></textarea>
+        {#if customSvgError}
+          <p id="appearance-custom-svg-error" class="text-xs text-danger" role="alert">
+            {customSvgError}
+          </p>
+        {/if}
+        <div class="flex items-center justify-between gap-2">
+          {#if customSvg}
+            <button
+              type="button"
+              class="rounded-lg px-2 py-1 text-xs text-muted hover:bg-elevated"
+              title="Remove custom SVG icon"
+              aria-label="Remove custom SVG icon"
+              onclick={() => {
+                onCustomSvgChange?.(undefined)
+                pastedSvg = ''
+              }}
+            >
+              <X size={12} />
+            </button>
+          {:else}<span></span>{/if}
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title="Apply pasted SVG icon"
+            onclick={applyCustomSvg}
+          >
+            <Check size={12} />
+            Use SVG
+          </button>
+        </div>
+      </div>
+    {/if}
   {/if}
 
   {#if hasAppearance}

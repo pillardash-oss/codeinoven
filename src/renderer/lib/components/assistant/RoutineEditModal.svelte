@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { FolderOpen } from '@lucide/svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -116,35 +115,28 @@
       void save()
     }}
   >
-    <AppearancePicker
-      {name}
-      {color}
-      {iconType}
-      {customSvg}
-      allowCustomSvg
-      fallbackIconUrl={customSvgSelected ? null : previewIconUrl}
-      onColorChange={(next) => (color = next)}
-      onIconTypeChange={(next) => (iconType = next)}
-      onCustomSvgChange={(next) => {
-        customSvg = next
-        customSvgSelected = Boolean(next)
-      }}
-      onReset={() => {
-        resetAppearance()
-        customSvg = routine?.customSvg
-        customSvgSelected = false
-      }}
-    />
-
-    <button
-      type="button"
-      class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Upload a custom image as the routine icon"
-      onclick={() => void uploadImage()}
-    >
-      <FolderOpen size={12} />
-      Upload Image
-    </button>
+    {#if routine}
+      <AppearancePicker
+        {name}
+        {color}
+        {iconType}
+        {customSvg}
+        allowCustomSvg
+        fallbackIconUrl={customSvgSelected ? null : previewIconUrl}
+        onColorChange={(next) => (color = next)}
+        onIconTypeChange={(next) => (iconType = next)}
+        onCustomSvgChange={(next) => {
+          customSvg = next
+          customSvgSelected = Boolean(next)
+        }}
+        onUploadImage={() => void uploadImage()}
+        onReset={() => {
+          resetAppearance()
+          customSvg = routine?.customSvg
+          customSvgSelected = false
+        }}
+      />
+    {/if}
 
     <div>
       <label class="mb-1 block text-xs font-medium text-muted" for="edit-routine-name">
