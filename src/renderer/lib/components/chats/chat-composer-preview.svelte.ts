@@ -3,7 +3,8 @@ import { attachmentPreviewKind, fileUrlToPath } from '$lib/mime'
 import type { PromptAttachment } from '$shared/types'
 
 /**
- * Attachment preview cache for the composer.
+ * Attachment preview cache for the composer, and for the non-media attachments a
+ * sent message carries (PDF, document, Markdown, plain text).
  *
  * Binary media are held as blob (object) URLs, Word/ODT/PPTX documents as
  * converted HTML, and markdown/plain text as decoded strings. Everything is

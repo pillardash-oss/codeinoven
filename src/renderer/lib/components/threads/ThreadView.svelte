@@ -46,6 +46,8 @@
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import MediaPreview from '../chats/MediaPreview.svelte'
+  import AttachmentPreview from '../chats/AttachmentPreview.svelte'
+  import { createComposerAttachmentPreview } from '../chats/chat-composer-preview.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
@@ -88,7 +90,13 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
-  import { isImageMime, isVideoMime, isAudioMime, fileUrlToPath } from '$lib/mime'
+  import {
+    attachmentPreviewKind,
+    isImageMime,
+    isVideoMime,
+    isAudioMime,
+    fileUrlToPath
+  } from '$lib/mime'
   import {
     fastBaseModelId,
     fastVariantForModelId,
@@ -181,6 +189,7 @@
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
   import { toPosixPath } from '$shared/paths'
   import {
+    revealAttachmentFile,
     revealCitationFile,
     revealFileInAppTree,
     revealLocalFile,
@@ -1997,6 +2006,10 @@
   let threadViewElement = $state<HTMLDivElement | null>(null)
   let previewFile = $state<{ url: string; filename: string; mime: string } | null>(null)
   let imageUrls = new FileBlobUrlManager()
+  /** Fullscreen preview for a message attachment that carries no media to show
+   *  inline (PDF, document, Markdown, plain text): the same cache the composer
+   *  previews attachments with, keyed by the attachment's `file://` URL. */
+  const attachmentPreview = createComposerAttachmentPreview()
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
@@ -6597,6 +6610,25 @@
     void revealLocalFile(thread.projectId, url)
   }
 
+  /**
+   * Open a message attachment that has no inline thumbnail but that the
+   * fullscreen preview can render: a PDF, a Word/OpenDocument file, Markdown or
+   * plain text opens on the spot through the same cache the composer uses.
+   */
+  function previewDocumentPart(part: Extract<AgentPart, { type: 'file' }>): void {
+    attachmentPreview.open({ mime: part.mime, url: part.url, filename: part.filename })
+  }
+
+  /**
+   * Click behaviour for a message attachment nothing in the app can render: the
+   * reader has to find it on disk, so it is revealed in the project's file tree
+   * when it lives there and in the OS file manager when it does not. A file
+   * neither can show is reported as gone.
+   */
+  function revealSentAttachment(part: Extract<AgentPart, { type: 'file' }>): void {
+    void revealAttachmentFile(part.url)
+  }
+
   function citationForFilePart(
     part: Extract<AgentPart, { type: 'file' }>
   ): { path: string } | undefined {
@@ -10649,6 +10681,7 @@
   onDestroy(() => {
     releaseAnnotationHighlights(responseHighlightOwner, RESPONSE_HIGHLIGHT_NAME)
     imageUrls.destroy()
+    attachmentPreview.revokeAll()
     // Signal the main process that this thread's composer is gone so the
     // draft-timer never fires for a composer that no longer exists.
     publishDraftActivity(thread.projectId, thread.id, false)
@@ -10665,6 +10698,18 @@
       const target = previewFile
       if (target) void imageUrls.bindMedia(target.url, target.mime, el)
     }}
+  />
+{/if}
+
+{#if attachmentPreview.file}
+  {@const sentAttachment = attachmentPreview.file}
+  <AttachmentPreview
+    attachment={sentAttachment}
+    src={attachmentPreview.urls[sentAttachment.url]}
+    text={attachmentPreview.texts[sentAttachment.url]}
+    documentHtml={attachmentPreview.documents[sentAttachment.url]}
+    documentLoading={attachmentPreview.documentLoading[sentAttachment.url] ?? false}
+    onClose={() => attachmentPreview.close()}
   />
 {/if}
 
@@ -11019,6 +11064,36 @@
             </div>
           {/if}
           <!-- Messages -->
+          <!--
+            One chip for every attachment a message carries that is not an image
+            thumbnail. The icon is the only difference between the kinds, so it
+            travels as a value rather than as three copies of the same button.
+          -->
+          {#snippet filePartChip(
+            name: string,
+            kind: 'video' | 'audio' | 'renderable' | 'opaque',
+            action: string,
+            onclick: () => void
+          )}
+            <button
+              type="button"
+              class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+              title={action}
+              aria-label={action}
+              {onclick}
+            >
+              {#if kind === 'video'}
+                <Video size={11} class="shrink-0" />
+              {:else if kind === 'audio'}
+                <AudioLines size={11} class="shrink-0" />
+              {:else if kind === 'renderable'}
+                <FileTypeIcon path={name} size={12} class="shrink-0" />
+              {:else}
+                <FileText size={11} class="shrink-0" />
+              {/if}
+              <span class="max-w-32 truncate">{name}</span>
+            </button>
+          {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
             {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
             {#if msg.role === 'user'}
@@ -11153,6 +11228,13 @@
                                 : isAudioMime(part.mime)
                                   ? 'audio'
                                   : null}
+                              <!-- Kinds with no inline thumbnail but a preview we
+                                   can render: PDF, document, Markdown, text. -->
+                              {@const renderable =
+                                !mediaKind &&
+                                Boolean(attachmentPreviewKind(part.mime, part.filename ?? ''))}
+                              {@const partName =
+                                part.filename ?? part.url.split('/').pop() ?? 'file'}
                               {#if imageFile}
                                 <FileCitationContextMenu
                                   projectId={thread.projectId}
@@ -11197,44 +11279,41 @@
                                   projectId={thread.projectId}
                                   citation={citationForFilePart(part)}
                                 >
-                                  <button
-                                    type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
-                                    title="Preview {part.filename ?? mediaKind}"
-                                    aria-label="Preview {part.filename ?? mediaKind}"
-                                    onclick={() =>
+                                  {@render filePartChip(
+                                    partName,
+                                    mediaKind,
+                                    `Preview ${partName}`,
+                                    () =>
                                       (previewFile = {
                                         url: part.url,
                                         filename: part.filename ?? mediaKind,
                                         mime: part.mime
-                                      })}
-                                  >
-                                    {#if mediaKind === 'video'}
-                                      <Video size={11} class="shrink-0" />
-                                    {:else}
-                                      <AudioLines size={11} class="shrink-0" />
-                                    {/if}
-                                    <span class="max-w-32 truncate"
-                                      >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
-                                    >
-                                  </button>
+                                      })
+                                  )}
+                                </FileCitationContextMenu>
+                              {:else if renderable}
+                                <FileCitationContextMenu
+                                  projectId={thread.projectId}
+                                  citation={citationForFilePart(part)}
+                                >
+                                  {@render filePartChip(
+                                    partName,
+                                    'renderable',
+                                    `Preview ${partName}`,
+                                    () => previewDocumentPart(part)
+                                  )}
                                 </FileCitationContextMenu>
                               {:else}
                                 <FileCitationContextMenu
                                   projectId={thread.projectId}
                                   citation={citationForFilePart(part)}
                                 >
-                                  <button
-                                    type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
-                                    title={`Open ${part.filename ?? part.url.split('/').pop() ?? 'file'}`}
-                                    onclick={() => openFilePart(part.url)}
-                                  >
-                                    <FileText size={11} class="shrink-0" />
-                                    <span class="max-w-32 truncate"
-                                      >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
-                                    >
-                                  </button>
+                                  {@render filePartChip(
+                                    partName,
+                                    'opaque',
+                                    `Reveal ${partName}`,
+                                    () => revealSentAttachment(part)
+                                  )}
                                 </FileCitationContextMenu>
                               {/if}
                             {/if}

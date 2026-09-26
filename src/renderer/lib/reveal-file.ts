@@ -211,7 +211,8 @@ export async function revealLocalFile(projectId: string | undefined, url: string
 }
 
 /**
- * Reveal one composer attachment on disk.
+ * Reveal one attachment file on disk: a composer attachment, or the same file
+ * once it has been sent as a message.
  *
  * Main decides whether the file sits inside a project root, because attachments
  * live in app scratch space rather than in the project's own tree: a local
@@ -221,6 +222,9 @@ export async function revealLocalFile(projectId: string | undefined, url: string
  * which is the only surface that can show it. `shell:revealExternalPath` takes
  * an existing absolute path and never reads its contents, so no scope grant is
  * needed for that half.
+ *
+ * Both probes are existence-based, so a file neither tree can show is reported
+ * as gone: that is what a deleted or moved attachment looks like.
  */
 export async function revealAttachmentFile(url: string): Promise<void> {
   if (!url.startsWith('file://')) return
@@ -237,7 +241,7 @@ export async function revealAttachmentFile(url: string): Promise<void> {
 
   const revealed = await invoke('shell:revealExternalPath', absolutePath).catch(() => false)
   if (!revealed) {
-    toast.error('This file is outside every project or no longer exists on disk.')
+    toast.info("File doesn't exist, it may have been deleted.")
   }
 }
 
