@@ -9,16 +9,22 @@
  *
  * Bucket keys, served from {@link DOWNLOAD_MIRROR_URL}:
  *
- *   <channel>/codeinoven-arm64.dmg   the installers, named without a version:
- *                                    a channel serves one release, so its file
+ *   <channel>/codeinoven-arm64.dmg   the artifacts, named without a version:
+ *   <channel>/codeinoven-arm64.zip   the installers a user downloads by hand,
+ *   <channel>/codeinoven-setup.exe   plus the macOS `.zip`, which is the payload
+ *   <channel>/codeinoven.AppImage    electron-updater installs an update from.
+ *   <channel>/codeinoven.deb         A channel serves one release, so its file
  *                                    names are the channel's names and a link
  *                                    to the mirror never rots
  *   <channel>/latest-mac.yml         the release's own update feeds, per platform
  *   <channel>/latest.yml
  *   <channel>/latest-linux.yml
- *   <channel>/SHA256SUMS.txt         checksums of the installers, for the names
+ *   <channel>/SHA256SUMS.txt         checksums of the artifacts, for the names
  *                                    the mirror actually serves
  *   <channel>/RELEASE.json           machine-readable manifest of that release
+ *
+ * macOS therefore carries two artifacts in a channel, `.dmg` and `.zip`: a
+ * consumer of `RELEASE.json` selects by `kind`, never by `platform` alone.
  *
  * Each channel directory is the channel's current download set: one release,
  * under versionless names, plus the feeds and the manifest that describe it. A

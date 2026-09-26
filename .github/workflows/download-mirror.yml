@@ -1,14 +1,15 @@
 name: Download mirror
 
 # Copy a published release to our own download origin (dl.codeinoven.com) so
-# users stop downloading installers from GitHub Releases, which is slow.
+# users stop downloading installers, and the app stops downloading its macOS
+# auto-update payload, from GitHub Releases, which is slow.
 #
 # Nothing is rebuilt here: the job downloads the assets GitHub already
-# published, verifies every installer against the release's own SHA256SUMS.txt,
-# aborts any unfinished multipart upload an earlier run left in that channel,
-# uploads them with their update feeds and a RELEASE.json manifest, HEAD-checks
-# what the origin actually serves, and deletes the previous release of that
-# channel, so the bucket holds only the release it serves (GitHub Releases is
+# published, verifies every mirrored artifact against the release's own
+# SHA256SUMS.txt, aborts any unfinished multipart upload an earlier run left in
+# that channel, uploads them with their update feeds and a RELEASE.json manifest,
+# HEAD-checks what the origin actually serves, and deletes the previous release of
+# that channel, so the bucket holds only the release it serves (GitHub Releases is
 # the archive). See scripts/publish-release-mirror.ts and
 # docs/DOWNLOAD-MIRROR.md.
 #
@@ -67,7 +68,9 @@ jobs:
   mirror:
     name: Mirror release to dl.codeinoven.com
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Five artifacts per release, about 965 MiB of multipart uploads, plus the
+    # read-back verification and the sweep.
+    timeout-minutes: 60
     if: ${{ github.event_name == 'workflow_dispatch' || (vars.DOWNLOAD_MIRROR_S3_ENDPOINT != '' && vars.DOWNLOAD_MIRROR_S3_BUCKET != '') }}
     env:
       DOWNLOAD_MIRROR_S3_ENDPOINT: ${{ vars.DOWNLOAD_MIRROR_S3_ENDPOINT }}

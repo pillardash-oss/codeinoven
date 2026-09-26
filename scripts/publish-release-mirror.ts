@@ -12,10 +12,11 @@
  *
  * Bucket keys (served from `DOWNLOAD_MIRROR_URL`, see src/lib/download-mirror.ts):
  *
- *   <channel>/codeinoven-arm64.dmg   the installers the download page offers,
- *                                    one per platform and architecture, with no
- *                                    version in the name: a channel serves one
- *                                    release, so a link never rots
+ *   <channel>/codeinoven-arm64.dmg   one file per artifact the app or a user
+ *   <channel>/codeinoven-arm64.zip   fetches: the installers the download page
+ *   <channel>/codeinoven-setup.exe   offers, plus the macOS auto-update `.zip`.
+ *   <channel>/codeinoven.AppImage    No version in any name: a channel serves
+ *   <channel>/codeinoven.deb         one release, so a link never rots
  *   <channel>/latest-mac.yml         the release's own update feeds, per platform
  *   <channel>/latest.yml
  *   <channel>/latest-linux.yml
@@ -23,12 +24,16 @@
  *                                    the versionless names the mirror serves
  *   <channel>/RELEASE.json           machine-readable manifest for download pages
  *
- * The mirror carries only what a user downloads by hand (see
- * MIRRORED_EXTENSIONS); the macOS auto-update `.zip` and the differential
- * `.blockmap` files stay on GitHub, which is the archive, so nothing is
- * duplicated at a size that matters. `RELEASE.json` records the GitHub asset name
- * each served file came from, so the app can match a versioned update-feed entry
- * against a versionless mirror file.
+ * The mirror carries every artifact the app itself asks for, plus the installers a
+ * user downloads by hand (see MIRRORED_EXTENSIONS): the macOS `.zip` is
+ * electron-updater's auto-update payload, so leaving it behind sent every mac
+ * in-app update to GitHub Releases while Windows and Linux came from here. Only
+ * the differential `.blockmap` files stay on GitHub, which is the archive, because
+ * the app pre-downloads whole artifacts and never asks for one. `RELEASE.json`
+ * records the GitHub asset name each served file came from, so the app can match a
+ * versioned update-feed entry against a versionless mirror file. macOS therefore
+ * has two artifacts in a channel (`.dmg` and `.zip`): a consumer of
+ * `RELEASE.json` selects by `kind`, never by `platform` alone.
  *
  * Upload order matters: artifacts first, the feeds and manifest last, so a
  * consumer never sees a manifest pointing at a file that is not there yet. Every
@@ -36,12 +41,12 @@
  * exactly the release it serves: versionless names mean a new release overwrites
  * the previous one, and the sweep deletes whatever the channel no longer serves
  * (the release just replaced, or a leftover from an earlier layout such as a
- * versioned name, a macOS zip or a blockmap). Publishing a release older than the
+ * versioned name or a differential blockmap). Publishing a release older than the
  * one the channel serves is refused unless `--allow-downgrade` is passed, so a
  * mis-typed backfill cannot replace the live download with a stale one. No older
  * version is kept on the mirror: GitHub Releases is the archive.
  *
- * Run this from CI. A release is about 750 MB of multipart uploads, which a home
+ * Run this from CI. A release is about 965 MiB of multipart uploads, which a home
  * uplink turns into an hour-long job. A run that is killed leaves its unfinished
  * multipart uploads behind: the key stays unreadable (the origin answers 404 for
  * it), but the parts are billed and the bucket lists them as a half-uploaded
@@ -143,33 +148,33 @@ const EXTENSION_KINDS: Readonly<
 }
 
 /**
- * The installers the mirror carries: exactly one per platform a user installs
- * from the download page (macOS `.dmg`, Windows NSIS `.exe`, Linux `.AppImage`
- * and `.deb`).
+ * What the mirror carries: one file per artifact, each under its versionless name
+ * (`codeinoven-arm64.dmg`), so a link for a platform is the same from release to
+ * release.
  *
- * GitHub Releases stays the archive, so anything the page does not offer stays
- * on GitHub instead of being duplicated here:
- *
- * - the macOS `.zip` is electron-updater's auto-update payload. The app's trust
- *   check only uses the mirror when its manifest lists the exact file the update
- *   feed points at, so with no zip here a mac update downloads from GitHub (see
+ * - the installers a user installs from the download page: macOS `.dmg`, Windows
+ *   NSIS `.exe`, Linux `.AppImage` and `.deb`;
+ * - the macOS `.zip`, which is electron-updater's auto-update payload. The app's
+ *   trust check only uses the mirror when its manifest lists the exact file the
+ *   update feed points at, and darwin prefers the `.zip` over the `.dmg`, so
+ *   leaving the zip out sent every mac in-app update to GitHub Releases while
+ *   Windows and Linux came from the mirror (see
  *   `src/main/notifications/updater-download.ts`).
- * - `.blockmap` files only serve differential downloads. The app pre-downloads
- *   the whole artifact into electron-updater's pending cache, so it never asks
- *   for one.
  *
- * Each one is uploaded under its versionless name (`codeinoven-arm64.dmg`), so
- * the download link for a platform is the same from release to release.
+ * `.blockmap` files are the one thing deliberately left behind: they only serve
+ * differential downloads, and the app pre-downloads the whole artifact into
+ * electron-updater's pending cache, so it never asks for one.
  */
-const MIRRORED_EXTENSIONS: readonly string[] = ['dmg', 'exe', 'appimage', 'deb']
+const MIRRORED_EXTENSIONS: readonly string[] = ['dmg', 'zip', 'exe', 'appimage', 'deb']
 
 /**
- * Every installer extension electron-builder has produced for this app, mirrored
- * or not. {@link MIRRORED_EXTENSIONS} is what the mirror carries; this list is
- * what a channel listing is scanned for, so the sweep recognizes an object from
- * the earlier versioned layout (including the macOS zip) as an installer.
+ * Every installer extension a release asset can carry, mirrored or not: whatever
+ * {@link classifyArtifact} recognizes. This is what a channel listing is scanned
+ * for, so the sweep recognizes an object from the earlier versioned layout (a
+ * versioned zip included) as an installer, and it is derived from the classifier
+ * rather than repeated, so it cannot fall out of step with it.
  */
-const INSTALLER_EXTENSIONS: readonly string[] = ['dmg', 'zip', 'exe', 'appimage', 'deb']
+const INSTALLER_EXTENSIONS: readonly string[] = Object.keys(EXTENSION_KINDS)
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   dmg: 'application/x-apple-diskimage',
@@ -502,7 +507,7 @@ export function servedVersion(keys: readonly string[]): string | null {
  * installer object the channel holds that this run did not write. A channel
  * serves one release under versionless names, so anything else in it is either
  * the release just replaced (same keys, overwritten) or a leftover from an
- * earlier layout: a versioned file name, the macOS zip, a differential blockmap.
+ * earlier layout: a versioned file name, or a differential blockmap.
  *
  * Feeds, checksums, the manifest and anything unrecognized are never deleted, so
  * a sweep can neither break the channel nor leave it feedless; unrecognized
@@ -817,8 +822,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return fail(`No installer artifacts found in ${artifactsDir}`)
   }
 
-  // Only the installers the download page offers are copied here; the rest stay
-  // on GitHub, which is the archive (see MIRRORED_EXTENSIONS).
+  // Every artifact the mirror carries is copied here; `.blockmap` files were
+  // filtered out above. This filter is the single place that decides what is
+  // mirrored, so a classifier extension that was added without being mirrored is
+  // skipped and reported instead of silently uploaded (see MIRRORED_EXTENSIONS).
   const mirrored = installers.filter((installer) => isMirroredArtifact(installer.name))
   if (mirrored.length === 0) {
     return fail(
