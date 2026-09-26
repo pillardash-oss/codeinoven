@@ -120,6 +120,7 @@
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
     isOrchestrationChildThread,
+    conversationScopeId,
     threadTracksReadStatus,
     usesThreadWorkspaceMount
   } from '$shared/types'
@@ -1421,6 +1422,21 @@
   let assistantRunsByRoutine = $derived(groupRunsByRoutine(assistantThreads))
   /** Every run thread, for the header search's Runs results. */
   let assistantRuns = $derived(assistantThreads.filter((thread) => thread.assistantTaskId))
+  /**
+   * Every assistant thread's browser scope, keyed by thread id: a routine's
+   * how-to host and each of its runs share the routine, and a routine-less task
+   * owns its own. The sidebar resolves a tab's scope through this, so switching
+   * between a routine's threads keeps the browser those threads opened instead
+   * of closing it.
+   */
+  const assistantBrowserScopes = $derived.by(() => {
+    const scopes = new SvelteMap<string, string>()
+    for (const thread of allThreads) {
+      if (thread.projectId !== ASSISTANT_SPACE_ID) continue
+      scopes.set(thread.id, conversationScopeId(thread.projectId, thread.id, thread.routineId))
+    }
+    return scopes
+  })
   let assistantRoutineList = $derived(assistantRoutines.routines)
 
   let threadsByProject = $derived.by(() => {
@@ -1734,6 +1750,17 @@
         void workspaceState.refreshSourceProcessCount(projectId, threadId)
       }
     })
+  })
+
+  $effect(() => {
+    // The sidebar owns the browser tab list but holds no thread rows, so it asks
+    // the workspace which conversation a tab belongs to. The resolver reads the
+    // scope index lazily, so registering it once is enough.
+    contextSidebarState.setThreadBrowserScopeResolver((projectId, threadId) =>
+      projectId === ASSISTANT_SPACE_ID
+        ? (assistantBrowserScopes.get(threadId) ?? threadId)
+        : conversationScopeId(projectId, threadId, null)
+    )
   })
 
   $effect(() => {

@@ -16,7 +16,7 @@ import {
   type TerminalContextTab,
   type TerminalPlacement
 } from './context-sidebar-types'
-import type { AgentSubagentActivity, ThreadSettings } from '$shared/types'
+import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } from '$shared/types'
 
 export type {
   ActionsContextTab,
@@ -55,6 +55,17 @@ class ContextSidebarState {
    *  instead of an empty one. See `activeThreadRowId`. */
   private activeRowThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
+  /**
+   * How the sidebar resolves a thread's browser scope. The sidebar holds no
+   * thread rows, and the workspace owns the only list of them, so the workspace
+   * registers this one resolver: it maps a thread to the conversation that owns
+   * its browser tabs (see `conversationScopeId`), which is what makes a
+   * routine's threads keep one browser across a thread switch. Until it is
+   * registered, a conversation is scoped by its own thread, which is the
+   * pre-routine behaviour.
+   */
+  private threadBrowserScopeResolver: ((projectId: string, threadId: string) => string) | null =
+    null
   width = $state(480)
   terminalHeight = $state(320)
   terminalPlacement = $state<TerminalPlacement>(loadTerminalPlacement())
@@ -82,10 +93,24 @@ class ContextSidebarState {
   private browser = new SidebarBrowserTabs({
     activeProjectId: () => this.activeProjectId,
     activeThreadId: () => this.activeThreadId,
+    threadScopeId: (projectId, threadId) => this.threadBrowserScopeId(projectId, threadId),
     clearNotifications: () => {
       this.notificationsVisible = false
     }
   })
+
+  /** Register the workspace's thread-to-conversation resolver (see
+   *  `threadBrowserScopeResolver`). */
+  setThreadBrowserScopeResolver(resolver: (projectId: string, threadId: string) => string): void {
+    this.threadBrowserScopeResolver = resolver
+  }
+
+  private threadBrowserScopeId(projectId: string, threadId: string): string {
+    return (
+      this.threadBrowserScopeResolver?.(projectId, threadId) ??
+      conversationScopeId(projectId, threadId, null)
+    )
+  }
 
   get tabs(): ContextSidebarTab[] {
     return [

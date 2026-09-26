@@ -10,14 +10,35 @@ export const ASSISTANT_SPACE_ID = 'assistant'
 
 /**
  * Fixed hidden containers that hold many independent conversations under one
- * project id. Every per-conversation surface keys off the open thread inside
- * them: a standalone chat or an assistant task owns its own file mount and its
- * own browser tabs, so switching conversations swaps both instead of leaking
+ * project id. Every per-conversation surface keys off the open thread's
+ * conversation scope inside them: a standalone chat owns its own file mount and
+ * its own browser tabs, while an assistant routine's threads (its how-to host
+ * and the runs it fires) share one of each, because a routine is one container
+ * the user set up. Switching conversations swaps the scope instead of leaking
  * one conversation's state into another. A real project keeps one shared
  * surface across all of its threads.
  */
 export function isConversationContainer(projectId: string): boolean {
   return projectId === INBOX_PROJECT_ID || projectId === ASSISTANT_SPACE_ID
+}
+
+/**
+ * The conversation a thread's browser tabs belong to. A project's threads share
+ * the project, exactly as they share its workspace. An assistant thread shares
+ * its routine with that routine's other threads, which is the same owner the
+ * `assistant-cwd/<routineId ?? threadId>` mount uses, so a browser opened by one
+ * run of a routine stays on screen in its how-to host and in its other runs. A
+ * routine-less assistant task and an inbox chat are independent conversations
+ * and each own their own.
+ */
+export function conversationScopeId(
+  projectId: string,
+  threadId: string,
+  routineId?: string | null
+): string {
+  if (projectId === ASSISTANT_SPACE_ID) return routineId ?? threadId
+  if (projectId === INBOX_PROJECT_ID) return threadId
+  return projectId
 }
 
 /**
