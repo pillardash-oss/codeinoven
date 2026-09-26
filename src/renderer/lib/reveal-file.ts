@@ -129,6 +129,25 @@ export async function openProjectFileFromAbsolutePath(
 }
 
 /**
+ * Reveal a file main already resolved to a project (`project:findFileOwner`) in
+ * that project's own file tree. Like {@link openProjectFileFromAbsolutePath} the
+ * relative path is given rather than derived from the *active* project, so a
+ * reveal lands in the right tree whichever project happens to be on screen.
+ * Returns whether the entry resolved, so the caller can fall back to the OS file
+ * manager instead of leaving a click with no visible result.
+ */
+export async function revealProjectFileFromAbsolutePath(
+  projectId: string,
+  relativePath: string
+): Promise<boolean> {
+  const entry = await exactEntry(projectId, relativePath)
+  if (!entry) return false
+  await ensureProjectFilesReady(projectId)
+  await revealEntry(projectId, entry)
+  return true
+}
+
+/**
  * Bring one document on screen to be annotated: reveal it in the project's file
  * tree and open it in the annotate view, which is the only surface that draws a
  * document annotation's passage and note. Returns whether the document was
@@ -188,6 +207,37 @@ export async function revealLocalFile(projectId: string | undefined, url: string
   const revealed = await invoke('shell:revealExternalPath', absolutePath).catch(() => false)
   if (!revealed) {
     toast.error('This local file is outside the active project or no longer exists.')
+  }
+}
+
+/**
+ * Reveal one composer attachment on disk.
+ *
+ * Main decides whether the file sits inside a project root, because attachments
+ * live in app scratch space rather than in the project's own tree: a local
+ * project keeps them in `.cio/tmp/attachments/<threadId>`, a chat keeps them
+ * under the config root. A file inside a project root is revealed in that
+ * project's file tree; every other existing file goes to the OS file manager,
+ * which is the only surface that can show it. `shell:revealExternalPath` takes
+ * an existing absolute path and never reads its contents, so no scope grant is
+ * needed for that half.
+ */
+export async function revealAttachmentFile(url: string): Promise<void> {
+  if (!url.startsWith('file://')) return
+
+  const absolutePath = fileUrlToPath(url)
+  const owner = await invoke('project:findFileOwner', absolutePath).catch(() => null)
+  if (owner) {
+    const revealed = await revealProjectFileFromAbsolutePath(
+      owner.projectId,
+      owner.relativePath
+    ).catch(() => false)
+    if (revealed) return
+  }
+
+  const revealed = await invoke('shell:revealExternalPath', absolutePath).catch(() => false)
+  if (!revealed) {
+    toast.error('This file is outside every project or no longer exists on disk.')
   }
 }
 
