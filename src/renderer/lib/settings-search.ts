@@ -2,6 +2,7 @@ import {
   BrainCircuit,
   ChartColumn,
   Cloud,
+  FolderTree,
   HeartPulse,
   Info,
   Keyboard,
@@ -71,6 +72,24 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Agent names, audits, and per-agent behavior.',
     keywords: ['workers', 'audit'],
     icon: UsersRound
+  },
+  {
+    id: 'design-work-folders',
+    section: 'design',
+    blockId: 'design-work-folders',
+    title: 'Work folders',
+    description: 'Where designs and videos are saved, and whether Git tracks them.',
+    keywords: [
+      'design folder',
+      'video folder',
+      'save path',
+      'version control',
+      'git',
+      'commit',
+      'move',
+      'output'
+    ],
+    icon: FolderTree
   },
   {
     id: 'design-generation',

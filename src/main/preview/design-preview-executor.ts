@@ -2,6 +2,7 @@ import { requireLocalProject } from '../../lib/project-artifacts'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import type { BrowserService } from '../browser/browser-service'
 import { openDesignPreview } from '../design/design-preview-session'
+import { currentWorkRoot } from '../design/work-roots-state'
 import type { Database } from '../database/database'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 import type { DirectoryPreviewService } from './directory-preview-service'
@@ -64,6 +65,7 @@ export function createDesignPreviewExecutor(
         threadId: context.threadId,
         directory: input['directory'],
         entry: input['entry'],
+        defaultRoot: currentWorkRoot('design'),
         attention,
         reveal: false
       }

@@ -64,6 +64,7 @@
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
+  import DesignWorkFoldersSettings from './DesignWorkFoldersSettings.svelte'
   import MediaGenerationSettings from './MediaGenerationSettings.svelte'
   import PrototypeCdnSettings from './PrototypeCdnSettings.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
@@ -1111,12 +1112,17 @@
       <div class="p-6 pb-24">
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">Design</h1>
-          <p class="mt-0.5 text-sm text-muted">Assign a model to each kind of design work.</p>
+          <p class="mt-0.5 text-sm text-muted">
+            Where design work is saved, and which model does each kind of it.
+          </p>
           {#if error}
             <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {error}
             </p>
           {/if}
+        </div>
+        <div class="mb-6">
+          <DesignWorkFoldersSettings {config} {settingsReady} {updateConfig} />
         </div>
         <div class="mb-6">
           <MediaGenerationSettings {config} {settingsReady} {updateConfig} />

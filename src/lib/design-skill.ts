@@ -1,5 +1,11 @@
 import { expertDelegationGuidance, NO_EXPERTS, type EffectiveExperts } from './experts'
 import {
+  DEFAULT_WORK_ROOTS,
+  workRootGuidance,
+  workRootForKind,
+  type WorkRoots
+} from './design/work-roots'
+import {
   DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnOrigins,
   type PrototypeCdnPolicy
@@ -48,14 +54,16 @@ export const DESIGN_CAPABILITY_SUMMARY =
 export const DESIGN_CAPABILITY_SEARCH_QUERY = 'design'
 
 /**
- * Where a design goes when nobody names a folder.
+ * Where a design goes when nobody names a folder, which is the user's setting.
  *
- * `.cio/` is the app's scratch tree and is ignored by Git, so a design written
- * here is explorable work rather than a change to the product. Promoting it, by
- * moving it into the source tree and rebuilding it from the project's own
- * components, stays a deliberate act.
+ * Kept as a function rather than a constant for the same reason the paragraphs
+ * below are: a playbook that hard-coded the default would tell an agent to write
+ * into `.cio/designs` while the user had pointed the folder somewhere Git
+ * tracks, and the agent would oblige.
  */
-export const DESIGN_OUTPUT_ROOT = '.cio/designs'
+export function designOutputRoot(roots: WorkRoots = DEFAULT_WORK_ROOTS): string {
+  return workRootForKind(roots, 'design')
+}
 
 /** The two sentences about external assets, built from the live policy. */
 function externalAssetGuidance(policy: PrototypeCdnPolicy): string {
@@ -89,14 +97,16 @@ export const DESIGN_CAPABILITY_DOCS = designCapabilityDocs({
 
 /**
  * The playbook handed back when the capability is activated. Kept as a function
- * because the external-asset paragraph is the live CDN policy and the delegation
- * section is the user's live experts; a stale copy of either is the drift both
- * resolvers exist to prevent.
+ * because the external-asset paragraph is the live CDN policy, the delegation
+ * section is the user's live experts, and the folder is the user's live setting;
+ * a stale copy of any of them is the drift those resolvers exist to prevent.
  */
 export function designCapabilityDocs(
   policy: PrototypeCdnPolicy,
-  experts: EffectiveExperts = NO_EXPERTS
+  experts: EffectiveExperts = NO_EXPERTS,
+  roots: WorkRoots = DEFAULT_WORK_ROOTS
 ): string {
+  const designRoot = designOutputRoot(roots)
   return `# Design studio
 
 Design interfaces as plain HTML, then look at them in this app while the turn is still running. A landing page, a marketing site, a dashboard, an app screen, a wireframe, a pitch: anything that is a screen rather than a program.
@@ -107,7 +117,7 @@ A project may hold no framework at all, sometimes not even a package.json. That 
 
 ## Where a design lives
 
-Write one design per folder under \`${DESIGN_OUTPUT_ROOT}/<name>/\`, with \`index.html\` as the entry file. The folder is served as a static site, so \`styles.css\`, \`app.js\`, SVGs and images can sit beside the entry file, and both relative paths (\`./styles.css\`) and root-absolute paths (\`/styles.css\`) resolve inside the folder. \`.cio/\` is ignored by Git, so a design stays scratch until the user asks for it in the source tree.
+Write one design per folder under \`${designRoot}/<name>/\`, with \`index.html\` as the entry file. The folder is served as a static site, so \`styles.css\`, \`app.js\`, SVGs and images can sit beside the entry file, and both relative paths (\`./styles.css\`) and root-absolute paths (\`/styles.css\`) resolve inside the folder. ${workRootGuidance(designRoot)}
 
 Do not write into \`.cio/specs/<feature>/prototypes/\`. That folder belongs to the engineering prototype phase, which finalizes and registers whatever it finds there.
 
@@ -115,7 +125,7 @@ Do not write into \`.cio/specs/<feature>/prototypes/\`. That folder belongs to t
 
 Invoke this capability with operation \`preview\`:
 
-- \`directory\`, project-relative, defaults to \`${DESIGN_OUTPUT_ROOT}\`.
+- \`directory\`, project-relative, defaults to \`${designRoot}\`.
 - \`entry\`, a file inside that folder, defaults to \`index.html\` when that file exists. With no entry file the app opens its own file listing.
 - \`attention\`, \`focus\` (the default) to bring the tab to the user, \`background\` to leave them where they are.
 

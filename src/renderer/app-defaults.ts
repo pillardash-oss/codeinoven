@@ -1,4 +1,5 @@
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
+import { DEFAULT_WORK_ROOTS } from '$shared/design/work-roots'
 import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '$shared/prototypes/prototype-cdn'
 import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
 import {
@@ -25,6 +26,7 @@ export const defaultConfig: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
   design: { assignments: [] },
+  workRoots: { ...DEFAULT_WORK_ROOTS },
   mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,

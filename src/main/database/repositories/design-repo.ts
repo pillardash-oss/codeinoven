@@ -140,6 +140,33 @@ export class DesignRepo {
     this.db.run('DELETE FROM thread_designs WHERE thread_id = ?', threadId)
   }
 
+  /**
+   * Re-point this project's rows at the folder they now live in.
+   *
+   * The row names a folder, and a folder moves when the user points the work root
+   * somewhere else. Without this the board would open the old path, which no longer
+   * exists, for every thread whose work had moved correctly on disk. Only rows under
+   * the old root are touched, and the entry stays as it was: it is spelled inside the
+   * folder, and the folder is what moved.
+   */
+  rebaseRoot(input: { projectId: string; from: string; to: string }): number {
+    const rows = this.db.all<{ thread_id: string; directory: string }>(
+      'SELECT thread_id, directory FROM thread_designs WHERE project_id = ?',
+      input.projectId
+    )
+    let updated = 0
+    for (const row of rows) {
+      if (row.directory !== input.from && !row.directory.startsWith(`${input.from}/`)) continue
+      this.db.run(
+        'UPDATE thread_designs SET directory = ? WHERE thread_id = ?',
+        `${input.to}${row.directory.slice(input.from.length)}`,
+        row.thread_id
+      )
+      updated += 1
+    }
+    return updated
+  }
+
   deleteProject(projectId: string): void {
     this.db.run('DELETE FROM thread_designs WHERE project_id = ?', projectId)
   }

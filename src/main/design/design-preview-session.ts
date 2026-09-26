@@ -4,9 +4,9 @@ import type { DirectoryPreviewService } from '../preview/directory-preview-servi
 import {
   SERVED_FOLDER_ENTRY_FILE,
   resolveServedEntry,
+  resolveServedFolder,
   servedFileUrl
 } from '../preview/served-folder'
-import { resolveDesignDirectory } from './design-paths'
 
 /**
  * One way to put a design on screen.
@@ -37,8 +37,15 @@ export interface DesignPreviewRequest {
    * IPC argument go through one check.
    */
   directory: unknown
-  /** Project-relative entry inside the folder, or null/undefined for the default. */
+  /**
+   * Project-relative entry inside the folder, or null/undefined for the default.
+   */
   entry: unknown
+  /**
+   * The folder to default to when the caller names none, which is the user's
+   * configured design root.
+   */
+  defaultRoot: string
   /** How the capability's own open behaves when it has to create the tab. */
   attention: 'focus' | 'background'
   /** Bring the tab to the user even when it already existed. */
@@ -75,7 +82,7 @@ export async function openDesignPreview(
   deps: DesignPreviewDeps,
   request: DesignPreviewRequest
 ): Promise<DesignPreviewResult> {
-  const directory = resolveDesignDirectory(request.projectPath, request.directory)
+  const directory = resolveServedFolder(request.projectPath, request.directory, request.defaultRoot)
   const registration = await deps.previews.open(directory.absolute).catch((error: unknown) => {
     throw new Error(
       `The design folder "${directory.display}" is not there yet. Write the design into it first, or name a folder that exists. Underlying error: ${error instanceof Error ? error.message : String(error)}`

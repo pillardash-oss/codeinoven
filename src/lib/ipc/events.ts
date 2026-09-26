@@ -58,6 +58,12 @@ export const IPC_EVENT_CONTRACT = {
    * working spinner with no live output.
    */
   'thread:foreignRuns': [] as unknown as [notices: import('../types').ForeignRunNotice[]],
+  /**
+   * The persisted config was written. Broadcast so a surface that did not make
+   * the change still shows the value that was saved, which matters when the
+   * design board changes the work folders and Settings is open behind it.
+   */
+  'config:changed': [] as unknown as [config: import('../types').AppConfig],
   /** Assistant routines changed (created, updated, deleted, reordered). */
   'routine:changed': [] as unknown as [routines: import('../types').Routine[]],
   /**

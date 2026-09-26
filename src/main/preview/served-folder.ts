@@ -9,6 +9,11 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
  * model-written argument, so the containment check and the entry rules live
  * here rather than in a copy per capability: a second copy is how one of them
  * ends up accepting a path the other refuses.
+ *
+ * Resolving the folder itself belongs here for the same reason. The two
+ * capabilities used to have a resolver each, and the two were the same function
+ * with a different default; now that the default is the user's setting, a copy
+ * would let one capability honour the setting and the other keep a constant.
  */
 
 /** File a served folder is expected to hold, and the one a preview falls back to. */
@@ -16,6 +21,9 @@ export const SERVED_FOLDER_ENTRY_FILE = 'index.html'
 
 /** Ceiling on the entry field, so a hand-written call cannot inflate a log line. */
 export const MAX_PREVIEW_ENTRY_LENGTH = 512
+
+/** Ceiling on a folder field, so a hand-written call cannot inflate a log line. */
+export const MAX_SERVED_FOLDER_LENGTH = 1_024
 
 /** Whether `target` is inside `root` and is not `root` itself. */
 export function isInsideProject(root: string, target: string): boolean {
@@ -26,6 +34,48 @@ export function isInsideProject(root: string, target: string): boolean {
     !relativePath.startsWith(`..${sep}`) &&
     !isAbsolute(relativePath)
   )
+}
+
+/** One project-relative folder a capability resolved, and how it is spelled back. */
+export interface ResolvedServedFolder {
+  /** Absolute path of the folder, which always sits inside the project. */
+  absolute: string
+  /** Project-relative spelling with forward slashes, which is what a reply names. */
+  display: string
+}
+
+/**
+ * Resolve one project-relative folder a capability may touch.
+ *
+ * The folder is resolved from a model-written argument, so an absolute path, a
+ * name that escapes the project and the project root itself are all refused
+ * here: every capability that writes or serves a folder goes through this, and a
+ * check per call site is how one of them ends up missing.
+ *
+ * `defaultRoot` is the user's setting for the capability's kind, passed in rather
+ * than read here so that a resolver stays a pure function of its arguments and
+ * the caller's own notion of "where this work lives" is the one that applies.
+ */
+export function resolveServedFolder(
+  projectPath: string,
+  raw: unknown,
+  defaultRoot: string
+): ResolvedServedFolder {
+  let requested = defaultRoot
+  if (raw !== undefined) {
+    if (typeof raw !== 'string') throw new Error('directory must be a project-relative path')
+    const trimmed = raw.trim()
+    if (trimmed.length > MAX_SERVED_FOLDER_LENGTH) throw new Error('directory is too long')
+    if (trimmed.length > 0) requested = trimmed
+  }
+  if (isAbsolute(requested)) throw new Error('directory must be relative to the project')
+  const absolute = resolve(projectPath, requested)
+  if (!isInsideProject(projectPath, absolute)) {
+    throw new Error(
+      'directory must be a folder inside the project, and not the project root itself'
+    )
+  }
+  return { absolute, display: relative(projectPath, absolute).split(sep).join('/') }
 }
 
 /** One entry file inside a served folder, split into the spellings callers need. */

@@ -74,6 +74,7 @@ function defaultConfig(): AppConfig {
     agentDefaults: { syncFromThreadChanges: false },
     auxiliaryAgents: {},
     design: { assignments: [] },
+    workRoots: { design: '.cio/designs', video: '.cio/videos' },
     mediaGeneration: { providerId: null },
     rankingJudge: { kind: 'automatic' },
     agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,

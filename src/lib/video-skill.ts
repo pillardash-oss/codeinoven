@@ -1,4 +1,10 @@
 import { expertDelegationGuidance, NO_EXPERTS, type EffectiveExperts } from './experts'
+import {
+  DEFAULT_WORK_ROOTS,
+  workRootGuidance,
+  workRootForKind,
+  type WorkRoots
+} from './design/work-roots'
 
 /**
  * The video capability's playbook, and the constants the surfaces that list it
@@ -32,8 +38,16 @@ export const VIDEO_CAPABILITY_SUMMARY =
  */
 export const VIDEO_CAPABILITY_SEARCH_QUERY = 'video'
 
-/** Where a composition goes when nobody names a folder. */
-export { VIDEO_PROJECT_ROOT as VIDEO_OUTPUT_ROOT } from './video/project'
+/**
+ * Where a composition goes when nobody names a folder, which is the user's
+ * setting.
+ *
+ * Read through a function rather than a constant so the playbook states the
+ * folder the app will actually write into, not the default it ships with.
+ */
+export function videoOutputRoot(roots: WorkRoots = DEFAULT_WORK_ROOTS): string {
+  return workRootForKind(roots, 'video')
+}
 
 /**
  * What the agent is handed when the capability is activated.
@@ -42,7 +56,11 @@ export { VIDEO_PROJECT_ROOT as VIDEO_OUTPUT_ROOT } from './video/project'
  * lives, the contract that makes it renderable, how to watch it and check it,
  * and only then the craft notes that decide whether the result is good.
  */
-export function videoCapabilityDocs(experts: EffectiveExperts = NO_EXPERTS): string {
+export function videoCapabilityDocs(
+  experts: EffectiveExperts = NO_EXPERTS,
+  roots: WorkRoots = DEFAULT_WORK_ROOTS
+): string {
+  const videoRoot = videoOutputRoot(roots)
   return `# Video studio
 
 Make a video as a small web project, then watch it in this app while the turn is still running. A title sequence, a product walkthrough, a captioned social cut, an explainer, an animated chart, a montage: anything that is a piece of motion rather than a page.
@@ -53,13 +71,13 @@ A timeline document can only describe arrangement. An edit needs to compute: twe
 
 ## Where a composition lives
 
-Write one composition per folder under \`.cio/videos/<name>/\`:
+Write one composition per folder under \`${videoRoot}/<name>/\`:
 
 - \`index.html\`, the stage the app loads.
 - \`composition.json\`, the manifest it reads before the page runs.
 - Whatever else the composition needs beside them: scripts, stylesheets, fonts, images, audio, all referenced with relative paths.
 
-\`.cio/\` is ignored by Git, so a composition stays scratch until the user asks for it in the source tree. Do not write into \`.cio/specs/<feature>/prototypes/\`, which belongs to the engineering prototype phase.
+${workRootGuidance(videoRoot)} Do not write into \`.cio/specs/<feature>/prototypes/\`, which belongs to the engineering prototype phase.
 
 ## The manifest
 
@@ -112,7 +130,7 @@ The page plays the files named in \`audio\` for a viewing. The app reads the sam
 
 Invoke this capability with operation \`preview\`:
 
-- \`directory\`, project-relative, defaults to \`.cio/videos\`.
+- \`directory\`, project-relative, defaults to \`${videoRoot}\`.
 - \`entry\`, a file inside that folder, defaults to \`index.html\`.
 - \`attention\`, \`focus\` (the default) to bring the tab to the user, \`background\` to leave them where they are.
 

@@ -4,6 +4,7 @@ import type { BrowserService } from '../browser/browser-service'
 import type { Database } from '../database/database'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import type { VideoCapabilityExecutor } from '../utilities/utility-orchestration-service'
+import { currentWorkRoot } from '../design/work-roots-state'
 import { openVideoPreview } from './video-preview-session'
 
 /**
@@ -61,6 +62,7 @@ export function createVideoPreviewExecutor(
         threadId: context.threadId,
         directory: input['directory'],
         entry: input['entry'],
+        defaultRoot: currentWorkRoot('video'),
         attention,
         reveal: false
       }

@@ -1,6 +1,7 @@
 import { relative, sep } from 'node:path'
 import { requireLocalProject } from '../../lib/project-artifacts'
-import { resolveDesignDirectory } from '../design/design-paths'
+import { resolveServedFolder } from '../preview/served-folder'
+import { currentWorkRoot } from '../design/work-roots-state'
 import { saveDesignMedia } from '../design/design-media-service'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
 import { MAX_DESIGN_MEDIA_NAME_LENGTH } from '../../lib/design-media'
@@ -18,6 +19,7 @@ import {
   parseMediaModelRef
 } from '../../lib/media-generation'
 import type { AppConfig } from '../../lib/types'
+import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import type { DesignMediaKind } from '../../lib/design-media'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 import type { Database } from '../database/database'
@@ -43,6 +45,16 @@ export interface MediaGenerationExecutorOptions {
   /** The live config, read per call so a settings change applies at once. */
   config: () => Promise<AppConfig>
   service: MediaGenerationService
+  /**
+   * Which authored-work session the calling thread is in.
+   *
+   * `generate` is one operation on two capabilities, so the folder a file lands in
+   * when the caller names none has to follow the session rather than a fixed root:
+   * a composition's music bed belongs beside the composition, not in the design
+   * folder. Null means the thread is in no session, which reads as a design, the
+   * same answer the board gives an ordinary thread.
+   */
+  sessionKind: (projectId: string, threadId: string) => Promise<AuthoredWorkKind | null>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -125,7 +137,12 @@ export function createMediaGenerationExecutor(
     }
 
     const project = requireLocalProject(options.database, context.projectId)
-    const directory = resolveDesignDirectory(project.path, input['directory'])
+    const sessionKind = (await options.sessionKind(context.projectId, context.threadId)) ?? 'design'
+    const directory = resolveServedFolder(
+      project.path,
+      input['directory'],
+      currentWorkRoot(sessionKind)
+    )
 
     const result = await options.service.generate(kind, ref, assigned.model, {
       kind,

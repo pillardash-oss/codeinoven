@@ -17,6 +17,8 @@ import { createThreadWorkspaceRoots } from '../editor/project-files/thread-works
 import { getConfigRoot } from '../../lib/utils'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
+import { workRootsFromConfig } from '../../lib/design/work-roots'
+import { setWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, routineRunPrompt } from '../../lib/routine-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
@@ -305,11 +307,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   )
   state.prototypePreviewService = new PrototypePreviewService()
   try {
-    state.prototypePreviewService.setCdnPolicy(
-      prototypeCdnPolicyFromConfig(await storage.getConfig())
-    )
+    const startupConfig = await storage.getConfig()
+    state.prototypePreviewService.setCdnPolicy(prototypeCdnPolicyFromConfig(startupConfig))
+    // The folders designs and videos are written into. Held for the whole run so a
+    // path resolver never touches the config file, and replaced on every save.
+    setWorkRoots(workRootsFromConfig(startupConfig))
   } catch {
-    // The strict policy stands until the config can be read.
+    // The strict policy and the default folders stand until the config can be read.
   }
   state.directoryPreviewService = new DirectoryPreviewService()
   state.chatEngine.setPrototypePreviewRegistrar(
@@ -423,7 +427,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     createMediaGenerationExecutor({
       database,
       config: () => storage.getConfig(),
-      service: mediaGeneration
+      service: mediaGeneration,
+      // `generate` is one operation on two capabilities, so which folder a file
+      // lands in when the caller names none follows the thread's session. The
+      // board answers the same question the same way, so the two cannot disagree.
+      sessionKind: async (projectId, threadId) =>
+        (await designService.sessionKinds(projectId, [threadId]))[threadId] ?? null
     })
   )
   const { registerMediaGenerationIpc } = await import('../media/media-generation-ipc')

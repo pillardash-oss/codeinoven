@@ -2,7 +2,8 @@ import type {
   AuthoredWorkKind,
   DesignOpenResult,
   DesignThumbnail,
-  ThreadDesignState
+  ThreadDesignState,
+  WorkRootState
 } from './design'
 import type { Contract } from './contract-helpers'
 
@@ -41,5 +42,11 @@ export const invokeDesignContract = {
   'design:thumbnail': {} as Contract<
     [projectId: string, threadId: string, directory: string, entry: string | null, width: number],
     DesignThumbnail
-  >
+  >,
+  /**
+   * The folders designs and videos are written into, and what the last change
+   * moved. Read straight after a save, because both surfaces that change a root
+   * have to report what the move did with the work already on disk.
+   */
+  'design:workRootState': {} as Contract<[], WorkRootState>
 }

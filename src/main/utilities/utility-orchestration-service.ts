@@ -41,6 +41,7 @@ import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/
 import { VIDEO_CAPABILITY_SEARCH_QUERY, videoCapabilityDocs } from '../../lib/video-skill'
 import { NO_EXPERTS, type EffectiveExperts } from '../../lib/experts'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
+import { currentWorkRoots } from '../design/work-roots-state'
 import { resultWithImageParts } from '../../lib/image-payload'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
@@ -92,8 +93,8 @@ import {
 } from './utility-orchestration/utility-turn-state'
 import {
   BROWSER_UTILITY_TOOLS,
-  DESIGN_UTILITY_TOOLS,
-  VIDEO_UTILITY_TOOLS,
+  designUtilityTools,
+  videoUtilityTools,
   BRIDGE_SCRIPT_PATH,
   buildCuaSessionId,
   buildUtilityGatewayScript,
@@ -1446,7 +1447,8 @@ export class UtilityOrchestrationService {
     const config = await this.storage.getConfig()
     return designCapabilityDocs(
       prototypeCdnPolicyFromConfig(config),
-      await this.expertsForThread(threadId)
+      await this.expertsForThread(threadId),
+      currentWorkRoots()
     )
   }
 
@@ -1456,7 +1458,7 @@ export class UtilityOrchestrationService {
    * models a design is.
    */
   private async videoPlaybook(threadId: string): Promise<string> {
-    return videoCapabilityDocs(await this.expertsForThread(threadId))
+    return videoCapabilityDocs(await this.expertsForThread(threadId), currentWorkRoots())
   }
 
   /**
@@ -1490,7 +1492,7 @@ export class UtilityOrchestrationService {
       // capability this one is invoked with typed fields.
       return {
         instructions: await this.designPlaybook(state.request.threadId),
-        tools: DESIGN_UTILITY_TOOLS
+        tools: designUtilityTools(currentWorkRoots())
       }
     }
     if (resolved.utility.id === APP_VIDEO_UTILITY_ID) {
@@ -1499,7 +1501,7 @@ export class UtilityOrchestrationService {
       // docs re-dump is one payload.
       return {
         instructions: await this.videoPlaybook(state.request.threadId),
-        tools: VIDEO_UTILITY_TOOLS
+        tools: videoUtilityTools(currentWorkRoots())
       }
     }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {

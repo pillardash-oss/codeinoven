@@ -15,6 +15,7 @@ import {
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
 import { DEFAULT_MAX_CONFLICT_FILE_BYTES, DEFAULT_IN_APP_NOTIFICATION_SOUND } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
+import { DEFAULT_WORK_ROOTS, workRootsFromConfig } from '../../lib/design/work-roots'
 import {
   CIO_PROMPT_DEFINITIONS,
   CIO_PROMPT_MAX_LENGTH,
@@ -65,6 +66,7 @@ const DEFAULT_CONFIG: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
   design: { assignments: [] },
+  workRoots: { ...DEFAULT_WORK_ROOTS },
   mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
@@ -185,6 +187,10 @@ export class StorageEngine {
       mediaGeneration: {
         providerId: config?.mediaGeneration?.providerId ?? DEFAULT_CONFIG.mediaGeneration.providerId
       },
+      // Read tolerantly: a value a future version wrote, a hand-edited path, or a
+      // pair where one root sits inside the other arrives as a working app with
+      // the defaults rather than as a failed start.
+      workRoots: workRootsFromConfig(config ?? {}),
       memory: {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),

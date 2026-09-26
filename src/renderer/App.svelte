@@ -997,6 +997,23 @@
   }
 
   /**
+   * Follow a config change this window did not make.
+   *
+   * The design board changes the work folders from its own panel, and a settings
+   * page still showing the replaced folder would be describing a file that is no
+   * longer on disk. Main broadcasts the saved config, so every surface agrees on
+   * what was written. The window that made the change receives its own broadcast
+   * too, which is the same value it already holds.
+   */
+  function installConfigSubscription(): () => void {
+    return subscribe('config:changed', (next) => {
+      config = next
+      appConfigState.sync(next)
+      applyTheme()
+    })
+  }
+
+  /**
    * Cmd/Ctrl+W closes the active surface: the topmost modal, the Settings page,
    * a sidebar panel, or the open thread. When nothing is active the shortcut is
    * intentionally a no-op; application shutdown is reserved for explicit quit
@@ -1308,6 +1325,7 @@
       handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps)
     })
     const unsubscribeShutdown = installShutdownSubscription()
+    const unsubscribeConfig = installConfigSubscription()
     const originalOpenThread = workspaceState.openThread.bind(workspaceState)
     const originalClearThread = workspaceState.clearThread.bind(workspaceState)
     workspaceState.openThread = (thread, project, iconUrl) => {
@@ -1338,6 +1356,7 @@
       restoreWorkspaceCallbacks()
       unsubscribeIpc()
       unsubscribeShutdown()
+      unsubscribeConfig()
       workspaceState.openThread = originalOpenThread
       workspaceState.clearThread = originalClearThread
     }

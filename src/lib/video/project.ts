@@ -26,14 +26,6 @@
 /** Version of the manifest this module reads. A future shape bumps this. */
 export const VIDEO_PROJECT_VERSION = 1
 
-/**
- * Where a composition goes when nobody names a folder.
- *
- * `.cio/` is the app's scratch tree and is ignored by Git, so a video written
- * here is explorable work rather than a change to the product.
- */
-export const VIDEO_PROJECT_ROOT = '.cio/videos'
-
 /** The file the stage loads. */
 export const VIDEO_PROJECT_ENTRY = 'index.html'
 

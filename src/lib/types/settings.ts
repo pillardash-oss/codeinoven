@@ -297,6 +297,14 @@ export interface AppConfig {
   auxiliaryAgents: AuxiliaryAgentConfig
   /** Model the user assigned to each named design assignment (images, copy, video). */
   design: DesignConfig
+  /**
+   * Project-relative folders where authored work is written, app-wide.
+   *
+   * One value covers every project, and each project resolves it against its own
+   * root, so a user who wants designs committed sets it once. Changing it moves
+   * the work already written under the old folder into the new one.
+   */
+  workRoots: WorkRoots
   /** Backend that generates images, clips and sound for a design or a composition. */
   mediaGeneration: MediaGenerationConfig
   /** Model that judges ranking conversations, and whether it is pinned at all. */
@@ -362,6 +370,8 @@ export interface BehaviorLayer {
   defaultOpen: boolean
 }
 
+import type { WorkRoots } from '../design/work-roots'
+
 /** Renderer-editable settings. Internal config fields cannot be patched over IPC. */
 export type AppConfigPatch = Partial<
   Pick<
@@ -382,6 +392,7 @@ export type AppConfigPatch = Partial<
     | 'auxiliaryAgents'
     | 'design'
     | 'mediaGeneration'
+    | 'workRoots'
     | 'rankingJudge'
     | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'

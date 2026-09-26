@@ -1,6 +1,10 @@
 import { realpathSync } from 'node:fs'
 import { isAbsolute, relative, sep } from 'node:path'
-import { AUTHORED_WORK_ROOT_BY_KIND, authoredWorkKindOf } from '../../lib/design/authored-work'
+import {
+  DEFAULT_WORK_ROOTS,
+  authoredWorkKindOf,
+  workRootForKind
+} from '../../lib/design/work-roots'
 import type {
   AuthoredWorkKind,
   DesignEntry,
@@ -25,6 +29,7 @@ import { openVideoPreview } from '../video/video-preview-session'
 import { readCompositionManifest } from '../video/video-manifest'
 import { listProjectWorkFolders } from './design-listing'
 import { openDesignPreview } from './design-preview-session'
+import { currentWorkRoot, currentWorkRootReports, currentWorkRoots } from './work-roots-state'
 
 /**
  * What the app knows about a thread's authored work, and how the user gets back to it.
@@ -161,6 +166,15 @@ export class DesignService {
           typeof rawWidth === 'number' ? rawWidth : 480
         )
     )
+    // The folders authored work is written into, and what the last change moved.
+    // Read rather than pushed, because both surfaces that change a root (the
+    // Design settings card and the board's own save path) ask immediately after
+    // the save that caused the move.
+    ipcMain.handle('design:workRootState', async () => ({
+      roots: currentWorkRoots(),
+      defaults: { ...DEFAULT_WORK_ROOTS },
+      reports: currentWorkRootReports()
+    }))
   }
 
   /** Forget a thread's authored-work record when the thread itself is gone. */
@@ -218,7 +232,7 @@ export class DesignService {
       root
     )
     if (directory === null) return NO_TAB_MARK
-    const kind = authoredWorkKindOf(directory)
+    const kind = authoredWorkKindOf(directory, currentWorkRoots())
     if (kind === null) return NO_TAB_MARK
     await this.rememberShownFolder({
       projectId,
@@ -336,6 +350,7 @@ export class DesignService {
   async stateFor(projectId: string, threadId: string): Promise<ThreadDesignState> {
     const storedProject = await new ProjectRepo(this.options.database).getViaWorker(projectId)
     if (!storedProject || storedProject.source !== 'local' || !storedProject.path) {
+      const fallbackRoot = workRootForKind(DEFAULT_WORK_ROOTS, 'design')
       return {
         projectId,
         threadId,
@@ -343,13 +358,14 @@ export class DesignService {
         active: false,
         current: null,
         items: [],
-        defaultDirectory: AUTHORED_WORK_ROOT_BY_KIND.design
+        defaultDirectory: fallbackRoot,
+        root: fallbackRoot
       }
     }
     const current = await this.designs.forThreadViaWorker(threadId)
     const tagged = await this.latestSessionTag(threadId)
     const kind = this.kindFor(current, tagged)
-    const root = AUTHORED_WORK_ROOT_BY_KIND[kind]
+    const root = currentWorkRoot(kind)
     const items = await this.listWorkFolders(storedProject.path, root)
     return {
       projectId,
@@ -358,7 +374,8 @@ export class DesignService {
       active: current !== null || tagged !== null,
       current,
       items,
-      defaultDirectory: current?.directory ?? items[0]?.directory ?? root
+      defaultDirectory: current?.directory ?? items[0]?.directory ?? root,
+      root
     }
   }
 
@@ -620,6 +637,7 @@ export class DesignService {
       threadId: input.threadId,
       directory: input.directory,
       entry: input.entry,
+      defaultRoot: currentWorkRoot(input.kind),
       attention: input.attention,
       reveal: input.reveal,
       posterSeconds: input.posterSeconds

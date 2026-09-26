@@ -1,21 +1,30 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import {
+    Check,
     ExternalLink,
     Film,
     Frame,
     ImageOff,
     LoaderCircle,
+    Pencil,
     RefreshCw,
+    RotateCcw,
     Volume2,
-    VolumeX
+    VolumeX,
+    X
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
-  import { DESIGN_OUTPUT_ROOT } from '$shared/design-skill'
-  import type { DesignEntry, ThreadDesignState } from '$shared/ipc-contract'
-  import { VIDEO_PROJECT_ROOT } from '$shared/video/project'
+  import { workRootMoveSummary } from '$lib/design-work-root-summary'
+  import type {
+    AuthoredWorkKind,
+    DesignEntry,
+    ThreadDesignState,
+    WorkRootState
+  } from '$shared/ipc-contract'
+  import type { WorkRoots } from '$shared/design/work-roots'
 
   /**
    * The coordinator board for a thread's authored work.
@@ -60,7 +69,28 @@
   let nounTitle = $derived(video ? 'Composition' : 'Design')
   let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
   let WorkIcon = $derived(video ? Film : Frame)
-  let workRoot = $derived(video ? VIDEO_PROJECT_ROOT : DESIGN_OUTPUT_ROOT)
+
+  /**
+   * Where this kind of work is written, and the two controls that change it.
+   *
+   * The folder is a setting rather than a constant, so the board is also the
+   * place a user points it at a folder Git tracks: they are looking at the work,
+   * so moving it is one button rather than a detour through Settings. Main owns
+   * the value and reports what the move did, which is why the draft is saved
+   * through the same channel the settings card uses.
+   */
+  let kind = $derived<AuthoredWorkKind>(video ? 'video' : 'design')
+  let workRoots = $state<WorkRootState | null>(null)
+  let editingRoot = $state(false)
+  let rootDraft = $state('')
+  let rootBusy = $state(false)
+  let rootError = $state('')
+  let rootNotice = $state('')
+
+  /** The folder in use: main's answer once it has arrived, the board's until then. */
+  let workRoot = $derived(workRoots?.roots[kind] ?? designState?.root ?? '')
+  let defaultRoot = $derived(workRoots?.defaults[kind] ?? '')
+  let rootIsDefault = $derived(workRoot !== '' && workRoot === defaultRoot)
 
   /**
    * The tab's live audio state, read from the same store the tab strip reads.
@@ -94,6 +124,61 @@
       error = ''
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'The work state could not be read.'
+    }
+  }
+
+  /** Read the folders in use, and what the last change moved. */
+  async function loadWorkRoots(): Promise<WorkRootState | null> {
+    try {
+      const state = await invoke('design:workRootState')
+      workRoots = state
+      return state
+    } catch {
+      // A board that cannot read the setting still shows the work, so the folder
+      // line falls back to what the board's own state reported.
+      workRoots = null
+      return null
+    }
+  }
+
+  function beginEditRoot(): void {
+    rootDraft = workRoot
+    rootError = ''
+    rootNotice = ''
+    editingRoot = true
+  }
+
+  function cancelEditRoot(): void {
+    editingRoot = false
+    rootError = ''
+  }
+
+  /**
+   * Point this kind of work at another folder, or back at the default.
+   *
+   * The setting is app-wide, so main moves every project's folder and answers with
+   * what it moved. The board re-reads its own state afterwards, because the folder
+   * it was showing may be the one that just moved.
+   */
+  async function applyRoot(next: string): Promise<void> {
+    const roots = workRoots?.roots
+    if (!roots || rootBusy || next === '' || next === workRoot) return
+    const nextRoots: WorkRoots =
+      kind === 'video' ? { ...roots, video: next } : { ...roots, design: next }
+    rootBusy = true
+    rootError = ''
+    rootNotice = ''
+    try {
+      await invoke('config:update', { workRoots: nextRoots })
+      const state = await loadWorkRoots()
+      await loadState()
+      await loadThumbnail()
+      rootNotice = state ? workRootMoveSummary(state, kind) : ''
+      editingRoot = false
+    } catch (failure) {
+      rootError = failure instanceof Error ? failure.message : 'The save path could not be changed.'
+    } finally {
+      rootBusy = false
     }
   }
 
@@ -150,6 +235,7 @@
 
   onMount(() => {
     void loadState().then(loadThumbnail)
+    void loadWorkRoots()
   })
 
   function updatedLabel(item: DesignEntry): string {
@@ -323,6 +409,96 @@
             </li>
           {/each}
         </ul>
+      {/if}
+    </div>
+
+    <div class="mt-3 rounded-lg border border-border px-2 py-2">
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+          Save path
+        </span>
+        <span class="flex shrink-0 items-center gap-1">
+          {#if !editingRoot}
+            <button
+              type="button"
+              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+              disabled={rootBusy || workRoot === ''}
+              title={`Change where new ${noun}s are saved`}
+              aria-label={`Change where new ${noun}s are saved`}
+              onclick={beginEditRoot}
+            >
+              <Pencil size={11} />
+            </button>
+          {/if}
+          <button
+            type="button"
+            class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+            disabled={rootBusy || rootIsDefault || defaultRoot === ''}
+            title={`Put new ${noun}s back in ${defaultRoot || '.cio'}, and move the ones already there`}
+            aria-label={`Reset the ${noun} save path to the default`}
+            onclick={() => void applyRoot(defaultRoot)}
+          >
+            {#if rootBusy}
+              <LoaderCircle size={11} class="animate-spin" />
+            {:else}
+              <RotateCcw size={11} />
+            {/if}
+          </button>
+        </span>
+      </div>
+
+      {#if editingRoot}
+        <div class="mt-1 flex items-center gap-1">
+          <input
+            class="h-6 min-w-0 flex-1 rounded-md border border-border bg-elevated px-1.5 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
+            bind:value={rootDraft}
+            placeholder={defaultRoot}
+            aria-label={`Folder new ${noun}s are saved in, relative to the project`}
+            onkeydown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                cancelEditRoot()
+                return
+              }
+              if (event.key !== 'Enter') return
+              event.preventDefault()
+              void applyRoot(rootDraft.trim())
+            }}
+          />
+          <button
+            type="button"
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-elevated disabled:opacity-40"
+            disabled={rootBusy || rootDraft.trim() === ''}
+            title={`Save this ${noun} folder`}
+            aria-label={`Save this ${noun} folder`}
+            onclick={() => void applyRoot(rootDraft.trim())}
+          >
+            {#if rootBusy}
+              <LoaderCircle size={11} class="animate-spin" />
+            {:else}
+              <Check size={12} />
+            {/if}
+          </button>
+          <button
+            type="button"
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            title="Cancel"
+            aria-label="Cancel changing the save path"
+            onclick={cancelEditRoot}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      {:else}
+        <p class="mt-0.5 truncate font-mono text-[0.6875rem] text-muted" title={workRoot}>
+          {workRoot === '' ? 'Reading the folder...' : workRoot}
+        </p>
+      {/if}
+
+      {#if rootError !== ''}
+        <p class="mt-1 text-[0.6875rem] text-danger" role="alert">{rootError}</p>
+      {:else if rootNotice !== ''}
+        <p class="mt-1 text-[0.6875rem] text-muted">{rootNotice}</p>
       {/if}
     </div>
   </div>

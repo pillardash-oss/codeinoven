@@ -1,6 +1,7 @@
 import { requireLocalProject } from '../../lib/project-artifacts'
 import { videoClampTime } from '../../lib/video/project'
-import { resolveVideoDirectory } from './video-paths'
+import { resolveServedFolder } from '../preview/served-folder'
+import { currentWorkRoot } from '../design/work-roots-state'
 import { loadCompositionManifest } from './video-manifest'
 import type { BrowserService } from '../browser/browser-service'
 import type { Database } from '../database/database'
@@ -59,7 +60,11 @@ export function createVideoCaptureExecutor(
       throw new Error('A frame cannot be captured while the app has no window to render it in.')
     }
     const project = requireLocalProject(options.database, context.projectId)
-    const directory = resolveVideoDirectory(project.path, input['directory'])
+    const directory = resolveServedFolder(
+      project.path,
+      input['directory'],
+      currentWorkRoot('video')
+    )
     const manifest = await loadCompositionManifest(directory.absolute, directory.display)
     // Clamp before the page is loaded, so the URL and the frame drawn agree on
     // which second is being captured.
@@ -73,6 +78,7 @@ export function createVideoCaptureExecutor(
         threadId: context.threadId,
         directory: input['directory'],
         entry: input['entry'],
+        defaultRoot: currentWorkRoot('video'),
         attention: 'background',
         reveal: false,
         captureSeconds: seconds

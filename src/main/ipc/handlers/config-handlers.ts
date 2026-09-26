@@ -2,6 +2,10 @@ import { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { CIO_PROMPT_MAX_LENGTH, isCioPromptId } from '../../../lib/cio-prompts'
 import { prototypeCdnPolicyFromConfig } from '../../../lib/prototypes/prototype-cdn'
+import { type WorkRoots } from '../../../lib/design/work-roots'
+import { relocateWorkRoots } from '../../design/work-root-relocation'
+import { setWorkRootReports, setWorkRoots } from '../../design/work-roots-state'
+import { ProjectRepo } from '../../database/repositories/project-repo'
 import { normalizeWorkerNames } from '../../../lib/assignment/worker-names'
 import type {
   ProjectAction,
@@ -51,6 +55,20 @@ function broadcastRankingGradeProgress(progress: LocalRankingGradeProgress | nul
 }
 
 /**
+ * Tell every window the persisted config changed.
+ *
+ * A settings page is not the only writer: the design board's save-path control
+ * changes the same file, and without this the Design settings page would keep
+ * showing the folder the user replaced until the app restarted.
+ */
+function broadcastConfigChanged(config: AppConfig): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+    sendToRenderer(win.webContents, 'config:changed', config)
+  }
+}
+
+/**
  * The judge a manual run would use, described for the panel that offers it.
  *
  * A `model` pin that is missing any of its parts is reported as "No model
@@ -73,8 +91,32 @@ function rankingJudgeView(config: AppConfig): LocalRankingJudgeView {
 }
 
 export function registerConfigHandlers(ctx: IpcHandlerContext): void {
-  const { storage, options, harnessUsageRepo, modelRankingRepo, rankingSnapshotRepo, chatEngine } =
-    ctx
+  const {
+    storage,
+    database,
+    options,
+    harnessUsageRepo,
+    modelRankingRepo,
+    rankingSnapshotRepo,
+    chatEngine
+  } = ctx
+
+  /**
+   * Move every project's authored work into the folders the user just chose.
+   *
+   * The roots are one app-wide setting, so the move covers every local project:
+   * one left behind would keep its designs under a root the board no longer
+   * lists. The reports are remembered for the surface that made the change, which
+   * asks for them as soon as this handler returns.
+   */
+  async function relocateAuthoringRoots(previous: WorkRoots, next: WorkRoots): Promise<void> {
+    if (previous.design === next.design && previous.video === next.video) return
+    const projects = new ProjectRepo(database)
+      .list()
+      .filter((project) => project.source === 'local' && project.path.length > 0)
+      .map((project) => ({ id: project.id, name: project.name, path: project.path }))
+    setWorkRootReports(await relocateWorkRoots({ database, projects, previous, next }))
+  }
 
   /**
    * One read of everything the grading panel shows: the queue, the judge, and
@@ -298,11 +340,16 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     if (patch.agentBehaviorPrompt) {
       await storage.saveCioPrompt('work-ethics', patch.agentBehaviorPrompt)
     }
-    const config = { ...(await storage.getConfig()), ...patch }
+    const previous = await storage.getConfig()
+    const config = { ...previous, ...patch }
     await storage.saveConfig(config)
     // The preview server resolves the header when the policy is applied, so this
     // keeps a settings change effective for the very next prototype request.
     options.prototypePreviewService?.setCdnPolicy(prototypeCdnPolicyFromConfig(config))
+    // Applied before the move below, so a design that previews while the folders
+    // are being relocated already resolves the folder it is going to, not the one
+    // being emptied underneath it.
+    if (patch.workRoots) setWorkRoots(config.workRoots)
     if (patch.zoomLevel !== undefined) {
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
       if (win && !win.isDestroyed()) win.webContents.setZoomFactor(config.zoomLevel)
@@ -316,6 +363,8 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
         tts: patch.sound.ttsUnload
       } as Record<string, unknown>)
     }
+    if (patch.workRoots) await relocateAuthoringRoots(previous.workRoots, config.workRoots)
+    broadcastConfigChanged(config)
     return config
   })
   ipcMain.handle('config:syncAgentRole', async (_, role: unknown, selection: unknown) => {
