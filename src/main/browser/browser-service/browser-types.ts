@@ -50,6 +50,15 @@ export interface BrowserTab {
    * which the live refresh produces every time the composition changes.
    */
   transport: { generation: number; url: string; duration: number; fps: number } | null
+  /**
+   * Whether the mute in force on this tab is the player's rather than the user's.
+   *
+   * A composition is muted whenever its transport is not playing, because a page
+   * can always start sound the runtime cannot reach. Remembering that the app made
+   * the mute is what lets a play lift it without ever overriding a mute the user
+   * chose for themselves.
+   */
+  transportMuted: boolean
   /** Counts committed navigations, so a runtime installed a moment ago can be told
    *  from one installed into a document that has since been replaced. */
   navigationGeneration: number

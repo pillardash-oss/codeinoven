@@ -617,8 +617,10 @@ export class BrowserService {
     if (next.design === null) this.inspector.setArmed(tabId, tab.view.webContents, false, null)
     this.publishState(tabId)
     if (!next.composition) {
-      // A tab that left the composition has no playhead to restore.
+      // A tab that left the composition has no playhead to restore, and the mute
+      // the player took from it belongs to the tab rather than to the composition.
       this.playheads.delete(tabId)
+      this.releaseTransportAudio(tabId, tab)
       return
     }
     // Arming is idempotent per document and per timeline, so this needs no guard
@@ -1125,6 +1127,9 @@ export class BrowserService {
       // A folder listing, or a composition whose page has not defined the render
       // function yet, is an ordinary thing to be looking at rather than a fault.
       Logger.dev('Composition playback was not armed:', { tabId, reason })
+      // A preview the runtime could not drive is still a preview the app put on
+      // screen, and one that cannot be stopped must not be audible.
+      this.applyTransportAudio(tabId, tab, false)
       return
     }
     // A burst of agent writes reloads a preview more than once, so the document can
@@ -1133,11 +1138,19 @@ export class BrowserService {
     // load believe it was already armed, so neither is kept.
     if (contents.isDestroyed() || tab.navigationGeneration !== generation) return
     tab.transport = { generation, url, duration: composition.duration, fps: composition.fps }
+    // A capture URL is silent by definition and a viewing starts playing, so the
+    // tab's audio follows what the runtime actually did rather than what was asked
+    // of it: a first frame that threw leaves the transport paused and the tab quiet.
+    const playback = await this.transportState(tabId)
+    this.applyTransportAudio(tabId, tab, playback?.playing === true)
     if (frozen) return
     const playhead = live ?? this.takePlayhead(tabId, composition.directory)
     if (!playhead) return
     await this.sendTransport(tabId, 'seek', playhead.time)
-    if (playhead.playing) await this.sendTransport(tabId, 'play', 0)
+    // A reload arms playing, so a composition the user had paused must be paused
+    // again: without this, an agent write while the user was stopped would start
+    // the video over their still frame.
+    await this.sendTransport(tabId, playhead.playing ? 'play' : 'pause', 0)
   }
 
   /** Arm the transport without letting a playback problem fail a page load. */
@@ -1192,7 +1205,49 @@ export class BrowserService {
     const result: unknown = await tab.view.webContents.executeJavaScript(
       compositionTransportCommandScript(command, value)
     )
-    return toCompositionPlayback(result)
+    const playback = toCompositionPlayback(result)
+    // The runtime declines the page's draws, parks its loop and pauses the media it
+    // knows about, but a page can always start sound none of that reaches. The tab
+    // is muted for exactly as long as the transport is not playing, which is the
+    // one lever no composition can work around. A command that never reached the
+    // page reports nothing, and an unreachable composition is quiet by default.
+    if (tab.composition) this.applyTransportAudio(tabId, tab, playback?.playing === true)
+    return playback
+  }
+
+  /**
+   * Mute a composition tab for as long as its transport is not playing.
+   *
+   * The page-side runtime pauses the media it can reach; this is the part it cannot.
+   * Muting the view silences a detached element the runtime never saw, a synthesized
+   * track, and a frame the page starts behind the player's back. The app only lifts a
+   * mute it made itself, so a tab the user muted stays muted through a play.
+   */
+  private applyTransportAudio(tabId: string, tab: BrowserTab, playing: boolean): void {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) return
+    if (playing) {
+      if (tab.transportMuted && contents.isAudioMuted()) {
+        contents.setAudioMuted(false)
+        this.publishState(tabId)
+      }
+      tab.transportMuted = false
+      return
+    }
+    if (contents.isAudioMuted()) return
+    contents.setAudioMuted(true)
+    tab.transportMuted = true
+    this.publishState(tabId)
+  }
+
+  /** Give a tab back the mute the player took from it. */
+  private releaseTransportAudio(tabId: string, tab: BrowserTab): void {
+    if (!tab.transportMuted) return
+    tab.transportMuted = false
+    const contents = tab.view.webContents
+    if (contents.isDestroyed() || !contents.isAudioMuted()) return
+    contents.setAudioMuted(false)
+    this.publishState(tabId)
   }
 
   /**
@@ -1353,6 +1408,7 @@ export class BrowserService {
       design: null,
       composition: null,
       transport: null,
+      transportMuted: false,
       navigationGeneration: 0
     }
     this.tabs.set(tabId, tab)

@@ -89,12 +89,12 @@ The app sets two things when it wants one frozen frame: the query parameters \`c
 
 For a viewing, animate: drive \`cioRenderFrame\` from \`requestAnimationFrame\`, looping at \`duration\`, unless \`cio-capture\` is set.
 
-While the app is showing your composition it owns the clock. The preview tab has play, pause, seek, stop, a frame step and a loop toggle, so the user watches a video rather than a page that plays itself, and the playhead is kept across the reload an edit causes. Two consequences for your code:
+While the app is showing your composition it owns the clock completely. The preview tab has play, pause, seek, stop, a frame step and a loop toggle, so the user watches a video rather than a page that plays itself, and the playhead is kept across the reload an edit causes. Two consequences for your code:
 
-- Call \`window.cioRenderFrame\` through the global. Never hold the function in a variable and call that: the player replaces the global so the page's own loop cannot fight it for the frame, and a cached copy would draw behind the user's playhead.
-- Keep animating the page yourself, because the same folder is also opened outside this app, where nothing else drives it. Your draws are simply ignored while the app is showing the composition.
+- Write your own animation loop anyway, because the same folder is also opened outside this app, where nothing else drives it. While the app is showing the composition that loop is parked: the callbacks you register are held instead of run, so nothing you draw reaches the screen behind the playhead, whether you call \`window.cioRenderFrame\` or a local copy of it.
+- Do one-time setup with promises rather than with \`requestAnimationFrame\`. A callback you register after the player armed stays held until the player is disposed, so a first frame that waits for an animation-frame tick would never arrive.
 
-Your soundtrack is paused and re-timed with the picture when the user pauses or seeks. It is not re-scored frame by frame, so do not key a beat to a time only you can compute: put the timing in the render function, where the app can reach it.
+Your soundtrack stops with the picture. A play is refused while the player is paused, and the app mutes the tab for as long as it is not playing, so a bed you start late or from an element you never added to the page cannot sound under a still frame. Playing, pausing or seeking re-times the bed to the playhead rather than re-scoring it, so do not key a beat to a time only you can compute: put the timing in the render function, where the app can reach it.
 
 ## The stage
 

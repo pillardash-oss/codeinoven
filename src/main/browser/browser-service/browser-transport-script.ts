@@ -17,15 +17,21 @@
  *
  * 1. A frame is a function of the second alone, which the render contract already
  *    requires, so the transport can draw any second on demand.
- * 2. The page calls `window.cioRenderFrame` through the global. The transport
- *    replaces that global with a function that ignores page-initiated draws, so
- *    the page's own loop cannot fight the transport for the frame. A page that
- *    cached the function in a variable before this ran would keep drawing, which
- *    is why the playbook names the rule.
+ * 2. A page draw is declined twice over, because once is not enough. The transport
+ *    replaces the global with a function that ignores page-initiated draws, and it
+ *    parks the page's own animation loop outright. A page that cached the draw
+ *    function in a variable, or that calls a local one, would otherwise repaint
+ *    over the app's frame for as long as the tab lived, which is the difference
+ *    between a pause and a page that keeps playing.
  *
- * The page is never stopped, muted or hidden: it keeps running, and only its draws
- * are declined. Everything here is plain JavaScript because it runs in the page,
- * and the file is a pure function of the manifest so it can be checked directly.
+ * The soundtrack is reached the same way, and for the same reason. A bed is
+ * normally a detached `new Audio(...)` that no document query can find, so every
+ * media element that asks to play is recorded as it asks and a play is refused
+ * while the transport is paused. Audio contexts are remembered by wrapping their
+ * constructor, and suspended with the picture.
+ *
+ * Everything here is plain JavaScript because it runs in the page, and the file is
+ * a pure function of the manifest so it can be checked directly.
  */
 
 /** The global the transport is reachable at, for the app's own commands. */
@@ -102,6 +108,155 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     error: null
   };
 
+  /* ── The page's own loop is parked while the app shows the composition ── */
+
+  /**
+   * Callbacks the page asked for while its loop is parked.
+   *
+   * Held rather than scheduled, so the page cannot repaint over the frame the
+   * transport drew, however it reaches its draw function. Bounded, because a page
+   * that registers a callback on every attempt must not queue without limit.
+   */
+  let parkedCallbacks = [];
+  let parkedCallbackId = -1;
+  const MAX_PARKED_CALLBACKS = 64;
+
+  function parkedRaf(callback) {
+    if (parkedCallbacks.length >= MAX_PARKED_CALLBACKS) return 0;
+    const id = parkedCallbackId;
+    parkedCallbackId -= 1;
+    parkedCallbacks.push({ id, callback });
+    return id;
+  }
+
+  function parkedCaf(id) {
+    if (typeof id === 'number' && id < 0) {
+      const index = parkedCallbacks.findIndex((entry) => entry.id === id);
+      if (index >= 0) parkedCallbacks.splice(index, 1);
+      return;
+    }
+    caf(id);
+  }
+
+  function parkPageLoop() {
+    globalThis.requestAnimationFrame = parkedRaf;
+    globalThis.cancelAnimationFrame = parkedCaf;
+  }
+
+  /**
+   * Give the page its own clock back.
+   *
+   * The callbacks the page registered while parked are dropped rather than
+   * replayed: disposing happens when a fresh runtime is about to replace this one,
+   * so replaying them would let the page draw once with a jumped clock in the gap,
+   * and a composition is only ever shown inside this app, where the transport is
+   * the clock.
+   */
+  function releasePageLoop() {
+    globalThis.requestAnimationFrame = raf;
+    globalThis.cancelAnimationFrame = caf;
+    parkedCallbacks = [];
+  }
+
+  /* ── The soundtrack, whether or not it is in the document ── */
+
+  /**
+   * Every media element that has asked to play.
+   *
+   * A composition's bed is normally a detached \`new Audio(...)\`, which
+   * \`document.querySelectorAll\` cannot see, and a soundtrack that keeps sounding
+   * behind a paused picture is the whole defect this closes. Recording the element
+   * as it asks is what makes such an element reachable at all.
+   */
+  const watchedMedia = new Set();
+  const MAX_WATCHED_MEDIA = 128;
+  let releaseMediaWatch = null;
+
+  function watchMedia() {
+    const prototype = globalThis.HTMLMediaElement && globalThis.HTMLMediaElement.prototype;
+    if (!prototype || typeof prototype.play !== 'function') return;
+    const original = prototype.play;
+    const patched = function () {
+      watchedMedia.add(this);
+      if (watchedMedia.size > MAX_WATCHED_MEDIA) {
+        const oldest = watchedMedia.values().next().value;
+        if (oldest !== undefined) watchedMedia.delete(oldest);
+      }
+      // Nothing starts sounding behind a still frame: a page whose boot runs after
+      // the composition was armed frozen would otherwise play over a pause.
+      if (!transport.playing) {
+        try {
+          this.pause();
+        } catch {
+          // A pause that fails changes nothing, because the element was not running.
+        }
+        return Promise.resolve();
+      }
+      return original.apply(this, arguments);
+    };
+    prototype.play = patched;
+    releaseMediaWatch = () => {
+      if (prototype.play === patched) prototype.play = original;
+    };
+  }
+
+  /**
+   * Audio contexts the page opened, so a synthesized soundtrack stops with the
+   * picture.
+   *
+   * A context is a constructor call rather than a node, so it cannot be found
+   * after the fact: the constructor is wrapped while the runtime is armed, and
+   * every context it hands out is remembered.
+   */
+  const watchedContexts = new Set();
+  const MAX_WATCHED_CONTEXTS = 32;
+  const releaseContextWatches = [];
+
+  function watchAudioContexts() {
+    for (const name of ['AudioContext', 'webkitAudioContext']) {
+      const Original = globalThis[name];
+      if (typeof Original !== 'function') continue;
+      const Tracked = function () {
+        const context = new Original(...arguments);
+        watchedContexts.add(context);
+        if (watchedContexts.size > MAX_WATCHED_CONTEXTS) {
+          const oldest = watchedContexts.values().next().value;
+          if (oldest !== undefined) watchedContexts.delete(oldest);
+        }
+        return context;
+      };
+      Tracked.prototype = Original.prototype;
+      globalThis[name] = Tracked;
+      releaseContextWatches.push(() => {
+        if (globalThis[name] === Tracked) globalThis[name] = Original;
+      });
+    }
+  }
+
+  /** Every media element the app can reach: what the page started, plus what is in
+   *  the document in case the page replaced the element it started. */
+  function mediaElements() {
+    let listed = [];
+    try {
+      listed = Array.prototype.slice.call(document.querySelectorAll('audio, video'));
+    } catch {
+      listed = [];
+    }
+    for (const element of listed) watchedMedia.add(element);
+    return Array.from(watchedMedia);
+  }
+
+  function syncAudioContexts(playing) {
+    for (const context of watchedContexts) {
+      try {
+        const settled = playing ? context.resume() : context.suspend();
+        if (settled && typeof settled.catch === 'function') settled.catch(() => {});
+      } catch {
+        // A context that refuses to settle is the page's business.
+      }
+    }
+  }
+
   function clampTime(seconds) {
     const value = Number(seconds);
     if (!Number.isFinite(value) || value < 0) return 0;
@@ -131,15 +286,15 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     }
   }
 
-  /** Re-time the page's own media to the playhead, or stop it with the picture. */
+  /**
+   * Re-time the page's own media to the playhead, or stop it with the picture.
+   *
+   * Everything the page has started is reached rather than only what is in the
+   * document, because a bed is normally a detached element. Contexts settle with
+   * the picture too, so a synthesized soundtrack stops when the picture does.
+   */
   function syncMedia(playing) {
-    let media;
-    try {
-      media = Array.prototype.slice.call(document.querySelectorAll('audio, video'));
-    } catch {
-      return;
-    }
-    for (const element of media) {
+    for (const element of mediaElements()) {
       try {
         if (playing) {
           if (Math.abs(element.currentTime - transport.time) > RESYNC) {
@@ -155,6 +310,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
         // refuses to re-time must not stop the picture.
       }
     }
+    syncAudioContexts(playing);
   }
 
   function stopDriver() {
@@ -248,6 +404,12 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   function dispose() {
     transport.playing = false;
     stopDriver();
+    // The picture and the sound both stop with the runtime, so a disposed runtime
+    // cannot leave a tab playing under a bar that no longer answers.
+    syncMedia(false);
+    releasePageLoop();
+    if (releaseMediaWatch) releaseMediaWatch();
+    for (const release of releaseContextWatches) release();
     // Only take the global back if it is still ours: a page that redefined its
     // render function after this runtime was installed keeps its own definition.
     if (globalThis.cioRenderFrame === declinedDraw) globalThis.cioRenderFrame = render;
@@ -273,6 +435,12 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   transport.freezeAt = freezeAt;
   transport.state = state;
   transport.dispose = dispose;
+  // The runtime owns the page from here: its loop is parked so it cannot repaint
+  // over the transport's frame, its soundtrack is reachable wherever the page put
+  // it, and its audio contexts are remembered so they settle with the picture.
+  watchMedia();
+  watchAudioContexts();
+  parkPageLoop();
   globalThis.cioRenderFrame = declinedDraw;
   globalThis.${COMPOSITION_TRANSPORT_GLOBAL} = transport;
 
