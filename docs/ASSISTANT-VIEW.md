@@ -178,6 +178,12 @@ the app's clock for Assistant View.
   overlaid (`sendPrompt` with `origin: 'internal'`). The run thread inherits the
   task's `routineId`, so the engine composes the routine how-to and the run
   contract into its system prompt exactly as it does for the task.
+- **A run is named for what it runs.** The run's visible prompt is built by
+  `routineRunPrompt` (`src/lib/routine-run.ts`). A user's own task is named by
+  its title, but a routine's Getting started thread is its authoring host, not
+  a job: a run of it is named for the routine instead. Naming it "Getting
+  started" made a completed routine's run read (and get answered by the agent)
+  as another getting-started pass.
 - **Paused routines never fire.** `Routine.paused` is checked before the
   schedule is even read (`RoutineManager.isTaskPaused`), so pausing a routine
   stops every task in it while keeping the tasks, their how-to, and their
@@ -186,9 +192,9 @@ the app's clock for Assistant View.
 - **No auto catch-up.** A slot that came due while the app was closed (or a
   machine slept through it) is recorded as a missed run, never run in a burst.
   The grace window is `MISS_GRACE_MS`; a fire before process start is always a
-  miss. Each record carries a `reason`   `app-closed` when the app was not
+  miss. Each record carries a `reason` `app-closed` when the app was not
   running at the due time, `delayed` when it was running but could not start the
-  run in time   and both surfaces state it instead of always claiming the app
+  run in time and both surfaces state it instead of always claiming the app
   was closed.
 - **A slot before the schedule existed is never due.** The scheduler floors a
   due slot at the later of the task's last fire and the moment its schedule
@@ -326,6 +332,18 @@ runs is working (`runWorking`), because the run, not the task, is what is
 executing, and the routine row aggregates the same signal. Missed badges stay on
 the task (and its routine): a miss is a property of the schedule, not of one
 execution.
+
+**A routine's Getting started runs leave that row once the routine is set up.**
+While the routine is still authoring (its how-to unsaved) its runs stay nested
+inside the Getting started thread, since they are still about setting the
+routine up. Once `routineHowToComplete` holds, `Workspace.svelte` also groups
+every run by its `routineId` (`groupRunsByRoutine`) and the sidebar lifts the
+seed thread's runs out to sit beside its task rows, at the same level, through
+`routineSiblingRuns`. A run whose task is no longer on screen (the Getting
+started thread was hidden) rises to the routine too, so hiding the seed only
+hides that row and never the runs it produced. A run whose task renders
+elsewhere (a pinned task that left for the Pinned section) keeps nesting under
+that row.
 
 Pinned tasks lead the sidebar **above** the routines, in one shared **Pinned**
 section rendered by the same `PinnedSection.svelte` the project sidebar uses.
@@ -492,6 +510,7 @@ prompt"; the user-facing term is how-to.
   re-offer its choices) and the ask itself: the two priority brackets are two
   separate single-choice questions, because one question carrying both brackets
   produces a combined answer no turn can resolve back into brackets.
+
 - The how-to panel shows that checkpoint under **Agreed so far** while the
   how-to is incomplete, so the interview is auditable from the panel instead of
   only from the thread. The main process broadcasts `routine:checkpointChanged`
@@ -562,6 +581,41 @@ prompt"; the user-facing term is how-to.
   with `cio_util_manage`, collects credentials with `cio_ask_secret`, and asks
   the user for anything else with `cio_ask_user`. Pointing the user at the
   Connections tab is the last resort, not the answer.
+- **The Getting started thread never runs the routine.** `ChatEngine.routineConversation`
+  (`src/main/chat/chat-engine.ts`) is the one place that decides which of the
+  three routine conversations a thread is on: `authoring` (any thread of a routine
+  that still has no how-to, the interview that drafts it), `update` (the Getting
+  started thread once the routine is saved), and `run` (every other thread of a
+  saved routine). A run of the routine
+  dispatches its own run thread (`assistantRunTitle`, `routineRunPrompt`), so a
+  message on the Getting started thread is always about the routine itself. It
+  carries the editing contract instead of the run contract
+  (`routineHowToUpdateContext` in `src/lib/routine-authoring.ts`): the saved
+  how-to, schedule, connections, delivery and urgency ride along as the starting
+  point, the agent changes only what the user asked for, and it is told plainly
+  to never start doing the routine's job or treat the message as the routine
+  having fired. This was a real bug: the thread was handed the run contract as
+  soon as the how-to was saved, so "more Nigerian news, less politics" was
+  answered by searching the web and writing the brief instead of revising the
+  how-to. The editing turn keeps the management grant a run has (a tweak that
+  names a new service installs it here; `CIO_UTILITY_ROUTINE_EDIT_PROMPT` in
+  `src/main/utilities/cio-utility-prompt.ts`), and a steer on that thread keeps
+  it too, while the interview checkpoint capability stays bound to the authoring
+  conversation alone.
+- **A revision commits through the same recap card.** The draft path is open on
+  the Getting started thread after the first save, not only before it:
+  `assistantRoutineDraft` (`ThreadView.svelte`) keeps parsing the thread's newest
+  `how-to` and `routine` fences there, while a task or run thread of the same
+  routine still never proposes one. A draft is offered only when it is a real
+  change: it must be newer than `Routine.howToUpdatedAt` (a draft left in a
+  reopened thread after an edit elsewhere is not) and it must differ from what is
+  saved, counting a plan-only change (a new time, an added connection) because the
+  how-to text often carries no schedule at all. `RoutineRecapCard` carries an
+  `update` flag, so it says **Ready to update**, lists the connections the routine
+  keeps beside the ones the plan adds, keeps the saved schedule when the plan does
+  not name it, and commits through the same `confirmRoutineSave`/
+  `saveRoutineHowTo` pair. The app-owned next-steps turn is posted for a routine's
+  first save only.
 - The contract is a property of the thread, so it applies to every turn on the
   task, not just the internal run: a scheduled run, a missed-run **Run now**, and
   a user follow-up on the same thread all carry it and the run grant
@@ -765,13 +819,33 @@ the run thread itself. Note what that does and does not mean today. The report i
 the run thread's message, and the thread is listed in the assistant sidebar under
 its routine. The notification panel's **Assistants** tab carries **missed runs
 only**, so a finished report does not currently raise its own notification entry
-there. Every other channel is *external*, and picking one is
+there. Every other channel is _external_, and picking one is
 also a statement that the routine needs a connection: the authoring contract
 tells the agent to add that channel to the plan's `connections` and set it up
 like any other, and the panel warns (and the All tab's summary row marks) a
 delivery whose channel has no ready connection. An action-only routine that
 reports nothing has no delivery, and the contract says so explicitly instead of
 inventing a channel.
+
+### Durable report files
+
+A run thread is capped and evicted, so a report that only ever lived in the
+transcript would eventually disappear. Every assistant task turn that settles
+with a report therefore also lands one Markdown file under `reports/` in the
+routine's own workspace (`assistant-cwd/<routineId>/reports/`), which the
+**Workspace files** panel mounts. `isAssistantReportThread`
+(`src/lib/assistant-reports.ts`) excludes the Getting started authoring thread,
+and `assistantReportIsTerminal` limits the copy to the terminal outcomes
+(`completed`, `failed`); a non-terminal settle (`awaiting_approval`,
+`working-paused`) is still in flight, and an `interrupted` turn was stopped on
+purpose. The file is written in the main process from the turn's final answer
+(`writeAssistantReport`, `src/main/chat/assistant-report-service.ts`, called from
+the chat engine's idle finalization), so it is deterministic and does not depend
+on the model remembering to write a file. `buildAssistantReportDocument` puts a
+short metadata header (run time, status, task, agreed urgency) above the final
+answer, and the file name is the run time plus a short thread suffix so two runs
+that settle in the same second do not collide. The in-app report and its
+notification are unchanged: the file is the copy that outlives the thread.
 
 ### Priority
 

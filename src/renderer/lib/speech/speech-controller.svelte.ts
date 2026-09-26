@@ -25,8 +25,10 @@ import type {
   SpeechEditorTarget
 } from './editor-target'
 import {
+  CAPTURE_START_TIMEOUT_MS,
   CAPTURE_STOP_TIMEOUT_MS,
   CAPTURE_TIMESLICE_MS,
+  CAPTURE_UPLOAD_DRAIN_TIMEOUT_MS,
   PAUSE_UPLOAD_DEPTH,
   errorMessage,
   recordingToastMessage,
@@ -125,6 +127,13 @@ class SpeechController {
   /** Scope captured when `start()` begins so the capture is attributable to
    *  its thread even before permission resolves (no ActiveCapture yet). */
   private captureScope: SpeechScope | null = null
+  /**
+   * Cancels the start currently opening the microphone. The mic can take an
+   * unbounded time to open (a wedged device, a stalled permission prompt), and
+   * while it does there is no `ActiveCapture` for `stop()` to finish, so this
+   * is the only handle that lets a stop or Escape interrupt the attempt.
+   */
+  private startToken: AbortController | null = null
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
   private preloadTimer: ReturnType<typeof setTimeout> | null = null
   private preloadFired = false
@@ -538,47 +547,197 @@ class SpeechController {
     // the mic button must respond in the same frame they are pressed. Every
     // async pipeline step below has a failure path that settles into `failed`.
     this.state = { state: 'starting', targetId: target.id }
-
-    const nativeStarted = await invoke('speech:beginNativeCapture', scope).catch(() => null)
-    if (nativeStarted?.ok) {
-      const capture: ActiveCapture = {
-        target,
-        snapshot,
-        scope,
-        recorder: null,
-        stream: null,
-        native: true,
-        sessionId: nativeStarted.value.sessionId,
-        attemptId: nativeStarted.value.attemptId,
-        startedAt: performance.now(),
-        uploadTail: Promise.resolve(),
-        queuedChunks: 0,
-        uploadError: null
-      }
-      this.active = capture
-      this.state = {
-        state: 'recording',
-        targetId: target.id,
-        attemptId: capture.attemptId,
-        startedAt: Date.now(),
-        elapsedMs: 0
-      }
-      this.startElapsedTimer(capture)
-      this.scheduleAsrPreload(capture)
-      this.flagCaptureDrafting(capture.scope)
-      playSpeechCue(this.sound, 'started')
-      return
-    }
-
-    let stream: MediaStream
+    const startToken = new AbortController()
+    this.startToken = startToken
     try {
-      if (typeof navigator.mediaDevices?.getUserMedia !== 'function') {
-        throw new Error('Microphone recording is unavailable in this environment.')
+      const nativeStarted = await invoke('speech:beginNativeCapture', scope).catch(
+        (cause: unknown) => {
+          // Falling back to the browser recorder is expected on a device without
+          // the native worker, but a failure with the worker present is the real
+          // reason a recording is lost or sounds different, so it is recorded
+          // instead of being swallowed.
+          logRendererError(
+            'Native voice capture did not start; using the browser recorder.',
+            cause
+          )
+          return null
+        }
+      )
+      if (startToken.signal.aborted) {
+        // The user stopped (or hit Escape) while the native capture was starting:
+        // end the session on the way out so a cancelled attempt never lingers in
+        // main, and settle quietly instead of raising a failure toast.
+        if (nativeStarted?.ok) {
+          await invoke(
+            'speech:failNativeCapture',
+            nativeStarted.value.sessionId,
+            'Recording was cancelled.'
+          ).catch(() => undefined)
+        }
+        this.state = { state: 'idle' }
+        return
       }
-      if (typeof MediaRecorder === 'undefined') {
-        throw new Error('Audio recording is unavailable in this environment.')
+      if (nativeStarted?.ok) {
+        const capture: ActiveCapture = {
+          target,
+          snapshot,
+          scope,
+          recorder: null,
+          stream: null,
+          native: true,
+          sessionId: nativeStarted.value.sessionId,
+          attemptId: nativeStarted.value.attemptId,
+          startedAt: performance.now(),
+          uploadTail: Promise.resolve(),
+          queuedChunks: 0,
+          uploadError: null
+        }
+        this.active = capture
+        this.state = {
+          state: 'recording',
+          targetId: target.id,
+          attemptId: capture.attemptId,
+          startedAt: Date.now(),
+          elapsedMs: 0
+        }
+        this.startElapsedTimer(capture)
+        this.scheduleAsrPreload(capture)
+        this.flagCaptureDrafting(capture.scope)
+        playSpeechCue(this.sound, 'started')
+        return
       }
-      stream = await navigator.mediaDevices.getUserMedia({
+
+      let stream: MediaStream
+      try {
+        if (typeof MediaRecorder === 'undefined') {
+          throw new Error('Audio recording is unavailable in this environment.')
+        }
+        stream = await this.openMicrophone(startToken.signal)
+      } catch (cause) {
+        // A cancelled start is not a permission failure: the user asked for it to
+        // end, so it settles quietly instead of raising a toast.
+        if (startToken.signal.aborted) {
+          this.state = { state: 'idle' }
+          return
+        }
+        const message = errorMessage(cause)
+        await invoke('speech:recordPermissionFailure', scope, message).catch(() => undefined)
+        this.surfaceFailure(target.id, 'permission', cause)
+        return
+      }
+      if (startToken.signal.aborted) {
+        for (const track of stream.getTracks()) track.stop()
+        this.state = { state: 'idle' }
+        return
+      }
+
+      let recorder: MediaRecorder
+      let pendingSessionId: string | null = null
+      let active: ActiveCapture | null = null
+      try {
+        const mimeType = selectedMimeType()
+        recorder = new MediaRecorder(stream, {
+          ...(mimeType ? { mimeType } : {}),
+          audioBitsPerSecond: 64_000
+        })
+        const started = await invoke(
+          'speech:beginCapture',
+          scope,
+          recorder.mimeType || mimeType || 'audio/webm'
+        )
+        if (!started.ok) throw new Error(started.error.message)
+        pendingSessionId = started.value.sessionId
+        const capture: ActiveCapture = {
+          target,
+          snapshot,
+          scope,
+          recorder,
+          stream,
+          native: false,
+          sessionId: started.value.sessionId,
+          attemptId: started.value.attemptId,
+          startedAt: performance.now(),
+          uploadTail: Promise.resolve(),
+          queuedChunks: 0,
+          uploadError: null
+        }
+        active = capture
+        this.active = capture
+        recorder.ondataavailable = (event) => this.queueChunk(capture, event.data)
+        recorder.onerror = () => {
+          capture.uploadError ??= new Error('The recording device stopped unexpectedly.')
+          void this.stop()
+        }
+        for (const track of stream.getAudioTracks()) {
+          track.addEventListener(
+            'ended',
+            () => {
+              if (this.active !== capture || recorder.state === 'inactive') return
+              capture.uploadError ??= new Error(
+                'Microphone access was revoked or the device was disconnected.'
+              )
+              void this.stop()
+            },
+            { once: true }
+          )
+        }
+        recorder.start(CAPTURE_TIMESLICE_MS)
+        pendingSessionId = null
+        this.state = {
+          state: 'recording',
+          targetId: target.id,
+          attemptId: capture.attemptId,
+          startedAt: Date.now(),
+          elapsedMs: 0
+        }
+        this.startElapsedTimer(capture)
+        this.scheduleAsrPreload(capture)
+        this.flagCaptureDrafting(capture.scope)
+        playSpeechCue(this.sound, 'started')
+      } catch (cause) {
+        this.clearElapsedTimer()
+        this.clearPreloadTimer()
+        if (active) {
+          active.uploadError ??= cause instanceof Error ? cause : new Error(errorMessage(cause))
+          if (active.recorder) await this.stopRecorder(active.recorder).catch(() => undefined)
+          if (active.stream) for (const track of active.stream.getTracks()) track.stop()
+          await active.uploadTail.catch(() => undefined)
+          await invoke('speech:failCapture', active.sessionId, errorMessage(cause)).catch(
+            () => undefined
+          )
+        } else if (pendingSessionId) {
+          await invoke('speech:failCapture', pendingSessionId, errorMessage(cause)).catch(
+            () => undefined
+          )
+        }
+        for (const track of stream.getTracks()) track.stop()
+        this.active = null
+        this.settleCaptureDraft(scope)
+        this.surfaceFailure(target.id, 'capture', cause)
+      }
+    } finally {
+      if (this.startToken === startToken) this.startToken = null
+    }
+  }
+
+  /**
+   * Open the microphone, bounded in time.
+   *
+   * `getUserMedia` can hang for good: a wedged device, a permission prompt the
+   * user never answers, a platform audio service that stopped responding. The
+   * surface has already flipped to `starting` at that point and no
+   * `ActiveCapture` exists, so an unbounded await is a permanent wedge. The
+   * timeout settles the attempt as a failure, and the abort settles it as a
+   * cancellation. A stream that resolves after the race is lost is stopped so a
+   * live mic is never leaked.
+   */
+  private async openMicrophone(signal: AbortSignal): Promise<MediaStream> {
+    if (typeof navigator.mediaDevices?.getUserMedia !== 'function') {
+      throw new Error('Microphone recording is unavailable in this environment.')
+    }
+    let settled = false
+    const pending = navigator.mediaDevices
+      .getUserMedia({
         audio: {
           channelCount: 1,
           echoCancellation: true,
@@ -587,102 +746,68 @@ class SpeechController {
         },
         video: false
       })
-    } catch (cause) {
-      const message = errorMessage(cause)
-      await invoke('speech:recordPermissionFailure', scope, message).catch(() => undefined)
-      this.surfaceFailure(target.id, 'permission', cause)
-      return
-    }
-
-    let recorder: MediaRecorder
-    let pendingSessionId: string | null = null
-    let active: ActiveCapture | null = null
-    try {
-      const mimeType = selectedMimeType()
-      recorder = new MediaRecorder(stream, {
-        ...(mimeType ? { mimeType } : {}),
-        audioBitsPerSecond: 64_000
+      .then((stream) => {
+        if (settled) {
+          for (const track of stream.getTracks()) track.stop()
+          throw new Error('The microphone opened after the recording was cancelled.')
+        }
+        return stream
       })
-      const started = await invoke(
-        'speech:beginCapture',
-        scope,
-        recorder.mimeType || mimeType || 'audio/webm'
+    const interruption = new Promise<never>((_resolve, rejectPromise) => {
+      const timer = setTimeout(
+        () => rejectPromise(new Error('The microphone did not open in time.')),
+        CAPTURE_START_TIMEOUT_MS
       )
-      if (!started.ok) throw new Error(started.error.message)
-      pendingSessionId = started.value.sessionId
-      const capture: ActiveCapture = {
-        target,
-        snapshot,
-        scope,
-        recorder,
-        stream,
-        native: false,
-        sessionId: started.value.sessionId,
-        attemptId: started.value.attemptId,
-        startedAt: performance.now(),
-        uploadTail: Promise.resolve(),
-        queuedChunks: 0,
-        uploadError: null
-      }
-      active = capture
-      this.active = capture
-      recorder.ondataavailable = (event) => this.queueChunk(capture, event.data)
-      recorder.onerror = () => {
-        capture.uploadError ??= new Error('The recording device stopped unexpectedly.')
-        void this.stop()
-      }
-      for (const track of stream.getAudioTracks()) {
-        track.addEventListener(
-          'ended',
-          () => {
-            if (this.active !== capture || recorder.state === 'inactive') return
-            capture.uploadError ??= new Error(
-              'Microphone access was revoked or the device was disconnected.'
-            )
-            void this.stop()
-          },
-          { once: true }
-        )
-      }
-      recorder.start(CAPTURE_TIMESLICE_MS)
-      pendingSessionId = null
-      this.state = {
-        state: 'recording',
-        targetId: target.id,
-        attemptId: capture.attemptId,
-        startedAt: Date.now(),
-        elapsedMs: 0
-      }
-      this.startElapsedTimer(capture)
-      this.scheduleAsrPreload(capture)
-      this.flagCaptureDrafting(capture.scope)
-      playSpeechCue(this.sound, 'started')
-    } catch (cause) {
-      this.clearElapsedTimer()
-      this.clearPreloadTimer()
-      if (active) {
-        active.uploadError ??= cause instanceof Error ? cause : new Error(errorMessage(cause))
-        if (active.recorder) await this.stopRecorder(active.recorder).catch(() => undefined)
-        if (active.stream) for (const track of active.stream.getTracks()) track.stop()
-        await active.uploadTail.catch(() => undefined)
-        await invoke('speech:failCapture', active.sessionId, errorMessage(cause)).catch(
-          () => undefined
-        )
-      } else if (pendingSessionId) {
-        await invoke('speech:failCapture', pendingSessionId, errorMessage(cause)).catch(
-          () => undefined
-        )
-      }
-      for (const track of stream.getTracks()) track.stop()
-      this.active = null
-      this.settleCaptureDraft(scope)
-      this.surfaceFailure(target.id, 'capture', cause)
+      signal.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(timer)
+          rejectPromise(new Error('The recording was cancelled before the microphone opened.'))
+        },
+        { once: true }
+      )
+    })
+    try {
+      return await Promise.race([pending, interruption])
+    } finally {
+      settled = true
+      // A losing `pending` must not surface as an unhandled rejection.
+      void pending.catch(() => undefined)
+    }
+  }
+
+  /**
+   * Drain the serialized chunk-upload chain, bounded in time. Returning instead
+   * of hanging keeps the stop path able to settle: the caller checks
+   * `uploadError` and fails the capture, which is far better than a surface
+   * pinned in `stopping` with every later stop blocked behind it.
+   */
+  private async drainUploads(active: ActiveCapture): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      await Promise.race([
+        active.uploadTail,
+        new Promise<never>((_resolve, rejectPromise) => {
+          timer = setTimeout(
+            () => rejectPromise(new Error('The recording upload did not finish in time.')),
+            CAPTURE_UPLOAD_DRAIN_TIMEOUT_MS
+          )
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 
   async stop(): Promise<void> {
     const active = this.active
-    if (!active) return
+    if (!active) {
+      // No capture exists yet: the microphone is still opening. Cancelling the
+      // in-flight start is what makes stop (and Escape) work in `starting`
+      // instead of silently doing nothing while the attempt pins the surface.
+      if (this.state.state === 'starting') this.startToken?.abort()
+      return
+    }
     if (this.stopPromise) return this.stopPromise
     const pending = this.finishStop(active)
     this.stopPromise = pending
@@ -722,7 +847,7 @@ class SpeechController {
         if (!active.recorder || !active.stream) throw new Error('Browser capture is unavailable.')
         await this.stopRecorder(active.recorder)
         for (const track of active.stream.getTracks()) track.stop()
-        await active.uploadTail
+        await this.drainUploads(active)
         if (active.uploadError) throw active.uploadError
         const finished = await invoke(
           'speech:finishCapture',

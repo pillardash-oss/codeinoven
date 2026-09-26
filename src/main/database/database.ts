@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks'
 import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
+import { DEFAULT_WORK_ROOTS, authoredWorkKindOf } from '../../lib/design/work-roots'
 import { USAGE_EVENT_FEATURES } from '../../lib/types/usage'
 import { Logger } from '../system/logger'
 import {
@@ -45,6 +46,13 @@ import { buildBoundedQuery } from './bounded-query'
 /** Main-thread SQLite work above one 60 Hz frame is diagnostic-worthy. */
 export const MAIN_THREAD_DATABASE_WARNING_MS = 16.7
 
+/** `db_meta` key: '1' once the narrow search mirror is fully backfilled. */
+const SEARCH_META_READY_KEY = 'agent_message_search_meta_ready'
+/** `db_meta` key: highest agent_messages rowid already mirrored by the backfill. */
+const SEARCH_META_CURSOR_KEY = 'agent_message_search_meta_cursor'
+/** Rows mirrored per serialized worker batch while backfilling. */
+const SEARCH_META_BATCH_ROWS = 2000
+
 /**
  * Database   synchronous SQLite wrapper for the Electron main process.
  *
@@ -58,6 +66,13 @@ export class Database {
   private readonly path: string
   private maintenanceWorker: DatabaseWorker | null = null
   private readonly workerFactory: DatabaseWorkerFactory | undefined
+  /**
+   * Whether `agent_message_search_meta` is fully backfilled, so thread search
+   * can rank against the narrow mirror instead of joining agent_messages per
+   * match. False until the batched backfill reports done (see
+   * `backfillAgentMessageSearchMeta`).
+   */
+  private searchMetaReady = false
 
   constructor(path?: string, workerFactory?: DatabaseWorkerFactory) {
     this.path = path ?? getConfigRoot() + '/codeinoven.db'
@@ -83,11 +98,20 @@ export class Database {
     await this.migrateIndependentUsageLedger()
     await this.migrateUsageEventFeatures()
     this.db.pragma('optimize = 0x10002')
+    // Non-blocking: the mirror is brought up to date on the worker in small
+    // serialized batches, so init never waits on it and the main thread stays
+    // free. Until it reports ready, search uses the legacy (correct) query.
+    void this.backfillAgentMessageSearchMeta()
 
     Logger.info('SQLite database initialised', {
       path: this.path,
       durationMs: this.roundDuration(performance.now() - startedAt)
     })
+  }
+
+  /** Whether thread search may rank against the narrow search mirror. */
+  isSearchMetaReady(): boolean {
+    return this.searchMetaReady
   }
 
   /**
@@ -115,6 +139,94 @@ export class Database {
   /** Whether the database connection is currently open. */
   isOpen(): boolean {
     return this.db !== null
+  }
+
+  /**
+   * Bring `agent_message_search_meta` up to date with agent_messages.
+   *
+   * The mirror is what makes thread search fast: without it the FTS query has
+   * to read agent_messages once per match (random rowid order, hundreds of
+   * megabytes) just to apply its visibility filter and rank by recency.
+   *
+   * Backfilling runs on the worker's connection as a sequence of small
+   * serialized batches, each its own request, so an interactive query slots in
+   * between batches instead of waiting for the whole rebuild. Progress is
+   * resumable through `db_meta`; the ready flag is written only once the whole
+   * table has been mirrored, because new messages keep the mirror current
+   * through the schema triggers from then on.
+   */
+  private async backfillAgentMessageSearchMeta(): Promise<void> {
+    const worker = this.maintenanceWorker
+    if (!worker?.isRunning()) return
+    if ((await this.metaFlag(SEARCH_META_READY_KEY)) !== null) {
+      this.searchMetaReady = true
+      return
+    }
+    try {
+      let cursor = Number((await this.metaFlag(SEARCH_META_CURSOR_KEY)) ?? 0)
+      for (;;) {
+        if (!worker.isRunning() || !this.isOpen()) return
+        const batch = await worker.query(
+          'SELECT rowid AS rowid FROM agent_messages WHERE rowid > ? ORDER BY rowid LIMIT ?',
+          [cursor, SEARCH_META_BATCH_ROWS],
+          SEARCH_META_BATCH_ROWS
+        )
+        if (!batch.ok) {
+          Logger.error('Search mirror backfill read failed', batch.error)
+          return
+        }
+        const rows = batch.rows ?? []
+        if (rows.length === 0) break
+        // Mirror exactly the range the batch read, so a concurrent delete inside
+        // the batch can never leave a rowid gap the next cursor would skip.
+        const lastRowid = Number(rows[rows.length - 1]?.rowid ?? cursor)
+        const inserted = await worker.execute(
+          `INSERT OR IGNORE INTO agent_message_search_meta(
+             rowid, thread_id, role, visibility, session_id, created_at
+           )
+           SELECT rowid, thread_id, role, visibility, session_id, created_at
+           FROM agent_messages WHERE rowid > ? AND rowid <= ?`,
+          [cursor, lastRowid]
+        )
+        if (!inserted.ok) {
+          Logger.error('Search mirror backfill write failed', inserted.error)
+          return
+        }
+        cursor = lastRowid
+        this.setMetaFlag(SEARCH_META_CURSOR_KEY, String(cursor))
+      }
+      this.setMetaFlag(SEARCH_META_READY_KEY, '1')
+      this.searchMetaReady = true
+      Logger.info('Agent message search mirror ready', { throughRowid: cursor })
+    } catch (error) {
+      // Search keeps working through the legacy query; it is only slower.
+      Logger.error('Search mirror backfill failed', error)
+    }
+  }
+
+  /**
+   * Read a `db_meta` value, or null when the key is absent (or the db is closed).
+   *
+   * On the worker's connection: the backfill reads its cursor between batches,
+   * and even a one-row read must not reach the primary connection from the main
+   * thread while the user is working (see the main-thread SQLite rule in
+   * `docs/APP-BIBLE.md`).
+   */
+  private async metaFlag(key: string): Promise<string | null> {
+    if (!this.isOpen()) return null
+    const result = await this.queryViaWorker('SELECT value FROM db_meta WHERE key = ?', [key], 1)
+    const row = result.rows[0] as { value: string } | undefined
+    return row?.value ?? null
+  }
+
+  /**
+   * Write a `db_meta` value. The connection can close underneath the backfill
+   * (its waits are on the worker), so a closed database turns this into a no-op
+   * rather than an error on a normal quit.
+   */
+  private setMetaFlag(key: string, value: string): void {
+    if (!this.isOpen()) return
+    this.run('INSERT OR REPLACE INTO db_meta(key, value) VALUES(?, ?)', key, value)
   }
 
   /** Close the primary connection only; the maintenance worker is retained. */
@@ -213,9 +325,11 @@ export class Database {
   }
 
   /**
-   * Log only operation class, duration, and the statement text (params and
-   * user data are never logged). The SQL is attributed verbatim so a slow op
-   * can be traced to its caller; very long statements are bounded.
+   * Log only operation class, duration, the statement text, and the call site
+   * (params and user data are never logged). The stack is walked only after the
+   * statement has already held the main thread past a frame, so the report is
+   * free on the normal path and names the feature that issued the statement -
+   * the SQL alone says which query ran, not who ran it.
    */
   private reportSlowMainThreadOperation(operation: string, startedAt: number, sql?: string): void {
     const durationMs = performance.now() - startedAt
@@ -223,7 +337,8 @@ export class Database {
     Logger.info('Slow synchronous SQLite operation on Electron main', {
       operation,
       durationMs: this.roundDuration(durationMs),
-      sql: sql ? truncateSqlForLog(sql) : undefined
+      sql: sql ? truncateSqlForLog(sql) : undefined,
+      caller: mainThreadCallFrames()
     })
   }
 
@@ -744,8 +859,46 @@ export class Database {
       this.migrateRoutineAgentsAndPause(connection)
       this.migrateRoutineDescription(connection)
       this.migrateRoutineReporting(connection)
+      this.migrateCustomSvgIcons(connection)
+      this.migrateCustomIconLibrary(connection)
       this.migrateRoutineScheduleAnchor(connection)
+      this.migrateThreadDesignKind(connection)
+      this.migrateThreadAuthoredWorkKind(connection)
     })()
+  }
+
+  private migrateCustomSvgIcons(connection: DatabaseType): void {
+    for (const table of ['projects', 'routines'] as const) {
+      const columns = new Set<string>(
+        (connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
+          (column) => column.name
+        )
+      )
+      if (!columns.has('custom_svg')) {
+        connection.exec(`ALTER TABLE ${table} ADD COLUMN custom_svg TEXT`)
+      }
+    }
+  }
+
+  /** Remove the obsolete required name column while preserving saved SVGs. */
+  private migrateCustomIconLibrary(connection: DatabaseType): void {
+    const columns = connection.prepare('PRAGMA table_info(custom_icons)').all() as Array<{
+      name: string
+      notnull: number
+    }>
+    if (!columns.some((column) => column.name === 'name' && column.notnull === 1)) return
+
+    connection.exec(`
+      CREATE TABLE custom_icons_without_name (
+        id TEXT PRIMARY KEY NOT NULL,
+        svg TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      INSERT INTO custom_icons_without_name(id, svg, created_at)
+        SELECT id, svg, created_at FROM custom_icons;
+      DROP TABLE custom_icons;
+      ALTER TABLE custom_icons_without_name RENAME TO custom_icons;
+    `)
   }
 
   /**
@@ -881,6 +1034,73 @@ export class Database {
           WHERE schedule IS NOT NULL AND schedule_updated_at IS NULL`
       )
       .run()
+  }
+
+  /**
+   * Record the kind of authored work on each thread's folder row.
+   *
+   * The row used to store only a path, and the kind was recovered by reading that
+   * path's root, so a thread lost its marker whenever its folder stopped sitting
+   * under a known root: renamed, deleted, or written somewhere the app does not
+   * document. The kind is a column now, written at preview time, and this pass
+   * classifies the rows that predate it so an upgraded database arrives with the
+   * knowledge a fresh one records. One bounded pass over one row per thread, and
+   * only on the pass that adds the column, so it costs nothing afterwards.
+   *
+   * The added column carries the default but not the fresh schema's `CHECK`, which
+   * SQLite cannot attach to an existing table; the reader treats anything that is
+   * not `video` as a design, so the constraint is a documentation of intent here.
+   */
+  private migrateThreadDesignKind(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(thread_designs)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (columns.has('kind')) return
+    connection.exec("ALTER TABLE thread_designs ADD COLUMN kind TEXT NOT NULL DEFAULT 'design'")
+    const rows = connection
+      .prepare('SELECT thread_id, directory FROM thread_designs')
+      .all() as Array<{ thread_id: string; directory: string }>
+    const update = connection.prepare('UPDATE thread_designs SET kind = ? WHERE thread_id = ?')
+    for (const row of rows) {
+      // The column default already says design, so only a composition needs a write.
+      // The defaults are the roots these rows were written under: the setting
+      // that moves them came later, so a stored root cannot be what classified
+      // a row that predates it.
+      if (authoredWorkKindOf(row.directory, DEFAULT_WORK_ROOTS) !== 'video') continue
+      update.run('video', row.thread_id)
+    }
+  }
+
+  /**
+   * Record the authored-work session on the thread itself.
+   *
+   * The sidebar used to answer "is this a design or a video thread" by scanning
+   * every listed thread's persisted messages for the session tag, a `parts LIKE`
+   * that read the whole column on every render. The thread already carries the
+   * answer the moment it enters a session, so the kind lives here and the row
+   * draws it directly. Threads that predate the column are classified from the
+   * durable folder record; a thread that only ever typed the tag self-heals on
+   * its next turn, when the chat engine persists the kind it derives.
+   *
+   * The added column carries no `CHECK`: SQLite cannot attach one through
+   * `ALTER TABLE ADD COLUMN`, so the reader enforces the domain and the fresh
+   * schema's constraint documents the intent.
+   */
+  private migrateThreadAuthoredWorkKind(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.has('authored_work_kind')) return
+    connection.exec('ALTER TABLE threads ADD COLUMN authored_work_kind TEXT')
+    connection.exec(
+      `UPDATE threads
+          SET authored_work_kind = (SELECT kind FROM thread_designs WHERE thread_id = threads.id)
+        WHERE EXISTS (SELECT 1 FROM thread_designs WHERE thread_id = threads.id)`
+    )
   }
 
   /**
@@ -1483,6 +1703,36 @@ function parseColumnNames(columnsSql: string): string[] {
 
 /** Statement text attributed in slow-op logs; capped and normalized to a single line. */
 const MAX_SLOW_OP_SQL_LENGTH = 240
+
+/** Caller frames a slow-operation report names, innermost first. */
+const SLOW_OP_FRAME_LIMIT = 3
+
+/** Frames that name the database layer itself rather than the code to look at. */
+const DATABASE_LAYER_FRAME =
+  /node:internal|node_modules|mainThreadCallFrames|reportSlowMainThreadOperation|Database\.(?:get|all|run|transaction|prepare)\b/u
+
+/**
+ * The frames above the database layer in the current stack, innermost first.
+ *
+ * `new Error().stack` is read lazily, inside the slow path only, so a statement
+ * that stays under the threshold pays nothing. The frames are what turn a
+ * slow-operation report into a fix without an investigation: a packaged build
+ * names the single bundle file and an offset, a dev build names the source file.
+ */
+function mainThreadCallFrames(limit = SLOW_OP_FRAME_LIMIT): string[] {
+  const stack = new Error('slow-main-thread-sqlite').stack
+  if (!stack) return []
+  const frames: string[] = []
+  for (const line of stack.split('\n')) {
+    const frame = line.trim()
+    if (!frame.startsWith('at ')) continue
+    const text = frame.slice(3)
+    if (DATABASE_LAYER_FRAME.test(text)) continue
+    frames.push(text)
+    if (frames.length >= limit) break
+  }
+  return frames
+}
 
 function truncateSqlForLog(sql: string): string {
   const singleLine = sql.replace(/\s+/gu, ' ').trim()

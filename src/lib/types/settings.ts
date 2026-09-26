@@ -1,6 +1,7 @@
 import type { AgentDefaultsConfig, AuxiliaryAgentConfig, RankingJudgeConfig } from './agent'
 import type { AgentModelSelection } from './common'
 import type { GitPullPreference, PrMergeMethod } from './git'
+import type { MediaProviderId } from '../media-generation'
 
 export interface WorkflowStage {
   id: string
@@ -230,14 +231,36 @@ export interface DesignAssignment {
   produces?: DesignAssignmentOutput
   /** Standing guidance handed to the assigned model with every call. */
   instructions?: string
-  /** The model that does this work. */
-  selection: AgentModelSelection
+  /**
+   * The harness model that does this work. Required for a text craft, and absent
+   * for a media craft, which names a generated-media model instead.
+   */
+  selection?: AgentModelSelection
+  /**
+   * The generation model that produces this craft's asset, in the configured
+   * provider's own spelling (`black-forest-labs/flux-1.1-pro`). Required for a
+   * media craft, and absent for a text craft.
+   */
+  mediaModel?: string
 }
 
 /** Design work the user routed to a model of their own choosing. */
 export interface DesignConfig {
   /** User-authored assignments. Empty means nothing is delegated anywhere. */
   assignments: DesignAssignment[]
+}
+
+/**
+ * The backend that turns a prompt into an image, a clip or a track.
+ *
+ * One provider at a time, because one aggregator token already reaches many
+ * models: the user's real choice is the model they assign to each craft, which
+ * lives on the design assignment rather than here. The token itself is kept in
+ * the secure vault and never in this config.
+ */
+export interface MediaGenerationConfig {
+  /** The backend the app calls, or null while the user has not chosen one. */
+  providerId: MediaProviderId | null
 }
 
 export interface AppConfig {
@@ -274,6 +297,16 @@ export interface AppConfig {
   auxiliaryAgents: AuxiliaryAgentConfig
   /** Model the user assigned to each named design assignment (images, copy, video). */
   design: DesignConfig
+  /**
+   * Project-relative folders where authored work is written, app-wide.
+   *
+   * One value covers every project, and each project resolves it against its own
+   * root, so a user who wants designs committed sets it once. Changing it moves
+   * the work already written under the old folder into the new one.
+   */
+  workRoots: WorkRoots
+  /** Backend that generates images, clips and sound for a design or a composition. */
+  mediaGeneration: MediaGenerationConfig
   /** Model that judges ranking conversations, and whether it is pinned at all. */
   rankingJudge: RankingJudgeConfig
   /** Editable default behavior prompt for project Engineering implementation turns. */
@@ -309,6 +342,14 @@ export interface AppConfig {
   /** Route loopback development links into the app-scoped test browser. */
   openLocalhostInCioBrowser: boolean
   /**
+   * Route every other (non-loopback) link into the workspace browser of the
+   * project/thread it was activated in, instead of the system browser. Off by
+   * default. Localhost keeps its own preference because it always belongs to the
+   * surface it was clicked in, while this is the general default that a future
+   * project-less global browser will extend.
+   */
+  openAllLinksInCioBrowser: boolean
+  /**
    * Let prototype previews load fonts, styles, and scripts from the approved
    * CDNs. Off confines every prototype to assets inlined in its own folder.
    */
@@ -329,6 +370,8 @@ export interface BehaviorLayer {
   defaultOpen: boolean
 }
 
+import type { WorkRoots } from '../design/work-roots'
+
 /** Renderer-editable settings. Internal config fields cannot be patched over IPC. */
 export type AppConfigPatch = Partial<
   Pick<
@@ -348,6 +391,8 @@ export type AppConfigPatch = Partial<
     | 'agentDefaults'
     | 'auxiliaryAgents'
     | 'design'
+    | 'mediaGeneration'
+    | 'workRoots'
     | 'rankingJudge'
     | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'
@@ -362,6 +407,7 @@ export type AppConfigPatch = Partial<
     | 'maxDiffLines'
     | 'maxConflictFileBytes'
     | 'openLocalhostInCioBrowser'
+    | 'openAllLinksInCioBrowser'
     | 'allowPrototypeExternalCdn'
     | 'prototypeCdnAllowlist'
     | 'inAppNotificationSound'

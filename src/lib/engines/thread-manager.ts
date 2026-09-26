@@ -588,6 +588,7 @@ export class ThreadManager {
         | 'titleSource'
         | 'providerId'
         | 'workingDirectory'
+        | 'authoredWorkKind'
         | 'scopeBucketId'
         | 'lastActivity'
         | 'read'
@@ -628,6 +629,7 @@ export class ThreadManager {
       titleSource: input.titleSource ?? existing.titleSource,
       providerId: input.providerId ?? existing.providerId,
       workingDirectory: input.workingDirectory ?? existing.workingDirectory,
+      authoredWorkKind: input.authoredWorkKind ?? existing.authoredWorkKind,
       scopeBucketId: input.scopeBucketId ?? existing.scopeBucketId,
       read: input.read ?? existing.read,
       assignmentId: input.assignmentId ?? existing.assignmentId,

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { mkdir, rm, stat } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 
 const projectRoot = process.cwd()
@@ -97,20 +97,25 @@ if (checkedFiles.length === 0) {
   fail('No .ts or .svelte files were found in the requested paths.')
 }
 
-// The scoped tsconfigs reference project files with paths relative to this
-// scratch directory. svelte-check rewrites those specs for its overlay by
-// prefixing them with `svelte/`, which only resolves when the temporary
-// tsconfig sits exactly two levels below the project root (`.cio/.check-<id>`).
-// Keep the scratch directory under `.cio/` rather than the repo root.
-const checkOutputDirectory = join(projectRoot, '.cio')
-await mkdir(checkOutputDirectory, { recursive: true })
-const temporaryDirectory = await mkdtemp(join(checkOutputDirectory, '.check-'))
+// A scoped tsconfig references project files with paths relative to the folder
+// that holds it. svelte-check rewrites those specs for the overlay tsconfig it
+// writes into `.svelte-check` by prefixing each one with `svelte/`, and that
+// only resolves when the folder holding the temporary tsconfig sits exactly two
+// levels below the project root. `.cio/tmp/` is exactly that depth, so the
+// temporary tsconfigs are staged directly inside it. The repo root and the
+// `.cio/` root stay clean, and `.cio/tmp/` is the project's disposable scratch
+// space, so an interrupted run leaves nothing but a stale file there.
+const scratchDirectory = join(projectRoot, '.cio', 'tmp')
+await mkdir(scratchDirectory, { recursive: true })
+const scratchId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+const scopedTsconfigPaths: string[] = []
 
 try {
   let exitCode = 0
 
   for (const [index, scope] of scopes.entries()) {
-    const scopedTsconfigPath = join(temporaryDirectory, `tsconfig-${index}.json`)
+    const scopedTsconfigPath = join(scratchDirectory, `check-${scratchId}-${index}.json`)
+    scopedTsconfigPaths.push(scopedTsconfigPath)
     await Bun.write(
       scopedTsconfigPath,
       `${JSON.stringify(
@@ -121,7 +126,7 @@ try {
           },
           extends: join(projectRoot, 'tsconfig.json'),
           exclude: [],
-          files: scope.files.map((file) => relative(temporaryDirectory, file)),
+          files: scope.files.map((file) => relative(scratchDirectory, file)),
           include: [join(projectRoot, 'src/main/types/**/*.ts')]
         },
         null,
@@ -134,6 +139,8 @@ try {
 
   process.exitCode = exitCode
 } finally {
-  await rm(temporaryDirectory, { force: true, recursive: true })
+  await Promise.all(
+    scopedTsconfigPaths.map((scopedTsconfigPath) => rm(scopedTsconfigPath, { force: true }))
+  )
   await rm(join(projectRoot, '.svelte-check'), { force: true, recursive: true })
 }

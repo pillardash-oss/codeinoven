@@ -1,11 +1,8 @@
 <script lang="ts">
-  import { Check, Trash2, X } from '@lucide/svelte'
-  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { X } from '@lucide/svelte'
   import { draggablePopover } from '$lib/draggable-popover.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
-  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
-  import { plainTextEditorTarget } from '../../speech/editor-target'
-  import { speechController } from '../../speech/speech-controller.svelte'
+  import AnnotationCommentForm from './AnnotationCommentForm.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
 
   interface Props {
@@ -23,57 +20,13 @@
     onClose: () => void
   }
 
-  let {
-    x,
-    y,
-    initialComment,
-    targetId,
-    scope,
-    onDraftChange,
-    onDone,
-    onRemove,
-    onClose
-  }: Props = $props()
+  let { x, y, initialComment, targetId, scope, onDraftChange, onDone, onRemove, onClose }: Props =
+    $props()
 
   const POPOVER_WIDTH = 400
 
-  // The popover is remounted fresh each time it opens, so the props are only
-  // read at creation and never change during the popover's lifetime.
-  // svelte-ignore state_referenced_locally
-  let comment = $state(initialComment)
-  // svelte-ignore state_referenced_locally
-  const initialCursorPosition = initialComment.length
-  let textarea: HTMLTextAreaElement | null = null
-  const speechTarget = $derived(plainTextEditorTarget({ id: targetId, element: () => textarea }))
-
   let preferredLeft = $derived(x - POPOVER_WIDTH / 2)
   let preferredTop = $derived(y + 41)
-
-  function focusTextarea(textarea: HTMLTextAreaElement): void {
-    textarea.focus()
-    textarea.setSelectionRange(initialCursorPosition, initialCursorPosition)
-  }
-
-  function submit(): void {
-    speechController.observeSent(targetId, comment)
-    onDone(comment)
-  }
-
-  function updateDraft(event: Event & { currentTarget: HTMLTextAreaElement }): void {
-    comment = event.currentTarget.value
-    onDraftChange(comment)
-  }
-
-  function onKeydown(event: KeyboardEvent): void {
-    if (keymapState.matches('chat-annotation-close', event)) {
-      event.preventDefault()
-      onClose()
-    }
-    if (keymapState.matches('chat-annotation-comment', event)) {
-      event.preventDefault()
-      submit()
-    }
-  }
 </script>
 
 <button
@@ -106,39 +59,13 @@
       <X size={13} />
     </button>
   </div>
-  <textarea
-    bind:this={textarea}
-    {@attach focusTextarea}
-    value={comment}
-    class="h-20 min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-sm text-foreground outline-none placeholder:text-dimmed"
-    placeholder="Add a comment for the agent…"
-    oninput={updateDraft}
-    onkeydown={onKeydown}></textarea>
-  <div class="mt-2 flex items-center justify-between gap-1.5">
-    <button
-      type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:pointer-events-none disabled:opacity-40"
-      title="Remove this selection from the chat entirely"
-      disabled={!comment.trim()}
-      onclick={onRemove}
-    >
-      <Trash2 size={12} />
-      Remove
-    </button>
-    <VoiceInputButton
-      {targetId}
-      getTarget={() => speechTarget}
-      {scope}
-      triggerPriority={6}
-    />
-    <button
-      type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      title="Done   attach this comment to the selection"
-      onclick={submit}
-    >
-      <Check size={12} />
-      Done
-    </button>
-  </div>
+  <AnnotationCommentForm
+    {initialComment}
+    {targetId}
+    {scope}
+    {onDraftChange}
+    {onDone}
+    {onRemove}
+    {onClose}
+  />
 </div>

@@ -9,6 +9,8 @@
  *   project_fts       FTS5 virtual table on projects.name
  *   agent_messages    Mirrored agent conversation messages
  *   agent_messages_fts   FTS5 virtual table on agent_messages.search_text
+ *   agent_message_search_meta  Narrow search mirror of agent_messages
+ *                              (thread/role/visibility/session/created_at)
  *   settings          Global app config (key/value)
  *   db_meta           Internal database metadata
  */
@@ -33,6 +35,13 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- ─── Shared custom icon library ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS custom_icons (
+  id         TEXT PRIMARY KEY NOT NULL,
+  svg        TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 -- ─── Projects ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS projects (
   id                 TEXT PRIMARY KEY NOT NULL,
@@ -49,6 +58,7 @@ CREATE TABLE IF NOT EXISTS projects (
   icon               TEXT,
   color              TEXT,
   icon_type          TEXT,
+  custom_svg         TEXT,
   change_tracking_mode TEXT NOT NULL DEFAULT 'manual' CHECK(change_tracking_mode IN ('git','manual')),
   has_deployments    INTEGER NOT NULL DEFAULT 0,
   created_at         INTEGER NOT NULL,
@@ -99,6 +109,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   read                 INTEGER NOT NULL DEFAULT 1,
   branch               TEXT,
   feature_slug         TEXT,
+  authored_work_kind   TEXT CHECK(authored_work_kind IN ('design','video')),
   scope_bucket_id      TEXT DEFAULT 'default',
   settings             TEXT,
   context_usage        TEXT,
@@ -427,6 +438,56 @@ CREATE TRIGGER IF NOT EXISTS agent_messages_fts_update AFTER UPDATE ON agent_mes
 WHEN new.search_text != old.search_text BEGIN
   INSERT INTO agent_messages_fts(agent_messages_fts, rowid, search_text) VALUES('delete', old.rowid, old.search_text);
   INSERT INTO agent_messages_fts(rowid, search_text) VALUES (new.rowid, new.search_text);
+END;`
+
+export const AGENT_MESSAGE_SEARCH_META_SQL = `
+-- ─── Agent Message Search Metadata ──────────────────────────────────────
+-- Narrow mirror of the agent_messages columns thread search filters, joins
+-- and orders by. agent_messages_fts is external content, so a search that
+-- reads a column per FTS match (visibility, session_id, thread_id, role,
+-- created_at) has to read that many rows of the big messages table in random
+-- rowid order. The mirror keeps those columns in a compact table whose rowid
+-- is the message rowid, so ranking/filtering costs a narrow-row read and the
+-- messages table is only touched for the rows that actually return a snippet.
+-- Kept in sync by the triggers below (fresh installs and existing databases).
+CREATE TABLE IF NOT EXISTS agent_message_search_meta (
+  rowid      INTEGER PRIMARY KEY,
+  thread_id  TEXT NOT NULL,
+  role       TEXT NOT NULL,
+  visibility TEXT NOT NULL,
+  session_id TEXT,
+  created_at INTEGER NOT NULL
+);
+
+-- Reads that ask for a set of threads' messages filtered by role and session
+-- can narrow to the candidate rows on the compact mirror instead of scanning
+-- agent_messages, whose parts column dominates the file size.
+CREATE INDEX IF NOT EXISTS idx_agent_message_search_meta_thread
+  ON agent_message_search_meta(thread_id, role, session_id, created_at);`
+
+export const AGENT_MESSAGE_SEARCH_META_TRIGGERS_SQL = `
+CREATE TRIGGER IF NOT EXISTS agent_message_search_meta_insert AFTER INSERT ON agent_messages BEGIN
+  INSERT INTO agent_message_search_meta(rowid, thread_id, role, visibility, session_id, created_at)
+  VALUES (new.rowid, new.thread_id, new.role, new.visibility, new.session_id, new.created_at);
+END;
+
+CREATE TRIGGER IF NOT EXISTS agent_message_search_meta_delete AFTER DELETE ON agent_messages BEGIN
+  DELETE FROM agent_message_search_meta WHERE rowid = old.rowid;
+END;
+
+DROP TRIGGER IF EXISTS agent_message_search_meta_update;
+CREATE TRIGGER IF NOT EXISTS agent_message_search_meta_update
+AFTER UPDATE OF thread_id, role, visibility, session_id, created_at ON agent_messages
+WHEN new.thread_id IS NOT old.thread_id
+  OR new.role IS NOT old.role
+  OR new.visibility IS NOT old.visibility
+  OR new.session_id IS NOT old.session_id
+  OR new.created_at IS NOT old.created_at
+BEGIN
+  UPDATE agent_message_search_meta
+  SET thread_id = new.thread_id, role = new.role, visibility = new.visibility,
+      session_id = new.session_id, created_at = new.created_at
+  WHERE rowid = new.rowid;
 END;`
 
 export const MISC_TABLES_SQL = `
@@ -877,6 +938,7 @@ CREATE TABLE IF NOT EXISTS routines (
   color               TEXT,
   icon                TEXT,
   icon_type           TEXT,
+  custom_svg          TEXT,
   schedule            TEXT,
   schedule_updated_at INTEGER,
   how_to              TEXT NOT NULL DEFAULT '',
@@ -895,6 +957,54 @@ CREATE TABLE IF NOT EXISTS routines (
 
 CREATE INDEX IF NOT EXISTS idx_routines_listing ON routines(pinned DESC, sort_order, updated_at DESC);`
 
+/**
+ * Which folder of authored work a thread is working on, and which kind it holds.
+ *
+ * A session is user-started (the `@cio-design` or `@cio-video` tag, which lives in
+ * the thread's persisted messages), but the folder the agent wrote into is not
+ * derivable from a message, and the app must be able to put a restarted user back
+ * on their design or their composition. One row per thread: the work has no
+ * identity of its own beyond its folder, and a thread works on one at a time.
+ *
+ * `kind` is written at preview time rather than recovered from the folder's root,
+ * so a thread that has done design or video work stays marked on its row even when
+ * nothing about the folder can be resolved any more. The foreign key makes the row
+ * follow the thread's deletion instead of orphaning.
+ */
+const THREAD_DESIGNS_SQL = `
+CREATE TABLE IF NOT EXISTS thread_designs (
+  thread_id  TEXT PRIMARY KEY NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  directory  TEXT NOT NULL,
+  entry      TEXT,
+  kind       TEXT NOT NULL DEFAULT 'design' CHECK(kind IN ('design','video')),
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_thread_designs_project ON thread_designs(project_id);`
+
+/**
+ * What a thread decided about the experts its design or video session may use.
+ *
+ * The card that asks this question is shown once, before the first send of a
+ * session, and the answer has to outlive the window: a restarted app that asked
+ * again would be asking a question the user already answered, and a session that
+ * was muted would quietly delegate again. The row is the thread's answer, and the
+ * foreign key makes it follow the thread's deletion instead of orphaning.
+ *
+ * `signature` is the digest of the expert set the user answered about. It is what
+ * lets the card return when the user staffs different experts, without asking
+ * again every time they send.
+ */
+const THREAD_EXPERTS_SQL = `
+CREATE TABLE IF NOT EXISTS thread_experts (
+  thread_id  TEXT PRIMARY KEY NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  choice     TEXT NOT NULL CHECK(choice IN ('all','off')),
+  silent     INTEGER NOT NULL DEFAULT 0,
+  signature  TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL
+);`
+
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
@@ -906,9 +1016,13 @@ export const DATABASE_SCHEMA_SQL = [
   ATTACHMENT_GRANTS_SQL,
   AGENT_MESSAGES_FTS_SQL,
   AGENT_MESSAGES_FTS_TRIGGERS_SQL,
+  AGENT_MESSAGE_SEARCH_META_SQL,
+  AGENT_MESSAGE_SEARCH_META_TRIGGERS_SQL,
   MISC_TABLES_SQL,
   PERSISTENCE_SQL,
   HARNESS_USAGE_SQL,
   THREAD_NOTES_SQL,
+  THREAD_DESIGNS_SQL,
+  THREAD_EXPERTS_SQL,
   ROUTINES_SQL
 ].join('\n')

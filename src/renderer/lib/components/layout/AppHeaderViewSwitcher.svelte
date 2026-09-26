@@ -1,7 +1,7 @@
 <script lang="ts">
   import { type Component } from 'svelte'
   import { fade } from 'svelte/transition'
-  import { ChevronDown, MessageSquare, Timeline } from '@lucide/svelte'
+  import { BotMessageSquare, ChevronDown, MessageSquare, Timeline } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
   import WorkingCountBadge from '$lib/components/shared/WorkingCountBadge.svelte'
@@ -9,9 +9,9 @@
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { viewActions } from '$lib/stores/view-actions.svelte'
+  import { contentThreadFamily } from '$lib/content-view-threads'
   import {
     coordinatorHasActiveDelegates,
-    INBOX_PROJECT_ID,
     isOrchestrationChildThread
   } from '$shared/types'
   import { DropdownMenu } from 'bits-ui'
@@ -40,15 +40,16 @@
   })
 
   /**
-   * Thread counts per navigation family, feeding the activity badges on
-   * the view switcher. Working threads pulse in the working tone (same rule
-   * as before); threads parked on `working-paused` pulse in the retry tone;
-   * threads in `awaiting_approval` or `failed` pulse in the attention tone
-   * (error-red when a failure is inside the family). Orchestration children
-   * are folded into their coordinator (same rule as the sidebar rows) so a
-   * delegated run counts once instead of inflating the total with hidden
-   * worker threads. A live-working thread always counts as working, never
-   * as attention/retry, so no thread is ever double-counted.
+   * Thread counts per navigation family (project threads, chats, assistant),
+   * feeding the activity badges on the view switcher. Working threads pulse
+   * in the working tone (same rule as before); threads parked on
+   * `working-paused` pulse in the retry tone; threads in `awaiting_approval`
+   * or `failed` pulse in the attention tone (error-red when a failure is
+   * inside the family). Orchestration children are folded into their
+   * coordinator (same rule as the sidebar rows) so a delegated run counts
+   * once instead of inflating the total with hidden worker threads. A
+   * live-working thread always counts as working, never as attention/retry,
+   * so no thread is ever double-counted.
    */
   let threadActivityCounts = $derived.by(() => {
     const threads = scopeState.allScopeThreads
@@ -65,34 +66,44 @@
     const counts = {
       workingProjects: 0,
       workingChats: 0,
+      workingAssistant: 0,
       attentionProjects: 0,
       attentionChats: 0,
+      attentionAssistant: 0,
       attentionProjectsError: false,
       attentionChatsError: false,
+      attentionAssistantError: false,
       retryProjects: 0,
-      retryChats: 0
+      retryChats: 0,
+      retryAssistant: 0
     }
     for (const thread of threads) {
       if (thread.archived || isOrchestrationChildThread(thread)) continue
-      const isChat = thread.projectId === INBOX_PROJECT_ID
+      const family = contentThreadFamily(thread)
       const isWorking = workingIds.has(thread.id) || coordinatorHasActiveDelegates(thread, working)
       if (isWorking) {
-        if (isChat) counts.workingChats += 1
+        if (family === 'chats') counts.workingChats += 1
+        else if (family === 'assistant') counts.workingAssistant += 1
         else counts.workingProjects += 1
         continue
       }
       if (thread.status === 'working-paused') {
-        if (isChat) counts.retryChats += 1
+        if (family === 'chats') counts.retryChats += 1
+        else if (family === 'assistant') counts.retryAssistant += 1
         else counts.retryProjects += 1
         continue
       }
       if (thread.status === 'awaiting_approval' || thread.status === 'failed') {
-        if (isChat) {
+        const isFailure = thread.status === 'failed'
+        if (family === 'chats') {
           counts.attentionChats += 1
-          if (thread.status === 'failed') counts.attentionChatsError = true
+          if (isFailure) counts.attentionChatsError = true
+        } else if (family === 'assistant') {
+          counts.attentionAssistant += 1
+          if (isFailure) counts.attentionAssistantError = true
         } else {
           counts.attentionProjects += 1
-          if (thread.status === 'failed') counts.attentionProjectsError = true
+          if (isFailure) counts.attentionProjectsError = true
         }
       }
     }
@@ -117,10 +128,13 @@
   let hasThreadActivity = $derived(
     threadActivityCounts.workingProjects > 0 ||
       threadActivityCounts.workingChats > 0 ||
+      threadActivityCounts.workingAssistant > 0 ||
       threadActivityCounts.attentionProjects > 0 ||
       threadActivityCounts.attentionChats > 0 ||
+      threadActivityCounts.attentionAssistant > 0 ||
       threadActivityCounts.retryProjects > 0 ||
-      threadActivityCounts.retryChats > 0
+      threadActivityCounts.retryChats > 0 ||
+      threadActivityCounts.retryAssistant > 0
   )
 
   /** Rendered width of the current trigger label. Measured after every label
@@ -178,9 +192,9 @@
       <!-- Thread activity: one pulsing badge per navigation family and
            status group (working, needs attention, waiting to retry), riding
            the top edge of the trigger (left-anchored like every other
-           header badge). The label itself stays still. Family icons stay
-           the same as the working badges (Timeline = project threads,
-           MessageSquare = chats); the tone carries the status. -->
+           header badge). The label itself stays still. Family icons match
+           the views (Timeline = project threads, MessageSquare = chats,
+           BotMessageSquare = assistant); the tone carries the status. -->
       {#if hasThreadActivity}
         <span class="absolute -top-2 left-1 flex items-center gap-1">
           <WorkingCountBadge
@@ -192,6 +206,11 @@
             icon={MessageSquare}
             count={threadActivityCounts.workingChats}
             label={workingThreadLabel(threadActivityCounts.workingChats, 'chat')}
+          />
+          <WorkingCountBadge
+            icon={BotMessageSquare}
+            count={threadActivityCounts.workingAssistant}
+            label={workingThreadLabel(threadActivityCounts.workingAssistant, 'assistant thread')}
           />
           <WorkingCountBadge
             icon={Timeline}
@@ -206,6 +225,12 @@
             tone={threadActivityCounts.attentionChatsError ? 'error' : 'attention'}
           />
           <WorkingCountBadge
+            icon={BotMessageSquare}
+            count={threadActivityCounts.attentionAssistant}
+            label={attentionThreadLabel(threadActivityCounts.attentionAssistant, 'assistant thread')}
+            tone={threadActivityCounts.attentionAssistantError ? 'error' : 'attention'}
+          />
+          <WorkingCountBadge
             icon={Timeline}
             count={threadActivityCounts.retryProjects}
             label={retryThreadLabel(threadActivityCounts.retryProjects, 'project thread')}
@@ -215,6 +240,12 @@
             icon={MessageSquare}
             count={threadActivityCounts.retryChats}
             label={retryThreadLabel(threadActivityCounts.retryChats, 'chat')}
+            tone="retry"
+          />
+          <WorkingCountBadge
+            icon={BotMessageSquare}
+            count={threadActivityCounts.retryAssistant}
+            label={retryThreadLabel(threadActivityCounts.retryAssistant, 'assistant thread')}
             tone="retry"
           />
         </span>

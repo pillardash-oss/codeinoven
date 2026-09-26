@@ -64,6 +64,8 @@
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
+  import DesignWorkFoldersSettings from './DesignWorkFoldersSettings.svelte'
+  import MediaGenerationSettings from './MediaGenerationSettings.svelte'
   import PrototypeCdnSettings from './PrototypeCdnSettings.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
@@ -835,6 +837,26 @@
                 disabled={!settingsReady}
               />
             </div>
+            <div class="mt-4 border-t pt-4">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Open all other links on CIO's browser</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Send every non-local link to the workspace browser of the current project or
+                    thread instead of your default browser
+                  </p>
+                </div>
+                <Switch
+                  checked={config.openAllLinksInCioBrowser}
+                  onchange={() =>
+                    void updateConfig({
+                      openAllLinksInCioBrowser: !config.openAllLinksInCioBrowser
+                    })}
+                  aria-label="Toggle opening all other links in CIO's browser"
+                  disabled={!settingsReady}
+                />
+              </div>
+            </div>
             <PrototypeCdnSettings {config} {settingsReady} {updateConfig} />
           </div>
 
@@ -1090,12 +1112,20 @@
       <div class="p-6 pb-24">
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">Design</h1>
-          <p class="mt-0.5 text-sm text-muted">Assign a model to each kind of design work.</p>
+          <p class="mt-0.5 text-sm text-muted">
+            Where design work is saved, and which model does each kind of it.
+          </p>
           {#if error}
             <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {error}
             </p>
           {/if}
+        </div>
+        <div class="mb-6">
+          <DesignWorkFoldersSettings {config} {settingsReady} {updateConfig} />
+        </div>
+        <div class="mb-6">
+          <MediaGenerationSettings {config} {settingsReady} {updateConfig} />
         </div>
         <DesignAssignmentsSettings {config} {settingsReady} {updateConfig} />
       </div>

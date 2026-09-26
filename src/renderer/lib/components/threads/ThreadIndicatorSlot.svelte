@@ -1,5 +1,6 @@
 <script lang="ts">
   import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
+  import SpeakingIndicator from '$lib/components/speech/SpeakingIndicator.svelte'
   import VoiceSendIndicator from '$lib/components/speech/VoiceSendIndicator.svelte'
   import WaveBars from '$lib/components/speech/WaveBars.svelte'
   import ComputerUseIndicator from './ComputerUseIndicator.svelte'
@@ -16,7 +17,7 @@
 {#if indicator === 'recording'}
   <RecordingIndicator label="Listening" />
 {:else if indicator === 'speaking'}
-  <RecordingIndicator label="Speaking" tone="speech" />
+  <SpeakingIndicator label="Playing audio" />
 {:else if indicator === 'transcribing'}
   <WaveBars label="Transcribing" />
 {:else if indicator === 'transcribing-send'}

@@ -373,6 +373,7 @@ export class ProjectManager {
       changeTrackingMode: input.changeTrackingMode ?? existing.changeTrackingMode,
       color: 'color' in input ? input.color : existing.color,
       iconType: 'iconType' in input ? input.iconType : existing.iconType,
+      customSvg: 'customSvg' in input ? (input.customSvg ?? undefined) : existing.customSvg,
       updatedAt: Date.now()
     }
 

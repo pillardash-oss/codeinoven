@@ -9,19 +9,37 @@
     Lock,
     LockOpen,
     RotateCw,
+    SquareDashedMousePointer,
     SquareTerminal,
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { normalizeBrowserUrl } from '$shared/local-development-url'
+  import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
+  import BrowserCommentEditor from './BrowserCommentEditor.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
+  import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
+  import { browserInspector } from '$lib/stores/browser-inspector.svelte'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
+  import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import type {
     BrowserDevToolsState,
     BrowserPageState,
+    BrowserPanelShortcutAction,
     BrowserViewBounds
   } from '$shared/ipc-contract'
+
+  /**
+   * The sidebar's own region, which the browser panel shares with the strip that
+   * selects it. Read from the DOM contract every surface already agrees on, so
+   * the panel never has to be handed the sidebar by its parent.
+   *
+   * The bottom dock carries the same marker with a different placement, and a
+   * terminal docked there owns its own keys (on Windows and Linux Ctrl+W is the
+   * shell's delete-word binding), so the dock is excluded rather than claimed.
+   */
+  const SIDEBAR_REGION_SELECTOR = '[data-region="context-sidebar"]:not([data-placement="bottom"])'
 
   interface Props {
     tab: BrowserContextTab
@@ -50,10 +68,6 @@
   // svelte-ignore state_referenced_locally
   const tabInitialTitle = tab.title
 
-  // Claim the native view for this tab while this panel is mounted. The claim is
-  // released with the component, so a destroyed panel can never keep the view.
-  $effect(() => browserVisibility.claimTab(tabId, surface))
-
   function initialPageState(): BrowserPageState {
     return {
       tabId,
@@ -67,11 +81,14 @@
       canGoForward: false,
       audible: false,
       muted: false,
-      capturing: false
+      capturing: false,
+      design: null,
+      composition: null
     }
   }
 
   let contentElement = $state<HTMLDivElement>()
+  let addressInput = $state<HTMLInputElement>()
   let address = $state(initialPageState().url)
   let addressError = $state('')
   let pageState = $state<BrowserPageState>(initialPageState())
@@ -85,6 +102,23 @@
    *  frame   so this panel never has to combine them itself. */
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
   let devToolsOpen = $state(false)
+  /**
+   * Whether element inspection is armed on this tab.
+   *
+   * Read from the shared session, not owned here: the mode belongs to the tab,
+   * so the sidebar and the full screen surface show and keep the same state, and
+   * moving between them neither drops the mode nor disarms the page.
+   */
+  let inspectArmed = $derived(browserInspector.isArmed(tabId))
+  /** The comment currently open for editing on this tab, in composer order. */
+  let editingComment = $derived.by(() => {
+    const referenceId = browserInspector.editingId(tabId)
+    if (!referenceId) return null
+    const references = responseReferencesState.forThread(tabProjectId, tabThreadId)
+    const index = references.findIndex((reference) => reference.id === referenceId)
+    const reference = index < 0 ? null : references[index]
+    return reference ? { reference, number: index + 1 } : null
+  })
   /** Show a closed padlock for https origins; open padlock for everything else. */
   let secure = $derived(pageState.url.startsWith('https:'))
   /** The site menu is a native OS popup composited above the page view, so
@@ -154,6 +188,50 @@
     ).catch(() => {
       siteMenuOpen = false
     })
+  }
+
+  /**
+   * Move focus to the address bar and select what is there, which is what
+   * Cmd/Ctrl+L does in a browser. Main asks for it because the chord is claimed
+   * in the main process, where a page-focused key is visible before the
+   * application menu acts on it.
+   */
+  function focusAddress(): void {
+    addressInput?.focus()
+    addressInput?.select()
+  }
+
+  /**
+   * Tell the keyboard owner whether the focus that just moved belongs to this
+   * browser.
+   *
+   * The claim follows the *sidebar*, not just this panel: the strip that
+   * selects this tab is the sidebar's own chrome, so a key pressed while that
+   * button holds focus still belongs to the browser being shown. Anything that
+   * takes focus outside the sidebar hands the keyboard back to the app.
+   */
+  function onSidebarFocusIn(event: FocusEvent): void {
+    if (!panelVisible) return
+    const target = event.target
+    if (!(target instanceof Element) || !target.closest(SIDEBAR_REGION_SELECTOR)) return
+    browserKeyboardFocus.setClaim('sidebar', tabId)
+  }
+
+  function onSidebarFocusOut(event: FocusEvent): void {
+    const next = event.relatedTarget
+    if (next instanceof Element && next.closest(SIDEBAR_REGION_SELECTOR)) return
+    browserKeyboardFocus.setClaim('sidebar', null)
+  }
+
+  /**
+   * The focus a keyboard-driven shortcut lands on. Only the instance that owns
+   * the native view may take it: a full screen and a sidebar panel can both be
+   * mounted for one tab, and the hidden one has no visible address bar.
+   */
+  function onPanelShortcut(eventTabId: string, action: BrowserPanelShortcutAction): void {
+    if (eventTabId !== tabId || action !== 'focus-address') return
+    if (!panelVisible) return
+    focusAddress()
   }
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {
@@ -248,13 +326,57 @@
     devToolsOpen = state.open
   }
 
+  /** Arm or disarm element inspection for this tab, through the shared session. */
+  function toggleInspect(): void {
+    if (!inspectArmed && !pageState.design) return
+    browserInspector.toggle(tabId)
+  }
+
+  /** Save the comment on the element being edited, and close its editor. */
+  function saveComment(referenceId: string, comment: string): void {
+    responseReferencesState.updateComment(tabProjectId, tabThreadId, referenceId, comment)
+    browserInspector.closeComment(tabId)
+  }
+
+  function persistCommentDraft(referenceId: string, comment: string): void {
+    responseReferencesState.updateCommentDraft(tabProjectId, tabThreadId, referenceId, comment)
+  }
+
+  /** Remove a picked element from the chat, pins and all. */
+  function removeComment(referenceId: string): void {
+    responseReferencesState.setForThread(
+      tabProjectId,
+      tabThreadId,
+      responseReferencesState
+        .forThread(tabProjectId, tabThreadId)
+        .filter((reference) => reference.id !== referenceId)
+    )
+    browserInspector.closeComment(tabId)
+  }
+
+  // Publish the pin set whenever the reference list changes, so a pick, a
+  // finished comment, or a removal made from the composer moves the pins on the
+  // page. The store notifies on every write rather than an effect watching it:
+  // the pins are elements drawn by an injected script, not a render of state, so
+  // the write has to be told to happen, not derived.
   onMount(() => {
+    // Claim the native view for this tab while this panel is mounted. The claim
+    // is released with the component, so a destroyed panel can never keep the view.
+    const releaseBrowserClaim = browserVisibility.claimTab(tabId, surface)
     const unsubscribeSiteMenu = subscribe('browser:siteMenuClosed', () => {
       siteMenuOpen = false
     })
     let destroyed = false
     const unsubscribeState = subscribe('browser:state', applyPageState)
     const unsubscribeDevTools = subscribe('browser:devToolsChanged', applyDevToolsState)
+    const unsubscribePanelShortcut = subscribe('browser:panelShortcut', onPanelShortcut)
+    // Only the sidebar report is focus-driven: a single panel decides it for the
+    // whole sidebar, so one listener is enough. The full screen overlay claims
+    // the keyboard for as long as it is mounted instead (WorkspaceFullscreenBrowser).
+    if (surface === 'sidebar') {
+      document.addEventListener('focusin', onSidebarFocusIn)
+      document.addEventListener('focusout', onSidebarFocusOut)
+    }
     const observer = new ResizeObserver(() => {
       if (!destroyed) void showAtCurrentBounds().catch(() => {})
     })
@@ -287,18 +409,26 @@
       cancelAnimationFrame(animationFrame)
       observer.disconnect()
       window.removeEventListener('resize', onWindowResize)
+      releaseBrowserClaim()
       unsubscribeSiteMenu()
       unsubscribeState()
       unsubscribeDevTools()
+      unsubscribePanelShortcut()
+      // The inspection session outlives this panel on purpose: the mode, the
+      // pins and the open comment belong to the tab, and the other surface (the
+      // full screen dialog, or the sidebar it is returning to) keeps them. Only
+      // the user, the page, or the tab leaving its design ends the session.
+      if (surface === 'sidebar') {
+        document.removeEventListener('focusin', onSidebarFocusIn)
+        document.removeEventListener('focusout', onSidebarFocusOut)
+        browserKeyboardFocus.setClaim('sidebar', null)
+      }
       void invoke('browser:hide', tabId).catch(() => {})
     }
   })
 </script>
 
-<div
-  {@attach panelVisible && manageNativeBrowserView}
-  class="flex h-full min-h-0 flex-col bg-app"
->
+<div {@attach panelVisible && manageNativeBrowserView} class="flex h-full min-h-0 flex-col bg-app">
   <form
     class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2"
     onsubmit={(event) => {
@@ -362,6 +492,7 @@
       <input
         class="h-7 w-full rounded-lg border border-border bg-elevated pl-8 pr-8 text-xs text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
         class:border-danger={addressError !== ''}
+        bind:this={addressInput}
         bind:value={address}
         spellcheck="false"
         autocomplete="url"
@@ -410,7 +541,45 @@
         <span>Console</span>
       {/if}
     </button>
+    {#if pageState.design}
+      <button
+        type="button"
+        class={[
+          'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
+          fullscreen ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
+          inspectArmed
+            ? 'bg-accent/15 text-accent'
+            : 'text-dimmed hover:bg-elevated hover:text-foreground'
+        ]}
+        aria-label={inspectArmed ? 'Stop inspecting elements' : 'Pick an element to comment on'}
+        aria-pressed={inspectArmed}
+        title={inspectArmed
+          ? 'Stop inspecting: hover an element and click to comment, Escape to exit'
+          : 'Pick an element in this design to comment on'}
+        onclick={toggleInspect}
+      >
+        <SquareDashedMousePointer size={13} />
+        {#if fullscreen}
+          <span>Inspect</span>
+        {/if}
+      </button>
+    {/if}
   </form>
+  {#if pageState.composition}
+    <BrowserCompositionTransport
+      {tabId}
+      composition={pageState.composition}
+      active={panelVisible}
+    />
+  {/if}
+  {#if inspectArmed}
+    <p
+      class="shrink-0 border-b border-accent/20 bg-accent/10 px-3 py-1 text-[0.6875rem] text-foreground"
+      role="status"
+    >
+      Hover an element and click to comment on it. Escape exits.
+    </p>
+  {/if}
   {#if addressError}
     <p
       class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[0.6875rem] text-danger"
@@ -437,4 +606,16 @@
       ).catch(() => {})
     }}
   ></div>
+  {#if panelVisible && editingComment}
+    <BrowserCommentEditor
+      reference={editingComment.reference}
+      number={editingComment.number}
+      projectId={tabProjectId}
+      threadId={tabThreadId}
+      onDraftChange={(comment) => persistCommentDraft(editingComment.reference.id, comment)}
+      onDone={(comment) => saveComment(editingComment.reference.id, comment)}
+      onRemove={() => removeComment(editingComment.reference.id)}
+      onClose={() => browserInspector.closeComment(tabId)}
+    />
+  {/if}
 </div>

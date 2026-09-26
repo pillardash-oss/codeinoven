@@ -1,5 +1,10 @@
 import { DEFAULT_IN_APP_NOTIFICATION_SOUND } from '$shared/types'
-import type { AppConfig, GitPullPreference, InAppNotificationSoundSettings } from '$shared/types'
+import type {
+  AppConfig,
+  GitPullPreference,
+  InAppNotificationSoundSettings,
+  MediaGenerationConfig
+} from '$shared/types'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
 /** Fallback used until the persisted config loads (mirrors App.svelte defaults). */
@@ -23,6 +28,7 @@ const FONT_STACKS: Record<string, string> = {
 
 let maxDiffLines = $state(DEFAULT_MAX_DIFF_LINES)
 let openLocalhostInCioBrowser = $state(true)
+let openAllLinksInCioBrowser = $state(false)
 let inAppNotificationSound = $state<InAppNotificationSoundSettings>(
   structuredClone(DEFAULT_IN_APP_NOTIFICATION_SOUND)
 )
@@ -31,6 +37,8 @@ let fontFamily = $state(DEFAULT_FONT_FAMILY)
 let appFontSize = $state(DEFAULT_APP_FONT_SIZE)
 let fontWeight = $state(200)
 let zoomLevel = $state(DEFAULT_ZOOM_LEVEL)
+/** The generation backend choice, mirrored so deep components can read it. */
+let mediaGeneration = $state<MediaGenerationConfig>({ providerId: null })
 
 /** Push the persisted appearance preferences onto the document: the app font
  *  stack as a CSS variable and the base font size on the root element (all
@@ -56,6 +64,9 @@ export const appConfigState = {
   get openLocalhostInCioBrowser(): boolean {
     return openLocalhostInCioBrowser
   },
+  get openAllLinksInCioBrowser(): boolean {
+    return openAllLinksInCioBrowser
+  },
   /** Which in-app alert groups may play their quieter sound. */
   get inAppNotificationSound(): InAppNotificationSoundSettings {
     return inAppNotificationSound
@@ -75,9 +86,13 @@ export const appConfigState = {
   get zoomLevel(): number {
     return zoomLevel
   },
+  get mediaGeneration(): MediaGenerationConfig {
+    return mediaGeneration
+  },
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
     openLocalhostInCioBrowser = config.openLocalhostInCioBrowser
+    openAllLinksInCioBrowser = config.openAllLinksInCioBrowser
     inAppNotificationSound = {
       ...DEFAULT_IN_APP_NOTIFICATION_SOUND,
       ...config.inAppNotificationSound
@@ -87,6 +102,7 @@ export const appConfigState = {
     appFontSize = config.appFontSize
     fontWeight = config.fontWeight
     zoomLevel = config.zoomLevel
+    mediaGeneration = { providerId: config.mediaGeneration.providerId }
     // The persisted keybindings overwrite the registry defaults, so every
     // handler that asks keymapState for an id picks up the user's binding.
     keymapState.setOverrides(config.keybindings)

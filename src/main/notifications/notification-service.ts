@@ -561,7 +561,7 @@ export class NotificationService {
     const focused = this.appFocused()
     if (focused) return
 
-    this.dispatchNotificationSound(notificationSoundKind(payload.kind), windows)
+    this.dispatchNotificationSound(notificationSoundKind(payload.kind, payload.projectId), windows)
 
     const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
@@ -912,6 +912,23 @@ export class NotificationService {
     const now = Date.now()
     if (now - this.lastNotificationSoundPlayedAt < NOTIFICATION_SOUND_DEDUP_MS) return false
     this.lastNotificationSoundPlayedAt = now
+
+    // The window is throttled while it is occluded, which is the normal state
+    // whenever the user is in another app, and this alert exists exactly for
+    // that case. Lift throttling for the dispatch so the alert lands with the OS
+    // card instead of after Chromium's next throttled turn, then let the window
+    // fall back to throttled once the alert has had time to play.
+    try {
+      soundWindow.webContents.setBackgroundThrottling(false)
+      const restore = setTimeout(() => {
+        if (soundWindow.isDestroyed() || soundWindow.webContents.isDestroyed()) return
+        soundWindow.webContents.setBackgroundThrottling(true)
+      }, NOTIFICATION_SOUND_DEDUP_MS)
+      restore.unref()
+    } catch (error) {
+      // Throttling control is best effort; the alert still dispatches.
+      Logger.dev('Could not lift background throttling for the notification alert:', error)
+    }
 
     return sendToRenderer(soundWindow.webContents, 'notification:playSound', kind)
   }

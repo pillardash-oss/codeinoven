@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { FolderOpen } from '@lucide/svelte'
   import type { SvelteMap } from 'svelte/reactivity'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import { invoke } from '$lib/ipc.svelte'
+  import type { CustomIcon } from '$shared/types'
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
 
   interface Props {
@@ -12,6 +13,35 @@
   }
 
   let { dialogs, projectIcons }: Props = $props()
+  let customIcons = $state<CustomIcon[]>([])
+
+  $effect(() => {
+    if (!dialogs.showEditModal) return
+    void invoke('icon-library:list').then((icons) => (customIcons = icons))
+  })
+
+  async function addCustomIcon(svg: string): Promise<void> {
+    const icon = await invoke('icon-library:add', svg)
+    customIcons = [...customIcons, icon]
+  }
+
+  let hasAppearance = $derived(
+    Boolean(
+      dialogs.editProjectColor ||
+      dialogs.editProjectIconType ||
+      dialogs.editProjectCustomSvg ||
+      dialogs.editProject?.icon ||
+      dialogs.editProjectPendingIcon
+    )
+  )
+
+  function resetProjectAppearance(): void {
+    dialogs.editProjectColor = dialogs.editProject?.color
+    dialogs.editProjectIconType = dialogs.editProject?.iconType
+    dialogs.editProjectCustomSvg = dialogs.editProject?.customSvg
+    dialogs.editProjectCustomSvgSelected = false
+    dialogs.editProjectPendingIcon = undefined
+  }
 </script>
 
 <!-- Edit Project Modal -->
@@ -19,6 +49,7 @@
   open={dialogs.showEditModal}
   title="Edit Project"
   onClose={() => (dialogs.showEditModal = false)}
+  size="lg"
 >
   {#if dialogs.editProject}
     <form
@@ -26,30 +57,32 @@
       class="space-y-4"
       onsubmit={(e: SubmitEvent) => void dialogs.confirmEditProject(e)}
     >
-      <AppearancePicker
-        name={dialogs.editProjectName}
-        color={dialogs.editProjectColor}
-        iconType={dialogs.editProjectIconType}
-        fallbackIconUrl={dialogs.editProjectPendingIcon?.dataUrl ??
-          (dialogs.editProject.icon ? (projectIcons.get(dialogs.editProject.id) ?? null) : null)}
-        onColorChange={(color) => (dialogs.editProjectColor = color)}
-        onIconTypeChange={(iconType) => (dialogs.editProjectIconType = iconType)}
-        onReset={() => {
-          dialogs.editProjectColor = dialogs.editProject?.color
-          dialogs.editProjectIconType = dialogs.editProject?.iconType
-          dialogs.editProjectPendingIcon = undefined
-        }}
-      />
-
-      <button
-        type="button"
-        class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Upload a custom image as the project icon"
-        onclick={() => void dialogs.changeEditProjectIcon()}
-      >
-        <FolderOpen size={12} />
-        Upload Image
-      </button>
+      {#if dialogs.showEditModal}
+        <AppearancePicker
+          name={dialogs.editProjectName}
+          color={dialogs.editProjectColor}
+          iconType={dialogs.editProjectIconType}
+          customSvg={dialogs.editProjectCustomSvg}
+          {customIcons}
+          onAddCustomIcon={addCustomIcon}
+          allowCustomSvg
+          resetPlacement="footer"
+          fallbackIconUrl={dialogs.editProjectCustomSvgSelected
+            ? null
+            : (dialogs.editProjectPendingIcon?.dataUrl ??
+              (dialogs.editProject.icon
+                ? (projectIcons.get(dialogs.editProject.id) ?? null)
+                : null))}
+          onColorChange={(color) => (dialogs.editProjectColor = color)}
+          onIconTypeChange={(iconType) => (dialogs.editProjectIconType = iconType)}
+          onCustomSvgChange={(svg) => {
+            dialogs.editProjectCustomSvg = svg
+            dialogs.editProjectCustomSvgSelected = Boolean(svg)
+          }}
+          onUploadImage={() => void dialogs.changeEditProjectIcon()}
+          onReset={resetProjectAppearance}
+        />
+      {/if}
 
       <!-- Project name -->
       <div>
@@ -82,23 +115,37 @@
 
   {#snippet footer()}
     {#if dialogs.editProject}
-      <button
-        type="button"
-        class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-        title="Cancel"
-        onclick={() => (dialogs.showEditModal = false)}
-      >
-        Cancel
-      </button>
-      <button
-        type="submit"
-        form="edit-project-form"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        disabled={!dialogs.editProjectName.trim()}
-        title="Save project settings"
-      >
-        Save
-      </button>
+      <div class="flex w-full items-center justify-between">
+        {#if hasAppearance}
+          <button
+            type="button"
+            class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+            title="Reset appearance"
+            onclick={resetProjectAppearance}
+          >
+            Reset
+          </button>
+        {:else}<span></span>{/if}
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+            title="Cancel"
+            onclick={() => (dialogs.showEditModal = false)}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="edit-project-form"
+            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            disabled={!dialogs.editProjectName.trim()}
+            title="Save project settings"
+          >
+            Save
+          </button>
+        </div>
+      </div>
     {/if}
   {/snippet}
 </Modal>

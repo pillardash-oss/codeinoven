@@ -16,7 +16,7 @@
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { validateAssignment } from '$shared/assignment/assignment-validation'
   import { exportAssignmentMarkdown } from '$shared/assignment/assignment-markdown'
-  import { offsetsForQuote, offsetsForRange } from './studio-annotation-anchors'
+  import { offsetsForQuote, offsetsForRange } from '$lib/selection-anchors'
   import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type {

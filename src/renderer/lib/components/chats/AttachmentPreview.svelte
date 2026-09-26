@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X, Download, FileQuestion, Loader2, Save, WrapText } from '@lucide/svelte'
+  import { X, Download, FileQuestion, FolderOpen, Loader2, Save, WrapText } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -12,6 +12,7 @@
   import { attachmentPreviewKind } from '$lib/mime'
   import { documentPreviewFrame } from '$lib/document-preview-frame'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { revealAttachmentFile } from '$lib/reveal-file'
 
   interface Props {
     attachment: PromptAttachment
@@ -74,6 +75,8 @@
     panZoom.panY = 0
   })
   const wrapTitle = $derived(wrapToggleLabel(wrapTextState.wrapped))
+  /** Only an attachment that is a real file on disk has a path to reveal. */
+  const revealable = $derived(attachment.url.startsWith('file://'))
 
   function triggerDownload(url: string, name: string): void {
     const link = document.createElement('a')
@@ -110,6 +113,11 @@
   function downloadFromButton(event: MouseEvent): void {
     event.stopPropagation()
     handleDownload()
+  }
+
+  function revealFromButton(event: MouseEvent): void {
+    event.stopPropagation()
+    void revealAttachmentFile(attachment.url)
   }
 
   async function saveText(): Promise<void> {
@@ -192,6 +200,17 @@
       >
         <Download size={14} />
       </button>
+      {#if revealable}
+        <button
+          type="button"
+          class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={`Reveal path of ${filename}`}
+          title="Reveal path"
+          onclick={() => void revealAttachmentFile(attachment.url)}
+        >
+          <FolderOpen size={14} />
+        </button>
+      {/if}
       <button
         type="button"
         class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -317,24 +336,37 @@
           <span class="max-w-full truncate text-xs text-muted">{filename}</span>
         </div>
       </div>
-      <button
-        type="button"
-        class="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-        aria-label="Close preview"
-        title="Close preview (Esc)"
-        onclick={closeFromButton}
-      >
-        <X size={18} />
-      </button>
-      <button
-        type="button"
-        class="absolute right-4 top-16 flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-        aria-label="Download file"
-        title="Download file"
-        onclick={downloadFromButton}
-      >
-        <Download size={16} />
-      </button>
+      <div class="absolute right-4 top-4 flex flex-col gap-2">
+        <button
+          type="button"
+          class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
+          aria-label="Close preview"
+          title="Close preview (Esc)"
+          onclick={closeFromButton}
+        >
+          <X size={18} />
+        </button>
+        {#if revealable}
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
+            aria-label={`Reveal path of ${filename}`}
+            title="Reveal path"
+            onclick={revealFromButton}
+          >
+            <FolderOpen size={16} />
+          </button>
+        {/if}
+        <button
+          type="button"
+          class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
+          aria-label="Download file"
+          title="Download file"
+          onclick={downloadFromButton}
+        >
+          <Download size={16} />
+        </button>
+      </div>
     </div>
   </Modal>
 {/if}

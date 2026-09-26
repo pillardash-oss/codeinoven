@@ -144,3 +144,24 @@ export function requireLocalProject(db: Database, projectId: string): Project {
   }
   return project
 }
+
+/**
+ * The same validation as {@link requireLocalProject}, read on the database worker.
+ *
+ * For an async caller on an interaction path: the synchronous read above holds the
+ * Electron main thread for the length of a statement, which a profile of the app
+ * caught stalling frames (see the main-thread SQLite rule in `docs/APP-BIBLE.md`).
+ * The errors are worded identically, so a caller can pick either one without
+ * changing what a bad project id reports.
+ */
+export async function requireLocalProjectViaWorker(
+  db: Database,
+  projectId: string
+): Promise<Project> {
+  const project = await new ProjectRepo(db).getViaWorker(projectId)
+  if (!project) throw new Error(`Project not found: ${projectId}`)
+  if (project.source !== 'local' || !project.path) {
+    throw new Error(`Project ${projectId} has no local filesystem root`)
+  }
+  return project
+}

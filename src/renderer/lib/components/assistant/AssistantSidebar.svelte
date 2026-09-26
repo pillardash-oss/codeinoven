@@ -8,12 +8,18 @@
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { pinnedThreadSort } from '$lib/stores/workspace.svelte'
-  import { isAssistantSetupThread, isThreadWorking, type Routine, type Thread } from '$shared/types'
+  import {
+    isAssistantSetupThread,
+    isThreadWorking,
+    routineHowToComplete,
+    type Routine,
+    type Thread
+  } from '$shared/types'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
   import AssistantRoutineRow from './AssistantRoutineRow.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
   import RoutineEditModal from './RoutineEditModal.svelte'
-  import { TASK_RUN_PREVIEW, previewRuns } from './assistant-view'
+  import { TASK_RUN_PREVIEW, previewRuns, routineSiblingRuns } from './assistant-view'
 
   interface Props {
     routines: Routine[]
@@ -24,6 +30,11 @@
      * own thread and renders nested under the task it ran.
      */
     runsByTask: ReadonlyMap<string, Thread[]>
+    /**
+     * Every routine's runs, newest first, keyed by routine id. A run inherits
+     * its task's `routineId`, so a run whose task is hidden still groups here.
+     */
+    runsByRoutine: ReadonlyMap<string, Thread[]>
     selectedThreadId: string | null
     /** Bind the scroll container so the workspace can reveal the active row. */
     scroller?: HTMLElement | null
@@ -54,6 +65,7 @@
     routines,
     tasks,
     runsByTask,
+    runsByRoutine,
     selectedThreadId,
     scroller = $bindable(null),
     navigate,
@@ -193,13 +205,28 @@
    * once the user asks for it. Bounded by default so a routine that has run for
    * months cannot turn the sidebar into a log.
    */
-  function visibleRuns(taskId: string): Thread[] {
-    return previewRuns(runsFor(taskId), expandedRuns.has(taskId))
+  function toggleRuns(key: string): void {
+    if (expandedRuns.has(key)) expandedRuns.delete(key)
+    else expandedRuns.add(key)
   }
 
-  function toggleRuns(taskId: string): void {
-    if (expandedRuns.has(taskId)) expandedRuns.delete(taskId)
-    else expandedRuns.add(taskId)
+  /** Every on-screen assistant task by id, so a run's parent can be resolved
+   *  even when that parent renders outside the routine's own list. */
+  const tasksById = $derived(new Map(tasks.map((task) => [task.id, task])))
+
+  /** The runs a routine shows at its own level, beside its task rows (see
+   *  `routineSiblingRuns`). */
+  function siblingRuns(routine: Routine): readonly Thread[] {
+    const runs = runsByRoutine.get(routine.id)
+    if (!runs || runs.length === 0) return EMPTY_RUNS
+    const renderedTaskIds = new Set(nestedRoutineTasks(routine.id).map((task) => task.id))
+    return routineSiblingRuns(runs, routineHowToComplete(routine), renderedTaskIds, tasksById)
+  }
+
+  /** Whether a task row nests its own runs. A set-up routine's Getting started
+   *  runs leave that row and render beside it instead. */
+  function taskNestsRuns(task: Thread, routine: Routine): boolean {
+    return !routineHowToComplete(routine) || !isAssistantSetupThread(task)
   }
 
   /**
@@ -272,30 +299,20 @@
   }
 </script>
 
-{#snippet taskWithRuns(task: Thread, color: string | undefined, select: (task: Thread) => void)}
-  <AssistantTaskRow
-    {task}
-    {color}
-    active={task.id === selectedThreadId}
-    missed={missedThreadIds.has(task.id)}
-    nextRunAt={assistantRoutines.nextRunForTask(task)}
-    runWorking={taskRunWorking(task.id)}
-    onSelect={select}
-    onRename={onRenameTask}
-    onTogglePin={onTogglePinTask}
-    onDelete={onDeleteTask}
-    onFork={onForkTask}
-    onOpenNotes={onOpenTaskNotes}
-    onHandedOff={onHandedOffTask}
-    {onHideHowTo}
-  />
-  {#if runsFor(task.id).length > 0}
+{#snippet runRows(
+  runs: readonly Thread[],
+  color: string | undefined,
+  key: string,
+  ariaLabel: string,
+  nested: boolean
+)}
+  {#if runs.length > 0}
     <div
-      class="mb-1 ml-3 border-l border-border/70 pl-1.5"
+      class={nested ? 'mb-1 ml-3 border-l border-border/70 pl-1.5' : 'mb-1'}
       role="group"
-      aria-label="Runs of {task.title}"
+      aria-label={ariaLabel}
     >
-      {#each visibleRuns(task.id) as run (run.id)}
+      {#each previewRuns(runs, expandedRuns.has(key)) as run (run.id)}
         <AssistantTaskRow
           task={run}
           variant="run"
@@ -313,19 +330,44 @@
           {onHideHowTo}
         />
       {/each}
-      {#if runsFor(task.id).length > TASK_RUN_PREVIEW}
+      {#if runs.length > TASK_RUN_PREVIEW}
         <button
           type="button"
           class="flex w-full items-center rounded-md px-2 py-1 text-left text-[0.5625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-expanded={expandedRuns.has(task.id)}
-          onclick={() => toggleRuns(task.id)}
+          aria-expanded={expandedRuns.has(key)}
+          onclick={() => toggleRuns(key)}
         >
-          {expandedRuns.has(task.id)
-            ? 'Show fewer runs'
-            : `Show all ${runsFor(task.id).length} runs`}
+          {expandedRuns.has(key) ? 'Show fewer runs' : `Show all ${runs.length} runs`}
         </button>
       {/if}
     </div>
+  {/if}
+{/snippet}
+
+{#snippet taskWithRuns(
+  task: Thread,
+  color: string | undefined,
+  select: (task: Thread) => void,
+  nestRuns: boolean
+)}
+  <AssistantTaskRow
+    {task}
+    {color}
+    active={task.id === selectedThreadId}
+    missed={missedThreadIds.has(task.id)}
+    nextRunAt={assistantRoutines.nextRunForTask(task)}
+    runWorking={taskRunWorking(task.id)}
+    onSelect={select}
+    onRename={onRenameTask}
+    onTogglePin={onTogglePinTask}
+    onDelete={onDeleteTask}
+    onFork={onForkTask}
+    onOpenNotes={onOpenTaskNotes}
+    onHandedOff={onHandedOffTask}
+    {onHideHowTo}
+  />
+  {#if nestRuns}
+    {@render runRows(runsFor(task.id), color, task.id, `Runs of ${task.title}`, true)}
   {/if}
 {/snippet}
 
@@ -363,7 +405,7 @@
           onFork={onForkTask}
         >
           {#snippet row(task: Thread)}
-            {@render taskWithRuns(task, routineColorFor(task), openPinnedTask)}
+            {@render taskWithRuns(task, routineColorFor(task), openPinnedTask, true)}
           {/snippet}
         </PinnedSection>
 
@@ -372,11 +414,13 @@
           {@const visibleTasks = filteredRoutineTasks(routine)}
           {@const searching = routineSearchOpen.has(routine.id)}
           {@const query = routineSearchQueries.get(routine.id) ?? ''}
-          {@const holdsSelected = nestedRoutineTasks(routine.id).some(
-            (task) =>
-              task.id === selectedThreadId ||
-              runsFor(task.id).some((run) => run.id === selectedThreadId)
-          )}
+          {@const siblingRunRows = siblingRuns(routine)}
+          {@const holdsSelected =
+            nestedRoutineTasks(routine.id).some(
+              (task) =>
+                task.id === selectedThreadId ||
+                runsFor(task.id).some((run) => run.id === selectedThreadId)
+            ) || siblingRunRows.some((run) => run.id === selectedThreadId)}
           <AssistantRoutineRow
             {routine}
             expanded={expanded.has(routine.id) || searching || holdsSelected}
@@ -404,19 +448,33 @@
                 <p class="px-2 py-1 text-[0.625rem] text-dimmed">No matching tasks</p>
               {:else}
                 {#each visibleTasks as task (task.id)}
-                  {@render taskWithRuns(task, routine.color, (selected) => {
-                    expanded.add(routine.id)
-                    onOpenTask(selected)
-                    onOpenRoutineHowTo(routine)
-                  })}
+                  {@render taskWithRuns(
+                    task,
+                    routine.color,
+                    (selected) => {
+                      expanded.add(routine.id)
+                      onOpenTask(selected)
+                      onOpenRoutineHowTo(routine)
+                    },
+                    taskNestsRuns(task, routine)
+                  )}
                 {:else}
-                  <p class="px-2 py-1 text-[0.625rem] text-dimmed">
-                    {routineTaskList.length > 0
-                      ? `${routineTaskList.length === 1 ? 'Its only task is' : 'Its tasks are'} pinned, in the Pinned section above.`
-                      : 'No tasks in this routine yet.'}
-                  </p>
+                  {#if siblingRunRows.length === 0}
+                    <p class="px-2 py-1 text-[0.625rem] text-dimmed">
+                      {routineTaskList.length > 0
+                        ? `${routineTaskList.length === 1 ? 'Its only task is' : 'Its tasks are'} pinned, in the Pinned section above.`
+                        : 'No tasks in this routine yet.'}
+                    </p>
+                  {/if}
                 {/each}
               {/if}
+              {@render runRows(
+                siblingRunRows,
+                routine.color,
+                `routine:${routine.id}`,
+                `Runs of ${routine.name}`,
+                false
+              )}
             </div>
           {/if}
         {/each}
@@ -428,10 +486,15 @@
             Tasks
           </div>
           {#each standaloneTasks as task (task.id)}
-            {@render taskWithRuns(task, undefined, (selected) => {
-              onOpenTask(selected)
-              onOpenTaskHowTo(selected)
-            })}
+            {@render taskWithRuns(
+              task,
+              undefined,
+              (selected) => {
+                onOpenTask(selected)
+                onOpenTaskHowTo(selected)
+              },
+              true
+            )}
           {/each}
         {/if}
       {/if}

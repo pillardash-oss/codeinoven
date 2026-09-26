@@ -1,4 +1,5 @@
 import type { Database } from '../database'
+import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import {
   sanitizeThreadSettings,
   type AgentRateLimitWindow,
@@ -26,6 +27,7 @@ interface ThreadRow {
   read: number
   branch: string | null
   feature_slug: string | null
+  authored_work_kind: string | null
   scope_bucket_id: string | null
   settings: string | null
   context_usage: string | null
@@ -148,6 +150,7 @@ function rowToThread(row: ThreadRow): Thread {
     read: row.read === 1,
     branch: row.branch ?? undefined,
     featureSlug: row.feature_slug ?? undefined,
+    authoredWorkKind: (row.authored_work_kind as Thread['authoredWorkKind']) ?? undefined,
     scopeBucketId: row.scope_bucket_id ?? undefined,
     settings: row.settings
       ? (sanitizeThreadSettings(JSON.parse(row.settings)) as ThreadSettings)
@@ -318,7 +321,7 @@ interface MessageMatchRow {
 const THREAD_UPSERT_SQL = `INSERT INTO threads(
   id, project_id, provider_id, title, title_source, status,
   pinned, pinned_at, sort_order, scope_sort_order, archived, read,
-  branch, feature_slug, scope_bucket_id, settings, context_usage,
+  branch, feature_slug, authored_work_kind, scope_bucket_id, settings, context_usage,
   session_id, session_harness_id, session_account_id, dismissed_spec_id, dismissed_spec_version,
   audit_state, loop_iteration, active_audit_id, active_audit_version,
   assignment_id, assignment_role, assignment_task_id,
@@ -329,7 +332,7 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   assistant_task_id,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -343,6 +346,7 @@ ON CONFLICT(id) DO UPDATE SET
   read=excluded.read,
   branch=excluded.branch,
   feature_slug=excluded.feature_slug,
+  authored_work_kind=excluded.authored_work_kind,
   scope_bucket_id=excluded.scope_bucket_id,
   settings=excluded.settings,
   context_usage=excluded.context_usage,
@@ -394,6 +398,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.read ? 1 : 0,
     thread.branch ?? null,
     thread.featureSlug ?? null,
+    thread.authoredWorkKind ?? null,
     thread.scopeBucketId ?? null,
     thread.settings ? JSON.stringify(thread.settings) : null,
     thread.contextUsage ? JSON.stringify(thread.contextUsage) : null,
@@ -470,6 +475,24 @@ export class ThreadRepo {
     const result = await this.db.executeViaWorker(THREAD_UPSERT_SQL, threadUpsertParams(thread))
     if (!result.ok) {
       throw new Error(result.error ?? 'Thread upsert failed')
+    }
+  }
+
+  /**
+   * Set a thread's authored-work kind off the main thread.
+   *
+   * The `IS NOT ?` guard makes a repeated write of the same kind a no-op, so a
+   * preview navigation that records the kind it already stored touches nothing.
+   * That matters because this runs on every recognized navigation, and an
+   * unconditional UPDATE would bump the WAL for an unchanged value.
+   */
+  async setAuthoredWorkKindViaWorker(id: string, kind: AuthoredWorkKind): Promise<void> {
+    const result = await this.db.executeViaWorker(
+      'UPDATE threads SET authored_work_kind = ? WHERE id = ? AND authored_work_kind IS NOT ?',
+      [kind, id, kind]
+    )
+    if (!result.ok) {
+      throw new Error(result.error ?? 'Thread authored-work kind update failed')
     }
   }
 
@@ -684,6 +707,22 @@ export class ThreadRepo {
       lastActivity: Number(row['last_activity']),
       scopeBucketId: row['scope_bucket_id'] == null ? undefined : String(row['scope_bucket_id'])
     }))
+  }
+
+  /**
+   * Every thread id a project owns, read on the database worker.
+   *
+   * For a caller comparing the rows against thread directories on disk, which
+   * must not touch SQLite on the main thread (see `docs/APP-BIBLE.md`).
+   */
+  async listIdsViaWorker(projectId: string): Promise<string[]> {
+    const result = await this.db.queryViaWorker(
+      'SELECT id FROM threads WHERE project_id = ?',
+      [projectId],
+      0
+    )
+    if (!result.ok) return []
+    return result.rows.map((row) => String(row['id']))
   }
 
   /**
@@ -964,10 +1003,10 @@ export class ThreadRepo {
    * Message matches surface user messages and the agent's final output
    * from conversation-scoped records.
    */
-  search(query: string, options: ThreadSearchOptions = {}): ThreadSearchResult[] {
+  search(query: string, options: ThreadSearchOptions = {}, useSearchMeta = false): ThreadSearchResult[] {
     const raw = query.trim()
     if (!raw) return []
-    const built = buildThreadSearchSql(raw, options)
+    const built = buildThreadSearchSql(raw, options, useSearchMeta)
     const titleRows = this.db.all<ThreadRow>(
       `${built.title.sql} LIMIT ?`,
       ...built.title.params,
@@ -977,7 +1016,7 @@ export class ThreadRepo {
       ? this.db.all<ThreadRow & MessageMatchRow>(
           `${built.fts.sql} LIMIT ?`,
           ...built.fts.params,
-          Math.min(built.limit * 4, 200)
+          threadSearchMessageLimit(built.limit)
         )
       : []
     return mergeThreadSearchResults(titleRows, messageRows, raw, built.limit)
@@ -989,16 +1028,31 @@ export class ThreadRepo {
 export interface ThreadSearchSql {
   /** Title-substring query (no LIMIT; caller bounds the result). */
   title: { sql: string; params: unknown[] }
-  /** FTS5 message query (no LIMIT; null when the raw query has no tokens). */
+  /** FTS5 message query (bounded internally; null when the raw query has no tokens). */
   fts: { sql: string; params: unknown[] } | null
   /** Effective result cap. */
   limit: number
 }
 
-/** Build the title + FTS search SQL from free-form input. */
+/** How many message rows the FTS query ranks/returns per search. */
+export function threadSearchMessageLimit(limit: number): number {
+  return Math.min(limit * 4, 200)
+}
+
+/**
+ * Build the title + FTS search SQL from free-form input.
+ *
+ * `useSearchMeta` selects the fast message query: it ranks and filters against
+ * the narrow `agent_message_search_meta` mirror and touches `agent_messages`
+ * only for the rows that return a snippet. Without it (the mirror is still
+ * being backfilled, or the database predates it) the legacy query joins
+ * `agent_messages` directly, which is correct but reads the whole messages
+ * table in FTS index order. See schema.ts for the mirror's rationale.
+ */
 export function buildThreadSearchSql(
   raw: string,
-  options: ThreadSearchOptions = {}
+  options: ThreadSearchOptions = {},
+  useSearchMeta = false
 ): ThreadSearchSql {
   const limit = Math.max(1, Math.min(options.limit ?? 20, 100))
   const projectId = options.projectId ?? null
@@ -1011,9 +1065,33 @@ export function buildThreadSearchSql(
     params: [projectId, projectId, `%${escapeLike(trimmed)}%`, trimmed]
   }
   const ftsQuery = toFtsQuery(trimmed)
+  const messageLimit = threadSearchMessageLimit(limit)
   const fts = ftsQuery
-    ? {
-        sql: `SELECT t.*, am.role AS match_role, substr(am.search_text, 1, 2000) AS snippet_text,
+    ? useSearchMeta
+      ? {
+          sql: `SELECT t.*, meta.role AS match_role,
+              substr(am.search_text, 1, 2000) AS snippet_text,
+              meta.created_at AS snippet_timestamp, meta.fts_rank AS fts_rank
+        FROM (
+          SELECT m.rowid AS msg_rowid, m.thread_id AS msg_thread_id, m.role AS role,
+                 m.created_at AS created_at, bm25(agent_messages_fts) AS fts_rank
+          FROM agent_messages_fts
+          JOIN agent_message_search_meta m ON m.rowid = agent_messages_fts.rowid
+          JOIN threads st ON st.id = m.thread_id
+          WHERE agent_messages_fts MATCH ?
+            AND m.session_id IS NULL
+            AND m.visibility = 'conversation'
+            AND (? IS NULL OR st.project_id = ?)
+          ORDER BY bm25(agent_messages_fts), m.created_at DESC
+          LIMIT ?
+        ) meta
+        JOIN agent_messages am ON am.rowid = meta.msg_rowid
+        JOIN threads t ON t.id = meta.msg_thread_id
+        ORDER BY meta.fts_rank, meta.created_at DESC`,
+          params: [ftsQuery, projectId, projectId, messageLimit]
+        }
+      : {
+          sql: `SELECT t.*, am.role AS match_role, substr(am.search_text, 1, 2000) AS snippet_text,
               am.created_at AS snippet_timestamp, bm25(agent_messages_fts) AS fts_rank
         FROM agent_messages_fts
         JOIN agent_messages am ON am.rowid = agent_messages_fts.rowid
@@ -1023,8 +1101,8 @@ export function buildThreadSearchSql(
           AND am.visibility = 'conversation'
           AND (? IS NULL OR t.project_id = ?)
         ORDER BY bm25(agent_messages_fts), am.created_at DESC`,
-        params: [ftsQuery, projectId, projectId]
-      }
+          params: [ftsQuery, projectId, projectId]
+        }
     : null
   return { title, fts, limit }
 }

@@ -42,6 +42,8 @@ import type {
   ScopeWorktreeProgressEvent
 } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
+import { sanitizeCustomSvg } from '../../../lib/custom-svg'
+import { randomUUID } from 'node:crypto'
 
 /** Upper bound on one in-app "open these paths" request (a drag selection). */
 const MAX_OPEN_PATHS = 64
@@ -96,6 +98,26 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     vault,
     gitCredentialRef
   } = ctx
+
+  ipcMain.handle('icon-library:list', () =>
+    database
+      .all<{ id: string; svg: string; created_at: number }>(
+        'SELECT id, svg, created_at FROM custom_icons ORDER BY created_at, id'
+      )
+      .map((icon) => ({ id: icon.id, svg: icon.svg, createdAt: icon.created_at }))
+  )
+  ipcMain.handle('icon-library:add', (_, rawSvg: unknown) => {
+    const svg = sanitizeCustomSvg(requireString(rawSvg, 'Custom SVG'))
+    const id = randomUUID()
+    const createdAt = Date.now()
+    database.run(
+      'INSERT INTO custom_icons(id, svg, created_at) VALUES(?, ?, ?)',
+      id,
+      svg,
+      createdAt
+    )
+    return { id, svg, createdAt }
+  })
 
   const worktreeProgressRelay =
     (event: IpcMainInvokeEvent, target: ScopeTarget) =>
@@ -555,7 +577,16 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle(
     'project:update',
     async (_, projectId: string, input: Partial<CreateProjectInput>) => {
-      const project = await projectManager.updateProject(projectId, input)
+      const validatedInput = { ...input }
+      if ('customSvg' in input) {
+        if (input.customSvg === null) validatedInput.customSvg = undefined
+        else if (typeof input.customSvg === 'string') {
+          validatedInput.customSvg = sanitizeCustomSvg(input.customSvg)
+        } else if (input.customSvg !== undefined) {
+          throw new TypeError('Project custom SVG must be text')
+        }
+      }
+      const project = await projectManager.updateProject(projectId, validatedInput)
       projectFilesService.invalidateProject(projectId)
       // The root may have changed; warm the index and re-point the watcher.
       void projectFilesService.prewarmProject(projectId)

@@ -256,11 +256,14 @@ function createWindow(): BrowserWindow {
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
       autoplayPolicy: 'no-user-gesture-required',
-      // Keep the renderer responsive when the window is hidden or occluded so
-      // background events (e.g. the notification alert played from the
-      // renderer) are handled the moment they arrive instead of after Chromium
-      // throttles the backgrounded page.
-      backgroundThrottling: false,
+      // Chromium throttles a hidden or occluded window by default, and that is
+      // left on deliberately: this window is occluded whenever the user works
+      // in another app, which is most of a long agent run, and an unthrottled
+      // renderer spends that whole time at full timer rate for nothing. The one
+      // behaviour that flag used to buy (the off-app notification alert playing
+      // promptly) is preserved at its own call site instead, which lifts
+      // throttling for the moment the alert is dispatched
+      // (see NotificationService.dispatchNotificationSound).
       preload: getPreloadPath(),
       sandbox: true,
       contextIsolation: true,
@@ -322,6 +325,11 @@ function createWindow(): BrowserWindow {
     })
 
   window.webContents.on('before-input-event', (event, input) => {
+    // A key pressed while a browser toolbar holds focus arrives here, not on the
+    // native page view. Claim the browser's own chords first, so a page-scoped
+    // key acts on the page instead of on the app around it (Cmd/Ctrl+R would
+    // otherwise reload the whole app, and Cmd/Ctrl+W would close its window).
+    if (state.browserService?.consumeChromeShortcut(event, input)) return
     // Cmd/Ctrl+W is handled by the renderer ("close the active surface": modal,
     // settings page, or thread). Prevent the default here so the macOS
     // application menu's "Close Window" accelerator never closes the window
@@ -344,25 +352,29 @@ function createWindow(): BrowserWindow {
 
   // External links leave the app through the default browser only when they
   // are safe web URLs. Every popup is denied regardless   the renderer never
-  // spawns a second window.
+  // spawns a second window. A link is routed into the in-app browser when the
+  // matching preference is on: local development links keep their own
+  // preference, every other link follows the general one. The renderer falls
+  // back to the system browser when no project thread can own the tab, so
+  // sending the request is never a dead end.
   window.webContents.setWindowOpenHandler((details) => {
     try {
       const safeUrl = windowBoundaryValidator.validateExternalUrl(details.url)
-      if (isLocalDevelopmentUrl(safeUrl)) {
-        void storage
-          .getConfig()
-          .then((config) => {
-            if (window.isDestroyed() || window.webContents.isDestroyed()) return
-            if (config.openLocalhostInCioBrowser) {
-              sendToRenderer(window.webContents, 'browser:openRequested', safeUrl)
-            } else {
-              void shell.openExternal(safeUrl)
-            }
-          })
-          .catch((error: unknown) => Logger.error('Local link routing failed:', error))
-      } else {
-        void shell.openExternal(safeUrl)
-      }
+      const local = isLocalDevelopmentUrl(safeUrl)
+      void storage
+        .getConfig()
+        .then((config) => {
+          if (window.isDestroyed() || window.webContents.isDestroyed()) return
+          const openInCioBrowser =
+            (local && config.openLocalhostInCioBrowser) ||
+            (!local && config.openAllLinksInCioBrowser)
+          if (openInCioBrowser) {
+            sendToRenderer(window.webContents, 'browser:openRequested', safeUrl)
+          } else {
+            void shell.openExternal(safeUrl)
+          }
+        })
+        .catch((error: unknown) => Logger.error('External link routing failed:', error))
     } catch (error) {
       Logger.error('Window open rejected unsafe URL:', error)
     }

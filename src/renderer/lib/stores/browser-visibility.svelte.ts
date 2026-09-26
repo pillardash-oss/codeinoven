@@ -102,8 +102,12 @@ class BrowserVisibilityState {
    * claim dies with the component that made it.
    *
    * ```svelte
-   * $effect(() => browserVisibility.claimTab(tabId, 'sidebar'))
+   * onMount(() => browserVisibility.claimTab(tabId, 'sidebar'))
    * ```
+   *
+   * Called from a lifecycle rather than an `$effect` on purpose: a claim is a
+   * side effect that lasts exactly as long as its component, and its inputs are
+   * snapshotted at construction, so there is nothing for an effect to track.
    */
   claimTab(tabId: string, surface: BrowserSurface): () => void {
     this.claims.set(surface, tabId)

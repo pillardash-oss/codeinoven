@@ -6,7 +6,9 @@
 
 import type { WebContentsView } from 'electron'
 import type {
+  BrowserCompositionTab,
   BrowserConsoleEntry,
+  BrowserDesignTab,
   BrowserDownload,
   BrowserPermissionRequest,
   BrowserSiteDataScope
@@ -30,6 +32,36 @@ export interface BrowserTab {
    *  laid out at the on-screen surface's size instead, and keeps this value for
    *  whenever it is parked again. */
   viewport: BrowserViewport
+  /** The design folder this tab is rendering, when the design capability opened
+   *  it. Non-null is what makes the tab eligible for the element inspector. */
+  design: BrowserDesignTab | null
+  /** The video composition this tab is showing, read from the served folder's
+   *  manifest. Non-null is what arms the transport and what the panel draws the
+   *  transport bar from. */
+  composition: BrowserCompositionTab | null
+  /**
+   * The document the playback runtime was installed into, and the timeline it was
+   * installed with, or null while the current document has none.
+   *
+   * Arming reads this rather than assuming: a document is armed once, and the same
+   * document is armed again only when the timeline the agent wrote changed under
+   * it, because installing a second runtime would restart the video at zero. The
+   * generation is what tells one document from the next one loaded at the same URL,
+   * which the live refresh produces every time the composition changes.
+   */
+  transport: { generation: number; url: string; duration: number; fps: number } | null
+  /**
+   * Whether the mute in force on this tab is the player's rather than the user's.
+   *
+   * A composition is muted whenever its transport is not playing, because a page
+   * can always start sound the runtime cannot reach. Remembering that the app made
+   * the mute is what lets a play lift it without ever overriding a mute the user
+   * chose for themselves.
+   */
+  transportMuted: boolean
+  /** Counts committed navigations, so a runtime installed a moment ago can be told
+   *  from one installed into a document that has since been replaced. */
+  navigationGeneration: number
 }
 
 export interface PendingBrowserPermission {

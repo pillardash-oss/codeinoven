@@ -149,10 +149,19 @@
   /** The screen on top. A nested screen outranks the actions list, because
    *  picking one closes the actions list in the same flush. */
   function resolveSpotlightScreen(): SpotlightScreenId | null {
-    if (fileSearch.paletteOpen) return 'files'
-    if (threadSearch.paletteOpen) return 'threads'
-    if (projectSwitch.paletteOpen) return 'projects'
-    if (commandPaletteOpen) return 'actions'
+    // Read every flag before deciding. A `$derived` only stays subscribed to
+    // the signals it read on its last run, so a short-circuit that skips a
+    // flag drops that flag from the dependency set: a later change to it no
+    // longer dirties the derived, and the screen it controls never re-renders.
+    // That is what made the spotlight refuse to reopen after a screen hop.
+    const files = fileSearch.paletteOpen
+    const threads = threadSearch.paletteOpen
+    const projects = projectSwitch.paletteOpen
+    const actions = commandPaletteOpen
+    if (files) return 'files'
+    if (threads) return 'threads'
+    if (projects) return 'projects'
+    if (actions) return 'actions'
     return null
   }
 
@@ -988,6 +997,23 @@
   }
 
   /**
+   * Follow a config change this window did not make.
+   *
+   * The design board changes the work folders from its own panel, and a settings
+   * page still showing the replaced folder would be describing a file that is no
+   * longer on disk. Main broadcasts the saved config, so every surface agrees on
+   * what was written. The window that made the change receives its own broadcast
+   * too, which is the same value it already holds.
+   */
+  function installConfigSubscription(): () => void {
+    return subscribe('config:changed', (next) => {
+      config = next
+      appConfigState.sync(next)
+      applyTheme()
+    })
+  }
+
+  /**
    * Cmd/Ctrl+W closes the active surface: the topmost modal, the Settings page,
    * a sidebar panel, or the open thread. When nothing is active the shortcut is
    * intentionally a no-op; application shutdown is reserved for explicit quit
@@ -1299,6 +1325,7 @@
       handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps)
     })
     const unsubscribeShutdown = installShutdownSubscription()
+    const unsubscribeConfig = installConfigSubscription()
     const originalOpenThread = workspaceState.openThread.bind(workspaceState)
     const originalClearThread = workspaceState.clearThread.bind(workspaceState)
     workspaceState.openThread = (thread, project, iconUrl) => {
@@ -1329,6 +1356,7 @@
       restoreWorkspaceCallbacks()
       unsubscribeIpc()
       unsubscribeShutdown()
+      unsubscribeConfig()
       workspaceState.openThread = originalOpenThread
       workspaceState.clearThread = originalClearThread
     }
@@ -1435,12 +1463,27 @@
       <PipOverlay />
     {/await}
   {/if}
-  {#if standaloneFiles.open}
-    <!-- Files opened through the operating system: editable text (saved straight
-         back to the file) and deliberately project-less (no file tree, no tree
-         operations, nothing indexed). -->
+  {#if standaloneFiles.open && standaloneFiles.presentation === 'docked'}
+    <!-- Files opened through the operating system: docked as a floating panel by
+         default so the workspace and its threads stay usable, minimizable to a
+         screen-edge chip. Editable text saved straight back to the file, and
+         deliberately project-less (no file tree, no tree operations, nothing
+         indexed). -->
+    {#await import('$lib/components/files/StandaloneFileDock.svelte') then { default: StandaloneFileDock }}
+      <StandaloneFileDock />
+    {/await}
+  {:else if standaloneFiles.open}
+    <!-- The explicit full screen mode of the same files, one action away from
+         the docked panel. -->
     {#await import('$lib/components/files/StandaloneFileViewer.svelte') then { default: StandaloneFileViewer }}
       <StandaloneFileViewer />
+    {/await}
+  {/if}
+  {#if standaloneFiles.pendingClose}
+    <!-- One unsaved-changes confirmation served to both the docked panel and the
+         fullscreen reader. -->
+    {#await import('$lib/components/files/StandaloneFileCloseDialog.svelte') then { default: StandaloneFileCloseDialog }}
+      <StandaloneFileCloseDialog />
     {/await}
   {/if}
 

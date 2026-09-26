@@ -17,7 +17,7 @@
   import StudioVersionBar from './StudioVersionBar.svelte'
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
-  import { offsetsForQuote, offsetsForRange } from './studio-annotation-anchors'
+  import { offsetsForQuote, offsetsForRange } from '$lib/selection-anchors'
   import {
     StudioAnnotationOverlay,
     clampPendingPosition

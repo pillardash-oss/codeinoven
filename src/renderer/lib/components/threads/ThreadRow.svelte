@@ -37,6 +37,11 @@
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
   import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import {
+    AUTHORED_WORK_ICON_BY_KIND,
+    AUTHORED_WORK_NAME_BY_KIND
+  } from '$lib/authored-work-presentation'
+  import type { AuthoredWorkKind } from '$shared/ipc-contract'
   import { threadScopeBucket } from '$lib/threads/thread-scope'
   import { pipState } from '$lib/stores/pip.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
@@ -498,11 +503,20 @@
 
   let scopeBucket = $derived(threadScopeBucket(thread))
 
+  /** The authored-work session this thread is in, or null when it is in none.
+   *  Drawn from the persisted thread field: main writes it the moment the thread
+   *  enters a session and pushes the row over `thread:updated`, so no scan and no
+   *  per-row round trip stands behind the marker. */
+  let authoredWorkKind = $derived(thread.authoredWorkKind ?? null)
+
   let hasNote = $derived(threadNotesState.has(thread.id))
 
-  /** Whether the bottom line (scope/harness/time) is shown. Single harness on
-   *  the default scope collapses to a one-line row with the time on the top. */
-  let showBottomRow = $derived(scopeBucket !== null || harnessIds.length > 1 || hasNote)
+  /** Whether the bottom line (scope/harness/time) is shown. A thread in an
+   *  authored-work session always shows it, because the marker for that session rides
+   *  the bottom line beside the computer-use/recording indicator. */
+  let showBottomRow = $derived(
+    authoredWorkKind !== null || scopeBucket !== null || harnessIds.length > 1 || hasNote
+  )
 
   let scopeColor = $derived(
     scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''
@@ -658,6 +672,19 @@
   }
 </script>
 
+{#snippet authoredWorkMarker(kind: AuthoredWorkKind | null)}
+  {#if kind}
+    {@const WorkIcon = AUTHORED_WORK_ICON_BY_KIND[kind]}
+    <span
+      class="flex shrink-0 items-center text-muted"
+      title="{AUTHORED_WORK_NAME_BY_KIND[kind]} thread"
+      aria-label="{AUTHORED_WORK_NAME_BY_KIND[kind]} thread"
+    >
+      <WorkIcon size={11} strokeWidth={1.8} aria-hidden="true" />
+    </span>
+  {/if}
+{/snippet}
+
 {#if picker}
   <div
     class="flex min-h-11 w-full flex-col gap-1 border-l-2 px-2.5 py-1.5 text-left transition-colors {selected
@@ -780,6 +807,7 @@
               <StickyNote size={11} />
             </span>
           {/if}
+          {@render authoredWorkMarker(authoredWorkKind)}
           {#if indicator}
             <ThreadIndicatorSlot {indicator} />
           {:else}
@@ -1022,6 +1050,7 @@
               <StickyNote size={11} />
             </span>
           {/if}
+          {@render authoredWorkMarker(authoredWorkKind)}
           {#if indicator}
             <ThreadIndicatorSlot {indicator} />
           {:else}

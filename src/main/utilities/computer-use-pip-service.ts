@@ -397,7 +397,8 @@ export class ComputerUsePipService {
     const client = await StdioMcpClient.connect(
       utility.config.command,
       utility.config.args ?? [],
-      utility.config.environment ?? {}
+      utility.config.environment ?? {},
+      { name: 'Cua Driver', scope: 'app' }
     )
     if (this.runGeneration !== generation) {
       // The overlay was dismissed (or the app is quitting) while this client was

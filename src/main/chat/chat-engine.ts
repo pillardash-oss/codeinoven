@@ -100,7 +100,8 @@ import { RoutineRepo } from '../database/repositories/routine-repo'
 import {
   ROUTINE_AUTHORING_DECISION_LIMIT,
   routineAuthoringContext,
-  routineAuthoringProgressContext
+  routineAuthoringProgressContext,
+  routineHowToUpdateContext
 } from '../../lib/routine-authoring'
 import { isRoutineNextStepsPrompt } from '../../lib/assistant-next-steps'
 import { composeRoutineInstruction, routineRunContext } from '../../lib/routine-run'
@@ -154,6 +155,7 @@ import {
 } from '../utilities/agent-secret-service'
 import {
   CIO_UTILITY_REUSE_PROMPT,
+  CIO_UTILITY_ROUTINE_EDIT_PROMPT,
   CIO_UTILITY_RUN_PROMPT,
   CIO_UTILITY_SETUP_PROMPT,
   isCioUtilityRequest
@@ -164,7 +166,16 @@ import {
   isCioDesignRequest,
   type DesignSessionMode
 } from '../utilities/cio-design-prompt'
+import {
+  CIO_VIDEO_CONTINUE_PROMPT,
+  CIO_VIDEO_TURN_PROMPT,
+  isCioVideoRequest,
+  type VideoSessionMode
+} from '../utilities/cio-video-prompt'
+import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
+import { effectiveExperts, type EffectiveExperts } from '../../lib/experts'
+import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { McpConnectionTestService } from '../utilities/mcp-connection-test-service'
 import { validateMcpProbeTarget } from '../utilities/mcp-probe-input'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -176,6 +187,7 @@ import {
 import { refreshCustomProviderModels } from '../providers/base-url-model-refresh'
 import { AgentProcessService } from '../agents/agent-process-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
+import { appServiceRegistry } from '../system/app-service-registry'
 import { UtilityOrchestrationService } from '../utilities/utility-orchestration-service'
 import {
   createDesignAssignmentExecutor,
@@ -186,6 +198,7 @@ import type { AssignmentWorkerScopeProvisioner } from '../../lib/engines/assignm
 import type {
   BrowserUtilityExecutor,
   DesignCapabilityExecutor,
+  VideoCapabilityExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
   UtilityResultAttribution,
@@ -323,7 +336,7 @@ import {
   workflowGroupThreads
 } from '../../lib/engines/thread-manager-lineage'
 import { capPersistedPart } from './bounded-tool-output'
-import { foldTurnStreamEvents } from './turn-stream'
+import { compactTurnStreamEvents, foldTurnStreamEvents } from './turn-stream'
 import type { TurnStreamEvent } from './turn-stream'
 import { pageTurnStreamParts } from './turn-stream-page'
 import { modelKey } from '../../lib/model-keys'
@@ -382,6 +395,8 @@ import { auxiliarySelectionFor } from '../../lib/auxiliary-agents'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import { createAutoTitleLauncher } from './title-generation-policy'
 import { artifactInstruction, GeneratedArtifactService } from './generated-artifact-service'
+import { writeAssistantReport } from './assistant-report-service'
+import { assistantReportIsTerminal, isAssistantReportThread } from '../../lib/assistant-reports'
 import {
   classifyProviderIssue,
   isUsageLimitNoticeText,
@@ -556,6 +571,7 @@ import {
   BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT,
   BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
   CHAT_WEB_ONLY_TOOLS,
+  chatGatewayAllowedTools,
   CONVERSATION_ASSIGNMENT_INSTRUCTION,
   ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION,
   IMAGE_DESCRIPTOR_SYSTEM_NOTE,
@@ -825,6 +841,15 @@ export class ChatEngine {
   /** Parsed stream-log entries held per thread before the oldest is evicted. */
   private static readonly TURN_STREAM_CACHE_LIMIT = 16
 
+  /**
+   * Size a thread's durable stream log may reach before it is compacted to the
+   * current turn.
+   *
+   * Well above any single turn's events, far below the hundreds of megabytes a
+   * long-lived thread accumulated while the file was never trimmed.
+   */
+  private static readonly TURN_STREAM_COMPACT_BYTES = 32 * 1024 * 1024
+
   private drivers = new Map<string, HarnessDriver>()
 
   /** Managed-account drivers are lazy and isolated by credential container. */
@@ -876,6 +901,13 @@ export class ChatEngine {
   /** Latest high-frequency stream mutations waiting for the next renderer frame. */
   /** Parsed stream-log state per thread so a reopen only parses appended bytes. */
   private turnStreamCache = new Map<string, TurnStreamCacheEntry>()
+
+  /** Thread streams being rewritten right now, so a burst of loads schedules one. */
+  private readonly compactingTurnStreams = new Set<string>()
+
+  /** Streams whose thread was deleted, so a late fire-and-forget append cannot
+   *  recreate the file the deletion just removed. */
+  private readonly deletedTurnStreams = new Set<string>()
 
   private pendingStreamBroadcasts = new Map<string, AgentEvent>()
 
@@ -1320,6 +1352,13 @@ export class ChatEngine {
   private accountRegistry: HarnessAccountRegistry
 
   private utilityOrchestration: UtilityOrchestrationService
+  /**
+   * What each thread decided about the experts its design or video session may
+   * use. Wired by the service graph after the window exists; until then a
+   * delegation reads the config directly, which is what this app did before a
+   * thread could answer for itself.
+   */
+  private expertSettings: ExpertSettingsService | null = null
 
   private usageRepo: HarnessUsageRepo
 
@@ -1410,6 +1449,11 @@ export class ChatEngine {
    *  keeps the design capability active until the user leaves the thread. */
   private cioDesignThreads = new Map<string, true>()
 
+  /** Threads whose user has opened a video session with @cio-video (current
+   *  turn or history). An edit is worked on over many messages, so the session
+   *  keeps the video capability active until the user leaves the thread. */
+  private cioVideoThreads = new Map<string, true>()
+
   constructor(
     private storage: StorageEngine,
     private database: Database,
@@ -1487,7 +1531,7 @@ export class ChatEngine {
     this.utilityOrchestration.setDesignAssignmentExecutor(
       createDesignAssignmentExecutor({
         database,
-        designConfig: async () => (await this.storage.getConfig()).design,
+        experts: (context) => this.expertsForThread(context.threadId),
         run: (request) => this.runDesignAssignment(request)
       })
     )
@@ -1671,6 +1715,32 @@ export class ChatEngine {
   }
 
   /**
+   * Register the thread-scoped expert policy.
+   *
+   * It answers two questions that have to agree: what the playbook tells a
+   * session about the models the user staffed, and whether `delegate` will run
+   * one of them. Both are asked of this service, so a thread the user muted is
+   * neither described as staffed nor allowed to delegate.
+   */
+  setExpertSettings(settings: ExpertSettingsService | null): void {
+    this.expertSettings = settings
+    this.utilityOrchestration.setExpertSettings(settings)
+  }
+
+  /**
+   * The experts a thread's session may delegate to.
+   *
+   * Falls back to the raw config when no policy is wired, which keeps a
+   * service graph that never installed one working exactly as it did before
+   * threads could carry an answer of their own.
+   */
+  private async expertsForThread(threadId: string): Promise<EffectiveExperts> {
+    if (this.expertSettings) return this.expertSettings.effectiveFor(threadId)
+    const config = await this.storage.getConfig()
+    return effectiveExperts(config.design?.assignments, null)
+  }
+
+  /**
    * Register the executor behind the app-owned design capability's `preview`
    * operation. The chat engine owns the turn's project and thread, so it is the
    * app surface that hands the executor those two ids.
@@ -1686,6 +1756,34 @@ export class ChatEngine {
    */
   setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
     this.utilityOrchestration.setDesignMediaExecutor(executor)
+  }
+
+  /**
+   * Register the executor behind the `generate` operation the design and video
+   * capabilities share. It needs the database for the project root, the live
+   * config for the craft's model, and the vault for the provider token, all of
+   * which the app owns rather than the turn.
+   */
+  setMediaGenerationExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.utilityOrchestration.setMediaGenerationExecutor(executor)
+  }
+
+  /**
+   * Register the executor behind the app-owned video capability's `preview`
+   * operation. The chat engine owns the turn's project and thread, so it is the
+   * app surface that hands the executor those two ids.
+   */
+  setVideoPreviewExecutor(executor: VideoCapabilityExecutor | null): void {
+    this.utilityOrchestration.setVideoPreviewExecutor(executor)
+  }
+
+  /**
+   * Register the executor behind the video capability's `capture` operation,
+   * which renders one frame and screenshots it. It needs the browser and the
+   * preview server, both of which the app owns.
+   */
+  setVideoCaptureExecutor(executor: VideoCapabilityExecutor | null): void {
+    this.utilityOrchestration.setVideoCaptureExecutor(executor)
   }
 
   /**
@@ -1836,6 +1934,12 @@ export class ChatEngine {
       }
       return this.killTaskManagerProcess(pid, force === true)
     })
+    ipcMain.handle('taskManager:stopService', (_, id: unknown) => {
+      if (typeof id !== 'string' || id.trim().length === 0) {
+        throw new TypeError('Service id must be a non-empty string')
+      }
+      return this.stopTaskManagerService(id)
+    })
     ipcMain.handle('capabilities:readSkill', (_, source: AgentCapabilitySource) =>
       this.capabilityDiscovery.readSkill(source)
     )
@@ -1868,6 +1972,9 @@ export class ChatEngine {
       'agent:ensureSession',
       (_, projectId: string, threadId: string, requestedDriverId?: string) =>
         this.ensureSession(projectId, threadId, requestedDriverId)
+    )
+    ipcMain.handle('agent:warmSession', (_, projectId: string, threadId: string) =>
+      this.warmThreadSession(projectId, threadId)
     )
     ipcMain.handle(
       'agent:loadMessages',
@@ -3108,6 +3215,50 @@ export class ChatEngine {
   }
 
   /**
+   * Whether a video session was opened in this thread, now or earlier, and
+   * whether this turn is the one that opened it. The same memo-and-rescan shape
+   * as the design tag, so an edit or rollback that removes the tag takes the
+   * session with it.
+   */
+  private async videoSessionFor(
+    projectId: string,
+    threadId: string,
+    requestedThisTurn: boolean
+  ): Promise<VideoSessionMode> {
+    if (requestedThisTurn) return 'start'
+    if (this.cioVideoThreads.has(threadId)) return 'continue'
+    const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
+    const opened = userMessages.some((message) => isCioVideoRequest(message.content))
+    if (opened) this.cioVideoThreads.set(threadId, true)
+    return opened ? 'continue' : 'off'
+  }
+
+  /**
+   * Persist the authored-work session on the thread row.
+   *
+   * A thread row used to answer "is this a design or a video thread" by
+   * scanning every listed thread's persisted messages for the session tag, which
+   * read the whole `parts` column through a LIKE on every sidebar render. The
+   * thread knows the moment it enters a session, so the kind is written here and
+   * the existing `thread:updated` broadcast carries it to the row. Guarded on the
+   * current value so an unchanged kind never re-broadcasts, and best-effort: the
+   * marker is cosmetic and a failed write must never fail a turn.
+   */
+  private async rememberAuthoredWorkKind(
+    projectId: string,
+    threadId: string,
+    kind: AuthoredWorkKind,
+    current: AuthoredWorkKind | undefined
+  ): Promise<void> {
+    if (current === kind) return
+    try {
+      await this.threadManager.updateThread(projectId, threadId, { authoredWorkKind: kind })
+    } catch (error) {
+      Logger.dev('Authored-work kind persist failed:', error)
+    }
+  }
+
+  /**
    * Publish the plan and progress this thread is executing so a driver-owned
    * checkpoint can rebuild context from them when a transcript can no longer be
    * summarized. Best-effort: a thread with no plan publishes an empty snapshot,
@@ -3223,13 +3374,16 @@ export class ChatEngine {
     brainstormInterview = false,
     explicitUtilityInvocation = false,
     /**
-     * A turn on a saved routine's task   a scheduled run or a user follow-up on
-     * the same thread. It carries the run grant (management is in scope) rather
-     * than the reuse contract, which reserves installing for an explicit
-     * request. Mutually exclusive with `explicitUtilityInvocation`, which wins
-     * when the user typed @cio-utility on the same turn.
+     * The routine conversation this turn belongs to, when it is one.
+     * `'run'`   a turn on a saved routine's task (a scheduled run or a user
+     * follow-up on the same thread): it carries the run grant (management is in
+     * scope) rather than the reuse contract, which reserves installing for an
+     * explicit request. `'edit'`   a user turn on a saved routine's Getting
+     * started thread: it does not run the routine, but a connection the change
+     * needs is installed here, so the grant is the same. A turn where the user
+     * typed @cio-utility keeps the full setup briefing instead.
      */
-    assistantRoutineTurn = false,
+    assistantRoutineTurn: 'none' | 'run' | 'edit' = 'none',
     /**
      * The routine whose Getting started interview this turn belongs to, when it
      * is one. Binds the checkpoint capability to the turn so the agent can save
@@ -3242,7 +3396,14 @@ export class ChatEngine {
      * later turn of the same thread. Both promote the design capability to an
      * active capability for the turn and add the matching session contract.
      */
-    designSession: DesignSessionMode = 'off'
+    designSession: DesignSessionMode = 'off',
+    /**
+     * Whether this turn belongs to a video session the user opened with
+     * `@cio-video`. `start` is the turn that typed the tag, `continue` is every
+     * later turn of the same thread. Both promote the video capability to an
+     * active capability for the turn and add the matching session contract.
+     */
+    videoSession: VideoSessionMode = 'off'
   ): Promise<string> {
     // The plan and progress the thread is executing are republished before any
     // early return below: a session whose transcript can no longer be summarized
@@ -3251,11 +3412,9 @@ export class ChatEngine {
     // A new agent turn begins here   re-enable a user-dismissed PiP so it may
     // show again if CUA is used, and cancel any auto-dismiss from the last turn.
     this.computerUsePip?.notifyTurnStarted(threadId)
-    // A web-only inbox chat masks its tool set to web utilities, so the app
-    // gateway and any materialized utility runtime are never reachable. Skipping
-    // the runtime here keeps the shared `chats-cwd` opencode server alive across
-    // turns instead of restarting it twice per turn (prepare + cleanup), which
-    // is what produced the transient "fetch failed" history-mirror errors.
+    // A turn that owns no utility runtime (a temporary/isolated session with no
+    // gateway) returns before any runtime is materialized, so its shared server
+    // is never restarted on its behalf.
     if (skipRuntime) return ''
     // Re-expose this thread's stored secrets for the turn that is starting: the
     // hook lands before the transport split so a direct-gateway harness (Pi,
@@ -3295,6 +3454,7 @@ export class ChatEngine {
           this.executingModelVisionCapable(projectId, settings),
         allowManagement,
         designSession,
+        videoSession,
         ...(brainstormInterview
           ? {
               saveBrainstormNotes: (markdown: string) =>
@@ -3325,11 +3485,13 @@ export class ChatEngine {
       // re-dumped into context.
       const utilityContract = !allowManagement
         ? ''
-        : assistantRoutineTurn
+        : assistantRoutineTurn === 'run'
           ? CIO_UTILITY_RUN_PROMPT
           : explicitUtilityInvocation
             ? CIO_UTILITY_SETUP_PROMPT
-            : CIO_UTILITY_REUSE_PROMPT
+            : assistantRoutineTurn === 'edit'
+              ? CIO_UTILITY_ROUTINE_EDIT_PROMPT
+              : CIO_UTILITY_REUSE_PROMPT
       // The design contract is separate from the utility contract because it is
       // not a setup grant: the capability it activates arrives with the turn
       // request, and what this adds is how to run the session the user opened.
@@ -3339,6 +3501,14 @@ export class ChatEngine {
           : designSession === 'continue'
             ? CIO_DESIGN_CONTINUE_PROMPT
             : ''
+      // The video contract is the same shape as the design one, for the same
+      // reason: the capability it activates arrives with the turn request.
+      const videoContract =
+        videoSession === 'start'
+          ? CIO_VIDEO_TURN_PROMPT
+          : videoSession === 'continue'
+            ? CIO_VIDEO_CONTINUE_PROMPT
+            : ''
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their
@@ -3347,7 +3517,13 @@ export class ChatEngine {
           await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
         }
         this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
-        return [gateway.directInstructions, utilityContract, designContract, ...skillInstructions]
+        return [
+          gateway.directInstructions,
+          utilityContract,
+          designContract,
+          videoContract,
+          ...skillInstructions
+        ]
           .filter(Boolean)
           .join('\n\n')
       }
@@ -3369,7 +3545,9 @@ export class ChatEngine {
         await applyRuntime(projectPath, null, sessionId)
         await gateway.cleanup()
         gateway = undefined
-        return [utilityContract, designContract, ...skillInstructions].filter(Boolean).join('\n\n')
+        return [utilityContract, designContract, videoContract, ...skillInstructions]
+          .filter(Boolean)
+          .join('\n\n')
       }
       const environment = {
         ...(overlay.env ?? {}),
@@ -3404,7 +3582,13 @@ export class ChatEngine {
         gateway,
         threadId
       })
-      return [gateway.instructions, utilityContract, designContract, ...skillInstructions]
+      return [
+        gateway.instructions,
+        utilityContract,
+        designContract,
+        videoContract,
+        ...skillInstructions
+      ]
         .filter(Boolean)
         .join('\n\n')
     } catch (error) {
@@ -3527,16 +3711,20 @@ export class ChatEngine {
     // authoring conversation, exactly like a turn where the user typed
     // @cio-utility; a steer landing mid-conversation must not drop it. A run of
     // a saved routine keeps it for the same reason: a steer must not drop the
-    // ability to supply a connection the run needs.
+    // ability to supply a connection the run needs. A user editing a saved
+    // routine's how-to on its Getting started thread keeps it too, because the
+    // tweak may need a capability installed.
     const allowManagement =
-      this.isRoutineAuthoringThread(steeringThread) ||
-      this.routineRunHiddenContext(steeringThread) !== undefined ||
+      this.routineConversation(steeringThread) !== null ||
       (await this.hasCioUtilityInvocation(projectId, threadId))
     // A steer landing mid-authoring keeps the checkpoint capability alive for
     // the rest of the turn, so an answer the user steered with is still saved.
-    const authoringRoutineId = this.isRoutineAuthoringThread(steeringThread)
-      ? (steeringThread?.routineId ?? null)
-      : null
+    // A steer on a saved routine's Getting started thread is an editing turn,
+    // not an interview: it has no checkpoint to keep.
+    const authoringRoutineId =
+      this.routineConversation(steeringThread) === 'authoring'
+        ? (steeringThread?.routineId ?? null)
+        : null
     if (this.utilityTurns.has(sessionId)) {
       // A steer that invokes @cio-utility has to manage utilities for the rest of
       // the turn. A gateway fixes its tool set when the turn starts, and the live
@@ -4687,6 +4875,44 @@ export class ChatEngine {
     )
   }
 
+  /**
+   * Bring a thread's harness session up before its next turn needs it.
+   *
+   * Spawning the harness is the slow part of a first send, and the app knows one
+   * is coming while the user is still reading whatever is holding it. Warming
+   * here means the prompt that follows finds its process already running, and the
+   * turn itself is unchanged: the driver's own send path takes the same route it
+   * always did, just with the spawn already paid for.
+   *
+   * Best-effort by construction. A driver with no transport to warm, a harness
+   * that is not installed, an unavailable model, a project that moved: every one
+   * of those leaves the thread exactly as it was, and the send starts the session
+   * the normal way. Nothing here may fail a turn, so nothing here throws.
+   */
+  async warmThreadSession(projectId: string, threadId: string): Promise<boolean> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    try {
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (!thread) return false
+      const driverId = thread.settings?.harnessId || DEFAULT_HARNESS
+      if (driverId === 'opencode' && this.openCodeDriverIsV2) return false
+      const account = await this.accountRegistry.resolveForProvider(
+        driverId,
+        thread.settings?.providerId,
+        thread.settings?.accountId
+      )
+      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, account.id)
+      if (!driver.warmSession) return false
+      const sessionId = await this.ensureSession(projectId, threadId, driverId)
+      await driver.warmSession(projectPath, sessionId)
+      return true
+    } catch (error) {
+      Logger.dev('Harness warm-up was skipped:', error)
+      return false
+    }
+  }
+
   /** Return the thread's harness session, creating and persisting one if needed. */
   async ensureSession(
     projectId: string,
@@ -5514,10 +5740,12 @@ export class ChatEngine {
   /** App-wide process list for the task manager (all projects and app scope). */
   async listTaskManagerProcesses(): Promise<TaskManagerSnapshot> {
     const processes = await this.agentProcesses.listAll()
+    const services = appServiceRegistry.list()
     const projectNames = new Map<string, string>()
     const threadTitles = new Map<string, string>()
-    for (const process of processes) {
-      const { projectId, threadId } = process
+    // One resolution pass across both lists, so a project or thread that owns a
+    // process and a service is read from the database once.
+    const resolveOwner = async (projectId: string | null, threadId: string | null) => {
       if (projectId && !projectNames.has(projectId)) {
         const project = await this.projectManager.getProject(projectId)
         projectNames.set(projectId, project?.name ?? projectId)
@@ -5527,13 +5755,21 @@ export class ChatEngine {
         threadTitles.set(threadId, thread?.title ?? threadId)
       }
     }
+    for (const process of processes) await resolveOwner(process.projectId, process.threadId)
+    for (const service of services) await resolveOwner(service.projectId, service.threadId)
     const resolvedProcesses = processes.map((process) => ({
       ...process,
       ...(process.projectId ? { projectName: projectNames.get(process.projectId) ?? null } : {}),
       ...(process.threadId ? { threadTitle: threadTitles.get(process.threadId) ?? null } : {})
     }))
+    const resolvedServices = services.map((service) => ({
+      ...service,
+      ...(service.projectId ? { projectName: projectNames.get(service.projectId) ?? null } : {}),
+      ...(service.threadId ? { threadTitle: threadTitles.get(service.threadId) ?? null } : {})
+    }))
     return {
       processes: resolvedProcesses,
+      services: resolvedServices,
       power: {
         source: powerMonitor.isOnBatteryPower() ? 'battery' : 'ac',
         thermalState:
@@ -5549,6 +5785,11 @@ export class ChatEngine {
       throw new TypeError('Process ID must be a positive integer')
     }
     return this.agentProcesses.killProcessGlobal(pid, force)
+  }
+
+  /** Stop one registered app service through the action it registered with. */
+  stopTaskManagerService(id: string): Promise<void> {
+    return appServiceRegistry.stop(id)
   }
 
   /** Register a PTY-backed terminal or action and its descendants with the
@@ -6565,17 +6806,7 @@ export class ChatEngine {
     const reconciliation = (async (): Promise<void> => {
       const info = this.sessionRegistry.get(sessionId)
       if (!info || info.ephemeral) return
-      const awaitingInput =
-        [...this.pendingQuestions.values()].some(
-          (pending) => pending.request.sessionId === sessionId
-        ) ||
-        [...this.pendingPermissions.values()].some(
-          (pending) => pending.request.sessionId === sessionId
-        ) ||
-        [...this.pendingImageDescriptorDecisions.values()].some(
-          (pending) => pending.sessionId === sessionId
-        )
-      if (awaitingInput) return
+      if (this.sessionAwaitsUserInput(sessionId)) return
       const expectedStatus: Extract<ThreadStatus, 'planning' | 'executing'> =
         this.planningSessions.has(sessionId) ? 'planning' : 'executing'
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
@@ -6721,15 +6952,47 @@ export class ChatEngine {
    * how-to is saved.
    */
   private isRoutineAuthoringThread(thread: Thread | null | undefined): boolean {
-    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return false
-    const routine = this.routineRepo.get(thread.routineId)
-    return routine ? !routineHowToComplete(routine) : false
+    return this.routineConversation(thread) === 'authoring'
   }
 
   /**
-   * The how-to authoring contract for a turn in a routine that still has no
-   * how-to, with the interview's own app-owned state beside it: the checkpoint
-   * the agent keeps current and every answer the user already submitted.
+   * Which routine conversation a thread is on, when it is one of the three. The
+   * single source of truth for them, so a turn can never be read as two at once:
+   *
+   * - `authoring`: a thread of a routine that still has no how-to, the Getting
+   *   started interview that drafts it. The user confirms the recap and the app
+   *   saves the routine from it.
+   * - `update`: the Getting started thread of a routine that is already saved.
+   *   The user is back to tweak the how-to, the schedule, or the connections, so
+   *   the turn carries the editing contract and never runs the routine.
+   * - `run`: any other thread of a saved routine. This is where the routine
+   *   actually runs, and what carries the how-to plus the self-provisioning
+   *   contract.
+   *
+   * `null` for every thread that belongs to no routine.
+   */
+  private routineConversation(
+    thread: Thread | null | undefined
+  ): 'authoring' | 'update' | 'run' | null {
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return null
+    const routine = this.routineRepo.get(thread.routineId)
+    if (!routine) return null
+    // A routine with no how-to cannot run, so every one of its threads is the
+    // interview, exactly as before the Getting started thread's flag existed.
+    if (!routineHowToComplete(routine)) return 'authoring'
+    // A routine's Getting started thread is its later editing host, never a run:
+    // runs are dispatched on their own run threads.
+    return isAssistantSetupThread(thread) ? 'update' : 'run'
+  }
+
+  /**
+   * The contract for a turn on a routine's Getting started thread: the authoring
+   * interview while the routine still has no how-to, and the editing contract
+   * once it is saved.
+   *
+   * The authoring form carries the interview's own app-owned state beside it: the
+   * checkpoint the agent keeps current and every answer the user already
+   * submitted.
    *
    * The contract is a property of the thread, so the engine composes it rather
    * than the composer: a resend from the message editor, a steer, or a queued
@@ -6750,9 +7013,22 @@ export class ChatEngine {
     threadId: string,
     thread: Thread | null | undefined
   ): Promise<string | undefined> {
-    if (!this.isRoutineAuthoringThread(thread) || !thread?.routineId) return undefined
+    const conversation = this.routineConversation(thread)
+    // Only the two Getting started conversations have a contract here: a run
+    // thread carries the run contract instead, and the app's own next-steps turn
+    // on a task thread carries none.
+    if ((conversation !== 'authoring' && conversation !== 'update') || !thread?.routineId) {
+      return undefined
+    }
     const routine = this.routineRepo.get(thread.routineId)
     if (!routine) return undefined
+    // The routine is saved, so this is no longer an interview: the user is back
+    // to tweak the how-to, the schedule, or the connections, and the saved state
+    // is what the agent revises. The interview checkpoint belongs to the authoring
+    // conversation, so it is neither read nor injected here.
+    if (conversation === 'update') {
+      return routineHowToUpdateContext(routine)
+    }
     const [checkpoint, messages] = await Promise.all([
       this.routineAuthoringCheckpoints.read(routine.id).catch((error: unknown): string | null => {
         Logger.error('Getting started checkpoint could not be read:', error)
@@ -6806,9 +7082,9 @@ export class ChatEngine {
    * user message on the task.
    */
   private routineRunHiddenContext(thread: Thread | null | undefined): string | undefined {
-    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return undefined
-    const routine = this.routineRepo.get(thread.routineId)
-    if (!routine || !routineHowToComplete(routine)) return undefined
+    if (this.routineConversation(thread) !== 'run') return undefined
+    const routine = thread?.routineId ? this.routineRepo.get(thread.routineId) : null
+    if (!routine) return undefined
     return routineRunContext(routine)
   }
 
@@ -7495,6 +7771,15 @@ export class ChatEngine {
     }
     if (isCioUtilityRequest(text)) this.cioUtilityThreads.set(threadId, true)
     if (isCioDesignRequest(text)) this.cioDesignThreads.set(threadId, true)
+    if (isCioVideoRequest(text)) this.cioVideoThreads.set(threadId, true)
+    const steeredKind: AuthoredWorkKind | null = isCioVideoRequest(text)
+      ? 'video'
+      : isCioDesignRequest(text)
+        ? 'design'
+        : null
+    if (steeredKind) {
+      await this.rememberAuthoredWorkKind(projectId, threadId, steeredKind, thread.authoredWorkKind)
+    }
     await this.rearmSteerUtilities(
       driver,
       projectId,
@@ -7926,6 +8211,13 @@ export class ChatEngine {
     const routineRun = this.routineRunHiddenContext(targetThread)
     const assistantTaskTurn =
       routineRun !== undefined && !(origin === 'internal' && isRoutineNextStepsPrompt(text))
+    // A user turn on the Getting started thread of a routine that is already
+    // saved: the user is tweaking the how-to, the schedule, or the connections,
+    // not running the routine. It carries the editing contract through
+    // `routineAuthoringInstruction` below, and the same management grant a run
+    // gets, because a tweak can need a capability this thread has to install.
+    const routineHowToUpdateTurn =
+      origin === 'user' && this.routineConversation(targetThread) === 'update'
     // The contract belongs to the thread, not to one send path. A scheduled run
     // and a user follow-up on the same task are both the routine's assistant, so
     // both carry the self-provisioning contract and the run grant; gating it on
@@ -8306,6 +8598,12 @@ export class ChatEngine {
     // A new turn resolves any pending auto-resume for this session   the user
     // (or a previous scheduled retry) is driving it again.
     this.retryScheduler?.clear(sessionId)
+    // The thread can also carry a pending record keyed to an earlier session:
+    // a harness or account switch replaces the session id while the old wait
+    // stays on the ledger. A fresh turn on the thread resolves every one of
+    // them, so a retried worker can never keep reading "Waiting to retry"
+    // while it is actually working.
+    this.retryScheduler?.dropThread(threadId)
     updateRetryWakeWindow(sessionId, null)
     // Track the latest user expression for the memory proposal at turn end.
     // Recorded before the active-turn branch below so a message that steers a
@@ -8461,6 +8759,31 @@ export class ChatEngine {
     const designRequested = origin === 'user' && isCioDesignRequest(text)
     if (designRequested) this.cioDesignThreads.set(threadId, true)
     const designSession = await this.designSessionFor(projectId, threadId, designRequested)
+    // A video session is user-started the same way, and it lasts for the thread:
+    // the turn that types @cio-video gets the session briefing and promotes the
+    // video capability to an active one, and every later turn keeps the
+    // capability and gets the continuation instead.
+    const videoRequested = origin === 'user' && isCioVideoRequest(text)
+    if (videoRequested) this.cioVideoThreads.set(threadId, true)
+    const videoSession = await this.videoSessionFor(projectId, threadId, videoRequested)
+    // The thread row carries the session, so the sidebar draws its marker from
+    // the persisted field instead of a message scan. A thread that opened the
+    // session in an earlier turn (detected as `continue` above) records it here
+    // too, which heals a database that predates the column.
+    const authoredWorkKind: AuthoredWorkKind | null =
+      videoRequested || videoSession === 'continue'
+        ? 'video'
+        : designRequested || designSession === 'continue'
+          ? 'design'
+          : null
+    if (authoredWorkKind) {
+      await this.rememberAuthoredWorkKind(
+        projectId,
+        threadId,
+        authoredWorkKind,
+        targetThread?.authoredWorkKind
+      )
+    }
     // The routine how-to authoring thread carries the utility gateway from the
     // start: the agent has to research and install the skills, MCPs and plugins
     // a routine needs while it writes the how-to, without the user first arming
@@ -8479,16 +8802,14 @@ export class ChatEngine {
       utilitySetupRequested ||
       assistantAuthoringTurn ||
       assistantTaskTurn ||
+      routineHowToUpdateTurn ||
       (await this.hasCioUtilityInvocation(projectId, threadId))
-    // A web-only chat skips the app gateway only when the harness can search
-    // the web natively (claude-code, codex, cline, antigravity) or cannot host
-    // the gateway at all. Pi has NO native web tools   the gateway is its only
-    // path to web search/fetch   so it must receive the gateway or a
-    // File-System-OFF chat can reach neither the internet nor the file system.
-    const driverHasNativeWebSearch = (driver.capabilities.nativeUtilities ?? []).includes(
-      'web_search'
-    )
-    const driverCanPublishGateway = typeof driver.publishUtilityGatewayEndpoint === 'function'
+    // Every chat, web-only or not, receives the app utility gateway: the
+    // in-app browser (and any installed web tool) is reached through it, and
+    // masking the chat's file-system tools happens on the harness allowlist
+    // below instead of by withholding the gateway. Without the gateway a
+    // web-only chat could reach neither the internet nor the in-app browser on
+    // a harness whose only web path is the gateway.
     const utilityInstructionsPromise = this.prepareTurnUtilities(
       driver,
       projectId,
@@ -8499,16 +8820,14 @@ export class ChatEngine {
       utilityBudgetContext,
       targetThread?.title ?? '',
       targetThread?.scopeBucketId,
-      isChatThread &&
-        !chatFileSystemEnabled &&
-        !utilitySetupAllowed &&
-        (driverHasNativeWebSearch || !driverCanPublishGateway),
+      false,
       utilitySetupAllowed,
       activeBrainstormSession,
       utilitySetupRequested || assistantAuthoringTurn,
-      assistantTaskTurn,
+      assistantTaskTurn ? 'run' : routineHowToUpdateTurn ? 'edit' : 'none',
       assistantAuthoringTurn ? (targetThread?.routineId ?? null) : null,
-      designSession
+      designSession,
+      videoSession
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -8948,7 +9267,7 @@ export class ChatEngine {
           !utilitySetupAllowed &&
           settings.providerId &&
           settings.modelId
-            ? CHAT_WEB_ONLY_TOOLS
+            ? [...CHAT_WEB_ONLY_TOOLS, ...chatGatewayAllowedTools(driverId)]
             : undefined,
         agent: utilitySetupRequested
           ? leanAgentNameForMode('utility-setup')
@@ -12029,6 +12348,10 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     await this.agentProcesses.releaseThread(projectId, threadId)
+    // The durable stream log is per-thread and lives in the directory the
+    // deletion removes, so its cache and its queued appends are dropped before
+    // anything else: neither may outlive the file.
+    await this.forgetThreadStream(projectId, threadId)
 
     const tearDownSession = async (
       sessionId: string,
@@ -20796,6 +21119,19 @@ export class ChatEngine {
     if (eventOwner) {
       this.projectIdleSince.delete(eventOwner.projectId)
       this.releasedProjects.delete(eventOwner.projectId)
+      // Live traffic is the only proof of life the silence watchdog has, and its
+      // timer is armed once from the session's `working` status. Without this
+      // reset the watchdog fires a fixed window later   even while the harness
+      // streams parts, tool calls and questions   and a probe that answers for
+      // the wrong process then kills a turn that was demonstrably alive.
+      // Lifecycle signals are excluded: they arm or clear the watchdog themselves.
+      if (
+        event.type !== 'session.status' &&
+        event.type !== 'session.idle' &&
+        event.type !== 'session.error'
+      ) {
+        this.resetSessionWatchdog(event.sessionId)
+      }
       this.forwardBrainstormTrace(eventOwner, event)
       this.forwardInitialSpecTrace(eventOwner, event)
       this.forwardAssignmentDraftTrace(eventOwner, event)
@@ -21890,6 +22226,10 @@ export class ChatEngine {
     owner: SessionInfo,
     event: Extract<AgentEvent, { type: 'message.part.updated' | 'message.part.delta' }>
   ): Promise<void> {
+    const streamPath = turnStreamPath(owner.projectId, owner.threadId)
+    // A deleted thread's append is a no-op: the deletion removed the file, and a
+    // late write would recreate the directory it just freed.
+    if (this.deletedTurnStreams.has(streamPath)) return
     const ts = Date.now()
     const sessionId = event.sessionId
     // Bind the event to the session's active turn; while the active turn is
@@ -21930,10 +22270,7 @@ export class ChatEngine {
       // (e.g. one base64 chunk); persisting it would re-poison the log.
       return
     }
-    await this.storage.appendRaw(
-      turnStreamPath(owner.projectId, owner.threadId),
-      `${JSON.stringify(streamEvent)}\n`
-    )
+    await this.storage.appendRaw(streamPath, `${JSON.stringify(streamEvent)}\n`)
   }
 
   /** Rebuild a bounded window of the working trace from the thread's durable
@@ -21998,9 +22335,31 @@ export class ChatEngine {
     }
     entry.consumedBytes = tail.nextByte
 
+    const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
+    // Bound the retained log to the current turn before folding. The parse above
+    // only ever appends, so without this a long-lived thread pins every event it
+    // has streamed since launch. Compaction keeps the fold identical while
+    // collapsing history to one snapshot per part the current turn still touches.
+    const retainedBefore = entry.events.length
+    const compacted = compactTurnStreamEvents(entry.events, turnStartTs)
+    if (compacted !== entry.events) {
+      entry.events = compacted
+      entry.foldKey = null
+    }
+    // The same compaction on disk. The file is append-only and nothing ever
+    // trimmed it, so a long-lived thread's log reached hundreds of megabytes and
+    // every reopen re-read and re-parsed all of it. Past the cap, rewrite the file
+    // to exactly the events the fold needs, through the append queue, reusing the
+    // bytes this load already parsed.
+    if (
+      tail.size >= ChatEngine.TURN_STREAM_COMPACT_BYTES &&
+      entry.events.length < retainedBefore
+    ) {
+      void this.compactTurnStream(streamPath, entry.consumedBytes, entry.events, turnStartTs)
+    }
+
     // Fold the latest bound turn PLUS every unbound-turn event. Re-folding is
     // skipped entirely when neither the events nor the turn boundary changed.
-    const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
     const foldKey = `${entry.events.length}:${entry.latestTurnId}:${turnStartTs ?? ''}`
     let folded = entry.folded
     if (entry.foldKey !== foldKey || !folded) {
@@ -22009,6 +22368,79 @@ export class ChatEngine {
       entry.foldKey = foldKey
     }
     return pageTurnStreamParts(folded, entry.events, query)
+  }
+
+  /**
+   * Trim a thread's durable stream log to the events the fold needs.
+   *
+   * The in-memory compaction is what bounds the parse cache, and the events it
+   * keeps are exactly what a fresh load would read, so writing them back is a
+   * faithful file trim rather than a second, divergent notion of what matters.
+   * The rewrite runs on the file's append queue: an append queued before it is
+   * already on disk and folded in, and one queued after it lands after the trim.
+   * A load that advanced the cache while the rewrite waited aborts it, so the
+   * newer events can never be dropped.
+   */
+  private async compactTurnStream(
+    streamPath: string,
+    fromByte: number,
+    retained: TurnStreamEvent[],
+    turnStartTs: number | undefined
+  ): Promise<void> {
+    if (this.compactingTurnStreams.has(streamPath)) return
+    this.compactingTurnStreams.add(streamPath)
+    try {
+      await this.storage.rewriteRawFrom(streamPath, fromByte, (appended) => {
+        const entry = this.turnStreamCache.get(streamPath)
+        // A load advanced the cache while this rewrite was queued, so its newer
+        // events are not in `retained` and rewriting would drop them. The next
+        // load, which starts from the current offset, compacts instead.
+        if (!entry || entry.consumedBytes !== fromByte) return null
+        const events = retained.slice()
+        for (const line of appended.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          try {
+            const parsed = JSON.parse(trimmed) as TurnStreamEvent
+            if (parsed.kind === 'part.updated' || parsed.kind === 'part.delta') events.push(parsed)
+          } catch {
+            // A malformed line is dropped exactly as the loader drops it.
+          }
+        }
+        const compacted = compactTurnStreamEvents(events, turnStartTs)
+        const text = compacted.map((event) => `${JSON.stringify(event)}\n`).join('')
+        // Nothing to gain (the turn is one huge segment) leaves the file alone,
+        // so a pathological turn never makes every later load rewrite it.
+        if (text.length === 0 || text.length >= fromByte + appended.length) return null
+        entry.events = compacted
+        entry.consumedBytes = Buffer.byteLength(text)
+        entry.foldKey = null
+        entry.folded = null
+        return text
+      })
+    } catch (error) {
+      Logger.dev('Turn stream compaction failed:', error)
+    } finally {
+      this.compactingTurnStreams.delete(streamPath)
+    }
+  }
+
+  /**
+   * Drop one thread's durable stream log with the thread.
+   *
+   * The deletion removes the whole thread directory, so a parse cache keyed by
+   * the path would outlive the file, and a fire-and-forget append queued before
+   * the delete would recreate the directory after it. The tombstone makes the
+   * late append a no-op and the drain lets the writes already queued land before
+   * the directory is removed.
+   */
+  private async forgetThreadStream(projectId: string, threadId: string): Promise<void> {
+    const streamPath = turnStreamPath(projectId, threadId)
+    this.turnStreamCache.delete(streamPath)
+    this.deletedTurnStreams.add(streamPath)
+    await this.storage.drainRaw(streamPath).catch((error: unknown) => {
+      Logger.dev('Turn stream drain failed:', error)
+    })
   }
 
   /** Timestamp of the newest non-activity user message in the mirror   the
@@ -22196,6 +22628,59 @@ export class ChatEngine {
     recorder: ((threadId: string, status: ThreadStatus) => void) | null
   ): void {
     this.assistantRunSettled = recorder
+  }
+
+  /**
+   * Publish one settled assistant run's report as a durable Markdown file under
+   * `reports/` in the routine's own workspace.
+   *
+   * A thread is capped and evicted, so a report that only ever lived in the run
+   * transcript disappears with it. Fire-and-forget and swallowed on error: the
+   * durable copy is best-effort bookkeeping and must never block or fail the
+   * turn's finalization.
+   */
+  private captureAssistantReport(
+    thread: Thread,
+    turnAssistant: AgentMessage | undefined,
+    status: ThreadStatus
+  ): void {
+    if (!isAssistantReportThread(thread)) return
+    if (!assistantReportIsTerminal(status)) return
+    if (!turnAssistant) return
+    const report = assistantText(turnAssistant).trim()
+    if (report.length === 0) return
+    void this.writeAssistantReportFor(thread, report, status)
+  }
+
+  private async writeAssistantReportFor(
+    thread: Thread,
+    report: string,
+    status: ThreadStatus
+  ): Promise<void> {
+    try {
+      const routine = thread.routineId ? this.routineRepo.get(thread.routineId) : null
+      // A run's own title is just its start time, so the report's heading uses
+      // the task it ran for. A turn on the task's own thread is already titled.
+      let taskTitle = thread.title
+      if (thread.assistantTaskId) {
+        const task = await this.threadManager.getThread(thread.projectId, thread.assistantTaskId)
+        if (task) taskTitle = task.title
+      }
+      await writeAssistantReport(this.storage, {
+        thread,
+        taskTitle,
+        routineName: routine?.name,
+        priority: routine?.priority,
+        report,
+        status,
+        at: Date.now()
+      })
+    } catch (error) {
+      Logger.error('Assistant report could not be written to disk', {
+        threadId: thread.id,
+        error: rawErrorMessage(error)
+      })
+    }
   }
 
   /**
@@ -23296,16 +23781,7 @@ export class ChatEngine {
       if (!userAborted && erroredSession?.state === 'error' && !failure) {
         failure = erroredSession.issue?.message ?? 'Agent session failed'
       }
-      const awaitingUser =
-        [...this.pendingQuestions.values()].some(
-          (pending) => pending.request.sessionId === sessionId
-        ) ||
-        [...this.pendingPermissions.values()].some(
-          (pending) => pending.request.sessionId === sessionId
-        ) ||
-        [...this.pendingImageDescriptorDecisions.values()].some(
-          (pending) => pending.sessionId === sessionId
-        )
+      const awaitingUser = this.sessionAwaitsUserInput(sessionId)
       const engineeringContractActive = this.engineeringImplementationSessions.has(sessionId)
       const contractResponse = turnAssistant ? assistantText(turnAssistant).trim() : ''
       const contractBlocked =
@@ -23806,6 +24282,12 @@ export class ChatEngine {
       // thread no run was dispatched on.
       if (this.assistantRunSettled && finishedThread && isAssistantThread(finishedThread)) {
         this.assistantRunSettled(finishedThread.id, finalStatus)
+      }
+      // A settled assistant task turn also leaves a durable Markdown report in
+      // the routine's workspace, so the report outlives the evicted thread. The
+      // in-app report and its notification are unchanged.
+      if (finishedThread && isAssistantThread(finishedThread)) {
+        this.captureAssistantReport(finishedThread, turnAssistant, finalStatus)
       }
       if (!failure && !awaitingUser && !contractBlocked && finishedThread) {
         try {
@@ -26176,6 +26658,22 @@ export class ChatEngine {
     }
   }
 
+  /** Whether the session is parked on a card the user has not settled: a
+   *  question, a permission request, or an image-descriptor decision. */
+  private sessionAwaitsUserInput(sessionId: string): boolean {
+    return (
+      [...this.pendingQuestions.values()].some(
+        (pending) => pending.request.sessionId === sessionId
+      ) ||
+      [...this.pendingPermissions.values()].some(
+        (pending) => pending.request.sessionId === sessionId
+      ) ||
+      [...this.pendingImageDescriptorDecisions.values()].some(
+        (pending) => pending.sessionId === sessionId
+      )
+    )
+  }
+
   /**
    * Called when the watchdog fires   the session has been silent for one check window.
    * When the session is demonstrably still working (an in-flight shell tool or
@@ -26209,12 +26707,16 @@ export class ChatEngine {
       // unbounded amount of time reasoning or running a tool without emitting
       // another event, while their harness process remains healthy. Keep the
       // canonical working state and re-check later; driver lifecycle events
-      // remain authoritative for completion and transport failures.
-      Logger.info('Session remains silent without an explicit provider failure   preserving turn', {
-        sessionId,
-        projectId: info.projectId,
-        threadId: info.threadId
-      })
+      // remain authoritative for completion and transport failures. A card the
+      // user has not settled is the same bargain from the other side: the turn
+      // is waiting on a human, so the card's own timer ends the wait.
+      const waitingOnUser = this.sessionAwaitsUserInput(sessionId)
+      Logger.info(
+        waitingOnUser
+          ? 'Session is waiting on the user   extending watchdog'
+          : 'Session remains silent without an explicit provider failure   preserving turn',
+        { sessionId, projectId: info.projectId, threadId: info.threadId }
+      )
       this.startSessionWatchdog(sessionId, ChatEngine.SILENT_WORK_GRACE_MS)
       return
     }
@@ -26374,6 +26876,11 @@ export class ChatEngine {
     if (driver?.isSessionBusy) {
       const probe = await probeSessionLiveness(driver, info, sessionId)
       if (probe === 'busy') return null
+      // A quiet harness with a card on screen is the user's turn to move, not a
+      // failure: extend instead of promoting the silence, so the engine never
+      // tears a live harness out from under a card the user is still filling in.
+      // A wedged transport is a real failure and still reports below.
+      if (probe === 'idle' && this.sessionAwaitsUserInput(sessionId)) return null
       const message =
         probe === 'wedged'
           ? `The ${harnessId} session stopped responding (its connection appears wedged).`
@@ -26826,6 +27333,8 @@ export class ChatEngine {
       'Set propose to false for conversational continuations, confirmations, questions, temporary context, and one-off task instructions.',
       'A request to implement, edit, fix, review, investigate, or choose something for the current task is not memory, even when it names a project, repository, feature, file, platform, or preferred implementation.',
       'Concrete artifact instructions such as "use the icon we created for this shortcut instead of a generic icon" are current-task requirements and must return propose false.',
+      'A feature request or an acceptance criterion for the deliverable in front of the user is not memory, even when it is phrased with must, should, needs to, never, always, or every. "The task manager must track every app process in production" and "the assistant browser should be scoped per routine" describe the work being requested, not a rule about how later turns are handled, so they must return propose false.',
+      '"I want you to ...", "can you make sure ...", and other request phrasing ask for work now. They are not memory unless the same message also states something explicitly lasting, such as "from now on" or "remember this".',
       'Treat user-authored comments on referenced responses as primary evidence. A comment that addresses the current model or harness and uses recurring language such as always, never, or "I do not like this" to prescribe future response behavior is durable model memory, even though the referenced response came from the current task.',
       'A complaint or correction can still be durable when it states an explicit recurring rule. Do not reject a durable rule merely because the user is frustrated.',
       'Scope words such as project, thread, chat, routine, task, repository, or codebase never make a one-off request durable. If durability is ambiguous, set propose to false.',

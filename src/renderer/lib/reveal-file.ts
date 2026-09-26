@@ -1,7 +1,11 @@
 import { invoke } from '$lib/ipc.svelte'
 import { isAbsoluteishPath } from '$shared/paths'
 import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
-import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+import {
+  filePreviewFlags,
+  canAnnotateDocument
+} from '$lib/components/files/project-files-panel-preview'
+import { projectFilesWorkspace, type ProjectFileView } from '$lib/stores/project-files.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { toast } from 'svelte-sonner'
@@ -64,11 +68,12 @@ function relativeProjectPath(projectPath: string, citedPath: string): string {
 async function revealEntry(
   projectId: string,
   entry: ProjectFileEntry,
-  focusLine?: number
+  focusLine?: number,
+  view: ProjectFileView = 'source'
 ): Promise<void> {
   if (entry.kind === 'file') {
     await projectFilesWorkspace.revealFile(projectId, entry.path)
-    await projectFilesWorkspace.openFile(projectId, entry.path, 'source', focusLine)
+    await projectFilesWorkspace.openFile(projectId, entry.path, view, focusLine)
     return
   }
   await projectFilesWorkspace.revealDirectory(projectId, entry.path)
@@ -123,6 +128,56 @@ export async function openProjectFileFromAbsolutePath(
   return true
 }
 
+/**
+ * Reveal a file main already resolved to a project (`project:findFileOwner`) in
+ * that project's own file tree. Like {@link openProjectFileFromAbsolutePath} the
+ * relative path is given rather than derived from the *active* project, so a
+ * reveal lands in the right tree whichever project happens to be on screen.
+ * Returns whether the entry resolved, so the caller can fall back to the OS file
+ * manager instead of leaving a click with no visible result.
+ */
+export async function revealProjectFileFromAbsolutePath(
+  projectId: string,
+  relativePath: string
+): Promise<boolean> {
+  const entry = await exactEntry(projectId, relativePath)
+  if (!entry) return false
+  await ensureProjectFilesReady(projectId)
+  await revealEntry(projectId, entry)
+  return true
+}
+
+/**
+ * Bring one document on screen to be annotated: reveal it in the project's file
+ * tree and open it in the annotate view, which is the only surface that draws a
+ * document annotation's passage and note. Returns whether the document was
+ * opened, so the caller can report one that has since been deleted instead of
+ * opening an empty editor for it.
+ *
+ * A file that cannot carry a note is opened in its source view instead: only
+ * rendered Markdown has selectable text to anchor an annotation to, so a document
+ * renamed out from under an annotation still opens, just not as an annotator.
+ */
+export async function revealAnnotatedDocument(projectId: string, path: string): Promise<boolean> {
+  if (!path || isAbsoluteishPath(path) || path.split('/').includes('..')) return false
+  // Prepare the file surface before probing the path: a conversation's tree is
+  // mounted on its own workspace directory, and the probe resolves through that
+  // mount. The cost of preparing for a deleted document is a visible file tree,
+  // which is also where the reader learns it is gone.
+  await ensureProjectFilesReady(projectId)
+  const entry = await exactEntry(projectId, path)
+  if (!entry || entry.kind !== 'file') return false
+  const view: ProjectFileView = canAnnotateDocument(filePreviewFlags(entry.path))
+    ? 'annotate'
+    : 'source'
+  await revealEntry(projectId, entry, undefined, view)
+  // `openFile` focuses a document that is already open without touching its
+  // view, so a document the reader left in the diff or source view still has to
+  // be pointed at the annotator.
+  projectFilesWorkspace.setViewForPath(projectId, entry.path, view)
+  return true
+}
+
 /** Route an explicit local file URL to the in-app tree or the OS file manager. */
 export async function revealLocalFile(projectId: string | undefined, url: string): Promise<void> {
   if (!projectId || !url.startsWith('file://')) return
@@ -152,6 +207,41 @@ export async function revealLocalFile(projectId: string | undefined, url: string
   const revealed = await invoke('shell:revealExternalPath', absolutePath).catch(() => false)
   if (!revealed) {
     toast.error('This local file is outside the active project or no longer exists.')
+  }
+}
+
+/**
+ * Reveal one attachment file on disk: a composer attachment, or the same file
+ * once it has been sent as a message.
+ *
+ * Main decides whether the file sits inside a project root, because attachments
+ * live in app scratch space rather than in the project's own tree: a local
+ * project keeps them in `.cio/tmp/attachments/<threadId>`, a chat keeps them
+ * under the config root. A file inside a project root is revealed in that
+ * project's file tree; every other existing file goes to the OS file manager,
+ * which is the only surface that can show it. `shell:revealExternalPath` takes
+ * an existing absolute path and never reads its contents, so no scope grant is
+ * needed for that half.
+ *
+ * Both probes are existence-based, so a file neither tree can show is reported
+ * as gone: that is what a deleted or moved attachment looks like.
+ */
+export async function revealAttachmentFile(url: string): Promise<void> {
+  if (!url.startsWith('file://')) return
+
+  const absolutePath = fileUrlToPath(url)
+  const owner = await invoke('project:findFileOwner', absolutePath).catch(() => null)
+  if (owner) {
+    const revealed = await revealProjectFileFromAbsolutePath(
+      owner.projectId,
+      owner.relativePath
+    ).catch(() => false)
+    if (revealed) return
+  }
+
+  const revealed = await invoke('shell:revealExternalPath', absolutePath).catch(() => false)
+  if (!revealed) {
+    toast.info("File doesn't exist, it may have been deleted.")
   }
 }
 

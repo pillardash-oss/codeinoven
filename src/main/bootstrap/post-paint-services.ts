@@ -17,7 +17,9 @@ import { createThreadWorkspaceRoots } from '../editor/project-files/thread-works
 import { getConfigRoot } from '../../lib/utils'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
-import { assistantRunTitle } from '../../lib/routine-run'
+import { workRootsFromConfig } from '../../lib/design/work-roots'
+import { setWorkRoots } from '../design/work-roots-state'
+import { assistantRunTitle, routineRunPrompt } from '../../lib/routine-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -216,16 +218,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         title: assistantRunTitle(Date.now())
       })
     },
-    dispatch: (run, task) => {
+    dispatch: (run, task, routine) => {
       const chatEngine = state.chatEngine
       if (!chatEngine) {
         Logger.dev('Scheduled routine run skipped   no chat engine', { threadId: task.id })
         return
       }
-      const prompt =
-        task.title.trim().length > 0
-          ? `Run this scheduled task now: ${task.title}`
-          : 'Run this scheduled task now.'
+      const prompt = routineRunPrompt(task, routine?.name)
       const runSettings = run.settings ?? task.settings
       if (!runSettings) {
         Logger.error('Routine run has no bound settings', { taskId: task.id, runId: run.id })
@@ -308,11 +307,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   )
   state.prototypePreviewService = new PrototypePreviewService()
   try {
-    state.prototypePreviewService.setCdnPolicy(
-      prototypeCdnPolicyFromConfig(await storage.getConfig())
-    )
+    const startupConfig = await storage.getConfig()
+    state.prototypePreviewService.setCdnPolicy(prototypeCdnPolicyFromConfig(startupConfig))
+    // The folders designs and videos are written into. Held for the whole run so a
+    // path resolver never touches the config file, and replaced on every save.
+    setWorkRoots(workRootsFromConfig(startupConfig))
   } catch {
-    // The strict policy stands until the config can be read.
+    // The strict policy and the default folders stand until the config can be read.
   }
   state.directoryPreviewService = new DirectoryPreviewService()
   state.chatEngine.setPrototypePreviewRegistrar(
@@ -363,12 +364,47 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // the loopback static host that serves a folder and the thread's browser tab
   // that shows it. Serving must keep working with no window to host a tab, so the
   // browser is read lazily and a missing one degrades to a URL in the reply.
+  //
+  // The design service is the durable side of the same thing: it owns what the
+  // app knows about a thread's authored work (which folder, and how to get back
+  // to it after a restart) and serves the coordinator's open and thumbnail
+  // actions. Both capabilities record every preview through it, so the user's
+  // design or composition is not lost when the window that showed it closes.
+  const { DesignService } = await import('../design/design-service')
+  const designService = new DesignService({
+    database,
+    previews: state.directoryPreviewService,
+    browser: () => state.browserService
+  })
+  designService.registerIpc()
+  // What each thread decided about the experts its design or video session may
+  // delegate to. One service answers it, because the playbook that names the
+  // experts and the `delegate` operation that would run one have to agree: a
+  // thread the user muted must be neither described as staffed nor allowed to
+  // delegate, and two derivations is how those two answers drift apart.
+  const { ExpertSettingsService } = await import('../design/expert-settings-service')
+  const expertSettings = new ExpertSettingsService({
+    database,
+    config: () => storage.getConfig(),
+    sessionKind: async (_projectId, threadId) => designService.authoredWorkKindFor(threadId)
+  })
+  expertSettings.registerIpc()
+  state.chatEngine.setExpertSettings(expertSettings)
+  // A tab is recognised from the page it is showing rather than from a record of who
+  // opened it, so a design the agent opened itself and a tab the renderer restored
+  // after a restart are designs too, and a tab that navigated away stops being one.
+  // The same recognition arms a composition's playback transport, which is why it
+  // answers with the folder, its kind and, for a composition, its timeline.
+  state.browserService?.setTabMarkRecogniser((projectId, threadId, url) =>
+    designService.observeShownFolder(projectId, threadId, url)
+  )
   const { createDesignPreviewExecutor } = await import('../preview/design-preview-executor')
   state.chatEngine.setDesignPreviewExecutor(
     createDesignPreviewExecutor({
       previews: state.directoryPreviewService,
       database,
-      browser: () => state.browserService
+      browser: () => state.browserService,
+      record: (input) => designService.recordPreview(input)
     })
   )
   // Generation services answer with a link and those links expire, so the design
@@ -376,6 +412,50 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // as a file the design references by relative path.
   const { createDesignMediaExecutor } = await import('../design/design-media-executor')
   state.chatEngine.setDesignMediaExecutor(createDesignMediaExecutor({ database }))
+  // The engine the app was missing: it turns the prompt an agent writes into a
+  // picture, a clip or a track, using the model the user assigned to that craft
+  // and the provider token the user stored. The bytes land through the same
+  // saver above, so generated media has one writer and one set of ceilings.
+  const { MediaGenerationService } = await import('../media/media-generation-service')
+  const mediaGeneration = new MediaGenerationService({
+    config: () => storage.getConfig(),
+    vault
+  })
+  const { createMediaGenerationExecutor } = await import('../media/media-generation-executor')
+  state.chatEngine.setMediaGenerationExecutor(
+    createMediaGenerationExecutor({
+      database,
+      config: () => storage.getConfig(),
+      service: mediaGeneration,
+      // `generate` is one operation on two capabilities, so which folder a file
+      // lands in when the caller names none follows the thread's session. The
+      // board answers the same question the same way, so the two cannot disagree.
+      sessionKind: async (_projectId, threadId) => designService.authoredWorkKindFor(threadId)
+    })
+  )
+  const { registerMediaGenerationIpc } = await import('../media/media-generation-ipc')
+  registerMediaGenerationIpc(mediaGeneration)
+  // The video capability composes the same two services: the loopback static
+  // host that serves a composition folder and the thread's browser tab that
+  // shows it. `capture` adds the frame render and the screenshot on top of the
+  // same serve-and-show path, so the two operations cannot drift.
+  const { createVideoPreviewExecutor } = await import('../video/video-preview-executor')
+  state.chatEngine.setVideoPreviewExecutor(
+    createVideoPreviewExecutor({
+      previews: state.directoryPreviewService,
+      database,
+      browser: () => state.browserService,
+      record: (input) => designService.recordPreview(input)
+    })
+  )
+  const { createVideoCaptureExecutor } = await import('../video/video-capture-executor')
+  state.chatEngine.setVideoCaptureExecutor(
+    createVideoCaptureExecutor({
+      previews: state.directoryPreviewService,
+      database,
+      browser: () => state.browserService
+    })
+  )
   // A previewed folder refreshes itself: the preview server reports a batched
   // change for the directory it serves, and the tab showing that origin reloads.
   // The browser is read lazily because it exists only while the app has a window,
@@ -665,5 +745,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     } catch (error) {
       Logger.error('Update/notification startup failed (non-fatal):', error)
     }
+
+    // Reclaim directory trees whose database row is gone. Delayed past the
+    // interactive path and bounded per run, so a large backlog costs a
+    // background task instead of a slower launch.
+    setTimeout(() => {
+      void import('../storage/orphan-artifact-sweep')
+        .then(({ sweepOrphanProjectArtifacts }) => sweepOrphanProjectArtifacts(storage, database))
+        .catch((error: unknown) => Logger.dev('Orphan artifact sweep failed:', error))
+    }, 20_000)
   })()
 }

@@ -1,9 +1,14 @@
 import type {
+  BrowserCompositionPlayback,
   BrowserDownload,
+  BrowserInspectorMarker,
+  BrowserInspectorTheme,
   BrowserPageState,
   BrowserPermissionDecision,
   BrowserPermissionPromptContext,
+  BrowserShortcutBindings,
   BrowserSiteDataScope,
+  BrowserTransportCommand,
   BrowserViewBounds
 } from './browser'
 import type { Contract } from './contract-helpers'
@@ -25,14 +30,71 @@ export const invokeBrowserContract = {
   'browser:goBack': {} as Contract<[tabId: string], void>,
   'browser:goForward': {} as Contract<[tabId: string], void>,
   'browser:reload': {} as Contract<[tabId: string], void>,
+  /**
+   * Run one playback action on a composition tab and answer with the state it
+   * left behind, so the panel shows what happened rather than what it asked for.
+   * Only meaningful on a tab whose `BrowserPageState.composition` is set.
+   */
+  'browser:transport': {} as Contract<
+    [tabId: string, command: BrowserTransportCommand, value: number | boolean],
+    BrowserCompositionPlayback | null
+  >,
+  /** Read a composition tab's playhead without changing it. Null when the tab is
+   *  not a composition, or is showing a page that has not been armed. */
+  'browser:transportState': {} as Contract<[tabId: string], BrowserCompositionPlayback | null>,
   /** Reload bypassing the HTTP cache (hard reload). */
   'browser:reloadIgnoringCache': {} as Contract<[tabId: string], void>,
   'browser:stop': {} as Contract<[tabId: string], void>,
   /** Mute or unmute one tab's audio output. Main publishes the applied state
    *  back through `browser:state`. */
   'browser:setMuted': {} as Contract<[tabId: string, muted: boolean], void>,
+  /**
+   * Replace the browser surface's shortcut table. The renderer resolves the
+   * keymap's `browser` category into platform-explicit chords and pushes them
+   * whenever the keymap changes, because main intercepts those keys before the
+   * application menu can and holds no keymap of its own.
+   */
+  'browser:setShortcutBindings': {} as Contract<[bindings: BrowserShortcutBindings], void>,
+  /**
+   * Report which tab's toolbar (address bar, buttons) holds DOM focus, or null
+   * when none does. A key pressed in a native page view never reaches the
+   * renderer, so main needs the focus the toolbar holds to route the same
+   * chords when the user is typing an address.
+   */
+  'browser:setChromeFocus': {} as Contract<[tabId: string | null], void>,
   /** Toggle the web page's native DevTools. Returns whether it is now open. */
   'browser:toggleDevTools': {} as Contract<[tabId: string], boolean>,
+  /**
+   * Arm or disarm the element inspector on a design tab. Arming injects the
+   * page-side inspector and starts reporting picks; disarming stops picking but
+   * leaves the pins in place, and both keep reporting a pin the user clicks.
+   * Only meaningful on a tab whose `BrowserPageState.design` is set.
+   *
+   * The theme rides on the arm so the injected overlay is themed by the time it
+   * draws its first box, instead of racing a separate theme push.
+   */
+  'browser:inspectSetArmed': {} as Contract<
+    [tabId: string, armed: boolean, theme?: BrowserInspectorTheme],
+    void
+  >,
+  /** Replace the pinned-element set the page draws, after a pick or a removal
+   *  changed the composer's references. */
+  'browser:inspectMarkers': {} as Contract<
+    [tabId: string, markers: BrowserInspectorMarker[]],
+    void
+  >,
+  /** Re-theme a tab's page overlay. Sent when the application's theme changes,
+   *  so a pin and its comment follow light and dark mode without a re-arm. */
+  'browser:inspectTheme': {} as Contract<[tabId: string, theme: BrowserInspectorTheme], void>,
+  /**
+   * Put one pinned element in front of the user: highlight it, and optionally
+   * scroll it into view. This is how a comment clicked in the composer brings
+   * the browser back to the element it was made on.
+   */
+  'browser:inspectFocus': {} as Contract<
+    [tabId: string, referenceId: string | null, scroll: boolean],
+    void
+  >,
   'browser:clearData': {} as Contract<[projectId: string], void>,
   'browser:clearSiteData': {} as Contract<
     [projectId: string, scopes: BrowserSiteDataScope[]],

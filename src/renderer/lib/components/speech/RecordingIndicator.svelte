@@ -2,15 +2,13 @@
   interface Props {
     label?: string
     decorative?: boolean
-    /** Visual tone: dictation (danger red) or text-to-speech (info blue). */
-    tone?: 'recording' | 'speech'
   }
 
-  let { label = 'Listening', decorative = false, tone = 'recording' }: Props = $props()
+  let { label = 'Listening', decorative = false }: Props = $props()
 </script>
 
 <span
-  class="recording-wrap {tone === 'speech' ? 'indicator-speech' : ''}"
+  class="recording-wrap"
   role={decorative ? undefined : 'status'}
   aria-label={decorative ? undefined : label}
   aria-hidden={decorative}
@@ -56,11 +54,6 @@
     border-radius: 9999px;
     background: var(--color-danger);
     animation: cio-record-ping 1.35s cubic-bezier(0, 0, 0.2, 1) infinite;
-  }
-
-  .indicator-speech .recording-dot,
-  .indicator-speech .recording-ping {
-    background: var(--color-info);
   }
 
   @keyframes cio-record-pulse {

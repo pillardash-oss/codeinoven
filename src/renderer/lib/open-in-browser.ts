@@ -31,20 +31,19 @@ export function openInCioBrowser(url: string): boolean {
 
 /**
  * Route a link the user activated normally (a click, an agent's suggested URL,
- * an "open the docs" control) to whichever browser belongs to it: local
- * development links stay inside the workspace when that preference is on and a
- * project thread can own the tab, everything else goes to the system browser.
+ * an "open the docs" control) to whichever browser belongs to it.
+ *
+ * Local development links stay inside the workspace when that preference is on
+ * and a project thread can own the tab, and they never fall through to the
+ * general preference: they always belong to the surface they were clicked in.
+ * When the general preference is on, every other link takes the same route.
+ * Otherwise, and whenever no project thread can own the tab, the operating
+ * system browser is the fallback instead of a silent no-op.
  */
 export async function openInBrowser(url: string): Promise<void> {
-  // `openBrowser` returns null when no project thread is active to own the
-  // tab, in which case the operating-system browser is the usable fallback
-  // instead of a silent no-op.
-  if (
-    appConfigState.openLocalhostInCioBrowser &&
-    isLocalDevelopmentUrl(url) &&
-    openInCioBrowser(url)
-  ) {
-    return
-  }
+  const wantsCioBrowser =
+    (appConfigState.openLocalhostInCioBrowser && isLocalDevelopmentUrl(url)) ||
+    appConfigState.openAllLinksInCioBrowser
+  if (wantsCioBrowser && openInCioBrowser(url)) return
   await invoke('shell:openExternal', url)
 }

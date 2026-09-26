@@ -826,7 +826,8 @@ body {
 .titlebar-no-drag {
   -webkit-app-region: no-drag;
 }
-::highlight(response-annotation) {
+::highlight(response-annotation),
+::highlight(document-annotation-anchor) {
   background-color: color-mix(in srgb, var(--color-accent) 34%, transparent);
   color: inherit;
 }

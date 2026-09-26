@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { FolderOpen } from '@lucide/svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import type { Routine } from '$shared/types'
+  import type { CustomIcon, Routine } from '$shared/types'
 
   interface Props {
     /** Routine being edited; null closes the modal. */
@@ -16,11 +15,24 @@
   }
 
   let { routine, onClose, onSaved }: Props = $props()
+  let customIcons = $state<CustomIcon[]>([])
+
+  $effect(() => {
+    if (!routine) return
+    void invoke('icon-library:list').then((icons) => (customIcons = icons))
+  })
+
+  async function addCustomIcon(svg: string): Promise<void> {
+    const icon = await invoke('icon-library:add', svg)
+    customIcons = [...customIcons, icon]
+  }
 
   let name = $state('')
   let description = $state('')
   let color = $state<string | undefined>(undefined)
   let iconType = $state<string | undefined>(undefined)
+  let customSvg = $state<string | undefined>(undefined)
+  let customSvgSelected = $state(false)
   /** Newly picked image, previewed locally until Save persists it. */
   let pendingIcon = $state<{ path: string; dataUrl: string } | undefined>(undefined)
   let busy = $state(false)
@@ -33,6 +45,8 @@
     description = routine.description ?? ''
     color = routine.color
     iconType = routine.iconType
+    customSvg = routine.customSvg
+    customSvgSelected = false
     pendingIcon = undefined
     error = null
   })
@@ -41,6 +55,9 @@
     routine ? (assistantRoutines.iconUrls.get(routine.id) ?? null) : null
   )
   const previewIconUrl = $derived(pendingIcon?.dataUrl ?? storedIconUrl)
+  const hasAppearance = $derived(
+    Boolean(color || iconType || customSvg || routine?.icon || pendingIcon || storedIconUrl)
+  )
 
   async function uploadImage(): Promise<void> {
     const imagePath = await invoke('dialog:pickImage')
@@ -48,15 +65,15 @@
     // Read the file for local preview only; nothing is persisted until Save.
     const dataUrl = await invoke('file:readAsDataUrl', imagePath)
     if (!dataUrl) return
+    customSvgSelected = false
     pendingIcon = { path: imagePath, dataUrl }
-    // A custom image takes precedence over the colour and SVG icon selection.
-    color = undefined
-    iconType = undefined
   }
 
   function resetAppearance(): void {
     color = routine?.color
     iconType = routine?.iconType
+    customSvg = routine?.customSvg
+    customSvgSelected = false
     pendingIcon = undefined
   }
 
@@ -66,23 +83,31 @@
     busy = true
     error = null
     try {
+      const appearance = {
+        name: name.trim(),
+        description: description.trim() || null,
+        color: color ?? null,
+        iconType: iconType ?? null,
+        customSvg: customSvg ?? null
+      }
       let saved: Routine
-      if (pendingIcon) {
-        // Persist the new image only; the routine keeps its colour and icon type
-        // so clearing the image later restores the previous appearance.
-        saved = await assistantRoutines.setRoutineIcon(target.id, pendingIcon.path)
+      if (customSvgSelected && customSvg && target.icon) {
+        await assistantRoutines.clearRoutineIcon(target.id)
+        saved = await assistantRoutines.updateRoutine(target.id, appearance)
+      } else if (pendingIcon && !customSvgSelected) {
+        // Persist the new image, then the appearance the form holds. An image
+        // takes precedence over the SVG icon in the preview, but the colour and
+        // icon type still save so clearing the image later restores them, and a
+        // colour picked in the same session is never dropped.
+        await assistantRoutines.setRoutineIcon(target.id, pendingIcon.path)
+        saved = await assistantRoutines.updateRoutine(target.id, appearance)
       } else {
         const hadCustomIcon = Boolean(target.icon)
         const switchingToSvgIcon = iconType !== target.iconType && iconType !== undefined
         if (hadCustomIcon && switchingToSvgIcon) {
           await assistantRoutines.clearRoutineIcon(target.id)
         }
-        saved = await assistantRoutines.updateRoutine(target.id, {
-          name: name.trim(),
-          description: description.trim() || null,
-          color: color ?? null,
-          iconType: iconType ?? null
-        })
+        saved = await assistantRoutines.updateRoutine(target.id, appearance)
       }
       onSaved?.(saved)
       onClose()
@@ -95,7 +120,7 @@
   }
 </script>
 
-<Modal open={routine !== null} title="Edit routine" {onClose}>
+<Modal open={routine !== null} size="lg" title="Edit routine" {onClose}>
   <form
     id="edit-routine-form"
     class="space-y-4"
@@ -104,25 +129,31 @@
       void save()
     }}
   >
-    <AppearancePicker
-      {name}
-      {color}
-      {iconType}
-      fallbackIconUrl={previewIconUrl}
-      onColorChange={(next) => (color = next)}
-      onIconTypeChange={(next) => (iconType = next)}
-      onReset={resetAppearance}
-    />
-
-    <button
-      type="button"
-      class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Upload a custom image as the routine icon"
-      onclick={() => void uploadImage()}
-    >
-      <FolderOpen size={12} />
-      Upload Image
-    </button>
+    {#if routine}
+      <AppearancePicker
+        {name}
+        {color}
+        {iconType}
+        {customSvg}
+        {customIcons}
+        onAddCustomIcon={addCustomIcon}
+        allowCustomSvg
+        resetPlacement="footer"
+        fallbackIconUrl={customSvgSelected ? null : previewIconUrl}
+        onColorChange={(next) => (color = next)}
+        onIconTypeChange={(next) => (iconType = next)}
+        onCustomSvgChange={(next) => {
+          customSvg = next
+          customSvgSelected = Boolean(next)
+        }}
+        onUploadImage={() => void uploadImage()}
+        onReset={() => {
+          resetAppearance()
+          customSvg = routine?.customSvg
+          customSvgSelected = false
+        }}
+      />
+    {/if}
 
     <div>
       <label class="mb-1 block text-xs font-medium text-muted" for="edit-routine-name">
@@ -158,22 +189,36 @@
   </form>
 
   {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      title="Cancel"
-      onclick={onClose}
-    >
-      Cancel
-    </button>
-    <button
-      type="submit"
-      form="edit-routine-form"
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-      disabled={!name.trim() || busy}
-      title="Save routine settings"
-    >
-      Save
-    </button>
+    <div class="flex w-full items-center justify-between">
+      {#if hasAppearance}
+        <button
+          type="button"
+          class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+          title="Reset appearance"
+          onclick={resetAppearance}
+        >
+          Reset
+        </button>
+      {:else}<span></span>{/if}
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+          title="Cancel"
+          onclick={onClose}
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          form="edit-routine-form"
+          class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          disabled={!name.trim() || busy}
+          title="Save routine settings"
+        >
+          Save
+        </button>
+      </div>
+    </div>
   {/snippet}
 </Modal>

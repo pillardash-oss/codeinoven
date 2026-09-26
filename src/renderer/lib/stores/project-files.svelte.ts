@@ -22,7 +22,9 @@ import { ProjectFilesExplorer } from './project-files-explorer.svelte'
 import {
   createProjectFilesState,
   directoriesToRefresh,
+  documentViewFor,
   errorMessage,
+  followingDocumentView,
   isPreviewableBinary,
   type ProjectFileClipboard,
   type ProjectFileTab,
@@ -270,9 +272,7 @@ class ProjectFilesWorkspace {
       return
     }
     const activeTab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
-    const preferredView: ProjectFileView =
-      activeTab?.view === 'preview' && supportsFilePreview(path) ? 'preview' : 'source'
-    await this.openWorkingTab(projectId, path, preferredView, true)
+    await this.openWorkingTab(projectId, path, followingDocumentView(activeTab?.view, path), true)
   }
 
   /** Focus an existing sidebar file tab by path before any caller creates a
@@ -394,13 +394,14 @@ class ProjectFilesWorkspace {
     const state = this.ensureState(projectId)
     const threadId = contextSidebarState.threadIdForProject(projectId)
     if (!threadId) return
-    // Keep the viewer's preview mode sticky while the user walks a checkpoint
-    // file list: when the currently active tab is in preview mode and the new
-    // file also supports preview, open it in preview instead of the diff view
-    // so the user never has to re-select the mode for every file.
+    // Keep the viewer's document view sticky while the user walks a checkpoint
+    // file list: when the currently active tab is in preview or annotation mode
+    // and the new file supports that view, open it the same way instead of the
+    // diff view, so the user never has to re-select the mode for every file.
     const activeTab = state.tabs.find((candidate) => candidate.id === state.activeTabId)
-    if (preferredView === 'diff' && activeTab?.view === 'preview' && supportsFilePreview(path)) {
-      preferredView = 'preview'
+    if (preferredView === 'diff') {
+      const following = followingDocumentView(activeTab?.view, path)
+      if (following !== 'source') preferredView = following
     }
     const tabId = `checkpoint:${threadId}:${checkpointId}:${path}`
     if (!state.tabs.some((candidate) => candidate.id === tabId)) {
@@ -484,15 +485,13 @@ class ProjectFilesWorkspace {
     const tab = state.tabs.find((t) => t.id === currentTabId)
     if (!tab) return
 
-    const wasPreviewView = tab.view === 'preview'
     tab.id = nextTabId
     tab.path = nextPath
     tab.focusLine = null
     tab.focusLineRequest += 1
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
-    if (isPreviewableBinary(nextMime) || (wasPreviewView && supportsFilePreview(nextPath)))
-      tab.view = 'preview'
+    tab.view = documentViewFor(tab.view, nextPath)
     state.activeTabId = nextTabId
 
     this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, tab.preview)
@@ -525,15 +524,13 @@ class ProjectFilesWorkspace {
     const tab = state.tabs.find((t) => t.id === currentTabId)
     if (!tab) return
 
-    const wasPreviewView = tab.view === 'preview'
     tab.id = nextTabId
     tab.path = nextPath
     tab.focusLine = null
     tab.focusLineRequest += 1
     tab.error = null
     const nextMime = mimeFromPath(nextPath)
-    if (isPreviewableBinary(nextMime) || (wasPreviewView && supportsFilePreview(nextPath)))
-      tab.view = 'preview'
+    tab.view = documentViewFor(tab.view, nextPath)
     state.activeTabId = nextTabId
 
     if (state.sessions[nextPath]) {
@@ -595,6 +592,23 @@ class ProjectFilesWorkspace {
   setView(projectId: string, tabId: string, view: ProjectFileView): void {
     const state = this.ensureState(projectId)
     const tab = state.tabs.find((candidate) => candidate.id === tabId)
+    if (tab) tab.view = view
+  }
+
+  /**
+   * Point the tab showing `path` at a view, preferring the tab that is on screen.
+   *
+   * A document can be asked for in a view by something other than the panel
+   * itself (an annotation sends its document to the annotate view), and by then
+   * the tab usually exists: `openFile` focuses an already-open tab without
+   * touching the view the reader chose for it, so the view has to be set here.
+   */
+  setViewForPath(projectId: string, path: string, view: ProjectFileView): void {
+    const state = this.ensureState(projectId)
+    const active = state.tabs.find(
+      (candidate) => candidate.id === state.activeTabId && candidate.path === path
+    )
+    const tab = active ?? state.tabs.find((candidate) => candidate.path === path)
     if (tab) tab.view = view
   }
 
@@ -790,7 +804,6 @@ class ProjectFilesWorkspace {
       return
     }
 
-    const wasPreviewView = tab.view === 'preview'
     tab.id = nextTabId
     tab.path = nextPath
     tab.preview = preview
@@ -800,8 +813,7 @@ class ProjectFilesWorkspace {
     tab.checkpointDiff = null
     tab.loadingDiff = false
     const nextMime = mimeFromPath(nextPath)
-    if (isPreviewableBinary(nextMime) || (wasPreviewView && supportsFilePreview(nextPath)))
-      tab.view = 'preview'
+    tab.view = documentViewFor(tab.view, nextPath)
     state.activeTabId = nextTabId
 
     this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, preview)

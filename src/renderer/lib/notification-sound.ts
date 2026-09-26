@@ -15,6 +15,9 @@
  *   silent too. It is an attention cue for something already on screen, so it
  *   plays at a reduced volume and must never startle or distract.
  *
+ * A successful assistant run is announced by `alert-assistant.wav` on both
+ * surfaces: the same alert, louder off-app and quieter in-app.
+ *
  * Each surface keeps its own burst window, sharing
  * `NOTIFICATION_SOUND_DEDUP_MS`: the main process gates the off-app alert, this
  * module gates the in-app one. The one user preference (the in-app groups can be
@@ -38,17 +41,19 @@ type AlertSurface = 'system' | 'in-app'
  */
 const IN_APP_ALERT_VOLUME = 0.5
 
-const ALERT_KINDS: readonly NotificationSoundKind[] = ['default', 'attention']
+const ALERT_KINDS: readonly NotificationSoundKind[] = ['default', 'attention', 'assistant']
 const ALERT_SURFACES: readonly AlertSurface[] = ['system', 'in-app']
 
 const ALERT_SOURCES: Record<AlertSurface, Record<NotificationSoundKind, string>> = {
   system: {
     default: 'alert.wav',
-    attention: 'alert-attention.wav'
+    attention: 'alert-attention.wav',
+    assistant: 'alert-assistant.wav'
   },
   'in-app': {
     default: 'alert-in-app.wav',
-    attention: 'alert-in-app-attention.wav'
+    attention: 'alert-in-app-attention.wav',
+    assistant: 'alert-assistant.wav'
   }
 }
 

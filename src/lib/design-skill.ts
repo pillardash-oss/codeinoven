@@ -1,11 +1,10 @@
+import { expertDelegationGuidance, NO_EXPERTS, type EffectiveExperts } from './experts'
 import {
-  DESIGN_ASSIGNMENT_OUTPUTS,
-  designAssignmentOutput,
-  designAssignmentOutputLabel,
-  designAssignmentReference,
-  isUsableDesignAssignment
-} from './design-assignments'
-import type { DesignAssignment } from './types/settings'
+  DEFAULT_WORK_ROOTS,
+  workRootGuidance,
+  workRootForKind,
+  type WorkRoots
+} from './design/work-roots'
 import {
   DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnOrigins,
@@ -55,14 +54,16 @@ export const DESIGN_CAPABILITY_SUMMARY =
 export const DESIGN_CAPABILITY_SEARCH_QUERY = 'design'
 
 /**
- * Where a design goes when nobody names a folder.
+ * Where a design goes when nobody names a folder, which is the user's setting.
  *
- * `.cio/` is the app's scratch tree and is ignored by Git, so a design written
- * here is explorable work rather than a change to the product. Promoting it, by
- * moving it into the source tree and rebuilding it from the project's own
- * components, stays a deliberate act.
+ * Kept as a function rather than a constant for the same reason the paragraphs
+ * below are: a playbook that hard-coded the default would tell an agent to write
+ * into `.cio/designs` while the user had pointed the folder somewhere Git
+ * tracks, and the agent would oblige.
  */
-export const DESIGN_OUTPUT_ROOT = '.cio/designs'
+export function designOutputRoot(roots: WorkRoots = DEFAULT_WORK_ROOTS): string {
+  return workRootForKind(roots, 'design')
+}
 
 /** The two sentences about external assets, built from the live policy. */
 function externalAssetGuidance(policy: PrototypeCdnPolicy): string {
@@ -73,39 +74,21 @@ function externalAssetGuidance(policy: PrototypeCdnPolicy): string {
 }
 
 /**
- * The delegation paragraph: the assignments the user set up, split by what they
- * produce, or the fact that nothing is delegated yet. Either way the agent is
- * told that picking a model is the user's decision and never its own.
+ * The delegation paragraph.
+ *
+ * Written for a design session by the shared builder, so the video playbook
+ * states the same thing about the same list of models.
  */
-function delegationGuidance(assignments: readonly DesignAssignment[]): string {
-  const usable = assignments.filter((assignment) => isUsableDesignAssignment(assignment))
-  if (usable.length === 0) {
-    return 'No design work is delegated yet: the user has not assigned a model to any design work. The assignments are app-wide, so this is true of every project rather than of this one. Produce what you can with your own tools, and when the design needs something you cannot produce, say which work needs a model and that the user assigns it in Settings, Design. Never choose a model yourself, and never fill the gap with a placeholder presented as the real thing.'
-  }
-  const lines: string[] = ['The user assigned:']
-  for (const output of DESIGN_ASSIGNMENT_OUTPUTS) {
-    const group = usable.filter((assignment) => designAssignmentOutput(assignment) === output)
-    if (group.length === 0) continue
-    const named = group.map(designAssignmentReference).join(', ')
-    lines.push(
-      output === 'text'
-        ? `- ${designAssignmentOutputLabel(output)}, run with \`delegate\`: ${named}.`
-        : `- ${designAssignmentOutputLabel(output)}, produced with a generation capability: ${named}.`
-    )
-  }
-  lines.push(
-    '',
-    "`delegate` answers with text, so it runs the copywriting work. A picture, a clip or a track is a file rather than an answer, so it comes from a generation capability in the app's utilities bank, and the model listed against that craft is the one the user had in mind: prefer a capability that reaches it, say which one you used, and save what it returns with `save-media`, because a generation link expires and the saved file does not. When no capability is installed, name the one that is needed and the model the user already chose. Two assignments that cover the same craft are the user's own alternatives, and `delegate` tries them in the user's order and reports which one answered. When the work is not in that list at all, do not pick a model yourself: name the work and tell the user to assign a model to it in Settings, Design."
-  )
-  return lines.join('\n')
+function delegationGuidance(experts: EffectiveExperts): string {
+  return expertDelegationGuidance(experts, 'design')
 }
 
 /**
  * The seeded copy of the playbook, written into the utilities registry so a
  * reader of that file sees a complete contract. Every activation replaces the
  * external-asset paragraph with the live policy and the delegation paragraph
- * with the user's live assignments, so this copy is a default rather than the
- * text a turn receives.
+ * with the user's live experts, so this copy is a default rather than the text a
+ * turn receives.
  */
 export const DESIGN_CAPABILITY_DOCS = designCapabilityDocs({
   allowExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
@@ -114,14 +97,16 @@ export const DESIGN_CAPABILITY_DOCS = designCapabilityDocs({
 
 /**
  * The playbook handed back when the capability is activated. Kept as a function
- * because the external-asset paragraph is the live CDN policy and the delegation
- * section is the user's live assignments; a stale copy of either is the drift
- * both resolvers exist to prevent.
+ * because the external-asset paragraph is the live CDN policy, the delegation
+ * section is the user's live experts, and the folder is the user's live setting;
+ * a stale copy of any of them is the drift those resolvers exist to prevent.
  */
 export function designCapabilityDocs(
   policy: PrototypeCdnPolicy,
-  assignments: readonly DesignAssignment[] = []
+  experts: EffectiveExperts = NO_EXPERTS,
+  roots: WorkRoots = DEFAULT_WORK_ROOTS
 ): string {
+  const designRoot = designOutputRoot(roots)
   return `# Design studio
 
 Design interfaces as plain HTML, then look at them in this app while the turn is still running. A landing page, a marketing site, a dashboard, an app screen, a wireframe, a pitch: anything that is a screen rather than a program.
@@ -132,7 +117,7 @@ A project may hold no framework at all, sometimes not even a package.json. That 
 
 ## Where a design lives
 
-Write one design per folder under \`${DESIGN_OUTPUT_ROOT}/<name>/\`, with \`index.html\` as the entry file. The folder is served as a static site, so \`styles.css\`, \`app.js\`, SVGs and images can sit beside the entry file, and both relative paths (\`./styles.css\`) and root-absolute paths (\`/styles.css\`) resolve inside the folder. \`.cio/\` is ignored by Git, so a design stays scratch until the user asks for it in the source tree.
+Write one design per folder under \`${designRoot}/<name>/\`, with \`index.html\` as the entry file. The folder is served as a static site, so \`styles.css\`, \`app.js\`, SVGs and images can sit beside the entry file, and both relative paths (\`./styles.css\`) and root-absolute paths (\`/styles.css\`) resolve inside the folder. ${workRootGuidance(designRoot)}
 
 Do not write into \`.cio/specs/<feature>/prototypes/\`. That folder belongs to the engineering prototype phase, which finalizes and registers whatever it finds there.
 
@@ -140,7 +125,7 @@ Do not write into \`.cio/specs/<feature>/prototypes/\`. That folder belongs to t
 
 Invoke this capability with operation \`preview\`:
 
-- \`directory\`, project-relative, defaults to \`${DESIGN_OUTPUT_ROOT}\`.
+- \`directory\`, project-relative, defaults to \`${designRoot}\`.
 - \`entry\`, a file inside that folder, defaults to \`index.html\` when that file exists. With no entry file the app opens its own file listing.
 - \`attention\`, \`focus\` (the default) to bring the tab to the user, \`background\` to leave them where they are.
 
@@ -152,25 +137,29 @@ Activate the app's in-app browser capability, \`cio:browser\` (search for "brows
 
 ## Delegating to the models the user assigned
 
-Some design work is a craft rather than markup: the copy that sounds like the product, an SEO pass, a script, a storyboard, the images a page needs, the clip that opens it. The user puts a model on each craft in Settings, Design, and operation \`delegate\` runs the one they chose for the work you name:
+Some design work is a craft rather than markup: the copy that sounds like the product, an SEO pass, a script, a storyboard. The user puts a model on each craft in Settings, Design, and operation \`delegate\` runs the one they chose for the work you name:
 
 - \`assignment\`, the work to delegate, by its handle or by its title.
 - \`prompt\`, the complete brief. The assigned model sees nothing of this conversation, so the prompt carries the subject, the tone, the format, every constraint, and the exact deliverable you want back.
 
-${delegationGuidance(assignments)}
+${delegationGuidance(experts)}
 
-\`delegate\` is the copywriting lane and answers with text only, so it cannot hand back an image, a video or a sound file. Never accept prose as though it were the asset: what comes back is text, not a picture, a clip or a track.
+\`delegate\` is the copywriting lane and answers with text only. A craft that produces a picture, a clip or a track is made with \`generate\` instead, so never accept prose as though it were the asset.
 
 Say which assignment produced a piece of work when you report, so the user can see where their own model choice was used.
 
 ## Pictures, video and sound
 
-Media comes from a capability, not from a completion. An image generator, a video model or a text-to-speech service reaches this app as a capability the user installed in Utilities, and the utilities bank is how you use it. When the user named a model for one of these crafts, that model says which generator they had in mind, so prefer a capability that reaches it and say which one you used.
+Media is generated by the app, with the model the user assigned to that craft. Call \`generate\` with the kind the design needs:
 
-1. Find it with the search tool the turn instructions name (query the work, for example "generate an image" or "video generation"), activate the result, then invoke it. Every one takes its own arguments, so read the capability's documentation before calling it.
-2. When it answers with a link, save that link with this capability's \`save-media\` operation, naming the design's own folder and a file name that says what the asset is. Generation links expire within hours or days, so a design that references one stops rendering; the saved file does not.
-3. Reference the file from the markup with the relative path the reply gave you, and preview the folder to check it renders at the size and in the position the design needs.
-4. When no installed capability does the work, say so plainly and name what would: the user installs it in Utilities. Do not stand in for a generator, and never leave an empty frame or a grey box where a real asset was asked for.
+1. \`kind\`, one of \`image\`, \`video\` or \`audio\`. It chooses the craft, and so the model the user put on that craft.
+2. \`prompt\`, the complete brief: the subject, the style, the mood, the framing, and anything the asset must not contain. A generation model has seen nothing of this work, so the prompt carries all of it.
+3. \`name\` and \`directory\` when the asset belongs beside a particular design, so the file lands in that design's folder under a name that says what it is. The default folder is the design root.
+4. \`options\` only for a provider-specific field the model documents, such as an aspect ratio or a duration.
+
+The reply carries the project-relative path. Reference the file from the markup with a relative path, preview the folder to check it renders at the size and in the position the design needs, and look at the asset before you describe it.
+
+A craft with no model assigned is refused by name. When that happens, do not substitute a placeholder and do not choose a model yourself: tell the user plainly which craft needs a model and that they assign it in Settings, Design. A generator the user installed in Utilities is still there to reach, and its answer is a link you save with \`save-media\`.
 
 ## External assets
 

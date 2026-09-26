@@ -796,10 +796,23 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
+  /**
+   * Start this session's Pi process and RPC channel without sending a turn.
+   *
+   * `sendPrompt` already goes through `ensureRpcClient`, so this is the same
+   * work pulled forward: the spawn, the extension materialization and the
+   * session bootstrap that a first turn would otherwise pay for while the user
+   * waits. Nothing about the turn changes, because the first prompt finds the
+   * client already registered and skips straight to its own RPC calls.
+   */
+  async warmSession(projectPath: string, sessionId: string): Promise<void> {
+    const session = await this.requireSession(projectPath, sessionId)
+    await this.ensureRpcClient(projectPath, session.id)
+  }
+
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
-    const client = await this.ensureRpcClient(projectPath, session.id)
-    // A real user turn is not a continuation of a stop: clear the stop request
+    const client = await this.ensureRpcClient(projectPath, session.id) // A real user turn is not a continuation of a stop: clear the stop request
     // the extension applies to worker sessions, and re-arm pi's automatic retry
     // that the stop disarmed.
     await this.clearStopRequest(session.id)

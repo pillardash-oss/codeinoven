@@ -46,6 +46,8 @@
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import MediaPreview from '../chats/MediaPreview.svelte'
+  import AttachmentPreview from '../chats/AttachmentPreview.svelte'
+  import { createComposerAttachmentPreview } from '../chats/chat-composer-preview.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
@@ -88,7 +90,13 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
-  import { isImageMime, isVideoMime, isAudioMime, fileUrlToPath } from '$lib/mime'
+  import {
+    attachmentPreviewKind,
+    isImageMime,
+    isVideoMime,
+    isAudioMime,
+    fileUrlToPath
+  } from '$lib/mime'
   import {
     fastBaseModelId,
     fastVariantForModelId,
@@ -143,8 +151,8 @@
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import {
     connectionsFromPlan,
+    extractHowToDraft,
     isRoutineConfirmation,
-    latestHowToDraft as latestHowToDraftIn,
     latestRoutinePlanDraft as latestRoutinePlanDraftIn,
     type RoutinePlanDraft
   } from '$lib/components/assistant/assistant-view'
@@ -152,6 +160,7 @@
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
+    ORCHESTRATION_COORDINATOR_COMPONENTS,
     type CoordinatorDockPanel
   } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -169,22 +178,34 @@
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import {
+    isResponseSelection,
     responseReferencesState,
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
+  import { browserInspector } from '$lib/stores/browser-inspector.svelte'
   import { isTodoToolPart, latestAgentTodo } from '$lib/agent-todos'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
   import { toPosixPath } from '$shared/paths'
-  import { revealCitationFile, revealFileInAppTree, revealLocalFile } from '$lib/reveal-file'
+  import {
+    revealAttachmentFile,
+    revealCitationFile,
+    revealFileInAppTree,
+    revealLocalFile,
+    revealAnnotatedDocument
+  } from '$lib/reveal-file'
+  import { openPassageInNewThread } from '$lib/quoted-passage'
+  import { documentAnnotationFocusState } from '$lib/stores/document-annotation-focus.svelte'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { routineDeliveryLabel, routinePriorityLabel } from '$shared/routine-reporting'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
-    DEFAULT_THREAD_TITLE,
+    describeSchedule,
+    isAssistantSetupThread,
     isOrchestrationChildThread,
     WORKING_TRACE_PAGE_SIZE
   } from '$shared/types'
@@ -280,14 +301,17 @@
     type SubagentPart
   } from './thread-turn-parts'
   import {
-    applyResponseHighlights,
+    applyAnnotationHighlights,
+    measureAnnotationBubbles,
+    releaseAnnotationHighlights,
+    ANNOTATION_BUBBLE_SIZE,
+    type AnnotationBubblePosition
+  } from '$lib/selection-anchors'
+  import {
     captureResponseSelection,
-    measureResponseBubblePositions,
-    releaseResponseHighlights,
     responseRangeFor,
     responseRangeIsCurrent,
-    RESPONSE_BUBBLE_SIZE,
-    type ResponseBubblePosition,
+    RESPONSE_HIGHLIGHT_NAME,
     type ResponseSelectionCandidate
   } from './thread-response-ranges'
   import {
@@ -1489,6 +1513,21 @@
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
+    // CodeInOven video session   the slash spelling of the @cio-video composer
+    // tag. The tag promotes the app-owned video capability to an active
+    // capability for the turn, so the agent starts editing instead of first
+    // looking for a tool that makes video.
+    actions.push({
+      id: 'command:cio-video',
+      title: '/cio-video',
+      description: 'Start a video session: make a video and watch it render in the browser',
+      category: 'command',
+      source: applicationActionSource,
+      keywords: ['cio', 'video', 'motion', 'edit', 'cut', 'reel', 'animation', 'composition'],
+      slashCommand: true,
+      ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+
     // Assistant authoring: the agent drafts the routine how-to in conversation
     // and asks the user to confirm the recap. The recap card commits the agreed
     // draft in one click; this command is only the fallback for when that path
@@ -1970,6 +2009,10 @@
   let threadViewElement = $state<HTMLDivElement | null>(null)
   let previewFile = $state<{ url: string; filename: string; mime: string } | null>(null)
   let imageUrls = new FileBlobUrlManager()
+  /** Fullscreen preview for a message attachment that carries no media to show
+   *  inline (PDF, document, Markdown, plain text): the same cache the composer
+   *  previews attachments with, keyed by the attachment's `file://` URL. */
+  const attachmentPreview = createComposerAttachmentPreview()
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
@@ -1980,7 +2023,7 @@
    *  teardown can never clear highlights another view published. */
   const responseHighlightOwner = {}
   /** Viewport position for the comment bubble of each reference anchor. */
-  let responseBubblePositions = $state<Record<string, ResponseBubblePosition>>({})
+  let responseBubblePositions = $state<Record<string, AnnotationBubblePosition>>({})
   let commentEditorReferenceId = $state<string | null>(null)
   let messageEditEditor = $state<RichMarkdownEditor>()
 
@@ -1997,7 +2040,11 @@
 
   /** Republish the live annotation ranges to the CSS Custom Highlight registry. */
   function refreshResponseHighlights(): void {
-    applyResponseHighlights(responseReferenceRanges, responseHighlightOwner)
+    applyAnnotationHighlights(
+      responseReferenceRanges,
+      responseHighlightOwner,
+      RESPONSE_HIGHLIGHT_NAME
+    )
   }
 
   /** Re-measure where each annotation's comment bubble belongs in the viewport. */
@@ -2006,7 +2053,7 @@
     // reading every range rect costs, so the common conversation pays nothing.
     if (responseReferenceRanges.size === 0 && Object.keys(responseBubblePositions).length === 0)
       return
-    responseBubblePositions = measureResponseBubblePositions(scrollEl, responseReferenceRanges)
+    responseBubblePositions = measureAnnotationBubbles(scrollEl, responseReferenceRanges)
   }
 
   let responseBubblePositionFrame = 0
@@ -2133,8 +2180,63 @@
     responseReferencesState.updateCommentDraft(thread.projectId, thread.id, id, comment)
   }
 
+  /**
+   * Jump to the document one annotation was made in: reveal it in the project tree
+   * and open it in the annotate view, which is the only surface that draws the
+   * annotated passage and its note, then open that note. A document that has since
+   * been deleted has nothing to show, so it is reported rather than opened.
+   */
+  function editDocumentAnnotation(reference: ResponseReferenceAnchor): void {
+    const path = reference.filePath
+    if (!path) return
+    void revealAnnotatedDocument(thread.projectId, path).then((opened) => {
+      if (!opened) {
+        toast.error('The annotated document is no longer in this project.', {
+          description: path
+        })
+        return
+      }
+      documentAnnotationFocusState.request(thread.projectId, thread.id, reference.id)
+    })
+  }
+
+  /**
+   * Bring a commented design element back in front of the reader: reveal the
+   * browser tab it was picked from, then highlight the element, scroll it into
+   * view and open its comment. A tab the user has since closed has nothing to
+   * show, so it is reported rather than silently doing nothing.
+   */
+  function editDesignAnnotation(reference: ResponseReferenceAnchor): void {
+    const tabId = reference.tabId
+    const open = tabId
+      ? contextSidebarState.tabs.some((tab) => tab.id === tabId && tab.kind === 'browser')
+      : false
+    if (!tabId || !open) {
+      toast.error('The design this comment was made on is no longer open.', {
+        description: reference.label
+      })
+      return
+    }
+    contextSidebarState.focus(tabId)
+    browserInspector.focusComment(tabId, reference.id)
+  }
+
   /** Jump back to a selection's highlight and open its comment editor. */
   function editResponseReference(id: string): void {
+    const reference = responseReferences.find((candidate) => candidate.id === id)
+    if (!reference) return
+    // A document annotation is drawn in the file panel and a design element in
+    // the browser, not in the conversation, so each of their edit actions opens
+    // the surface that draws it instead of a response range here.
+    if (reference.kind === 'file') {
+      editDocumentAnnotation(reference)
+      return
+    }
+    if (reference.kind === 'design') {
+      editDesignAnnotation(reference)
+      return
+    }
+    if (!isResponseSelection(reference)) return
     commentEditorReferenceId = id
     void tick().then(() => {
       updateResponseBubblePositions()
@@ -2198,10 +2300,12 @@
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user quoted excerpts from your earlier response as references. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
+      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser, and may have annotated passages of a project document in the file panel. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
-        return `[${reference.label}]\n${comment}<selection>\n${reference.text}\n</selection>`
+        const tag =
+          reference.kind === 'design' ? 'element' : reference.kind === 'file' ? 'file' : 'selection'
+        return `[${reference.label}]\n${comment}<${tag}>\n${reference.text}\n</${tag}>`
       })
     ].join('\n\n')
   }
@@ -2364,35 +2468,14 @@
     )
   }
 
-  /** Spin the selection off into a brand-new thread in the same project: the
-   *  text is seeded as the fresh composer's draft, wrapped in a txt code block
-   *  with breathing room above and below so the user can add context around
-   *  it, and immediately kick off a task from it. The fence widens when the
-   *  selection itself contains triple backticks so the block stays intact. */
+  /** Spin the selection off into a brand-new thread in the same project, seeded
+   *  as its composer draft. The same hand-off is offered for a passage of an
+   *  annotated document, so both go through one implementation. */
   function openSelectionInNewThread(): void {
     const selection = responseSelection
     if (!selection) return
     closeResponseSelection()
-    const fence = selection.text.includes('```') ? '````' : '```'
-    const draft = `\n${fence}txt\n${selection.text}\n${fence}\n`
-    const project = scopeState.projectRecords.find((p) => p.id === thread.projectId) ?? null
-    invoke('thread:create', {
-      projectId: thread.projectId,
-      providerId: thread.providerId,
-      title: DEFAULT_THREAD_TITLE,
-      workingDirectory: thread.workingDirectory,
-      settings: thread.settings,
-      // Inherit the current thread's scope so the spun-off thread stays in
-      // the same scope instead of dropping to the default bucket.
-      scopeBucketId: thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-    })
-      .then((newThread) => {
-        rendererRecovery.setDraft(newThread.projectId, newThread.id, draft)
-        workspaceState.openThread(newThread, project)
-      })
-      .catch((error) => {
-        reportError(error, 'The new thread could not be created.')
-      })
+    openPassageInNewThread(thread.projectId, thread.id, selection.text)
   }
 
   let spec = $state<EngineeringSpec | null>(null)
@@ -2934,7 +3017,13 @@
   $effect(() => {
     if (hasController || !workflowReady) return
     if (coordinatorKind !== null) return
-    coordinatorDockState.withdraw(thread.projectId, coordinatorDockThreadId)
+    // Only the orchestration boards this view publishes. An authored-work board on
+    // the same row belongs to the design store and must survive this cleanup.
+    coordinatorDockState.withdraw(
+      thread.projectId,
+      coordinatorDockThreadId,
+      ORCHESTRATION_COORDINATOR_COMPONENTS
+    )
   })
 
   /** Turning the Independent Audit switch off undocks the coordinator AND
@@ -5951,6 +6040,14 @@
     sendComposerMessage(request ? `@cio-design ${request}` : '@cio-design', [])
   }
 
+  /** Open a video session   the slash spelling of the @cio-video composer tag.
+   *  The main process owns the video contract and the capability that goes with
+   *  it, so this only has to send the tag and whatever the user typed after it. */
+  function triggerCioVideoTurn(args: string): void {
+    const request = args.trim()
+    sendComposerMessage(request ? `@cio-video ${request}` : '@cio-video', [])
+  }
+
   /** Ask the agent to load and follow a skill by name. This is the route for
    *  skills with no runnable native command in the current conversation (a
    *  side chat owns no thread row, and a global or CodeInOven skill is not a
@@ -5980,6 +6077,15 @@
       : null
   )
 
+  /** Whether this thread is a routine's Getting started thread: the authoring
+   *  host while its how-to is missing, and the editing host once it is saved. */
+  const assistantSetupThread = $derived(isAssistantSetupThread(thread))
+
+  /** The routine's own connection labels, for the recap card's kept ones. */
+  const existingRoutineConnections = $derived(
+    assistantRoutine?.connections.map((connection) => connection.label) ?? []
+  )
+
   /**
    * The complete draft the agent has presented for this routine: the how-to it
    * wrote plus the machine-readable plan (schedule and connections). A draft is
@@ -5989,18 +6095,75 @@
    * every delta would be wasted work for a card that cannot show yet anyway.
    * The authoring conversation is short and lives only until the routine is
    * saved, so scanning it once per settled turn is bounded work.
+   *
+   * A saved routine keeps its draft path on its Getting started thread alone, and
+   * only for a revision that actually changes it: a message there tweaks the
+   * how-to, so a revised draft has to be committable, while a task or run thread
+   * of the same routine carries the saved how-to and must never suggest a new one,
+   * and the draft already committed must not read as a pending change.
    */
   const assistantRoutineDraft = $derived.by(
     (): {
       howTo: string
       plan: RoutinePlanDraft | null
     } | null => {
-      if (!assistantMode || !assistantRoutineId || assistantHowToComplete || busy) return null
-      const howTo = latestHowToDraft()
-      if (!howTo) return null
-      return { howTo, plan: latestRoutinePlanDraft() }
+      if (!assistantMode || !assistantRoutineId || busy) return null
+      const draft = latestHowToDraft()
+      if (!draft) return null
+      const plan = latestRoutinePlanDraft()
+      if (assistantHowToComplete && !isRoutineRevision(draft, plan)) return null
+      return { howTo: draft.howTo, plan }
     }
   )
+
+  /**
+   * Whether a how-to draft is a change to the routine that is already saved, so
+   * the card offers a revision and never a second save of what is saved. Three
+   * things disqualify a draft:
+   *
+   * - it sits on a thread that is not the routine's Getting started thread;
+   * - it is older than the saved how-to, which is what a draft left in a reopened
+   *   thread looks like after the how-to was edited elsewhere;
+   * - it changes nothing, either because the agent re-presented the same how-to
+   *   and the same plan, or because the save would patch no field differently.
+   *   A plan-only change counts, because the how-to text often does not carry the
+   *   schedule at all.
+   *
+   * A routine that predates the how-to timestamp falls back to comparing content.
+   */
+  function isRoutineRevision(
+    draft: { howTo: string; at: number },
+    plan: RoutinePlanDraft | null
+  ): boolean {
+    if (!assistantSetupThread) return false
+    const savedAt = assistantRoutine?.howToUpdatedAt
+    if (savedAt !== undefined && draft.at <= savedAt) return false
+    const routine = assistantRoutine
+    if (!routine) return true
+    if (draft.howTo.trim() !== routine.howTo.trim()) return true
+    if (!plan) return false
+    if (plan.schedule && describeSchedule(plan.schedule) !== describeSchedule(routine.schedule)) {
+      return true
+    }
+    if (plan.delivery && routineDeliveryLabel(plan.delivery) !== currentDeliveryLabel()) return true
+    if (plan.priority && routinePriorityLabel(plan.priority) !== currentPriorityLabel()) return true
+    const known = new Set(
+      routine.connections.map((connection) => connection.label.trim().toLowerCase())
+    )
+    return plan.connections.some((connection) => !known.has(connection.name.trim().toLowerCase()))
+  }
+
+  /** The saved delivery as the plan's own label, so the two compare. */
+  function currentDeliveryLabel(): string {
+    const delivery = assistantRoutine?.delivery
+    return delivery ? routineDeliveryLabel(delivery) : ''
+  }
+
+  /** The saved urgency as the plan's own label, so the two compare. */
+  function currentPriorityLabel(): string {
+    const priority = assistantRoutine?.priority
+    return priority ? routinePriorityLabel(priority) : ''
+  }
 
   /**
    * Identity of the current draft. Dismissing the recap card hides it only for
@@ -6027,18 +6190,20 @@
   }
 
   /**
-   * The how-to the agent last drafted for this routine, taken from the newest
-   * how-to fenced block in an assistant message. The authoring contract asks
-   * for a `how-to` fence, but a bare fence whose body starts with a
-   * `how-to: <title>` line is accepted too.
+   * The how-to the agent last drafted for this routine, with the time it was
+   * written: the newest how-to fenced block in the newest assistant message that
+   * carries one. The authoring contract asks for a `how-to` fence, but a bare
+   * fence whose body starts with a `how-to: <title>` line is accepted too. The
+   * time is what tells a revision from the authoring draft the app already saved.
    */
-  function latestHowToDraft(): string | null {
-    const assistantTexts: string[] = []
-    for (const message of messages) {
-      if (message.role !== 'assistant') continue
-      assistantTexts.push(messageText(message))
+  function latestHowToDraft(): { howTo: string; at: number } | null {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (!message || message.role !== 'assistant') continue
+      const howTo = extractHowToDraft(messageText(message))
+      if (howTo) return { howTo, at: message.createdAt }
     }
-    return latestHowToDraftIn(assistantTexts)
+    return null
   }
 
   /** The machine-readable routine plan the agent last emitted, if any. */
@@ -6093,13 +6258,16 @@
    * The user's go-ahead for the pending routine recap: commit the draft, then
    * have the agent post a short next-steps list in the Getting started thread.
    * Both the recap card's Save button and a typed confirmation route here, so
-   * the follow-up turn happens whichever way the user agreed.
+   * the follow-up turn happens whichever way the user agreed. The next-steps
+   * turn belongs to a routine's first save; an edit of a routine that already
+   * has its how-to commits on its own, with nothing left to set up.
    */
   async function confirmRoutineSave(): Promise<void> {
     const routineId = assistantRoutineId
     if (!routineId) return
+    const firstSave = !assistantHowToComplete
     const saved = await saveRoutineHowTo()
-    if (saved) await assistantRoutines.postSetup(routineId).catch(() => undefined)
+    if (saved && firstSave) await assistantRoutines.postSetup(routineId).catch(() => undefined)
   }
 
   /**
@@ -6159,6 +6327,10 @@
     }
     if (commandId === 'command:cio-design') {
       triggerCioDesignTurn(args)
+      return
+    }
+    if (commandId === 'command:cio-video') {
+      triggerCioVideoTurn(args)
       return
     }
     if (commandId.startsWith('cio-skill:')) {
@@ -6264,11 +6436,13 @@
       return
     }
 
-    // App-owned slash commands (/cio-utility, /cio-design and capability skills)
-    // route through the same handler the composer's submit path uses.
+    // App-owned slash commands (/cio-utility, /cio-design, /cio-video and
+    // capability skills) route through the same handler the composer's submit
+    // path uses.
     if (
       action.id === 'command:cio-utility' ||
       action.id === 'command:cio-design' ||
+      action.id === 'command:cio-video' ||
       action.id.startsWith('cio-skill:')
     ) {
       await executeHarnessCommand(action.id, '')
@@ -6508,6 +6682,25 @@
 
   function openFilePart(url: string): void {
     void revealLocalFile(thread.projectId, url)
+  }
+
+  /**
+   * Open a message attachment that has no inline thumbnail but that the
+   * fullscreen preview can render: a PDF, a Word/OpenDocument file, Markdown or
+   * plain text opens on the spot through the same cache the composer uses.
+   */
+  function previewDocumentPart(part: Extract<AgentPart, { type: 'file' }>): void {
+    attachmentPreview.open({ mime: part.mime, url: part.url, filename: part.filename })
+  }
+
+  /**
+   * Click behaviour for a message attachment nothing in the app can render: the
+   * reader has to find it on disk, so it is revealed in the project's file tree
+   * when it lives there and in the OS file manager when it does not. A file
+   * neither can show is reported as gone.
+   */
+  function revealSentAttachment(part: Extract<AgentPart, { type: 'file' }>): void {
+    void revealAttachmentFile(part.url)
   }
 
   function citationForFilePart(
@@ -10560,8 +10753,9 @@
   })
 
   onDestroy(() => {
-    releaseResponseHighlights(responseHighlightOwner)
+    releaseAnnotationHighlights(responseHighlightOwner, RESPONSE_HIGHLIGHT_NAME)
     imageUrls.destroy()
+    attachmentPreview.revokeAll()
     // Signal the main process that this thread's composer is gone so the
     // draft-timer never fires for a composer that no longer exists.
     publishDraftActivity(thread.projectId, thread.id, false)
@@ -10578,6 +10772,18 @@
       const target = previewFile
       if (target) void imageUrls.bindMedia(target.url, target.mime, el)
     }}
+  />
+{/if}
+
+{#if attachmentPreview.file}
+  {@const sentAttachment = attachmentPreview.file}
+  <AttachmentPreview
+    attachment={sentAttachment}
+    src={attachmentPreview.urls[sentAttachment.url]}
+    text={attachmentPreview.texts[sentAttachment.url]}
+    documentHtml={attachmentPreview.documents[sentAttachment.url]}
+    documentLoading={attachmentPreview.documentLoading[sentAttachment.url] ?? false}
+    onClose={() => attachmentPreview.close()}
   />
 {/if}
 
@@ -10619,7 +10825,7 @@
     : undefined}
   {#if editorReference && editorPosition}
     <ResponseAnnotationComment
-      x={editorPosition.x + RESPONSE_BUBBLE_SIZE / 2}
+      x={editorPosition.x + ANNOTATION_BUBBLE_SIZE / 2}
       y={editorPosition.y}
       initialComment={editorReference.comment ?? ''}
       targetId={`response-comment-${thread.id}-${editorReference.id}`}
@@ -10932,6 +11138,36 @@
             </div>
           {/if}
           <!-- Messages -->
+          <!--
+            One chip for every attachment a message carries that is not an image
+            thumbnail. The icon is the only difference between the kinds, so it
+            travels as a value rather than as three copies of the same button.
+          -->
+          {#snippet filePartChip(
+            name: string,
+            kind: 'video' | 'audio' | 'renderable' | 'opaque',
+            action: string,
+            onclick: () => void
+          )}
+            <button
+              type="button"
+              class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+              title={action}
+              aria-label={action}
+              {onclick}
+            >
+              {#if kind === 'video'}
+                <Video size={11} class="shrink-0" />
+              {:else if kind === 'audio'}
+                <AudioLines size={11} class="shrink-0" />
+              {:else if kind === 'renderable'}
+                <FileTypeIcon path={name} size={12} class="shrink-0" />
+              {:else}
+                <FileText size={11} class="shrink-0" />
+              {/if}
+              <span class="max-w-32 truncate">{name}</span>
+            </button>
+          {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
             {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
             {#if msg.role === 'user'}
@@ -11066,6 +11302,13 @@
                                 : isAudioMime(part.mime)
                                   ? 'audio'
                                   : null}
+                              <!-- Kinds with no inline thumbnail but a preview we
+                                   can render: PDF, document, Markdown, text. -->
+                              {@const renderable =
+                                !mediaKind &&
+                                Boolean(attachmentPreviewKind(part.mime, part.filename ?? ''))}
+                              {@const partName =
+                                part.filename ?? part.url.split('/').pop() ?? 'file'}
                               {#if imageFile}
                                 <FileCitationContextMenu
                                   projectId={thread.projectId}
@@ -11110,44 +11353,41 @@
                                   projectId={thread.projectId}
                                   citation={citationForFilePart(part)}
                                 >
-                                  <button
-                                    type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
-                                    title="Preview {part.filename ?? mediaKind}"
-                                    aria-label="Preview {part.filename ?? mediaKind}"
-                                    onclick={() =>
+                                  {@render filePartChip(
+                                    partName,
+                                    mediaKind,
+                                    `Preview ${partName}`,
+                                    () =>
                                       (previewFile = {
                                         url: part.url,
                                         filename: part.filename ?? mediaKind,
                                         mime: part.mime
-                                      })}
-                                  >
-                                    {#if mediaKind === 'video'}
-                                      <Video size={11} class="shrink-0" />
-                                    {:else}
-                                      <AudioLines size={11} class="shrink-0" />
-                                    {/if}
-                                    <span class="max-w-32 truncate"
-                                      >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
-                                    >
-                                  </button>
+                                      })
+                                  )}
+                                </FileCitationContextMenu>
+                              {:else if renderable}
+                                <FileCitationContextMenu
+                                  projectId={thread.projectId}
+                                  citation={citationForFilePart(part)}
+                                >
+                                  {@render filePartChip(
+                                    partName,
+                                    'renderable',
+                                    `Preview ${partName}`,
+                                    () => previewDocumentPart(part)
+                                  )}
                                 </FileCitationContextMenu>
                               {:else}
                                 <FileCitationContextMenu
                                   projectId={thread.projectId}
                                   citation={citationForFilePart(part)}
                                 >
-                                  <button
-                                    type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
-                                    title={`Open ${part.filename ?? part.url.split('/').pop() ?? 'file'}`}
-                                    onclick={() => openFilePart(part.url)}
-                                  >
-                                    <FileText size={11} class="shrink-0" />
-                                    <span class="max-w-32 truncate"
-                                      >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
-                                    >
-                                  </button>
+                                  {@render filePartChip(
+                                    partName,
+                                    'opaque',
+                                    `Reveal ${partName}`,
+                                    () => revealSentAttachment(part)
+                                  )}
                                 </FileCitationContextMenu>
                               {/if}
                             {/if}
@@ -12103,6 +12343,8 @@
                     routineName={assistantRoutine?.name ?? assistantRoutineName ?? thread.title}
                     howTo={assistantRoutineDraft.howTo}
                     plan={assistantRoutineDraft.plan}
+                    update={assistantHowToComplete}
+                    existingConnections={existingRoutineConnections}
                     saving={routineSaving}
                     onSave={() => void confirmRoutineSave()}
                     onKeepEditing={keepEditingRoutine}
@@ -12480,19 +12722,21 @@
                       bind:this={composer}
                       placeholder={assistantMode && assistantRoutineName && !assistantHowToComplete
                         ? 'Describe how this routine should run…'
-                        : activePlanningEntry === 'brainstorm'
-                          ? 'Add details to the Brainstorm discussion…'
-                          : activePlanningEntry === 'spec'
-                            ? 'Sr. Engineer is preparing the specification…'
-                            : assignmentFormulating
-                              ? 'Sr. Engineer is preparing the Assignment…'
-                              : specFormulating
-                                ? 'Formulating specification…'
-                                : delegatedWorkBusy
-                                  ? `${delegatedActivityLabel}   message the Sr. Engineer`
-                                  : busy
-                                    ? `${APP_NAME} is working   type to queue a message`
-                                    : 'Send a message...'}
+                        : assistantSetupThread && assistantHowToComplete
+                          ? 'Tweak the how-to, the schedule, or a connection…'
+                          : activePlanningEntry === 'brainstorm'
+                            ? 'Add details to the Brainstorm discussion…'
+                            : activePlanningEntry === 'spec'
+                              ? 'Sr. Engineer is preparing the specification…'
+                              : assignmentFormulating
+                                ? 'Sr. Engineer is preparing the Assignment…'
+                                : specFormulating
+                                  ? 'Formulating specification…'
+                                  : delegatedWorkBusy
+                                    ? `${delegatedActivityLabel}   message the Sr. Engineer`
+                                    : busy
+                                      ? `${APP_NAME} is working   type to queue a message`
+                                      : 'Send a message...'}
                       disabled={specFormulating}
                       working={busy}
                       onStop={abortRun}

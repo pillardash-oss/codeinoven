@@ -15,6 +15,7 @@ import {
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
 import { DEFAULT_MAX_CONFLICT_FILE_BYTES, DEFAULT_IN_APP_NOTIFICATION_SOUND } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
+import { DEFAULT_WORK_ROOTS, workRootsFromConfig } from '../../lib/design/work-roots'
 import {
   CIO_PROMPT_DEFINITIONS,
   CIO_PROMPT_MAX_LENGTH,
@@ -65,6 +66,8 @@ const DEFAULT_CONFIG: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
   design: { assignments: [] },
+  workRoots: { ...DEFAULT_WORK_ROOTS },
+  mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
@@ -79,6 +82,7 @@ const DEFAULT_CONFIG: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
+  openAllLinksInCioBrowser: false,
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
@@ -178,6 +182,15 @@ export class StorageEngine {
           .filter(isUsableDesignAssignment)
           .slice(0, MAX_DESIGN_ASSIGNMENTS)
       },
+      // A provider id a future version wrote is passed through as-is so the
+      // choice is not silently erased; only a missing field falls back.
+      mediaGeneration: {
+        providerId: config?.mediaGeneration?.providerId ?? DEFAULT_CONFIG.mediaGeneration.providerId
+      },
+      // Read tolerantly: a value a future version wrote, a hand-edited path, or a
+      // pair where one root sits inside the other arrives as a working app with
+      // the defaults rather than as a failed start.
+      workRoots: workRootsFromConfig(config ?? {}),
       memory: {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),
@@ -507,12 +520,26 @@ export class StorageEngine {
    */
   async appendRaw(relativePath: string, content: string): Promise<void> {
     const fullPath = this.resolve(relativePath)
-    const previous = this.appendQueues.get(fullPath) ?? Promise.resolve()
-    const write = previous.then(async () => {
+    return this.enqueueRawWrite(fullPath, async () => {
       await ensureDir(join(fullPath, '..'))
       await appendFile(fullPath, content, 'utf-8')
     })
-    // The queue only ever advances on a settled link: a failed append must not
+  }
+
+  /**
+   * Run a write on one file's append queue.
+   *
+   * The queue is what makes an append-only log readable: without it the OS
+   * decides which of two concurrent writes lands first. A rewrite has to share
+   * the queue for the same reason   renaming over a file an in-flight append is
+   * still writing loses that line, and a delete that runs while an append is
+   * queued is undone when the append recreates the file. Both operations go
+   * through here so that can never happen.
+   */
+  private enqueueRawWrite(fullPath: string, task: () => Promise<void>): Promise<void> {
+    const previous = this.appendQueues.get(fullPath) ?? Promise.resolve()
+    const write = previous.then(task)
+    // The queue only ever advances on a settled link: a failed write must not
     // wedge every later write to the same file. Callers still receive the real
     // outcome through `write`.
     const queued = write.then(
@@ -524,6 +551,41 @@ export class StorageEngine {
       if (this.appendQueues.get(fullPath) === queued) this.appendQueues.delete(fullPath)
     })
     return write
+  }
+
+  /**
+   * Rewrite a raw file inside its append queue.
+   *
+   * `build` receives the bytes appended since `fromByte`, read inside the lock so
+   * an append that raced the caller's own read is still included, and returns the
+   * whole new file, or null to leave it as it is. A caller that already holds the
+   * parsed content before `fromByte` compacts a several-hundred-megabyte append
+   * log without reading it a second time.
+   */
+  async rewriteRawFrom(
+    relativePath: string,
+    fromByte: number,
+    build: (appended: string) => string | null
+  ): Promise<void> {
+    const fullPath = this.resolve(relativePath)
+    await this.enqueueRawWrite(fullPath, async () => {
+      const tail = await this.readRawTail(relativePath, fromByte)
+      const next = build(tail?.content ?? '')
+      if (next === null) return
+      await ensureDir(join(fullPath, '..'))
+      await atomicWrite(fullPath, next)
+    })
+  }
+
+  /**
+   * Wait for the writes already queued for a path.
+   *
+   * Called before a file is removed so a queued append cannot land after the
+   * delete and recreate it. A write queued after this returns is the caller's to
+   * prevent   the turn-stream delete does that with a tombstone.
+   */
+  async drainRaw(relativePath: string): Promise<void> {
+    await (this.appendQueues.get(this.resolve(relativePath)) ?? Promise.resolve())
   }
 
   /** List entries in a directory relative to config root */

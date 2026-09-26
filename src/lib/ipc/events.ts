@@ -11,8 +11,10 @@ import type {
 import type {
   BrowserDevToolsState,
   BrowserDownload,
+  BrowserInspectorEvent,
   BrowserOpenRequestContext,
   BrowserPageState,
+  BrowserPanelShortcutAction,
   BrowserPermissionRequest
 } from './browser'
 import type {
@@ -56,6 +58,12 @@ export const IPC_EVENT_CONTRACT = {
    * working spinner with no live output.
    */
   'thread:foreignRuns': [] as unknown as [notices: import('../types').ForeignRunNotice[]],
+  /**
+   * The persisted config was written. Broadcast so a surface that did not make
+   * the change still shows the value that was saved, which matters when the
+   * design board changes the work folders and Settings is open behind it.
+   */
+  'config:changed': [] as unknown as [config: import('../types').AppConfig],
   /** Assistant routines changed (created, updated, deleted, reordered). */
   'routine:changed': [] as unknown as [routines: import('../types').Routine[]],
   /**
@@ -161,6 +169,15 @@ export const IPC_EVENT_CONTRACT = {
   'providers:status': [] as unknown as [payload: ProviderConnectionInfo[]],
   /** DevTools open state changed for a browser tab (open/closed). */
   'browser:devToolsChanged': [] as unknown as [state: BrowserDevToolsState],
+  /** One event from a tab's injected design inspector: a pick, a finished
+   *  comment, a removed pin, or inspect mode ending on its own. */
+  'browser:inspector': [] as unknown as [tabId: string, event: BrowserInspectorEvent],
+  /**
+   * A browser shortcut the renderer has to carry out, because it owns the tab
+   * strip: focusing the address bar of a tab, or closing or opening a tab. Main
+   * decides the key, the renderer decides what the tab strip does with it.
+   */
+  'browser:panelShortcut': [] as unknown as [tabId: string, action: BrowserPanelShortcutAction],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
   /**
    * Delivered to the native permission-prompt popup window (not the main

@@ -174,6 +174,21 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
         '127.0.0.1',
         '--port',
         '0',
+        // A transcript normalizer and a cleanup instruct model both work in a
+        // few thousand tokens, so the server must never size its KV cache from
+        // the model's own training context. Left unset, llama-server reads
+        // `context_length` from the GGUF (40960 for the S1 mini artifact) and
+        // allocates 4.4 GB of KV at this model's 112 KB per token, plus four
+        // parallel slots worth of batch and logits buffers: about 10.5 GB of
+        // writable memory for a 0.6B model, which is what pushed a 16 GB machine
+        // to 8.5 GB of swap. 8192 keeps roughly double the headroom the largest
+        // real prompt needs (lesson context plus both transcripts), and the
+        // job queue runs at most one cleanup request per runtime, so one slot
+        // is correct.
+        '--ctx-size',
+        '8192',
+        '--parallel',
+        '1',
         // Qwen3-based cleanup models were trained with thinking off; the S1
         // normalizer requires it too or it produces no usable output.
         '--jinja',

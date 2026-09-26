@@ -219,6 +219,14 @@ export function isDocumentPreviewPath(path: string): boolean {
 const MARKDOWN_PREVIEW_EXTENSION_PATTERN = /\.(?:md|mdown|markdown)$/iu
 const HTML_PREVIEW_EXTENSION_PATTERN = /\.(?:html|htm)$/iu
 
+/** True when the files panel renders this path as Markdown. Such a file is the
+ *  only preview that can carry annotations: it is rendered as selectable text in
+ *  the panel, while every other preview is a sandboxed frame or a media surface.
+ *  Used to keep a document view sticky while navigating file lists. */
+export function isMarkdownPreviewPath(path: string): boolean {
+  return MARKDOWN_PREVIEW_EXTENSION_PATTERN.test(path)
+}
+
 /** True when the files panel can render this path as a sanitized HTML document.
  *  HTML files are never loaded as real documents (they are project-controlled
  *  active content); the panel mounts `htmlPreviewFrame()` output in a frame
@@ -238,7 +246,7 @@ export function supportsFilePreview(path: string): boolean {
     isVideoMime(mime) ||
     isAudioMime(mime) ||
     isDocumentPreviewPath(path) ||
-    MARKDOWN_PREVIEW_EXTENSION_PATTERN.test(path) ||
+    isMarkdownPreviewPath(path) ||
     isHtmlPreviewPath(path)
   )
 }

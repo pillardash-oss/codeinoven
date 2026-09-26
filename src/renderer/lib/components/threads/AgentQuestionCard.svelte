@@ -4,6 +4,8 @@
   import { onDestroy } from 'svelte'
   import { SvelteSet, createSubscriber } from 'svelte/reactivity'
   import { invoke } from '$lib/ipc.svelte'
+  import { formatKeyCombo } from '$lib/keymap/keymap'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
@@ -109,6 +111,9 @@
   let currentAnswers = $derived(answers[currentIndex] ?? [])
   let currentCustomAnswer = $derived(customAnswers[currentIndex] ?? '')
   let allAnswered = $derived(answers.every((answer) => answer.length > 0))
+  // The send key resolved through the user's keymap overrides, so the Next
+  // button advertises whichever combination actually advances the question.
+  let advanceShortcutLabel = $derived(formatKeyCombo(keymapState.keysFor('chat-send')))
   let timerPaused = $derived(interactedIndexes.has(currentIndex) || request.expiresAt === undefined)
   // Time is an external system, so the countdown subscribes to it instead of
   // tracking it in an effect; the interval only runs while the timer is live.
@@ -339,6 +344,20 @@
       }
     }
   })
+
+  /**
+   * The custom answer editor's send shortcut (Cmd/Ctrl+Enter). While the
+   * request still has a question after this one, the key advances to it so a
+   * whole multi-question request can be answered from the keyboard; on the
+   * last question it submits every answer, as it always did.
+   */
+  function handleEditorSubmit(): void {
+    if (currentIndex < total - 1) {
+      goNext()
+      return
+    }
+    void handleSubmit()
+  }
 
   async function handleSubmit(): Promise<void> {
     if (!allAnswered || working) return
@@ -617,7 +636,7 @@
                 ariaLabel="Your response"
                 disabled={working}
                 onValueChange={handleCustomInput}
-                onSubmit={() => void handleSubmit()}
+                onSubmit={handleEditorSubmit}
               />
               <div class="flex shrink-0 items-center">
                 <VoiceInputButton
@@ -633,6 +652,9 @@
                   class="flex min-h-10 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
                   disabled={working}
                   onclick={goNext}
+                  title={advanceShortcutLabel
+                    ? `Next question (${advanceShortcutLabel})`
+                    : 'Next question'}
                 >
                   Next
                   <ChevronRight size={14} />

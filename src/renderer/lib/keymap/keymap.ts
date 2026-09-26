@@ -196,14 +196,37 @@ function bareModifierKeyToken(token: string, isMac: boolean): string | null {
   }
 }
 
+/** The concrete modifier set a chord requires on one platform: `mod` is Command
+ *  on macOS and Control elsewhere. Shared by the matcher and by every consumer
+ *  that has to describe a chord outside this module (the browser surface pushes
+ *  its resolved chords to the main process, which never sees the tokens). */
+export interface ResolvedChordModifiers {
+  meta: boolean
+  control: boolean
+  shift: boolean
+  alt: boolean
+}
+
+/** Resolve a chord's modifiers for a platform. */
+export function resolveChordModifiers(
+  chord: KeymapChord,
+  isMac = isMacPlatform()
+): ResolvedChordModifiers {
+  return {
+    meta: chord.modifiers.includes('cmd') || (chord.modifiers.includes('mod') && isMac),
+    control: chord.modifiers.includes('ctrl') || (chord.modifiers.includes('mod') && !isMac),
+    shift: chord.modifiers.includes('shift'),
+    alt: chord.modifiers.includes('alt')
+  }
+}
+
 /** True when an event is one press of a chord, with no extra modifiers held. */
 function chordMatches(chord: KeymapChord, event: KeyboardEvent, isMac: boolean): boolean {
-  const wantsCmd = chord.modifiers.includes('cmd') || (chord.modifiers.includes('mod') && isMac)
-  const wantsCtrl = chord.modifiers.includes('ctrl') || (chord.modifiers.includes('mod') && !isMac)
-  if (event.metaKey !== wantsCmd) return false
-  if (event.ctrlKey !== wantsCtrl) return false
-  if (event.shiftKey !== chord.modifiers.includes('shift')) return false
-  if (event.altKey !== chord.modifiers.includes('alt')) return false
+  const wants = resolveChordModifiers(chord, isMac)
+  if (event.metaKey !== wants.meta) return false
+  if (event.ctrlKey !== wants.control) return false
+  if (event.shiftKey !== wants.shift) return false
+  if (event.altKey !== wants.alt) return false
   return eventKeyToken(event) === chord.key
 }
 

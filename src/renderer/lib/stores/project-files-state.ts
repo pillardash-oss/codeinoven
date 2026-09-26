@@ -8,9 +8,16 @@ import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { posixDirname } from '$shared/paths'
 import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
-import { isDocumentPreviewMime, isImageMime, isPdfMime } from '$lib/mime'
+import {
+  isDocumentPreviewMime,
+  isImageMime,
+  isMarkdownPreviewPath,
+  isPdfMime,
+  mimeFromPath,
+  supportsFilePreview
+} from '$lib/mime'
 
-export type ProjectFileView = 'diff' | 'preview' | 'source'
+export type ProjectFileView = 'diff' | 'preview' | 'annotate' | 'source'
 
 export interface ProjectFileSession {
   source: ProjectTextFile
@@ -130,6 +137,43 @@ export function parentDirectory(path: string): string {
 
 export function isPreviewableBinary(mime: string): boolean {
   return isPdfMime(mime) || isImageMime(mime) || isDocumentPreviewMime(mime)
+}
+
+/**
+ * The view a working tab shows after it is re-pointed at another file.
+ *
+ * A document view belongs to the file that renders it, so it follows only a file
+ * that can render it: an `annotate` view survives while the next file is
+ * annotatable Markdown, and otherwise falls back to a plain preview or the
+ * editor's source view. `diff` and `source` are always kept, and a file with no
+ * text session (image, PDF, media, converted document) is always previewed   a
+ * swap never downgrades the file editor's own view.
+ */
+export function documentViewFor(current: ProjectFileView, nextPath: string): ProjectFileView {
+  if (current === 'annotate') {
+    if (isMarkdownPreviewPath(nextPath)) return 'annotate'
+    return supportsFilePreview(nextPath) ? 'preview' : 'source'
+  }
+  if (isPreviewableBinary(mimeFromPath(nextPath))) return 'preview'
+  if (current === 'preview' && supportsFilePreview(nextPath)) return 'preview'
+  return current
+}
+
+/**
+ * The view a newly opened file keeps from the view the panel is already showing.
+ *
+ * Opening a file is the one place a view follows the user rather than the file:
+ * preview mode opens another previewable file as a preview, and an annotation
+ * view opens another annotatable document ready to annotate. Every other
+ * combination opens as source, which is what a text file wants.
+ */
+export function followingDocumentView(
+  current: ProjectFileView | undefined,
+  nextPath: string
+): ProjectFileView {
+  if (current === 'annotate' && isMarkdownPreviewPath(nextPath)) return 'annotate'
+  if (current === 'preview' && supportsFilePreview(nextPath)) return 'preview'
+  return 'source'
 }
 
 /** Unique top-level paths: nested entries whose ancestor is also present are

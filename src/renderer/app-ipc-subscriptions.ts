@@ -86,7 +86,7 @@ function showAgentNotification(
   // The toast is shown from here, so this is the only place the in-app alert is
   // played: the cue exists exactly when the card does, and a suppressed toast
   // (the user is already on this thread) stays silent.
-  playInAppAlert(notificationSoundKind(payload.kind))
+  playInAppAlert(notificationSoundKind(payload.kind, payload.projectId))
   notificationPanelState.add(payload)
   const id = payload.id
   const options = {

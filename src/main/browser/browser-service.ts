@@ -1,5 +1,7 @@
 import {
+  app,
   BrowserWindow,
+  dialog,
   Menu,
   MenuItem,
   session,
@@ -11,19 +13,27 @@ import {
 } from 'electron'
 import type { Database } from '../database/database'
 import { createHash } from 'node:crypto'
+import { join } from 'node:path'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Project, Thread } from '../../lib/types'
-import { isPreviewOriginUrl } from '../../lib/local-development-url'
+import { isPreviewOriginUrl, originOf } from '../../lib/local-development-url'
 import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../lib/image-payload'
 import type {
+  BrowserCompositionPlayback,
   BrowserConsoleEntry,
   BrowserConsoleLevel,
+  BrowserDesignTab,
   BrowserDevToolsState,
   BrowserPageState,
+  BrowserPanelShortcutAction,
   BrowserPermissionRequest,
+  BrowserShortcutAction,
+  BrowserShortcutBindings,
+  BrowserTransportCommand,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
+import { isVideoCaptureUrl } from '../../lib/video/project'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
@@ -31,8 +41,10 @@ import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow, type PromptRequestContext } from './permission-prompt-window'
 import { BrowserDownloadTracker } from './browser-service/browser-downloads'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
+import { BrowserInspector } from './browser-service/browser-inspector'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
 import { dialogContextScript } from './browser-service/browser-dialog-context'
+import { matchBrowserShortcut } from './browser-service/browser-shortcuts'
 import {
   permissionCheckKey,
   permissionGrantKeys,
@@ -51,21 +63,30 @@ import {
   AGENT_REVEAL_GRACE_MS,
   BROWSER_PARTITION_PREFIX,
   DEFAULT_PARKED_VIEWPORT,
+  FRAME_RENDER_TIMEOUT_MS,
   MAX_ABANDONED_REVEALS,
   MAX_CONSOLE_ENTRIES,
   MAX_DIALOG_LABEL_LENGTH,
   MAX_PARKED_TABS,
+  MAX_TRANSPORT_ERROR_LENGTH,
+  MAX_ZOOM_LEVEL,
   PERMISSION_TIMEOUT_MS,
   RELAX_COOLDOWN_MS,
   SCREENSHOT_JPEG_QUALITY,
   SCREENSHOT_MAX_BYTES,
+  ZOOM_STEP,
   browserContextKey,
   isSameBounds,
+  safeBasename,
   validateAttention,
   validateBounds,
   validateBoundedHost,
+  validateBrowserShortcutBindings,
   validateBrowserUrl,
   validateDownloadId,
+  validateInspectorMarkers,
+  validateInspectorReferenceId,
+  validateInspectorTheme,
   validateOptionalBrowserUrl,
   validatePermissionDecision,
   validatePermissionRequestId,
@@ -74,9 +95,38 @@ import {
   validateSiteMenuPoint,
   validateTabId,
   validateThreadId,
+  validateTransportCommand,
+  validateTransportValue,
   validateViewportRequest
 } from './browser-service/browser-validation'
 import type { BrowserViewport } from './browser-service/browser-types'
+
+/**
+ * Where a renderer-owned shortcut lands. The key is decided in this process,
+ * which is the only one that sees it before the application menu, and the tab
+ * strip stays the renderer's: it opens, closes and focuses its own tabs.
+ */
+const PANEL_SHORTCUT_TARGETS: Readonly<
+  Record<'focusAddress' | 'closeTab' | 'newTab', BrowserPanelShortcutAction>
+> = {
+  focusAddress: 'focus-address',
+  closeTab: 'close-tab',
+  newTab: 'new-tab'
+}
+
+import {
+  NO_TAB_MARK,
+  isSameTabMark,
+  tabMarkFor,
+  type BrowserTabMark,
+  type TabMarkRecogniser
+} from './browser-service/browser-tab-mark'
+import {
+  COMPOSITION_TRANSPORT_GLOBAL,
+  compositionTransportCommandScript,
+  compositionTransportScript,
+  compositionTransportStateScript
+} from './browser-service/browser-transport-script'
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -88,6 +138,9 @@ export class BrowserService {
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
   private readonly downloadTracker: BrowserDownloadTracker
   private readonly capture: BrowserCaptureObserver
+  /** Element inspector for design tabs. Injected page code reports picks and
+   *  comments; the panel drives it through the browser IPC contract. */
+  private readonly inspector: BrowserInspector
   private readonly siteData: BrowserSiteDataService
   private readonly permissionMemory: BrowserPermissionMemory
   private readonly promptWindow: PermissionPromptWindow
@@ -102,7 +155,36 @@ export class BrowserService {
     string,
     { hash: string; width: number; height: number }
   >()
+  /** How a tab is recognised as showing a design or a composition, supplied by
+   *  the app at boot. */
+  private tabMarkRecogniser: TabMarkRecogniser | null = null
+  /**
+   * Where each composition tab's playhead was, kept across a reload.
+   *
+   * A preview refreshes itself whenever the agent writes, which reloads the page
+   * and would otherwise throw the playhead away: the user would be sent back to
+   * the start of the video every time the composition changed, which is the whole
+   * complaint the transport answers. The folder is recorded with the position so a
+   * playhead is only ever restored into the composition it came from.
+   */
+  private readonly playheads = new Map<
+    string,
+    { directory: string; time: number; playing: boolean }
+  >()
   private activeTabId: string | null = null
+  /** Chords the browser claims, resolved from the keymap by the renderer. Empty
+   *  until that report arrives, which leaves every key to the rest of the app. */
+  private shortcutBindings: BrowserShortcutBindings = {}
+  /**
+   * The tab whose toolbar holds DOM focus (address bar, navigation buttons), or
+   * null while none does.
+   *
+   * A key pressed inside the page arrives on the tab's own web contents; a key
+   * pressed in the toolbar arrives on the window's, where the application menu
+   * would otherwise act on it. This is the one fact main cannot read for itself,
+   * so the panel reports it and the window-level interception routes to this tab.
+   */
+  private focusedChromeTabId: string | null = null
   /** Last known content bounds of the active tab's native view (window-content
    *  coordinates). The permission popup anchors itself to this area so it
    *  never collides with toasts at the window edge. */
@@ -172,6 +254,13 @@ export class BrowserService {
       // published on the same state event the tab strip already listens to.
       onChange: (tabId) => this.publishState(tabId)
     })
+    this.inspector = new BrowserInspector({
+      // Every pick, comment and removal is forwarded to the renderer, which owns
+      // the reference list and turns it back into the page's marker set.
+      onEvent: (tabId, event) => {
+        sendToRenderer(this.window.webContents, 'browser:inspector', tabId, event)
+      }
+    })
   }
 
   /**
@@ -189,6 +278,7 @@ export class BrowserService {
   }
 
   register(): void {
+    this.guardAgainstStrandedView()
     ipcMain.handle(
       'browser:show',
       (_event, rawTabId, rawProjectId, rawThreadId, rawInitialUrl, rawBounds) => {
@@ -256,6 +346,14 @@ export class BrowserService {
     ipcMain.handle('browser:reload', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.reload()
     })
+    ipcMain.handle('browser:transport', async (_event, rawTabId, rawCommand, rawValue) => {
+      const tabId = validateTabId(rawTabId)
+      const command = validateTransportCommand(rawCommand)
+      return this.transport(tabId, command, validateTransportValue(command, rawValue))
+    })
+    ipcMain.handle('browser:transportState', (_event, rawTabId) =>
+      this.transportState(validateTabId(rawTabId))
+    )
     ipcMain.handle('browser:reloadIgnoringCache', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.reloadIgnoringCache()
     })
@@ -274,17 +372,61 @@ export class BrowserService {
       // silently unmuted through its own audio controls.
       this.publishState(tabId)
     })
-    ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) => {
-      const tab = this.requireTab(validateTabId(rawTabId))
-      const contents = tab.view.webContents
-      if (contents.isDevToolsOpened()) {
-        contents.closeDevTools()
-        return false
+    ipcMain.handle('browser:setChromeFocus', (_event, rawTabId) => {
+      // The panel may name a tab that was already destroyed (a close racing the
+      // last focus report). Parking the answer as null is correct: no toolbar
+      // holds the keyboard any more.
+      if (rawTabId === null) {
+        this.focusedChromeTabId = null
+        return
       }
-      // Plain native behavior: default dock inside the window, resizable
-      // there, fully undockable from DevTools' own controls.
-      contents.openDevTools()
-      return true
+      const tabId = validateTabId(rawTabId)
+      this.focusedChromeTabId = this.tabs.has(tabId) ? tabId : null
+    })
+    ipcMain.handle('browser:setShortcutBindings', (_event, rawBindings) => {
+      this.shortcutBindings = validateBrowserShortcutBindings(rawBindings)
+    })
+    ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) =>
+      this.toggleTabDevTools(this.requireTab(validateTabId(rawTabId)))
+    )
+    ipcMain.handle('browser:inspectSetArmed', (_event, rawTabId, rawArmed, rawTheme) => {
+      const tabId = validateTabId(rawTabId)
+      const tab = this.requireTab(tabId)
+      if (typeof rawArmed !== 'boolean') {
+        throw new TypeError('Inspect mode must be a boolean')
+      }
+      if (!tab.design && rawArmed) {
+        throw new TypeError('The element inspector is available on a design preview only')
+      }
+      this.inspector.setArmed(
+        tabId,
+        tab.view.webContents,
+        rawArmed,
+        rawTheme === undefined ? null : validateInspectorTheme(rawTheme)
+      )
+    })
+    ipcMain.handle('browser:inspectTheme', (_event, rawTabId, rawTheme) => {
+      const tabId = validateTabId(rawTabId)
+      this.requireTab(tabId)
+      this.inspector.syncTheme(tabId, validateInspectorTheme(rawTheme))
+    })
+    ipcMain.handle('browser:inspectFocus', (_event, rawTabId, rawReferenceId, rawScroll) => {
+      const tabId = validateTabId(rawTabId)
+      const tab = this.requireTab(tabId)
+      if (typeof rawScroll !== 'boolean') {
+        throw new TypeError('Inspector focus scroll flag must be a boolean')
+      }
+      this.inspector.focus(
+        tabId,
+        tab.view.webContents,
+        validateInspectorReferenceId(rawReferenceId),
+        rawScroll
+      )
+    })
+    ipcMain.handle('browser:inspectMarkers', (_event, rawTabId, rawMarkers) => {
+      const tabId = validateTabId(rawTabId)
+      this.requireTab(tabId)
+      this.inspector.syncMarkers(tabId, validateInspectorMarkers(rawMarkers))
     })
     ipcMain.handle('browser:clearData', async (_event, rawProjectId) => {
       await this.siteData.clearProjectData(validateProjectId(rawProjectId))
@@ -389,8 +531,101 @@ export class BrowserService {
     this.configuredSessions.clear()
     this.permissionGrants.clear()
     this.permissionDenies.clear()
+    this.playheads.clear()
     this.downloadTracker.dispose()
     this.capture.dispose()
+    this.inspector.dispose()
+  }
+
+  /**
+   * Record that a tab is rendering a design folder. Non-null `design` on the
+   *  published state is what makes the panel offer the element inspector, so only
+   *  the design capability calls this: it is the one caller that knows a served
+   *  folder is a design rather than an arbitrary directory.
+   *
+   *  A composition is recognized rather than marked, because its mark carries the
+   *  timeline its manifest declares and that has to be read.
+   */
+  markDesignTab(tabId: string, design: BrowserDesignTab): void {
+    const tab = this.requireTab(tabId)
+    tab.design = { directory: design.directory, origin: design.origin }
+    this.publishState(tabId)
+  }
+
+  /**
+   * Register how a tab is recognised from the page it is showing.
+   *
+   * Without this, a tab is a design only when a design capability marked it, which
+   * is what left a tab the agent opened itself, and a tab the renderer restored after
+   * a restart, showing a design as an ordinary page. The same recognition is what
+   * arms a composition's transport, so both marks come from one rule.
+   */
+  setTabMarkRecogniser(recogniser: TabMarkRecogniser | null): void {
+    this.tabMarkRecogniser = recogniser
+  }
+
+  /**
+   * Decide, from the origin a tab is showing, what the app knows about its folder.
+   *
+   * Called on every committed navigation and nowhere else, because the origin is the
+   * only thing that can change the answer: an in-page navigation cannot move a page
+   * to another origin. A tab that navigated away from its folder therefore loses its
+   * mark, and a tab that arrives on an authored-work folder gains one whether or not
+   * a capability opened it.
+   *
+   * The answer is asynchronous because a composition's mark carries the timeline
+   * its manifest declares, so the URL is read again when it lands: a mark for a
+   * document the tab has already left would arm the transport with the wrong video.
+   */
+  private refreshTabMark(tabId: string, tab: BrowserTab): void {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) return
+    const url = contents.getURL()
+    const recogniser = this.tabMarkRecogniser
+    if (!recogniser) {
+      this.applyTabMark(tabId, tab, url, NO_TAB_MARK)
+      return
+    }
+    void recogniser(tab.projectId, tab.threadId, url)
+      .then((recognised) => {
+        if (contents.isDestroyed() || contents.getURL() !== url) return
+        this.applyTabMark(tabId, tab, url, recognised)
+      })
+      .catch((error: unknown) => {
+        Logger.error('Browser tab recognition failed:', error)
+      })
+  }
+
+  /**
+   * Land a recognised mark on a tab, and arm or disarm what it governs.
+   *
+   * Arming waits for the document to settle unless it already has: the transport is
+   * installed into the page, and the load's own `did-finish-load` covers the case
+   * where the mark was resolved while the document was still arriving.
+   */
+  private applyTabMark(
+    tabId: string,
+    tab: BrowserTab,
+    url: string,
+    recognised: BrowserTabMark
+  ): void {
+    const previous: BrowserTabMark = { design: tab.design, composition: tab.composition }
+    const next = tabMarkFor(url, previous, recognised)
+    if (isSameTabMark(next, previous)) return
+    tab.design = next.design
+    tab.composition = next.composition
+    if (next.design === null) this.inspector.setArmed(tabId, tab.view.webContents, false, null)
+    this.publishState(tabId)
+    if (!next.composition) {
+      // A tab that left the composition has no playhead to restore, and the mute
+      // the player took from it belongs to the tab rather than to the composition.
+      this.playheads.delete(tabId)
+      this.releaseTransportAudio(tabId, tab)
+      return
+    }
+    // Arming is idempotent per document and per timeline, so this needs no guard
+    // against the load's own arm: whichever of the two arrives second does nothing.
+    this.armCompositionQuietly(tabId, tab)
   }
 
   async executeUtility(
@@ -588,14 +823,556 @@ export class BrowserService {
    */
   reloadPreviewOrigin(origin: string): number {
     let reloaded = 0
-    for (const tab of this.tabs.values()) {
+    for (const [tabId, tab] of this.tabs) {
       const contents = tab.view.webContents
       if (contents.isDestroyed()) continue
       if (!isPreviewOriginUrl(contents.getURL(), origin)) continue
-      contents.reload()
+      // Reloading is deferred until the tab's playhead has been read, so a
+      // composition the agent just edited resumes where it was instead of being
+      // thrown back to its first frame. A tab that is not a composition answers
+      // without touching the page.
+      void this.reloadKeepingPlayhead(tabId, tab).catch((error: unknown) => {
+        Logger.error('A preview tab could not refresh itself:', error)
+      })
       reloaded += 1
     }
     return reloaded
+  }
+
+  /**
+   * Refresh one preview tab, keeping a composition's playhead across the reload.
+   *
+   * The document is about to be replaced, so where it was is read first and handed
+   * to the next arming of the transport. The reload still happens when that read
+   * fails: a preview that stops refreshing because playback could not be asked about
+   * would be a worse trade than losing one second of position.
+   */
+  private async reloadKeepingPlayhead(tabId: string, tab: BrowserTab): Promise<void> {
+    if (tab.composition) await this.rememberPlayhead(tabId, tab)
+    const contents = tab.view.webContents
+    if (!contents.isDestroyed()) contents.reload()
+  }
+
+  /** A composition tab's playhead as the page reports it, or null. */
+  private async readPlayhead(tabId: string): Promise<{ time: number; playing: boolean } | null> {
+    const playback = await this.transportState(tabId).catch(() => null)
+    return playback ? { time: playback.time, playing: playback.playing } : null
+  }
+
+  /**
+   * Remember where a composition's playhead is, for the next arming to restore.
+   *
+   * The folder is stored with the position, so a tab reused for another composition
+   * can never restore this one's playhead. A page with no armed transport answers
+   * nothing, and that answer deliberately does not overwrite a position already
+   * remembered: a capture's frozen page is exactly that page, and the position worth
+   * restoring is the one from before it was loaded.
+   */
+  private async rememberPlayhead(tabId: string, tab: BrowserTab): Promise<void> {
+    const directory = tab.composition?.directory
+    if (!directory) return
+    const playback = await this.readPlayhead(tabId)
+    // The tab can be closed while the page is being asked, and a position for a
+    // tab that is gone would never be restored by anything.
+    if (this.tabs.get(tabId) !== tab) return
+    if (playback) this.playheads.set(tabId, { directory, ...playback })
+  }
+
+  /** Take the remembered playhead for one folder, when that is the folder it is for. */
+  private takePlayhead(
+    tabId: string,
+    directory: string
+  ): { time: number; playing: boolean } | null {
+    const saved = this.playheads.get(tabId)
+    if (!saved) return null
+    this.playheads.delete(tabId)
+    return saved.directory === directory ? { time: saved.time, playing: saved.playing } : null
+  }
+
+  /** The agent tab bound to a project and thread, or null when it has none.
+   *  A preview uses this to decide between navigating the thread's existing tab
+   *  and creating its first one, so the answer comes from the browser rather
+   *  than from a memo a caller keeps on the side. */
+  agentTabFor(projectId: string, threadId: string): string | null {
+    return this.agentTabIds.get(browserContextKey(projectId, threadId)) ?? null
+  }
+
+  /**
+   * The URL a tab is showing right now, or null when it is gone.
+   *
+   * A preview asks this before loading something, because a page the tab already
+   * has open is a page the user is already looking at: reloading it would throw
+   * away what they are watching, and a composition that is playing must not be
+   * replaced by a still.
+   */
+  tabUrl(tabId: string): string | null {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return null
+    return tab.view.webContents.getURL()
+  }
+
+  /**
+   * Bring an existing tab to the user.
+   *
+   * Creating a tab reveals it as a side effect, but showing a page the thread
+   * already has open makes no new tab, so nothing would move the sidebar. The
+   * renderer already knows how to open or focus a tab from this event, so
+   * revealing reuses it rather than adding a second reveal path.
+   */
+  revealTab(tabId: string): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || this.window.webContents.isDestroyed()) return
+    sendToRenderer(
+      this.window.webContents,
+      'browser:openRequested',
+      tab.view.webContents.getURL(),
+      {
+        projectId: tab.projectId,
+        threadId: tab.threadId,
+        requestedTabId: tabId,
+        reveal: true
+      }
+    )
+  }
+
+  /**
+   * Wait until a tab is no longer loading, bounded.
+   *
+   * A capture taken mid-navigation shows a half-painted page, and a page that
+   * never finishes (a hung script, an unreachable host) must not hold the caller
+   * forever, so the wait ends on stop, failure, or the deadline.
+   */
+  async waitForTabLoad(tabId: string, timeoutMs = 8_000): Promise<void> {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    const contents = tab.view.webContents
+    if (contents.isDestroyed() || !contents.isLoading()) return
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const finish = (): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        contents.removeListener('did-stop-loading', finish)
+        contents.removeListener('did-fail-load', finish)
+        resolve()
+      }
+      // Declared after `finish` closes over it: the deadline cannot fire before
+      // this line runs, so the reference is always initialised.
+      const timer = setTimeout(finish, timeoutMs)
+      contents.once('did-stop-loading', finish)
+      contents.once('did-fail-load', finish)
+    })
+  }
+
+  /**
+   * Capture a tab as a small PNG data URL, for a UI preview rather than a model.
+   *
+   * Distinct from the agent's `screenshot` operation: that one is capped for
+   * tokens and skipped when the page has not changed, while a preview wants a
+   * fresh picture at the size the panel can show.
+   */
+  async captureThumbnail(
+    tabId: string,
+    maxWidth: number
+  ): Promise<{ dataUrl: string; width: number; height: number } | null> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return null
+    const captured = await tab.view.webContents.capturePage()
+    const source = captured.getSize()
+    if (source.width < 1 || source.height < 1) return null
+    const target = fitWithin(source.width, source.height, maxWidth)
+    const resized =
+      target.width !== source.width || target.height !== source.height
+        ? captured.resize({ width: target.width, height: target.height })
+        : captured
+    const size = resized.getSize()
+    return {
+      dataUrl: `data:image/png;base64,${resized.toPNG().toString('base64')}`,
+      width: size.width,
+      height: size.height
+    }
+  }
+
+  /**
+   * Draw one exact frame of a composition and settle the page before a capture.
+   *
+   * A composition owns how a frame is drawn   the render contract is a global
+   * function the project defines   so the app calls it and waits rather than
+   * reimplementing it. The page is asked to draw the frame itself, then two
+   * animation frames are waited out, because a project that redraws from its own
+   * loop during a settle would otherwise be captured mid-paint. A project that
+   * defines no render function is reported rather than captured as a guess.
+   */
+  async renderTabFrame(
+    tabId: string,
+    seconds: number
+  ): Promise<{ rendered: boolean; reason?: string }> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) {
+      return { rendered: false, reason: 'the tab is gone' }
+    }
+    const drawn: unknown = tab.view.webContents.executeJavaScript(`(async () => {
+      const transport = globalThis.${COMPOSITION_TRANSPORT_GLOBAL};
+      if (transport && typeof transport.freezeAt === 'function') {
+        const state = transport.freezeAt(${JSON.stringify(seconds)});
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const failure = state && state.error;
+        return failure ? { rendered: false, reason: String(failure) } : { rendered: true };
+      }
+      const draw = globalThis.cioRenderFrame;
+      if (typeof draw !== 'function') {
+        return { rendered: false, reason: 'the page defines no cioRenderFrame function' };
+      }
+      try {
+        await draw(${JSON.stringify(seconds)});
+      } catch (error) {
+        return { rendered: false, reason: String(error) };
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return { rendered: true };
+    })()`)
+    // Bounded, because a page that never settles, or one whose animation frames
+    // are throttled because the tab is parked, would leave this outstanding and
+    // hang the turn that asked for the frame.
+    const expired: unique symbol = Symbol('frame-render-timeout')
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const deadline = new Promise<typeof expired>((resolve) => {
+      timer = setTimeout(() => resolve(expired), FRAME_RENDER_TIMEOUT_MS)
+    })
+    let result: unknown
+    try {
+      result = await Promise.race([drawn, deadline])
+    } finally {
+      if (timer !== null) clearTimeout(timer)
+    }
+    if (result === expired) {
+      return {
+        rendered: false,
+        reason: `the composition did not settle within ${FRAME_RENDER_TIMEOUT_MS / 1000} seconds`
+      }
+    }
+    if (typeof result !== 'object' || result === null) return { rendered: false }
+    const record = result as Record<string, unknown>
+    const reason = typeof record['reason'] === 'string' ? record['reason'] : undefined
+    return record['rendered'] === true
+      ? { rendered: true }
+      : { rendered: false, ...(reason ? { reason } : {}) }
+  }
+
+  /**
+   * Install the playback transport in a composition tab.
+   *
+   * This is the handover that turns a composition from a page that plays itself
+   * into a video: the runtime draws every frame and the panel drives the playhead,
+   * so a piece of work can be paused, scrubbed and replayed instead of watched from
+   * the start every time it is looked at.
+   *
+   * Three rules keep the playhead honest, and each of them exists because of a way
+   * it was being lost:
+   *
+   * - A document is armed once, for the timeline it was armed with. Recognition
+   *   resolves after the load, so a navigation can be armed from the mark the tab
+   *   carried a moment ago and then asked to arm again for the folder it actually
+   *   arrived on; without this, the second install restarts the video.
+   * - A composition is restored from the playhead saved for *its* folder. A tab
+   *   reused for a different composition must not inherit the previous one's
+   *   position.
+   * - A re-arm of a running document takes its position from the page rather than
+   *   from the saved value, which belongs to the document that has already gone.
+   *
+   * A capture URL is armed frozen rather than played. The runtime still declines the
+   * page's own draws, which is what makes the captured frame the frame that was
+   * asked for, but it never starts moving and never restores a playhead: the picture
+   * is the answer there, not playback.
+   */
+  private async armCompositionTransport(tabId: string, tab: BrowserTab): Promise<void> {
+    const composition = tab.composition
+    const contents = tab.view.webContents
+    if (!composition || contents.isDestroyed()) return
+    const url = contents.getURL()
+    // Recognition resolves after the load, so the mark a tab is holding can name the
+    // folder it just left. Every served folder keeps its own loopback origin, so the
+    // origin is what tells the document in front of us from the one the mark
+    // describes: arming on a stale mark would drive this page with another
+    // composition's timeline.
+    if (originOf(url) !== composition.origin) return
+    const frozen = isVideoCaptureUrl(url)
+    const generation = tab.navigationGeneration
+    const armed = tab.transport
+    if (
+      armed !== null &&
+      armed.generation === generation &&
+      armed.url === url &&
+      armed.duration === composition.duration &&
+      armed.fps === composition.fps
+    ) {
+      // The same document, already driven by the same timeline.
+      return
+    }
+    // A re-arm of the document that is on screen right now keeps where the user is
+    // rather than the position saved for a document that has been replaced.
+    const live = armed !== null && armed.url === url ? await this.readPlayhead(tabId) : null
+    const result: unknown = await contents.executeJavaScript(
+      compositionTransportScript({
+        duration: composition.duration,
+        fps: composition.fps,
+        autoplay: !frozen
+      })
+    )
+    const record =
+      typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : null
+    if (record?.['installed'] !== true) {
+      const reason = typeof record?.['reason'] === 'string' ? record['reason'] : 'unknown reason'
+      // A folder listing, or a composition whose page has not defined the render
+      // function yet, is an ordinary thing to be looking at rather than a fault.
+      Logger.dev('Composition playback was not armed:', { tabId, reason })
+      // A preview the runtime could not drive is still a preview the app put on
+      // screen, and one that cannot be stopped must not be audible.
+      this.applyTransportAudio(tabId, tab, false)
+      return
+    }
+    // A burst of agent writes reloads a preview more than once, so the document can
+    // be replaced while the runtime is being installed. The position then belongs to
+    // a document that has gone, and a record naming this one would make the next
+    // load believe it was already armed, so neither is kept.
+    if (contents.isDestroyed() || tab.navigationGeneration !== generation) return
+    tab.transport = { generation, url, duration: composition.duration, fps: composition.fps }
+    // A capture URL is silent by definition and a viewing starts playing, so the
+    // tab's audio follows what the runtime actually did rather than what was asked
+    // of it: a first frame that threw leaves the transport paused and the tab quiet.
+    const playback = await this.transportState(tabId)
+    this.applyTransportAudio(tabId, tab, playback?.playing === true)
+    if (frozen) return
+    const playhead = live ?? this.takePlayhead(tabId, composition.directory)
+    if (!playhead) return
+    await this.sendTransport(tabId, 'seek', playhead.time)
+    // A reload arms playing, so a composition the user had paused must be paused
+    // again: without this, an agent write while the user was stopped would start
+    // the video over their still frame.
+    await this.sendTransport(tabId, playhead.playing ? 'play' : 'pause', 0)
+  }
+
+  /** Arm the transport without letting a playback problem fail a page load. */
+  private armCompositionQuietly(tabId: string, tab: BrowserTab): void {
+    void this.armCompositionTransport(tabId, tab).catch((error: unknown) => {
+      Logger.error('A composition preview could not be armed for playback:', error)
+    })
+  }
+
+  /**
+   * Run one playback action on a composition tab and report the state it left.
+   *
+   * The page owns the frame, so the answer is read back rather than assumed: a play
+   * that ended immediately, or a seek the composition clamped to its own length,
+   * shows in the panel exactly as it happened.
+   */
+  async transport(
+    tabId: string,
+    command: BrowserTransportCommand,
+    value: number | boolean
+  ): Promise<BrowserCompositionPlayback | null> {
+    const tab = this.requireTab(tabId)
+    if (!tab.composition) {
+      throw new TypeError('Playback is available on a composition preview only')
+    }
+    return this.sendTransport(tabId, command, value)
+  }
+
+  /**
+   * A composition tab's playhead, or null when the tab is not playing one.
+   *
+   * Read without changing anything, because this is what the panel polls to move the
+   * scrubber. A tab that is gone, or is not a composition, answers null rather than
+   * throwing: the panel can outlive the tab it was reading.
+   */
+  async transportState(tabId: string): Promise<BrowserCompositionPlayback | null> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || !tab.composition || tab.view.webContents.isDestroyed()) return null
+    const result: unknown = await tab.view.webContents.executeJavaScript(
+      compositionTransportStateScript()
+    )
+    return toCompositionPlayback(result)
+  }
+
+  private async sendTransport(
+    tabId: string,
+    command: BrowserTransportCommand,
+    value: number | boolean
+  ): Promise<BrowserCompositionPlayback | null> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return null
+    const result: unknown = await tab.view.webContents.executeJavaScript(
+      compositionTransportCommandScript(command, value)
+    )
+    const playback = toCompositionPlayback(result)
+    // The runtime declines the page's draws, parks its loop and pauses the media it
+    // knows about, but a page can always start sound none of that reaches. The tab
+    // is muted for exactly as long as the transport is not playing, which is the
+    // one lever no composition can work around. A command that never reached the
+    // page reports nothing, and an unreachable composition is quiet by default.
+    if (tab.composition) this.applyTransportAudio(tabId, tab, playback?.playing === true)
+    return playback
+  }
+
+  /**
+   * Mute a composition tab for as long as its transport is not playing.
+   *
+   * The page-side runtime pauses the media it can reach; this is the part it cannot.
+   * Muting the view silences a detached element the runtime never saw, a synthesized
+   * track, and a frame the page starts behind the player's back. The app only lifts a
+   * mute it made itself, so a tab the user muted stays muted through a play.
+   */
+  private applyTransportAudio(tabId: string, tab: BrowserTab, playing: boolean): void {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) return
+    if (playing) {
+      if (tab.transportMuted && contents.isAudioMuted()) {
+        contents.setAudioMuted(false)
+        this.publishState(tabId)
+      }
+      tab.transportMuted = false
+      return
+    }
+    if (contents.isAudioMuted()) return
+    contents.setAudioMuted(true)
+    tab.transportMuted = true
+    this.publishState(tabId)
+  }
+
+  /** Give a tab back the mute the player took from it. */
+  private releaseTransportAudio(tabId: string, tab: BrowserTab): void {
+    if (!tab.transportMuted) return
+    tab.transportMuted = false
+    const contents = tab.view.webContents
+    if (contents.isDestroyed() || !contents.isAudioMuted()) return
+    contents.setAudioMuted(false)
+    this.publishState(tabId)
+  }
+
+  /**
+   * Run one claimed browser action on a tab.
+   *
+   * The actions split by owner: what acts on the page happens here, and what
+   * acts on the tab strip (focusing the address bar, closing or opening a tab)
+   * is forwarded to the renderer, which is the only side that knows the strip.
+   * Saving is asynchronous because the save dialog is, and it must never block
+   * the key event that asked for it.
+   */
+  private runBrowserShortcut(tabId: string, action: BrowserShortcutAction): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return
+    const contents = tab.view.webContents
+    switch (action) {
+      case 'reload':
+        contents.reload()
+        return
+      case 'hardReload':
+        contents.reloadIgnoringCache()
+        return
+      case 'back':
+        if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack()
+        return
+      case 'forward':
+        if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward()
+        return
+      case 'zoomIn':
+        this.stepTabZoom(contents, ZOOM_STEP)
+        return
+      case 'zoomOut':
+        this.stepTabZoom(contents, -ZOOM_STEP)
+        return
+      case 'zoomReset':
+        contents.setZoomLevel(0)
+        return
+      case 'toggleDevTools':
+        this.toggleTabDevTools(tab)
+        return
+      case 'savePage':
+        void this.saveTabPage(tab)
+        return
+      case 'focusAddress':
+      case 'closeTab':
+      case 'newTab':
+        this.requestPanelShortcut(tabId, PANEL_SHORTCUT_TARGETS[action])
+        return
+    }
+  }
+
+  /** Ask the renderer to act on the tab strip, which only the renderer owns. */
+  private requestPanelShortcut(tabId: string, action: BrowserPanelShortcutAction): void {
+    if (this.window.webContents.isDestroyed()) return
+    sendToRenderer(this.window.webContents, 'browser:panelShortcut', tabId, action)
+  }
+
+  /**
+   * Resolve a key pressed while the browser toolbar holds DOM focus.
+   *
+   * That key goes to the app renderer, so the window-level interception is the
+   * only place it can be claimed before the application menu acts on it. Called
+   * from `before-input-event` on the window's web contents; when it answers true
+   * the caller prevents the event, which the renderer, the page and the menu all
+   * then never see.
+   */
+  consumeChromeShortcut(event: Electron.Event, input: Electron.Input): boolean {
+    const tabId = this.focusedChromeTabId
+    if (!tabId) return false
+    const action = matchBrowserShortcut(input, this.shortcutBindings)
+    if (!action) return false
+    event.preventDefault()
+    this.runBrowserShortcut(tabId, action)
+    return true
+  }
+
+  /** Toggle the web page's own DevTools. Returns whether it is now open. */
+  private toggleTabDevTools(tab: BrowserTab): boolean {
+    const contents = tab.view.webContents
+    if (contents.isDevToolsOpened()) {
+      contents.closeDevTools()
+      return false
+    }
+    // Plain native behavior: default dock inside the window, resizable
+    // there, fully undockable from DevTools' own controls.
+    contents.openDevTools()
+    return true
+  }
+
+  /** Step one tab's zoom, clamped to Chromium's own range. */
+  private stepTabZoom(contents: WebContents, step: number): void {
+    const next = Math.min(MAX_ZOOM_LEVEL, Math.max(-MAX_ZOOM_LEVEL, contents.getZoomLevel() + step))
+    contents.setZoomLevel(next)
+  }
+
+  /**
+   * Save the page to a file the user picks.
+   *
+   * Chromium writes the page as it stands (markup plus its resources) rather
+   * than the raw response, which is what Chrome's own "Web page, complete"
+   * does and the only useful answer for a page a script rendered. A refusal or a
+   * write failure has no UI of its own, so it is reported as an app toast
+   * instead of leaving the user with a key that silently did nothing.
+   */
+  private async saveTabPage(tab: BrowserTab): Promise<void> {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed() || this.window.isDestroyed()) return
+    const title = contents.getTitle() || contents.getURL()
+    const { canceled, filePath } = await dialog.showSaveDialog(this.window, {
+      title: 'Save page',
+      defaultPath: join(app.getPath('downloads'), `${safeBasename(title)}.html`),
+      filters: [{ name: 'Web page, complete', extensions: ['html'] }]
+    })
+    if (canceled || !filePath) return
+    if (contents.isDestroyed()) return
+    try {
+      await contents.savePage(filePath, 'HTMLComplete')
+    } catch (error: unknown) {
+      Logger.error('Browser page could not be saved:', error)
+      if (this.window.webContents.isDestroyed()) return
+      sendToRenderer(this.window.webContents, 'app:toast', {
+        message: 'This page could not be saved to that file.',
+        type: 'error'
+      })
+    }
   }
 
   private ensureTab(tabId: string, projectId: string, threadId: string): BrowserTab {
@@ -627,11 +1404,28 @@ export class BrowserService {
       initialNavigationStarted: false,
       consoleEntries: [],
       favicon: null,
-      viewport: { ...DEFAULT_PARKED_VIEWPORT }
+      viewport: { ...DEFAULT_PARKED_VIEWPORT },
+      design: null,
+      composition: null,
+      transport: null,
+      transportMuted: false,
+      navigationGeneration: 0
     }
     this.tabs.set(tabId, tab)
 
     const publish = (): void => this.publishState(tabId)
+    // A key pressed in the page reaches this view's web contents and nothing
+    // else in the app, so this is where the browser claims its own shortcuts.
+    // Preventing the event also prevents the application menu from acting on
+    // the key, which is what keeps Cmd/Ctrl+R from reloading the whole app (in
+    // a development build the menu is Electron's default one) and Cmd/Ctrl+W
+    // from closing its window.
+    view.webContents.on('before-input-event', (event, input) => {
+      const action = matchBrowserShortcut(input, this.shortcutBindings)
+      if (!action) return
+      event.preventDefault()
+      this.runBrowserShortcut(tabId, action)
+    })
     // Audio the page emits is a tab-level fact the strip renders, so the state
     // event follows it the same way it follows a title or favicon change.
     view.webContents.on('audio-state-changed', publish)
@@ -648,6 +1442,10 @@ export class BrowserService {
       // The dom-ready install can race the document it runs in; watching again is
       // idempotent per frame and covers that case.
       this.watchCaptureMainFrame(tabId, view.webContents)
+      // A composition is armed on the document that just arrived, which is what
+      // covers a preview reloading itself: the folder is recognised on the
+      // navigation, and the playback runtime is installed here.
+      if (tab.composition) this.armCompositionQuietly(tabId, tab)
     })
     view.webContents.on(
       'did-frame-finish-load',
@@ -664,13 +1462,32 @@ export class BrowserService {
     view.webContents.on('devtools-opened', publish)
     view.webContents.on('devtools-closed', publish)
     view.webContents.on('did-start-loading', publish)
-    view.webContents.on('did-stop-loading', publish)
+    view.webContents.on('did-stop-loading', () => {
+      publish()
+      // The safety net for a mark that resolved while the document was still
+      // arriving, which `did-finish-load` cannot see because recognition is
+      // asynchronous. Arming is idempotent, so this costs nothing when the load's
+      // own arm already happened.
+      if (tab.composition) this.armCompositionQuietly(tabId, tab)
+    })
     view.webContents.on('did-navigate', () => {
       // A new document starts without an icon; the old site's favicon must not linger.
       tab.favicon = null
       // Capture state belongs to the document that ended here, so the tab must
       // not keep claiming it is recording until the new page says otherwise.
       this.capture.reset(tabId)
+      // The inspector lives in the document that ended here. Its desired mode is
+      // kept (a live preview reloads itself mid-session), but the outstanding
+      // event promise is void and the next arm installs into the new document.
+      this.inspector.reset(tabId)
+      // Recognition is decided from the page that just committed, not from a record
+      // of who opened the tab last: that is what keeps a design a design across a
+      // restart, and what covers a tab the agent opened itself.
+      // Whatever runtime the document that just ended had went with it, and the
+      // next document is a new one even when it is the same URL loaded again.
+      tab.navigationGeneration += 1
+      tab.transport = null
+      this.refreshTabMark(tabId, tab)
       // The dialog shim lived in the document that just went away, so the next
       // report has to install it again rather than trust the old record.
       this.injectedDialogLabels.delete(tabId)
@@ -1027,6 +1844,23 @@ export class BrowserService {
 
   private load(tabId: string, url: string): void {
     const tab = this.requireTab(tabId)
+    // Where a composition was is read before the document is replaced, so a capture
+    // round trip does not send the user back to the first frame, and the ordering
+    // cannot depend on which IPC the renderer happens to handle first.
+    if (tab.composition && !tab.view.webContents.isDestroyed()) {
+      void this.rememberPlayhead(tabId, tab).then(
+        () => this.navigateTo(tabId, url),
+        () => this.navigateTo(tabId, url)
+      )
+      return
+    }
+    this.navigateTo(tabId, url)
+  }
+
+  /** Start one navigation, reporting a failure rather than rejecting. */
+  private navigateTo(tabId: string, url: string): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return
     void tab.view.webContents.loadURL(url).catch((error: unknown) => {
       Logger.dev('Browser navigation did not complete:', { tabId, url, error })
       this.publishState(tabId)
@@ -1072,6 +1906,8 @@ export class BrowserService {
       audible: contents.isCurrentlyAudible(),
       muted: contents.isAudioMuted(),
       capturing: this.capture.isCapturing(tabId),
+      design: tab.design,
+      composition: tab.composition,
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward()
     }
@@ -1124,6 +1960,50 @@ export class BrowserService {
       timestamp: Date.now()
     }
     tab.consoleEntries = [...tab.consoleEntries, entry].slice(-MAX_CONSOLE_ENTRIES)
+  }
+
+  /**
+   * Detach the native view when the app renderer goes away, so a reload can never
+   * leave the browser floating over the app.
+   *
+   * The renderer is the only thing that knows which tab belongs on screen and at
+   * which frame, and the compositor paints the view ABOVE every DOM surface. A
+   * reload throws that knowledge away (the full screen browser is renderer state,
+   * and the sidebar browser starts hidden), while the view stays parented to the
+   * app window at the last frame it was given. Main only ever moves a view on the
+   * next `browser:show`, so without this the frame the user was looking at keeps
+   * covering the window and swallowing every click, with no DOM surface left that
+   * would ever ask for a different frame.
+   *
+   * The tab itself is kept alive and parked offscreen, exactly as if the user had
+   * left it, and the next renderer re-attaches it when it reports a frame. A
+   * crashed renderer is handled the same way: nothing will report a frame again
+   * until Electron reloads it, and an inert app must not sit under a live page.
+   */
+  private guardAgainstStrandedView(): void {
+    const contents = this.window.webContents
+    contents.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && !details.isSameDocument) this.detachDisplayedView()
+    })
+    contents.on('render-process-gone', () => this.detachDisplayedView())
+  }
+
+  /**
+   * Take the view off the app window without touching a tab the stage already
+   * released: reviving an inert tab would spend frames on a page nobody is
+   * looking at, which is the state `enforceParkedCap` deliberately created. The
+   * window's own child list is the authority on what is on screen, so this
+   * cannot strand a view that no record happens to mention.
+   */
+  private detachDisplayedView(): void {
+    // The toast hold is published by DOM that a reload or a crash has taken with
+    // it, so keeping it would strand the browser offscreen for a toast that no
+    // longer exists.
+    this.toastVisible = false
+    const parented = new Set(this.window.contentView.children)
+    for (const [tabId, tab] of this.tabs) {
+      if (parented.has(tab.view)) this.parkTab(tabId)
+    }
   }
 
   /**
@@ -1309,11 +2189,16 @@ export class BrowserService {
       this.activeTabBounds = null
     }
     if (this.displayedTab?.tabId === tabId) this.displayedTab = null
+    // A destroyed tab can no longer hold the keyboard, so its toolbar must not
+    // stay the tab the window-level interception routes to.
+    if (this.focusedChromeTabId === tabId) this.focusedChromeTabId = null
     this.injectedDialogLabels.delete(tabId)
     this.forgetParked(tabId)
     this.agentReveals.delete(tabId)
     this.lastScreenshot.delete(tabId)
+    this.playheads.delete(tabId)
     this.capture.forget(tabId)
+    this.inspector.forget(tabId)
     this.stage.release(tab.view)
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)
@@ -1332,5 +2217,33 @@ export class BrowserService {
       throw new TypeError(`${field} must be a string${allowEmpty ? '' : ' with content'}`)
     }
     return value
+  }
+}
+
+/**
+ * Read a transport state out of what a composition page answered, or null when it
+ * answered nothing usable.
+ *
+ * The page is a separate document whose shape the app does not control, so every
+ * field is checked rather than trusted. A missing or malformed answer is the same
+ * as no transport being armed, which is what a tab showing a normal site reports.
+ */
+function toCompositionPlayback(value: unknown): BrowserCompositionPlayback | null {
+  if (typeof value !== 'object' || value === null) return null
+  const record = value as Record<string, unknown>
+  const time = record['time']
+  const duration = record['duration']
+  if (typeof time !== 'number' || !Number.isFinite(time)) return null
+  if (typeof duration !== 'number' || !Number.isFinite(duration)) return null
+  const error = record['error']
+  return {
+    time: Math.max(0, time),
+    duration: Math.max(0, duration),
+    playing: record['playing'] === true,
+    loop: record['loop'] === true,
+    error:
+      typeof error === 'string' && error.length > 0
+        ? error.slice(0, MAX_TRANSPORT_ERROR_LENGTH)
+        : null
   }
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { FolderOpen, X } from '@lucide/svelte'
+  import { Code, FolderOpen, X } from '@lucide/svelte'
+  import type { CustomIcon } from '$shared/types'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import {
     PROJECT_SVG_ICONS,
@@ -7,14 +8,22 @@
     getIconSvgDataUrl
   } from '$lib/project-svg-icons'
   import ColorSwatches from './ColorSwatches.svelte'
+  import { getCustomSvgDataUrl, sanitizeCustomSvg } from '../../../../lib/custom-svg'
 
   interface Props {
     name: string
     color?: string
     iconType?: string
+    customSvg?: string
+    customIcons?: CustomIcon[]
+    allowCustomSvg?: boolean
+    resetPlacement?: 'picker' | 'footer'
     fallbackIconUrl?: string | null
     onColorChange: (color: string | undefined) => void
     onIconTypeChange: (iconType: string | undefined) => void
+    onCustomSvgChange?: (svg: string | undefined) => void
+    onAddCustomIcon?: (svg: string) => Promise<void>
+    onUploadImage?: () => void
     onReset: () => void
   }
 
@@ -22,14 +31,53 @@
     name,
     color,
     iconType,
+    customSvg,
+    customIcons = [],
+    allowCustomSvg = false,
+    resetPlacement = 'picker',
     fallbackIconUrl = null,
     onColorChange,
     onIconTypeChange,
+    onCustomSvgChange,
+    onAddCustomIcon,
+    onUploadImage,
     onReset
   }: Props = $props()
 
   let previewColor = $derived(color ?? PROJECT_COLORS[0].value)
-  let hasAppearance = $derived(Boolean(color || iconType || fallbackIconUrl))
+  let hasAppearance = $derived(Boolean(color || iconType || customSvg || fallbackIconUrl))
+  let pastedSvg = $state('')
+  let showSvgInput = $state(false)
+  let previewSvg = $state<string | null>(null)
+  let previewSvgError = $state<string | null>(null)
+  let saveIconError = $state<string | null>(null)
+
+  function previewCustomSvg(): void {
+    try {
+      previewSvg = sanitizeCustomSvg(pastedSvg)
+      previewSvgError = null
+      saveIconError = null
+    } catch (error) {
+      previewSvg = null
+      previewSvgError = error instanceof Error ? error.message : 'Could not read this SVG'
+    }
+  }
+
+  async function usePreviewIcon(): Promise<void> {
+    if (!previewSvg) return
+    try {
+      await onAddCustomIcon?.(previewSvg)
+      onCustomSvgChange?.(previewSvg)
+      onIconTypeChange(undefined)
+      showSvgInput = false
+      pastedSvg = ''
+      previewSvg = null
+      previewSvgError = null
+      saveIconError = null
+    } catch (error) {
+      saveIconError = error instanceof Error ? error.message : 'Could not save icon'
+    }
+  }
 </script>
 
 <div class="space-y-4">
@@ -41,6 +89,13 @@
     >
       {#if fallbackIconUrl}
         <img src={fallbackIconUrl} alt="" class="h-8 w-8 object-contain" draggable="false" />
+      {:else if customSvg}
+        <img
+          src={getCustomSvgDataUrl(customSvg, previewColor)}
+          alt=""
+          class="h-8 w-8 object-contain"
+          draggable="false"
+        />
       {:else if iconType}
         <img
           src={getIconSvgDataUrl(iconType, previewColor)}
@@ -83,7 +138,10 @@
           title={icon.label}
           aria-label={icon.label}
           aria-pressed={iconType === icon.key}
-          onclick={() => onIconTypeChange(iconType === icon.key ? undefined : icon.key)}
+          onclick={() => {
+            onIconTypeChange(iconType === icon.key ? undefined : icon.key)
+            onCustomSvgChange?.(undefined)
+          }}
         >
           <img
             src={getIconSvgDataUrl(icon.key, previewColor)}
@@ -93,10 +151,114 @@
           />
         </button>
       {/each}
+      {#each customIcons as customIcon (customIcon.id)}
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center rounded-md border transition-colors {customSvg ===
+          customIcon.svg
+            ? 'border-foreground bg-elevated'
+            : 'border-border'}"
+          title="Custom SVG icon"
+          aria-label="Custom SVG icon"
+          aria-pressed={customSvg === customIcon.svg}
+          onclick={() => {
+            onCustomSvgChange?.(customIcon.svg)
+            onIconTypeChange(undefined)
+          }}
+        >
+          <img
+            src={getCustomSvgDataUrl(customIcon.svg, previewColor)}
+            alt=""
+            class="h-4 w-4 object-contain"
+            draggable="false"
+          />
+        </button>
+      {/each}
     </div>
   </div>
 
-  {#if hasAppearance}
+  {#if allowCustomSvg}
+    <div class="flex gap-2">
+      {#if onUploadImage}
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Upload a custom image icon"
+          onclick={onUploadImage}
+        >
+          <FolderOpen size={12} />
+          Upload image
+        </button>
+      {/if}
+      <button
+        type="button"
+        class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title={showSvgInput ? 'Hide custom SVG input' : 'Add a custom SVG icon'}
+        aria-expanded={showSvgInput}
+        aria-controls="appearance-custom-svg-panel"
+        onclick={() => {
+          showSvgInput = !showSvgInput
+          if (showSvgInput && customSvg) pastedSvg = customSvg
+        }}
+      >
+        <Code size={12} />
+        {showSvgInput ? 'Hide SVG' : customSvg ? 'Edit SVG' : 'Add SVG'}
+      </button>
+    </div>
+    {#if showSvgInput}
+      <div id="appearance-custom-svg-panel" class="space-y-2">
+        <label class="block text-xs font-medium text-muted" for="appearance-custom-svg"
+          >Paste SVG</label
+        >
+        <textarea
+          id="appearance-custom-svg"
+          class="min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 font-mono text-xs text-foreground placeholder:text-dimmed"
+          bind:value={pastedSvg}
+          placeholder="Paste SVG markup with a viewBox"
+          oninput={(event) => {
+            pastedSvg = event.currentTarget.value
+            previewSvg = null
+            previewSvgError = null
+            saveIconError = null
+          }}
+          aria-describedby={previewSvgError ? 'appearance-custom-svg-error' : undefined}></textarea>
+        <div class="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title="Preview pasted SVG"
+            onclick={previewCustomSvg}>Preview</button
+          >
+          {#if previewSvg}
+            <img
+              src={getCustomSvgDataUrl(previewSvg, previewColor)}
+              alt="Preview of custom icon"
+              class="h-8 w-8 object-contain"
+              draggable="false"
+            />
+          {/if}
+        </div>
+        {#if previewSvgError}
+          <p id="appearance-custom-svg-error" class="text-xs text-danger" role="alert">
+            {previewSvgError}
+          </p>
+        {/if}
+        {#if saveIconError}<p class="text-xs text-danger" role="alert">{saveIconError}</p>{/if}
+        <div class="flex items-center justify-between gap-2">
+          <span></span>
+          <button
+            type="button"
+            class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            title="Use this SVG icon"
+            disabled={!previewSvg}
+            onclick={() => void usePreviewIcon()}>Use icon</button
+          >
+        </div>
+      </div>
+    {/if}
+  {/if}
+
+  {#if hasAppearance && resetPlacement === 'picker'}
     <div class="flex justify-end">
       <button
         type="button"

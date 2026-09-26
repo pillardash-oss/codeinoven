@@ -11,7 +11,11 @@ import type {
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
-import { APP_ADB_UTILITY_ID, APP_DESIGN_UTILITY_ID } from '../../lib/utility-ids'
+import {
+  APP_ADB_UTILITY_ID,
+  APP_DESIGN_UTILITY_ID,
+  APP_VIDEO_UTILITY_ID
+} from '../../lib/utility-ids'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_IMAGE_DESCRIPTOR_UTILITY_ID,
@@ -20,6 +24,7 @@ import {
 } from './utility-registry-service'
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
 import type { DesignSessionMode } from './cio-design-prompt'
+import type { VideoSessionMode } from './cio-video-prompt'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -33,10 +38,13 @@ import {
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
-import { designAssignmentsFromConfig } from '../../lib/design-assignments'
+import { VIDEO_CAPABILITY_SEARCH_QUERY, videoCapabilityDocs } from '../../lib/video-skill'
+import { NO_EXPERTS, type EffectiveExperts } from '../../lib/experts'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
+import { currentWorkRoots } from '../design/work-roots-state'
 import { resultWithImageParts } from '../../lib/image-payload'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
+import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { type McpClient } from '../agents/mcp-stdio-client'
 import {
@@ -54,6 +62,7 @@ import {
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
 import { gatewayHarnessTimeoutMs, type UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { Logger } from '../system/logger'
+import { appServiceRegistry } from '../system/app-service-registry'
 import { UTILITY_EVENTS_LOG_FILE, dailyLogRelativePath } from '../system/log-paths'
 import type { AgentSecretResolution } from './agent-secret-service'
 import {
@@ -84,7 +93,8 @@ import {
 } from './utility-orchestration/utility-turn-state'
 import {
   BROWSER_UTILITY_TOOLS,
-  DESIGN_UTILITY_TOOLS,
+  designUtilityTools,
+  videoUtilityTools,
   BRIDGE_SCRIPT_PATH,
   buildCuaSessionId,
   buildUtilityGatewayScript,
@@ -137,6 +147,13 @@ export interface UtilityTurnRequest {
    * its preview operation is callable without a search and an activation.
    */
   designSession?: DesignSessionMode
+  /**
+   * Whether this turn belongs to a video session the user opened with
+   * `@cio-video`. It does for the video capability what `designSession` does for
+   * the design capability: promotes it to an active capability for the turn, so
+   * the edit pass is in context and `preview` and `capture` are callable at once.
+   */
+  videoSession?: VideoSessionMode
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
   /**
@@ -222,10 +239,23 @@ export type BrowserUtilityExecutor = (
  * that made it. The app supplies one of these per operation group, because the
  * three halves have different owners: `preview` composes the loopback directory
  * preview with the in-app browser, `delegate` runs a prompt on the model the
- * user assigned to that design work, and `save-media` writes a generated asset
+ * user assigned to that design work, `generate` produces media with the model
+ * assigned to a media craft, and `save-media` writes a generated asset
  * into the project as a file the design can reference.
  */
 export type DesignCapabilityExecutor = (
+  operation: string,
+  input: Record<string, unknown>,
+  context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+/**
+ * Runs one gateway invocation of the app-owned video capability for the turn
+ * that made it. The two operations have different owners: `preview` composes the
+ * loopback directory preview with the in-app browser, and `capture` adds the
+ * frame render and the screenshot on top of the same serve-and-show path.
+ */
+export type VideoCapabilityExecutor = (
   operation: string,
   input: Record<string, unknown>,
   context: { projectId: string; threadId: string }
@@ -327,6 +357,11 @@ export class UtilityOrchestrationService {
   private designPreviewExecutor: DesignCapabilityExecutor | null = null
   private designAssignmentExecutor: DesignCapabilityExecutor | null = null
   private designMediaExecutor: DesignCapabilityExecutor | null = null
+  private mediaGenerationExecutor: DesignCapabilityExecutor | null = null
+  private videoPreviewExecutor: VideoCapabilityExecutor | null = null
+  private videoCaptureExecutor: VideoCapabilityExecutor | null = null
+  /** The thread-scoped expert policy, shared with the design delegation executor. */
+  private expertSettings: ExpertSettingsService | null = null
   private scopeToolExecutor: ScopeToolExecutor | null = null
   private secretRequestExecutor: SecretRequestExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
@@ -401,6 +436,17 @@ export class UtilityOrchestrationService {
   }
 
   /**
+   * Register the service that owns what a thread decided about its experts.
+   *
+   * The playbook names the models the user staffed, so a thread whose experts are
+   * muted has to be described by the same policy that refuses `delegate`, or a
+   * session would be offered a delegation it cannot make.
+   */
+  setExpertSettings(settings: ExpertSettingsService | null): void {
+    this.expertSettings = settings
+  }
+
+  /**
    * Register the executor behind the design capability's `delegate` operation,
    * which runs one prompt on the model the user assigned to a piece of design
    * work. The chat engine supplies it because it owns drivers, accounts and the
@@ -419,6 +465,37 @@ export class UtilityOrchestrationService {
    */
   setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
     this.designMediaExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the `generate` operation the design and video
+   * capabilities share, which runs the model the user assigned to a media craft
+   * and saves the result into the project. The app supplies it because it owns
+   * the provider credential, the vault and the folder the file lands in, and
+   * because the model is a user decision the agent must never make.
+   */
+  setMediaGenerationExecutor(executor: DesignCapabilityExecutor | null): void {
+    this.mediaGenerationExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the video capability's `preview` operation,
+   * which serves a composition folder on the app's loopback origin and shows it
+   * in the thread's browser tab. The app supplies it because it owns the preview
+   * server and the browser.
+   */
+  setVideoPreviewExecutor(executor: VideoCapabilityExecutor | null): void {
+    this.videoPreviewExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the video capability's `capture` operation,
+   * which freezes the composition at a second and hands the frame back as a
+   * picture. The app supplies it because rendering and capturing a frame is a
+   * browser operation the agent has no other way to reach.
+   */
+  setVideoCaptureExecutor(executor: VideoCapabilityExecutor | null): void {
+    this.videoCaptureExecutor = executor
   }
 
   /**
@@ -558,10 +635,29 @@ export class UtilityOrchestrationService {
     if (request.designSession && request.designSession !== 'off') {
       const design = eligible.find(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)
       if (design && !always.some(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)) {
-        const instructions = await this.designPlaybook()
+        const instructions = await this.designPlaybook(request.threadId)
         always.push({
           binding: design.binding,
           utility: { ...design.utility, kind: 'skill', config: { instructions } }
+        })
+      }
+    }
+    // A video session works the same way: the user opened it, so the edit pass
+    // travels with the turn and both operations are callable from the first
+    // token. Its craft notes are a constant, but the paragraph about the models
+    // the user staffed is resolved from live settings, because the same experts
+    // staff a composition and a design.
+    if (request.videoSession && request.videoSession !== 'off') {
+      const video = eligible.find(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)
+      if (video && !always.some(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)) {
+        const instructions = await this.videoPlaybook(request.threadId)
+        always.push({
+          binding: video.binding,
+          utility: {
+            ...video.utility,
+            kind: 'skill',
+            config: { instructions }
+          }
         })
       }
     }
@@ -578,6 +674,10 @@ export class UtilityOrchestrationService {
     // that is about to design an interface to know the guidance and the preview
     // exist, without carrying the design pass in every turn's context.
     const hasDesignCapability = eligible.some(({ utility }) => utility.id === APP_DESIGN_UTILITY_ID)
+    // The video capability is advertised the same way. Its playbook is heavier
+    // than a pointer would be and belongs to a session, so a turn that is not
+    // making a video learns it exists without carrying the edit pass.
+    const hasVideoCapability = eligible.some(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)
     const gatewayTools = GATEWAY_TOOLS.filter(({ name }) => {
       if (name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) {
         return request.allowManagement === true
@@ -645,7 +745,12 @@ export class UtilityOrchestrationService {
         : []),
       ...(hasDesignCapability
         ? [
-            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus three operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, and a \`save-media\` operation that saves a generated image, video or sound file into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus four operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, a \`generate\` operation that produces an image, a video clip or an audio file with the model the user assigned to that craft, and a \`save-media\` operation that saves a link a generator elsewhere answered with into the project as a file the design can reference. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+          ]
+        : []),
+      ...(hasVideoCapability
+        ? [
+            `The app-owned video capability (utility \`${APP_VIDEO_UTILITY_ID}\`) is knowledge plus two operations, and it is not in your tool list. When the work is to make a video   a title sequence, a walkthrough, a captioned cut, an explainer, a montage   search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the edit pass, a \`preview\` operation that serves the composition folder and opens it in this thread's browser tab, and a \`capture\` operation that freezes the composition at one second and hands the frame back as a picture you can look at. Look at every frame you change. It is a baseline, not an authority: where the project or the user's own skill states a motion language, follow that one.`
           ]
         : []),
       ...(hasOnDemand
@@ -1091,6 +1196,17 @@ export class UtilityOrchestrationService {
         }
         this.gatewayServer = server
         this.gatewayBaseUrl = `http://127.0.0.1:${address.port}`
+        // The gateway is app-lifetime infrastructure, so the task manager shows
+        // its loopback endpoint without offering a stop it must not honour.
+        appServiceRegistry.register({
+          id: 'utility-gateway',
+          kind: 'server',
+          name: 'Utility gateway',
+          detail: 'Loopback endpoint that serves activated utilities to a turn',
+          scope: 'app',
+          port: address.port,
+          url: this.gatewayBaseUrl
+        })
         resolve(this.gatewayBaseUrl)
       })
     })
@@ -1109,6 +1225,7 @@ export class UtilityOrchestrationService {
     this.gatewayServer = null
     this.gatewayBaseUrl = null
     this.gatewayStarting = null
+    appServiceRegistry.unregister('utility-gateway')
     if (!server) return
     await new Promise<void>((resolve) => {
       if (!server.listening) {
@@ -1317,20 +1434,43 @@ export class UtilityOrchestrationService {
   /**
    * The design capability's playbook, with the external-asset paragraph rebuilt
    * from the current settings policy and the delegation section rebuilt from the
-   * user's current assignments.
+   * experts this thread may use.
    *
    * Resolved rather than seeded because both facts are user settings: the CDN
-   * allowlist decides which hosts will actually load, and the assignments decide
-   * which models a design turn is allowed to delegate to. All paths that hand the
-   * playbook to a model   activation, and the promotion a `@cio-design` session
-   * performs at turn start   come through here, so they cannot disagree.
+   * allowlist decides which hosts will actually load, and the experts decide which
+   * models a design turn is allowed to delegate to, and whether it may at all.
+   * All paths that hand the playbook to a model   activation, the promotion a
+   * `@cio-design` session performs at turn start, and a post-compaction docs
+   * re-dump   come through here, so they cannot disagree.
    */
-  private async designPlaybook(): Promise<string> {
+  private async designPlaybook(threadId: string): Promise<string> {
     const config = await this.storage.getConfig()
     return designCapabilityDocs(
       prototypeCdnPolicyFromConfig(config),
-      designAssignmentsFromConfig(config.design)
+      await this.expertsForThread(threadId),
+      currentWorkRoots()
     )
+  }
+
+  /**
+   * The video capability's playbook. The craft notes are a constant; the experts
+   * paragraph is the thread's, because a composition is staffed by the same
+   * models a design is.
+   */
+  private async videoPlaybook(threadId: string): Promise<string> {
+    return videoCapabilityDocs(await this.expertsForThread(threadId), currentWorkRoots())
+  }
+
+  /**
+   * The experts a thread's session may delegate to.
+   *
+   * The expert settings service owns the decision, so a service graph that has
+   * not wired one reads as "nothing is staffed", which is the honest answer for a
+   * deployment without the design capability rather than a promise the app cannot
+   * keep.
+   */
+  private async expertsForThread(threadId: string): Promise<EffectiveExperts> {
+    return this.expertSettings ? this.expertSettings.effectiveFor(threadId) : NO_EXPERTS
   }
 
   /** Build the capability payload (tools, operations, or instructions) that
@@ -1351,8 +1491,17 @@ export class UtilityOrchestrationService {
       // The operation catalog travels with the playbook, because unlike the scope
       // capability this one is invoked with typed fields.
       return {
-        instructions: await this.designPlaybook(),
-        tools: DESIGN_UTILITY_TOOLS
+        instructions: await this.designPlaybook(state.request.threadId),
+        tools: designUtilityTools(currentWorkRoots())
+      }
+    }
+    if (resolved.utility.id === APP_VIDEO_UTILITY_ID) {
+      // Same shape as the design capability: knowledge plus a typed operation
+      // catalog, handed back together so an activation or a post-compaction
+      // docs re-dump is one payload.
+      return {
+        instructions: await this.videoPlaybook(state.request.threadId),
+        tools: videoUtilityTools(currentWorkRoots())
       }
     }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
@@ -1403,7 +1552,7 @@ export class UtilityOrchestrationService {
         // downgrading a full_access one.
         await this.cuaBridge.claimDaemonMode(state.request.permissionLevel, state.id)
       }
-      client = await this.mcpClient(resolved.utility)
+      client = await this.mcpClient(state, resolved.utility)
       state.clients.set(utilityId, client)
     }
     if (this.isComputerUseUtility(resolved) && !state.cuaSessionIds.has(utilityId)) {
@@ -1506,12 +1655,14 @@ export class UtilityOrchestrationService {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
-      // One capability, three operation groups with different owners: `preview`
-      // serves the design folder, `delegate` runs the model the user assigned,
-      // and `save-media` brings a generated asset in as a file.
+      // One capability, four operation groups with different owners: `preview`
+      // serves the design folder, `delegate` runs the model the user assigned to
+      // text work, `generate` produces media with the model assigned to a media
+      // craft, and `save-media` brings a generated asset in as a file.
       const executors = new Map<string, DesignCapabilityExecutor | null>([
         ['preview', this.designPreviewExecutor],
         ['delegate', this.designAssignmentExecutor],
+        ['generate', this.mediaGenerationExecutor],
         ['save-media', this.designMediaExecutor]
       ])
       const executor = executors.get(operation)
@@ -1520,6 +1671,26 @@ export class UtilityOrchestrationService {
           executors.has(operation)
             ? `The design capability's "${operation}" operation is unavailable`
             : `The design capability has no operation named "${operation}"`
+        )
+      }
+      result = await executor(operation, operationInput, {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId
+      })
+    } else if (resolved.utility.id === APP_VIDEO_UTILITY_ID) {
+      // Two operations with different owners: `preview` serves and shows the
+      // composition folder, `capture` renders one frame and screenshots it.
+      const executors = new Map<string, VideoCapabilityExecutor | null>([
+        ['preview', this.videoPreviewExecutor],
+        ['generate', this.mediaGenerationExecutor],
+        ['capture', this.videoCaptureExecutor]
+      ])
+      const executor = executors.get(operation)
+      if (!executor) {
+        throw new Error(
+          executors.has(operation)
+            ? `The video capability's "${operation}" operation is unavailable`
+            : `The video capability has no operation named "${operation}"`
         )
       }
       result = await executor(operation, operationInput, {
@@ -1755,20 +1926,34 @@ export class UtilityOrchestrationService {
   }
 
   private async mcpClient(
+    state: TurnState,
     utility: UtilityDefinitionFor<'mcp'> | UtilityDefinitionFor<'computer_use'>
   ): Promise<McpClient> {
     if (utility.kind === 'computer_use') {
       if (!utility.config.endpoint) {
         throw new Error(`Computer-use utility "${utility.name}" requires an MCP endpoint`)
       }
-      return RemoteMcpClient.connect(utility.config.endpoint, {})
+      return RemoteMcpClient.connect(
+        utility.config.endpoint,
+        {},
+        {
+          name: utility.name,
+          scope: 'thread',
+          projectId: state.request.projectId,
+          threadId: state.request.threadId
+        }
+      )
     }
     // One shared starter, which the Utilities connection test calls too, so a
     // server that tests green is a server this gateway can start.
     return connectMcpServer({
       config: utility.config,
       environment: await this.credentialEnvironment(utility),
-      owner: { name: utility.name, credentials: utility.credentials }
+      credentials: utility.credentials,
+      owner: { name: utility.name, credentials: utility.credentials },
+      // Attribute the running server to the turn that started it, so the task
+      // manager can say which thread an MCP belongs to.
+      context: { projectId: state.request.projectId, threadId: state.request.threadId }
     })
   }
 

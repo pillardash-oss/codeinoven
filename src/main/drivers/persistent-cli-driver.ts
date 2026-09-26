@@ -996,7 +996,24 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     command: string,
     cwd: string
   ): void {
-    this.processObserver?.watchProcess(sessionId, child.pid, command, cwd)
+    const pid = child.pid
+    if (typeof pid === 'number' && pid > 0) {
+      this.processObserver?.watchProcess(sessionId, pid, command, cwd)
+      return
+    }
+    // A bundled harness runs inside an Electron utilityProcess, whose OS pid is
+    // `undefined` until the helper has spawned (Electron reads it
+    // asynchronously), so the synchronous read above misses it in the packaged
+    // app. Register the root once the child reports the pid, so bundled harnesses
+    // appear in the task manager and are covered by orphan reaping exactly like
+    // a natively spawned one.
+    const onSpawn = (): void => {
+      const spawnedPid = child.pid
+      if (typeof spawnedPid === 'number' && spawnedPid > 0) {
+        this.processObserver?.watchProcess(sessionId, spawnedPid, command, cwd)
+      }
+    }
+    child.once('spawn', onSpawn)
   }
 
   protected setTurnProvenance(

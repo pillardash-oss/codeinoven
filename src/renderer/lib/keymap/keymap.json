@@ -248,8 +248,8 @@
           "id": "chat-annotation-comment",
           "keys": ["mod", "enter"],
           "label": "Submit annotation comment",
-          "description": "Posts the comment on a response selection; Escape closes the editor.",
-          "scenario": "Editing a comment on a response selection."
+          "description": "Posts the comment being written: on a response selection, on a document passage, or on an element of a design open in the browser. Escape closes the editor.",
+          "scenario": "Editing a comment on a selection, a document passage, or a design element."
         },
         {
           "id": "chat-notification-open",
@@ -513,6 +513,100 @@
           "label": "Reveal file in explorer",
           "description": "Reveals the clicked file path in the OS file manager.",
           "scenario": "Clicking a path link in the terminal."
+        }
+      ]
+    },
+    {
+      "id": "browser",
+      "label": "Browser",
+      "shortcuts": [
+        {
+          "id": "browser-reload",
+          "keys": ["mod", "r"],
+          "platformKeys": { "other": ["f5", "ctrl", "r"] },
+          "label": "Reload page",
+          "description": "Reloads the page in the browser. Cmd+R on macOS, F5 or Ctrl+R on Windows and Linux.",
+          "scenario": "The browser page or its toolbar has focus."
+        },
+        {
+          "id": "browser-hard-reload",
+          "keys": ["mod", "shift", "r"],
+          "label": "Hard reload page",
+          "description": "Reloads the page ignoring its cache, so every asset is fetched again.",
+          "scenario": "The browser page or its toolbar has focus."
+        },
+        {
+          "id": "browser-back",
+          "keys": ["mod", "["],
+          "platformKeys": { "other": ["alt", "arrowleft"] },
+          "label": "Back in page history",
+          "description": "Goes back in the page's own history, not in the app's. Cmd+[ on macOS, Alt+Left on Windows and Linux.",
+          "scenario": "The browser page or its toolbar has focus."
+        },
+        {
+          "id": "browser-forward",
+          "keys": ["mod", "]"],
+          "platformKeys": { "other": ["alt", "arrowright"] },
+          "label": "Forward in page history",
+          "description": "Goes forward in the page's own history, not in the app's. Cmd+] on macOS, Alt+Right on Windows and Linux.",
+          "scenario": "The browser page or its toolbar has focus."
+        },
+        {
+          "id": "browser-focus-address",
+          "keys": ["mod", "l"],
+          "label": "Focus the address bar",
+          "description": "Moves focus to the browser's address bar and selects the address already there.",
+          "scenario": "The browser page or its toolbar has focus."
+        },
+        {
+          "id": "browser-save-page",
+          "keys": ["mod", "s"],
+          "label": "Save page",
+          "description": "Saves the page to a file you choose, as one complete web page.",
+          "scenario": "The browser page or its toolbar has focus."
+        },
+        {
+          "id": "browser-zoom-in",
+          "keys": ["mod", "="],
+          "label": "Zoom page in",
+          "description": "Steps the page's zoom in.",
+          "scenario": "The browser page or its toolbar has focus."
+        },
+        {
+          "id": "browser-zoom-out",
+          "keys": ["mod", "-"],
+          "label": "Zoom page out",
+          "description": "Steps the page's zoom out.",
+          "scenario": "The browser page or its toolbar has focus."
+        },
+        {
+          "id": "browser-zoom-reset",
+          "keys": ["mod", "0"],
+          "label": "Reset page zoom",
+          "description": "Returns the page to its default zoom level.",
+          "scenario": "The browser page or its toolbar has focus."
+        },
+        {
+          "id": "browser-devtools",
+          "keys": ["mod", "alt", "i"],
+          "platformKeys": { "other": ["ctrl", "shift", "i", "f12"] },
+          "label": "Toggle page DevTools",
+          "description": "Opens or closes DevTools for the page in this browser.",
+          "scenario": "The browser page or its toolbar has focus."
+        },
+        {
+          "id": "browser-close-tab",
+          "keys": ["mod", "w"],
+          "label": "Close browser tab",
+          "description": "Closes the browser tab that has focus. The app's close-the-active-surface chord owns this key everywhere else.",
+          "scenario": "The browser page or its toolbar has focus."
+        },
+        {
+          "id": "browser-new-tab",
+          "keys": ["mod", "t"],
+          "label": "New browser tab",
+          "description": "Opens a new blank browser tab for the current thread.",
+          "scenario": "The browser page or its toolbar has focus."
         }
       ]
     },

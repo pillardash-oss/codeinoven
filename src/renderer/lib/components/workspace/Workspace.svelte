@@ -30,6 +30,7 @@
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
@@ -49,7 +50,7 @@
   import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
   import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
-  import { groupRunsByTask } from '../assistant/assistant-view'
+  import { groupRunsByRoutine, groupRunsByTask } from '../assistant/assistant-view'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
@@ -680,6 +681,23 @@
   let coordinator = $derived(
     coordinatorDockState.forThread(selectedThread?.projectId, activeThreadRowId(selectedThread))
   )
+
+  /**
+   * Keep the coordinator in step with the on-screen thread.
+   *
+   * A session belongs to a thread and survives everything the turn that started it
+   * did, so this re-reads when the thread changes and whenever that thread sees
+   * activity: the `@cio-design` or `@cio-video` tag can arrive on any later message,
+   * and main is the one that decides from the persisted messages, so the coordinator
+   * docks the moment the tag lands rather than waiting for a reload.
+   */
+  $effect(() => {
+    const thread = selectedThread
+    if (!thread) return
+    // Read as a dependency: a new message on this thread re-runs the refresh.
+    void thread.lastActivity
+    void designCoordinatorState.refresh(thread.projectId, thread.id)
+  })
 
   /** The auditor thread of the on-screen coordinator, if one exists. Orchestration
    *  children stay out of the visible thread list but land in the scope store
@@ -1399,6 +1417,8 @@
   )
   /** Every task's runs, newest first, for the sidebar's nested rows. */
   let assistantRunsByTask = $derived(groupRunsByTask(assistantThreads))
+  /** Every routine's runs, newest first, for the sidebar's sibling run rows. */
+  let assistantRunsByRoutine = $derived(groupRunsByRoutine(assistantThreads))
   /** Every run thread, for the header search's Runs results. */
   let assistantRuns = $derived(assistantThreads.filter((thread) => thread.assistantTaskId))
   let assistantRoutineList = $derived(assistantRoutines.routines)
@@ -1516,6 +1536,15 @@
    *  or history   or one the harness just started working on   must be added
    *  on first sighting instead of silently dropped. */
   function upsertThreadInList(thread: Thread): void {
+    // Orchestration children (Assignment workers and auditors) are internals:
+    // their activity rolls up onto the Sr. Engineer's row, so they never get a
+    // sidebar row of their own. This guard lives here, not only at the call
+    // sites, because the sidebar list is exactly the user-facing surface a
+    // child must never enter   an unguarded ingestion (for example restoring
+    // the last-open thread when the user had a worker open) previously inserted
+    // one, and every later `thread:updated` for it was then skipped by the same
+    // predicate, freezing that row on the stale snapshot it was restored with.
+    if (isOrchestrationChildThread(thread)) return
     const index = allThreads.findIndex((candidate) => candidate.id === thread.id)
     if (index < 0) {
       allThreads = [thread, ...allThreads]
@@ -1720,6 +1749,24 @@
         return
       }
       if (contextSidebarState.openBrowser(url) === null) void invoke('shell:openExternal', url)
+    })
+  })
+
+  $effect(() => {
+    return subscribe('browser:panelShortcut', (tabId, action) => {
+      // Focusing the address bar is the panel's own: it owns the input, and it
+      // is the surface (sidebar or full screen) that decides whether it shows it.
+      if (action === 'focus-address') return
+      const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
+      if (!tab || tab.kind !== 'browser') return
+      if (action === 'close-tab') {
+        closeContextTab(tabId)
+        return
+      }
+      // A new tab opens in the container the focused tab belongs to, so a key
+      // pressed in a thread's browser can never open a tab the strip is not
+      // showing.
+      contextSidebarState.openBrowserForContext('', tab.projectId, tab.threadId, undefined, true)
     })
   })
 
@@ -3639,6 +3686,7 @@
         routines={assistantRoutineList}
         tasks={assistantTasks}
         runsByTask={assistantRunsByTask}
+        runsByRoutine={assistantRunsByRoutine}
         selectedThreadId={activeThreadRowId(selectedThread)}
         {navigate}
         onOpenTask={openAssistantTask}

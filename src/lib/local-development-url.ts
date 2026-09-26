@@ -76,6 +76,22 @@ export function isBlockedFetchHost(value: string | URL): boolean {
 }
 
 /**
+ * The origin of a URL, or null when it cannot be parsed.
+ *
+ * An origin and not a URL, because that is the unit a preview identity is built
+ * from: the server is reached at `http://127.0.0.1:<port>/` and any path under it
+ * is the same page, so comparing whole URLs would call two spellings of one page
+ * two different pages.
+ */
+export function originOf(value: string): string | null {
+  try {
+    return new URL(value).origin
+  } catch {
+    return null
+  }
+}
+
+/**
  * Whether a page URL belongs to one preview origin.
  *
  * This is how the tab a preview server is feeding gets found: the server knows

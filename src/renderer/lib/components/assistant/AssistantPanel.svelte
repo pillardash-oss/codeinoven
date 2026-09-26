@@ -996,6 +996,10 @@
 
               {#if editingId === section.id}
                 <div class="border-t border-border p-2">
+                  <!-- The editor grows with its content (no `max-h` cap) so a long
+                       section keeps the same tall box the read view showed instead
+                       of collapsing into a short scroll pane on edit. The panel's
+                       content already scrolls, so an overlong body is still safe. -->
                   <RichMarkdownEditor
                     id="assistant-section-{section.id}"
                     value={editDraft}
@@ -1003,7 +1007,9 @@
                     placeholder="Write this section in Markdown…"
                     ariaLabel="Edit {section.title}"
                     autofocus
+                    onSubmit={() => void saveSection(section.id)}
                     containerClass="rounded-md border border-border bg-surface"
+                    class="min-h-10 w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
                   />
                   <div class="mt-1.5 flex justify-end gap-1.5">
                     <button

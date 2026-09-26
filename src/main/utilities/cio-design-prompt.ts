@@ -1,4 +1,4 @@
-import { isQuotedMentionPosition } from '../../lib/mention-context'
+import { CIO_DESIGN_TAG, isCioDesignRequest, type DesignSessionMode } from '../../lib/session-tags'
 
 /**
  * The explicit design-session tag.
@@ -17,29 +17,14 @@ import { isQuotedMentionPosition } from '../../lib/mention-context'
  * than produced in one.
  */
 
-/** Stable built-in tag that opens a design session on an explicit turn. */
-export const CIO_DESIGN_TAG = '@cio-design'
-
-const CIO_DESIGN_TAG_PATTERN = /(^|\s)@cio-design(?=\s|$|[.,:;!?])/giu
-
 /**
- * Whether this text opens a design session.
- *
- * A tag inside a quote or a blockquote is a mention of the tag rather than an
- * invocation of it, which is what keeps documentation about `@cio-design` from
- * starting a session. Shared with the utility tag through
- * `isQuotedMentionPosition` so both tags agree on what counts as quoting.
+ * The tag, its predicate and the turn mode are shared with the renderer and with
+ * the design service, so the copy that decides whether a send opens a design
+ * session is the same code everywhere it is asked. Re-exported here because this
+ * module is where the rest of the main process already looks for them.
  */
-export function isCioDesignRequest(text: string): boolean {
-  for (const match of text.matchAll(CIO_DESIGN_TAG_PATTERN)) {
-    const mentionStart = (match.index ?? 0) + (match[1]?.length ?? 0)
-    if (!isQuotedMentionPosition(text, mentionStart)) return true
-  }
-  return false
-}
-
-/** Which design contract a turn carries: none, the first one, or a continuation. */
-export type DesignSessionMode = 'off' | 'start' | 'continue'
+export { CIO_DESIGN_TAG, isCioDesignRequest }
+export type { DesignSessionMode }
 
 /**
  * The first turn of a design session.

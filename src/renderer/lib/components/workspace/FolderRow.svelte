@@ -17,6 +17,11 @@
     onToggle: () => void
     /** Hover actions rendered on the right (e.g. new-thread button, ellipsis menu). */
     actions?: Snippet
+    /**
+     * Keep the hover actions visible and interactive without hover, for cases where a
+     * control opened from them (search popover, options menu) must stay reachable.
+     */
+    actionsPinned?: boolean
     /** Callback for drag-to-reorder; position is relative to this item. */
     onMoveProject?: (id: string, targetId: string, position: 'before' | 'after') => void
     /** Callback for right-click context menu. */
@@ -32,6 +37,7 @@
     working = false,
     onToggle,
     actions,
+    actionsPinned = false,
     onMoveProject,
     onContextMenu,
     showLocation = false
@@ -88,7 +94,7 @@
 
 <div
   class="group relative flex items-center gap-1 border-l-2 px-1.5 py-1.5 transition-colors {expanded
-    ? 'bg-elevated/70'
+    ? 'bg-elevated/70 hover:bg-elevated'
     : 'hover:bg-elevated'}"
   style={project.color
     ? `border-color: ${project.color}`
@@ -162,24 +168,33 @@
     />
   </button>
 
+  <!-- The working badge and the hover actions float over the right edge of the row
+       instead of reserving width in the flex flow, so the project name always keeps
+       the full width of the row until the actions are actually visible. The left-to-right
+       fade keeps the overlaid controls legible over a long name. -->
+  {#if working}
+    <span
+      class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
+    >
+      <StatusBadge stage="working" animated title="Agent is working" />
+    </span>
+  {/if}
+
   {#if actions}
-    <span class="relative shrink-0">
+    <span
+      class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center justify-end bg-linear-to-l from-elevated from-65% to-transparent pl-4 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 {actionsPinned
+        ? 'opacity-100'
+        : ''}"
+    >
+      <!-- Only the buttons take pointer events, so the fade never swallows a click
+           meant for the row's expand toggle underneath. -->
       <span
-        class="block opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+        class="flex items-center {actionsPinned
+          ? 'pointer-events-auto'
+          : 'pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto'}"
       >
         {@render actions()}
       </span>
-      {#if working}
-        <span
-          class="pointer-events-none absolute right-0 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center opacity-100 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
-        >
-          <StatusBadge stage="working" animated title="Agent is working" />
-        </span>
-      {/if}
-    </span>
-  {:else if working}
-    <span class="flex h-5 w-5 shrink-0 items-center justify-center">
-      <StatusBadge stage="working" animated title="Agent is working" />
     </span>
   {/if}
 </div>

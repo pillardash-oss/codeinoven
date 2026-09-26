@@ -1,6 +1,7 @@
 import { formatDateTime } from '$shared/date-time-format'
 import {
   describeRelativeTime,
+  isAssistantSetupThread,
   routineAgentsComplete,
   routineHowToComplete,
   type AgentCapabilityCatalog,
@@ -14,10 +15,7 @@ import {
   type UtilityCatalog,
   type UtilityDefinition
 } from '$shared/types'
-import {
-  normalizePlanDelivery,
-  normalizePlanPriority
-} from '$shared/routine-reporting'
+import { normalizePlanDelivery, normalizePlanPriority } from '$shared/routine-reporting'
 import {
   parseRoutinePlanJson,
   type RoutinePlan,
@@ -136,6 +134,61 @@ export function groupRunsByTask<T extends Pick<Thread, 'assistantTaskId' | 'crea
   }
   for (const runs of grouped.values()) runs.sort((a, b) => b.createdAt - a.createdAt)
   return grouped
+}
+
+/**
+ * Runs grouped by the routine they ran for, newest first inside each group. A
+ * run inherits its task's `routineId`, so a run whose task is no longer on
+ * screen (an archived Getting started thread) still groups under its routine.
+ */
+export function groupRunsByRoutine<
+  T extends Pick<Thread, 'assistantTaskId' | 'routineId' | 'createdAt'>
+>(threads: readonly T[]): Map<string, T[]> {
+  const grouped = new Map<string, T[]>()
+  for (const thread of threads) {
+    if (!thread.assistantTaskId || !thread.routineId) continue
+    const runs = grouped.get(thread.routineId)
+    if (runs) runs.push(thread)
+    else grouped.set(thread.routineId, [thread])
+  }
+  for (const runs of grouped.values()) runs.sort((a, b) => b.createdAt - a.createdAt)
+  return grouped
+}
+
+/**
+ * The runs a routine renders at its own level, beside its task rows, newest
+ * first:
+ *
+ * - the Getting started seed's runs, once the routine's how-to is saved; while
+ *   the routine is still authoring they stay nested inside it, since they are
+ *   still about setting the routine up;
+ * - any run whose task is no longer on screen, so hiding the Getting started
+ *   thread never hides the runs it produced.
+ *
+ * A run whose task renders elsewhere in the sidebar (a pinned task that left
+ * for the Pinned section) is never hoisted: it keeps nesting under that row.
+ */
+export function routineSiblingRuns<
+  T extends Pick<Thread, 'assistantTaskId' | 'routineId' | 'createdAt'>
+>(
+  runs: readonly T[],
+  setupDone: boolean,
+  renderedTaskIds: ReadonlySet<string>,
+  tasksById: ReadonlyMap<string, Pick<Thread, 'assistantGettingStarted'>>
+): T[] {
+  const hoisted = runs.filter((run) => {
+    const taskId = run.assistantTaskId
+    if (!taskId) return false
+    const parent = tasksById.get(taskId)
+    // A parent that is not on screen at all (a hidden how-to thread) has no row
+    // left to nest under, so the run rises to the routine.
+    if (!parent) return true
+    // A parent that renders elsewhere (the Pinned section) still owns it.
+    if (!renderedTaskIds.has(taskId)) return false
+    return setupDone && isAssistantSetupThread(parent)
+  })
+  hoisted.sort((a, b) => b.createdAt - a.createdAt)
+  return hoisted
 }
 
 /**

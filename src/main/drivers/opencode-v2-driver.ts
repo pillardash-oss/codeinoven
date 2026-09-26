@@ -27,6 +27,7 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import type { IsolatedSessionDriver, IsolatedSessionHandle } from './isolated-session'
+import { QuestionRequestGoneError } from './driver.interface'
 import { Logger } from '../system/logger'
 import { buildProcessEnvironment } from './cli-environment'
 import { readOpenCodeAccountUsage } from './opencode-account-usage'
@@ -46,12 +47,9 @@ import {
   startOpenCodeV2Server,
   type OpenCodeV2ServerHandle
 } from '../opencode-v2/opencode-v2-server'
+import { discoverOpenCodeV2ProviderCatalogs } from '../opencode-v2/opencode-v2-discovery'
 import { OPENCODE_COMMAND } from '../../lib/opencode-version'
-import {
-  mapOpenCodeV2Catalogs,
-  mapOpenCodeV2Commands,
-  openCodeV2ModelVariants
-} from './opencode-v2/v2-catalog'
+import { mapOpenCodeV2Commands, openCodeV2ModelVariants } from './opencode-v2/v2-catalog'
 import {
   eventSessionId,
   mapOpenCodeV2Event,
@@ -485,26 +483,73 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
    * honest answer for restart recovery: the driver's in-memory registration is
    * empty after an app restart even though the surviving server may still be
    * running the pre-restart turn.
+   *
+   * The probe has to ask the process that owns the session. A turn carrying
+   * utilities runs on its own per-turn `serve` process, and an auxiliary session
+   * on its own disposable one; both are invisible to the shared host, whose
+   * running map then reports the session as `idle`. The engine's silence
+   * watchdog trusts that answer and fails a turn that is demonstrably alive.
+   *
+   * A probe answers a question, it never starts work: a server that is not
+   * already running is never spawned here. `ensureServer` would start a pooled
+   * host for the project path, register it app-wide, and then have that fresh
+   * process report `idle` about a session it has never seen, leaving a task
+   * manager row labelled `Shared server` with no thread for the price. With no
+   * server to ask, the driver's own active-session registration is the answer.
    */
   async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
-    let handle: ServerHandle
-    try {
-      handle = await this.ensureServer(projectPath)
-    } catch {
-      return false
-    }
+    const handle = this.sessionServer(sessionId) ?? this.pooledServer(projectPath)
+    if (!handle) return this.activeSessions.has(sessionId)
     try {
       const response = await handle.client.json<{ data?: Record<string, unknown> }>(
         '/api/session/active'
       )
       return recordValue(response?.data)?.[sessionId] !== undefined
     } catch {
-      return false
+      // An unreachable server proves nothing about the turn, so fall back to
+      // what this driver already knows rather than reporting a dead session.
+      return this.activeSessions.has(sessionId)
     }
+  }
+
+  /** The pooled host already serving a project path, without starting one. */
+  private pooledServer(projectPath: string): ServerHandle | null {
+    return this.server ? this.scopedHandle(this.server, projectPath) : null
   }
 
   hasActiveTurn(sessionId: string): boolean {
     return this.activeSessions.has(sessionId)
+  }
+
+  /** The spawned server that owns a session's agent loop, if one is live. */
+  private sessionServer(sessionId: string): ServerHandle | null {
+    return this.turnServers.get(sessionId) ?? this.isolatedServers.get(sessionId) ?? null
+  }
+
+  /**
+   * Translate a form call the owning server can no longer honour into the error
+   * the chat engine reconciles stale cards with.
+   *
+   * A form lives only in the memory of the `serve` process that created it, so a
+   * turn that ended (or was aborted) takes the form with it while the card stays
+   * on screen. V2 answers such a call with `FormNotFoundError` (404) or, once a
+   * form was already settled or cancelled, `FormAlreadySettledError` (409); both
+   * keep their `_tag` in the parsed body. Surfacing either as a raw driver error
+   * leaves the user with a card that can neither be answered nor dismissed, so
+   * they become `QuestionRequestGoneError`: the engine then closes the card and
+   * resumes the session with the user's decision.
+   *
+   * Only a payload that identifies a form counts. A bare 404 (an unknown route
+   * on a mismatched server build) stays a real error, exactly as the V1
+   * classifier keeps it, so a version mismatch can never swallow an answer.
+   */
+  private goneFormError(sessionId: string, requestId: string, error: unknown): Error | null {
+    if (!(error instanceof OpenCodeV2RequestError)) return null
+    const formGone =
+      error.tag === 'FormNotFoundError' ||
+      error.tag === 'FormAlreadySettledError' ||
+      /form not found/iu.test(error.message)
+    return formGone ? new QuestionRequestGoneError(sessionId, requestId, this.name) : null
   }
 
   async loadMessages(
@@ -650,27 +695,37 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     requestId: string,
     answers: string[][]
   ): Promise<void> {
-    const handle = this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
+    const handle = this.sessionServer(sessionId) ?? (await this.ensureServer(projectPath))
     const sessionPath = `/api/session/${encodeURIComponent(sessionId)}`
-    // V2 types every answer against its field, so the form's own definition has
-    // to be read back before the reply can be expressed in the shape it wants.
-    const detail = await handle.client.json(`${sessionPath}/form/${encodeURIComponent(requestId)}`)
-    const form = recordValue(recordValue(detail)?.['data']) ?? recordValue(detail)
-    await handle.client.json(`${sessionPath}/form/${encodeURIComponent(requestId)}/reply`, {
-      method: 'POST',
-      body: buildOpenCodeV2FormReply(form, answers)
-    })
+    try {
+      // V2 types every answer against its field, so the form's own definition has
+      // to be read back before the reply can be expressed in the shape it wants.
+      const detail = await handle.client.json(
+        `${sessionPath}/form/${encodeURIComponent(requestId)}`
+      )
+      const form = recordValue(recordValue(detail)?.['data']) ?? recordValue(detail)
+      await handle.client.json(`${sessionPath}/form/${encodeURIComponent(requestId)}/reply`, {
+        method: 'POST',
+        body: buildOpenCodeV2FormReply(form, answers)
+      })
+    } catch (error) {
+      throw this.goneFormError(sessionId, requestId, error) ?? error
+    }
     this.pendingRequests.delete(requestId)
   }
 
   async rejectQuestion(projectPath: string, sessionId: string, requestId: string): Promise<void> {
-    const handle = this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
-    // V2 has no reject value: cancelling the form is what dismisses a question,
-    // and the waiting tool then fails with "The user dismissed this question".
-    await handle.client.json(
-      `/api/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(requestId)}`,
-      { method: 'DELETE' }
-    )
+    const handle = this.sessionServer(sessionId) ?? (await this.ensureServer(projectPath))
+    try {
+      // V2 has no reject value: cancelling the form is what dismisses a question,
+      // and the waiting tool then fails with "The user dismissed this question".
+      await handle.client.json(
+        `/api/session/${encodeURIComponent(sessionId)}/form/${encodeURIComponent(requestId)}`,
+        { method: 'DELETE' }
+      )
+    } catch (error) {
+      throw this.goneFormError(sessionId, requestId, error) ?? error
+    }
     this.pendingRequests.delete(requestId)
   }
 
@@ -704,8 +759,11 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   }
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
-    const handle = await this.ensureServer(projectPath)
-    const catalogs = await this.readCatalogs(handle, projectPath)
+    const catalogs = await discoverOpenCodeV2ProviderCatalogs({
+      command: this.command,
+      cwd: projectPath,
+      env: this.buildEnv()
+    })
     if (!this.baseUrlProviders) return catalogs
     const custom = await this.baseUrlProviders.listEnabled(this.id)
     if (custom.length === 0) return catalogs
@@ -733,33 +791,6 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       })
     }
     return merged
-  }
-
-  /**
-   * Read the server's catalog, waiting out its asynchronous boot.
-   *
-   * Only a handle that was just spawned can be mid-boot, so the wait is bounded
-   * by the handle's own age: a warm server answers with the first read, and an
-   * empty catalog on a long-lived server is reported as empty instead of being
-   * polled for a value that will never arrive.
-   */
-  private async readCatalogs(
-    handle: ServerHandle,
-    projectPath: string
-  ): Promise<ProviderCatalog[]> {
-    const query = handle.client.locationQuery(projectPath)
-    const settleBy = handle.startedAt + CATALOG_SETTLE_TIMEOUT_MS
-    for (;;) {
-      const [models, providers] = await Promise.all([
-        handle.client.json(`/api/model?${query}`, { timeoutMs: CATALOG_REQUEST_TIMEOUT_MS }),
-        handle.client
-          .json(`/api/provider?${query}`, { timeoutMs: CATALOG_REQUEST_TIMEOUT_MS })
-          .catch(() => null)
-      ])
-      const catalogs = mapOpenCodeV2Catalogs(models, providers)
-      if (catalogs.length > 0 || Date.now() >= settleBy) return catalogs
-      await new Promise((resolve) => setTimeout(resolve, CATALOG_POLL_INTERVAL_MS))
-    }
   }
 
   /**

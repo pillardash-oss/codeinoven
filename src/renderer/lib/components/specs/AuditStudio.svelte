@@ -36,7 +36,7 @@
     StudioAnnotationOverlay,
     clampPendingPosition
   } from './studio-annotation-overlay.svelte'
-  import { offsetsForQuote as offsetsForQuoteIn, offsetsForRange } from './studio-annotation-anchors'
+  import { offsetsForQuote as offsetsForQuoteIn, offsetsForRange } from '$lib/selection-anchors'
   import { onDestroy, onMount, tick } from 'svelte'
 
   type CallbackResult = void | Promise<void>

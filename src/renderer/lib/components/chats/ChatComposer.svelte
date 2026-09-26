@@ -24,6 +24,7 @@
   import ChatComposerAttachmentStrip from './ChatComposerAttachmentStrip.svelte'
   import ChatComposerDropZone from './ChatComposerDropZone.svelte'
   import ChatComposerImageGate from './ChatComposerImageGate.svelte'
+  import ExpertCard from './ExpertCard.svelte'
   import ChatComposerInferencePicker from './ChatComposerInferencePicker.svelte'
   import ChatComposerPermissionPicker from './ChatComposerPermissionPicker.svelte'
   import ChatComposerPlusMenu from './ChatComposerPlusMenu.svelte'
@@ -71,6 +72,12 @@
   import { getVendorIconSvg } from '$lib/vendor-icons/registry'
   import ComposerShoe, { type ComposerScopeShoe } from './ComposerShoe.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { sessionTagKind } from '$shared/session-tags'
+  import { expertSessionFor, shouldOfferExpertCard, type ExpertSummary } from '$shared/experts'
+  import { mediaProviderLabel } from '$shared/media-generation'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
+  import type { ExpertDecisionInput, ThreadExpertState } from '$shared/ipc-contract'
   import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../speech/editor-target'
   import type { ActionDefinition, ActionSelection } from '$lib/actions'
   import type { RichInlineBadge } from '../shared/rich-markdown'
@@ -460,6 +467,15 @@
   let gateVisionSelection = $state<AgentModelSelection | null>(null)
   let gateDonotAsk = $state(false)
   let gateDirect = $state<boolean | undefined>(undefined)
+  /**
+   * Expert gate state: a design or video session the user has not answered for
+   * is held once, before the message goes, so the card can ask.
+   */
+  let expertGateOpen = $state(false)
+  let expertGateState = $state<ThreadExpertState | null>(null)
+  let expertGateSession = $state<'design' | 'video'>('design')
+  let expertGateDirect = $state<boolean | undefined>(undefined)
+  let expertWarming = $state(false)
   // svelte-ignore state_referenced_locally
   const composerEditorId = `chat-composer-${projectId ?? 'no-project'}-${threadId ?? 'none'}`
   /** macOS shows ⌘; Windows/Linux show Ctrl   matches the global send shortcut. */
@@ -813,6 +829,110 @@
   }
 
   /**
+   * Read the thread's experts and its recorded answer.
+   *
+   * Null on any failure: the card is an offer, and a read that fails must let the
+   * message go rather than hold it. The read happens on a user send, not in a
+   * render loop, so it costs one indexed lookup and one small config read.
+   */
+  async function readExpertState(): Promise<ThreadExpertState | null> {
+    if (!projectId || !threadId) return null
+    try {
+      return await invoke('experts:state', projectId, threadId)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Hold this send for the expert card, or let it go.
+   *
+   * The card has one question, scoped to a session: may this design or video
+   * session hand its craft work to the models the user staffed. It is asked on
+   * the send that opens a session and on later sends until the thread answers,
+   * and it comes back only when the expert list itself changed. Everything else
+   * sends straight through.
+   */
+  async function offerExpertCardOrSend(msg: string, direct?: boolean): Promise<void> {
+    const state = await readExpertState()
+    const session = expertSessionFor(sessionTagKind(msg), state?.session ?? null)
+    if (
+      !state ||
+      !shouldOfferExpertCard({
+        session,
+        expertCount: state.experts.length,
+        decision: state.decision,
+        signature: state.signature
+      })
+    ) {
+      performSend(direct)
+      return
+    }
+    expertGateState = state
+    expertGateSession = session === 'video' ? 'video' : 'design'
+    expertGateDirect = direct
+    expertGateOpen = true
+    void warmSession()
+  }
+
+  /**
+   * Start the harness while the card is on screen.
+   *
+   * The send is held for as long as the user reads the card, so the spawn they
+   * would otherwise wait for happens behind it. Fire and forget: a warm-up that
+   * fails changes nothing about the send that follows.
+   */
+  async function warmSession(): Promise<void> {
+    if (!projectId || !threadId) return
+    expertWarming = true
+    try {
+      await invoke('agent:warmSession', projectId, threadId)
+    } catch {
+      // A warm-up is an optimization; its failure must not surface.
+    } finally {
+      expertWarming = false
+    }
+  }
+
+  /** Record the card's answer, then send the message it was holding. */
+  async function decideExperts(choice: 'all' | 'off', silent: boolean): Promise<void> {
+    const direct = expertGateDirect
+    expertGateOpen = false
+    const input: ExpertDecisionInput = { choice, silent }
+    if (projectId && threadId) {
+      try {
+        expertGateState = await invoke('experts:decide', projectId, threadId, input)
+      } catch {
+        // The decision is remembered for the next send; it must not block this one.
+      }
+    }
+    focusComposerAtSavedCaret()
+    performSend(direct)
+  }
+
+  /**
+   * The provider and model an expert runs on, named from the composer's own
+   * catalog so a row reads as one of the models the user can see, not as an id.
+   */
+  function expertModelLabel(expert: ExpertSummary): string {
+    // A media craft names a generation model rather than a harness model, and
+    // there is no catalog to resolve that against, so the provider's own name is
+    // the whole label.
+    if (expert.mediaModel) {
+      const providerId = appConfigState.mediaGeneration?.providerId
+      return `${providerId ? mediaProviderLabel(providerId) : 'Generation'} ${expert.mediaModel}`
+    }
+    const selection = expert.selection
+    if (!selection) return expert.label
+    const provider = resolvedProviders.find(
+      (candidate) =>
+        candidate.harnessId === selection.harnessId && candidate.id === selection.providerId
+    )
+    const model = provider?.models.find((candidate) => candidate.id === selection.modelId)
+    return `${provider?.name ?? selection.providerId} ${model?.name ?? selection.modelId}`
+  }
+
+  /**
    * Thinking presets declared by the selected model. While the catalog is cold
    * (model unknown yet) fall back to the standard presets so the thread's stored
    * `thinkingLevel` snapshot renders immediately; once the model resolves, its
@@ -1053,6 +1173,13 @@
     // We still clear the input so the user can type their next message.
     if (shouldInterceptImageGate()) {
       openImageDescriptorGate(direct)
+      return
+    }
+    // A design or video session holds its send once, so the expert card can ask.
+    // Reading the answer is one call on the user's own action, and the common
+    // case (a thread that already answered, or a plain message) sends through.
+    if (projectId && threadId) {
+      void offerExpertCardOrSend(msg, direct)
       return
     }
     performSend(direct)
@@ -1503,6 +1630,19 @@
       {onReorderFavorite}
       onCancel={cancelImageDescriptorGate}
       onConfirm={confirmImageDescriptorGate}
+    />
+  {/if}
+
+  {#if expertGateOpen && expertGateState}
+    <ExpertCard
+      expertState={expertGateState}
+      session={expertGateSession}
+      modelLabel={expertModelLabel}
+      warming={expertWarming}
+      onUse={() => void decideExperts('all', false)}
+      onDisable={() => void decideExperts('off', false)}
+      onNeverAsk={() => void decideExperts('off', true)}
+      onOpenSettings={() => workspaceState.navigateToSettings?.('design')}
     />
   {/if}
 
