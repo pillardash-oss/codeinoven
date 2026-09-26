@@ -172,7 +172,7 @@ export async function relocateWorkRoots(input: {
       // folders still are, so the board opens the work rather than a path that
       // was never created.
       if (moved > 0) {
-        report.rebased += new DesignRepo(input.database).rebaseRoot({
+        report.rebased += await new DesignRepo(input.database).rebaseRoot({
           projectId: project.id,
           from: plan.from,
           to: plan.to

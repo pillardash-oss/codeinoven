@@ -118,12 +118,20 @@ export class DesignRepo {
    * exists, for every thread whose work had moved correctly on disk. Only rows under
    * the old root are touched, and the entry stays as it was: it is spelled inside the
    * folder, and the folder is what moved.
+   *
+   * The read runs on the database worker: this is reached from the save path that
+   * moves a work root, which is an interaction path, so it must not touch SQLite
+   * on the Electron main thread (see `docs/APP-BIBLE.md`). The writes stay on the
+   * primary connection, where a bounded UPDATE is the tail of the same action.
    */
-  rebaseRoot(input: { projectId: string; from: string; to: string }): number {
-    const rows = this.db.all<{ thread_id: string; directory: string }>(
+  async rebaseRoot(input: { projectId: string; from: string; to: string }): Promise<number> {
+    const result = await this.db.queryViaWorker(
       'SELECT thread_id, directory FROM thread_designs WHERE project_id = ?',
-      input.projectId
+      [input.projectId],
+      0
     )
+    if (!result.ok) return 0
+    const rows = result.rows as unknown as Array<{ thread_id: string; directory: string }>
     let updated = 0
     for (const row of rows) {
       if (row.directory !== input.from && !row.directory.startsWith(`${input.from}/`)) continue
