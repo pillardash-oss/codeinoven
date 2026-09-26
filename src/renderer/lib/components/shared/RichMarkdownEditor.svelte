@@ -5,6 +5,7 @@
     applyCodeFenceOnEnter,
     applyEmptyPairCodeRule,
     applyMarkdownInputRule,
+    caretBlock,
     exitEmptyListItemOnEnter,
     formatRichSelection,
     insertMarkdownLineBreak,
@@ -17,7 +18,7 @@
     syncCodeBlockLanguages,
     unlistListItem
   } from './rich-markdown'
-  import type { RichInlineBadge } from './rich-markdown'
+  import type { MarkdownRuleKind, RichInlineBadge } from './rich-markdown'
   import {
     demoteSmartPunctuation,
     flattenWithNewlines,
@@ -99,6 +100,7 @@
       replaceEditorContent(entry.markdown, entry.html)
       restoreSelection(entry.selection)
       publishCaretText()
+      holdRevertedRule(entry.revertedRule)
     },
     getValue: () => value,
     setValue: (next) => {
@@ -113,6 +115,31 @@
    *  modal) so focus-return flows can restore the caret exactly where the user
    *  left it instead of jumping to the end. */
   let lastSelectionBookmark: SelectionBookmark | null = null
+
+  /** The block whose last undo reverted an auto-conversion, plus the rule the
+   *  user already turned down there. Word-processor behaviour: after undoing
+   *  the conversion, typing on in that same paragraph must not convert again.
+   *  Dropped as soon as the caret works in another block. */
+  let revertedRuleHold: { block: HTMLElement; kind: MarkdownRuleKind } | null = null
+
+  function isRuleSuppressed(block: HTMLElement | null, kind: MarkdownRuleKind): boolean {
+    const hold = revertedRuleHold
+    if (!block || !hold) return false
+    if (hold.block !== block || !hold.block.isConnected) {
+      revertedRuleHold = null
+      return false
+    }
+    return hold.kind === kind
+  }
+
+  function holdRevertedRule(kind: MarkdownRuleKind | undefined): void {
+    if (!kind || !editor) {
+      revertedRuleHold = null
+      return
+    }
+    const block = caretBlock(editor)
+    revertedRuleHold = block ? { block, kind } : null
+  }
 
   function captureSelection(): SelectionBookmark | null {
     if (!editor) return null
@@ -319,10 +346,21 @@
   function handleInput(event: Event): void {
     if (!editor) return
     const inputEvent = event as InputEvent
-    applyMarkdownInputRule(editor)
+    // Two snapshots: `pending` is the state before the browser inserted this
+    // input (the plain undo target), `typed` is the state right after it, before
+    // any input rule rewrote the DOM   the literal text the user typed, which
+    // undo restores when a rule fired.
+    const pending = history.consumePending()
+    const typed = history.captureEntry()
+    const revertedRule = applyMarkdownInputRule(editor, { isRuleSuppressed })
     syncCodeBlockLanguages(editor)
     emitEditorValue(inputEvent.inputType.startsWith('delete'))
-    history.commit(history.consumePending(), inputEvent.inputType)
+    if (revertedRule) {
+      if (typed) typed.revertedRule = revertedRule
+      history.commit(typed, inputEvent.inputType, true)
+    } else {
+      history.commit(pending, inputEvent.inputType)
+    }
     publishCaretText()
   }
 
