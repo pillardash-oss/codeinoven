@@ -1,6 +1,7 @@
 import type {
   AdoptableWorktreeInfo,
   CreateProjectInput,
+  CustomIcon,
   DirectoryPreviewSession,
   EditorId,
   ManagedWorktreeDescriptor,
@@ -30,6 +31,8 @@ import type {
 import type { Contract } from './contract-helpers'
 
 export const invokeProjectContract = {
+  'icon-library:list': {} as Contract<[], CustomIcon[]>,
+  'icon-library:add': {} as Contract<[name: string, svg: string], CustomIcon>,
   /** Open the app-owned data directory in the operating system's file manager. */
   'storage:openDataDirectory': {} as Contract<[], boolean>,
   'project:search': {} as Contract<[query: string, limit?: number], Project[]>,

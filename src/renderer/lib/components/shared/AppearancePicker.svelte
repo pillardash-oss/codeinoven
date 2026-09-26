@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, Code, FolderOpen, X } from '@lucide/svelte'
+  import { Code, FolderOpen, X } from '@lucide/svelte'
+  import type { CustomIcon } from '$shared/types'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import {
     PROJECT_SVG_ICONS,
@@ -14,12 +15,14 @@
     color?: string
     iconType?: string
     customSvg?: string
+    customIcons?: CustomIcon[]
     allowCustomSvg?: boolean
     resetPlacement?: 'picker' | 'footer'
     fallbackIconUrl?: string | null
     onColorChange: (color: string | undefined) => void
     onIconTypeChange: (iconType: string | undefined) => void
     onCustomSvgChange?: (svg: string | undefined) => void
+    onAddCustomIcon?: (name: string, svg: string) => Promise<void>
     onUploadImage?: () => void
     onReset: () => void
   }
@@ -29,12 +32,14 @@
     color,
     iconType,
     customSvg,
+    customIcons = [],
     allowCustomSvg = false,
     resetPlacement = 'picker',
     fallbackIconUrl = null,
     onColorChange,
     onIconTypeChange,
     onCustomSvgChange,
+    onAddCustomIcon,
     onUploadImage,
     onReset
   }: Props = $props()
@@ -44,6 +49,8 @@
   let pastedSvg = $state('')
   let customSvgError = $state<string | null>(null)
   let showSvgInput = $state(false)
+  let customIconName = $state('')
+  let saveIconError = $state<string | null>(null)
 
   function applyCustomSvg(): void {
     try {
@@ -129,6 +136,29 @@
           />
         </button>
       {/each}
+      {#each customIcons as customIcon (customIcon.id)}
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center rounded-md border transition-colors {customSvg ===
+          customIcon.svg
+            ? 'border-foreground bg-elevated'
+            : 'border-border'}"
+          title={customIcon.name}
+          aria-label={customIcon.name}
+          aria-pressed={customSvg === customIcon.svg}
+          onclick={() => {
+            onCustomSvgChange?.(customIcon.svg)
+            onIconTypeChange(undefined)
+          }}
+        >
+          <img
+            src={getCustomSvgDataUrl(customIcon.svg, previewColor)}
+            alt=""
+            class="h-4 w-4 object-contain"
+            draggable="false"
+          />
+        </button>
+      {/each}
     </div>
   </div>
 
@@ -176,30 +206,45 @@
             {customSvgError}
           </p>
         {/if}
+        {#if saveIconError}<p class="text-xs text-danger" role="alert">{saveIconError}</p>{/if}
         <div class="flex items-center justify-between gap-2">
-          {#if customSvg}
+          {#if onAddCustomIcon}
+            <input
+              class="min-w-0 flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs text-foreground"
+              bind:value={customIconName}
+              placeholder="Name this icon"
+              aria-label="Custom icon name"
+            />
+          {:else}<span></span>{/if}
+          {#if onAddCustomIcon}
             <button
               type="button"
-              class="rounded-lg px-2 py-1 text-xs text-muted hover:bg-elevated"
-              title="Remove custom SVG icon"
-              aria-label="Remove custom SVG icon"
-              onclick={() => {
-                onCustomSvgChange?.(undefined)
-                pastedSvg = ''
-              }}
+              class="rounded-lg border px-2.5 py-1.5 text-xs text-muted hover:bg-elevated hover:text-foreground"
+              title="Save SVG to the shared icon library"
+              onclick={async () => {
+                try {
+                  if (!customIconName.trim()) throw new Error('Enter a name for this icon')
+                  const normalized = sanitizeCustomSvg(pastedSvg)
+                  await onAddCustomIcon?.(customIconName, normalized)
+                  onCustomSvgChange?.(normalized)
+                  onIconTypeChange(undefined)
+                  customIconName = ''
+                  customSvgError = null
+                  saveIconError = null
+                  showSvgInput = false
+                } catch (error) {
+                  saveIconError = error instanceof Error ? error.message : 'Could not save icon'
+                }
+              }}>Save to library</button
             >
-              <X size={12} />
-            </button>
-          {:else}<span></span>{/if}
-          <button
-            type="button"
-            class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title="Apply pasted SVG icon"
-            onclick={applyCustomSvg}
-          >
-            <Check size={12} />
-            Use SVG
-          </button>
+          {:else}
+            <button
+              type="button"
+              class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              title="Apply pasted SVG icon"
+              onclick={applyCustomSvg}>Use SVG</button
+            >
+          {/if}
         </div>
       </div>
     {/if}

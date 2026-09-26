@@ -35,6 +35,14 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- ─── Shared custom icon library ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS custom_icons (
+  id         TEXT PRIMARY KEY NOT NULL,
+  name       TEXT NOT NULL,
+  svg        TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 -- ─── Projects ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS projects (
   id                 TEXT PRIMARY KEY NOT NULL,

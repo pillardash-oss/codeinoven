@@ -4,7 +4,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import type { Routine } from '$shared/types'
+  import type { CustomIcon, Routine } from '$shared/types'
 
   interface Props {
     /** Routine being edited; null closes the modal. */
@@ -15,6 +15,17 @@
   }
 
   let { routine, onClose, onSaved }: Props = $props()
+  let customIcons = $state<CustomIcon[]>([])
+
+  $effect(() => {
+    if (!routine) return
+    void invoke('icon-library:list').then((icons) => (customIcons = icons))
+  })
+
+  async function addCustomIcon(name: string, svg: string): Promise<void> {
+    const icon = await invoke('icon-library:add', name, svg)
+    customIcons = [...customIcons, icon]
+  }
 
   let name = $state('')
   let description = $state('')
@@ -124,6 +135,8 @@
         {color}
         {iconType}
         {customSvg}
+        {customIcons}
+        onAddCustomIcon={addCustomIcon}
         allowCustomSvg
         resetPlacement="footer"
         fallbackIconUrl={customSvgSelected ? null : previewIconUrl}

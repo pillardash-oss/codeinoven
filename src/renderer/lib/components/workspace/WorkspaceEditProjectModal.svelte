@@ -2,6 +2,8 @@
   import type { SvelteMap } from 'svelte/reactivity'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import { invoke } from '$lib/ipc.svelte'
+  import type { CustomIcon } from '$shared/types'
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
 
   interface Props {
@@ -11,6 +13,17 @@
   }
 
   let { dialogs, projectIcons }: Props = $props()
+  let customIcons = $state<CustomIcon[]>([])
+
+  $effect(() => {
+    if (!dialogs.showEditModal) return
+    void invoke('icon-library:list').then((icons) => (customIcons = icons))
+  })
+
+  async function addCustomIcon(name: string, svg: string): Promise<void> {
+    const icon = await invoke('icon-library:add', name, svg)
+    customIcons = [...customIcons, icon]
+  }
 
   let hasAppearance = $derived(
     Boolean(
@@ -50,6 +63,8 @@
           color={dialogs.editProjectColor}
           iconType={dialogs.editProjectIconType}
           customSvg={dialogs.editProjectCustomSvg}
+          {customIcons}
+          onAddCustomIcon={addCustomIcon}
           allowCustomSvg
           resetPlacement="footer"
           fallbackIconUrl={dialogs.editProjectCustomSvgSelected

@@ -43,6 +43,7 @@ import type {
 } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
 import { sanitizeCustomSvg } from '../../../lib/custom-svg'
+import { randomUUID } from 'node:crypto'
 
 /** Upper bound on one in-app "open these paths" request (a drag selection). */
 const MAX_OPEN_PATHS = 64
@@ -97,6 +98,29 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     vault,
     gitCredentialRef
   } = ctx
+
+  ipcMain.handle('icon-library:list', () =>
+    database
+      .all<{ id: string; name: string; svg: string; created_at: number }>(
+        'SELECT id, name, svg, created_at FROM custom_icons ORDER BY created_at, id'
+      )
+      .map((icon) => ({ id: icon.id, name: icon.name, svg: icon.svg, createdAt: icon.created_at }))
+  )
+  ipcMain.handle('icon-library:add', (_, rawName: unknown, rawSvg: unknown) => {
+    const name = requireString(rawName, 'Icon name').trim().slice(0, 80)
+    if (!name) throw new TypeError('Icon name is required')
+    const svg = sanitizeCustomSvg(requireString(rawSvg, 'Custom SVG'))
+    const id = randomUUID()
+    const createdAt = Date.now()
+    database.run(
+      'INSERT INTO custom_icons(id, name, svg, created_at) VALUES(?, ?, ?, ?)',
+      id,
+      name,
+      svg,
+      createdAt
+    )
+    return { id, name, svg, createdAt }
+  })
 
   const worktreeProgressRelay =
     (event: IpcMainInvokeEvent, target: ScopeTarget) =>
