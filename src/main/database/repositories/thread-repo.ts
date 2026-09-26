@@ -1,4 +1,5 @@
 import type { Database } from '../database'
+import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import {
   sanitizeThreadSettings,
   type AgentRateLimitWindow,
@@ -26,6 +27,7 @@ interface ThreadRow {
   read: number
   branch: string | null
   feature_slug: string | null
+  authored_work_kind: string | null
   scope_bucket_id: string | null
   settings: string | null
   context_usage: string | null
@@ -148,6 +150,7 @@ function rowToThread(row: ThreadRow): Thread {
     read: row.read === 1,
     branch: row.branch ?? undefined,
     featureSlug: row.feature_slug ?? undefined,
+    authoredWorkKind: (row.authored_work_kind as Thread['authoredWorkKind']) ?? undefined,
     scopeBucketId: row.scope_bucket_id ?? undefined,
     settings: row.settings
       ? (sanitizeThreadSettings(JSON.parse(row.settings)) as ThreadSettings)
@@ -318,7 +321,7 @@ interface MessageMatchRow {
 const THREAD_UPSERT_SQL = `INSERT INTO threads(
   id, project_id, provider_id, title, title_source, status,
   pinned, pinned_at, sort_order, scope_sort_order, archived, read,
-  branch, feature_slug, scope_bucket_id, settings, context_usage,
+  branch, feature_slug, authored_work_kind, scope_bucket_id, settings, context_usage,
   session_id, session_harness_id, session_account_id, dismissed_spec_id, dismissed_spec_version,
   audit_state, loop_iteration, active_audit_id, active_audit_version,
   assignment_id, assignment_role, assignment_task_id,
@@ -329,7 +332,7 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   assistant_task_id,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -343,6 +346,7 @@ ON CONFLICT(id) DO UPDATE SET
   read=excluded.read,
   branch=excluded.branch,
   feature_slug=excluded.feature_slug,
+  authored_work_kind=excluded.authored_work_kind,
   scope_bucket_id=excluded.scope_bucket_id,
   settings=excluded.settings,
   context_usage=excluded.context_usage,
@@ -394,6 +398,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.read ? 1 : 0,
     thread.branch ?? null,
     thread.featureSlug ?? null,
+    thread.authoredWorkKind ?? null,
     thread.scopeBucketId ?? null,
     thread.settings ? JSON.stringify(thread.settings) : null,
     thread.contextUsage ? JSON.stringify(thread.contextUsage) : null,
@@ -470,6 +475,24 @@ export class ThreadRepo {
     const result = await this.db.executeViaWorker(THREAD_UPSERT_SQL, threadUpsertParams(thread))
     if (!result.ok) {
       throw new Error(result.error ?? 'Thread upsert failed')
+    }
+  }
+
+  /**
+   * Set a thread's authored-work kind off the main thread.
+   *
+   * The `IS NOT ?` guard makes a repeated write of the same kind a no-op, so a
+   * preview navigation that records the kind it already stored touches nothing.
+   * That matters because this runs on every recognized navigation, and an
+   * unconditional UPDATE would bump the WAL for an unchanged value.
+   */
+  async setAuthoredWorkKindViaWorker(id: string, kind: AuthoredWorkKind): Promise<void> {
+    const result = await this.db.executeViaWorker(
+      'UPDATE threads SET authored_work_kind = ? WHERE id = ? AND authored_work_kind IS NOT ?',
+      [kind, id, kind]
+    )
+    if (!result.ok) {
+      throw new Error(result.error ?? 'Thread authored-work kind update failed')
     }
   }
 

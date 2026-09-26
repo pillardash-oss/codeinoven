@@ -386,8 +386,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const expertSettings = new ExpertSettingsService({
     database,
     config: () => storage.getConfig(),
-    sessionKind: async (projectId, threadId) =>
-      (await designService.sessionKinds(projectId, [threadId]))[threadId] ?? null
+    sessionKind: async (_projectId, threadId) => designService.authoredWorkKindFor(threadId)
   })
   expertSettings.registerIpc()
   state.chatEngine.setExpertSettings(expertSettings)
@@ -431,8 +430,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       // `generate` is one operation on two capabilities, so which folder a file
       // lands in when the caller names none follows the thread's session. The
       // board answers the same question the same way, so the two cannot disagree.
-      sessionKind: async (projectId, threadId) =>
-        (await designService.sessionKinds(projectId, [threadId]))[threadId] ?? null
+      sessionKind: async (_projectId, threadId) => designService.authoredWorkKindFor(threadId)
     })
   )
   const { registerMediaGenerationIpc } = await import('../media/media-generation-ipc')

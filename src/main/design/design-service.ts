@@ -10,7 +10,6 @@ import type {
   DesignEntry,
   DesignOpenResult,
   DesignThumbnail,
-  ThreadDesignCurrent,
   ThreadDesignState
 } from '../../lib/ipc/design'
 import { originOf } from '../../lib/local-development-url'
@@ -18,13 +17,12 @@ import { requireLocalProjectViaWorker } from '../../lib/project-artifacts'
 import type { BrowserService } from '../browser/browser-service'
 import { NO_TAB_MARK, type BrowserTabMark } from '../browser/browser-service/browser-tab-mark'
 import type { Database } from '../database/database'
-import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
 import { DesignRepo } from '../database/repositories/design-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
+import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
-import { isCioDesignRequest, CIO_DESIGN_TAG } from '../utilities/cio-design-prompt'
-import { isCioVideoRequest, CIO_VIDEO_TAG } from '../utilities/cio-video-prompt'
+import { Logger } from '../system/logger'
 import { openVideoPreview } from '../video/video-preview-session'
 import { readCompositionManifest } from '../video/video-manifest'
 import { listProjectWorkFolders } from './design-listing'
@@ -39,8 +37,8 @@ import { currentWorkRoot, currentWorkRootReports, currentWorkRoots } from './wor
  * a video session (`@cio-video`, written into `.cio/videos/<name>/`). Three facts
  * have to survive a restart for a coordinator to be useful:
  *
- *   - that the thread is in a session (the tag, read from the persisted messages,
- *     exactly as the chat engine decides it);
+ *   - that the thread is in a session (the kind persisted on the thread row the
+ *     moment the session opens, so no message scan stands behind a row marker);
  *   - which folder the thread is working in (the `thread_designs` row, written on
  *     every preview by either capability);
  *   - what folders of that kind exist at all (a listing of the session's root).
@@ -62,13 +60,6 @@ const MAX_THUMBNAIL_WIDTH = 1_200
  * it, turning a picture into a failure.
  */
 const POSTER_SECONDS = 0
-
-/** The later of a thread's two session tags. */
-interface SessionTag {
-  kind: AuthoredWorkKind
-  /** When it was typed (ms), so a previewed folder can be weighed against it. */
-  at: number
-}
 
 /** The part of a served URL under its origin, decoded, or null when it names no file. */
 function entryWithinOrigin(url: string, origin: string): string | null {
@@ -92,23 +83,6 @@ function requireId(value: unknown, label: string): string {
   return value
 }
 
-/**
- * Ceiling on how many threads one marker read may name.
- *
- * A list of thread rows is bounded by what the sidebar draws, so this is a guard on
- * the boundary rather than a limit the app reaches: it stops a malformed or hostile
- * call from asking for the whole history in one query.
- */
-const MAX_MARKER_THREADS = 400
-
-/** Identifier-list validation for the batched marker read. */
-function requireThreadIds(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length > MAX_MARKER_THREADS) {
-    throw new TypeError('thread ids are invalid')
-  }
-  return value.map((entry) => requireId(entry, 'thread id'))
-}
-
 export interface DesignServiceOptions {
   database: Database
   previews: DirectoryPreviewService
@@ -128,21 +102,18 @@ interface ServedWork {
 
 export class DesignService {
   private readonly designs: DesignRepo
-  private readonly messages: AgentMessageRepo
+  private readonly threads: ThreadRepo
   /** Canonical spelling of a project's path per stored spelling, filled on first use. */
   private readonly canonicalProjects = new Map<string, string>()
 
   constructor(private readonly options: DesignServiceOptions) {
     this.designs = new DesignRepo(options.database)
-    this.messages = new AgentMessageRepo(options.database)
+    this.threads = new ThreadRepo(options.database)
   }
 
   registerIpc(): void {
     ipcMain.handle('design:state', async (_event, rawProjectId, rawThreadId) =>
       this.stateFor(requireId(rawProjectId, 'project id'), requireId(rawThreadId, 'thread id'))
-    )
-    ipcMain.handle('design:kinds', async (_event, rawProjectId, rawThreadIds) =>
-      this.sessionKinds(requireId(rawProjectId, 'project id'), requireThreadIds(rawThreadIds))
     )
     ipcMain.handle(
       'design:open',
@@ -200,6 +171,11 @@ export class DesignService {
     kind: AuthoredWorkKind
   }): void {
     this.designs.upsert(input)
+    // The capability previews inside a session the tag already opened, but the
+    // mirror is unconditional so the row's marker never depends on which of the
+    // two writers happened to run first. Fire-and-forget: the folder record above
+    // is the fact this method exists to persist.
+    void this.rememberThreadKind(input.threadId, input.kind)
   }
 
   /**
@@ -260,77 +236,31 @@ export class DesignService {
   }
 
   /**
-   * Which authored-work session each of these threads is in, for a list of thread rows.
+   * A thread's persisted authored-work kind, or null when it is in no session.
    *
-   * The same two facts {@link stateFor} weighs, read for many threads at once: the
-   * folder a thread last previewed and the session tags it typed. The caller draws the
-   * ids from the rows on screen, so the cost follows the list rather than the project's
-   * history, and the answer is the app's own notion of a session rather than a second
-   * one that could disagree with the coordinator board.
-   *
-   * A thread in neither is left out instead of defaulting to a design: the caller's
-   * fallback is its own evidence, and answering "design" here would put a marker on an
-   * ordinary thread.
-   *
-   * Every read runs on the database worker: a board asks about every thread it draws,
-   * and a profile of the app caught the marker read below holding the Electron main
-   * thread for 20-890 ms per call (see the main-thread SQLite rule in
-   * `docs/APP-BIBLE.md`).
+   * Read from the thread row, which is written the moment the thread enters a
+   * session (the tag at turn start, a preview into a work root). Nothing scans
+   * messages: the fact is stored when it happens and read back by id.
    */
-  async sessionKinds(
-    projectId: string,
-    threadIds: readonly string[]
-  ): Promise<Record<string, AuthoredWorkKind>> {
-    const project = await new ProjectRepo(this.options.database).getViaWorker(projectId)
-    if (!project || project.source !== 'local' || !project.path) return {}
-    const ids = [...new Set(threadIds)]
-    const kinds: Record<string, AuthoredWorkKind> = {}
-    if (ids.length === 0) return kinds
-    const folders = await this.designs.forThreadsViaWorker(projectId, ids)
-    const tags = await this.latestSessionTags(projectId, ids)
-    for (const threadId of ids) {
-      const folder = folders.get(threadId) ?? null
-      const tag = tags.get(threadId) ?? null
-      if (folder === null && tag === null) continue
-      kinds[threadId] = this.kindFor(folder, tag)
-    }
-    return kinds
+  async authoredWorkKindFor(threadId: string): Promise<AuthoredWorkKind | null> {
+    return (await this.threads.getViaWorker(threadId))?.authoredWorkKind ?? null
   }
 
   /**
-   * The later session tag of each thread, read for many threads in one query.
+   * Mirror a recorded work kind onto the thread row.
    *
-   * The same rule as {@link latestSessionTag}, applied to a batched read: video wins a
-   * same-timestamp tie so a compound invocation reads the same way every time, and
-   * otherwise the later message wins. The rows come back with only the messages whose
-   * stored parts mention a tag, so the exact detectors still decide.
+   * The row is what the sidebar draws its marker from, and what the expert card
+   * and media generation read the session from, so the folder record alone is not
+   * enough. Best-effort: the folder record has already landed, and a failed mirror
+   * must not fail the preview that triggered it. The repository guards the write,
+   * so a navigation that records the same kind churns nothing.
    */
-  private async latestSessionTags(
-    projectId: string,
-    threadIds: readonly string[]
-  ): Promise<Map<string, SessionTag>> {
-    const latest = new Map<string, SessionTag>()
-    const messages = await this.messages.loadUserMessagesMentioningViaWorker(projectId, threadIds, [
-      CIO_DESIGN_TAG,
-      CIO_VIDEO_TAG
-    ])
-    for (const message of messages) {
-      const found = latest.get(message.threadId)
-      if (
-        isCioVideoRequest(message.content) &&
-        (found === undefined || message.createdAt >= found.at)
-      ) {
-        latest.set(message.threadId, { kind: 'video', at: message.createdAt })
-        continue
-      }
-      if (
-        isCioDesignRequest(message.content) &&
-        (found === undefined || message.createdAt > found.at)
-      ) {
-        latest.set(message.threadId, { kind: 'design', at: message.createdAt })
-      }
+  private async rememberThreadKind(threadId: string, kind: AuthoredWorkKind): Promise<void> {
+    try {
+      await this.threads.setAuthoredWorkKindViaWorker(threadId, kind)
+    } catch (error) {
+      Logger.dev('Authored-work kind row update failed:', error)
     }
-    return latest
   }
 
   forgetProject(projectId: string): void {
@@ -363,15 +293,15 @@ export class DesignService {
       }
     }
     const current = await this.designs.forThreadViaWorker(threadId)
-    const tagged = await this.latestSessionTag(threadId)
-    const kind = this.kindFor(current, tagged)
+    const thread = await this.threads.getViaWorker(threadId)
+    const kind = thread?.authoredWorkKind ?? current?.kind ?? 'design'
     const root = currentWorkRoot(kind)
     const items = await this.listWorkFolders(storedProject.path, root)
     return {
       projectId,
       threadId,
       kind,
-      active: current !== null || tagged !== null,
+      active: current !== null || thread?.authoredWorkKind !== undefined,
       current,
       items,
       defaultDirectory: current?.directory ?? items[0]?.directory ?? root,
@@ -412,6 +342,7 @@ export class DesignService {
       entry: result.entry,
       kind
     })
+    await this.rememberThreadKind(threadId, kind)
     if (!result.tabId) {
       throw new Error('The work opened without a browser tab to show it in.')
     }
@@ -491,9 +422,8 @@ export class DesignService {
    * Guarded on the stored row because this runs on every navigation: a page the
    * thread already has open must not write the row again, and a folder that changed
    * must, because re-pointing the row is the whole point of having it. Writing
-   * unconditionally would also keep refreshing `updated_at`, which is what the kind
-   * is weighed against, so a folder left open in a tab would outrank a tag typed
-   * afterwards.
+   * unconditionally would also keep refreshing `updated_at`, the stamp the board
+   * reads as when the folder was last shown.
    */
   private async rememberShownFolder(input: {
     projectId: string
@@ -512,6 +442,7 @@ export class DesignService {
       return
     }
     this.designs.upsert(input)
+    await this.rememberThreadKind(input.threadId, input.kind)
   }
 
   /**
@@ -551,59 +482,20 @@ export class DesignService {
     return canonical
   }
 
-  /** Which session the thread is in, from the record and the persisted tags. */
+  /**
+   * Which session the thread is in.
+   *
+   * Read from the thread's own persisted kind, which every route into a session
+   * writes (the tag at turn start, a preview into a work root). A thread recorded
+   * before the column existed falls back to the folder record it kept, and an
+   * unknown thread is treated as a design so a folder with no session still opens
+   * on the design path.
+   */
   private async resolveKind(threadId: string): Promise<AuthoredWorkKind> {
+    const thread = await this.threads.getViaWorker(threadId)
+    if (thread?.authoredWorkKind) return thread.authoredWorkKind
     const current = await this.designs.forThreadViaWorker(threadId)
-    return this.kindFor(current, await this.latestSessionTag(threadId))
-  }
-
-  /**
-   * Which session a thread is in, from the two facts that say so.
-   *
-   * A thread can move between the sessions, so the newest evidence wins: the folder
-   * it last previewed when that folder is newer than either tag, otherwise the tag
-   * typed last. The folder is what makes the board follow the agent from a design
-   * into a composition (or back) without a reload, and the tags are what make it
-   * appear before the agent has previewed anything at all. The folder's kind is the
-   * one recorded with it, so this answer does not depend on the folder still
-   * sitting where the app expects it.
-   */
-  private kindFor(
-    current: ThreadDesignCurrent | null,
-    tagged: SessionTag | null
-  ): AuthoredWorkKind {
-    if (current && (tagged === null || current.updatedAt >= tagged.at)) return current.kind
-    return tagged?.kind ?? 'design'
-  }
-
-  /**
-   * The later of the thread's two session tags, or null when it opened neither.
-   *
-   * Read from the persisted messages rather than kept in memory, so it survives a
-   * restart and is undone by an edit or rollback that removes the tag. This is the
-   * same rule the chat engine applies when it decides a turn's session mode.
-   */
-  private async latestSessionTag(threadId: string): Promise<SessionTag | null> {
-    let latest: SessionTag | null = null
-    const { messages } = await this.messages.loadRecentUserMessagesViaWorker(threadId)
-    for (const message of messages) {
-      // One message carrying both tags is a video session: the narrower tag wins
-      // the tie, so a compound invocation reads the same way every time.
-      if (
-        isCioVideoRequest(message.content) &&
-        (latest === null || message.createdAt >= latest.at)
-      ) {
-        latest = { kind: 'video', at: message.createdAt }
-        continue
-      }
-      if (
-        isCioDesignRequest(message.content) &&
-        (latest === null || message.createdAt > latest.at)
-      ) {
-        latest = { kind: 'design', at: message.createdAt }
-      }
-    }
-    return latest
+    return current?.kind ?? 'design'
   }
 
   /**

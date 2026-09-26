@@ -44,6 +44,6 @@ describe('DesignService conversation container state', () => {
       current: null,
       items: []
     })
-    await expect(service.sessionKinds(ASSISTANT_SPACE_ID, ['routine-thread'])).resolves.toEqual({})
+    await expect(service.authoredWorkKindFor('routine-thread')).resolves.toBeNull()
   })
 })

@@ -170,6 +170,7 @@ import {
   isCioVideoRequest,
   type VideoSessionMode
 } from '../utilities/cio-video-prompt'
+import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { effectiveExperts, type EffectiveExperts } from '../../lib/experts'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
@@ -3212,6 +3213,31 @@ export class ChatEngine {
     const opened = userMessages.some((message) => isCioVideoRequest(message.content))
     if (opened) this.cioVideoThreads.set(threadId, true)
     return opened ? 'continue' : 'off'
+  }
+
+  /**
+   * Persist the authored-work session on the thread row.
+   *
+   * A thread row used to answer "is this a design or a video thread" by
+   * scanning every listed thread's persisted messages for the session tag, which
+   * read the whole `parts` column through a LIKE on every sidebar render. The
+   * thread knows the moment it enters a session, so the kind is written here and
+   * the existing `thread:updated` broadcast carries it to the row. Guarded on the
+   * current value so an unchanged kind never re-broadcasts, and best-effort: the
+   * marker is cosmetic and a failed write must never fail a turn.
+   */
+  private async rememberAuthoredWorkKind(
+    projectId: string,
+    threadId: string,
+    kind: AuthoredWorkKind,
+    current: AuthoredWorkKind | undefined
+  ): Promise<void> {
+    if (current === kind) return
+    try {
+      await this.threadManager.updateThread(projectId, threadId, { authoredWorkKind: kind })
+    } catch (error) {
+      Logger.dev('Authored-work kind persist failed:', error)
+    }
   }
 
   /**
@@ -7673,6 +7699,15 @@ export class ChatEngine {
     }
     if (isCioUtilityRequest(text)) this.cioUtilityThreads.set(threadId, true)
     if (isCioDesignRequest(text)) this.cioDesignThreads.set(threadId, true)
+    if (isCioVideoRequest(text)) this.cioVideoThreads.set(threadId, true)
+    const steeredKind: AuthoredWorkKind | null = isCioVideoRequest(text)
+      ? 'video'
+      : isCioDesignRequest(text)
+        ? 'design'
+        : null
+    if (steeredKind) {
+      await this.rememberAuthoredWorkKind(projectId, threadId, steeredKind, thread.authoredWorkKind)
+    }
     await this.rearmSteerUtilities(
       driver,
       projectId,
@@ -8652,6 +8687,24 @@ export class ChatEngine {
     const videoRequested = origin === 'user' && isCioVideoRequest(text)
     if (videoRequested) this.cioVideoThreads.set(threadId, true)
     const videoSession = await this.videoSessionFor(projectId, threadId, videoRequested)
+    // The thread row carries the session, so the sidebar draws its marker from
+    // the persisted field instead of a message scan. A thread that opened the
+    // session in an earlier turn (detected as `continue` above) records it here
+    // too, which heals a database that predates the column.
+    const authoredWorkKind: AuthoredWorkKind | null =
+      videoRequested || videoSession === 'continue'
+        ? 'video'
+        : designRequested || designSession === 'continue'
+          ? 'design'
+          : null
+    if (authoredWorkKind) {
+      await this.rememberAuthoredWorkKind(
+        projectId,
+        threadId,
+        authoredWorkKind,
+        targetThread?.authoredWorkKind
+      )
+    }
     // The routine how-to authoring thread carries the utility gateway from the
     // start: the agent has to research and install the skills, MCPs and plugins
     // a routine needs while it writes the how-to, without the user first arming

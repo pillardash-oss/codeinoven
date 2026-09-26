@@ -1,4 +1,5 @@
 import type { ScopeSlice } from './scope'
+import type { AuthoredWorkKind } from '../ipc/design'
 import type { ThreadSettings } from './agent'
 import { workerReportsToCoordinator } from './agent'
 import type { ThreadContextUsage } from './usage'
@@ -63,6 +64,13 @@ export interface Thread {
   branch?: string
   /** Stable agent-work directory name shared by forks of the same feature. */
   featureSlug?: string
+  /**
+   * The authored-work session this thread is in, recorded the moment it enters
+   * one (the `@cio-design`/`@cio-video` tag, or a preview into a work root). A
+   * thread row draws its marker straight from this field, so no message scan
+   * stands between the persisted fact and the sidebar.
+   */
+  authoredWorkKind?: AuthoredWorkKind
   /** User-defined feature bucket used by the project's Scope board. */
   scopeBucketId?: string
   /** Per-thread agent configuration (harness, model, thinking, permissions). */

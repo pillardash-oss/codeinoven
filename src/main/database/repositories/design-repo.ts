@@ -106,36 +106,6 @@ export class DesignRepo {
     return row ? toCurrent(row) : null
   }
 
-  /**
-   * The recorded folder of each of these threads, in one query.
-   *
-   * A list of thread rows asks about every thread it draws, so the read is batched
-   * rather than per row: one `forThreadViaWorker` per row would be one query per row,
-   * on the path that renders the sidebar. It runs on the worker's connection for the
-   * same reason that read does.
-   *
-   * Scoped by project so a caller cannot read a folder recorded for another one.
-   */
-  async forThreadsViaWorker(
-    projectId: string,
-    threadIds: readonly string[]
-  ): Promise<Map<string, ThreadDesignCurrent>> {
-    const found = new Map<string, ThreadDesignCurrent>()
-    if (threadIds.length === 0) return found
-    const placeholders = threadIds.map(() => '?').join(', ')
-    const result = await this.db.queryViaWorker(
-      `SELECT ${CURRENT_COLUMNS} FROM thread_designs
-       WHERE project_id = ? AND thread_id IN (${placeholders})`,
-      [projectId, ...threadIds],
-      0
-    )
-    if (!result.ok) return found
-    for (const row of result.rows as unknown as ThreadDesignRow[]) {
-      found.set(row.thread_id, toCurrent(row))
-    }
-    return found
-  }
-
   deleteThread(threadId: string): void {
     this.db.run('DELETE FROM thread_designs WHERE thread_id = ?', threadId)
   }

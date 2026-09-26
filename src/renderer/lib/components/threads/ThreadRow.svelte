@@ -37,7 +37,6 @@
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
   import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
-  import { authoredWorkMarkers } from '$lib/stores/authored-work-markers.svelte'
   import {
     AUTHORED_WORK_ICON_BY_KIND,
     AUTHORED_WORK_NAME_BY_KIND
@@ -504,15 +503,11 @@
 
   let scopeBucket = $derived(threadScopeBucket(thread))
 
-  /** The authored-work session this thread is in, or null when it is in none. */
-  let authoredWorkKind = $derived(authoredWorkMarkers.kindFor(thread.id))
-
-  // Ask main for this row's marker, once per activity stamp: a session can start on a
-  // later turn, and the request is coalesced with every other mounted row's into one
-  // call, so a list of rows costs one round trip rather than one per row.
-  $effect(() => {
-    authoredWorkMarkers.request(thread.projectId, thread.id, thread.lastActivity)
-  })
+  /** The authored-work session this thread is in, or null when it is in none.
+   *  Drawn from the persisted thread field: main writes it the moment the thread
+   *  enters a session and pushes the row over `thread:updated`, so no scan and no
+   *  per-row round trip stands behind the marker. */
+  let authoredWorkKind = $derived(thread.authoredWorkKind ?? null)
 
   let hasNote = $derived(threadNotesState.has(thread.id))
 
