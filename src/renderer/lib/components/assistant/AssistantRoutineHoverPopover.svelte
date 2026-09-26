@@ -5,7 +5,7 @@
     CalendarPlus,
     Clock,
     Link2,
-    ListChecks,
+    RotateCcw,
     Sparkles
   } from '@lucide/svelte'
   import { formatDateTime } from '$shared/date-time-format'
@@ -14,7 +14,9 @@
 
   interface Props {
     routine: Routine
-    taskCount: number
+    /** How many times this routine has run. The Getting started host is an
+     *  authoring thread, not an execution, so it is never counted. */
+    runCount: number
     /** True while any task in this routine is running. */
     working: boolean
     /** Any task carries a pending missed run. */
@@ -23,7 +25,7 @@
     nextRunAt: number | null
   }
 
-  let { routine, taskCount, working, missed, nextRunAt }: Props = $props()
+  let { routine, runCount, working, missed, nextRunAt }: Props = $props()
 
   const incomplete = $derived(routineGap(routine) !== null)
   const gapLabel = $derived(routineGap(routine) ?? '')
@@ -97,10 +99,10 @@
     </div>
   {/if}
   <div class="flex gap-2">
-    <dt class="w-16 shrink-0 text-dimmed">Tasks</dt>
+    <dt class="w-16 shrink-0 text-dimmed">Runs</dt>
     <dd class="flex min-w-0 items-center gap-1 text-muted">
-      <ListChecks size={12} class="shrink-0" />
-      <span>{taskCount === 1 ? '1 task' : `${taskCount} tasks`}</span>
+      <RotateCcw size={12} class="shrink-0" />
+      <span>{runCount === 1 ? '1 run' : `${runCount} runs`}</span>
     </dd>
   </div>
   <div class="flex gap-2">

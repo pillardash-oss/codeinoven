@@ -32,7 +32,9 @@
     working: boolean
     /** Any task carries a pending missed run. */
     missed: boolean
-    taskCount: number
+    /** How many times this routine has run: one row per execution. The routine's
+     *  Getting started host is not an execution, so it is never counted here. */
+    runCount: number
     /** Custom icon data URL for this routine, when it stores one. */
     iconUrl?: string | null
     /** Next intended fire for the routine, or null when unscheduled. */
@@ -59,7 +61,7 @@
     expanded,
     working,
     missed,
-    taskCount,
+    runCount,
     iconUrl = null,
     nextRunAt,
     searchOpen,
@@ -267,7 +269,7 @@
         <span class="truncate text-[0.8125rem] text-foreground">{routine.name}</span>
       </span>
       <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
-        <span class="truncate">{taskCount === 1 ? '1 task' : `${taskCount} tasks`}</span>
+        <span class="truncate">{runCount === 1 ? '1 run' : `${runCount} runs`}</span>
         {#if routine.paused}
           <span
             class="flex shrink-0 items-center"
@@ -400,7 +402,7 @@
       class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
       style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
     >
-      <AssistantRoutineHoverPopover {routine} {taskCount} {working} {missed} {nextRunAt} />
+      <AssistantRoutineHoverPopover {routine} {runCount} {working} {missed} {nextRunAt} />
     </div>
   </Portal>
 {/if}
