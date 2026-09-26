@@ -19,6 +19,7 @@
   import BrowserCommentEditor from './BrowserCommentEditor.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
+  import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { browserInspector } from '$lib/stores/browser-inspector.svelte'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
@@ -200,6 +201,21 @@
     addressInput?.focus()
     addressInput?.select()
   }
+
+  /**
+   * Take the keyboard for the address bar of a tab the user just opened.
+   *
+   * The request is made where the tab is created, and it is honored here the
+   * moment this panel owns the visible view: a panel that is mounted but not on
+   * screen (the sidebar while the full screen browser is up) leaves the request
+   * alone, because taking focus behind another surface is exactly what it must
+   * not do, and the request is still waiting when the user sees the tab.
+   */
+  $effect(() => {
+    if (!panelVisible) return
+    if (!browserAddressFocus.take(tabId)) return
+    focusAddress()
+  })
 
   /**
    * Tell the keyboard owner whether the focus that just moved belongs to this
