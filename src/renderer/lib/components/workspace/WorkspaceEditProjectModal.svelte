@@ -11,6 +11,24 @@
   }
 
   let { dialogs, projectIcons }: Props = $props()
+
+  let hasAppearance = $derived(
+    Boolean(
+      dialogs.editProjectColor ||
+      dialogs.editProjectIconType ||
+      dialogs.editProjectCustomSvg ||
+      dialogs.editProject?.icon ||
+      dialogs.editProjectPendingIcon
+    )
+  )
+
+  function resetProjectAppearance(): void {
+    dialogs.editProjectColor = dialogs.editProject?.color
+    dialogs.editProjectIconType = dialogs.editProject?.iconType
+    dialogs.editProjectCustomSvg = dialogs.editProject?.customSvg
+    dialogs.editProjectCustomSvgSelected = false
+    dialogs.editProjectPendingIcon = undefined
+  }
 </script>
 
 <!-- Edit Project Modal -->
@@ -33,6 +51,7 @@
           iconType={dialogs.editProjectIconType}
           customSvg={dialogs.editProjectCustomSvg}
           allowCustomSvg
+          resetPlacement="footer"
           fallbackIconUrl={dialogs.editProjectCustomSvgSelected
             ? null
             : (dialogs.editProjectPendingIcon?.dataUrl ??
@@ -46,13 +65,7 @@
             dialogs.editProjectCustomSvgSelected = Boolean(svg)
           }}
           onUploadImage={() => void dialogs.changeEditProjectIcon()}
-          onReset={() => {
-            dialogs.editProjectColor = dialogs.editProject?.color
-            dialogs.editProjectIconType = dialogs.editProject?.iconType
-            dialogs.editProjectCustomSvg = dialogs.editProject?.customSvg
-            dialogs.editProjectCustomSvgSelected = false
-            dialogs.editProjectPendingIcon = undefined
-          }}
+          onReset={resetProjectAppearance}
         />
       {/if}
 
@@ -87,23 +100,37 @@
 
   {#snippet footer()}
     {#if dialogs.editProject}
-      <button
-        type="button"
-        class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-        title="Cancel"
-        onclick={() => (dialogs.showEditModal = false)}
-      >
-        Cancel
-      </button>
-      <button
-        type="submit"
-        form="edit-project-form"
-        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        disabled={!dialogs.editProjectName.trim()}
-        title="Save project settings"
-      >
-        Save
-      </button>
+      <div class="flex w-full items-center justify-between">
+        {#if hasAppearance}
+          <button
+            type="button"
+            class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+            title="Reset appearance"
+            onclick={resetProjectAppearance}
+          >
+            Reset
+          </button>
+        {:else}<span></span>{/if}
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+            title="Cancel"
+            onclick={() => (dialogs.showEditModal = false)}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="edit-project-form"
+            class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            disabled={!dialogs.editProjectName.trim()}
+            title="Save project settings"
+          >
+            Save
+          </button>
+        </div>
+      </div>
     {/if}
   {/snippet}
 </Modal>

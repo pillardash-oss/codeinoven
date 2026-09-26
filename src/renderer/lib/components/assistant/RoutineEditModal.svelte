@@ -44,6 +44,9 @@
     routine ? (assistantRoutines.iconUrls.get(routine.id) ?? null) : null
   )
   const previewIconUrl = $derived(pendingIcon?.dataUrl ?? storedIconUrl)
+  const hasAppearance = $derived(
+    Boolean(color || iconType || customSvg || routine?.icon || pendingIcon || storedIconUrl)
+  )
 
   async function uploadImage(): Promise<void> {
     const imagePath = await invoke('dialog:pickImage')
@@ -122,6 +125,7 @@
         {iconType}
         {customSvg}
         allowCustomSvg
+        resetPlacement="footer"
         fallbackIconUrl={customSvgSelected ? null : previewIconUrl}
         onColorChange={(next) => (color = next)}
         onIconTypeChange={(next) => (iconType = next)}
@@ -172,22 +176,36 @@
   </form>
 
   {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      title="Cancel"
-      onclick={onClose}
-    >
-      Cancel
-    </button>
-    <button
-      type="submit"
-      form="edit-routine-form"
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-      disabled={!name.trim() || busy}
-      title="Save routine settings"
-    >
-      Save
-    </button>
+    <div class="flex w-full items-center justify-between">
+      {#if hasAppearance}
+        <button
+          type="button"
+          class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+          title="Reset appearance"
+          onclick={resetAppearance}
+        >
+          Reset
+        </button>
+      {:else}<span></span>{/if}
+      <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+          title="Cancel"
+          onclick={onClose}
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          form="edit-routine-form"
+          class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          disabled={!name.trim() || busy}
+          title="Save routine settings"
+        >
+          Save
+        </button>
+      </div>
+    </div>
   {/snippet}
 </Modal>

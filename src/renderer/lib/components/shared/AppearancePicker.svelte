@@ -15,6 +15,7 @@
     iconType?: string
     customSvg?: string
     allowCustomSvg?: boolean
+    resetPlacement?: 'picker' | 'footer'
     fallbackIconUrl?: string | null
     onColorChange: (color: string | undefined) => void
     onIconTypeChange: (iconType: string | undefined) => void
@@ -29,6 +30,7 @@
     iconType,
     customSvg,
     allowCustomSvg = false,
+    resetPlacement = 'picker',
     fallbackIconUrl = null,
     onColorChange,
     onIconTypeChange,
@@ -203,7 +205,7 @@
     {/if}
   {/if}
 
-  {#if hasAppearance}
+  {#if hasAppearance && resetPlacement === 'picker'}
     <div class="flex justify-end">
       <button
         type="button"
