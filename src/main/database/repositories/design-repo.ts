@@ -38,6 +38,19 @@ function kindOfRow(value: string): AuthoredWorkKind {
   return value === 'video' ? 'video' : 'design'
 }
 
+/** The stored row as the app reads it back. */
+function toCurrent(row: ThreadDesignRow): ThreadDesignCurrent {
+  return {
+    directory: row.directory,
+    entry: row.entry,
+    kind: kindOfRow(row.kind),
+    updatedAt: row.updated_at
+  }
+}
+
+/** Columns every read of the table selects, so the row mappers stay one shape. */
+const CURRENT_COLUMNS = 'thread_id, project_id, directory, entry, kind, updated_at'
+
 export class DesignRepo {
   constructor(private readonly db: Database) {}
 
@@ -75,47 +88,50 @@ export class DesignRepo {
     )
   }
 
-  /** The folder a thread last previewed, or null when it never has. */
-  forThread(threadId: string): ThreadDesignCurrent | null {
-    const row = this.db.get<ThreadDesignRow>(
-      'SELECT thread_id, project_id, directory, entry, kind, updated_at FROM thread_designs WHERE thread_id = ?',
-      threadId
+  /**
+   * The folder a thread last previewed, or null when it never has.
+   *
+   * Read on the worker's connection: a thread's marker is drawn by every board that
+   * shows it and by every preview, so this read is on interaction paths and must not
+   * touch SQLite on the Electron main thread (see `docs/APP-BIBLE.md`).
+   */
+  async forThreadViaWorker(threadId: string): Promise<ThreadDesignCurrent | null> {
+    const result = await this.db.queryViaWorker(
+      `SELECT ${CURRENT_COLUMNS} FROM thread_designs WHERE thread_id = ?`,
+      [threadId],
+      1
     )
-    if (!row) return null
-    return {
-      directory: row.directory,
-      entry: row.entry,
-      kind: kindOfRow(row.kind),
-      updatedAt: row.updated_at
-    }
+    if (!result.ok) return null
+    const row = (result.rows as unknown as ThreadDesignRow[])[0]
+    return row ? toCurrent(row) : null
   }
 
   /**
    * The recorded folder of each of these threads, in one query.
    *
    * A list of thread rows asks about every thread it draws, so the read is batched
-   * rather than per row: one `forThread` per row would be one query per row, on the
-   * path that renders the sidebar.
+   * rather than per row: one `forThreadViaWorker` per row would be one query per row,
+   * on the path that renders the sidebar. It runs on the worker's connection for the
+   * same reason that read does.
    *
    * Scoped by project so a caller cannot read a folder recorded for another one.
    */
-  forThreads(projectId: string, threadIds: readonly string[]): Map<string, ThreadDesignCurrent> {
+  async forThreadsViaWorker(
+    projectId: string,
+    threadIds: readonly string[]
+  ): Promise<Map<string, ThreadDesignCurrent>> {
     const found = new Map<string, ThreadDesignCurrent>()
     if (threadIds.length === 0) return found
     const placeholders = threadIds.map(() => '?').join(', ')
-    const rows = this.db.all<ThreadDesignRow>(
-      `SELECT thread_id, project_id, directory, entry, kind, updated_at FROM thread_designs
+    const result = await this.db.queryViaWorker(
+      `SELECT ${CURRENT_COLUMNS} FROM thread_designs
        WHERE project_id = ? AND thread_id IN (${placeholders})`,
-      projectId,
-      ...threadIds
+      [projectId, ...threadIds],
+      0
     )
-    for (const row of rows) {
-      found.set(row.thread_id, {
-        directory: row.directory,
-        entry: row.entry,
-        kind: kindOfRow(row.kind),
-        updatedAt: row.updated_at
-      })
+    if (!result.ok) return found
+    for (const row of result.rows as unknown as ThreadDesignRow[]) {
+      found.set(row.thread_id, toCurrent(row))
     }
     return found
   }

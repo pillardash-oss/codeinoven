@@ -628,6 +628,38 @@ export function runProviderDeltaSync(
   }
 }
 
+/**
+ * Rows one single-thread tag read considers, counted from the newest message.
+ *
+ * A session tag lives in the user's latest message, so the window is taken from
+ * the newest end: a cap can only ever drop messages no caller of this read asks
+ * about. 200 is far beyond any real thread (a user types the tag, they do not
+ * repeat it), and `truncated` reports the cap when it is reached.
+ */
+const RECENT_USER_MESSAGE_ROWS = 200
+
+/**
+ * Rows one batched marker read considers, counted from the newest match.
+ *
+ * Same reasoning as {@link RECENT_USER_MESSAGE_ROWS}, applied to a list of
+ * threads: every caller of the read asks which tag a thread's latest message
+ * carries, so dropping the oldest matches is harmless while dropping the newest
+ * would answer wrong.
+ */
+const MARKER_MESSAGE_ROWS = 500
+
+/** One `agent_messages` row as the marker read selects it. */
+interface UserMessageRow {
+  id: string
+  parts: string
+  created_at: number
+}
+
+/** One marker-read row: a user message plus the thread it came from. */
+interface MarkerMessageRow extends UserMessageRow {
+  thread_id: string
+}
+
 export class AgentMessageRepo {
   constructor(private db: Database) {}
 
@@ -870,7 +902,7 @@ export class AgentMessageRepo {
 
   /** Every user-authored conversation message, oldest to newest. */
   loadUserMessagesByThread(threadId: string): UserMessageSummary[] {
-    const rows = this.db.all<{ id: string; parts: string; created_at: number }>(
+    const rows = this.db.all<UserMessageRow>(
       `SELECT id, parts, created_at FROM agent_messages
        WHERE thread_id = ? AND session_id IS NULL AND role = 'user'
          AND visibility IN ('conversation', 'working_trace')
@@ -885,23 +917,57 @@ export class AgentMessageRepo {
   }
 
   /**
-   * Every user-authored message of these threads whose stored parts mention one of
-   * `markers`, oldest to newest, with the thread each came from.
+   * The newest user-authored conversation messages of one thread, newest first.
+   *
+   * Read on the worker's connection, and the `parts` JSON is parsed there, so a
+   * message carrying a pasted attachment never crosses into the main process as
+   * text and never blocks a frame. This is the read a caller wants when it asks
+   * which tag a thread's latest message carries, which is why the window is
+   * bounded from the newest end: `truncated` reports that older messages exist
+   * beyond it.
+   */
+  async loadRecentUserMessagesViaWorker(
+    threadId: string,
+    limit = RECENT_USER_MESSAGE_ROWS
+  ): Promise<{ messages: UserMessageSummary[]; truncated: boolean }> {
+    const result = await this.db.queryUserMessagesViaWorker(
+      `SELECT id, parts, created_at FROM agent_messages
+       WHERE thread_id = ? AND session_id IS NULL AND role = 'user'
+         AND visibility IN ('conversation', 'working_trace')
+       ORDER BY created_at DESC, id DESC`,
+      [threadId],
+      limit
+    )
+    if (!result.ok) return { messages: [], truncated: false }
+    return { messages: result.messages, truncated: result.truncated }
+  }
+
+  /**
+   * The user-authored messages of these threads whose stored parts mention one of
+   * `markers`, newest first, with the thread each came from.
    *
    * For a caller that has to ask the same question of a whole list of threads. Reading
-   * `loadUserMessagesByThread` once per thread would load and parse every user message
-   * of every thread, which is the expensive part, so the markers narrow the rows in
-   * SQLite first and only a matching row's parts are parsed.
+   * `loadRecentUserMessagesViaWorker` once per thread would load and parse every user
+   * message of every thread, which is the expensive part, so the markers narrow the
+   * rows in SQLite first and only a matching row's parts are parsed.
+   *
+   * Read on the worker's connection. The caller draws the thread list from the rows on
+   * screen, so this is the widest read an authored-work board triggers, and a profile
+   * of the app caught it holding the Electron main thread for 20-890 ms per call (see
+   * the main-thread SQLite rule in `docs/APP-BIBLE.md`). Rows arrive newest first, so
+   * the row cap drops the oldest matches: every caller asks which marker a thread's
+   * latest message carries, and no caller needs the rows a full cap dropped.
    *
    * The markers are matched as plain substrings, so this is a prefilter and not the
    * rule: a caller that needs the exact rule applies its own detector to `content`,
    * which is what makes a quoted mention still not count.
    */
-  loadUserMessagesMentioning(
+  async loadUserMessagesMentioningViaWorker(
     projectId: string,
     threadIds: readonly string[],
-    markers: readonly string[]
-  ): ThreadUserMessage[] {
+    markers: readonly string[],
+    maxRows = MARKER_MESSAGE_ROWS
+  ): Promise<ThreadUserMessage[]> {
     if (threadIds.length === 0 || markers.length === 0) return []
     const threadPlaceholders = threadIds.map(() => '?').join(', ')
     const markerClause = markers.map(() => 'm.parts LIKE ?').join(' OR ')
@@ -919,7 +985,7 @@ export class AgentMessageRepo {
            AND meta.session_id IS NULL AND meta.role = 'user'
            AND meta.visibility IN ('conversation', 'working_trace')
            AND (${markerClause})
-         ORDER BY m.created_at ASC, m.id ASC`
+         ORDER BY m.created_at DESC, m.id DESC`
       : `SELECT m.id, m.thread_id, m.parts, m.created_at
          FROM agent_messages m
          JOIN threads t ON t.id = m.thread_id
@@ -927,14 +993,14 @@ export class AgentMessageRepo {
            AND m.session_id IS NULL AND m.role = 'user'
            AND m.visibility IN ('conversation', 'working_trace')
            AND (${markerClause})
-         ORDER BY m.created_at ASC, m.id ASC`
-    const rows = this.db.all<{
-      id: string
-      thread_id: string
-      parts: string
-      created_at: number
-    }>(source, projectId, ...threadIds, ...markers.map((marker) => `%${marker}%`))
-    return rows.map((row) => ({
+         ORDER BY m.created_at DESC, m.id DESC`
+    const result = await this.db.queryViaWorker(
+      source,
+      [projectId, ...threadIds, ...markers.map((marker) => `%${marker}%`)],
+      maxRows
+    )
+    if (!result.ok) return []
+    return (result.rows as unknown as MarkerMessageRow[]).map((row) => ({
       threadId: row.thread_id,
       id: row.id,
       content: userMessageText(row.parts),

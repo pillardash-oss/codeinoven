@@ -382,8 +382,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const expertSettings = new ExpertSettingsService({
     database,
     config: () => storage.getConfig(),
-    sessionKind: (projectId, threadId) =>
-      designService.sessionKinds(projectId, [threadId])[threadId] ?? null
+    sessionKind: async (projectId, threadId) =>
+      (await designService.sessionKinds(projectId, [threadId]))[threadId] ?? null
   })
   expertSettings.registerIpc()
   state.chatEngine.setExpertSettings(expertSettings)

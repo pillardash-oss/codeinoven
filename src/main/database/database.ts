@@ -158,12 +158,12 @@ export class Database {
   private async backfillAgentMessageSearchMeta(): Promise<void> {
     const worker = this.maintenanceWorker
     if (!worker?.isRunning()) return
-    if (this.metaFlag(SEARCH_META_READY_KEY)) {
+    if ((await this.metaFlag(SEARCH_META_READY_KEY)) !== null) {
       this.searchMetaReady = true
       return
     }
     try {
-      let cursor = Number(this.metaFlag(SEARCH_META_CURSOR_KEY) ?? 0)
+      let cursor = Number((await this.metaFlag(SEARCH_META_CURSOR_KEY)) ?? 0)
       for (;;) {
         if (!worker.isRunning() || !this.isOpen()) return
         const batch = await worker.query(
@@ -204,10 +204,18 @@ export class Database {
     }
   }
 
-  /** Read a `db_meta` value, or null when the key is absent (or the db is closed). */
-  private metaFlag(key: string): string | null {
+  /**
+   * Read a `db_meta` value, or null when the key is absent (or the db is closed).
+   *
+   * On the worker's connection: the backfill reads its cursor between batches,
+   * and even a one-row read must not reach the primary connection from the main
+   * thread while the user is working (see the main-thread SQLite rule in
+   * `docs/APP-BIBLE.md`).
+   */
+  private async metaFlag(key: string): Promise<string | null> {
     if (!this.isOpen()) return null
-    const row = this.get<{ value: string }>('SELECT value FROM db_meta WHERE key = ?', key)
+    const result = await this.queryViaWorker('SELECT value FROM db_meta WHERE key = ?', [key], 1)
+    const row = result.rows[0] as { value: string } | undefined
     return row?.value ?? null
   }
 
@@ -317,9 +325,11 @@ export class Database {
   }
 
   /**
-   * Log only operation class, duration, and the statement text (params and
-   * user data are never logged). The SQL is attributed verbatim so a slow op
-   * can be traced to its caller; very long statements are bounded.
+   * Log only operation class, duration, the statement text, and the call site
+   * (params and user data are never logged). The stack is walked only after the
+   * statement has already held the main thread past a frame, so the report is
+   * free on the normal path and names the feature that issued the statement -
+   * the SQL alone says which query ran, not who ran it.
    */
   private reportSlowMainThreadOperation(operation: string, startedAt: number, sql?: string): void {
     const durationMs = performance.now() - startedAt
@@ -327,7 +337,8 @@ export class Database {
     Logger.info('Slow synchronous SQLite operation on Electron main', {
       operation,
       durationMs: this.roundDuration(durationMs),
-      sql: sql ? truncateSqlForLog(sql) : undefined
+      sql: sql ? truncateSqlForLog(sql) : undefined,
+      caller: mainThreadCallFrames()
     })
   }
 
@@ -1658,6 +1669,36 @@ function parseColumnNames(columnsSql: string): string[] {
 
 /** Statement text attributed in slow-op logs; capped and normalized to a single line. */
 const MAX_SLOW_OP_SQL_LENGTH = 240
+
+/** Caller frames a slow-operation report names, innermost first. */
+const SLOW_OP_FRAME_LIMIT = 3
+
+/** Frames that name the database layer itself rather than the code to look at. */
+const DATABASE_LAYER_FRAME =
+  /node:internal|node_modules|mainThreadCallFrames|reportSlowMainThreadOperation|Database\.(?:get|all|run|transaction|prepare)\b/u
+
+/**
+ * The frames above the database layer in the current stack, innermost first.
+ *
+ * `new Error().stack` is read lazily, inside the slow path only, so a statement
+ * that stays under the threshold pays nothing. The frames are what turn a
+ * slow-operation report into a fix without an investigation: a packaged build
+ * names the single bundle file and an offset, a dev build names the source file.
+ */
+function mainThreadCallFrames(limit = SLOW_OP_FRAME_LIMIT): string[] {
+  const stack = new Error('slow-main-thread-sqlite').stack
+  if (!stack) return []
+  const frames: string[] = []
+  for (const line of stack.split('\n')) {
+    const frame = line.trim()
+    if (!frame.startsWith('at ')) continue
+    const text = frame.slice(3)
+    if (DATABASE_LAYER_FRAME.test(text)) continue
+    frames.push(text)
+    if (frames.length >= limit) break
+  }
+  return frames
+}
 
 function truncateSqlForLog(sql: string): string {
   const singleLine = sql.replace(/\s+/gu, ' ').trim()

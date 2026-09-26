@@ -7,7 +7,7 @@ import {
 } from '../../lib/experts'
 import type { ExpertDecisionInput, ThreadExpertState } from '../../lib/ipc/expert'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
-import { requireLocalProject } from '../../lib/project-artifacts'
+import { requireLocalProjectViaWorker } from '../../lib/project-artifacts'
 import type { AppConfig } from '../../lib/types'
 import type { Database } from '../database/database'
 import { ExpertSettingsRepo } from '../database/repositories/expert-settings-repo'
@@ -34,9 +34,10 @@ export interface ExpertSettingsOptions {
    *
    * Supplied by the design service, which owns that detection, so the card and
    * the coordinator can never disagree about whether a thread is designing or
-   * editing.
+   * editing. Async because the answer is read on the database worker: this runs
+   * on the path that draws a thread's card.
    */
-  sessionKind?: (projectId: string, threadId: string) => AuthoredWorkKind | null
+  sessionKind?: (projectId: string, threadId: string) => Promise<AuthoredWorkKind | null>
 }
 
 /** Ceiling on an identifier this service will look up. */
@@ -87,7 +88,7 @@ export class ExpertSettingsService {
 
   /** Everything a surface needs about one thread's experts, right now. */
   async stateFor(projectId: string, threadId: string): Promise<ThreadExpertState> {
-    requireLocalProject(this.options.database, projectId)
+    await requireLocalProjectViaWorker(this.options.database, projectId)
     const assignments = (await this.options.config()).design?.assignments
     return {
       threadId,
@@ -97,7 +98,7 @@ export class ExpertSettingsService {
       // user who turned them off for this thread still needs to see who they
       // turned off, and the switch that brings them back.
       experts: expertSummaries(assignments),
-      session: this.options.sessionKind?.(projectId, threadId) ?? null
+      session: (await this.options.sessionKind?.(projectId, threadId)) ?? null
     }
   }
 
@@ -113,7 +114,7 @@ export class ExpertSettingsService {
     threadId: string,
     input: ExpertDecisionInput
   ): Promise<ThreadExpertState> {
-    requireLocalProject(this.options.database, projectId)
+    await requireLocalProjectViaWorker(this.options.database, projectId)
     const assignments = (await this.options.config()).design?.assignments
     this.repo.upsert(threadId, {
       choice: input.choice,

@@ -10,7 +10,7 @@ import type {
   ThreadDesignState
 } from '../../lib/ipc/design'
 import { originOf } from '../../lib/local-development-url'
-import { requireLocalProject } from '../../lib/project-artifacts'
+import { requireLocalProjectViaWorker } from '../../lib/project-artifacts'
 import type { BrowserService } from '../browser/browser-service'
 import { NO_TAB_MARK, type BrowserTabMark } from '../browser/browser-service/browser-tab-mark'
 import type { Database } from '../database/database'
@@ -214,13 +214,13 @@ export class DesignService {
     const root = this.options.previews.rootForOrigin(origin)
     if (root === null) return NO_TAB_MARK
     const directory = this.projectRelativeFolder(
-      requireLocalProject(this.options.database, projectId).path,
+      (await requireLocalProjectViaWorker(this.options.database, projectId)).path,
       root
     )
     if (directory === null) return NO_TAB_MARK
     const kind = authoredWorkKindOf(directory)
     if (kind === null) return NO_TAB_MARK
-    this.rememberShownFolder({
+    await this.rememberShownFolder({
       projectId,
       threadId,
       directory,
@@ -257,15 +257,23 @@ export class DesignService {
    * A thread in neither is left out instead of defaulting to a design: the caller's
    * fallback is its own evidence, and answering "design" here would put a marker on an
    * ordinary thread.
+   *
+   * Every read runs on the database worker: a board asks about every thread it draws,
+   * and a profile of the app caught the marker read below holding the Electron main
+   * thread for 20-890 ms per call (see the main-thread SQLite rule in
+   * `docs/APP-BIBLE.md`).
    */
-  sessionKinds(projectId: string, threadIds: readonly string[]): Record<string, AuthoredWorkKind> {
-    const project = new ProjectRepo(this.options.database).get(projectId)
+  async sessionKinds(
+    projectId: string,
+    threadIds: readonly string[]
+  ): Promise<Record<string, AuthoredWorkKind>> {
+    const project = await new ProjectRepo(this.options.database).getViaWorker(projectId)
     if (!project || project.source !== 'local' || !project.path) return {}
     const ids = [...new Set(threadIds)]
     const kinds: Record<string, AuthoredWorkKind> = {}
     if (ids.length === 0) return kinds
-    const folders = this.designs.forThreads(projectId, ids)
-    const tags = this.latestSessionTags(projectId, ids)
+    const folders = await this.designs.forThreadsViaWorker(projectId, ids)
+    const tags = await this.latestSessionTags(projectId, ids)
     for (const threadId of ids) {
       const folder = folders.get(threadId) ?? null
       const tag = tags.get(threadId) ?? null
@@ -283,12 +291,12 @@ export class DesignService {
    * otherwise the later message wins. The rows come back with only the messages whose
    * stored parts mention a tag, so the exact detectors still decide.
    */
-  private latestSessionTags(
+  private async latestSessionTags(
     projectId: string,
     threadIds: readonly string[]
-  ): Map<string, SessionTag> {
+  ): Promise<Map<string, SessionTag>> {
     const latest = new Map<string, SessionTag>()
-    const messages = this.messages.loadUserMessagesMentioning(projectId, threadIds, [
+    const messages = await this.messages.loadUserMessagesMentioningViaWorker(projectId, threadIds, [
       CIO_DESIGN_TAG,
       CIO_VIDEO_TAG
     ])
@@ -326,7 +334,7 @@ export class DesignService {
    * preview operation.
    */
   async stateFor(projectId: string, threadId: string): Promise<ThreadDesignState> {
-    const storedProject = new ProjectRepo(this.options.database).get(projectId)
+    const storedProject = await new ProjectRepo(this.options.database).getViaWorker(projectId)
     if (!storedProject || storedProject.source !== 'local' || !storedProject.path) {
       return {
         projectId,
@@ -338,12 +346,11 @@ export class DesignService {
         defaultDirectory: AUTHORED_WORK_ROOT_BY_KIND.design
       }
     }
-    const project = requireLocalProject(this.options.database, projectId)
-    const current = this.designs.forThread(threadId)
-    const tagged = this.latestSessionTag(threadId)
+    const current = await this.designs.forThreadViaWorker(threadId)
+    const tagged = await this.latestSessionTag(threadId)
     const kind = this.kindFor(current, tagged)
     const root = AUTHORED_WORK_ROOT_BY_KIND[kind]
-    const items = await this.listWorkFolders(project.path, root)
+    const items = await this.listWorkFolders(storedProject.path, root)
     return {
       projectId,
       threadId,
@@ -369,8 +376,8 @@ export class DesignService {
     entry: unknown,
     reveal: boolean
   ): Promise<DesignOpenResult> {
-    const project = requireLocalProject(this.options.database, projectId)
-    const kind = this.resolveKind(threadId)
+    const project = await requireLocalProjectViaWorker(this.options.database, projectId)
+    const kind = await this.resolveKind(threadId)
     const result = await this.serveWork({
       kind,
       projectPath: project.path,
@@ -417,9 +424,9 @@ export class DesignService {
     entry: unknown,
     width: number
   ): Promise<DesignThumbnail> {
-    const project = requireLocalProject(this.options.database, projectId)
+    const project = await requireLocalProjectViaWorker(this.options.database, projectId)
     const browser = this.options.browser()
-    const kind = this.resolveKind(threadId)
+    const kind = await this.resolveKind(threadId)
     const result = await this.serveWork({
       kind,
       projectPath: project.path,
@@ -471,14 +478,14 @@ export class DesignService {
    * is weighed against, so a folder left open in a tab would outrank a tag typed
    * afterwards.
    */
-  private rememberShownFolder(input: {
+  private async rememberShownFolder(input: {
     projectId: string
     threadId: string
     directory: string
     entry: string | null
     kind: AuthoredWorkKind
-  }): void {
-    const current = this.designs.forThread(input.threadId)
+  }): Promise<void> {
+    const current = await this.designs.forThreadViaWorker(input.threadId)
     if (
       current &&
       current.directory === input.directory &&
@@ -528,8 +535,9 @@ export class DesignService {
   }
 
   /** Which session the thread is in, from the record and the persisted tags. */
-  private resolveKind(threadId: string): AuthoredWorkKind {
-    return this.kindFor(this.designs.forThread(threadId), this.latestSessionTag(threadId))
+  private async resolveKind(threadId: string): Promise<AuthoredWorkKind> {
+    const current = await this.designs.forThreadViaWorker(threadId)
+    return this.kindFor(current, await this.latestSessionTag(threadId))
   }
 
   /**
@@ -558,9 +566,10 @@ export class DesignService {
    * restart and is undone by an edit or rollback that removes the tag. This is the
    * same rule the chat engine applies when it decides a turn's session mode.
    */
-  private latestSessionTag(threadId: string): SessionTag | null {
+  private async latestSessionTag(threadId: string): Promise<SessionTag | null> {
     let latest: SessionTag | null = null
-    for (const message of this.messages.loadUserMessagesByThread(threadId)) {
+    const { messages } = await this.messages.loadRecentUserMessagesViaWorker(threadId)
+    for (const message of messages) {
       // One message carrying both tags is a video session: the narrower tag wins
       // the tie, so a compound invocation reads the same way every time.
       if (
