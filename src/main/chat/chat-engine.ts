@@ -4843,6 +4843,7 @@ export class ChatEngine {
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread) return false
       const driverId = thread.settings?.harnessId || DEFAULT_HARNESS
+      if (driverId === 'opencode' && this.openCodeDriverIsV2) return false
       const account = await this.accountRegistry.resolveForProvider(
         driverId,
         thread.settings?.providerId,

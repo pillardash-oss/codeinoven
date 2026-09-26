@@ -47,12 +47,9 @@ import {
   startOpenCodeV2Server,
   type OpenCodeV2ServerHandle
 } from '../opencode-v2/opencode-v2-server'
+import { discoverOpenCodeV2ProviderCatalogs } from '../opencode-v2/opencode-v2-discovery'
 import { OPENCODE_COMMAND } from '../../lib/opencode-version'
-import {
-  mapOpenCodeV2Catalogs,
-  mapOpenCodeV2Commands,
-  openCodeV2ModelVariants
-} from './opencode-v2/v2-catalog'
+import { mapOpenCodeV2Commands, openCodeV2ModelVariants } from './opencode-v2/v2-catalog'
 import {
   eventSessionId,
   mapOpenCodeV2Event,
@@ -762,8 +759,11 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   }
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
-    const handle = await this.ensureServer(projectPath)
-    const catalogs = await this.readCatalogs(handle, projectPath)
+    const catalogs = await discoverOpenCodeV2ProviderCatalogs({
+      command: this.command,
+      cwd: projectPath,
+      env: this.buildEnv()
+    })
     if (!this.baseUrlProviders) return catalogs
     const custom = await this.baseUrlProviders.listEnabled(this.id)
     if (custom.length === 0) return catalogs
@@ -791,33 +791,6 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       })
     }
     return merged
-  }
-
-  /**
-   * Read the server's catalog, waiting out its asynchronous boot.
-   *
-   * Only a handle that was just spawned can be mid-boot, so the wait is bounded
-   * by the handle's own age: a warm server answers with the first read, and an
-   * empty catalog on a long-lived server is reported as empty instead of being
-   * polled for a value that will never arrive.
-   */
-  private async readCatalogs(
-    handle: ServerHandle,
-    projectPath: string
-  ): Promise<ProviderCatalog[]> {
-    const query = handle.client.locationQuery(projectPath)
-    const settleBy = handle.startedAt + CATALOG_SETTLE_TIMEOUT_MS
-    for (;;) {
-      const [models, providers] = await Promise.all([
-        handle.client.json(`/api/model?${query}`, { timeoutMs: CATALOG_REQUEST_TIMEOUT_MS }),
-        handle.client
-          .json(`/api/provider?${query}`, { timeoutMs: CATALOG_REQUEST_TIMEOUT_MS })
-          .catch(() => null)
-      ])
-      const catalogs = mapOpenCodeV2Catalogs(models, providers)
-      if (catalogs.length > 0 || Date.now() >= settleBy) return catalogs
-      await new Promise((resolve) => setTimeout(resolve, CATALOG_POLL_INTERVAL_MS))
-    }
   }
 
   /**
