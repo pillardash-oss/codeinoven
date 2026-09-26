@@ -130,6 +130,41 @@ function collectEditorDefinitions(lines: string[]): EditorDefinitions {
   }
 }
 
+/**
+ * Emphasis delimiters only open or close a span when the text between them
+ * starts and ends on a non-space character   the CommonMark flanking rule the
+ * message renderer (`marked`) already follows. Without it the literal
+ * asterisks of `* this should not be italicized *` and `1.* or 2.*` were read
+ * as an italic window.
+ *
+ * The renderer and the typing rules share these sources so a keystroke converts
+ * exactly what a re-render would produce. They are kept as sources because the
+ * renderer wants a global regex while the typing rules anchor `$` at the caret.
+ */
+const DELIMITED_SPAN_SOURCES = {
+  strongAsterisk: String.raw`\*\*([^\s*](?:[^*\n]*[^\s*])?)\*\*`,
+  strongUnderscore: String.raw`(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__(?![A-Za-z0-9])`,
+  strike: String.raw`~~([^\s~](?:[^~\n]*[^\s~])?)~~`,
+  emphasisAsterisk: String.raw`(?<!\*)\*([^\s*](?:[^*\n]*[^\s*])?)\*(?!\*)`,
+  emphasisUnderscore: String.raw`(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_(?![A-Za-z0-9])`
+} as const
+
+/** Renderer passes, in order: strong before emphasis so `**` is never eaten by
+ *  the single-asterisk rule. */
+const RENDER_DELIMITED_SPAN_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [
+    new RegExp(DELIMITED_SPAN_SOURCES.strongAsterisk, 'g'),
+    '<strong class="font-semibold">$1</strong>'
+  ],
+  [
+    new RegExp(DELIMITED_SPAN_SOURCES.strongUnderscore, 'g'),
+    '<strong class="font-semibold">$1</strong>'
+  ],
+  [new RegExp(DELIMITED_SPAN_SOURCES.strike, 'g'), '<del class="text-muted line-through">$1</del>'],
+  [new RegExp(DELIMITED_SPAN_SOURCES.emphasisAsterisk, 'g'), '<em class="italic">$1</em>'],
+  [new RegExp(DELIMITED_SPAN_SOURCES.emphasisUnderscore, 'g'), '<em class="italic">$1</em>']
+]
+
 function renderInline(
   source: string,
   inlineBadges: readonly RichInlineBadge[],
@@ -157,7 +192,7 @@ function renderInline(
     if (!badge.value) continue
     prepared = prepared.replaceAll(badge.value, (match, offset: number, text: string) => {
       // Mentions and other badge values never become badges inside a block
-      // quote, an open double-quoted passage, or an unclosed inline code span  
+      // quote, an open double-quoted passage, or an unclosed inline code span
       // there the text must stay literal. (Closed inline code and fenced code
       // blocks are already safe: they are stashed or block-rendered before this
       // loop runs.)
@@ -220,17 +255,9 @@ function renderInline(
   })
 
   let html = escapeHtml(prepared)
-  html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong class="font-semibold">$1</strong>')
-  html = html.replace(
-    /(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__(?![A-Za-z0-9])/g,
-    '<strong class="font-semibold">$1</strong>'
-  )
-  html = html.replace(/~~([^~\n]+)~~/g, '<del class="text-muted line-through">$1</del>')
-  html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em class="italic">$1</em>')
-  html = html.replace(
-    /(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_(?![A-Za-z0-9])/g,
-    '<em class="italic">$1</em>'
-  )
+  for (const [pattern, replacement] of RENDER_DELIMITED_SPAN_RULES) {
+    html = html.replace(pattern, replacement)
+  }
   return html
     .replace(/\uE000(\d+)\uE001/g, (_match, index: string) => code[Number(index)] ?? '')
     .replace(/\uE002(\d+)\uE003/g, (_match, index: string) => badges[Number(index)] ?? '')
@@ -730,6 +757,14 @@ export function selectedBlockTag(root: HTMLElement): string | null {
   return block === root ? null : (block?.tagName ?? null)
 }
 
+/** Block element holding the caret, or null when the caret is outside `root`.
+ *  The rule-suppression bookkeeping compares this element's identity. */
+export function caretBlock(root: HTMLElement): HTMLElement | null {
+  const selection = selectionInside(root)
+  if (!selection?.anchorNode) return null
+  return currentBlock(root, selection.anchorNode)
+}
+
 function isFirstContentInBlock(block: HTMLElement, element: Node): boolean {
   for (const child of Array.from(block.childNodes)) {
     if (child === element) return true
@@ -979,12 +1014,15 @@ export function applyEmptyPairCodeRule(root: HTMLElement): boolean {
   return true
 }
 
-function applyInlineRule(root: HTMLElement): boolean {
+function applyInlineRule(
+  root: HTMLElement,
+  options: MarkdownInputRuleOptions
+): MarkdownRuleKind | null {
   const selection = selectionInside(root)
-  if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
+  if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return null
   // Markdown inline formatting must never fire inside a code block   code like
   // `const x = `foo`` or `**not bold**` has to stay literal.
-  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
+  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return null
 
   const textNode = selection.anchorNode
   const endOffset = selection.anchorOffset
@@ -998,16 +1036,21 @@ function applyInlineRule(root: HTMLElement): boolean {
   const fenceBlock = currentBlock(root, selection.anchorNode)
   if (fenceBlock) {
     const candidate = collectFenceCandidate(root, fenceBlock)
-    if (candidate && parseFenceCandidateText(candidate.text)) return false
+    if (candidate && parseFenceCandidateText(candidate.text)) return null
   }
+
+  const suppressed = (kind: MarkdownRuleKind): boolean =>
+    options.isRuleSuppressed?.(fenceBlock, kind) === true
 
   // A non-backtick character typed (or pasted) right after a fresh double
   // backtick starts an inline code span with the caret inside. The bare pair
   // `` stays literal, and a third backtick never triggers   that is a code
   // fence. Skipped while a fence is being built: a trailing triple after the
   // caret means the closing ``` of the tag-end-then-open flow, not content.
-  if (!suffix.includes('```') && applyEmptyPairCodeRule(root)) return true
-  if (applyInsidePairCodeRule(root)) return true
+  if (!suffix.includes('```') && !suppressed('inline-code') && applyEmptyPairCodeRule(root)) {
+    return 'inline-code'
+  }
+  if (!suppressed('inline-code') && applyInsidePairCodeRule(root)) return 'inline-code'
 
   // Opening-backtick-last flow: the user tagged the end of a run with a backtick
   // first, moved the caret before the run, and now types the opening backtick.
@@ -1018,6 +1061,7 @@ function applyInlineRule(root: HTMLElement): boolean {
   const boundaryChar = endOffset >= 2 ? prefix[endOffset - 2] : undefined
   if (
     closesAfter &&
+    !suppressed('inline-code') &&
     (boundaryChar === undefined || /[\s\u00a0\u200b]/.test(boundaryChar))
   ) {
     const range = document.createRange()
@@ -1029,22 +1073,14 @@ function applyInlineRule(root: HTMLElement): boolean {
       selection.addRange(range)
     }
     insertInlineCode(root, closesAfter[1] ?? '', false)
-    return true
+    return 'inline-code'
   }
 
-  const rules: Array<[RegExp, 'strong' | 'em' | 'del']> = [
-    [/\*\*([^*\n]+)\*\*$/, 'strong'],
-    [/(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__$/, 'strong'],
-    [/~~([^~\n]+)~~$/, 'del'],
-    [/(?<!\*)\*([^*\n]+)\*$/, 'em'],
-    [/(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_$/, 'em']
-  ]
-
-  for (const [pattern, tag] of rules) {
+  for (const [pattern, tag, kind] of INLINE_TYPING_RULES) {
     const match = prefix.match(pattern)
-    if (!match) continue
+    if (!match || suppressed(kind)) continue
     replaceInlineMatch(root, textNode, endOffset, match, tag)
-    return true
+    return kind
   }
 
   // Inline code pairs single backticks left to right, exactly like the renderer:
@@ -1054,14 +1090,14 @@ function applyInlineRule(root: HTMLElement): boolean {
   // to let a backtick typed for the *next* word re-pair with the backtick that
   // had already closed an earlier span, which swallowed the whole sentence into
   // one inline code span and left the earlier pair unread as a pair.
-  if (prefix.endsWith('`')) {
+  if (prefix.endsWith('`') && !suppressed('inline-code')) {
     const pair = scanInlineCode(prefix).pair
     if (pair) {
       replaceInlineCodePair(root, textNode, pair, endOffset)
-      return true
+      return 'inline-code'
     }
   }
-  return false
+  return null
 }
 
 function replaceBlockWithHeading(block: HTMLElement, level: number, content: string): void {
@@ -1168,7 +1204,12 @@ function collectFenceCandidate(root: HTMLElement, block: HTMLElement): FenceCand
   while (sibling instanceof HTMLElement && root.contains(sibling)) {
     if (++scanned > MAX_FENCE_CANDIDATE_SIBLINGS) return null
     const text = blockTextWithBreaks(sibling).replace(/[\u200b\u00a0\s]+$/g, '')
-    if (text === '```') return { text: `${parts.join('\n')}\n\u0060\u0060\u0060`, nodes: [...nodes, sibling], closed: true }
+    if (text === '```')
+      return {
+        text: `${parts.join('\n')}\n\u0060\u0060\u0060`,
+        nodes: [...nodes, sibling],
+        closed: true
+      }
     if (text.startsWith('```')) break
     if (sibling.tagName !== 'P' && sibling.tagName !== 'DIV') break
     if (text.split('\n').some((line) => /^\s*>/.test(line))) return null
@@ -1277,38 +1318,82 @@ export function applyCodeFenceOnEnter(root: HTMLElement): boolean {
   return true
 }
 
-function applyBlockRule(root: HTMLElement): boolean {
-  const selection = selectionInside(root)
-  if (!selection?.anchorNode) return false
-  const block = currentBlock(root, selection.anchorNode)
-  if (!block || block === root || (block.tagName !== 'P' && block.tagName !== 'DIV')) return false
-  const text = block.textContent ?? ''
+/**
+ * Identifies which markdown input rule rewrote the DOM. The editor uses it to
+ * make an auto-conversion its own undo step (undo restores the literal text the
+ * user typed) and to hold that same rule off inside the block the user just
+ * reverted it in.
+ */
+export type MarkdownRuleKind =
+  | 'heading'
+  | 'bullet-list'
+  | 'ordered-list'
+  | 'strong-asterisk'
+  | 'strong-underscore'
+  | 'strikethrough'
+  | 'emphasis-asterisk'
+  | 'emphasis-underscore'
+  | 'inline-code'
 
-  const heading = text.match(/^(#{1,6})\s+(.*)$/)
-  if (heading) {
-    replaceBlockWithHeading(block, heading[1]?.length ?? 1, heading[2] ?? '')
-    return true
-  }
-  const unordered = text.match(/^[-+*]\s+(.*)$/)
-  if (unordered) {
-    replaceBlockWithList(block, false, unordered[1] ?? '')
-    return true
-  }
-  const ordered = text.match(/^1[.)]\s+(.*)$/)
-  if (ordered) {
-    replaceBlockWithList(block, true, ordered[1] ?? '')
-    return true
-  }
-
-  return false
+export interface MarkdownInputRuleOptions {
+  /** True when the caret's block must skip `kind` because the user undid that
+   *  very conversion there and the typed characters are still literal. */
+  isRuleSuppressed?: (block: HTMLElement | null, kind: MarkdownRuleKind) => boolean
 }
 
-export function applyMarkdownInputRule(root: HTMLElement): void {
+/** Typing-rule passes, in order: strong before emphasis so `**` is never eaten
+ *  by the single-asterisk rule. Matched against the text before the caret. */
+const INLINE_TYPING_RULES: ReadonlyArray<
+  readonly [RegExp, 'strong' | 'em' | 'del', MarkdownRuleKind]
+> = [
+  [new RegExp(`${DELIMITED_SPAN_SOURCES.strongAsterisk}$`), 'strong', 'strong-asterisk'],
+  [new RegExp(`${DELIMITED_SPAN_SOURCES.strongUnderscore}$`), 'strong', 'strong-underscore'],
+  [new RegExp(`${DELIMITED_SPAN_SOURCES.strike}$`), 'del', 'strikethrough'],
+  [new RegExp(`${DELIMITED_SPAN_SOURCES.emphasisAsterisk}$`), 'em', 'emphasis-asterisk'],
+  [new RegExp(`${DELIMITED_SPAN_SOURCES.emphasisUnderscore}$`), 'em', 'emphasis-underscore']
+]
+
+function applyBlockRule(
+  root: HTMLElement,
+  options: MarkdownInputRuleOptions
+): MarkdownRuleKind | null {
+  const selection = selectionInside(root)
+  if (!selection?.anchorNode) return null
+  const block = currentBlock(root, selection.anchorNode)
+  if (!block || block === root || (block.tagName !== 'P' && block.tagName !== 'DIV')) return null
+  const text = block.textContent ?? ''
+  const suppressed = (kind: MarkdownRuleKind): boolean =>
+    options.isRuleSuppressed?.(block, kind) === true
+
+  const heading = text.match(/^(#{1,6})\s+(.*)$/)
+  if (heading && !suppressed('heading')) {
+    replaceBlockWithHeading(block, heading[1]?.length ?? 1, heading[2] ?? '')
+    return 'heading'
+  }
+  const unordered = text.match(/^[-+*]\s+(.*)$/)
+  if (unordered && !suppressed('bullet-list')) {
+    replaceBlockWithList(block, false, unordered[1] ?? '')
+    return 'bullet-list'
+  }
+  const ordered = text.match(/^1[.)]\s+(.*)$/)
+  if (ordered && !suppressed('ordered-list')) {
+    replaceBlockWithList(block, true, ordered[1] ?? '')
+    return 'ordered-list'
+  }
+
+  return null
+}
+
+export function applyMarkdownInputRule(
+  root: HTMLElement,
+  options: MarkdownInputRuleOptions = {}
+): MarkdownRuleKind | null {
   // The code fence is deliberately NOT an input rule: it only materializes on
   // Enter (see `applyCodeFenceOnEnter`), so typing ```lang never yanks the
   // paragraph away mid-sentence.
-  if (applyBlockRule(root)) return
-  applyInlineRule(root)
+  const blockRule = applyBlockRule(root, options)
+  if (blockRule) return blockRule
+  return applyInlineRule(root, options)
 }
 
 export function formatRichSelection(root: HTMLElement, tagName: 'strong' | 'em' | 'code'): boolean {

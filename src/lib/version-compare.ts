@@ -12,14 +12,29 @@ export function parseMajorVersion(version: string): number {
   return major
 }
 
+/** First `major[.minor[.patch]]` sequence anywhere in a version-ish string. */
+const VERSION_SEQUENCE_PATTERN = /(\d+)(?:\.(\d+))?(?:\.(\d+))?/u
+
+/**
+ * Numeric parts of a version string, read from the first numeric sequence it
+ * contains. Raw `--version` lines (`opencode v2.0.18`, `codex-cli 0.44.0`) are
+ * therefore comparable by their numbers instead of degrading to NaN, which
+ * would make every ordering test fail and silently keep the first candidate.
+ */
 function versionParts(version: string): [number, number, number] {
-  const [major, minor, patch] = version.split('.').map((part) => Number.parseInt(part, 10))
-  return [major ?? 0, minor ?? 0, patch ?? 0]
+  const match = VERSION_SEQUENCE_PATTERN.exec(version)
+  if (!match) return [0, 0, 0]
+  return [
+    Number.parseInt(match[1] ?? '0', 10),
+    Number.parseInt(match[2] ?? '0', 10),
+    Number.parseInt(match[3] ?? '0', 10)
+  ]
 }
 
 /**
- * Three-part numeric compare (prerelease/build metadata ignored). Returns > 0
- * when `a` is newer than `b`, < 0 when older, 0 when equal.
+ * Three-part numeric compare of a version line or plain version (prerelease and
+ * build metadata ignored). Returns > 0 when `a` is newer than `b`, < 0 when
+ * older, 0 when equal   a string carrying no number at all counts as 0.0.0.
  */
 export function compareVersions(a: string, b: string): number {
   const [aMajor, aMinor, aPatch] = versionParts(a)

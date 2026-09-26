@@ -1,6 +1,6 @@
 # Download mirror (`dl.codeinoven.com`)
 
-GitHub Releases throttles large assets, which makes installer downloads slow. Every
+GitHub Releases throttles large assets, which makes installer and update downloads slow. Every
 published release is therefore copied to our own Cloudflare R2 origin and served from
 `https://dl.codeinoven.com`. Nothing is rebuilt: the job copies exactly the bytes GitHub
 already published, after verifying them against the release's own `SHA256SUMS.txt`.
@@ -11,7 +11,7 @@ deletes whatever the channel no longer serves, so the bucket never grows and a d
 never rots. GitHub Releases is the archive: anyone who wants an older version downloads it
 there.
 
-Mirrored installers carry **no version in their name** (`stable/codeinoven-arm64.dmg`), because
+Mirrored artifacts carry **no version in their name** (`stable/codeinoven-arm64.dmg`), because
 a channel serves one release. `RELEASE.json` records the GitHub asset name each served file came
 from, which is how the app matches a versioned update-feed entry against a versionless mirror
 file.
@@ -35,7 +35,8 @@ One directory per channel, served from the bucket root:
 
 ```
 https://dl.codeinoven.com/stable/    latest-mac.yml, latest.yml, latest-linux.yml
-                                     codeinoven-arm64.dmg        macOS
+                                     codeinoven-arm64.dmg        macOS (download)
+                                     codeinoven-arm64.zip        macOS (in-app update)
                                      codeinoven-setup.exe        Windows
                                      codeinoven.AppImage | .deb  Linux
                                      SHA256SUMS.txt, RELEASE.json
@@ -47,18 +48,19 @@ The file names are the channel's, not the release's: `stable/codeinoven-arm64.dm
 channel no longer serves (the release just replaced, or a leftover from the earlier versioned
 layout). Nothing on the mirror is versioned, so nothing here links to an old release.
 
-The mirror carries one installer per platform a user installs from the download page, and
-nothing else. GitHub Releases stays the archive, so these stay on GitHub and are **not**
-duplicated here:
+The mirror carries every artifact the app asks for on its own, plus the installers a user
+downloads by hand. Only one thing a release publishes is deliberately left to GitHub Releases,
+which stays the archive:
 
-- the macOS `.zip` is electron-updater's auto-update payload, not a download;
 - `.blockmap` files only serve differential downloads, which the app never performs: it
   pre-downloads the whole artifact into electron-updater's pending cache.
 
-Consequence worth knowing: the app's trust check only uses the mirror when its manifest
-lists the exact file the update feed points at, and macOS updates download the `.zip`. With
-no zip in the bucket, **macOS in-app updates download from GitHub** while Windows and Linux
-updates come from the mirror.
+The macOS `.zip` used to be left behind on the reasoning that it is electron-updater's payload
+rather than a download. That was wrong for the platform users actually update on: darwin prefers
+the `.zip` over the `.dmg`, so a bucket without a zip meant **every macOS in-app update came from
+GitHub Releases** while Windows and Linux came from the mirror. The `.zip` is mirrored now, and
+since macOS carries two artifacts (`.dmg` and `.zip`), a consumer of `RELEASE.json` selects by
+`kind`, never by `platform` alone.
 
 Each directory is a self-contained update-feed root: the feed and the artifacts it points at
 sit side by side, and both describe the same, single release. Nightly feed assets
@@ -70,7 +72,8 @@ array.
 (the digests are unchanged, and they are verified against the release's file before anything is
 uploaded), so `shasum -a 256 -c SHA256SUMS.txt` verifies a versionless download.
 
-`RELEASE.json` is the contract for download pages and for the updater's trust check:
+`RELEASE.json` is the contract for download pages and for the updater's trust check. macOS has
+two entries (`.dmg` and `.zip`), so a consumer selects by `kind`, never by `platform` alone:
 
 ```jsonc
 {
@@ -86,11 +89,22 @@ uploaded), so `shasum -a 256 -c SHA256SUMS.txt` verifies a versionless download.
       "source": "codeinoven-0.5.56-arm64.dmg", // the GitHub asset it came from
       "platform": "macos", // macos | windows | linux
       "arch": "arm64", // arm64 | x64
-      "kind": "dmg", // dmg | installer | appimage | deb (never zip)
+      "kind": "dmg", // dmg | zip | installer | appimage | deb (never blockmap)
       "sizeBytes": 234487204,
       "sha256": "…",
       "sha512": "…", // base64, identical to the value in the channel's update feed
       "url": "https://dl.codeinoven.com/stable/codeinoven-arm64.dmg"
+    },
+    {
+      "name": "codeinoven-arm64.zip", // macOS carries two: the installer and the
+      "source": "codeinoven-0.5.56-arm64.zip", // payload electron-updater installs
+      "platform": "macos",
+      "arch": "arm64",
+      "kind": "zip",
+      "sizeBytes": 234185523,
+      "sha256": "…",
+      "sha512": "…", // what the app compares with the feed before it downloads
+      "url": "https://dl.codeinoven.com/stable/codeinoven-arm64.zip"
     }
   ],
   "feeds": [{ "source": "latest-mac.yml", "key": "stable/latest-mac.yml" }]
@@ -156,10 +170,16 @@ decides caching. Create two Cache Rules (**Rules → Cache Rules**), in this ord
 2. **Installers are cached briefly.** When the hostname is `dl.codeinoven.com`, mark the
    response cache eligible with the shortest edge TTL Cloudflare allows (one hour) and no
    browser cache. The file names are versionless, so a cached copy can outlive the release it
-   was cached for: at most an hour of a manual download still getting the previous installer,
-   and never a wrong install from the app, which checks the bytes against GitHub's feed hash
-   before it uses them. Bypass cache for the hostname instead if you would rather never serve
-   a stale installer; R2 has no egress fees.
+   was cached for: at most an hour of a download still getting the previous release's artifact.
+   Bypass cache for the hostname instead if you would rather never serve a stale one; R2 has no
+   egress fees.
+
+A stale cached artifact can never install a wrong update. Before it downloads anything from the
+mirror, the app requires the manifest to publish the same `sha512` GitHub's feed does for that
+exact file, and the bytes it then downloads have to hash to that same value or they are discarded
+and the update is taken from GitHub instead. That check runs on whatever artifact the feed points
+at, so it covers the macOS `.zip` the updater actually installs, not only the installers a user
+fetches by hand.
 
 Skipping this step still works (objects are served straight from R2), but repeat downloads are
 then not edge-cached.
@@ -247,8 +267,7 @@ The script (`scripts/publish-release-mirror.ts`):
    size the origin reports for the whole object and the bytes it serves;
 6. deletes every installer object the channel holds that this run did not write: the release
    it just replaced (same keys, overwritten) and any leftover from the earlier versioned
-   layout (a versioned name, the macOS zip, a blockmap), never touching feeds, checksums or the
-   manifest.
+   layout (a versioned name, a blockmap), never touching feeds, checksums or the manifest.
 
 Two guards keep the sweep from taking away the release the channel is serving:
 
@@ -261,7 +280,7 @@ Two guards keep the sweep from taking away the release the channel is serving:
   was passed. The workflow serializes mirror runs (`concurrency: download-mirror`) so this stays
   a safety net.
 
-Upload the release from CI, not from a laptop. A release is about 750 MB, so a home uplink
+Upload the release from CI, not from a laptop. A release is about 965 MiB, so a home uplink
 turns that into an hour-long job (measured 0.12 MiB/s up on a constrained connection), while
 the GitHub runner that published the release finishes it in a minute or two. A local run is
 for backfills on a fast connection, and for `--dry-run`, which needs no credentials and
@@ -277,6 +296,11 @@ curl -fL -O https://dl.codeinoven.com/stable/codeinoven.AppImage     # Linux
 curl -fL -O https://dl.codeinoven.com/stable/codeinoven.deb          # Debian / Ubuntu
 curl -fL -O https://dl.codeinoven.com/stable/codeinoven-setup.exe    # Windows
 ```
+
+The macOS `.zip` is served under a versionless link too (`stable/codeinoven-arm64.zip`). It is
+the artifact electron-updater installs an in-app update from, and it is the same one the mirror
+vouches for in `RELEASE.json` under `kind: "zip"`, so a script can fetch exactly what an update
+would download.
 
 Then verify, in the directory you downloaded into:
 
@@ -327,11 +351,11 @@ mean the app silently uses GitHub instead; re-run the mirror job for that releas
 
 ## Retention and cost
 
-A full release is ~750 MB across the four mirrored installers (measured on the `v0.5.56`
-assets: dmg 223.6, exe 164.5, AppImage 202.3, deb 156.4). Each channel holds exactly the release
-it serves, so the bucket stays at ~750 MB per channel (~1.5 GB for both) and does not grow:
-versionless keys mean the next release overwrites the previous one, and the sweep deletes
-whatever the channel no longer serves. R2 storage is
+A full release is ~965 MiB across the five mirrored artifacts (measured on the `v0.5.57`
+assets, in MiB: dmg 222.2, zip 221.9, exe 163.8, AppImage 201.1, deb 155.9). Each channel holds
+exactly the release it serves, so the bucket stays at ~965 MiB per channel (~1.9 GB for both) and
+does not grow: versionless keys mean the next release overwrites the previous one, and the sweep
+deletes whatever the channel no longer serves. R2 storage is
 $0.015/GB-month with no egress fees
 ([R2 pricing](https://developers.cloudflare.com/r2/pricing/)), so the whole mirror costs
 cents per month. `--keep 0` disables deletion if you ever want the bucket to accumulate.

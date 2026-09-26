@@ -88,6 +88,7 @@
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -120,6 +121,7 @@
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
     isOrchestrationChildThread,
+    conversationScopeId,
     threadTracksReadStatus,
     usesThreadWorkspaceMount
   } from '$shared/types'
@@ -555,8 +557,12 @@
 
   function openNewBrowser(): string | null {
     // A new tab starts blank: no URL is loaded, the address bar stays empty,
-    // and the page only loads once the user types an address.
-    return contextSidebarState.openBrowser('')
+    // and the page only loads once the user types an address. It takes the
+    // keyboard with it, so the user can start typing without reaching for the
+    // address bar first.
+    const tabId = contextSidebarState.openBrowser('')
+    if (tabId) browserAddressFocus.request(tabId)
+    return tabId
   }
 
   function openDebugger(): void {
@@ -1421,6 +1427,21 @@
   let assistantRunsByRoutine = $derived(groupRunsByRoutine(assistantThreads))
   /** Every run thread, for the header search's Runs results. */
   let assistantRuns = $derived(assistantThreads.filter((thread) => thread.assistantTaskId))
+  /**
+   * Every assistant thread's browser scope, keyed by thread id: a routine's
+   * how-to host and each of its runs share the routine, and a routine-less task
+   * owns its own. The sidebar resolves a tab's scope through this, so switching
+   * between a routine's threads keeps the browser those threads opened instead
+   * of closing it.
+   */
+  const assistantBrowserScopes = $derived.by(() => {
+    const scopes = new SvelteMap<string, string>()
+    for (const thread of allThreads) {
+      if (thread.projectId !== ASSISTANT_SPACE_ID) continue
+      scopes.set(thread.id, conversationScopeId(thread.projectId, thread.id, thread.routineId))
+    }
+    return scopes
+  })
   let assistantRoutineList = $derived(assistantRoutines.routines)
 
   let threadsByProject = $derived.by(() => {
@@ -1737,6 +1758,17 @@
   })
 
   $effect(() => {
+    // The sidebar owns the browser tab list but holds no thread rows, so it asks
+    // the workspace which conversation a tab belongs to. The resolver reads the
+    // scope index lazily, so registering it once is enough.
+    contextSidebarState.setThreadBrowserScopeResolver((projectId, threadId) =>
+      projectId === ASSISTANT_SPACE_ID
+        ? (assistantBrowserScopes.get(threadId) ?? threadId)
+        : conversationScopeId(projectId, threadId, null)
+    )
+  })
+
+  $effect(() => {
     return subscribe('browser:openRequested', (url, context) => {
       if (context) {
         contextSidebarState.openBrowserForContext(
@@ -1765,8 +1797,15 @@
       }
       // A new tab opens in the container the focused tab belongs to, so a key
       // pressed in a thread's browser can never open a tab the strip is not
-      // showing.
-      contextSidebarState.openBrowserForContext('', tab.projectId, tab.threadId, undefined, true)
+      // showing. It takes the keyboard like one opened from the strip does.
+      const newTabId = contextSidebarState.openBrowserForContext(
+        '',
+        tab.projectId,
+        tab.threadId,
+        undefined,
+        true
+      )
+      browserAddressFocus.request(newTabId)
     })
   })
 

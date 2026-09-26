@@ -20,14 +20,22 @@ const persistedBrowserTabs = loadPersistedBrowserTabs()
 export interface SidebarBrowserTabsHost {
   activeProjectId(): string | null
   activeThreadId(): string | null
+  /**
+   * The conversation a thread's browser tabs belong to (see
+   * `conversationScopeId`). The sidebar store holds no thread rows, so the
+   * workspace resolves this one identity: a routine's threads share the routine,
+   * a standalone chat or routine-less task owns its own, a project's threads
+   * share the project.
+   */
+  threadScopeId(projectId: string, threadId: string): string
   clearNotifications(): void
 }
 
 /**
  * Browser tabs docked in the sidebar. Owns the tab list, the remembered active
- * tab, and visibility, plus persistence and the native view detach. Project
- * scoping is resolved through the host so the store stays the active-identity
- * owner.
+ * tab, and visibility, plus persistence and the native view detach. Conversation
+ * scoping is resolved through the host, so the store never reads thread rows and
+ * stays the active-identity owner.
  */
 export class SidebarBrowserTabs {
   tabs: BrowserContextTab[] = $state(persistedBrowserTabs.tabs)
@@ -47,15 +55,17 @@ export class SidebarBrowserTabs {
     subscribe('browser:state', (state) => this.applyPageState(state))
   }
 
-  /** Browser tabs for the active container.
+  /** Browser tabs for the active conversation.
    *
    *  A project's threads share one browser tab list, so switching between a
    *  project's threads keeps the browser the user was reading. A hidden
    *  conversation container (the inbox, the assistant space) is different: it is
    *  one project holding many independent conversations, so its tabs are scoped
-   *  to the open conversation instead. One agent's tabs then never surface in
-   *  another conversation, and closing them cannot tear down a neighbour's page.
-   *  Switching conversations swaps the browser with the conversation. */
+   *  to the conversation instead. An assistant routine is one such conversation
+   *  whatever thread of it is open   its how-to host and each of its runs share
+   *  the routine (see `conversationScopeId`)   so switching between a routine's
+   *  threads keeps the page those threads opened, instead of closing the browser
+   *  on every switch. */
   get activeTabs(): BrowserContextTab[] {
     const projectId = this.host.activeProjectId()
     if (!projectId) return EMPTY_BROWSER_TABS
@@ -63,7 +73,10 @@ export class SidebarBrowserTabs {
     if (!isConversationContainer(projectId)) return projectTabs
     const threadId = this.host.activeThreadId()
     if (!threadId) return EMPTY_BROWSER_TABS
-    return projectTabs.filter((tab) => tab.threadId === threadId)
+    const scopeId = this.host.threadScopeId(projectId, threadId)
+    return projectTabs.filter(
+      (tab) => this.host.threadScopeId(tab.projectId, tab.threadId) === scopeId
+    )
   }
 
   has(id: string): boolean {
@@ -155,11 +168,7 @@ export class SidebarBrowserTabs {
       existing.url = url
       existing.threadId = threadId
       this.persist()
-      if (
-        reveal &&
-        this.host.activeProjectId() === projectId &&
-        this.host.activeThreadId() === threadId
-      ) {
+      if (reveal && this.isShownConversation(projectId, threadId)) {
         this.focus(id)
       }
       return id
@@ -176,14 +185,26 @@ export class SidebarBrowserTabs {
     }
     this.tabs = [...this.tabs, { id, kind: 'browser', title, projectId, threadId, url }]
     this.persist()
-    if (
-      reveal &&
-      this.host.activeProjectId() === projectId &&
-      this.host.activeThreadId() === threadId
-    ) {
+    if (reveal && this.isShownConversation(projectId, threadId)) {
       this.focus(id)
     }
     return id
+  }
+
+  /**
+   * Whether the sidebar is showing the conversation a tab is opening for. A
+   * reveal is delivered to the conversation on screen, which for an assistant
+   * routine is every one of its threads: a run that opens a page while the user
+   * reads its sibling opens it in the browser already on screen.
+   */
+  private isShownConversation(projectId: string, threadId: string): boolean {
+    if (this.host.activeProjectId() !== projectId) return false
+    const activeThreadId = this.host.activeThreadId()
+    if (!activeThreadId) return false
+    return (
+      this.host.threadScopeId(projectId, threadId) ===
+      this.host.threadScopeId(projectId, activeThreadId)
+    )
   }
 
   updateTab(tabId: string, url: string, title?: string, favicon?: string | null): void {
@@ -315,8 +336,15 @@ export class SidebarBrowserTabs {
   focus(id: string): void {
     const tab = this.tabs.find((candidate) => candidate.id === id)
     if (!tab || tab.projectId !== this.host.activeProjectId()) return
-    if (isConversationContainer(tab.projectId) && tab.threadId !== this.host.activeThreadId())
-      return
+    if (isConversationContainer(tab.projectId)) {
+      const activeThreadId = this.host.activeThreadId()
+      if (!activeThreadId) return
+      // A tab of the active conversation may be focused from any thread that
+      // shares it, which is what lets a routine keep one browser across its
+      // threads. A tab of another conversation never is.
+      const scopeId = this.host.threadScopeId(tab.projectId, activeThreadId)
+      if (this.host.threadScopeId(tab.projectId, tab.threadId) !== scopeId) return
+    }
     this.activeTabId = id
     this.visible = true
     this.host.clearNotifications()

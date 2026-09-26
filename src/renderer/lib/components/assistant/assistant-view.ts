@@ -118,6 +118,34 @@ export function runRowLine(run: Pick<Thread, 'lastActivity'>, now: number): stri
   return `Ran ${describeRelativeTime(run.lastActivity, now)}`
 }
 
+/** How many runs a routine row states exactly before it collapses to a chip. */
+export const ROUTINE_RUN_COUNT_CAP = 10
+
+/**
+ * A routine row's run count. A count above the cap collapses to a fixed `+9`
+ * chip, so a routine that has fired for months cannot widen its row; the exact
+ * total stays on the row's hover card.
+ */
+export function routineRunCountLabel(count: number): string {
+  if (count > ROUTINE_RUN_COUNT_CAP) return '+9'
+  return count === 1 ? '1 run' : `${count} runs`
+}
+
+/**
+ * The next fire a routine row states beside its run count, or null when the
+ * scheduler will not fire this routine at all. A paused routine and a routine
+ * with no saved how-to are both skipped before any slot is evaluated, so the row
+ * must not advertise a time for either.
+ */
+export function routineNextRunLine(
+  routine: Pick<Routine, 'paused' | 'howTo'>,
+  nextRunAt: number | null,
+  now: number
+): string | null {
+  if (nextRunAt === null || routine.paused || !routineHowToComplete(routine)) return null
+  return `Next run ${describeRelativeTime(nextRunAt, now)}`
+}
+
 /**
  * Runs grouped by the task they run, newest first inside each group. A run
  * carries `assistantTaskId`; a task does not, so a task can never group itself.

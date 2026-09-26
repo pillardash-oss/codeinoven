@@ -1,9 +1,15 @@
 import type { SelectionBookmark } from './rich-markdown-editor-dom'
+import type { MarkdownRuleKind } from './rich-markdown'
 
 export interface RichHistoryEntry {
   markdown: string
   html: string
   selection: SelectionBookmark | null
+  /** Set when this snapshot is the literal text the user typed just before an
+   *  input rule rewrote it: undoing the entry reverts only the conversion and
+   *  leaves those characters in place, and the editor holds that rule off in
+   *  the restored block (see `RichMarkdownEditor`). */
+  revertedRule?: MarkdownRuleKind
 }
 
 export interface RichHistoryCallbacks {
@@ -27,7 +33,9 @@ const HISTORY_MERGE_MS = 300
  * Entries capture serialized markdown plus the rendered HTML so an undo can
  * restore the editor without a re-render round trip. Consecutive typing and
  * deleting input is merged into one entry within a short window so a single
- * keystroke is not its own undo step.
+ * keystroke is not its own undo step. A `discrete` commit   an auto-conversion,
+ * whose entry holds the literal text the user typed before the rule fired  
+ * never merges, so undoing it lands exactly on that literal text.
  */
 export class RichMarkdownEditorHistory {
   private undoHistory: RichHistoryEntry[] = []
@@ -67,7 +75,7 @@ export class RichMarkdownEditorHistory {
     this.callbacks.publishState(this.undoHistory.length > 0, this.redoHistory.length > 0)
   }
 
-  commit(entry: RichHistoryEntry | null, inputType?: string): void {
+  commit(entry: RichHistoryEntry | null, inputType?: string, discrete = false): void {
     const editor = this.callbacks.getEditor()
     if (!editor || !entry) return
     const markdown = this.callbacks.serialize(editor)
@@ -75,9 +83,10 @@ export class RichMarkdownEditorHistory {
 
     const now = Date.now()
     const mergeable =
-      inputType === 'insertText' ||
-      inputType === 'deleteContentBackward' ||
-      inputType === 'deleteContentForward'
+      !discrete &&
+      (inputType === 'insertText' ||
+        inputType === 'deleteContentBackward' ||
+        inputType === 'deleteContentForward')
     const merge =
       mergeable &&
       inputType === this.lastHistoryInputType &&

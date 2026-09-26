@@ -195,6 +195,13 @@
     return runsByTask.get(taskId) ?? EMPTY_RUNS
   }
 
+  /** One routine's runs, newest first (empty while it has never run). The row
+   *  reports executions, so this is what its count reads: a routine's Getting
+   *  started host is an authoring thread, never an execution. */
+  function runsOfRoutine(routineId: string): readonly Thread[] {
+    return runsByRoutine.get(routineId) ?? EMPTY_RUNS
+  }
+
   /** True while any of a task's runs is actually working. */
   function taskRunWorking(taskId: string): boolean {
     return runsFor(taskId).some((run) => isThreadWorking(run))
@@ -217,8 +224,8 @@
   /** The runs a routine shows at its own level, beside its task rows (see
    *  `routineSiblingRuns`). */
   function siblingRuns(routine: Routine): readonly Thread[] {
-    const runs = runsByRoutine.get(routine.id)
-    if (!runs || runs.length === 0) return EMPTY_RUNS
+    const runs = runsOfRoutine(routine.id)
+    if (runs.length === 0) return EMPTY_RUNS
     const renderedTaskIds = new Set(nestedRoutineTasks(routine.id).map((task) => task.id))
     return routineSiblingRuns(runs, routineHowToComplete(routine), renderedTaskIds, tasksById)
   }
@@ -411,6 +418,7 @@
 
         {#each orderedRoutines as routine (routine.id)}
           {@const routineTaskList = routineTasks(routine.id)}
+          {@const routineRunList = runsOfRoutine(routine.id)}
           {@const visibleTasks = filteredRoutineTasks(routine)}
           {@const searching = routineSearchOpen.has(routine.id)}
           {@const query = routineSearchQueries.get(routine.id) ?? ''}
@@ -426,7 +434,7 @@
             expanded={expanded.has(routine.id) || searching || holdsSelected}
             working={routineWorking(routine.id)}
             missed={missedRoutineIds.has(routine.id)}
-            taskCount={routineTaskList.length}
+            runCount={routineRunList.length}
             iconUrl={assistantRoutines.iconUrls.get(routine.id) ?? null}
             nextRunAt={routineNextRun(routine.id)}
             searchOpen={searching}
