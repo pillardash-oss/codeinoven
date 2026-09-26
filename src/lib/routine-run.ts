@@ -72,9 +72,11 @@ export function composeRoutineInstruction(
  * asking the user for whatever only the user can supply. Pointing the user at
  * the Connections tab is the last resort, not the answer.
  *
- * The chat engine attaches this to the hidden context of every assistant task
- * turn (`routineRunHiddenContext`), so the behavior is a property of the thread
- * and not of one send path.
+ * The chat engine attaches this to the hidden context of every turn on a saved
+ * routine's task or run thread (`routineRunHiddenContext`), so the behavior is a
+ * property of the thread and not of one send path. The routine's Getting started
+ * thread is never one of them: it is the authoring and editing host, so a message
+ * there carries `routineHowToUpdateContext` instead of this contract.
  */
 export function routineRunContext(
   routine: Pick<Routine, 'name' | 'connections' | 'delivery' | 'priority'>

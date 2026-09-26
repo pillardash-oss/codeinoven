@@ -581,6 +581,41 @@ prompt"; the user-facing term is how-to.
   with `cio_util_manage`, collects credentials with `cio_ask_secret`, and asks
   the user for anything else with `cio_ask_user`. Pointing the user at the
   Connections tab is the last resort, not the answer.
+- **The Getting started thread never runs the routine.** `ChatEngine.routineConversation`
+  (`src/main/chat/chat-engine.ts`) is the one place that decides which of the
+  three routine conversations a thread is on: `authoring` (any thread of a routine
+  that still has no how-to, the interview that drafts it), `update` (the Getting
+  started thread once the routine is saved), and `run` (every other thread of a
+  saved routine). A run of the routine
+  dispatches its own run thread (`assistantRunTitle`, `routineRunPrompt`), so a
+  message on the Getting started thread is always about the routine itself. It
+  carries the editing contract instead of the run contract
+  (`routineHowToUpdateContext` in `src/lib/routine-authoring.ts`): the saved
+  how-to, schedule, connections, delivery and urgency ride along as the starting
+  point, the agent changes only what the user asked for, and it is told plainly
+  to never start doing the routine's job or treat the message as the routine
+  having fired. This was a real bug: the thread was handed the run contract as
+  soon as the how-to was saved, so "more Nigerian news, less politics" was
+  answered by searching the web and writing the brief instead of revising the
+  how-to. The editing turn keeps the management grant a run has (a tweak that
+  names a new service installs it here; `CIO_UTILITY_ROUTINE_EDIT_PROMPT` in
+  `src/main/utilities/cio-utility-prompt.ts`), and a steer on that thread keeps
+  it too, while the interview checkpoint capability stays bound to the authoring
+  conversation alone.
+- **A revision commits through the same recap card.** The draft path is open on
+  the Getting started thread after the first save, not only before it:
+  `assistantRoutineDraft` (`ThreadView.svelte`) keeps parsing the thread's newest
+  `how-to` and `routine` fences there, while a task or run thread of the same
+  routine still never proposes one. A draft is offered only when it is a real
+  change: it must be newer than `Routine.howToUpdatedAt` (a draft left in a
+  reopened thread after an edit elsewhere is not) and it must differ from what is
+  saved, counting a plan-only change (a new time, an added connection) because the
+  how-to text often carries no schedule at all. `RoutineRecapCard` carries an
+  `update` flag, so it says **Ready to update**, lists the connections the routine
+  keeps beside the ones the plan adds, keeps the saved schedule when the plan does
+  not name it, and commits through the same `confirmRoutineSave`/
+  `saveRoutineHowTo` pair. The app-owned next-steps turn is posted for a routine's
+  first save only.
 - The contract is a property of the thread, so it applies to every turn on the
   task, not just the internal run: a scheduled run, a missed-run **Run now**, and
   a user follow-up on the same thread all carry it and the run grant

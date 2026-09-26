@@ -224,6 +224,24 @@ This turn runs a saved routine, and the tools it needs may still be missing. You
 - Collect any credential with ${ASK_SECRET_TOOL_NAME} instead of asking the user to paste it in chat.
 - Never edit harness config files or stored CodeInOven app data directly; configuration goes through the app API.`
 
+/**
+ * The compact management grant for a user turn on a saved routine's Getting
+ * started thread. It is not a run   the routine's own job never executes here;
+ * the user is tweaking the how-to, the schedule, or the connections. Installing
+ * is still in scope, because a tweak that names a new service has to be set up in
+ * this thread, with the same powers a run has, rather than by sending the user to
+ * the panel. The editing contract in `routine-authoring.ts` carries the detail.
+ */
+export const CIO_UTILITY_ROUTINE_EDIT_PROMPT = `CodeInOven utility contract (routine update)
+
+This turn updates a saved routine's how-to, schedule, or connections. It does not run the routine, and the tools the change needs may still be missing. You may supply them on this turn:
+- Search the app utility library with ${UTILITY_SEARCH_TOOL_NAME} for a matching skill, MCP server, or plugin.
+- When the library has nothing, go online to find the official source: use your own web tools, or activate a web/search capability from the library with ${UTILITY_SEARCH_TOOL_NAME} and ${UTILITY_ACTIVATE_TOOL_NAME}. Look up the official MCP endpoint, package, or install instructions and cite the source.
+- Install a compatible one with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) after you explain it and the user agrees. Definitions must stay secret-free.
+- Collect any credential with ${ASK_SECRET_TOOL_NAME} instead of asking the user to paste it in chat.
+- Verify the capability actually works before you call the connection set up.
+- Never edit harness config files or stored CodeInOven app data directly; configuration goes through the app API.`
+
 export function isCioUtilityRequest(text: string): boolean {
   for (const match of text.matchAll(CIO_UTILITY_TAG_PATTERN)) {
     const mentionStart = (match.index ?? 0) + (match[1]?.length ?? 0)

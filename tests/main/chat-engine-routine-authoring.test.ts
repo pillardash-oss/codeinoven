@@ -207,9 +207,15 @@ describe('routineAuthoringInstruction', () => {
     expect(instruction).not.toContain('## Resolved decisions (app-owned, verbatim)')
   })
 
-  it('is not an authoring turn once the routine has its how-to', async () => {
-    const { engine, thread, checkpoints } = await setup('# Saved how-to')
-    await checkpoints.save(routine('').id, '- Stale')
+  it('carries the editing contract once the routine is saved, and never the run contract', async () => {
+    const howTo = '# Saved how-to\n\nSearch the web and report.'
+    const { engine, thread, checkpoints } = await setup(howTo)
+    await checkpoints.save(routine('').id, '- Stale interview state')
+
+    // A routine's Getting started thread is where the user comes back to change
+    // the how-to. Handing it the run contract made the agent answer a tweak
+    // ("more Nigerian news, less politics") by running the routine's job.
+    expect(internals(engine).routineRunHiddenContext(thread)).toBeUndefined()
 
     const instruction = await internals(engine).routineAuthoringInstruction(
       ASSISTANT_SPACE_ID,
@@ -217,6 +223,17 @@ describe('routineAuthoringInstruction', () => {
       thread
     )
 
-    expect(instruction).toBeUndefined()
+    expect(instruction).toBeDefined()
+    expect(instruction).toContain('Slack latest info')
+    expect(instruction).toContain('tweak or update its how-to and its connections')
+    expect(instruction).toContain('This thread never runs the routine')
+    // The saved state is what the agent revises, so it rides the contract.
+    expect(instruction).toContain('## Saved state (app-owned)')
+    expect(instruction).toContain(howTo)
+    expect(instruction).toContain('Current schedule: Not scheduled')
+    // The interview's own state belongs to the authoring conversation only.
+    expect(instruction).not.toContain('two separate single-choice questions')
+    expect(instruction).not.toContain('## Getting started checkpoint (app-owned)')
+    expect(instruction).not.toContain('- Stale interview state')
   })
 })

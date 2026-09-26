@@ -100,7 +100,8 @@ import { RoutineRepo } from '../database/repositories/routine-repo'
 import {
   ROUTINE_AUTHORING_DECISION_LIMIT,
   routineAuthoringContext,
-  routineAuthoringProgressContext
+  routineAuthoringProgressContext,
+  routineHowToUpdateContext
 } from '../../lib/routine-authoring'
 import { isRoutineNextStepsPrompt } from '../../lib/assistant-next-steps'
 import { composeRoutineInstruction, routineRunContext } from '../../lib/routine-run'
@@ -154,6 +155,7 @@ import {
 } from '../utilities/agent-secret-service'
 import {
   CIO_UTILITY_REUSE_PROMPT,
+  CIO_UTILITY_ROUTINE_EDIT_PROMPT,
   CIO_UTILITY_RUN_PROMPT,
   CIO_UTILITY_SETUP_PROMPT,
   isCioUtilityRequest
@@ -3372,13 +3374,16 @@ export class ChatEngine {
     brainstormInterview = false,
     explicitUtilityInvocation = false,
     /**
-     * A turn on a saved routine's task   a scheduled run or a user follow-up on
-     * the same thread. It carries the run grant (management is in scope) rather
-     * than the reuse contract, which reserves installing for an explicit
-     * request. Mutually exclusive with `explicitUtilityInvocation`, which wins
-     * when the user typed @cio-utility on the same turn.
+     * The routine conversation this turn belongs to, when it is one.
+     * `'run'`   a turn on a saved routine's task (a scheduled run or a user
+     * follow-up on the same thread): it carries the run grant (management is in
+     * scope) rather than the reuse contract, which reserves installing for an
+     * explicit request. `'edit'`   a user turn on a saved routine's Getting
+     * started thread: it does not run the routine, but a connection the change
+     * needs is installed here, so the grant is the same. A turn where the user
+     * typed @cio-utility keeps the full setup briefing instead.
      */
-    assistantRoutineTurn = false,
+    assistantRoutineTurn: 'none' | 'run' | 'edit' = 'none',
     /**
      * The routine whose Getting started interview this turn belongs to, when it
      * is one. Binds the checkpoint capability to the turn so the agent can save
@@ -3480,11 +3485,13 @@ export class ChatEngine {
       // re-dumped into context.
       const utilityContract = !allowManagement
         ? ''
-        : assistantRoutineTurn
+        : assistantRoutineTurn === 'run'
           ? CIO_UTILITY_RUN_PROMPT
           : explicitUtilityInvocation
             ? CIO_UTILITY_SETUP_PROMPT
-            : CIO_UTILITY_REUSE_PROMPT
+            : assistantRoutineTurn === 'edit'
+              ? CIO_UTILITY_ROUTINE_EDIT_PROMPT
+              : CIO_UTILITY_REUSE_PROMPT
       // The design contract is separate from the utility contract because it is
       // not a setup grant: the capability it activates arrives with the turn
       // request, and what this adds is how to run the session the user opened.
@@ -3704,16 +3711,20 @@ export class ChatEngine {
     // authoring conversation, exactly like a turn where the user typed
     // @cio-utility; a steer landing mid-conversation must not drop it. A run of
     // a saved routine keeps it for the same reason: a steer must not drop the
-    // ability to supply a connection the run needs.
+    // ability to supply a connection the run needs. A user editing a saved
+    // routine's how-to on its Getting started thread keeps it too, because the
+    // tweak may need a capability installed.
     const allowManagement =
-      this.isRoutineAuthoringThread(steeringThread) ||
-      this.routineRunHiddenContext(steeringThread) !== undefined ||
+      this.routineConversation(steeringThread) !== null ||
       (await this.hasCioUtilityInvocation(projectId, threadId))
     // A steer landing mid-authoring keeps the checkpoint capability alive for
     // the rest of the turn, so an answer the user steered with is still saved.
-    const authoringRoutineId = this.isRoutineAuthoringThread(steeringThread)
-      ? (steeringThread?.routineId ?? null)
-      : null
+    // A steer on a saved routine's Getting started thread is an editing turn,
+    // not an interview: it has no checkpoint to keep.
+    const authoringRoutineId =
+      this.routineConversation(steeringThread) === 'authoring'
+        ? (steeringThread?.routineId ?? null)
+        : null
     if (this.utilityTurns.has(sessionId)) {
       // A steer that invokes @cio-utility has to manage utilities for the rest of
       // the turn. A gateway fixes its tool set when the turn starts, and the live
@@ -6941,15 +6952,47 @@ export class ChatEngine {
    * how-to is saved.
    */
   private isRoutineAuthoringThread(thread: Thread | null | undefined): boolean {
-    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return false
-    const routine = this.routineRepo.get(thread.routineId)
-    return routine ? !routineHowToComplete(routine) : false
+    return this.routineConversation(thread) === 'authoring'
   }
 
   /**
-   * The how-to authoring contract for a turn in a routine that still has no
-   * how-to, with the interview's own app-owned state beside it: the checkpoint
-   * the agent keeps current and every answer the user already submitted.
+   * Which routine conversation a thread is on, when it is one of the three. The
+   * single source of truth for them, so a turn can never be read as two at once:
+   *
+   * - `authoring`: a thread of a routine that still has no how-to, the Getting
+   *   started interview that drafts it. The user confirms the recap and the app
+   *   saves the routine from it.
+   * - `update`: the Getting started thread of a routine that is already saved.
+   *   The user is back to tweak the how-to, the schedule, or the connections, so
+   *   the turn carries the editing contract and never runs the routine.
+   * - `run`: any other thread of a saved routine. This is where the routine
+   *   actually runs, and what carries the how-to plus the self-provisioning
+   *   contract.
+   *
+   * `null` for every thread that belongs to no routine.
+   */
+  private routineConversation(
+    thread: Thread | null | undefined
+  ): 'authoring' | 'update' | 'run' | null {
+    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return null
+    const routine = this.routineRepo.get(thread.routineId)
+    if (!routine) return null
+    // A routine with no how-to cannot run, so every one of its threads is the
+    // interview, exactly as before the Getting started thread's flag existed.
+    if (!routineHowToComplete(routine)) return 'authoring'
+    // A routine's Getting started thread is its later editing host, never a run:
+    // runs are dispatched on their own run threads.
+    return isAssistantSetupThread(thread) ? 'update' : 'run'
+  }
+
+  /**
+   * The contract for a turn on a routine's Getting started thread: the authoring
+   * interview while the routine still has no how-to, and the editing contract
+   * once it is saved.
+   *
+   * The authoring form carries the interview's own app-owned state beside it: the
+   * checkpoint the agent keeps current and every answer the user already
+   * submitted.
    *
    * The contract is a property of the thread, so the engine composes it rather
    * than the composer: a resend from the message editor, a steer, or a queued
@@ -6970,9 +7013,22 @@ export class ChatEngine {
     threadId: string,
     thread: Thread | null | undefined
   ): Promise<string | undefined> {
-    if (!this.isRoutineAuthoringThread(thread) || !thread?.routineId) return undefined
+    const conversation = this.routineConversation(thread)
+    // Only the two Getting started conversations have a contract here: a run
+    // thread carries the run contract instead, and the app's own next-steps turn
+    // on a task thread carries none.
+    if ((conversation !== 'authoring' && conversation !== 'update') || !thread?.routineId) {
+      return undefined
+    }
     const routine = this.routineRepo.get(thread.routineId)
     if (!routine) return undefined
+    // The routine is saved, so this is no longer an interview: the user is back
+    // to tweak the how-to, the schedule, or the connections, and the saved state
+    // is what the agent revises. The interview checkpoint belongs to the authoring
+    // conversation, so it is neither read nor injected here.
+    if (conversation === 'update') {
+      return routineHowToUpdateContext(routine)
+    }
     const [checkpoint, messages] = await Promise.all([
       this.routineAuthoringCheckpoints.read(routine.id).catch((error: unknown): string | null => {
         Logger.error('Getting started checkpoint could not be read:', error)
@@ -7026,9 +7082,9 @@ export class ChatEngine {
    * user message on the task.
    */
   private routineRunHiddenContext(thread: Thread | null | undefined): string | undefined {
-    if (!thread || thread.projectId !== ASSISTANT_SPACE_ID || !thread.routineId) return undefined
-    const routine = this.routineRepo.get(thread.routineId)
-    if (!routine || !routineHowToComplete(routine)) return undefined
+    if (this.routineConversation(thread) !== 'run') return undefined
+    const routine = thread?.routineId ? this.routineRepo.get(thread.routineId) : null
+    if (!routine) return undefined
     return routineRunContext(routine)
   }
 
@@ -8155,6 +8211,13 @@ export class ChatEngine {
     const routineRun = this.routineRunHiddenContext(targetThread)
     const assistantTaskTurn =
       routineRun !== undefined && !(origin === 'internal' && isRoutineNextStepsPrompt(text))
+    // A user turn on the Getting started thread of a routine that is already
+    // saved: the user is tweaking the how-to, the schedule, or the connections,
+    // not running the routine. It carries the editing contract through
+    // `routineAuthoringInstruction` below, and the same management grant a run
+    // gets, because a tweak can need a capability this thread has to install.
+    const routineHowToUpdateTurn =
+      origin === 'user' && this.routineConversation(targetThread) === 'update'
     // The contract belongs to the thread, not to one send path. A scheduled run
     // and a user follow-up on the same task are both the routine's assistant, so
     // both carry the self-provisioning contract and the run grant; gating it on
@@ -8739,6 +8802,7 @@ export class ChatEngine {
       utilitySetupRequested ||
       assistantAuthoringTurn ||
       assistantTaskTurn ||
+      routineHowToUpdateTurn ||
       (await this.hasCioUtilityInvocation(projectId, threadId))
     // Every chat, web-only or not, receives the app utility gateway: the
     // in-app browser (and any installed web tool) is reached through it, and
@@ -8760,7 +8824,7 @@ export class ChatEngine {
       utilitySetupAllowed,
       activeBrainstormSession,
       utilitySetupRequested || assistantAuthoringTurn,
-      assistantTaskTurn,
+      assistantTaskTurn ? 'run' : routineHowToUpdateTurn ? 'edit' : 'none',
       assistantAuthoringTurn ? (targetThread?.routineId ?? null) : null,
       designSession,
       videoSession

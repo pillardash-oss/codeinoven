@@ -151,8 +151,8 @@
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import {
     connectionsFromPlan,
+    extractHowToDraft,
     isRoutineConfirmation,
-    latestHowToDraft as latestHowToDraftIn,
     latestRoutinePlanDraft as latestRoutinePlanDraftIn,
     type RoutinePlanDraft
   } from '$lib/components/assistant/assistant-view'
@@ -201,8 +201,11 @@
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { routineDeliveryLabel, routinePriorityLabel } from '$shared/routine-reporting'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
+    describeSchedule,
+    isAssistantSetupThread,
     isOrchestrationChildThread,
     WORKING_TRACE_PAGE_SIZE
   } from '$shared/types'
@@ -6074,6 +6077,15 @@
       : null
   )
 
+  /** Whether this thread is a routine's Getting started thread: the authoring
+   *  host while its how-to is missing, and the editing host once it is saved. */
+  const assistantSetupThread = $derived(isAssistantSetupThread(thread))
+
+  /** The routine's own connection labels, for the recap card's kept ones. */
+  const existingRoutineConnections = $derived(
+    assistantRoutine?.connections.map((connection) => connection.label) ?? []
+  )
+
   /**
    * The complete draft the agent has presented for this routine: the how-to it
    * wrote plus the machine-readable plan (schedule and connections). A draft is
@@ -6083,18 +6095,75 @@
    * every delta would be wasted work for a card that cannot show yet anyway.
    * The authoring conversation is short and lives only until the routine is
    * saved, so scanning it once per settled turn is bounded work.
+   *
+   * A saved routine keeps its draft path on its Getting started thread alone, and
+   * only for a revision that actually changes it: a message there tweaks the
+   * how-to, so a revised draft has to be committable, while a task or run thread
+   * of the same routine carries the saved how-to and must never suggest a new one,
+   * and the draft already committed must not read as a pending change.
    */
   const assistantRoutineDraft = $derived.by(
     (): {
       howTo: string
       plan: RoutinePlanDraft | null
     } | null => {
-      if (!assistantMode || !assistantRoutineId || assistantHowToComplete || busy) return null
-      const howTo = latestHowToDraft()
-      if (!howTo) return null
-      return { howTo, plan: latestRoutinePlanDraft() }
+      if (!assistantMode || !assistantRoutineId || busy) return null
+      const draft = latestHowToDraft()
+      if (!draft) return null
+      const plan = latestRoutinePlanDraft()
+      if (assistantHowToComplete && !isRoutineRevision(draft, plan)) return null
+      return { howTo: draft.howTo, plan }
     }
   )
+
+  /**
+   * Whether a how-to draft is a change to the routine that is already saved, so
+   * the card offers a revision and never a second save of what is saved. Three
+   * things disqualify a draft:
+   *
+   * - it sits on a thread that is not the routine's Getting started thread;
+   * - it is older than the saved how-to, which is what a draft left in a reopened
+   *   thread looks like after the how-to was edited elsewhere;
+   * - it changes nothing, either because the agent re-presented the same how-to
+   *   and the same plan, or because the save would patch no field differently.
+   *   A plan-only change counts, because the how-to text often does not carry the
+   *   schedule at all.
+   *
+   * A routine that predates the how-to timestamp falls back to comparing content.
+   */
+  function isRoutineRevision(
+    draft: { howTo: string; at: number },
+    plan: RoutinePlanDraft | null
+  ): boolean {
+    if (!assistantSetupThread) return false
+    const savedAt = assistantRoutine?.howToUpdatedAt
+    if (savedAt !== undefined && draft.at <= savedAt) return false
+    const routine = assistantRoutine
+    if (!routine) return true
+    if (draft.howTo.trim() !== routine.howTo.trim()) return true
+    if (!plan) return false
+    if (plan.schedule && describeSchedule(plan.schedule) !== describeSchedule(routine.schedule)) {
+      return true
+    }
+    if (plan.delivery && routineDeliveryLabel(plan.delivery) !== currentDeliveryLabel()) return true
+    if (plan.priority && routinePriorityLabel(plan.priority) !== currentPriorityLabel()) return true
+    const known = new Set(
+      routine.connections.map((connection) => connection.label.trim().toLowerCase())
+    )
+    return plan.connections.some((connection) => !known.has(connection.name.trim().toLowerCase()))
+  }
+
+  /** The saved delivery as the plan's own label, so the two compare. */
+  function currentDeliveryLabel(): string {
+    const delivery = assistantRoutine?.delivery
+    return delivery ? routineDeliveryLabel(delivery) : ''
+  }
+
+  /** The saved urgency as the plan's own label, so the two compare. */
+  function currentPriorityLabel(): string {
+    const priority = assistantRoutine?.priority
+    return priority ? routinePriorityLabel(priority) : ''
+  }
 
   /**
    * Identity of the current draft. Dismissing the recap card hides it only for
@@ -6121,18 +6190,20 @@
   }
 
   /**
-   * The how-to the agent last drafted for this routine, taken from the newest
-   * how-to fenced block in an assistant message. The authoring contract asks
-   * for a `how-to` fence, but a bare fence whose body starts with a
-   * `how-to: <title>` line is accepted too.
+   * The how-to the agent last drafted for this routine, with the time it was
+   * written: the newest how-to fenced block in the newest assistant message that
+   * carries one. The authoring contract asks for a `how-to` fence, but a bare
+   * fence whose body starts with a `how-to: <title>` line is accepted too. The
+   * time is what tells a revision from the authoring draft the app already saved.
    */
-  function latestHowToDraft(): string | null {
-    const assistantTexts: string[] = []
-    for (const message of messages) {
-      if (message.role !== 'assistant') continue
-      assistantTexts.push(messageText(message))
+  function latestHowToDraft(): { howTo: string; at: number } | null {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (!message || message.role !== 'assistant') continue
+      const howTo = extractHowToDraft(messageText(message))
+      if (howTo) return { howTo, at: message.createdAt }
     }
-    return latestHowToDraftIn(assistantTexts)
+    return null
   }
 
   /** The machine-readable routine plan the agent last emitted, if any. */
@@ -6187,13 +6258,16 @@
    * The user's go-ahead for the pending routine recap: commit the draft, then
    * have the agent post a short next-steps list in the Getting started thread.
    * Both the recap card's Save button and a typed confirmation route here, so
-   * the follow-up turn happens whichever way the user agreed.
+   * the follow-up turn happens whichever way the user agreed. The next-steps
+   * turn belongs to a routine's first save; an edit of a routine that already
+   * has its how-to commits on its own, with nothing left to set up.
    */
   async function confirmRoutineSave(): Promise<void> {
     const routineId = assistantRoutineId
     if (!routineId) return
+    const firstSave = !assistantHowToComplete
     const saved = await saveRoutineHowTo()
-    if (saved) await assistantRoutines.postSetup(routineId).catch(() => undefined)
+    if (saved && firstSave) await assistantRoutines.postSetup(routineId).catch(() => undefined)
   }
 
   /**
@@ -12269,6 +12343,8 @@
                     routineName={assistantRoutine?.name ?? assistantRoutineName ?? thread.title}
                     howTo={assistantRoutineDraft.howTo}
                     plan={assistantRoutineDraft.plan}
+                    update={assistantHowToComplete}
+                    existingConnections={existingRoutineConnections}
                     saving={routineSaving}
                     onSave={() => void confirmRoutineSave()}
                     onKeepEditing={keepEditingRoutine}
@@ -12646,19 +12722,21 @@
                       bind:this={composer}
                       placeholder={assistantMode && assistantRoutineName && !assistantHowToComplete
                         ? 'Describe how this routine should run…'
-                        : activePlanningEntry === 'brainstorm'
-                          ? 'Add details to the Brainstorm discussion…'
-                          : activePlanningEntry === 'spec'
-                            ? 'Sr. Engineer is preparing the specification…'
-                            : assignmentFormulating
-                              ? 'Sr. Engineer is preparing the Assignment…'
-                              : specFormulating
-                                ? 'Formulating specification…'
-                                : delegatedWorkBusy
-                                  ? `${delegatedActivityLabel}   message the Sr. Engineer`
-                                  : busy
-                                    ? `${APP_NAME} is working   type to queue a message`
-                                    : 'Send a message...'}
+                        : assistantSetupThread && assistantHowToComplete
+                          ? 'Tweak the how-to, the schedule, or a connection…'
+                          : activePlanningEntry === 'brainstorm'
+                            ? 'Add details to the Brainstorm discussion…'
+                            : activePlanningEntry === 'spec'
+                              ? 'Sr. Engineer is preparing the specification…'
+                              : assignmentFormulating
+                                ? 'Sr. Engineer is preparing the Assignment…'
+                                : specFormulating
+                                  ? 'Formulating specification…'
+                                  : delegatedWorkBusy
+                                    ? `${delegatedActivityLabel}   message the Sr. Engineer`
+                                    : busy
+                                      ? `${APP_NAME} is working   type to queue a message`
+                                      : 'Send a message...'}
                       disabled={specFormulating}
                       working={busy}
                       onStop={abortRun}
