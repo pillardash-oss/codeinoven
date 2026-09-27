@@ -6,6 +6,7 @@
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import {
+    anchorTextMatches,
     applyAnnotationHighlights,
     measureAnnotationBubbles,
     rangeForAnnotation,
@@ -33,9 +34,14 @@
     path: string
     /** Source being rendered, which is the file's draft while it is edited. */
     content: string
+    /** True when this view is the fullscreen reader. Its sidebar is behind the
+     *  modal, so an action that lands there has to give the modal up. */
+    fullscreen?: boolean
+    /** Dismiss the fullscreen reader. Required to leave it from an action. */
+    onExitFullscreen?: () => void
   }
 
-  let { projectId, threadId, path, content }: Props = $props()
+  let { projectId, threadId, path, content, fullscreen = false, onExitFullscreen }: Props = $props()
 
   /** Highlight registry name for document annotations. A conversation
    *  publishes its own name, so both a conversation and a document can be
@@ -111,6 +117,19 @@
   function syncAnnotations(): void {
     const liveIds = annotations.map((reference) => reference.id)
     for (const reference of annotations) {
+      // A range that still spans the passage it was built for is kept as it is.
+      // Rebuilding it would replace the live selection the annotation was just
+      // made from with a reconstructed one, and a rebuild that lands on a
+      // rewritten document is the only way the range can be lost at all.
+      const existing = ranges.get(reference.id)
+      if (
+        existing &&
+        existing.startContainer.isConnected &&
+        existing.endContainer.isConnected &&
+        anchorTextMatches(existing, reference.text)
+      ) {
+        continue
+      }
       const range = documentRoot
         ? rangeForAnnotation(documentRoot, {
             startOffset: reference.startOffset,
@@ -187,6 +206,9 @@
       mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
     )
     closeSelection()
+    // The side chat opens in the sidebar, which the fullscreen reader covers.
+    // Leaving fullscreen is what makes the action visible at all.
+    if (fullscreen) onExitFullscreen?.()
   }
 
   /** Spin the selected passage into a thread of its own, seeded as its draft. */
@@ -195,6 +217,7 @@
     if (!candidate) return
     closeSelection()
     openPassageInNewThread(projectId, threadId, candidate.text)
+    if (fullscreen) onExitFullscreen?.()
   }
 
   /** Save or clear the note attached to one annotation. */
