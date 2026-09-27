@@ -21,6 +21,11 @@ export interface ProjectActionRun {
 class ProjectActionsState {
   actionsByProject = new SvelteMap<string, ProjectAction[]>()
   runs = new SvelteMap<string, ProjectActionRun>()
+  /** How tall each action's expanded inline output is, in CSS pixels, keyed by
+   *  action id. Kept beside the runs rather than inside one so a user's chosen
+   *  height survives a rerun of the same action. An absent entry means the
+   *  panel's default height. */
+  expandedHeights = new SvelteMap<string, number>()
   private loading = new Map<string, Promise<void>>()
   private exitSubscriptions = new Map<string, () => void>()
 
@@ -29,6 +34,13 @@ class ProjectActionsState {
   }
   run(actionId: string): ProjectActionRun | undefined {
     return this.runs.get(actionId)
+  }
+  /** Chosen height of an action's expanded output, or undefined for the default. */
+  expandedHeight(actionId: string): number | undefined {
+    return this.expandedHeights.get(actionId)
+  }
+  setExpandedHeight(actionId: string, height: number): void {
+    this.expandedHeights.set(actionId, height)
   }
   runningCount(projectId: string): number {
     const ids = new Set(this.actions(projectId).map((action) => action.id))

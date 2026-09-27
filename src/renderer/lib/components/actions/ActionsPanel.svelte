@@ -1,6 +1,19 @@
 <script lang="ts">
-  import { Copy, MonitorCog, Pencil, Play, Plus, Square, Trash2, Variable, X } from '@lucide/svelte'
+  import {
+    Copy,
+    Maximize2,
+    MonitorCog,
+    Pencil,
+    Play,
+    Plus,
+    Square,
+    SquareTerminal,
+    Trash2,
+    Variable,
+    X
+  } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import ColorSwatches from '$lib/components/shared/ColorSwatches.svelte'
@@ -38,6 +51,71 @@
     void projectActionsState.load(projectId)
   })
   let actions = $derived(projectActionsState.actions(projectId))
+
+  /** Action whose run is shown over the whole window instead of its inline box.
+   *  Component-local: the full screen surface covers the app, so no context tab
+   *  switch can strand it. */
+  let fullscreenActionId = $state<string | null>(null)
+  let fullscreenAction = $derived(actions.find((entry) => entry.id === fullscreenActionId) ?? null)
+  let fullscreenRun = $derived(
+    fullscreenActionId ? (projectActionsState.run(fullscreenActionId) ?? null) : null
+  )
+
+  /** The panel's scroll area, measured when a drag starts so the expanded output
+   *  can grow to fill the visible panel without escaping it. */
+  let scrollArea = $state<HTMLDivElement>()
+
+  const MIN_EXPANDED_HEIGHT = 140
+  const DEFAULT_EXPANDED_HEIGHT = 208
+  const HEIGHT_STEP = 16
+
+  function expandedHeight(actionId: string): number {
+    return projectActionsState.expandedHeight(actionId) ?? DEFAULT_EXPANDED_HEIGHT
+  }
+  let resizingActionId = $state<string | null>(null)
+  let resizePointerId = 0
+  let resizeStartY = 0
+  let resizeStartHeight = 0
+  let resizeCeiling = DEFAULT_EXPANDED_HEIGHT
+
+  function startResize(
+    actionId: string,
+    event: PointerEvent & { currentTarget: HTMLButtonElement }
+  ): void {
+    resizingActionId = actionId
+    resizePointerId = event.pointerId
+    resizeStartY = event.clientY
+    resizeStartHeight = expandedHeight(actionId)
+    resizeCeiling = Math.max(
+      MIN_EXPANDED_HEIGHT,
+      scrollArea?.clientHeight ?? DEFAULT_EXPANDED_HEIGHT
+    )
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  function resize(actionId: string, event: PointerEvent): void {
+    if (resizingActionId !== actionId || event.pointerId !== resizePointerId) return
+    const next = Math.min(
+      Math.max(resizeStartHeight + event.clientY - resizeStartY, MIN_EXPANDED_HEIGHT),
+      resizeCeiling
+    )
+    projectActionsState.setExpandedHeight(actionId, Math.round(next))
+  }
+  function finishResize(actionId: string, event: PointerEvent): void {
+    if (resizingActionId !== actionId || event.pointerId !== resizePointerId) return
+    resizingActionId = null
+  }
+  function resizeWithKeyboard(actionId: string, event: KeyboardEvent): void {
+    const delta =
+      event.key === 'ArrowUp' ? HEIGHT_STEP : event.key === 'ArrowDown' ? -HEIGHT_STEP : 0
+    if (!delta) return
+    event.preventDefault()
+    const ceiling = Math.max(
+      MIN_EXPANDED_HEIGHT,
+      scrollArea?.clientHeight ?? DEFAULT_EXPANDED_HEIGHT
+    )
+    const next = Math.min(Math.max(expandedHeight(actionId) + delta, MIN_EXPANDED_HEIGHT), ceiling)
+    projectActionsState.setExpandedHeight(actionId, Math.round(next))
+  }
 
   /** A run keeps the scope it was launched in for its whole life (its shell's
    *  working directory is fixed when the PTY spawns), so while the open thread
@@ -177,7 +255,7 @@
       onclick={() => openEditor()}><Plus size={15} /></button
     >
   </header>
-  <div class="min-h-0 flex-1 overflow-y-auto p-2">
+  <div bind:this={scrollArea} class="min-h-0 flex-1 overflow-y-auto p-2">
     {#if actions.length === 0}
       <div class="flex h-full min-h-48 flex-col items-center justify-center px-6 text-center">
         <MonitorCog size={24} class="text-dimmed" />
@@ -260,6 +338,18 @@
                       fill="currentColor"
                     />{/if}</button
                 >
+                {#if run}
+                  <button
+                    type="button"
+                    class="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-overlay hover:text-foreground"
+                    title="Expand action to fullscreen"
+                    aria-label={`Expand ${action.name || 'action'} to fullscreen`}
+                    onclick={(event) => {
+                      event.stopPropagation()
+                      fullscreenActionId = action.id
+                    }}><Maximize2 size={13} /></button
+                  >
+                {/if}
                 <button
                   type="button"
                   class="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-overlay hover:text-foreground"
@@ -293,16 +383,49 @@
               </div>
             </div>
             {#if run?.expanded}
-              <div class="h-52 border-t border-border">
-                {#key run.terminalId}<ActionTerminal
-                    terminalId={run.terminalId}
-                    {projectId}
-                    {threadId}
-                    scopeBucketId={run.scopeBucketId}
-                    script={run.script}
-                    variables={run.variables}
-                    live={run.running}
-                  />{/key}
+              <div
+                class="flex flex-col border-t border-border"
+                style="height: {expandedHeight(action.id)}px"
+              >
+                {#if fullscreenActionId === action.id}
+                  <div class="flex flex-1 items-center justify-center text-xs text-muted">
+                    Action is open in fullscreen
+                  </div>
+                {:else}
+                  <button
+                    type="button"
+                    class="group flex h-2 w-full shrink-0 cursor-row-resize touch-none select-none items-center justify-center bg-transparent transition-colors hover:bg-primary/20 focus-visible:bg-primary/20 focus:outline-none {resizingActionId ===
+                    action.id
+                      ? 'bg-primary/30'
+                      : ''}"
+                    title="Resize action output"
+                    aria-label={`Resize ${action.name || 'action'} output, ${expandedHeight(
+                      action.id
+                    )} pixels tall`}
+                    onpointerdown={(event) => startResize(action.id, event)}
+                    onpointermove={(event) => resize(action.id, event)}
+                    onpointerup={(event) => finishResize(action.id, event)}
+                    onpointercancel={(event) => finishResize(action.id, event)}
+                    onkeydown={(event) => resizeWithKeyboard(action.id, event)}
+                    ondragstart={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                    }}
+                  >
+                    <span class="h-0.5 w-8 rounded-full bg-border group-hover:bg-primary/60"></span>
+                  </button>
+                  <div class="min-h-0 flex-1">
+                    {#key run.terminalId}<ActionTerminal
+                        terminalId={run.terminalId}
+                        {projectId}
+                        {threadId}
+                        scopeBucketId={run.scopeBucketId}
+                        script={run.script}
+                        variables={run.variables}
+                        live={run.running}
+                      />{/key}
+                  </div>
+                {/if}
               </div>
             {/if}
           </article>
@@ -311,6 +434,31 @@
     {/if}
   </div>
 </section>
+
+{#if fullscreenAction && fullscreenRun}
+  <FullscreenPanelDialog
+    tabs={[{ id: fullscreenAction.id, title: fullscreenAction.name || fullscreenAction.script }]}
+    activeTabId={fullscreenAction.id}
+    minimizeLabel="Close fullscreen action"
+    onMinimize={() => (fullscreenActionId = null)}
+    onSelect={(id) => (fullscreenActionId = id)}
+  >
+    {#snippet icon()}
+      <SquareTerminal size={11} class="shrink-0" />
+    {/snippet}
+    <div class="min-h-0 flex-1">
+      {#key fullscreenRun.terminalId}<ActionTerminal
+          terminalId={fullscreenRun.terminalId}
+          {projectId}
+          {threadId}
+          scopeBucketId={fullscreenRun.scopeBucketId}
+          script={fullscreenRun.script}
+          variables={fullscreenRun.variables}
+          live={fullscreenRun.running}
+        />{/key}
+    </div>
+  </FullscreenPanelDialog>
+{/if}
 
 <Modal
   open={editorOpen}
