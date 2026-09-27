@@ -134,8 +134,19 @@ class BrowserVisibilityState {
    * placement and overlay occlusion itself.
    */
   hideReasonFor(tabId: string, bounds: BrowserViewBounds | null): BrowserHideReason | null {
-    for (const reason of this.blocks.values()) return reason
     const surface = this.owningSurface
+    for (const reason of this.blocks.values()) {
+      // `workspace-inactive` reports that the workspace shell is hidden because
+      // another top-level view owns the window, which is equally true while the
+      // browser view is the active one   the shell stays mounted but hidden.
+      // That reason exists to stop a browser docked inside the shell from
+      // floating over Settings or Scope, so it must never suppress the browser's
+      // own top-level workspace surface, which is not inside the shell at all.
+      // Without this, opening the browser view published the block and the page
+      // was attached in main but never shown.
+      if (reason === 'workspace-inactive' && surface === 'workspace') continue
+      return reason
+    }
     if (surface === null) return 'not-placed'
     if (this.claims.get(surface) !== tabId) return 'owned-elsewhere'
     return this.isCovered(bounds) ? 'covered-by-overlay' : null
