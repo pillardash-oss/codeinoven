@@ -10,6 +10,7 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
@@ -20,7 +21,8 @@
     ChevronRight,
     FileText,
     Globe,
-    Loader2
+    Loader2,
+    Search
   } from '@lucide/svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
@@ -252,7 +254,22 @@
       </button>
     </div>
 
-    <AppHeaderViewActions />
+    {#if onSettings}
+      <!-- Settings owns this slot while it is on screen: the per-view actions
+           belong to the view that was here before. -->
+      <button
+        class="flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-150 {settingsUiState.searchOpen
+          ? 'bg-elevated text-foreground'
+          : 'text-muted hover:bg-elevated hover:text-foreground'}"
+        aria-label="Search settings"
+        title="Search settings"
+        onclick={() => (settingsUiState.searchOpen = true)}
+      >
+        <Search size={15} strokeWidth={1.8} />
+      </button>
+    {:else}
+      <AppHeaderViewActions />
+    {/if}
   </nav>
 
   {#if onScope}

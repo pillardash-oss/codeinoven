@@ -10,6 +10,13 @@ class SettingsUiState {
   activeTabLabel = $state<string | null>(null)
 
   /**
+   * Whether the settings search spotlight is open. It lives here rather than in
+   * `SettingsView` because the app header owns the search button now, so the
+   * header and the view share one flag.
+   */
+  searchOpen = $state(false)
+
+  /**
    * Inner tab the Harnesses page is showing.
    *
    * It lives here rather than inside `ProvidersView` because the settings search

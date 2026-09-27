@@ -1,17 +1,21 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { isOverlayOpen } from '$lib/overlay-close.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
+  import { isOverlayOpen } from '$lib/overlay-close.svelte'
+  import { flashElement } from '$lib/reveal-flash'
+  import type { SettingsSearchEntry } from '$lib/settings-search'
+  import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
   import {
     FONT_FAMILY_OPTIONS,
     FONT_WEIGHT_OPTIONS,
     ZOOM_LEVEL_OPTIONS
   } from '$lib/stores/app-config.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
-  import DownloadProgress from '../ui/DownloadProgress.svelte'
+  import { APP_NAME, APP_SLUG, GITHUB_URL, ORG_SLUG, WEBSITE_URL, X_URL } from '$shared/brand'
+  import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import {
     MAX_MAX_CONFLICT_FILE_BYTES,
     MIN_MAX_CONFLICT_FILE_BYTES,
@@ -23,15 +27,9 @@
     type SlashCommandMode,
     type ThemePreference
   } from '$shared/types'
-  import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
-  import { APP_NAME, APP_SLUG, ORG_SLUG, WEBSITE_URL, GITHUB_URL, X_URL } from '$shared/brand'
-  import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
-  import { flashElement } from '$lib/reveal-flash'
   import {
     AlertCircle,
     AlertTriangle,
-    ArrowLeft,
     Bell,
     CheckCircle2,
     Clock,
@@ -45,33 +43,34 @@
     SlidersHorizontal,
     Sun
   } from '@lucide/svelte'
-  import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
-  import Switch from '../ui/Switch.svelte'
-  import Modal from '../ui/Modal.svelte'
-  import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
-  import type { SettingsSearchEntry } from '$lib/settings-search'
+  import { onMount, tick } from 'svelte'
+  import { toast } from 'svelte-sonner'
   import type { ActionDefinition, ActionSelection } from '../../actions/types'
-  import ProvidersView from '../providers/ProvidersView.svelte'
-  import UtilitiesView, { type UtilitiesTab } from './UtilitiesView.svelte'
-  import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
-  import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
-  import KeymapSettingsTab from './KeymapSettingsTab.svelte'
+  import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
+  import CommandPalette from '../actions/CommandPalette.svelte'
+  import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
+  import ProvidersView from '../providers/ProvidersView.svelte'
+  import DownloadProgress from '../ui/DownloadProgress.svelte'
+  import Modal from '../ui/Modal.svelte'
+  import Switch from '../ui/Switch.svelte'
+  import AboutChangelog from './AboutChangelog.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
-  import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
-  import ProfileSettingsTab from './ProfileSettingsTab.svelte'
-  import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
+  import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
   import DesignWorkFoldersSettings from './DesignWorkFoldersSettings.svelte'
-  import MediaGenerationSettings from './MediaGenerationSettings.svelte'
-  import PrototypeCdnSettings from './PrototypeCdnSettings.svelte'
-  import AboutChangelog from './AboutChangelog.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
+  import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
+  import KeymapSettingsTab from './KeymapSettingsTab.svelte'
+  import MediaGenerationSettings from './MediaGenerationSettings.svelte'
+  import ProfileSettingsTab from './ProfileSettingsTab.svelte'
+  import PrototypeCdnSettings from './PrototypeCdnSettings.svelte'
+  import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
+  import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
   import SoundSettingsTab from './SoundSettingsTab.svelte'
-  import CommandPalette from '../actions/CommandPalette.svelte'
-  import { toast } from 'svelte-sonner'
+  import UtilitiesView, { type UtilitiesTab } from './UtilitiesView.svelte'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -201,15 +200,13 @@
       // keydown they consume on `document`, before this window listener runs;
       // Modal-style overlays unregister only in the microtask flush after the
       // event, so isOverlayOpen() still sees them during that same event.
-      if (settingsSearchOpen || e.defaultPrevented || isOverlayOpen()) return
+      if (settingsUiState.searchOpen || e.defaultPrevented || isOverlayOpen()) return
       e.preventDefault()
       goBack()
     }
   }
 
   // ── Settings search spotlight ────────────────────────────────────────────
-  let settingsSearchOpen = $state(false)
-
   const settingsSearchIndex = new Map<string, SettingsSearchEntry>(
     SETTINGS_SEARCH_ENTRIES.map((entry) => [`settings:${entry.id}`, entry])
   )
@@ -509,37 +506,15 @@
 
 <div class="flex h-full">
   <!-- Settings navigation   the shared sidebar, pinned so it can never be hidden here -->
-  <CollapsibleSidebar title="Back" pinned>
-    {#snippet titlePrefix()}
-      <button
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Go back"
-        aria-label="Go back"
-        onclick={goBack}
-      >
-        <ArrowLeft size={14} />
-      </button>
-    {/snippet}
-
-    {#snippet header()}
-      <button
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Search settings"
-        aria-label="Search settings"
-        onclick={() => (settingsSearchOpen = true)}
-      >
-        <Search size={14} />
-      </button>
-    {/snippet}
-
-    <nav class="space-y-px" aria-label="Settings sections">
+  <CollapsibleSidebar title="Settings" pinned hideHeader>
+    <nav class="space-y-1" aria-label="Settings sections">
       {#each tabs as tab (tab.id)}
         {@const Icon = tab.icon}
         {@const isActive = section === tab.id}
         <button
-          class="flex w-full items-center gap-2 border-l-2 px-2 py-1.5 text-left text-[0.8125rem] transition-colors {isActive
-            ? 'border-foreground bg-elevated text-foreground'
-            : 'border-transparent text-muted hover:border-border-strong hover:bg-elevated hover:text-foreground'}"
+          class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-colors {isActive
+            ? 'bg-elevated text-foreground'
+            : 'text-muted hover:bg-elevated hover:text-foreground'}"
           aria-current={isActive ? 'page' : undefined}
           title="{tab.label} settings"
           onclick={() => navigateSection(tab.id)}
@@ -559,7 +534,6 @@
           aria-label="Exit settings"
           onclick={onBack}
         >
-          <ArrowLeft size={14} />
           Exit settings
         </button>
       </div>
@@ -1490,16 +1464,16 @@
   </div>
 </div>
 
-{#if settingsSearchOpen}
+{#if settingsUiState.searchOpen}
   <CommandPalette
-    open={settingsSearchOpen}
+    open={settingsUiState.searchOpen}
     actions={settingsSearchActions}
     title="Search settings"
     placeholder="Search settings pages and sections…"
     emptyLabel="No matching settings"
     headerIcon={Search}
     onSelect={handleSettingsSearch}
-    onClose={() => (settingsSearchOpen = false)}
+    onClose={() => (settingsUiState.searchOpen = false)}
   />
 {/if}
 
