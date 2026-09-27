@@ -15,7 +15,7 @@ import type {
   BrowserTransportCommand,
   BrowserViewBounds
 } from '../../../lib/ipc-contract'
-import { BROWSER_SHORTCUT_ACTIONS } from '../../../lib/ipc-contract'
+import { BROWSER_SHORTCUT_ACTIONS, isBrowserTabId } from '../../../lib/ipc-contract'
 import type { BrowserViewport } from './browser-types'
 
 export const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
@@ -24,7 +24,6 @@ export const MAX_CONSOLE_ENTRIES = 500
 export const MAX_TRACKED_DOWNLOADS = 50
 export const DOWNLOAD_EVENT_INTERVAL_MS = 150
 export const PERMISSION_TIMEOUT_MS = 60_000
-const TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
 const PROJECT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,240}$/u
 const PERMISSION_REQUEST_ID_PATTERN = /^[a-f0-9-]{36}$/u
 const DOWNLOAD_ID_PATTERN = /^[a-f0-9-]{36}$/u
@@ -297,7 +296,7 @@ export const INSPECTOR_REARM_INTERVAL_MS = 120
 export const MAX_INSPECTOR_ARM_FAILURES = 4
 
 export function validateTabId(value: unknown): string {
-  if (typeof value !== 'string' || !TAB_ID_PATTERN.test(value)) {
+  if (!isBrowserTabId(value)) {
     throw new TypeError('Browser tab ID is invalid')
   }
   return value

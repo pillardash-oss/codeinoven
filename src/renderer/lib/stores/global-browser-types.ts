@@ -78,15 +78,7 @@ export interface GlobalBrowserTab {
   /** Last moment the tab was shown to the user; the hibernation clock reads it. */
   lastUsedAt: number
   hibernated: boolean
-  /** The user's own context note for this page, empty when none was written.
-   *  It belongs to the tab rather than to a thread, because a global tab is not
-   *  a thread and its note must survive a hibernation, a group move and a
-   *  restart. */
-  note: string
 }
-
-/** A note is text a human types, so it is bounded generously but bounded. */
-export const MAX_BROWSER_TAB_NOTE_LENGTH = 20_000
 
 /** Group names and tab titles are bounded the same way thread titles are. */
 export const MAX_BROWSER_GROUP_NAME_LENGTH = 60
@@ -118,9 +110,4 @@ export function browserTabTitleForUrl(url: string): string {
 export function isTabIdlePastWindow(tab: GlobalBrowserTab, now: number, windowMs: number): boolean {
   if (tab.hibernated) return false
   return now - tab.lastUsedAt >= windowMs
-}
-
-/** Whether a tab carries a note, which is what the strip's note marker reads. */
-export function tabHasNote(tab: GlobalBrowserTab): boolean {
-  return tab.note.trim() !== ''
 }

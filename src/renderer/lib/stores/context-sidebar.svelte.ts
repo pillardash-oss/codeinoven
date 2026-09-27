@@ -14,7 +14,8 @@ import {
   type TemporaryChatContextTab,
   type TemporaryChatMode,
   type TerminalContextTab,
-  type TerminalPlacement
+  type TerminalPlacement,
+  type ThreadNoteContextTab
 } from './context-sidebar-types'
 import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } from '$shared/types'
 
@@ -546,6 +547,28 @@ class ContextSidebarState {
     options: { edit?: boolean; focusEditor?: boolean } = {}
   ): void {
     this.tabContexts.openThreadNote(projectId, threadId, threadTitle, options)
+  }
+
+  /**
+   * The note docked for one subject, read directly from its own context rather
+   * than from the active one.
+   *
+   * The global browser view is not a workspace thread context, so its notes are
+   * keyed by browser tab and live outside whatever context is active. This is
+   * the read the browser rail uses; the workspace reads its own active context
+   * through `sidebarTabs`.
+   */
+  noteTabFor(projectId: string, threadId: string): ThreadNoteContextTab | null {
+    const tab = this.tabContexts
+      .contextFor(projectId, threadId)
+      ?.tabs.find((candidate) => candidate.kind === 'thread-note')
+    return tab?.kind === 'thread-note' ? tab : null
+  }
+
+  /** Create and load a subject's note tab without focusing it. See `noteTabFor`
+   *  for why the browser view needs a read that does not steal focus. */
+  ensureNoteTab(projectId: string, threadId: string, threadTitle: string): void {
+    this.tabContexts.ensureThreadNote(projectId, threadId, threadTitle)
   }
 
   openCloudDeployments(projectId: string, threadId: string): void {

@@ -12,12 +12,12 @@
  */
 
 import { APP_SLUG } from '$shared/brand'
+import { isBrowserTabId } from '$shared/ipc-contract'
 import {
   MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH,
   MAX_BROWSER_GROUP_ICON_TYPE_LENGTH,
   MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH,
   MAX_BROWSER_GROUP_NAME_LENGTH,
-  MAX_BROWSER_TAB_NOTE_LENGTH,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
   type BrowserGroupAppearance,
@@ -26,7 +26,6 @@ import {
 } from './global-browser-types'
 
 const GLOBAL_BROWSER_STORAGE_KEY = `${APP_SLUG}.global-browser.v1`
-const TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
 const GROUP_ID_PATTERN = /^group:[a-zA-Z0-9:_-]{1,240}$/u
 
 const COLOR_PATTERN = /^#[0-9a-fA-F]{3,8}$/u
@@ -111,10 +110,9 @@ function parseTabs(value: unknown, groups: readonly GlobalBrowserGroup[]): Globa
     const createdAt = record['createdAt']
     const lastUsedAt = record['lastUsedAt']
     const hibernated = record['hibernated']
-    const note = record['note']
     if (
       typeof id !== 'string' ||
-      !TAB_ID_PATTERN.test(id) ||
+      !isBrowserTabId(id) ||
       tabs.some((candidate) => candidate.id === id) ||
       typeof title !== 'string' ||
       title.length > 300 ||
@@ -124,9 +122,7 @@ function parseTabs(value: unknown, groups: readonly GlobalBrowserGroup[]): Globa
       !Number.isSafeInteger(createdAt) ||
       typeof lastUsedAt !== 'number' ||
       !Number.isSafeInteger(lastUsedAt) ||
-      typeof hibernated !== 'boolean' ||
-      (note !== undefined &&
-        (typeof note !== 'string' || note.length > MAX_BROWSER_TAB_NOTE_LENGTH))
+      typeof hibernated !== 'boolean'
     ) {
       continue
     }
@@ -140,8 +136,7 @@ function parseTabs(value: unknown, groups: readonly GlobalBrowserGroup[]): Globa
       lastUsedAt,
       // A restored page is never live: the snapshot's own flag is validated but
       // never trusted, because no page survives a restart.
-      hibernated: true,
-      note: typeof note === 'string' ? note : ''
+      hibernated: true
     })
   }
   return tabs
@@ -182,8 +177,7 @@ export function persistGlobalBrowserSnapshot(snapshot: GlobalBrowserSnapshot): v
           groupId: tab.groupId,
           createdAt: tab.createdAt,
           lastUsedAt: tab.lastUsedAt,
-          hibernated: tab.hibernated,
-          note: tab.note
+          hibernated: tab.hibernated
         })),
         activeTabId: snapshot.activeTabId
       })

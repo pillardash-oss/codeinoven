@@ -15,8 +15,9 @@
   } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
-  import { tabHasNote, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
 
   interface Props {
     tab: GlobalBrowserTab
@@ -140,7 +141,7 @@
       </button>
 
       <div class="pointer-events-none absolute right-1 flex items-center gap-0.5">
-        {#if tabHasNote(tab)}
+        {#if threadNotesState.has(tab.id)}
           <span
             role="img"
             class="pointer-events-none flex h-6 w-6 items-center justify-center text-dimmed"

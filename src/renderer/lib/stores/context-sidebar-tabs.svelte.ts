@@ -578,6 +578,39 @@ export class SidebarTabContexts {
     }
   }
 
+  /**
+   * Ensure a subject's note tab exists and load its body, without focusing it.
+   *
+   * The global browser view reads a tab's note from its own context, which is
+   * never the active workspace context, so it must not steal focus, flip the
+   * active project panel or detach the workspace browser the way
+   * `openThreadNote` does. The tab is the same one every other note uses.
+   */
+  ensureThreadNote(projectId: string, threadId: string, threadTitle: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `note:${projectId}:${threadId}`
+    if (context.tabs.some((tab) => tab.id === id)) return
+    context.tabs = [
+      ...context.tabs,
+      {
+        id,
+        kind: 'thread-note',
+        title: 'Notes',
+        projectId,
+        threadId,
+        threadTitle,
+        savedBody: null,
+        draftBody: '',
+        mode: 'edit',
+        focusRequest: 0,
+        loading: true,
+        saving: false,
+        error: null
+      }
+    ]
+    void this.loadThreadNote(context, id, projectId, threadId)
+  }
+
   openCloudDeployments(projectId: string, threadId: string): void {
     const context = this.ensureProjectContext(projectId)
     const id = `cloud-deployment:${projectId}`

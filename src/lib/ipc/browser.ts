@@ -15,6 +15,17 @@
 export const GLOBAL_BROWSER_PROJECT_ID = 'browser-global'
 export const GLOBAL_BROWSER_THREAD_ID = 'browser-global'
 
+/**
+ * The shape of one global browser tab's id. A tab's note is keyed by this same
+ * id, so the main-process validators, the note handlers and the renderer's own
+ * persistence all read the rule from here instead of keeping a copy each.
+ */
+export const BROWSER_TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
+
+export function isBrowserTabId(value: unknown): value is string {
+  return typeof value === 'string' && BROWSER_TAB_ID_PATTERN.test(value)
+}
+
 /** Native browser content rectangle in BrowserWindow density-independent pixels. */
 export interface BrowserViewBounds {
   x: number

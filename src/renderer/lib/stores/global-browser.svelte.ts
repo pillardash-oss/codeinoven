@@ -19,6 +19,8 @@ import type { BrowserOpenRequestContext, BrowserPageState } from '$shared/ipc-co
 import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '$shared/ipc-contract'
 import { appConfigState } from './app-config.svelte'
 import { reportError } from './app-errors.svelte'
+import { contextSidebarState } from './context-sidebar.svelte'
+import { threadNotesState } from './thread-notes.svelte'
 import {
   loadGlobalBrowserSnapshot,
   persistGlobalBrowserSnapshot,
@@ -27,7 +29,6 @@ import {
 import {
   IDLE_GLOBAL_BROWSER_RUNTIME,
   MAX_BROWSER_GROUP_NAME_LENGTH,
-  MAX_BROWSER_TAB_NOTE_LENGTH,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
   browserTabTitleForUrl,
@@ -153,7 +154,7 @@ export class GlobalBrowserState {
   activate(tabId: string): void {
     const tab = this.tabs.find((candidate) => candidate.id === tabId)
     if (!tab) return
-    this.activeTabId = tabId
+    this.setActiveTab(tabId)
     tab.lastUsedAt = Date.now()
     if (tab.hibernated) tab.hibernated = false
     this.persist()
@@ -162,6 +163,7 @@ export class GlobalBrowserState {
   /** Mark the workspace as opened, so the first activation can reveal a tab. */
   markOpened(): void {
     this.opened = true
+    this.dockActiveTabNote()
   }
 
   toggleSidebar(): void {
@@ -170,6 +172,26 @@ export class GlobalBrowserState {
 
   toggleContextSidebar(): void {
     this.contextSidebarVisible = !this.contextSidebarVisible
+    if (this.contextSidebarVisible) this.dockActiveTabNote()
+  }
+
+  /**
+   * The active tab moved. Owning this in one place is what keeps the rail's
+   * note docked: the right rail always shows the note of whichever tab is on
+   * screen, so that tab's note has to be created the moment it becomes active,
+   * and only while the rail is actually shown. `ContextSidebar.ensureNoteTab`
+   * is idempotent, so re-activating a tab costs nothing.
+   */
+  private setActiveTab(tabId: string | null): void {
+    this.activeTabId = tabId
+    this.dockActiveTabNote()
+  }
+
+  private dockActiveTabNote(): void {
+    if (!this.contextSidebarVisible) return
+    const tab = this.activeTab
+    if (!tab) return
+    contextSidebarState.ensureNoteTab(GLOBAL_BROWSER_PROJECT_ID, tab.id, tab.title)
   }
 
   beginDrag(tabId: string): void {
@@ -260,8 +282,7 @@ export class GlobalBrowserState {
         groupId: this.activeTab?.groupId ?? null,
         createdAt: now,
         lastUsedAt: now,
-        hibernated: false,
-        note: ''
+        hibernated: false
       }
     ]
     if (context.reveal) this.activate(tabId)
@@ -292,11 +313,10 @@ export class GlobalBrowserState {
       groupId: this.groups.some((group) => group.id === groupId) ? groupId : null,
       createdAt: now,
       lastUsedAt: now,
-      hibernated: false,
-      note: ''
+      hibernated: false
     }
     this.tabs = [...this.tabs, tab]
-    this.activeTabId = tab.id
+    this.setActiveTab(tab.id)
     this.persist()
     return tab.id
   }
@@ -310,23 +330,16 @@ export class GlobalBrowserState {
     this.runtime.delete(tabId)
     if (this.activeTabId === tabId) {
       const neighbour = remaining[Math.min(index, remaining.length - 1)]
-      this.activeTabId = neighbour?.id ?? null
+      this.setActiveTab(neighbour?.id ?? null)
       if (neighbour) neighbour.lastUsedAt = Date.now()
     }
     this.persist()
     void invoke('browser:destroy', tabId).catch(() => {})
-  }
-
-  /** Record the user's context note for a tab. The note travels with the tab
-   *  through hibernation, group moves and restarts, because it is the reason the
-   *  tab exists in the user's head rather than the page's. */
-  setNote(tabId: string, note: string): void {
-    const tab = this.tabs.find((candidate) => candidate.id === tabId)
-    if (!tab) return
-    const bounded = note.slice(0, MAX_BROWSER_TAB_NOTE_LENGTH)
-    if (tab.note === bounded) return
-    tab.note = bounded
-    this.persist()
+    // A tab's note is keyed by the tab id, so closing the tab is what removes
+    // it   exactly the way deleting a thread removes its note.
+    if (threadNotesState.has(tabId)) {
+      void invoke('note:delete', GLOBAL_BROWSER_PROJECT_ID, tabId).catch(() => {})
+    }
   }
 
   moveToGroup(tabId: string, groupId: string | null): void {

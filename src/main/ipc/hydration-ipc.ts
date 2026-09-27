@@ -6,6 +6,7 @@ import { ProjectManager } from '../../lib/engines/project-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { NoteRepo } from '../database/repositories/note-repo'
+import { GLOBAL_BROWSER_PROJECT_ID, isBrowserTabId } from '../../lib/ipc/browser'
 import { validateBoundedInteger, validateBoundedString, validateEntityId } from './ipc-validation'
 import type { Thread, ThreadMessageCursor } from '../../lib/types'
 import { RepositoryService } from '../git/repository-service'
@@ -84,6 +85,21 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   })
   ipcMain.handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
+    // The reserved global browser keys its notes by browser tab instead of by a
+    // thread; the tab id arrives in the same `threadId` position. Reported in
+    // the shape the one Notes panel already reads.
+    if (validProjectId === GLOBAL_BROWSER_PROJECT_ID) {
+      if (!isBrowserTabId(threadId)) throw new TypeError('Browser tab ID is invalid')
+      const note = noteRepo.getForBrowserTab(threadId)
+      return note
+        ? {
+            threadId: note.tabId,
+            body: note.body,
+            createdAt: note.createdAt,
+            updatedAt: note.updatedAt
+          }
+        : null
+    }
     const validThreadId = validateEntityId(threadId, 'Thread ID')
     const thread = await threadManager.getThread(validProjectId, validThreadId)
     if (!thread) return null
