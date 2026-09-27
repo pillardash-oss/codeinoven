@@ -284,18 +284,6 @@ export class AppHeaderNavigationController {
     this.showsPrimaryOption ? this.activeHeaderViewOption : this.lastPrimaryHeaderViewOption
   )
 
-  activeHeaderViewLabel = $derived.by(() => {
-    const option = this.headerViewOptions().find(
-      (candidate) => candidate.id === this.shownHeaderViewOption
-    )
-    return option?.label ?? 'Projects'
-  })
-
-  activeHeaderViewIcon = $derived(
-    this.headerViewOptions().find((candidate) => candidate.id === this.shownHeaderViewOption)
-      ?.icon ?? FolderKanban
-  )
-
   /** Cmd/Ctrl+3   Projects view with the scope sidebar active for the current
    *  thread (or project). Idempotent: never turns scope state off. */
   async openProjectWithScopeState(): Promise<void> {

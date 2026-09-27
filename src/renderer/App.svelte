@@ -3,6 +3,11 @@
   import { FileSearch, FolderKanban, MessagesSquare } from '@lucide/svelte'
   import type { CommandPaletteProps } from '$lib/components/actions/CommandPalette.svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
+  import AppViewRail from '$lib/components/layout/AppViewRail.svelte'
+  import {
+    AppHeaderNavigationController,
+    type HeaderViewOptionId
+  } from '$lib/components/layout/AppHeaderNavigationController.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
@@ -373,6 +378,20 @@
 
   function observeNavigationLocation(): void {
     navigationHistoryState.observe(currentLocation())
+  }
+
+  /** Primary-view navigation is owned here, so the header and the left view rail
+   *  share one controller (one `lastViewBeforeScope`/`shownHeaderViewOption`). */
+  const navigation = new AppHeaderNavigationController({
+    getActiveView: () => activeView,
+    navigate: (view) => navigate(view)
+  })
+
+  /** Warm the target view's threads (and lazy chunk) before a rail hover lands. */
+  function handleViewOptionHover(id: HeaderViewOptionId): void {
+    if (id === 'scope-board' || id === 'scoped-threads') preloadScopeChunk()
+    if (id === 'chats') navigation.preloadNavigationThreads('chats')
+    else navigation.preloadNavigationThreads('projects')
   }
 
   /** The most recently visited thread of one content-view family that still exists. */
@@ -1364,60 +1383,68 @@
 </script>
 
 <div class="flex h-screen flex-col bg-app">
-  <AppHeader {activeView} {navigate} {goBack} {goForward} />
+  <AppHeader {activeView} {goBack} {goForward} {navigation} />
 
-  <main class="flex-1 overflow-hidden">
-    <!-- One shell for all views   the workspace (and the open thread) stays
+  <div class="flex min-h-0 flex-1">
+    <AppViewRail
+      options={navigation.headerViewOptions()}
+      shownOption={navigation.shownHeaderViewOption}
+      onOptionHover={handleViewOptionHover}
+    />
+
+    <main class="min-w-0 flex-1 overflow-hidden">
+      <!-- One shell for all views   the workspace (and the open thread) stays
          mounted across Settings/Scope so returning never reloads the thread
          list or reconnects the harness; it's simply hidden while away. -->
-    <div
-      class={activeView === 'projects' ||
-      activeView === 'projects-scope' ||
-      activeView === 'chats' ||
-      activeView === 'threads' ||
-      activeView === 'assistant'
-        ? 'h-full'
-        : 'hidden'}
-    >
-      <Workspace
-        mode={lastContentView}
-        active={activeView === 'projects' ||
-          activeView === 'projects-scope' ||
-          activeView === 'chats' ||
-          activeView === 'threads' ||
-          activeView === 'assistant'}
-        scopeViewActive={activeView === 'scope'}
-        {navigate}
-        {config}
-        {updateConfig}
-      />
-    </div>
-    {#if activeView === 'scope'}
-      {#await import('$lib/components/scope/ScopeView.svelte') then { default: ScopeView }}
-        <ScopeView {navigateToScopedThreads} />
-      {/await}
-    {:else if isSettingsView(activeView)}
-      <!-- Each settings section is its own dedicated page in the navigation model.
+      <div
+        class={activeView === 'projects' ||
+        activeView === 'projects-scope' ||
+        activeView === 'chats' ||
+        activeView === 'threads' ||
+        activeView === 'assistant'
+          ? 'h-full'
+          : 'hidden'}
+      >
+        <Workspace
+          mode={lastContentView}
+          active={activeView === 'projects' ||
+            activeView === 'projects-scope' ||
+            activeView === 'chats' ||
+            activeView === 'threads' ||
+            activeView === 'assistant'}
+          scopeViewActive={activeView === 'scope'}
+          {navigate}
+          {config}
+          {updateConfig}
+        />
+      </div>
+      {#if activeView === 'scope'}
+        {#await import('$lib/components/scope/ScopeView.svelte') then { default: ScopeView }}
+          <ScopeView {navigateToScopedThreads} />
+        {/await}
+      {:else if isSettingsView(activeView)}
+        <!-- Each settings section is its own dedicated page in the navigation model.
            The view stays mounted and SettingsView swaps its content on the section
            prop   a keyed remount here would flash the screen on every tab switch. -->
-      {#await import('$lib/components/settings/SettingsView.svelte') then { default: SettingsView }}
-        <SettingsView
-          {config}
-          {settingsReady}
-          error={settingsError}
-          {setPreference}
-          {updateConfig}
-          section={settingsSectionForView(activeView) ?? 'general'}
-          onNavigateSection={(section) => navigate(settingsViewForSection(section))}
-          onBack={() => navigate(lastViewBeforeSettings)}
-        />
-      {/await}
-    {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads' || activeView === 'assistant')}
-      <div class="flex h-full items-center justify-center">
-        <p class="text-sm text-dimmed">Coming soon</p>
-      </div>
-    {/if}
-  </main>
+        {#await import('$lib/components/settings/SettingsView.svelte') then { default: SettingsView }}
+          <SettingsView
+            {config}
+            {settingsReady}
+            error={settingsError}
+            {setPreference}
+            {updateConfig}
+            section={settingsSectionForView(activeView) ?? 'general'}
+            onNavigateSection={(section) => navigate(settingsViewForSection(section))}
+            onBack={() => navigate(lastViewBeforeSettings)}
+          />
+        {/await}
+      {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads' || activeView === 'assistant')}
+        <div class="flex h-full items-center justify-center">
+          <p class="text-sm text-dimmed">Coming soon</p>
+        </div>
+      {/if}
+    </main>
+  </div>
   {#if spotlightScreenId}
     {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
       <CommandPalette {...spotlightPalette} />

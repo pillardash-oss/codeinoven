@@ -26,8 +26,8 @@
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
-  import { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
-  import AppHeaderViewSwitcher from './AppHeaderViewSwitcher.svelte'
+  import type { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
+  import AppHeaderViewActions from './AppHeaderViewActions.svelte'
   import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
   import AppHeaderCenter from './AppHeaderCenter.svelte'
   import AppHeaderThreadModals from './AppHeaderThreadModals.svelte'
@@ -38,17 +38,13 @@
 
   interface Props {
     activeView: View
-    navigate: (view: View) => void
     goBack: () => void
     goForward: () => void
+    /** Owned by the app shell so the header and the left view rail share one instance. */
+    navigation: AppHeaderNavigationController
   }
 
-  let { activeView, navigate, goBack, goForward }: Props = $props()
-
-  const navigation = new AppHeaderNavigationController({
-    getActiveView: () => activeView,
-    navigate: (view) => navigate(view)
-  })
+  let { activeView, goBack, goForward, navigation }: Props = $props()
 
   /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
@@ -233,11 +229,7 @@
   class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-1"
   style={trafficLightInsetStyle({ mirrorRightInset: false })}
 >
-  <nav
-    class="titlebar-no-drag flex shrink-0 items-center gap-1"
-    aria-label="Primary navigation"
-    data-onboarding="view-switcher"
-  >
+  <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
     <!-- Global navigation: back / forward -->
     <div class="flex items-center gap-0.5">
       <button
@@ -260,16 +252,7 @@
       </button>
     </div>
 
-    <AppHeaderViewSwitcher
-      options={navigation.headerViewOptions()}
-      shownOption={navigation.shownHeaderViewOption}
-      activeIcon={navigation.activeHeaderViewIcon}
-      activeLabel={navigation.activeHeaderViewLabel}
-      onOptionHover={(id) => {
-        if (id === 'chats') navigation.preloadNavigationThreads('chats')
-        else navigation.preloadNavigationThreads('projects')
-      }}
-    />
+    <AppHeaderViewActions />
   </nav>
 
   {#if onScope}
