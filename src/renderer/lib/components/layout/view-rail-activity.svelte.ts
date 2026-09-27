@@ -109,11 +109,9 @@ function familyActivityLabel(family: ContentThreadFamily, activity: ViewFamilyAc
  * as the sidebar rows) so a delegated run counts once instead of inflating the
  * total with hidden worker threads. A live-working thread always counts as
  * working, never as attention/retry, so no thread is ever double-counted.
- *
- * Call during component init only: it creates a `$derived`.
  */
-export function createViewActivityCounts(): ViewActivityCounts {
-  return $derived.by((): ViewActivityCounts => {
+export class ViewRailActivity {
+  counts: ViewActivityCounts = $derived.by((): ViewActivityCounts => {
     const threads = scopeState.allScopeThreads
     // Re-check on a coarse clock only while a retry deadline is tracked, so a
     // 6h+ parked wait rejoins the count once its reset gets close.
@@ -150,7 +148,6 @@ export function createViewActivityCounts(): ViewActivityCounts {
     return counts
   })
 }
-
 /**
  * The single activity pill a rail view shows, chosen by priority: working
  * outranks attention, which outranks a parked retry. The returned label always

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { HeaderViewOption, HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
   import WorkingCountBadge from '$lib/components/shared/WorkingCountBadge.svelte'
-  import { createViewActivityCounts, viewBadgeFor } from './view-rail-activity.svelte'
+  import { ViewRailActivity, viewBadgeFor } from './view-rail-activity.svelte'
 
   interface Props {
     /** The primary-view options, already ordered by the navigation controller. */
@@ -14,7 +14,7 @@
 
   let { options, shownOption, onOptionHover }: Props = $props()
 
-  const activityCounts = createViewActivityCounts()
+  const activity = new ViewRailActivity()
 
   function isActive(id: HeaderViewOptionId): boolean {
     return id === shownOption
@@ -36,7 +36,7 @@
   <div class="flex flex-col items-center gap-0.5" data-onboarding="view-switcher">
     {#each options as option (option.id)}
       {@const Icon = option.icon}
-      {@const badge = viewBadgeFor(option.id, activityCounts)}
+      {@const badge = viewBadgeFor(option.id, activity.counts)}
       <button
         type="button"
         class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-150 {isActive(
