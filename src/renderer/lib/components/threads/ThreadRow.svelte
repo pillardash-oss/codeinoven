@@ -891,9 +891,10 @@
       <!-- State indicator / pin toggle   fixed slot, opacity crossfade, zero layout shift -->
       <span class="relative h-4 w-4 shrink-0">
         <span
-          class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 {pinVisible
-            ? 'opacity-0'
-            : 'opacity-100'}"
+          class="absolute inset-0 flex items-center transition-opacity duration-150 {projectIconUrl ||
+          projectIconGlyph
+            ? 'justify-center'
+            : 'justify-start'} {pinVisible ? 'opacity-0' : 'opacity-100'}"
           aria-hidden={pinVisible}
         >
           {#if badgeProps}
