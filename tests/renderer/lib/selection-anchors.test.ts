@@ -98,6 +98,12 @@ describe('annotation highlights', () => {
   const name = 'test-annotation-anchor'
   const originalCss = Reflect.get(globalThis, 'CSS')
   const originalHighlight = Reflect.get(globalThis, 'Highlight')
+  /**
+   * The registry handed to the stubbed `CSS.highlights`, kept typed here so the
+   * assertions can read back what the module published without widening the
+   * DOM's `HighlightRegistry` to a `Map`.
+   */
+  let registry: Map<string, { ranges: readonly Range[] }>
 
   beforeEach(() => {
     class StubHighlight {
@@ -106,9 +112,9 @@ describe('annotation highlights', () => {
         this.ranges = ranges
       }
     }
-    const highlights = new Map<string, StubHighlight>()
+    registry = new Map<string, StubHighlight>()
     Reflect.set(globalThis, 'Highlight', StubHighlight)
-    Reflect.set(globalThis, 'CSS', { ...(originalCss ?? {}), highlights })
+    Reflect.set(globalThis, 'CSS', { ...(originalCss ?? {}), highlights: registry })
   })
 
   afterEach(() => {
@@ -117,11 +123,7 @@ describe('annotation highlights', () => {
   })
 
   function publishedRanges(): readonly Range[] {
-    const highlights = Reflect.get(globalThis, 'CSS').highlights as Map<
-      string,
-      { ranges: readonly Range[] }
-    >
-    return highlights.get(name)?.ranges ?? []
+    return registry.get(name)?.ranges ?? []
   }
 
   it('keeps every publisher of one name, so two views can draw it at once', () => {
