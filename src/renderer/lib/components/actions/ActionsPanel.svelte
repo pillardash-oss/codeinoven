@@ -78,11 +78,16 @@
   let resizeStartHeight = 0
   let resizeCeiling = DEFAULT_EXPANDED_HEIGHT
 
+  type ResizeEdge = 'top' | 'bottom'
+  let resizeEdge: ResizeEdge = 'bottom'
+
   function startResize(
     actionId: string,
+    edge: ResizeEdge,
     event: PointerEvent & { currentTarget: HTMLButtonElement }
   ): void {
     resizingActionId = actionId
+    resizeEdge = edge
     resizePointerId = event.pointerId
     resizeStartY = event.clientY
     resizeStartHeight = expandedHeight(actionId)
@@ -94,10 +99,10 @@
   }
   function resize(actionId: string, event: PointerEvent): void {
     if (resizingActionId !== actionId || event.pointerId !== resizePointerId) return
-    const next = Math.min(
-      Math.max(resizeStartHeight + event.clientY - resizeStartY, MIN_EXPANDED_HEIGHT),
-      resizeCeiling
-    )
+    // The box grows downward from a fixed top edge, so the bottom handle grows
+    // on a downward drag while the top handle grows on an upward one.
+    const travel = (event.clientY - resizeStartY) * (resizeEdge === 'bottom' ? 1 : -1)
+    const next = Math.min(Math.max(resizeStartHeight + travel, MIN_EXPANDED_HEIGHT), resizeCeiling)
     projectActionsState.setExpandedHeight(actionId, Math.round(next))
   }
   function finishResize(actionId: string, event: PointerEvent): void {
@@ -192,6 +197,13 @@
   let draggingId = $state<string | null>(null)
   let dragStartOrder: string[] | null = null
   function dragStart(action: ProjectAction, event: DragEvent): void {
+    // A resize handle lives inside the draggable entry. A pointer drag that
+    // starts on a handle must resize the output, never reorder the list, and
+    // the browser still fires the entry's dragstart on that movement.
+    if (resizingActionId) {
+      event.preventDefault()
+      return
+    }
     dragStartOrder = actions.map((entry) => entry.id)
     draggingId = action.id
     const transfer = event.dataTransfer
@@ -239,6 +251,34 @@
     )
   }
 </script>
+
+<!--
+  One handle per edge of an expanded output. The entry itself is draggable to
+  reorder, so a drag that starts on a handle must resize the output instead:
+  `dragStart` drops any entry drag that begins while a resize is in progress,
+  because a pointer drag on a handle still fires the entry's dragstart. The top
+  handle resizes upward.
+-->
+{#snippet resizeHandle(action: ProjectAction, edge: ResizeEdge)}
+  <button
+    type="button"
+    class="group flex h-2 w-full shrink-0 cursor-row-resize touch-none select-none items-center justify-center bg-transparent transition-colors hover:bg-primary/20 focus-visible:bg-primary/20 focus:outline-none {resizingActionId ===
+    action.id
+      ? 'bg-primary/30'
+      : ''}"
+    title={`Resize ${action.name || 'action'} output`}
+    aria-label={`Resize ${action.name || 'action'} output, ${expandedHeight(
+      action.id
+    )} pixels tall`}
+    onpointerdown={(event) => startResize(action.id, edge, event)}
+    onpointermove={(event) => resize(action.id, event)}
+    onpointerup={(event) => finishResize(action.id, event)}
+    onpointercancel={(event) => finishResize(action.id, event)}
+    onkeydown={(event) => resizeWithKeyboard(action.id, event)}
+  >
+    <span class="h-0.5 w-8 rounded-full bg-border group-hover:bg-primary/60"></span>
+  </button>
+{/snippet}
 
 <section class="flex h-full min-h-0 flex-col bg-app" aria-label="Actions">
   <StalePanelNotice stale={scopeStale} reason="run" />
@@ -392,28 +432,7 @@
                     Action is open in fullscreen
                   </div>
                 {:else}
-                  <button
-                    type="button"
-                    class="group flex h-2 w-full shrink-0 cursor-row-resize touch-none select-none items-center justify-center bg-transparent transition-colors hover:bg-primary/20 focus-visible:bg-primary/20 focus:outline-none {resizingActionId ===
-                    action.id
-                      ? 'bg-primary/30'
-                      : ''}"
-                    title="Resize action output"
-                    aria-label={`Resize ${action.name || 'action'} output, ${expandedHeight(
-                      action.id
-                    )} pixels tall`}
-                    onpointerdown={(event) => startResize(action.id, event)}
-                    onpointermove={(event) => resize(action.id, event)}
-                    onpointerup={(event) => finishResize(action.id, event)}
-                    onpointercancel={(event) => finishResize(action.id, event)}
-                    onkeydown={(event) => resizeWithKeyboard(action.id, event)}
-                    ondragstart={(event) => {
-                      event.preventDefault()
-                      event.stopPropagation()
-                    }}
-                  >
-                    <span class="h-0.5 w-8 rounded-full bg-border group-hover:bg-primary/60"></span>
-                  </button>
+                  {@render resizeHandle(action, 'top')}
                   <div class="min-h-0 flex-1">
                     {#key run.terminalId}<ActionTerminal
                         terminalId={run.terminalId}
@@ -425,6 +444,7 @@
                         live={run.running}
                       />{/key}
                   </div>
+                  {@render resizeHandle(action, 'bottom')}
                 {/if}
               </div>
             {/if}
