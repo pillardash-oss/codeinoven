@@ -195,7 +195,7 @@ export class AppHeaderNavigationController {
     return [
       {
         id: 'projects',
-        label: 'Projects',
+        label: 'Project',
         icon: FolderKanban,
         keys: keymapState.keysFor('nav-projects'),
         select: () => {
@@ -205,28 +205,28 @@ export class AppHeaderNavigationController {
       },
       {
         id: 'threads',
-        label: 'Threads',
+        label: 'Thread',
         icon: Timeline,
         keys: keymapState.keysFor('nav-threads'),
         select: () => void this.onPrimaryNavClick('threads')
       },
       {
         id: 'scoped-threads',
-        label: 'Scoped threads',
+        label: 'Scoped',
         icon: SquareDashedKanban,
         keys: keymapState.keysFor('nav-projects-with-scope'),
         select: () => void this.toggleScopedThreads()
       },
       {
         id: 'scope-board',
-        label: 'Scope Board',
+        label: 'Board',
         icon: Kanban,
         keys: keymapState.keysFor('nav-scope'),
         select: () => void this.onPrimaryNavClick('scope')
       },
       {
         id: 'chats',
-        label: 'Chats',
+        label: 'Chat',
         icon: CONTENT_FAMILY_ICONS.chats,
         keys: keymapState.keysFor('nav-chats'),
         select: () => void this.onPrimaryNavClick('chats')
