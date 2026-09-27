@@ -1,5 +1,4 @@
 import type { FitAddon, Ghostty, ITheme, Terminal } from 'ghostty-web'
-import { SvelteMap } from 'svelte/reactivity'
 import { CursorShapeDecoder } from './cursor-shape'
 import { TerminalCursorController } from './cursor-visibility'
 import { setTerminalFocused } from './focus'
@@ -32,18 +31,6 @@ export interface TerminalSpawnBinding {
   threadId: string
   scopeBucketId?: string
 }
-
-/**
- * Scope root each live shell was actually started in, keyed by terminal id.
- *
- * `session.scopeBucketId` records what the *panel* asked for on its last
- * attach; this records what the *running shell* was spawned with, and only a
- * real spawn changes it. A panel renders the stale-scope notice by comparing
- * the two, so the notice appears exactly while the shell is sitting in another
- * worktree and clears the moment the shell is respawned there. Reactive so the
- * panel can derive from it.
- */
-export const terminalSpawnScopes = new SvelteMap<string, string | null>()
 
 export interface TerminalSession {
   id: string
@@ -183,20 +170,6 @@ class TerminalSessionManager {
     return this.sessions.get(id)
   }
 
-  /** Explicit, user-requested restart of a live shell inside the scope its
-   *  panel currently wants (the live binding). Navigation never calls this:
-   *  only the stale-scope notice's restart action does. The PTY is destroyed
-   *  here and the exit subscription respawns it through spawnTargetOf(), which
-   *  reads the binding the panel keeps current, so the new shell starts in the
-   *  open thread's worktree. */
-  async restartInBoundScope(session: TerminalSession): Promise<void> {
-    if (session.kind !== 'shell' || !session.ptySpawned || !session.projectId) return
-    session.term.write('\r\n\x1b[90m[restarting in the open thread scope]\x1b[0m\r\n')
-    // A deliberate restart must never eat the crash-respawn budget.
-    session.respawnCount = 0
-    await invoke('pty:destroy', session.id)
-  }
-
   /** Move a live session into the visible panel and ensure its shell is running. */
   async attach(
     session: TerminalSession,
@@ -212,12 +185,11 @@ class TerminalSessionManager {
     session.binding = binding
     session.threadId = binding.threadId
     session.scopeBucketId = binding.scopeBucketId ?? null
-    // A panel that survived a thread switch into another scope keeps its live
-    // shell at the old root on purpose: a running server, watcher, or REPL
-    // belongs to the user, not to navigation, and navigation never kills it.
-    // The panel shows the stale-scope notice while the two differ, with an
-    // explicit restart action; a respawn (shell exit, Ctrl-D) already lands in
-    // the current scope via spawnTargetOf().
+    // Navigation never kills a shell. Each scope owns its own session (the
+    // panel qualifies the session id by the scope bucket), so a thread switch
+    // inside a scope only refreshes this binding while a scope switch mounts a
+    // different session. A respawn (shell exit, Ctrl-D) lands in this scope
+    // through spawnTargetOf().
     await this.ensurePty(session, projectId, binding.threadId, binding.scopeBucketId)
     this.focusIfRequested(session, options)
   }
@@ -269,7 +241,6 @@ class TerminalSessionManager {
           session.term.rows,
           scopeBucketId
         )
-        terminalSpawnScopes.set(session.id, scopeBucketId ?? null)
       } catch (error) {
         session.ptySpawned = false
         throw error
@@ -320,9 +291,6 @@ class TerminalSessionManager {
         session.term.rows,
         scopeBucketId
       )
-      // Recorded only after the spawn succeeded: an earlier scope here would
-      // tell a panel that its shell is current when it is not.
-      terminalSpawnScopes.set(session.id, scopeBucketId ?? null)
     } catch (error) {
       session.ptySpawned = false
       throw error
@@ -513,7 +481,6 @@ class TerminalSessionManager {
     if (session) {
       session.term.dispose()
       this.sessions.delete(id)
-      terminalSpawnScopes.delete(id)
     }
     // The focused terminal is gone — make sure the app no longer thinks a
     // terminal is focused so non-mac Ctrl+W resumes closing surfaces.
