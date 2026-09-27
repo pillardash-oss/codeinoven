@@ -10765,6 +10765,7 @@
 {#if previewFile}
   <MediaPreview
     src={imageUrls.getUrl(previewFile.url)}
+    revealUrl={previewFile.url}
     filename={previewFile.filename}
     mime={previewFile.mime}
     onClose={() => (previewFile = null)}
