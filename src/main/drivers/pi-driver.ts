@@ -1564,7 +1564,19 @@ export class PiDriver extends PersistentCliDriver {
     this.ensureIdleSweep()
     // Register the long-lived RPC harness root with the app's process tracker
     // so it appears in the task manager and is covered by orphan reaping.
-    this.observeHarnessProcess(sessionId, client.process, invocation.command, projectPath)
+    //
+    // The label is the harness command (`pi`), never `invocation.command`: a
+    // bundled Pi runs on Electron's own executable, so the prepared command is
+    // the app binary's path and the task manager would show a Pi root as
+    // `CodeInOven-electron` instead of `pi`. `runtime.command` is the command
+    // the user asked for in both the bundled and native cases, so the row reads
+    // the harness that actually owns the process again.
+    this.observeHarnessProcess(
+      sessionId,
+      client.process,
+      invocation.runtime?.command ?? invocation.command,
+      projectPath
+    )
     try {
       this.compactionReadySessions.delete(sessionId)
       await client.newSession()
