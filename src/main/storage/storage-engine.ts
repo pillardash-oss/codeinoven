@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { randomInt } from 'crypto'
-import { readFile, appendFile, unlink, open, type FileHandle } from 'fs/promises'
+import { readFile, appendFile, unlink, open, stat, type FileHandle } from 'fs/promises'
 import {
   getConfigRoot,
   ensureDir,
@@ -100,6 +100,18 @@ const VISION_MODELS_FILE = 'vision-models.json'
 export interface RawFileTail {
   /** Complete lines after `fromByte`, decoded UTF-8. Empty when none yet. */
   content: string
+  /** Byte offset to pass to the next call. */
+  nextByte: number
+  /** Current file size in bytes. */
+  size: number
+}
+
+/** One bounded chunk of a raw file, still undecoded. */
+export interface RawFileChunk {
+  /** The bytes read, empty at or past end of file. */
+  buffer: Buffer
+  /** How many bytes `buffer` holds. */
+  bytesRead: number
   /** Byte offset to pass to the next call. */
   nextByte: number
   /** Current file size in bytes. */
@@ -491,6 +503,58 @@ export class StorageEngine {
       }
     } finally {
       await handle.close()
+    }
+  }
+
+  /**
+   * Read at most `length` bytes starting at `fromByte`, without decoding them.
+   *
+   * The bounded counterpart of `readRawTail`: a caller that has to walk a large
+   * append-only log walks it a chunk at a time instead of allocating the whole
+   * file, so peak memory stays flat no matter how big the log grew and the
+   * caller can hand the event loop back between chunks. Returns null when the
+   * file is missing; `size` is the file's current byte length so a caller can
+   * still detect a rewrite (shrunk file) between chunks.
+   */
+  async readRawChunk(
+    relativePath: string,
+    fromByte: number,
+    length: number
+  ): Promise<RawFileChunk | null> {
+    let handle: FileHandle
+    try {
+      handle = await open(this.resolve(relativePath), 'r')
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+      throw error
+    }
+    try {
+      const { size } = await handle.stat()
+      if (length <= 0 || fromByte >= size) {
+        return { buffer: Buffer.alloc(0), bytesRead: 0, nextByte: fromByte, size }
+      }
+      const requested = Math.min(length, size - fromByte)
+      const buffer = Buffer.allocUnsafe(requested)
+      let read = 0
+      while (read < requested) {
+        const chunk = await handle.read(buffer, read, requested - read, fromByte + read)
+        if (chunk.bytesRead === 0) break
+        read += chunk.bytesRead
+      }
+      return { buffer: buffer.subarray(0, read), bytesRead: read, nextByte: fromByte + read, size }
+    } finally {
+      await handle.close()
+    }
+  }
+
+  /** Current byte length of a raw file, read from its metadata and never its content. */
+  async rawSize(relativePath: string): Promise<number | null> {
+    try {
+      const metadata = await stat(this.resolve(relativePath))
+      return metadata.size
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+      throw error
     }
   }
 
