@@ -44,10 +44,13 @@
   /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
 
-  /** "Settings · <Section>" while a settings tab is on screen. */
-  let settingsTitle = $derived(
-    settingsUiState.activeTabLabel ? `Settings · ${settingsUiState.activeTabLabel}` : 'Settings'
-  )
+  /**
+   * The settings section on screen. The header nav already names the view
+   * ("Settings"), so the centered title only carries the section to avoid
+   * repeating it. Falls back to "Settings" in the brief window before a
+   * section reports itself.
+   */
+  let settingsTitle = $derived(settingsUiState.activeTabLabel ?? 'Settings')
 
   /** Keep the header and project registry in sync after a pin toggle. */
   function handleProjectPinToggled(updated: Project): void {
