@@ -152,12 +152,18 @@ export class ViewRailActivity {
  * The single activity pill a rail view shows, chosen by priority: working
  * outranks attention, which outranks a parked retry. The returned label always
  * carries the family's full breakdown. Returns null when the family is quiet.
+ *
+ * The project family spans four views (Projects, Threads, Scoped threads, Scope
+ * Board), so its badge rides only the selected project view, never all four at
+ * once. Chats and Assistant each have a single view and keep their badge there.
  */
 export function viewBadgeFor(
   optionId: HeaderViewOptionId,
+  shownOption: HeaderViewOptionId,
   counts: ViewActivityCounts
 ): ViewBadge | null {
   const family = viewOptionFamily(optionId)
+  if (family === 'projects' && optionId !== shownOption) return null
   const activity = counts[family]
   const icon = FAMILY_ICONS[family]
   if (activity.working > 0) {

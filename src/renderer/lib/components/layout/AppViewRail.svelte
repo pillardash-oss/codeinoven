@@ -29,14 +29,14 @@
   own family.
 -->
 <nav
-  class="flex h-full w-10 shrink-0 flex-col items-center gap-0.5 border-r border-border bg-surface py-2"
+  class="flex h-full w-10 shrink-0 flex-col items-center gap-0.5 bg-surface py-2"
   aria-label="Primary views"
   data-region="view-rail"
 >
   <div class="flex flex-col items-center gap-0.5" data-onboarding="view-switcher">
     {#each options as option (option.id)}
       {@const Icon = option.icon}
-      {@const badge = viewBadgeFor(option.id, activity.counts)}
+      {@const badge = viewBadgeFor(option.id, shownOption, activity.counts)}
       <button
         type="button"
         class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-150 {isActive(

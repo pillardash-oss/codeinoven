@@ -70,7 +70,7 @@
   same place whether the context sidebar is open or closed.
 -->
 <nav
-  class="flex h-full w-10 shrink-0 flex-col items-center gap-0.5 border-l border-border bg-surface py-2"
+  class="flex h-full w-10 shrink-0 flex-col items-center gap-0.5 bg-surface py-2"
   aria-label="Context tools"
   data-region="context-dock"
 >

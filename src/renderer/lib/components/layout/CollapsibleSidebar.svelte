@@ -109,7 +109,7 @@
 {#if docked}
   <!-- Docked sidebar: occupies layout, resizable -->
   <aside
-    class="relative flex h-full shrink-0 flex-col border-r bg-surface"
+    class="relative flex h-full shrink-0 flex-col bg-surface"
     data-onboarding="project-sidebar"
     style="width: {sidebarState.width}px"
     class:select-none={resizing}
@@ -175,7 +175,7 @@
   <!-- Floating overlay -->
   {#if sidebarState.hoverOpen}
     <aside
-      class="fixed top-12 bottom-0 left-0 z-50 flex flex-col border-r bg-surface shadow-2xl"
+      class="fixed top-12 bottom-0 left-0 z-50 flex flex-col bg-surface shadow-2xl"
       data-onboarding="project-sidebar"
       style="width: {sidebarState.width}px"
       transition:fly={{ x: -sidebarState.width, duration: 180 }}

@@ -238,10 +238,7 @@
 </script>
 
 <aside
-  class="relative flex h-full min-h-0 w-full min-w-0 flex-col border-border bg-surface {placement ===
-  'bottom'
-    ? 'border-t'
-    : 'border-l'}"
+  class="relative flex h-full min-h-0 w-full min-w-0 flex-col bg-surface"
   class:select-none={resizing}
   aria-label="Context sidebar"
   data-region="context-sidebar"
