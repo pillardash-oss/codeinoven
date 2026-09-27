@@ -687,13 +687,13 @@
 
 {#if picker}
   <div
-    class="flex min-h-11 w-full flex-col gap-1 border-l-2 px-2.5 py-1.5 text-left transition-colors {selected
-      ? 'border-foreground bg-selected'
+    class="flex min-h-11 w-full flex-col gap-1 px-2.5 py-1.5 text-left transition-colors {selected
+      ? 'bg-selected'
       : isBusyIndicator
         ? isRetryPaused
-          ? 'border-warning bg-warning/5'
-          : 'border-thread-working bg-thread-working/5'
-        : 'border-transparent'}"
+          ? 'bg-warning/5'
+          : 'bg-thread-working/5'
+        : ''}"
     title={displayTitle}
   >
     <span class="flex w-full min-w-0 items-center gap-2">
@@ -850,17 +850,17 @@
       : 'opacity-0'}"
   ></div>
   <button
-    class="relative mb-1 flex w-full flex-col gap-1 border-l-2 text-left transition-colors {compact
+    class="relative mb-1 flex w-full flex-col gap-1 text-left transition-colors {compact
       ? 'px-2 py-1'
       : 'px-2 py-1.5'} {selected
-      ? 'border-foreground bg-selected'
+      ? 'bg-selected'
       : isBusyIndicator
         ? isRetryPaused
-          ? 'border-warning bg-warning/5 hover:bg-elevated'
+          ? 'bg-warning/5 hover:bg-elevated'
           : isForeignRun
-            ? 'border-thread-working bg-thread-working/5 hover:bg-elevated'
-            : 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
-        : 'border-transparent hover:border-border-strong hover:bg-elevated'}"
+            ? 'bg-thread-working/5 hover:bg-elevated'
+            : 'animate-pulse bg-thread-working/5 hover:bg-elevated'
+        : 'hover:bg-elevated'}"
     title={displayTitle}
     aria-current={selected ? 'true' : undefined}
     onpointerdown={() => preloadMessages()}
