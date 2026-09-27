@@ -9,8 +9,8 @@
   interface Props {
     /** The primary-view options, already ordered by the navigation controller. */
     options: HeaderViewOption[]
-    /** The option the rail currently reflects. */
-    shownOption: HeaderViewOptionId
+    /** The option the rail currently reflects, or null on takeover views. */
+    shownOption: HeaderViewOptionId | null
     /** The view the shell shows, so the utility group can mark Settings. */
     activeView: MainView
     navigate: (view: MainView) => void

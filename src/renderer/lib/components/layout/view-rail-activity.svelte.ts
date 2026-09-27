@@ -159,7 +159,7 @@ export class ViewRailActivity {
  */
 export function viewBadgeFor(
   optionId: HeaderViewOptionId,
-  shownOption: HeaderViewOptionId,
+  shownOption: HeaderViewOptionId | null,
   counts: ViewActivityCounts
 ): ViewBadge | null {
   const family = viewOptionFamily(optionId)

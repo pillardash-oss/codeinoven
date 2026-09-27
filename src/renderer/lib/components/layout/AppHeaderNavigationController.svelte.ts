@@ -56,9 +56,6 @@ export class AppHeaderNavigationController {
    *  the other takeover pages) keep the previous primary view. */
   lastViewBeforeScope: PrimaryView = $state('projects')
 
-  /** Last option shown while a primary view was active. */
-  lastPrimaryHeaderViewOption = $state<HeaderViewOptionId>('projects')
-
   constructor(options: AppHeaderNavigationOptions) {
     this.getActiveView = options.getActiveView
     this.navigate = options.navigate
@@ -74,10 +71,6 @@ export class AppHeaderNavigationController {
       ) {
         this.lastViewBeforeScope = activeView === 'projects-scope' ? 'projects' : activeView
       }
-    })
-
-    $effect(() => {
-      if (this.showsPrimaryOption) this.lastPrimaryHeaderViewOption = this.activeHeaderViewOption
     })
   }
 
@@ -278,10 +271,11 @@ export class AppHeaderNavigationController {
     )
   })
 
-  /** The option the trigger and menu reflect: live on primary views, the last
-   *  primary option while a takeover page owns the header. */
-  shownHeaderViewOption = $derived(
-    this.showsPrimaryOption ? this.activeHeaderViewOption : this.lastPrimaryHeaderViewOption
+  /** The option the rail marks current: live on primary views, and none at all
+   *  on takeover pages (Settings and friends) so the utility controls own the
+   *  active state there instead of a stale view. */
+  shownHeaderViewOption = $derived<HeaderViewOptionId | null>(
+    this.showsPrimaryOption ? this.activeHeaderViewOption : null
   )
 
   /** Cmd/Ctrl+3   Projects view with the scope sidebar active for the current
