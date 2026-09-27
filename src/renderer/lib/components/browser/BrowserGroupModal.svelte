@@ -2,14 +2,11 @@
   import { Check, Trash2 } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
+  import { invoke } from '$lib/ipc.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import {
-    BROWSER_GROUP_COLORS,
-    MAX_BROWSER_GROUP_NAME_LENGTH,
-    browserGroupColor,
-    type BrowserGroupIconId
-  } from '$lib/stores/global-browser-types'
-  import { BROWSER_GROUP_ICON_LIST } from './browser-group-icons'
+  import { MAX_BROWSER_GROUP_NAME_LENGTH } from '$lib/stores/global-browser-types'
+  import type { CustomIcon } from '$shared/types'
 
   interface Props {
     /** The group being edited, or null to create a new one. */
@@ -19,25 +16,84 @@
 
   let { groupId, onClose }: Props = $props()
 
-  // Read once at construction and never again: the panel is mounted fresh for
+  // Read once at construction and never again: the modal is mounted fresh for
   // each edit, so the draft it holds is the group as the user opened it. If the
   // group disappears underneath (deleted elsewhere), saving becomes a no-op.
   // svelte-ignore state_referenced_locally
   const existing = groupId ? globalBrowser.groupById(groupId) : null
 
+  let customIcons = $state<CustomIcon[]>([])
+
+  $effect(() => {
+    void invoke('icon-library:list').then((icons) => (customIcons = icons))
+  })
+
+  async function addCustomIcon(svg: string): Promise<void> {
+    const icon = await invoke('icon-library:add', svg)
+    customIcons = [...customIcons, icon]
+  }
+
   let name = $state(existing?.name ?? '')
-  let color = $state(existing?.color ?? BROWSER_GROUP_COLORS[0].id)
-  let icon = $state<BrowserGroupIconId | null>(existing?.icon ?? null)
+  // The same appearance vocabulary as a project or an assistant routine: a hex
+  // colour, a shared SVG icon key, a pasted SVG, and a picked image file.
+  let color = $state<string | undefined>(existing?.color ?? undefined)
+  let iconType = $state<string | undefined>(existing?.iconType ?? undefined)
+  let customSvg = $state<string | undefined>(existing?.customSvg ?? undefined)
+  let customSvgSelected = $state(false)
+  /** Newly picked image, previewed locally until Save persists its path. */
+  let pendingIcon = $state<{ path: string; dataUrl: string } | undefined>(undefined)
   let confirmDelete = $state(false)
 
+  const storedImageUrl = $derived(existing ? globalBrowser.groupIconUrl(existing.id) : null)
+  const previewIconUrl = $derived(pendingIcon?.dataUrl ?? storedImageUrl)
+  const hasAppearance = $derived(
+    Boolean(color || iconType || customSvg || existing?.imagePath || pendingIcon || storedImageUrl)
+  )
   const canSave = $derived(name.trim() !== '')
+
+  async function uploadImage(): Promise<void> {
+    const imagePath = await invoke('dialog:pickImage')
+    if (!imagePath) return
+    // Read the file for local preview only; nothing is persisted until Save.
+    const dataUrl = await invoke('file:readAsDataUrl', imagePath)
+    if (!dataUrl) return
+    customSvgSelected = false
+    pendingIcon = { path: imagePath, dataUrl }
+  }
+
+  function resetAppearance(): void {
+    color = existing?.color ?? undefined
+    iconType = existing?.iconType ?? undefined
+    customSvg = existing?.customSvg ?? undefined
+    customSvgSelected = false
+    pendingIcon = undefined
+  }
+
+  /** Resolve which image path the group should end up with, mirroring how a
+   *  routine's image and SVG icon interact: a pasted SVG or a chosen SVG icon
+   *  replaces a stored image, a freshly picked image wins over both, and a
+   *  colour picked in the same session is never dropped. */
+  function resolveImagePath(): string | null {
+    if (!existing) return pendingIcon?.path ?? null
+    if (customSvgSelected && customSvg && existing.imagePath) return null
+    if (pendingIcon && !customSvgSelected) return pendingIcon.path
+    const switchingToSvgIcon = iconType !== existing.iconType && iconType !== undefined
+    return existing.imagePath && switchingToSvgIcon ? null : existing.imagePath
+  }
 
   function save(): void {
     if (!canSave) return
+    const appearance = {
+      color: color ?? null,
+      iconType: iconType ?? null,
+      customSvg: customSvg ?? null,
+      imagePath: resolveImagePath()
+    }
     if (existing) {
-      globalBrowser.updateGroup(existing.id, { name, color, icon })
+      globalBrowser.updateGroup(existing.id, { name, ...appearance })
     } else {
-      globalBrowser.createGroup(name, color, icon)
+      const id = globalBrowser.createGroup(name, appearance)
+      void globalBrowser.ensureGroupIconLoaded(id)
     }
     onClose()
   }
@@ -57,6 +113,26 @@
   size="md"
   contentClass="space-y-4 overflow-y-auto p-6"
 >
+  <AppearancePicker
+    {name}
+    {color}
+    {iconType}
+    {customSvg}
+    {customIcons}
+    onAddCustomIcon={addCustomIcon}
+    allowCustomSvg
+    resetPlacement="footer"
+    fallbackIconUrl={customSvgSelected ? null : previewIconUrl}
+    onColorChange={(next) => (color = next)}
+    onIconTypeChange={(next) => (iconType = next)}
+    onCustomSvgChange={(next) => {
+      customSvg = next
+      customSvgSelected = Boolean(next)
+    }}
+    onUploadImage={() => void uploadImage()}
+    onReset={resetAppearance}
+  />
+
   <label class="block">
     <span class="mb-1.5 block text-xs font-medium text-muted">Name</span>
     <input
@@ -74,61 +150,6 @@
     />
   </label>
 
-  <div>
-    <span class="mb-1.5 block text-xs font-medium text-muted">Colour</span>
-    <div class="flex flex-wrap gap-2">
-      {#each BROWSER_GROUP_COLORS as swatch (swatch.id)}
-        <button
-          type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-lg border transition-colors {color ===
-          swatch.id
-            ? 'border-primary bg-elevated'
-            : 'border-border hover:bg-elevated'}"
-          aria-pressed={color === swatch.id}
-          aria-label={swatch.label}
-          title={swatch.label}
-          onclick={() => (color = swatch.id)}
-        >
-          <span class="h-3.5 w-3.5 rounded-full {swatch.dot}"></span>
-        </button>
-      {/each}
-    </div>
-  </div>
-
-  <div>
-    <span class="mb-1.5 block text-xs font-medium text-muted">Icon</span>
-    <div class="flex flex-wrap gap-2">
-      <button
-        type="button"
-        class="flex h-8 w-8 items-center justify-center rounded-lg border transition-colors {icon ===
-        null
-          ? 'border-primary bg-elevated'
-          : 'border-border hover:bg-elevated'}"
-        aria-pressed={icon === null}
-        aria-label="No icon"
-        title="No icon"
-        onclick={() => (icon = null)}
-      >
-        <span class="h-1.5 w-1.5 rounded-full bg-dimmed"></span>
-      </button>
-      {#each BROWSER_GROUP_ICON_LIST as entry (entry.id)}
-        <button
-          type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-lg border transition-colors {icon ===
-          entry.id
-            ? 'border-primary bg-elevated'
-            : 'border-border hover:bg-elevated'}"
-          aria-pressed={icon === entry.id}
-          aria-label={entry.id}
-          title={entry.id}
-          onclick={() => (icon = entry.id)}
-        >
-          <entry.icon size={14} class={browserGroupColor(color).text} />
-        </button>
-      {/each}
-    </div>
-  </div>
-
   {#snippet footer()}
     <div class="flex w-full items-center gap-2">
       {#if existing}
@@ -143,6 +164,16 @@
         </button>
       {/if}
       <div class="ml-auto flex items-center gap-2">
+        {#if hasAppearance}
+          <button
+            type="button"
+            class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+            title="Reset appearance"
+            onclick={resetAppearance}
+          >
+            Reset
+          </button>
+        {/if}
         <button
           type="button"
           class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"

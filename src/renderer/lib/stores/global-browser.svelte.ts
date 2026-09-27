@@ -31,9 +31,8 @@ import {
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
   browserTabTitleForUrl,
-  isBrowserGroupIconId,
   isTabIdlePastWindow,
-  type BrowserGroupIconId,
+  type BrowserGroupAppearance,
   type GlobalBrowserGroup,
   type GlobalBrowserRuntime,
   type GlobalBrowserTab
@@ -47,6 +46,9 @@ const HIBERNATION_SWEEP_INTERVAL_MS = 60_000
 export class GlobalBrowserState {
   tabs: GlobalBrowserTab[] = $state([])
   groups: GlobalBrowserGroup[] = $state([])
+  /** Data URLs for groups with a picked image icon, keyed by group id. Loaded
+   *  lazily, because a stored icon is a file path on disk and not inline bytes. */
+  groupIconUrls: SvelteMap<string, string> = $state(new SvelteMap())
   activeTabId: string | null = $state(null)
   /** True once the browser view has been opened at least once this session. */
   opened = $state(false)
@@ -121,6 +123,12 @@ export class GlobalBrowserState {
 
   groupById(groupId: string): GlobalBrowserGroup | null {
     return this.groups.find((group) => group.id === groupId) ?? null
+  }
+
+  /** The loaded data URL for a group's picked image icon, when there is one. A
+   *  group without a stored image resolves its icon from colour/SVG instead. */
+  groupIconUrl(groupId: string): string | null {
+    return this.groupIconUrls.get(groupId) ?? null
   }
 
   /** Live runtime of one tab, or the shared idle value while main has reported
@@ -348,7 +356,7 @@ export class GlobalBrowserState {
 
   // ─── Groups ───────────────────────────────────────────────────────────────
 
-  createGroup(name: string, color: string, icon: BrowserGroupIconId | null): string {
+  createGroup(name: string, appearance: Partial<BrowserGroupAppearance> = {}): string {
     const id = `group:${crypto.randomUUID()}`
     if (this.groups.length >= MAX_GLOBAL_BROWSER_GROUPS) return id
     this.groups = [
@@ -356,12 +364,31 @@ export class GlobalBrowserState {
       {
         id,
         name: name.trim().slice(0, MAX_BROWSER_GROUP_NAME_LENGTH) || 'New group',
-        color,
-        icon: icon && isBrowserGroupIconId(icon) ? icon : null
+        color: appearance.color ?? null,
+        iconType: appearance.iconType ?? null,
+        customSvg: appearance.customSvg ?? null,
+        imagePath: appearance.imagePath ?? null
       }
     ]
     this.persist()
     return id
+  }
+
+  /** Read a group's picked image icon into a data URL, once. Best-effort: a
+   *  missing or unreadable file leaves the group on its colour/SVG icon. */
+  async ensureGroupIconLoaded(groupId: string): Promise<void> {
+    const group = this.groupById(groupId)
+    if (!group?.imagePath) {
+      this.groupIconUrls.delete(groupId)
+      return
+    }
+    if (this.groupIconUrls.has(groupId)) return
+    try {
+      const url = await invoke('file:readAsDataUrl', group.imagePath)
+      if (url) this.groupIconUrls.set(groupId, url)
+    } catch {
+      // Icon loading is best-effort; the resolver's fallback remains.
+    }
   }
 
   updateGroup(id: string, patch: Partial<Omit<GlobalBrowserGroup, 'id'>>): void {
@@ -372,10 +399,15 @@ export class GlobalBrowserState {
       if (name) group.name = name
     }
     if (patch.color !== undefined) group.color = patch.color
-    if (patch.icon !== undefined) {
-      group.icon = patch.icon && isBrowserGroupIconId(patch.icon) ? patch.icon : null
-    }
+    if (patch.iconType !== undefined) group.iconType = patch.iconType
+    if (patch.customSvg !== undefined) group.customSvg = patch.customSvg
+    if (patch.imagePath !== undefined) group.imagePath = patch.imagePath
     this.persist()
+    // A new or cleared image must not keep showing the previous one's bytes.
+    if (patch.imagePath !== undefined) {
+      this.groupIconUrls.delete(id)
+      void this.ensureGroupIconLoaded(id)
+    }
   }
 
   /** Remove a group. Its tabs stay open and become ungrouped, because losing a
@@ -383,6 +415,7 @@ export class GlobalBrowserState {
   deleteGroup(id: string): void {
     if (!this.groups.some((group) => group.id === id)) return
     this.groups = this.groups.filter((group) => group.id !== id)
+    this.groupIconUrls.delete(id)
     for (const tab of this.tabs) {
       if (tab.groupId === id) tab.groupId = null
     }

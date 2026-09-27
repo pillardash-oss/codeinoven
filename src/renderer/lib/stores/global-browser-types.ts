@@ -29,16 +29,36 @@ export const IDLE_GLOBAL_BROWSER_RUNTIME: GlobalBrowserRuntime = Object.freeze({
   canGoForward: false
 })
 
-/** One group of tabs in the browser sidebar: a named, coloured, iconed fold. */
+/**
+ * One group of tabs in the browser sidebar: a named, coloured, iconed fold.
+ *
+ * Its appearance is deliberately the *same* model projects and assistant
+ * routines use   a hex colour, a `PROJECT_SVG_ICONS` key, a sanitized custom
+ * SVG, and a picked image file   so all three are edited with the one
+ * `AppearancePicker` and drawn by the one `getProjectIcon` resolver. Nothing
+ * here invents a parallel colour or icon vocabulary.
+ */
 export interface GlobalBrowserGroup {
   id: string
   name: string
-  /** A `BROWSER_GROUP_COLORS` id; unknown ids fall back to the first entry. */
-  color: string
-  /** A catalog icon id, or null for a plain colour dot. Typed as the union, so
-   *  an unknown persisted id can only reach it through the validator. */
-  icon: BrowserGroupIconId | null
+  /** A `PROJECT_COLORS` hex, or a custom hex, or null for no colour. */
+  color: string | null
+  /** A `PROJECT_SVG_ICONS` key, or null. */
+  iconType: string | null
+  /** A sanitized pasted SVG, or null. */
+  customSvg: string | null
+  /** Absolute path of a picked image file, read to a data URL for display. */
+  imagePath: string | null
 }
+
+/**
+ * The appearance fields a group carries, named once so the store's create and
+ * update signatures cannot drift from the modal that fills them in.
+ */
+export type BrowserGroupAppearance = Pick<
+  GlobalBrowserGroup,
+  'color' | 'iconType' | 'customSvg' | 'imagePath'
+>
 
 /**
  * One global browser tab.
@@ -68,61 +88,15 @@ export interface GlobalBrowserTab {
 /** A note is text a human types, so it is bounded generously but bounded. */
 export const MAX_BROWSER_TAB_NOTE_LENGTH = 20_000
 
-/** The colour catalog a group may use. Class strings, so no hex is hardcoded. */
-export interface BrowserGroupColor {
-  id: string
-  label: string
-  /** Small solid dot / accent fill. */
-  dot: string
-  /** Low-opacity fill for the group's own row and its tab tint. */
-  tint: string
-  /** Text/icon tone for the group's name. */
-  text: string
-}
-
-export const BROWSER_GROUP_COLORS: readonly BrowserGroupColor[] = [
-  { id: 'auric', label: 'Auric', dot: 'bg-accent', tint: 'bg-accent/10', text: 'text-accent' },
-  { id: 'sky', label: 'Sky', dot: 'bg-info', tint: 'bg-info/10', text: 'text-info' },
-  { id: 'glade', label: 'Glade', dot: 'bg-success', tint: 'bg-success/10', text: 'text-success' },
-  { id: 'ember', label: 'Ember', dot: 'bg-warning', tint: 'bg-warning/10', text: 'text-warning' },
-  { id: 'crimson', label: 'Crimson', dot: 'bg-danger', tint: 'bg-danger/10', text: 'text-danger' },
-  {
-    id: 'violet',
-    label: 'Violet',
-    dot: 'bg-thread-spec',
-    tint: 'bg-thread-spec/10',
-    text: 'text-thread-spec'
-  }
-]
-
-/** The icon catalog a group may use, resolved to components by the sidebar. */
-export const BROWSER_GROUP_ICON_IDS = [
-  'folder',
-  'briefcase',
-  'cloud',
-  'code',
-  'chart',
-  'star',
-  'heart',
-  'globe'
-] as const
-
-export type BrowserGroupIconId = (typeof BROWSER_GROUP_ICON_IDS)[number]
-
-export function isBrowserGroupIconId(value: string): value is BrowserGroupIconId {
-  return (BROWSER_GROUP_ICON_IDS as readonly string[]).includes(value)
-}
-
-/** The catalog entry for an id, falling back to the first colour for an
- *  unknown id so a stale persisted value can never render an unstyled group. */
-export function browserGroupColor(id: string): BrowserGroupColor {
-  return BROWSER_GROUP_COLORS.find((entry) => entry.id === id) ?? BROWSER_GROUP_COLORS[0]
-}
-
 /** Group names and tab titles are bounded the same way thread titles are. */
 export const MAX_BROWSER_GROUP_NAME_LENGTH = 60
 export const MAX_GLOBAL_BROWSER_TABS = 100
 export const MAX_GLOBAL_BROWSER_GROUPS = 40
+/** Bounds for the appearance payload a group may persist. The SVG ceiling
+ *  matches `sanitizeCustomSvg`, so a stored value can only be one it accepted. */
+export const MAX_BROWSER_GROUP_ICON_TYPE_LENGTH = 64
+export const MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH = 16_384
+export const MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH = 2_048
 
 /**
  * The tab title a fresh tab shows before the page reports its own.

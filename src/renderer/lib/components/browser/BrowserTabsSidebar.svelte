@@ -17,11 +17,11 @@
   import { normalizeBrowserUrl } from '$shared/local-development-url'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { browserGroupColor, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import { type GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import BrowserTabRow from './BrowserTabRow.svelte'
   import BrowserGroupModal from './BrowserGroupModal.svelte'
-  import { BROWSER_GROUP_ICONS } from './browser-group-icons'
+  import { browserGroupAccent, browserGroupIconUrl } from './browser-group-appearance'
 
   interface Props {
     /** Summon the address spotlight, which is how Cmd/Ctrl+L also opens it. */
@@ -64,6 +64,16 @@
   let addressError = $state('')
 
   const groups = $derived(globalBrowser.groups)
+
+  // A group's icon is a file on disk, so its bytes are read once and cached;
+  // this keeps the strip's icon current without every row reading the file.
+  $effect(() => {
+    for (const group of globalBrowser.groups) {
+      if (group.imagePath && !globalBrowser.groupIconUrls.has(group.id)) {
+        void globalBrowser.ensureGroupIconLoaded(group.id)
+      }
+    }
+  })
   const ungrouped = $derived(globalBrowser.tabsInGroup(null))
   const totalTabs = $derived(globalBrowser.tabs.length)
   const query = $derived(globalBrowser.tabSearchQuery)
@@ -298,15 +308,22 @@
       </div>
     {:else}
       {#each groups as group (group.id)}
-        {@const palette = browserGroupColor(group.color)}
+        {@const accent = browserGroupAccent(group)}
+        {@const hasAppearance = Boolean(
+          group.color || group.iconType || group.customSvg || group.imagePath
+        )}
+        {@const iconUrl = hasAppearance
+          ? browserGroupIconUrl(group, globalBrowser.groupIconUrl(group.id))
+          : null}
         {#if searchGroupId === null || searchGroupId === group.id}
           {#if searchGroupId !== null || tabsFor(group.id).length > 0}
             <div class="mb-1">
               <div
-                class="flex items-center gap-1 rounded-lg px-1.5 py-1 transition-colors {palette.tint} {groupDropTargetId ===
+                class="flex items-center gap-1 rounded-lg px-1.5 py-1 transition-colors {groupDropTargetId ===
                 group.id
                   ? 'ring-1 ring-info'
                   : ''}"
+                style="background-color: {accent}1a"
                 role="group"
                 aria-label={`${group.name}, drop a tab here to move it into this group`}
                 ondragover={(event: DragEvent) => onGroupDragOver(event, group.id)}
@@ -320,13 +337,18 @@
                   aria-label={`Filter the tab strip to ${group.name}`}
                   onclick={() => scopeSearch(group.id)}
                 >
-                  {#if group.icon}
-                    {@const GroupIcon = BROWSER_GROUP_ICONS[group.icon]}
-                    <GroupIcon size={13} class="shrink-0 {palette.text}" />
+                  {#if iconUrl}
+                    <img
+                      src={iconUrl}
+                      alt=""
+                      class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+                      draggable="false"
+                    />
                   {:else}
-                    <span class="h-2 w-2 shrink-0 rounded-full {palette.dot}"></span>
+                    <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {accent}"
+                    ></span>
                   {/if}
-                  <span class="truncate text-[0.6875rem] font-semibold {palette.text}">
+                  <span class="truncate text-[0.6875rem] font-semibold" style="color: {accent}">
                     {group.name}
                   </span>
                   <span class="shrink-0 text-[0.625rem] text-dimmed">

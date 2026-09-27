@@ -13,12 +13,14 @@
 
 import { APP_SLUG } from '$shared/brand'
 import {
-  BROWSER_GROUP_COLORS,
+  MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH,
+  MAX_BROWSER_GROUP_ICON_TYPE_LENGTH,
+  MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH,
   MAX_BROWSER_GROUP_NAME_LENGTH,
   MAX_BROWSER_TAB_NOTE_LENGTH,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
-  isBrowserGroupIconId,
+  type BrowserGroupAppearance,
   type GlobalBrowserGroup,
   type GlobalBrowserTab
 } from './global-browser-types'
@@ -27,13 +29,31 @@ const GLOBAL_BROWSER_STORAGE_KEY = `${APP_SLUG}.global-browser.v1`
 const TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
 const GROUP_ID_PATTERN = /^group:[a-zA-Z0-9:_-]{1,240}$/u
 
+const COLOR_PATTERN = /^#[0-9a-fA-F]{3,8}$/u
+
 export interface GlobalBrowserSnapshot {
   tabs: GlobalBrowserTab[]
   groups: GlobalBrowserGroup[]
   activeTabId: string | null
 }
 
-const COLOR_IDS = new Set(BROWSER_GROUP_COLORS.map((entry) => entry.id))
+/** A bounded optional string, so untrusted storage cannot smuggle a huge value
+ *  past a field that only ever holds a short one. */
+function parseOptionalString(value: unknown, maxLength: number): string | null {
+  return typeof value === 'string' && value.length <= maxLength ? value : null
+}
+
+/** The appearance payload a group persisted, validated field by field. */
+function parseAppearance(record: Record<string, unknown>): BrowserGroupAppearance {
+  const color = record['color']
+  const imagePath = parseOptionalString(record['imagePath'], MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH)
+  return {
+    color: typeof color === 'string' && COLOR_PATTERN.test(color) ? color : null,
+    iconType: parseOptionalString(record['iconType'], MAX_BROWSER_GROUP_ICON_TYPE_LENGTH),
+    customSvg: parseOptionalString(record['customSvg'], MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH),
+    imagePath: imagePath && imagePath !== '' ? imagePath : null
+  }
+}
 
 function emptySnapshot(): GlobalBrowserSnapshot {
   return { tabs: [], groups: [], activeTabId: null }
@@ -61,26 +81,17 @@ function parseGroups(value: unknown): GlobalBrowserGroup[] {
     const record = entry as Record<string, unknown>
     const id = record['id']
     const name = record['name']
-    const color = record['color']
-    const icon = record['icon']
     if (
       typeof id !== 'string' ||
       !GROUP_ID_PATTERN.test(id) ||
       groups.some((candidate) => candidate.id === id) ||
       typeof name !== 'string' ||
       name.trim() === '' ||
-      name.length > MAX_BROWSER_GROUP_NAME_LENGTH ||
-      typeof color !== 'string' ||
-      !COLOR_IDS.has(color)
+      name.length > MAX_BROWSER_GROUP_NAME_LENGTH
     ) {
       continue
     }
-    groups.push({
-      id,
-      name: name.trim(),
-      color,
-      icon: typeof icon === 'string' && isBrowserGroupIconId(icon) ? icon : null
-    })
+    groups.push({ id, name: name.trim(), ...parseAppearance(record) })
   }
   return groups
 }

@@ -16,11 +16,7 @@
   import { ContextMenu } from 'bits-ui'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
-  import {
-    BROWSER_GROUP_COLORS,
-    tabHasNote,
-    type GlobalBrowserTab
-  } from '$lib/stores/global-browser-types'
+  import { tabHasNote, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
 
   interface Props {
     tab: GlobalBrowserTab
@@ -65,7 +61,7 @@
    *  the editor always edits something real and the row's placement is settled
    *  even if the user dismisses the dialog. */
   function createGroupFromTab(): void {
-    const id = globalBrowser.createGroup('New group', BROWSER_GROUP_COLORS[0].id, null)
+    const id = globalBrowser.createGroup('New group')
     globalBrowser.moveToGroup(tab.id, id)
     onOpenGroupEditor(id)
   }
