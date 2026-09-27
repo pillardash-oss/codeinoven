@@ -11,11 +11,10 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
-  import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
-  import { Bell, ChevronLeft, ChevronRight, FileText, Globe, Loader2, Plus, Search } from '@lucide/svelte'
+  import { Bell, ChevronLeft, ChevronRight, FileText, Globe, Loader2, Search } from '@lucide/svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
@@ -47,10 +46,12 @@
   let onScope = $derived(activeView === 'scope')
 
   /**
-   * The global browser is its own workspace: its centre shows the page, and its
-   * right cluster keeps the browser's own actions (search the tabs, open one)
-   * plus the notification bell. No editor, spec, or git controls   those belong
-   * to a thread, and a browser tab is not a thread.
+   * The global browser is its own workspace: its centre shows the page, its
+   * quick actions (search the tabs, open one) are registered by the view itself
+   * and rendered beside the view switcher like every other view's, and its right
+   * cluster keeps only the global controls (the browser entry and the
+   * notification bell). No editor, spec, or git controls   those belong to a
+   * thread, and a browser tab is not a thread.
    */
   let onBrowser = $derived(activeView === 'browser')
 
@@ -346,30 +347,6 @@
     <!-- Git status chip   only when a thread is open in a project view -->
     {#if !chatMode && !onScope && !onBrowser && !onSettings && workspaceState.selectedThread && gitAvailable}
       <AppHeaderGitChip {gitAvailable} />
-    {/if}
-
-    <!-- Browser view actions   search the tab strip, then open a tab. Grouping
-         starts from a tab's own context menu, so it is deliberately not here. -->
-    {#if onBrowser}
-      <button
-        class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {globalBrowser.tabSearchOpen
-          ? 'bg-elevated text-foreground'
-          : 'text-muted hover:bg-elevated hover:text-foreground'}"
-        aria-label={globalBrowser.tabSearchOpen ? 'Close tab search' : 'Search browser tabs'}
-        title={globalBrowser.tabSearchOpen ? 'Close tab search' : 'Search tabs'}
-        aria-pressed={globalBrowser.tabSearchOpen}
-        onclick={() => globalBrowser.toggleTabSearch()}
-      >
-        <Search size={16} />
-      </button>
-      <button
-        class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-        aria-label="New browser tab"
-        title="New tab"
-        onclick={() => globalBrowser.openNewTabAddress()}
-      >
-        <Plus size={16} />
-      </button>
     {/if}
 
     <!-- Notification bell   available in all views -->

@@ -1,10 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import { Globe } from '@lucide/svelte'
+  import { onDestroy, onMount } from 'svelte'
+  import { Globe, Plus } from '@lucide/svelte'
   import { subscribe } from '$lib/ipc.svelte'
   import type { BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
+  import BrowserTabSearchButton from './BrowserTabSearchButton.svelte'
   import BrowserTabsSidebar from './BrowserTabsSidebar.svelte'
   import BrowserWorkspace from './BrowserWorkspace.svelte'
   import BrowserContextSidebar from './BrowserContextSidebar.svelte'
@@ -23,6 +26,34 @@
 
   let addressSpotlightOpen = $derived(globalBrowser.addressSpotlightOpen)
   const activeTab = $derived(globalBrowser.activeTab)
+
+  /**
+   * The view's quick actions, rendered beside the view switcher exactly like
+   * every other view's: search the tab strip, then open a tab. Creating a group
+   * stays a tab's own context-menu action, so it is deliberately absent here.
+   */
+  $effect(() => {
+    viewActions.set('browser', [
+      {
+        id: 'search-tabs',
+        component: BrowserTabSearchButton as unknown as ViewActionItem['component']
+      },
+      {
+        id: 'new-tab',
+        icon: Plus,
+        ariaLabel: 'New browser tab',
+        title: 'New tab',
+        shortcut: keymapState.keysFor('browser-new-tab'),
+        run: () => globalBrowser.openNewTabAddress()
+      }
+    ])
+  })
+
+  // Hand the slot back when the view goes away, unless another view has already
+  // claimed it, which is the normal case when the user switches views.
+  onDestroy(() => {
+    if (viewActions.view === 'browser') viewActions.set('none', [])
+  })
 
   /**
    * The browser shortcuts main routes back to the renderer are the ones whose
