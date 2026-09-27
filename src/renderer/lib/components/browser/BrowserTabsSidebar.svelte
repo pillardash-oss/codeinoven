@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {
     ArrowLeft,
@@ -41,22 +40,11 @@
    * an uninterrupted page.
    */
 
-  let query = $state('')
-  /** Whether the tab-search field is revealed. The action row carries a search
-   *  button rather than an always-visible field, so the strip gets the height
-   *  back until the user actually wants to search. */
-  let searchOpen = $state(false)
-  /** The fold the search is scoped to, or null for the whole strip. */
-  let searchGroupId = $state<string | null>(null)
-  let searchInput = $state<HTMLInputElement | undefined>()
-
-  /** The search field's own element, captured as an attachment so focusing it
-   *  after the button reveals it needs no `bind:this`. */
+  /** The search field's own element, captured as an attachment. Revealing the
+   *  field is what opens the search, so taking the caret on mount is the whole
+   *  focus story and needs no `bind:this`. */
   const attachSearchInput: Attachment<HTMLInputElement> = (element) => {
-    searchInput = element
-    return () => {
-      if (searchInput === element) searchInput = undefined
-    }
+    element.focus()
   }
   /** The group whose editor is open; `undefined` means closed and null means
    *  "create a new group", so the two states can never be confused. */
@@ -78,6 +66,8 @@
   const groups = $derived(globalBrowser.groups)
   const ungrouped = $derived(globalBrowser.tabsInGroup(null))
   const totalTabs = $derived(globalBrowser.tabs.length)
+  const query = $derived(globalBrowser.tabSearchQuery)
+  const searchGroupId = $derived(globalBrowser.tabSearchGroupId)
   const scopedGroup = $derived(searchGroupId ? globalBrowser.groupById(searchGroupId) : null)
   const address = $derived(addressFocused ? addressDraft : (activeTab?.url ?? ''))
 
@@ -96,29 +86,10 @@
     globalBrowser.createTab('', groupId)
   }
 
+  /** Narrow the strip to one group's tabs and take the caret, so a group's own
+   *  search affordance lands the user in the field rather than on the button. */
   function scopeSearch(groupId: string | null): void {
-    searchGroupId = groupId
-    query = ''
-    openSearch()
-  }
-
-  /** Reveal the search field and take the caret, so the button is usable in one
-   *  click. Closing it also drops the query and the group scope, because a hidden
-   *  field must never keep filtering the strip. */
-  function openSearch(): void {
-    searchOpen = true
-    void tick().then(() => searchInput?.focus())
-  }
-
-  function closeSearch(): void {
-    searchOpen = false
-    query = ''
-    searchGroupId = null
-  }
-
-  function toggleSearch(): void {
-    if (searchOpen) closeSearch()
-    else openSearch()
+    globalBrowser.openTabSearch(groupId)
   }
 
   function navigate(): void {
@@ -267,67 +238,45 @@
         {/if}
       </button>
     </div>
-    <!-- Action row: search the strip, then open a tab. Creating a group is a
-         right-click action on a tab, so it is deliberately not a button here. -->
-    <div class="flex items-center justify-end gap-0.5">
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-md transition-colors {searchOpen
-          ? 'bg-elevated text-foreground'
-          : 'text-muted hover:bg-elevated hover:text-foreground'}"
-        aria-label={searchOpen ? 'Close tab search' : 'Search browser tabs'}
-        title={searchOpen ? 'Close tab search' : 'Search tabs'}
-        aria-pressed={searchOpen}
-        onclick={toggleSearch}
-      >
-        <Search size={15} />
-      </button>
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label="New browser tab"
-        title="New tab"
-        onclick={() => newTab()}
-      >
-        <Plus size={15} />
-      </button>
-    </div>
   </div>
 
-  {#if searchOpen}
-    <div class="shrink-0 px-3 py-2">
-      <div class="flex items-center gap-1.5 rounded-lg bg-elevated px-2.5">
-        <Search size={13} class="shrink-0 text-dimmed" />
-        <input
-          {@attach attachSearchInput}
-          type="text"
-          class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
-          placeholder={scopedGroup ? `Search in ${scopedGroup.name}` : 'Search tabs'}
-          aria-label={scopedGroup ? `Search tabs in ${scopedGroup.name}` : 'Search browser tabs'}
-          value={query}
-          oninput={(event: Event) => {
-            if (event.currentTarget instanceof HTMLInputElement) query = event.currentTarget.value
-          }}
-          onkeydown={(event: KeyboardEvent) => {
-            if (event.key === 'Escape') closeSearch()
-          }}
-        />
-        {#if query !== '' || searchGroupId !== null}
-          <button
-            type="button"
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-            aria-label="Clear tab search"
-            title="Clear search"
-            onclick={() => {
-              query = ''
-              searchGroupId = null
+  {#if globalBrowser.tabSearchOpen}
+    <!-- Keyed on the open request so opening the search (from the header, or from
+         a group's own control while it is already up) remounts the field and the
+         attachment takes the caret, with no focus effect. -->
+    {#key globalBrowser.tabSearchFocusRequest}
+      <div class="shrink-0 px-3 py-2">
+        <div class="flex items-center gap-1.5 rounded-lg bg-elevated px-2.5">
+          <Search size={13} class="shrink-0 text-dimmed" />
+          <input
+            {@attach attachSearchInput}
+            type="text"
+            class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
+            placeholder={scopedGroup ? `Search in ${scopedGroup.name}` : 'Search tabs'}
+            aria-label={scopedGroup ? `Search tabs in ${scopedGroup.name}` : 'Search browser tabs'}
+            value={query}
+            oninput={(event: Event) => {
+              if (event.currentTarget instanceof HTMLInputElement)
+                globalBrowser.setTabSearchQuery(event.currentTarget.value)
             }}
-          >
-            <X size={13} />
-          </button>
-        {/if}
+            onkeydown={(event: KeyboardEvent) => {
+              if (event.key === 'Escape') globalBrowser.closeTabSearch()
+            }}
+          />
+          {#if query !== '' || searchGroupId !== null}
+            <button
+              type="button"
+              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+              aria-label="Clear tab search"
+              title="Clear search"
+              onclick={() => globalBrowser.clearTabSearch()}
+            >
+              <X size={13} />
+            </button>
+          {/if}
+        </div>
       </div>
-    </div>
+    {/key}
   {/if}
 
   <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">

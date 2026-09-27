@@ -64,6 +64,18 @@ export class GlobalBrowserState {
    *  store because the drop targets (group headers, other rows) are siblings of
    *  the dragged row, so the drag has to be visible outside the row's own scope. */
   draggingTabId: string | null = $state(null)
+  /** Whether the tab-search field is revealed. The button that opens it is one
+   *  of the browser view's header actions while the field itself filters the
+   *  strip, so the state lives here rather than in either surface. */
+  tabSearchOpen = $state(false)
+  /** What the tab search is filtering on. It sits beside the reveal flag so a
+   *  closed search can never keep filtering the strip. */
+  tabSearchQuery = $state('')
+  /** The fold the search is scoped to, or null for the whole strip. */
+  tabSearchGroupId = $state<string | null>(null)
+  /** Bumped every time the search is opened, so the strip's field can take the
+   *  caret without the header reaching into another surface. */
+  tabSearchFocusRequest = $state(0)
 
   private readonly runtime = new SvelteMap<string, GlobalBrowserRuntime>()
   private sweepTimer: number | null = null
@@ -173,6 +185,40 @@ export class GlobalBrowserState {
   openNewTabAddress(groupId: string | null = null): void {
     this.createTab('', groupId)
     this.addressSpotlightOpen = true
+  }
+
+  /** Reveal the tab search, optionally scoped to one group.
+   *
+   *  The field filters the strip, so opening the search also reveals the sidebar:
+   *  a hidden strip has nothing for the search to filter and no field to type in. */
+  openTabSearch(groupId: string | null = null): void {
+    this.tabSearchGroupId = groupId
+    this.tabSearchQuery = ''
+    this.tabSearchOpen = true
+    this.tabSearchFocusRequest += 1
+    this.sidebarVisible = true
+  }
+
+  closeTabSearch(): void {
+    this.tabSearchOpen = false
+    this.tabSearchQuery = ''
+    this.tabSearchGroupId = null
+  }
+
+  setTabSearchQuery(query: string): void {
+    this.tabSearchQuery = query
+  }
+
+  /** Drop the query and the group scope while leaving the field open, which is
+   *  what the field's own clear control does. */
+  clearTabSearch(): void {
+    this.tabSearchQuery = ''
+    this.tabSearchGroupId = null
+  }
+
+  toggleTabSearch(): void {
+    if (this.tabSearchOpen) this.closeTabSearch()
+    else this.openTabSearch()
   }
 
   /**
