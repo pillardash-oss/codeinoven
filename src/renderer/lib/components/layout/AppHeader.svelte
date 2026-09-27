@@ -13,7 +13,15 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
-  import { Bell, ChevronLeft, ChevronRight, FileText, Globe, Loader2 } from '@lucide/svelte'
+  import {
+    Bell,
+    BotMessageSquare,
+    ChevronLeft,
+    ChevronRight,
+    FileText,
+    Globe,
+    Loader2
+  } from '@lucide/svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
@@ -68,6 +76,25 @@
   let notificationsPanelActive = $derived(
     contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'
   )
+
+  /** The assistant badge's colour is the assistant space's own status colour,
+   *  so an assistant run never reads as a project/chat badge on the bell. */
+  let assistantBadgeColor = $derived.by((): string => {
+    switch (notificationPanelState.assistantStatus) {
+      case 'error':
+        return 'var(--color-danger)'
+      case 'attention':
+        return 'var(--color-warning)'
+      case 'missed':
+        return 'var(--color-missed)'
+      case 'spec':
+        return 'var(--color-thread-spec)'
+      case 'completed':
+        return 'var(--color-thread-done)'
+      default:
+        return 'var(--color-dimmed)'
+    }
+  })
 
   // ─── Thread actions (ellipsis dropdown) ──────────────────────────────────
 
@@ -329,7 +356,7 @@
       onclick={() => contextSidebarState.toggleNotifications()}
     >
       <Bell size={16} />
-      {#if notificationPanelState.totalCount > 0}
+      {#if notificationPanelState.totalCount > 0 || notificationPanelState.hasAssistant}
         <div class="absolute -top-0.5 -left-0.5 flex items-start gap-px">
           {#if notificationPanelState.hasCompleted}
             <StatusBadge kind="completed" title="Completed notifications" />
@@ -342,6 +369,14 @@
           {/if}
           {#if notificationPanelState.hasError}
             <StatusBadge kind="error" title="Error notifications" />
+          {/if}
+          {#if notificationPanelState.hasAssistant}
+            <StatusBadge
+              variant="icon"
+              icon={BotMessageSquare}
+              color={assistantBadgeColor}
+              title="Assistant activity"
+            />
           {/if}
         </div>
       {/if}

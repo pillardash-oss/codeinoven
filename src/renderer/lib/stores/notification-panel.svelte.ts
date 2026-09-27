@@ -1,6 +1,7 @@
 import { APP_SLUG } from '$shared/brand'
 import type { AgentNotificationPayload, NotificationSource } from '$shared/ipc-contract'
 import {
+  ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
   isOrchestrationChildThread,
   type Project,
@@ -52,6 +53,13 @@ class NotificationPanelState {
     return n.source === 'chat' || n.source === 'temporary-chat' || n.projectId === INBOX_PROJECT_ID
   }
 
+  /** Assistant notices come from the hidden assistant space (routine runs).
+   *  The source tag is authoritative; the project id covers any payload that
+   *  predates the dedicated source. */
+  private isAssistant(n: InAppNotification): boolean {
+    return n.source === 'assistant' || n.projectId === ASSISTANT_SPACE_ID
+  }
+
   private byKind(items: InAppNotification[], sub: NotificationSubFilter): InAppNotification[] {
     if (sub === 'all') return items
     const kind = SUB_FILTER_KINDS[sub]
@@ -59,17 +67,17 @@ class NotificationPanelState {
   }
 
   get projectNotifications(): InAppNotification[] {
-    return this._notifications.filter((n) => !this.isChat(n))
+    return this._notifications.filter((n) => !this.isChat(n) && !this.isAssistant(n))
   }
 
   get chatNotifications(): InAppNotification[] {
     return this._notifications.filter((n) => this.isChat(n))
   }
 
-  /** Assistants surface scheduled missed runs (v1). The panel renders them
-   *  straight from the assistant store, so the notification list stays empty. */
+  /** Assistant-space notices (routine runs). The panel renders them beside the
+   *  scheduled missed runs, which live in the assistant store rather than here. */
   get assistantNotifications(): InAppNotification[] {
-    return []
+    return this._notifications.filter((n) => this.isAssistant(n))
   }
 
   /** Items for the currently active top tab + sub filter. App errors are
@@ -101,25 +109,50 @@ class NotificationPanelState {
   }
 
   assistantCount(sub: NotificationSubFilter): number {
-    // The assistants tab carries pending missed runs; the panel renders them
-    // directly from the assistant store, so counts read that list here.
-    return sub === 'all' ? assistantRoutines.missedRuns.length : 0
+    // The assistants tab carries assistant notices plus the pending missed
+    // runs the panel renders straight from the assistant store. Missed runs
+    // surface under the tab's "All" view, which is its only view.
+    const notices = this.count(this.assistantNotifications, sub)
+    return sub === 'all' ? notices + assistantRoutines.missedRuns.length : notices
   }
 
+  /**
+   * The most urgent status the assistant space carries right now, or `null`
+   * when it has nothing to show. It drives the header bell's assistant badge:
+   * one badge whose colour is the assistant's own status colour, so an
+   * assistant run never reads as a project thread badge.
+   */
+  get assistantStatus(): 'error' | 'attention' | 'missed' | 'spec' | 'completed' | null {
+    const notices = this.assistantNotifications
+    if (notices.some((n) => n.kind === 'error')) return 'error'
+    if (notices.some((n) => n.kind === 'attention')) return 'attention'
+    if (assistantRoutines.missedRuns.length > 0) return 'missed'
+    if (notices.some((n) => n.kind === 'spec')) return 'spec'
+    if (notices.length > 0) return 'completed'
+    return null
+  }
+
+  /** True when the header bell must show its assistant status badge. */
+  get hasAssistant(): boolean {
+    return this.assistantStatus !== null
+  }
+
+  // Assistant notices are represented by the single assistant badge (see
+  // `assistantStatus`), so they never double up as a project/chat kind badge.
   get hasCompleted(): boolean {
-    return this._notifications.some((n) => n.kind === 'completed')
+    return this._notifications.some((n) => n.kind === 'completed' && !this.isAssistant(n))
   }
 
   get hasAttention(): boolean {
-    return this._notifications.some((n) => n.kind === 'attention')
+    return this._notifications.some((n) => n.kind === 'attention' && !this.isAssistant(n))
   }
 
   get hasError(): boolean {
-    return this._notifications.some((n) => n.kind === 'error')
+    return this._notifications.some((n) => n.kind === 'error' && !this.isAssistant(n))
   }
 
   get hasSpec(): boolean {
-    return this._notifications.some((n) => n.kind === 'spec')
+    return this._notifications.some((n) => n.kind === 'spec' && !this.isAssistant(n))
   }
 
   get totalCount(): number {
@@ -135,12 +168,16 @@ class NotificationPanelState {
     this._notifications = this._notifications.filter((n) => n.id !== id)
   }
 
-  /** Clear every notification under the given top tab. */
-  dismissTab(tab: Exclude<NotificationTopTab, 'app-errors' | 'assistants'>): void {
+  /** Clear every notification under the given top tab. Missed runs belong to
+   *  the assistant store and keep their own per-entry dismiss, so clearing the
+   *  assistants tab drops only its notifications. */
+  dismissTab(tab: Exclude<NotificationTopTab, 'app-errors'>): void {
     if (tab === 'projects') {
-      this._notifications = this._notifications.filter((n) => this.isChat(n))
-    } else {
+      this._notifications = this._notifications.filter((n) => this.isChat(n) || this.isAssistant(n))
+    } else if (tab === 'chats') {
       this._notifications = this._notifications.filter((n) => !this.isChat(n))
+    } else {
+      this._notifications = this._notifications.filter((n) => !this.isAssistant(n))
     }
   }
 
