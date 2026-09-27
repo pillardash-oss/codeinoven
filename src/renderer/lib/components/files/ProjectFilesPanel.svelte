@@ -1329,6 +1329,8 @@
             threadId={activeThreadId}
             path={activeTab.path}
             content={visibleContent}
+            fullscreen
+            onExitFullscreen={closeFullscreen}
           />
         {:else if activeTab?.view === 'preview' && hasAnyPreview(previewFlags)}
           <ProjectFilesPanelPreviewPane

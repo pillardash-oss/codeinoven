@@ -916,20 +916,16 @@
               onswitch={() => toggleGroup(group.pids)}
             >
               {#snippet icon()}
-                {@const harnessId =
-                  group.kind === 'thread'
-                    ? harnessIdFor(group.processes[0]?.command ?? '')
-                    : undefined}
-                {#if harnessId}
-                  <AgentIcon agentId={harnessId} size={20} class="shrink-0" />
-                {:else}
-                  {@render projectIconTile(
-                    group.projectId ?? group.id,
-                    group.projectName ?? group.label,
-                    'h-6 w-6 rounded-md',
-                    'h-4 w-4'
-                  )}
-                {/if}
+                <!-- A group is an owner   a project, or a thread inside one   so it
+                carries the icon and colour of the project it belongs to. The
+                harness mark stays on the process rows, where it identifies the
+                run itself rather than the project. -->
+                {@render projectIconTile(
+                  group.projectId ?? group.id,
+                  group.projectName ?? group.label,
+                  'h-6 w-6 rounded-md',
+                  'h-4 w-4'
+                )}
               {/snippet}
               <ul class="divide-y divide-border">
                 {#each group.processes as process (process.pid)}

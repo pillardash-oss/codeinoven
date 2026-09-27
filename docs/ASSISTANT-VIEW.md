@@ -244,10 +244,22 @@ default:
   the specific missed task row;
 - the **Missed Runs section** of the notification panel (`Assistants` tab),
   grouped per routine, with per-entry **Dismiss** and **Run now** actions. The
-  Assistants tab exposes no sub-filter buttons; with no miss it shows only a
-  neutral empty state. Each entry states why the fire was not run
+  Assistants tab exposes no sub-filter buttons; with nothing to show it renders
+  only a neutral empty state. Each entry states why the fire was not run
   (`missedRunReasonText` in `assistant-view.ts`), so the copy never claims the
   app was closed when the machine simply slept through the window.
+
+### Assistant notifications
+
+Every assistant run notifies as its own entry on the **Assistants** tab. The
+main process tags a run thread's notification with `source: 'assistant'`
+(`notificationSource` in `src/main/notifications/notification-service.ts`), so
+the panel routes it to the Assistants tab instead of Projects and the card names
+its own status (done, needs attention, spec ready, error). The header bell shows
+one **assistant** badge whose colour is the assistant space's most urgent status
+(error > attention > missed > spec > done), so an assistant run never reads as a
+project or chat badge. The badge is a bot icon rather than a plain status dot to
+keep it distinct from the project/chat kind dots.
 
 The renderer state lives in `assistantRoutines`
 (`src/renderer/lib/stores/assistant-routines.svelte.ts`), fed by the
@@ -817,9 +829,9 @@ destination. The channels are `in-app`, `slack`, `telegram`, `whatsapp`,
 means a normal thread notification inside CodeInOven, and the app delivers it by
 the run thread itself. Note what that does and does not mean today. The report is
 the run thread's message, and the thread is listed in the assistant sidebar under
-its routine. The notification panel's **Assistants** tab carries **missed runs
-only**, so a finished report does not currently raise its own notification entry
-there. Every other channel is _external_, and picking one is
+its routine, and the run raises its own entry on the notification panel's
+**Assistants** tab, tagged with the assistant source. Every other channel is
+_external_, and picking one is
 also a statement that the routine needs a connection: the authoring contract
 tells the agent to add that channel to the plan's `connections` and set it up
 like any other, and the panel warns (and the All tab's summary row marks) a

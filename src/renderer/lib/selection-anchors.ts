@@ -81,17 +81,71 @@ function rangeForOffsets(root: HTMLElement, startOffset: number, endOffset: numb
   return range
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function whitespaceFree(value: string): string {
+  return value.replace(/\s+/g, '')
+}
+
+/**
+ * Whether a live range still describes the quote it was built for.
+ *
+ * The two serializations of the same passage disagree about whitespace:
+ * `Range.toString()` concatenates the text nodes the range spans, so a passage
+ * crossing a block boundary reads `beta gamma.Delta`, while the
+ * `Selection.toString()` that stored the quote inserts a line break there and
+ * reads `beta gamma.\n\nDelta`. Comparing the two literally marked every
+ * cross-block annotation as moved and dropped its range, which is what left a
+ * freshly added annotation without a highlight, a bubble or a comment editor.
+ * Dropping whitespace compares the characters the reader actually selected.
+ */
+export function anchorTextMatches(range: Range, quote: string): boolean {
+  return whitespaceFree(range.toString()) === whitespaceFree(quote)
+}
+
+/**
+ * Locate a stored quote in a document's text content.
+ *
+ * The exact search is the common case: the quote is a contiguous slice of the
+ * document and has not moved. When it has moved, or when the serialization
+ * whitespace never existed in the document at all, the passage is searched for
+ * again with its whitespace runs optional, so `a b` still finds `a b` and a
+ * quote carrying a block separator still finds the text the separator never
+ * belonged to.
+ */
+function locateQuote(
+  text: string,
+  quote: string
+): { startOffset: number; endOffset: number } | null {
+  const trimmed = quote.trim()
+  if (!trimmed) return null
+  const exact = text.indexOf(trimmed)
+  if (exact >= 0) return { startOffset: exact, endOffset: exact + trimmed.length }
+  const pattern = trimmed.split(/\s+/).map(escapeRegExp).join('\\s*')
+  const match = new RegExp(pattern).exec(text)
+  return match ? { startOffset: match.index, endOffset: match.index + match[0].length } : null
+}
+
+/**
+ * Rebuild the live range for a persisted anchor, or null when it cannot be
+ * found. The stored offsets are the primary anchor, because they are measured
+ * in the same text-node coordinates this rebuild works in; the quote is the
+ * check that the offsets still describe the intended passage, and the fallback
+ * when the document was rewritten around it.
+ */
 export function rangeForAnnotation(root: HTMLElement, annotation: TextAnchor): Range | null {
   if (annotation.startOffset !== undefined && annotation.endOffset !== undefined) {
     const range = rangeForOffsets(root, annotation.startOffset, annotation.endOffset)
-    if (range && (!annotation.quote || range.toString().trim() === annotation.quote.trim())) {
+    if (range && (!annotation.quote || anchorTextMatches(range, annotation.quote))) {
       return range
     }
   }
   const quote = annotation.quote?.trim()
   if (!quote) return null
-  const startOffset = (root.textContent ?? '').indexOf(quote)
-  return startOffset < 0 ? null : rangeForOffsets(root, startOffset, startOffset + quote.length)
+  const located = locateQuote(root.textContent ?? '', quote)
+  return located ? rangeForOffsets(root, located.startOffset, located.endOffset) : null
 }
 
 export async function waitForScrollSettle(scroller: HTMLElement): Promise<void> {
@@ -159,38 +213,50 @@ export function measureAnnotationBubbles(
 }
 
 /**
- * Publish the live annotation ranges to the CSS Custom Highlight registry.
+ * The ranges each view contributed to a highlight name.
  *
- * The registry is document-global and keyed by name, so ownership is tracked per
- * name: only the view that published a name's current highlight may clear it.
- * Without that, a conversation view being torn down (a thread switch, a side
- * chat panel closing) wiped the highlight a sibling view had just published for
- * its own thread, leaving the annotations unhighlighted until something else
- * re-published them. The name is explicit because a conversation and a document
- * can both be on screen at once, each owning its own set of highlights.
+ * The registry is document-global and keyed by name, and more than one view can
+ * draw the same annotation kind at once: the file panel's annotate view is
+ * mounted twice while its fullscreen surface is open, once in the sidebar and
+ * once in the modal. Each builds ranges in its own copy of the document, so a
+ * name holds the union of every publisher's ranges. Registering only the last
+ * publisher erased the other one's highlight, and a teardown erased it for good,
+ * because a view whose dependencies did not change never republished: closing
+ * the fullscreen reader left the sidebar's annotations unhighlighted. A range
+ * from a detached tree simply paints nothing, so a stale contribution is
+ * harmless until its view releases it.
  */
-const highlightPublishers = new Map<string, object>()
+const highlightPublishers = new Map<string, Map<object, ReadonlyMap<string, Range>>>()
+
+function publishHighlights(name: string): void {
+  const publishers = highlightPublishers.get(name)
+  const ranges: Range[] = []
+  for (const contribution of publishers?.values() ?? []) ranges.push(...contribution.values())
+  if (typeof Highlight === 'undefined' || !CSS.highlights) return
+  if (ranges.length === 0) {
+    CSS.highlights.delete(name)
+    return
+  }
+  CSS.highlights.set(name, new Highlight(...ranges))
+}
 
 export function applyAnnotationHighlights(
   ranges: ReadonlyMap<string, Range>,
   publisher: object,
   name: string
 ): void {
-  if (typeof Highlight === 'undefined' || !CSS.highlights) return
-  if (ranges.size === 0) {
-    if (highlightPublishers.get(name) === publisher) {
-      CSS.highlights.delete(name)
-      highlightPublishers.delete(name)
-    }
-    return
-  }
-  CSS.highlights.set(name, new Highlight(...ranges.values()))
-  highlightPublishers.set(name, publisher)
+  const publishers = highlightPublishers.get(name) ?? new Map<object, ReadonlyMap<string, Range>>()
+  if (ranges.size === 0) publishers.delete(publisher)
+  else publishers.set(publisher, ranges)
+  if (publishers.size === 0) highlightPublishers.delete(name)
+  else highlightPublishers.set(name, publishers)
+  publishHighlights(name)
 }
 
-/** Drop this view's highlight, leaving any other name's registration intact. */
+/** Drop this view's ranges, leaving every other publisher's highlight intact. */
 export function releaseAnnotationHighlights(publisher: object, name: string): void {
-  if (highlightPublishers.get(name) !== publisher) return
-  CSS.highlights?.delete(name)
-  highlightPublishers.delete(name)
+  const publishers = highlightPublishers.get(name)
+  if (!publishers?.delete(publisher)) return
+  if (publishers.size === 0) highlightPublishers.delete(name)
+  publishHighlights(name)
 }

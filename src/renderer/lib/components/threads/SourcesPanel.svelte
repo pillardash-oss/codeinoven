@@ -717,6 +717,7 @@
 {#if previewSource}
   <MediaPreview
     src={imageUrls.getUrl(previewSource.url)}
+    revealUrl={previewSource.url}
     filename={previewSource.title}
     mime={previewSource.mime}
     onClose={() => (previewSource = null)}
@@ -726,6 +727,7 @@
 {#if previewArtifact}
   <MediaPreview
     src={imageUrls.getUrl(previewArtifact.url)}
+    revealUrl={previewArtifact.url}
     filename={previewArtifact.filename}
     mime={previewArtifact.mime}
     onClose={() => (previewArtifact = null)}

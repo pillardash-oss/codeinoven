@@ -82,9 +82,10 @@ export function inAppSoundGroup(kind: NotificationSoundKind): 'success' | 'issue
   return kind === 'attention' ? 'issue' : 'success'
 }
 
-/** Where a notification originated: a project thread, the global chat (inbox)
- *  or a temporary (side) chat piped through a parent thread. */
-export type NotificationSource = 'project' | 'chat' | 'temporary-chat'
+/** Where a notification originated: a project thread, the global chat (inbox),
+ *  the assistant space, or a temporary (side) chat piped through a parent
+ *  thread. The panel routes each source to its own top tab. */
+export type NotificationSource = 'project' | 'chat' | 'assistant' | 'temporary-chat'
 
 export interface AgentNotificationPayload extends ThreadClickedPayload {
   id: string

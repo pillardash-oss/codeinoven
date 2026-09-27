@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { X, Download } from '@lucide/svelte'
+  import { X, Download, FolderOpen } from '@lucide/svelte'
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
+  import { revealAttachmentFile } from '$lib/reveal-file'
 
   interface Props {
     src: string
@@ -13,15 +14,28 @@
     onClose: () => void
     /** Repair hook for a media element that failed to load (blob not ready yet). */
     onLoadError?: (element: HTMLMediaElement) => void
+    /**
+     * Original `file://` url of the media being shown, when the caller has one.
+     * `src` is usually a blob url, which has no path on disk, so the reveal
+     * action needs the untouched source url instead.
+     */
+    revealUrl?: string
   }
 
-  let { src, filename, mime, onClose, onLoadError }: Props = $props()
+  let { src, filename, mime, onClose, onLoadError, revealUrl }: Props = $props()
 
   const kind = $derived(isVideoMime(mime) ? 'video' : isAudioMime(mime) ? 'audio' : 'image')
 
   const downloadLabel = $derived(
     kind === 'image' ? 'Download image' : kind === 'video' ? 'Download video' : 'Download audio'
   )
+  /** Only media that is a real file on disk has a path to reveal. */
+  const revealable = $derived(revealUrl?.startsWith('file://') ?? false)
+
+  function revealFromButton(event: MouseEvent): void {
+    event.stopPropagation()
+    if (revealUrl) void revealAttachmentFile(revealUrl)
+  }
 
   function mediaError(event: Event): void {
     onLoadError?.(event.currentTarget as HTMLMediaElement)
@@ -125,24 +139,37 @@
     {#if kind === 'image'}
       <PanZoomToolbar {panZoom} viewport={imageViewport} class="absolute right-4 bottom-4" />
     {/if}
-    <button
-      type="button"
-      class="absolute right-4 top-4 flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
-      aria-label="Close preview"
-      title="Close (Esc)"
-      onclick={onClose}
-    >
-      <X size={18} />
-    </button>
-    <a
-      href={src}
-      download={filename}
-      class="absolute right-4 top-16 flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
-      aria-label={downloadLabel}
-      title={downloadLabel}
-      onclick={(e: MouseEvent) => e.stopPropagation()}
-    >
-      <Download size={16} />
-    </a>
+    <div class="absolute right-4 top-4 flex flex-col gap-2">
+      <button
+        type="button"
+        class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
+        aria-label="Close preview"
+        title="Close (Esc)"
+        onclick={onClose}
+      >
+        <X size={18} />
+      </button>
+      {#if revealable}
+        <button
+          type="button"
+          class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
+          aria-label={`Reveal path of ${filename}`}
+          title="Reveal path"
+          onclick={revealFromButton}
+        >
+          <FolderOpen size={16} />
+        </button>
+      {/if}
+      <a
+        href={src}
+        download={filename}
+        class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-black/50 text-white transition-colors hover:bg-black/70"
+        aria-label={downloadLabel}
+        title={downloadLabel}
+        onclick={(e: MouseEvent) => e.stopPropagation()}
+      >
+        <Download size={16} />
+      </a>
+    </div>
   </div>
 </Modal>

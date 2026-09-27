@@ -16,6 +16,21 @@ const OWNERSHIP_PROBE_CHUNK = 64
 /** Key under which app-wide roots (e.g. the shared opencode server) are tracked. */
 const APP_SCOPE = '__codeinoven_app_scope__'
 
+/**
+ * OpenCode's own managed background service (`opencode serve --service`).
+ *
+ * OpenCode starts this daemon for its own client commands and re-parents it to
+ * launchd, so it outlives whatever asked for it. The app never talks to it   it
+ * spawns private `serve --port 0` servers for its own work   so a stray one is
+ * never adopted as an app runtime and is reaped on the next launch.
+ */
+const OPENCODE_SERVICE_DAEMON_PATTERN =
+  /(?:^|[\\/])opencode(?:\.exe)?["']?\s+serve\s+--service(?:\s|$)/u
+
+function isOpenCodeServiceDaemon(command: string): boolean {
+  return OPENCODE_SERVICE_DAEMON_PATTERN.test(command)
+}
+
 export interface ProcessSnapshotEntry {
   pid: number
   parentPid: number
@@ -513,7 +528,10 @@ export class AgentProcessService implements AgentProcessObserver {
       if (options.requireOwnershipProof) {
         // An adopted daemon (see OwnedRoot.adopted) is an app-marked orphan too,
         // but the running app may be talking to it; only a launch reaps those.
-        if (root.adopted === true) continue
+        // The exception is OpenCode's own managed service, which the app caused
+        // but never uses: it is reaped so a historical leak does not outlive the
+        // fix that stopped spawning it.
+        if (root.adopted === true && !isOpenCodeServiceDaemon(root.command)) continue
         const marker = await this.processHasMarker(root.pid)
         if (marker === true) {
           await this.killTree(root.pid)
@@ -784,6 +802,10 @@ export class AgentProcessService implements AgentProcessObserver {
     const candidates = snapshot.filter(
       (entry) =>
         !trackedPids.has(entry.pid) &&
+        // OpenCode's managed service daemon is app-marked because the app's own
+        // probe triggered it, but the app never talks to it (it spawns private
+        // servers instead), so it is not adopted as an app runtime.
+        !isOpenCodeServiceDaemon(entry.command) &&
         this.isOrphaned(entry.parentPid, alive) &&
         // Windows cannot read another process's environment; only adopt the
         // unambiguously fingerprintable adb server daemon there.

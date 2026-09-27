@@ -2,6 +2,7 @@ import {
   isResponseSelection,
   type ResponseReferenceAnchor
 } from '$lib/stores/response-references.svelte'
+import { anchorTextMatches } from '$lib/selection-anchors'
 
 /**
  * DOM geometry for quoted response annotations.
@@ -136,7 +137,9 @@ export function captureResponseSelection(): ResponseSelectionCandidate | null {
  * message, markdown re-rendering once its images or citations resolve), and a
  * range pointing at those detached nodes paints nothing and measures a zero
  * rect. Text drift is checked too, because an in-place text update keeps the
- * node connected while the stored offsets no longer describe it.
+ * node connected while the stored offsets no longer describe it. The comparison
+ * tolerates the whitespace a selection serializer inserts at block boundaries,
+ * which the range's own text nodes never carry.
  */
 export function responseRangeIsCurrent(
   range: Range | null | undefined,
@@ -144,5 +147,5 @@ export function responseRangeIsCurrent(
 ): boolean {
   if (!range) return false
   if (!range.startContainer.isConnected || !range.endContainer.isConnected) return false
-  return range.toString().trim() === reference.text.trim()
+  return anchorTextMatches(range, reference.text)
 }

@@ -21,7 +21,10 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import { groupMissedRunsByRoutine, missedRunReasonText } from '$lib/components/assistant/assistant-view'
+  import {
+    groupMissedRunsByRoutine,
+    missedRunReasonText
+  } from '$lib/components/assistant/assistant-view'
   import { SvelteSet } from 'svelte/reactivity'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -128,6 +131,14 @@
         : notificationPanelState.visible.length > 0
   )
 
+  // Missed-run records keep their own per-entry dismiss, so the assistants tab
+  // only offers a clear-all once at least one assistant notice sits in it.
+  let showDismissAll = $derived(
+    showingAppErrors || !showingAssistants
+      ? hasVisibleItems
+      : notificationPanelState.assistantNotifications.length > 0
+  )
+
   // Missed runs are surfaced per routine: one group per owning routine, plus a
   // single group for routine-less tasks. Both the groups and the panel's tab
   // chrome exist only once at least one run has actually been missed.
@@ -214,9 +225,10 @@
       appErrorState.dismissAll()
       return
     }
-    if (tab === 'assistants') return
     notificationPanelState.dismissTab(tab)
-    contextSidebarState.hide()
+    // The assistants tab still has missed-run records after its notices clear,
+    // so the panel stays open there.
+    if (tab !== 'assistants') contextSidebarState.hide()
   }
 
   async function copyError(e: AppErrorEntry): Promise<void> {
@@ -331,6 +343,100 @@
   {/if}
 {/snippet}
 
+{#snippet notificationCard(n: InAppNotification)}
+  {@const active = busyId === n.id}
+  <div
+    class="group flex cursor-pointer items-start gap-2 border-l-2 bg-surface px-3 py-2.5 transition-colors hover:bg-elevated {kindAccent(
+      n.kind
+    )} {active ? 'opacity-60 pointer-events-none' : ''}"
+    role="button"
+    tabindex="0"
+    aria-label={`${kindLabel(n.kind)}: ${n.title}. Click to navigate to thread`}
+    title={`${n.title}${n.body ? `   ${n.body}` : ''}`}
+    onclick={() => void navigateToNotification(n)}
+    onkeydown={(e: KeyboardEvent) => {
+      // Ignore keys that belong to a nested control (the stack-trace
+      // toggle), which would otherwise navigate away on Enter.
+      if (e.target !== e.currentTarget) return
+      if (keymapState.matches('chat-notification-open', e)) {
+        e.preventDefault()
+        void navigateToNotification(n)
+      }
+    }}
+  >
+    <div class="flex w-2 shrink-0 pt-1">
+      <StatusBadge kind={n.kind} title={kindLabel(n.kind)} />
+    </div>
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-2">
+        <span class="truncate text-[0.6875rem] font-medium text-foreground">{n.title}</span>
+        <span class="shrink-0 text-[0.625rem] text-dimmed">{formatTime(n.timestamp)}</span>
+      </div>
+      <div class="mt-1 flex items-center gap-1 text-[0.625rem] text-dimmed">
+        {#if n.source === 'chat'}
+          <MessageSquare size={10} class="shrink-0" />
+          <span>Chat</span>
+        {:else if n.source === 'assistant'}
+          <Bot size={10} class="shrink-0" />
+          <span class="truncate">{n.projectName || 'Assistant'}</span>
+        {:else}
+          <span
+            class="h-1.5 w-1.5 shrink-0 rounded-full"
+            style="background: {n.projectColor ?? 'var(--color-border)'}"
+            role="presentation"
+          ></span>
+          <span class="truncate">{n.projectId === INBOX_PROJECT_ID ? 'Chat' : n.projectName}</span>
+          {#if n.source === 'temporary-chat'}
+            <span class="shrink-0">·</span>
+            <MessageCircleDashed
+              size={10}
+              class="shrink-0 text-info"
+              title="Temporary chat"
+              aria-hidden="true"
+            />
+          {/if}
+        {/if}
+      </div>
+      {#if n.body}
+        <p class="mt-0.5 line-clamp-2 text-[0.6875rem] leading-relaxed text-muted">
+          {n.body}
+        </p>
+      {/if}
+      {#if n.kind === 'error' && n.errorDetail && hasUsefulDetails(errorHeadline(n.body), n.errorDetail)}
+        {@render detailsBlock(`notification:${n.id}`, n.errorDetail)}
+      {/if}
+    </div>
+    {#if n.kind === 'error'}
+      <button
+        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        aria-label="Copy error details and stack trace"
+        title="Copy error details"
+        onclick={(e: MouseEvent) => {
+          e.stopPropagation()
+          void copyNotificationError(n)
+        }}
+      >
+        {#if copiedId === n.id}
+          <Check size={11} />
+        {:else}
+          <Copy size={11} />
+        {/if}
+      </button>
+    {/if}
+    <button
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+      aria-label="Dismiss notification"
+      title="Dismiss"
+      onclick={(e: MouseEvent) => {
+        e.stopPropagation()
+        dismiss(n)
+      }}
+    >
+      <X size={11} />
+    </button>
+  </div>
+{/snippet}
+
 <div class="flex h-full flex-col">
   <!-- Top-level tabs -->
   <div
@@ -358,7 +464,7 @@
       </button>
     {/each}
     <div class="ml-auto pb-1.5">
-      {#if hasVisibleItems && !showingAssistants}
+      {#if showDismissAll}
         <button
           class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={showingAppErrors ? 'Dismiss all app errors' : 'Dismiss all notifications'}
@@ -480,12 +586,19 @@
         </div>
       {/if}
     {:else if showingAssistants}
-      {#if assistantRoutines.missedRuns.length === 0}
+      {#if notificationPanelState.assistantNotifications.length === 0 && assistantRoutines.missedRuns.length === 0}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
           <Bot size={20} class="text-dimmed" />
-          <p class="text-xs text-muted">No missed runs</p>
+          <p class="text-xs text-muted">No assistant activity</p>
         </div>
       {:else}
+        {#if notificationPanelState.assistantNotifications.length > 0}
+          <div class="space-y-px p-1.5">
+            {#each notificationPanelState.assistantNotifications as n (n.id)}
+              {@render notificationCard(n)}
+            {/each}
+          </div>
+        {/if}
         {#each missedGroups as group (group.key)}
           <div class="pb-1.5">
             <div
@@ -559,96 +672,7 @@
     {:else}
       <div class="space-y-px p-1.5">
         {#each notificationPanelState.visible as n (n.id)}
-          {@const active = busyId === n.id}
-          <div
-            class="group flex cursor-pointer items-start gap-2 border-l-2 bg-surface px-3 py-2.5 transition-colors hover:bg-elevated {kindAccent(
-              n.kind
-            )} {active ? 'opacity-60 pointer-events-none' : ''}"
-            role="button"
-            tabindex="0"
-            aria-label={`${kindLabel(n.kind)}: ${n.title}. Click to navigate to thread`}
-            title={`${n.title}${n.body ? `   ${n.body}` : ''}`}
-            onclick={() => void navigateToNotification(n)}
-            onkeydown={(e: KeyboardEvent) => {
-              // Ignore keys that belong to a nested control (the stack-trace
-              // toggle), which would otherwise navigate away on Enter.
-              if (e.target !== e.currentTarget) return
-              if (keymapState.matches('chat-notification-open', e)) {
-                e.preventDefault()
-                void navigateToNotification(n)
-              }
-            }}
-          >
-            <div class="flex w-2 shrink-0 pt-1">
-              <StatusBadge kind={n.kind} title={kindLabel(n.kind)} />
-            </div>
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <span class="truncate text-[0.6875rem] font-medium text-foreground">{n.title}</span>
-                <span class="shrink-0 text-[0.625rem] text-dimmed">{formatTime(n.timestamp)}</span>
-              </div>
-              <div class="mt-1 flex items-center gap-1 text-[0.625rem] text-dimmed">
-                {#if n.source === 'chat'}
-                  <MessageSquare size={10} class="shrink-0" />
-                  <span>Chat</span>
-                {:else}
-                  <span
-                    class="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style="background: {n.projectColor ?? 'var(--color-border)'}"
-                    role="presentation"
-                  ></span>
-                  <span class="truncate"
-                    >{n.projectId === INBOX_PROJECT_ID ? 'Chat' : n.projectName}</span
-                  >
-                  {#if n.source === 'temporary-chat'}
-                    <span class="shrink-0">·</span>
-                    <MessageCircleDashed
-                      size={10}
-                      class="shrink-0 text-info"
-                      title="Temporary chat"
-                      aria-hidden="true"
-                    />
-                  {/if}
-                {/if}
-              </div>
-              {#if n.body}
-                <p class="mt-0.5 line-clamp-2 text-[0.6875rem] leading-relaxed text-muted">
-                  {n.body}
-                </p>
-              {/if}
-              {#if n.kind === 'error' && n.errorDetail && hasUsefulDetails(errorHeadline(n.body), n.errorDetail)}
-                {@render detailsBlock(`notification:${n.id}`, n.errorDetail)}
-              {/if}
-            </div>
-            {#if n.kind === 'error'}
-              <button
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                aria-label="Copy error details and stack trace"
-                title="Copy error details"
-                onclick={(e: MouseEvent) => {
-                  e.stopPropagation()
-                  void copyNotificationError(n)
-                }}
-              >
-                {#if copiedId === n.id}
-                  <Check size={11} />
-                {:else}
-                  <Copy size={11} />
-                {/if}
-              </button>
-            {/if}
-            <button
-              class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
-              aria-label="Dismiss notification"
-              title="Dismiss"
-              onclick={(e: MouseEvent) => {
-                e.stopPropagation()
-                dismiss(n)
-              }}
-            >
-              <X size={11} />
-            </button>
-          </div>
+          {@render notificationCard(n)}
         {/each}
       </div>
     {/if}

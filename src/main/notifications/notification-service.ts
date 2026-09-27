@@ -10,6 +10,7 @@ import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { AssignmentRepo } from '../database/repositories/assignment-repo'
 import {
+  ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
   isOrchestrationChildThread,
   type Thread,
@@ -519,7 +520,7 @@ export class NotificationService {
       thread,
       projectName || APP_NAME,
       projectColor,
-      thread.projectId === INBOX_PROJECT_ID ? 'chat' : 'project'
+      this.notificationSource(thread)
     )
     await this.deliverNotification(payload, {
       retainKey: threadKey,
@@ -763,6 +764,14 @@ export class NotificationService {
     })
   }
 
+  /** The source a thread's notification is routed under: the inbox is a chat,
+   *  the assistant space is its own tab, everything else is a project. */
+  private notificationSource(thread: Thread): NotificationSource {
+    if (thread.projectId === INBOX_PROJECT_ID) return 'chat'
+    if (thread.projectId === ASSISTANT_SPACE_ID) return 'assistant'
+    return 'project'
+  }
+
   private notificationPayload(
     thread: Thread,
     projectName: string,
@@ -771,7 +780,8 @@ export class NotificationService {
   ): AgentNotificationPayload {
     const kind: AgentNotificationKind =
       threadStatusPolicy(thread.status).notificationKind ?? 'error'
-    const displayName = source === 'chat' ? 'Chat' : projectName
+    const isAssistant = source === 'assistant'
+    const displayName = source === 'chat' ? 'Chat' : isAssistant ? 'Assistant' : projectName
     const title =
       kind === 'completed'
         ? `${displayName} Done`
@@ -793,14 +803,25 @@ export class NotificationService {
         : errorHeadline.length > 240
           ? `${errorHeadline.slice(0, 240).trimEnd()}…`
           : errorHeadline
+    // An assistant run says what it did; naming the hidden assistant space as
+    // the project it "finished in" would read as a project thread.
     const body =
       kind === 'completed'
-        ? `${thread.title} finished in ${projectName}.`
+        ? isAssistant
+          ? `${thread.title} finished.`
+          : `${thread.title} finished in ${projectName}.`
         : kind === 'attention'
-          ? `${thread.title} is waiting for your input in ${projectName}.`
+          ? isAssistant
+            ? `${thread.title} is waiting for your input.`
+            : `${thread.title} is waiting for your input in ${projectName}.`
           : kind === 'spec'
-            ? `${thread.title} has a reviewable engineering artifact ready in ${projectName}.`
-            : (errorBody ?? `${thread.title} stopped with an error in ${projectName}.`)
+            ? isAssistant
+              ? `${thread.title} has a reviewable engineering artifact ready.`
+              : `${thread.title} has a reviewable engineering artifact ready in ${projectName}.`
+            : (errorBody ??
+              (isAssistant
+                ? `${thread.title} stopped with an error.`
+                : `${thread.title} stopped with an error in ${projectName}.`))
 
     return {
       id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,
