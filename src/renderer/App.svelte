@@ -1389,6 +1389,8 @@
     <AppViewRail
       options={navigation.headerViewOptions()}
       shownOption={navigation.shownHeaderViewOption}
+      {activeView}
+      {navigate}
       onOptionHover={handleViewOptionHover}
     />
 

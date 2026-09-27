@@ -3727,7 +3727,6 @@
         runsByTask={assistantRunsByTask}
         runsByRoutine={assistantRunsByRoutine}
         selectedThreadId={activeThreadRowId(selectedThread)}
-        {navigate}
         onOpenTask={openAssistantTask}
         onOpenTaskHowTo={openAssistantHowToForTask}
         onOpenRoutineHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
@@ -3751,7 +3750,6 @@
       bind:scroller={sidebarScroller}
       {mode}
       {active}
-      {navigate}
       {projects}
       {visibleProjects}
       {projectIcons}
