@@ -2,6 +2,7 @@ import { type Component } from 'svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
+import { globalBrowser } from '$lib/stores/global-browser.svelte'
 import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
 import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
@@ -10,10 +11,10 @@ import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view
 import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
 import { type Project, type Thread } from '$shared/types'
 import { SvelteSet } from 'svelte/reactivity'
-import { FolderKanban, Kanban, SquareDashedKanban, Timeline } from '@lucide/svelte'
+import { FolderKanban, Globe2, Kanban, SquareDashedKanban, Timeline } from '@lucide/svelte'
 
 export type HeaderViewOptionId =
-  'projects' | 'threads' | 'scoped-threads' | 'scope-board' | 'chats' | 'assistant'
+  'projects' | 'threads' | 'scoped-threads' | 'scope-board' | 'chats' | 'assistant' | 'browser'
 
 export interface HeaderViewOption {
   id: HeaderViewOptionId
@@ -165,7 +166,7 @@ export class AppHeaderNavigationController {
   }
 
   async onPrimaryNavClick(
-    view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant'
+    view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant' | 'browser'
   ): Promise<void> {
     const activeView = this.getActiveView()
     // Scope Board keeps its toggle behaviour: already open → last view.
@@ -175,9 +176,12 @@ export class AppHeaderNavigationController {
     }
     // Selecting the view already open from the dropdown toggles the left
     // sidebar (scoped threads → projects must simply close the board (the
-    // caller clears it) without hiding the sidebar).
+    // caller clears it) without hiding the sidebar). The browser's left sidebar
+    // is its tab strip, so re-selecting Browser folds that instead of the
+    // thread sidebar, which is how the user gets an uninterrupted page.
     if (view === activeView) {
-      sidebarState.toggle()
+      if (view === 'browser') globalBrowser.toggleSidebar()
+      else sidebarState.toggle()
       return
     }
     await this.navigateToView(view)
@@ -242,6 +246,13 @@ export class AppHeaderNavigationController {
         icon: CONTENT_FAMILY_ICONS.assistant,
         keys: keymapState.keysFor('nav-assistant'),
         select: () => void this.onPrimaryNavClick('assistant')
+      },
+      {
+        id: 'browser',
+        label: 'Browser',
+        icon: Globe2,
+        keys: keymapState.keysFor('nav-browser'),
+        select: () => void this.onPrimaryNavClick('browser')
       }
     ]
   }
@@ -259,6 +270,7 @@ export class AppHeaderNavigationController {
     if (activeView === 'threads') return 'threads'
     if (activeView === 'chats') return 'chats'
     if (activeView === 'assistant') return 'assistant'
+    if (activeView === 'browser') return 'browser'
     return 'projects'
   })
 
@@ -272,6 +284,7 @@ export class AppHeaderNavigationController {
       activeView === 'threads' ||
       activeView === 'chats' ||
       activeView === 'assistant' ||
+      activeView === 'browser' ||
       activeView === 'scope'
     )
   })

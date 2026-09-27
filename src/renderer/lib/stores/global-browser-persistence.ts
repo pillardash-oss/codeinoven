@@ -15,6 +15,7 @@ import { APP_SLUG } from '$shared/brand'
 import {
   BROWSER_GROUP_COLORS,
   MAX_BROWSER_GROUP_NAME_LENGTH,
+  MAX_BROWSER_TAB_NOTE_LENGTH,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
   isBrowserGroupIconId,
@@ -99,6 +100,7 @@ function parseTabs(value: unknown, groups: readonly GlobalBrowserGroup[]): Globa
     const createdAt = record['createdAt']
     const lastUsedAt = record['lastUsedAt']
     const hibernated = record['hibernated']
+    const note = record['note']
     if (
       typeof id !== 'string' ||
       !TAB_ID_PATTERN.test(id) ||
@@ -111,7 +113,9 @@ function parseTabs(value: unknown, groups: readonly GlobalBrowserGroup[]): Globa
       !Number.isSafeInteger(createdAt) ||
       typeof lastUsedAt !== 'number' ||
       !Number.isSafeInteger(lastUsedAt) ||
-      typeof hibernated !== 'boolean'
+      typeof hibernated !== 'boolean' ||
+      (note !== undefined &&
+        (typeof note !== 'string' || note.length > MAX_BROWSER_TAB_NOTE_LENGTH))
     ) {
       continue
     }
@@ -125,7 +129,8 @@ function parseTabs(value: unknown, groups: readonly GlobalBrowserGroup[]): Globa
       lastUsedAt,
       // A restored page is never live: the snapshot's own flag is validated but
       // never trusted, because no page survives a restart.
-      hibernated: true
+      hibernated: true,
+      note: typeof note === 'string' ? note : ''
     })
   }
   return tabs
@@ -166,7 +171,8 @@ export function persistGlobalBrowserSnapshot(snapshot: GlobalBrowserSnapshot): v
           groupId: tab.groupId,
           createdAt: tab.createdAt,
           lastUsedAt: tab.lastUsedAt,
-          hibernated: tab.hibernated
+          hibernated: tab.hibernated,
+          note: tab.note
         })),
         activeTabId: snapshot.activeTabId
       })

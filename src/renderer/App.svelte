@@ -1213,6 +1213,14 @@
       // decided inside Workspace, which owns what the on-screen thread actually
       // offers (file tree, git, terminal, sources...), so the chord only
       // forwards the request. Only the workspace views own that sidebar.
+      // The browser view's right rail is its own (per-tab notes), so it answers
+      // the same chord directly instead of forwarding a thread-sidebar request.
+      if (activeView === 'browser') {
+        e.preventDefault()
+        if (e.repeat) return
+        globalBrowser.toggleContextSidebar()
+        return
+      }
       const rightSidebarViews = ['projects', 'projects-scope', 'chats', 'threads', 'assistant']
       if (!rightSidebarViews.includes(activeView)) return
       e.preventDefault()

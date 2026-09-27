@@ -27,6 +27,7 @@ import {
 import {
   IDLE_GLOBAL_BROWSER_RUNTIME,
   MAX_BROWSER_GROUP_NAME_LENGTH,
+  MAX_BROWSER_TAB_NOTE_LENGTH,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
   browserTabTitleForUrl,
@@ -52,10 +53,17 @@ export class GlobalBrowserState {
   /** Whether the left sidebar (browser chrome and tab strip) is shown. Hiding
    *  it is how the user gets an uninterrupted page. */
   sidebarVisible = $state(true)
+  /** Whether the right rail (per-tab notes) is shown. It is a tab-scoped
+   *  context rail, so it is independent of the strip's own visibility. */
+  contextSidebarVisible = $state(true)
   /** Whether the address spotlight is up. It lives here rather than in a surface
    *  because it is summoned from anywhere in the browser view (Cmd/Ctrl+L) and
    *  from a freshly opened tab, which has no surface of its own yet. */
   addressSpotlightOpen = $state(false)
+  /** The tab currently being dragged in the strip, or null. It lives in the
+   *  store because the drop targets (group headers, other rows) are siblings of
+   *  the dragged row, so the drag has to be visible outside the row's own scope. */
+  draggingTabId: string | null = $state(null)
 
   private readonly runtime = new SvelteMap<string, GlobalBrowserRuntime>()
   private sweepTimer: number | null = null
@@ -140,6 +148,18 @@ export class GlobalBrowserState {
     this.sidebarVisible = !this.sidebarVisible
   }
 
+  toggleContextSidebar(): void {
+    this.contextSidebarVisible = !this.contextSidebarVisible
+  }
+
+  beginDrag(tabId: string): void {
+    this.draggingTabId = tabId
+  }
+
+  endDrag(): void {
+    this.draggingTabId = null
+  }
+
   openAddressSpotlight(): void {
     this.addressSpotlightOpen = true
   }
@@ -186,7 +206,8 @@ export class GlobalBrowserState {
         groupId: this.activeTab?.groupId ?? null,
         createdAt: now,
         lastUsedAt: now,
-        hibernated: false
+        hibernated: false,
+        note: ''
       }
     ]
     if (context.reveal) this.activate(tabId)
@@ -217,7 +238,8 @@ export class GlobalBrowserState {
       groupId: this.groups.some((group) => group.id === groupId) ? groupId : null,
       createdAt: now,
       lastUsedAt: now,
-      hibernated: false
+      hibernated: false,
+      note: ''
     }
     this.tabs = [...this.tabs, tab]
     this.activeTabId = tab.id
@@ -239,6 +261,18 @@ export class GlobalBrowserState {
     }
     this.persist()
     void invoke('browser:destroy', tabId).catch(() => {})
+  }
+
+  /** Record the user's context note for a tab. The note travels with the tab
+   *  through hibernation, group moves and restarts, because it is the reason the
+   *  tab exists in the user's head rather than the page's. */
+  setNote(tabId: string, note: string): void {
+    const tab = this.tabs.find((candidate) => candidate.id === tabId)
+    if (!tab) return
+    const bounded = note.slice(0, MAX_BROWSER_TAB_NOTE_LENGTH)
+    if (tab.note === bounded) return
+    tab.note = bounded
+    this.persist()
   }
 
   moveToGroup(tabId: string, groupId: string | null): void {

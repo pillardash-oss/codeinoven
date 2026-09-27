@@ -7,6 +7,7 @@
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import BrowserTabsSidebar from './BrowserTabsSidebar.svelte'
   import BrowserWorkspace from './BrowserWorkspace.svelte'
+  import BrowserContextSidebar from './BrowserContextSidebar.svelte'
   import BrowserAddressSpotlight from './BrowserAddressSpotlight.svelte'
 
   /**
@@ -98,6 +99,10 @@
         </button>
       </div>
     </div>
+  {/if}
+
+  {#if globalBrowser.contextSidebarVisible}
+    <BrowserContextSidebar onClose={() => globalBrowser.toggleContextSidebar()} />
   {/if}
 </div>
 

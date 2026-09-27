@@ -1,9 +1,10 @@
 <script lang="ts">
+  import { tick } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
   import {
     ArrowLeft,
     ArrowRight,
     Download,
-    FolderPlus,
     Globe,
     Lock,
     LockOpen,
@@ -41,8 +42,22 @@
    */
 
   let query = $state('')
+  /** Whether the tab-search field is revealed. The action row carries a search
+   *  button rather than an always-visible field, so the strip gets the height
+   *  back until the user actually wants to search. */
+  let searchOpen = $state(false)
   /** The fold the search is scoped to, or null for the whole strip. */
   let searchGroupId = $state<string | null>(null)
+  let searchInput = $state<HTMLInputElement | undefined>()
+
+  /** The search field's own element, captured as an attachment so focusing it
+   *  after the button reveals it needs no `bind:this`. */
+  const attachSearchInput: Attachment<HTMLInputElement> = (element) => {
+    searchInput = element
+    return () => {
+      if (searchInput === element) searchInput = undefined
+    }
+  }
   /** The group whose editor is open; `undefined` means closed and null means
    *  "create a new group", so the two states can never be confused. */
   let editorGroupId = $state<string | null | undefined>(undefined)
@@ -84,6 +99,26 @@
   function scopeSearch(groupId: string | null): void {
     searchGroupId = groupId
     query = ''
+    openSearch()
+  }
+
+  /** Reveal the search field and take the caret, so the button is usable in one
+   *  click. Closing it also drops the query and the group scope, because a hidden
+   *  field must never keep filtering the strip. */
+  function openSearch(): void {
+    searchOpen = true
+    void tick().then(() => searchInput?.focus())
+  }
+
+  function closeSearch(): void {
+    searchOpen = false
+    query = ''
+    searchGroupId = null
+  }
+
+  function toggleSearch(): void {
+    if (searchOpen) closeSearch()
+    else openSearch()
   }
 
   function navigate(): void {
@@ -114,6 +149,26 @@
       Math.max(0, Math.round(rect.left)),
       Math.max(0, Math.round(rect.bottom + 4))
     ).catch(() => {})
+  }
+
+  /** The group a dragged tab is hovering, so its header can highlight as a drop
+   *  target. Dragging a tab onto a header files it under that group. */
+  let groupDropTargetId = $state<string | null>(null)
+
+  function onGroupDragOver(event: DragEvent, groupId: string): void {
+    if (!globalBrowser.draggingTabId) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    groupDropTargetId = groupId
+  }
+
+  function onGroupDrop(event: DragEvent, groupId: string): void {
+    groupDropTargetId = null
+    const dragged = globalBrowser.draggingTabId ?? event.dataTransfer?.getData('text/plain') ?? ''
+    if (!dragged) return
+    event.preventDefault()
+    globalBrowser.moveToGroup(dragged, groupId)
+    globalBrowser.endDrag()
   }
 </script>
 
@@ -212,62 +267,68 @@
         {/if}
       </button>
     </div>
-    <div class="flex items-center gap-1">
-      <h2 class="text-[0.6875rem] font-semibold uppercase tracking-[0.16em] text-dimmed">
-        Browser
-      </h2>
-      <span class="ml-auto flex items-center gap-0.5">
-        <button
-          type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="New tab group"
-          title="New tab group"
-          onclick={() => (editorGroupId = null)}
-        >
-          <FolderPlus size={15} />
-        </button>
-        <button
-          type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="New browser tab"
-          title="New tab"
-          onclick={() => newTab()}
-        >
-          <Plus size={15} />
-        </button>
-      </span>
+    <!-- Action row: search the strip, then open a tab. Creating a group is a
+         right-click action on a tab, so it is deliberately not a button here. -->
+    <div class="flex items-center justify-end gap-0.5">
+      <button
+        type="button"
+        class="flex h-7 w-7 items-center justify-center rounded-md transition-colors {searchOpen
+          ? 'bg-elevated text-foreground'
+          : 'text-muted hover:bg-elevated hover:text-foreground'}"
+        aria-label={searchOpen ? 'Close tab search' : 'Search browser tabs'}
+        title={searchOpen ? 'Close tab search' : 'Search tabs'}
+        aria-pressed={searchOpen}
+        onclick={toggleSearch}
+      >
+        <Search size={15} />
+      </button>
+      <button
+        type="button"
+        class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="New browser tab"
+        title="New tab"
+        onclick={() => newTab()}
+      >
+        <Plus size={15} />
+      </button>
     </div>
   </div>
 
-  <div class="shrink-0 px-3 py-2">
-    <div class="flex items-center gap-1.5 rounded-lg bg-elevated px-2.5">
-      <Search size={13} class="shrink-0 text-dimmed" />
-      <input
-        type="text"
-        class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
-        placeholder={scopedGroup ? `Search in ${scopedGroup.name}` : 'Search tabs'}
-        aria-label={scopedGroup ? `Search tabs in ${scopedGroup.name}` : 'Search browser tabs'}
-        value={query}
-        oninput={(event: Event) => {
-          if (event.currentTarget instanceof HTMLInputElement) query = event.currentTarget.value
-        }}
-      />
-      {#if query !== '' || searchGroupId !== null}
-        <button
-          type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-          aria-label="Clear tab search"
-          title="Clear search"
-          onclick={() => {
-            query = ''
-            searchGroupId = null
+  {#if searchOpen}
+    <div class="shrink-0 px-3 py-2">
+      <div class="flex items-center gap-1.5 rounded-lg bg-elevated px-2.5">
+        <Search size={13} class="shrink-0 text-dimmed" />
+        <input
+          {@attach attachSearchInput}
+          type="text"
+          class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
+          placeholder={scopedGroup ? `Search in ${scopedGroup.name}` : 'Search tabs'}
+          aria-label={scopedGroup ? `Search tabs in ${scopedGroup.name}` : 'Search browser tabs'}
+          value={query}
+          oninput={(event: Event) => {
+            if (event.currentTarget instanceof HTMLInputElement) query = event.currentTarget.value
           }}
-        >
-          <X size={13} />
-        </button>
-      {/if}
+          onkeydown={(event: KeyboardEvent) => {
+            if (event.key === 'Escape') closeSearch()
+          }}
+        />
+        {#if query !== '' || searchGroupId !== null}
+          <button
+            type="button"
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+            aria-label="Clear tab search"
+            title="Clear search"
+            onclick={() => {
+              query = ''
+              searchGroupId = null
+            }}
+          >
+            <X size={13} />
+          </button>
+        {/if}
+      </div>
     </div>
-  </div>
+  {/if}
 
   <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
     {#if totalTabs === 0}
@@ -292,7 +353,17 @@
         {#if searchGroupId === null || searchGroupId === group.id}
           {#if searchGroupId !== null || tabsFor(group.id).length > 0}
             <div class="mb-1">
-              <div class="flex items-center gap-1 rounded-lg px-1.5 py-1 {palette.tint}">
+              <div
+                class="flex items-center gap-1 rounded-lg px-1.5 py-1 transition-colors {palette.tint} {groupDropTargetId ===
+                group.id
+                  ? 'ring-1 ring-info'
+                  : ''}"
+                role="group"
+                aria-label={`${group.name}, drop a tab here to move it into this group`}
+                ondragover={(event: DragEvent) => onGroupDragOver(event, group.id)}
+                ondragleave={() => (groupDropTargetId = null)}
+                ondrop={(event: DragEvent) => onGroupDrop(event, group.id)}
+              >
                 <button
                   type="button"
                   class="flex min-w-0 flex-1 items-center gap-2 px-1 py-0.5 text-left"
@@ -343,7 +414,7 @@
               </div>
               <div class="mt-0.5 ml-2 border-l pl-1.5">
                 {#each tabsFor(group.id) as tab (tab.id)}
-                  <BrowserTabRow {tab} />
+                  <BrowserTabRow {tab} onOpenGroupEditor={(id) => (editorGroupId = id)} />
                 {/each}
                 {#if tabsFor(group.id).length === 0}
                   <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">No tabs match</p>
@@ -363,7 +434,7 @@
           </p>
         {/if}
         {#each tabsFor(null) as tab (tab.id)}
-          <BrowserTabRow {tab} />
+          <BrowserTabRow {tab} onOpenGroupEditor={(id) => (editorGroupId = id)} />
         {/each}
         {#if query !== '' && ungrouped.length > 0 && tabsFor(null).length === 0}
           <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">No ungrouped tabs match</p>

@@ -295,24 +295,6 @@
       </button>
     {/if}
 
-    <!-- Global browser   always present, before the editor menu. Selecting it
-         while the browser is already open folds its sidebar instead, which is
-         how the user gets an uninterrupted page. -->
-    <button
-      class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {onBrowser
-        ? 'bg-elevated text-foreground'
-        : 'text-muted hover:bg-elevated hover:text-foreground'}"
-      aria-label={onBrowser ? 'Toggle the browser sidebar' : 'Open the global browser'}
-      title={onBrowser ? 'Toggle the browser sidebar' : 'Open the global browser'}
-      aria-pressed={onBrowser}
-      onclick={() => {
-        if (onBrowser) globalBrowser.toggleSidebar()
-        else void navigation.navigateToView('browser')
-      }}
-    >
-      <Globe2 size={16} />
-    </button>
-
     <!-- Editor preference   hidden in chat mode, scope view, the browser view,
          and when no project is selected -->
     {#if !chatMode && !onScope && !onBrowser && workspaceState.activeProject}
