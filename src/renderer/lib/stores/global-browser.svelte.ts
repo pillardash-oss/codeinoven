@@ -57,8 +57,10 @@ export class GlobalBrowserState {
    *  it is how the user gets an uninterrupted page. */
   sidebarVisible = $state(true)
   /** Whether the right rail (per-tab notes) is shown. It is a tab-scoped
-   *  context rail, so it is independent of the strip's own visibility. */
-  contextSidebarVisible = $state(true)
+   *  context rail, so it is independent of the strip's own visibility. Closed by
+   *  default: it is the note of one tab, so it belongs to that tab's visit and
+   *  never opens on its own. */
+  contextSidebarVisible = $state(false)
   /** Whether the address spotlight is up. It lives here rather than in a surface
    *  because it is summoned from anywhere in the browser view (Cmd/Ctrl+L) and
    *  from a freshly opened tab, which has no surface of its own yet. */
@@ -117,6 +119,18 @@ export class GlobalBrowserState {
     return this.tabs.find((tab) => tab.id === this.activeTabId) ?? null
   }
 
+  /** Whether the left strip is on screen. It is the tab holder, so with no tab at
+   *  all there is nothing for it to hold and it stays closed. */
+  get sidebarShown(): boolean {
+    return this.sidebarVisible && this.tabs.length > 0
+  }
+
+  /** Whether the right rail is on screen. It is the notes rail of one tab, so it
+   *  exists only while a tab is open; with no tab it is closed and unreachable. */
+  get contextSidebarShown(): boolean {
+    return this.contextSidebarVisible && this.activeTab !== null
+  }
+
   /** Tabs of one group, in strip order. A null group means the ungrouped rest. */
   tabsInGroup(groupId: string | null): GlobalBrowserTab[] {
     return this.tabs.filter((tab) => tab.groupId === groupId)
@@ -171,6 +185,9 @@ export class GlobalBrowserState {
   }
 
   toggleContextSidebar(): void {
+    // The rail belongs to a tab: with nothing open there is no note to show, so
+    // the chord does nothing rather than opening an empty panel.
+    if (!this.activeTab) return
     this.contextSidebarVisible = !this.contextSidebarVisible
     if (this.contextSidebarVisible) this.dockActiveTabNote()
   }
@@ -332,6 +349,11 @@ export class GlobalBrowserState {
       const neighbour = remaining[Math.min(index, remaining.length - 1)]
       this.setActiveTab(neighbour?.id ?? null)
       if (neighbour) neighbour.lastUsedAt = Date.now()
+    }
+    if (this.tabs.length === 0) {
+      // With no tab left the notes rail has no subject, so it returns to its
+      // closed default instead of lingering for the next tab to inherit.
+      this.contextSidebarVisible = false
     }
     this.persist()
     void invoke('browser:destroy', tabId).catch(() => {})

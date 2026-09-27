@@ -37,7 +37,11 @@ const ACTION_ENTRIES: ReadonlyArray<readonly [BrowserShortcutAction, string]> = 
   ['zoomReset', 'browser-zoom-reset'],
   ['toggleDevTools', 'browser-devtools'],
   ['closeTab', 'browser-close-tab'],
-  ['newTab', 'browser-new-tab']
+  ['newTab', 'browser-new-tab'],
+  // The notes rail is this view's right sidebar, so it answers the same
+  // user-visible binding every other view's right sidebar answers, and a user
+  // rebind moves both at once.
+  ['toggleNotes', 'nav-toggle-right-sidebar']
 ]
 
 /** Only the effective key tokens per id are needed, which is what the keymap

@@ -115,11 +115,12 @@ import {
  * strip stays the renderer's: it opens, closes and focuses its own tabs.
  */
 const PANEL_SHORTCUT_TARGETS: Readonly<
-  Record<'focusAddress' | 'closeTab' | 'newTab', BrowserPanelShortcutAction>
+  Record<'focusAddress' | 'closeTab' | 'newTab' | 'toggleNotes', BrowserPanelShortcutAction>
 > = {
   focusAddress: 'focus-address',
   closeTab: 'close-tab',
-  newTab: 'new-tab'
+  newTab: 'new-tab',
+  toggleNotes: 'toggle-notes'
 }
 
 import {
@@ -1304,10 +1305,10 @@ export class BrowserService {
    * Run one claimed browser action on a tab.
    *
    * The actions split by owner: what acts on the page happens here, and what
-   * acts on the tab strip (focusing the address bar, closing or opening a tab)
-   * is forwarded to the renderer, which is the only side that knows the strip.
-   * Saving is asynchronous because the save dialog is, and it must never block
-   * the key event that asked for it.
+   * acts on the tab strip (focusing the address bar, closing or opening a tab,
+   * showing the tab's notes) is forwarded to the renderer, which is the only side
+   * that knows the strip. Saving is asynchronous because the save dialog is, and
+   * it must never block the key event that asked for it.
    */
   private runBrowserShortcut(tabId: string, action: BrowserShortcutAction): void {
     const tab = this.tabs.get(tabId)
@@ -1344,6 +1345,7 @@ export class BrowserService {
       case 'focusAddress':
       case 'closeTab':
       case 'newTab':
+      case 'toggleNotes':
         this.requestPanelShortcut(tabId, PANEL_SHORTCUT_TARGETS[action])
         return
     }

@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { Globe, Plus } from '@lucide/svelte'
+  import { Globe, Plus, StickyNote } from '@lucide/svelte'
   import { subscribe } from '$lib/ipc.svelte'
   import type { BrowserPanelShortcutAction } from '$shared/ipc-contract'
+  import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
@@ -26,6 +28,33 @@
 
   let addressSpotlightOpen = $derived(globalBrowser.addressSpotlightOpen)
   const activeTab = $derived(globalBrowser.activeTab)
+
+  /**
+   * The browser view's tools for the context rail.
+   *
+   * The rail is constant, exactly as it is in every other view: the window's
+   * right edge always carries the context tools. What differs here is that notes
+   * are the only tool this view has, because a browser tab has no project, no
+   * file tree and no terminal behind it. The item is always present and always
+   * leads to the same panel; that panel is the notes of the tab on screen, so it
+   * has something to show only while a tab is open.
+   */
+  const dockGroups = $derived.by((): ContextDockItem[][] => {
+    const tab = activeTab
+    const hasNote = tab ? threadNotesState.has(tab.id) : false
+    return [
+      [
+        {
+          id: 'note',
+          label: !tab ? 'Notes' : hasNote ? 'Note available' : 'Add note',
+          icon: StickyNote,
+          active: globalBrowser.contextSidebarShown,
+          tone: hasNote ? 'warning' : undefined,
+          onSelect: () => globalBrowser.toggleContextSidebar()
+        }
+      ]
+    ]
+  })
 
   /**
    * The view's quick actions, rendered beside the view switcher exactly like
@@ -69,6 +98,10 @@
       globalBrowser.openNewTabAddress()
       return
     }
+    if (action === 'toggle-notes') {
+      globalBrowser.toggleContextSidebar()
+      return
+    }
     const tab = globalBrowser.activeTab
     if (tab) globalBrowser.close(tab.id)
   }
@@ -102,7 +135,7 @@
 </script>
 
 <div class="flex h-full min-h-0" data-region="browser-view">
-  {#if globalBrowser.sidebarVisible}
+  {#if globalBrowser.sidebarShown}
     <BrowserTabsSidebar onOpenAddress={() => globalBrowser.openAddressSpotlight()} />
   {/if}
 
@@ -132,9 +165,11 @@
     </div>
   {/if}
 
-  {#if globalBrowser.contextSidebarVisible}
+  {#if globalBrowser.contextSidebarShown}
     <BrowserContextSidebar onClose={() => globalBrowser.toggleContextSidebar()} />
   {/if}
+
+  <ContextDock groups={dockGroups} />
 </div>
 
 {#if addressSpotlightOpen}

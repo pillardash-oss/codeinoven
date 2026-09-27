@@ -151,8 +151,8 @@
           "id": "nav-toggle-right-sidebar",
           "keys": ["mod", "shift", "s"],
           "label": "Toggle right sidebar",
-          "description": "Hides the right context sidebar, or brings back the tool you last had selected in it. With nothing selected yet it opens the file tree when the open thread has one, otherwise the first tool the context rail offers.",
-          "scenario": "Projects, Chats, or Threads view, including the scope state."
+          "description": "Hides the right context sidebar, or brings back the tool you last had selected in it. With nothing selected yet it opens the file tree when the open thread has one, otherwise the first tool the context rail offers. In the Browser view it shows or hides the notes rail of the browser tab on screen, which is the same right sidebar holding notes.",
+          "scenario": "Projects, Chats, or Threads view, including the scope state; or the Browser view with a browser tab open."
         }
       ]
     },

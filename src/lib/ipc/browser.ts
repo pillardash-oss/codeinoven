@@ -238,7 +238,8 @@ export const BROWSER_SHORTCUT_ACTIONS = [
   'zoomReset',
   'toggleDevTools',
   'closeTab',
-  'newTab'
+  'newTab',
+  'toggleNotes'
 ] as const
 
 export type BrowserShortcutAction = (typeof BROWSER_SHORTCUT_ACTIONS)[number]
@@ -264,7 +265,7 @@ export type BrowserShortcutBindings = Partial<Record<BrowserShortcutAction, Brow
  * A browser action the renderer owns, because only the renderer knows the tab
  * strip: focusing the address bar, and closing or opening a tab.
  */
-export type BrowserPanelShortcutAction = 'focus-address' | 'close-tab' | 'new-tab'
+export type BrowserPanelShortcutAction = 'focus-address' | 'close-tab' | 'new-tab' | 'toggle-notes'
 
 /** Ownership metadata for a browser tab requested by the main process. */
 export interface BrowserOpenRequestContext {
