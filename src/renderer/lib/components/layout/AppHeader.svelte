@@ -254,6 +254,17 @@
       </button>
     </div>
 
+    <!-- Selected view's name: the rail is icon-only, so the header names the
+         view it has selected, between the nav buttons and the view's actions. -->
+    {#if navigation.activeHeaderViewLabel}
+      <span
+        class="whitespace-nowrap px-1 text-[0.6875rem] font-medium text-muted"
+        aria-live="polite"
+      >
+        {navigation.activeHeaderViewLabel}
+      </span>
+    {/if}
+
     {#if onSettings}
       <!-- Settings owns this slot while it is on screen: the per-view actions
            belong to the view that was here before. -->

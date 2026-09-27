@@ -3,7 +3,7 @@ import { invoke } from '$lib/ipc.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
 import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
-import { type MainView } from '$lib/stores/renderer-recovery.svelte'
+import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
@@ -277,6 +277,20 @@ export class AppHeaderNavigationController {
   shownHeaderViewOption = $derived<HeaderViewOptionId | null>(
     this.showsPrimaryOption ? this.activeHeaderViewOption : null
   )
+
+  /** Name of the view the rail has selected, shown in the app header between
+   *  the nav buttons and the view's own action buttons. Settings is the one
+   *  takeover page with a rail selection of its own, so it names itself; every
+   *  other takeover page has no view to name. */
+  activeHeaderViewLabel = $derived.by((): string | null => {
+    if (this.showsPrimaryOption) {
+      const option = this.headerViewOptions().find(
+        (candidate) => candidate.id === this.activeHeaderViewOption
+      )
+      return option?.label ?? 'Projects'
+    }
+    return isSettingsView(this.getActiveView()) ? 'Settings' : null
+  })
 
   /** Cmd/Ctrl+3   Projects view with the scope sidebar active for the current
    *  thread (or project). Idempotent: never turns scope state off. */
