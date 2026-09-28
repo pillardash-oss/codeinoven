@@ -36,6 +36,7 @@
 import { WebContentsView, type WebContents } from 'electron'
 import type { BrowserPopupWindow, BrowserViewBounds } from '../../../lib/ipc-contract'
 import { Logger } from '../../system/logger'
+import { applyBrowserPageBackground } from './browser-page-background'
 import type { BrowserPageOwner, BrowserViewport } from './browser-types'
 
 /** One live popup window: its page, its view, and what the rail needs to show it. */
@@ -297,7 +298,9 @@ export class BrowserPopupWindows {
     // `webPreferences` (sandbox, context isolation, no node integration) and the
     // opener's session, so the app neither re-declares nor weakens them.
     const view = new WebContentsView({ webContents: contents })
-    view.setBackgroundColor('#00000000')
+    // A popup starts at `about:blank` legitimately, so it begins with no surface
+    // of its own and is given one when a document of its own commits.
+    applyBrowserPageBackground(view)
     return view
   }
 
@@ -317,6 +320,7 @@ export class BrowserPopupWindows {
     })
     contents.on('did-stop-loading', refresh)
     contents.on('did-navigate', refresh)
+    contents.on('did-navigate', () => applyBrowserPageBackground(record.view))
     contents.on('did-navigate-in-page', refresh)
     contents.on('page-title-updated', refresh)
     contents.on('page-favicon-updated', (_event, favicons) => {

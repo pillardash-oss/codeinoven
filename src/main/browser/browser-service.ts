@@ -92,6 +92,7 @@ import type {
   PendingBrowserPermission
 } from './browser-service/browser-types'
 import { BrowserTabStage } from './browser-service/browser-stage'
+import { applyBrowserPageBackground } from './browser-service/browser-page-background'
 import {
   AGENT_REVEAL_GRACE_MS,
   BROWSER_PARTITION_PREFIX,
@@ -1707,7 +1708,9 @@ export class BrowserService {
         devTools: true
       }
     })
-    view.setBackgroundColor('#00000000')
+    // The tab carries no document yet, so nothing of the page's own surface is
+    // painted over the app until one commits.
+    applyBrowserPageBackground(view)
     const tab: BrowserTab = {
       view,
       projectId,
@@ -1846,6 +1849,10 @@ export class BrowserService {
       // The dialog shim lived in the document that just went away, so the next
       // report has to install it again rather than trust the old record.
       this.injectedDialogLabels.delete(tabId)
+      // The document that just committed is also what decides the surface it is
+      // drawn over, which is white for a loaded page and the app's own surface
+      // for an empty one.
+      applyBrowserPageBackground(tab.view)
       publish()
     })
     view.webContents.on('did-navigate-in-page', publish)
