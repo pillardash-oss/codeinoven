@@ -89,9 +89,12 @@
   {@attach measureRail}
 >
   <!-- One current-item surface for the whole rail, shared by the view buttons and
-       the utility group, so a view switch slides it to the icon that took over. -->
+       the utility group, so a view switch slides it to the icon that took over.
+       `top-0` anchors it to the rail's padding box so the measured offset below
+       places it exactly on the item; without it the box would fall back to its
+       static position, which already sits inside the rail's `py-2`. -->
   <span
-    class="pointer-events-none absolute left-1 right-1 rounded-lg bg-elevated transition-[transform,height,opacity] duration-200 ease-out motion-reduce:transition-none {surface
+    class="pointer-events-none absolute left-1 right-1 top-0 rounded-lg bg-elevated transition-[transform,height,opacity] duration-200 ease-out motion-reduce:transition-none {surface
       ? 'opacity-100'
       : 'opacity-0'}"
     style:transform="translateY({surface?.top ?? lastSurface.top}px)"
