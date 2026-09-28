@@ -282,13 +282,21 @@ export class BrowserService {
    *  pressed in a page never reaches the renderer, so main claims these here. */
   private switcherBindings: BrowserSwitcherBindings = []
   /**
-   * The tab whose toolbar holds DOM focus (address bar, navigation buttons), or
-   * null while none does.
+   * The tab whose surface holds the keyboard, or null while none does.
    *
    * A key pressed inside the page arrives on the tab's own web contents; a key
-   * pressed in the toolbar arrives on the window's, where the application menu
-   * would otherwise act on it. This is the one fact main cannot read for itself,
-   * so the panel reports it and the window-level interception routes to this tab.
+   * pressed in the toolbar, or anywhere in the Browser view's own DOM, arrives on
+   * the window's, where the application menu would otherwise act on it. This is
+   * the one fact main cannot read for itself, so the surface that holds the
+   * keyboard reports it and the window-level interception routes to this tab.
+   *
+   * The report is kept exactly as it arrived and matched against the tab list when
+   * a key is consumed, rather than parked as null when the tab is not known yet: a
+   * view claims the keyboard as it mounts, which is a moment *before* the
+   * `browser:show` that creates the page it is about to display, and by the time a
+   * key arrives the tab is the one the renderer named. A destroyed tab is cleared
+   * here as well (`destroyTab`), so the match is what keeps a stale id from routing
+   * a key.
    */
   private focusedChromeTabId: string | null = null
   /**
@@ -592,15 +600,11 @@ export class BrowserService {
       this.publishState(tabId)
     })
     ipcMain.handle('browser:setChromeFocus', (_event, rawTabId) => {
-      // The panel may name a tab that was already destroyed (a close racing the
-      // last focus report). Parking the answer as null is correct: no toolbar
-      // holds the keyboard any more.
-      if (rawTabId === null) {
-        this.focusedChromeTabId = null
-        return
-      }
-      const tabId = validateTabId(rawTabId)
-      this.focusedChromeTabId = this.tabs.has(tabId) ? tabId : null
+      // Kept as reported, including a tab this process has not created yet: the
+      // claim is matched against the tab list when a key is consumed (see
+      // `focusedChromeTabId`), because the surface reports it as it mounts, before
+      // the show that creates the page.
+      this.focusedChromeTabId = rawTabId === null ? null : validateTabId(rawTabId)
     })
     ipcMain.handle('browser:focusPage', (_event, rawTabId) => {
       this.focusPage(validateTabId(rawTabId))
@@ -1645,7 +1649,11 @@ export class BrowserService {
    */
   consumeChromeShortcut(event: Electron.Event, input: Electron.Input): boolean {
     const tabId = this.focusedChromeTabId
-    if (!tabId) return false
+    // The claim can name a tab this process has not created yet (a view claims the
+    // keyboard as it mounts, before the show that creates its page), and a tab it
+    // no longer has is one whose keys belong to the app again, so the match is what
+    // decides.
+    if (!tabId || !this.tabs.has(tabId)) return false
     const action = matchBrowserShortcut(input, this.shortcutBindings)
     if (!action) return false
     event.preventDefault()

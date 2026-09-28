@@ -306,13 +306,9 @@
     addressError = ''
     address = resolution.url
     contextSidebarState.updateBrowserTab(tabId, resolution.url)
-    void invoke(
-      'browser:navigate',
-      tabId,
-      tabProjectId,
-      tabThreadId,
-      resolution.url
-    ).catch(() => {})
+    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, resolution.url).catch(
+      () => {}
+    )
   }
 
   function applyPageState(next: BrowserPageState): void {
@@ -384,7 +380,10 @@
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', onPanelShortcut)
     // Only the sidebar report is focus-driven: a single panel decides it for the
     // whole sidebar, so one listener is enough. The full screen overlay claims
-    // the keyboard for as long as it is mounted instead (WorkspaceFullscreenBrowser).
+    // the keyboard for as long as it is mounted instead
+    // (WorkspaceFullscreenBrowser), and the Browser view claims it while its page
+    // is the surface on screen (BrowserWorkspace), so a press anywhere in those
+    // views is the browser's.
     if (surface === 'sidebar') {
       document.addEventListener('focusin', onSidebarFocusIn)
       document.addEventListener('focusout', onSidebarFocusOut)

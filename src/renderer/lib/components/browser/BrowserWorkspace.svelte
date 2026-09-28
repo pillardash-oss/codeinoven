@@ -6,6 +6,7 @@
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
   import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import { openBrowserPageMenuAt } from './browser-chrome-menus'
 
@@ -133,6 +134,30 @@
       void invoke('browser:hide', tabId).catch(() => {})
     }
   }
+
+  /**
+   * The browser owns the keyboard for as long as its page is the surface on
+   * screen.
+   *
+   * Focus is deliberately not part of this. The Browser view *is* the browser, so
+   * Cmd/Ctrl+L belongs to it wherever the keyboard sits inside the view: in the
+   * page, in the tab strip, in the rail, or in the app header and the nav sidebar
+   * the view shares with the rest of the app. What is part of it is whether the
+   * page is on screen at all, because a full-window DOM surface over it (a modal,
+   * the address spotlight, the command palette) takes the keys along with the
+   * screen   the same answer that detaches the native view. So the claim follows
+   * `pageVisible` rather than focus, and a page that failed to load keeps it: its
+   * card is what is on screen, and reload is what the browser's keys are for
+   * there.
+   *
+   * One browser tab at a time holds it, and the component is keyed by tab, so a
+   * tab switch hands the claim over with the page.
+   */
+  $effect(() => {
+    if (!pageVisible) return
+    browserKeyboardFocus.setClaim('workspace', tabId)
+    return () => browserKeyboardFocus.setClaim('workspace', null)
+  })
 
   onMount(() => {
     // Claim the single native view for this tab while this surface is mounted.

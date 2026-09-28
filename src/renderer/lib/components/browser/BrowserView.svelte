@@ -11,7 +11,6 @@
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { motionDuration } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
-  import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import BrowserTabSearchButton from './BrowserTabSearchButton.svelte'
@@ -25,10 +24,12 @@
    * opens.
    *
    * Its left sidebar is the browser's chrome and tab strip, and the rest of the
-   * window is the page. The view owns the two things that belong to neither
-   * surface: the keyboard claim for the whole view (so browser shortcuts work
-   * wherever focus sits inside it) and the address spotlight, because Cmd/Ctrl+L
-   * must summon it from anywhere in here.
+   * window is the page. The view owns the address spotlight, because Cmd/Ctrl+L
+   * must summon it from anywhere in here. It does not own the keyboard claim:
+   * that belongs to the surface showing the page (`BrowserWorkspace`), which
+   * publishes it while the page is the surface on screen rather than while focus
+   * sits inside the view, so the browser's keys survive a press with the app
+   * header, the nav sidebar or nothing at all holding the focus.
    */
 
   let addressSpotlightOpen = $derived(globalBrowser.addressSpotlightOpen)
@@ -156,20 +157,6 @@
     if (tab) globalBrowser.close(tab.id)
   }
 
-  function onFocusIn(event: FocusEvent): void {
-    const target = event.target
-    const tab = globalBrowser.activeTab
-    if (!tab) return
-    if (!(target instanceof Element) || !target.closest('[data-region="browser-view"]')) return
-    browserKeyboardFocus.setClaim('workspace', tab.id)
-  }
-
-  function onFocusOut(event: FocusEvent): void {
-    const next = event.relatedTarget
-    if (next instanceof Element && next.closest('[data-region="browser-view"]')) return
-    browserKeyboardFocus.setClaim('workspace', null)
-  }
-
   onMount(() => {
     // This surface asks for the browser itself: nothing about the browser is built
     // at boot (see `browser-access.svelte`), so the view that needs it is the one
@@ -178,13 +165,8 @@
     void loadBrowser()
     globalBrowser.markOpened()
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', handlePanelShortcut)
-    document.addEventListener('focusin', onFocusIn)
-    document.addEventListener('focusout', onFocusOut)
     return () => {
       unsubscribePanelShortcut()
-      document.removeEventListener('focusin', onFocusIn)
-      document.removeEventListener('focusout', onFocusOut)
-      browserKeyboardFocus.setClaim('workspace', null)
     }
   })
 </script>

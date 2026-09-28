@@ -12,6 +12,7 @@
  *
  *   - `sidebar`    the sidebar holds DOM focus while it shows a browser tab
  *   - `fullscreen` the full screen browser is on screen
+ *   - `workspace`  the Browser view is on screen with a page
  *
  * A full screen claim outranks the sidebar, because that overlay is the only
  * surface on screen while it is up. The global browser workspace is its own
@@ -19,6 +20,13 @@
  * rather than something docked inside another view. The effective claim is
  * published to main only when it changes, so focus moving between controls
  * inside one surface is not a message per keystroke.
+ *
+ * Only the sidebar's claim follows focus, because a browser docked beside other
+ * panels must not take the keys from the panel the user is typing in. The
+ * workspace claim does not: the whole view is the browser, so it is published
+ * while the page is the surface on screen and released while a DOM surface
+ * covers it (`BrowserWorkspace`). The full screen overlay claims for as long as
+ * it is up, for the same reason.
  */
 
 import { invoke } from '$lib/ipc.svelte'
