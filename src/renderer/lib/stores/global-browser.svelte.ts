@@ -33,6 +33,7 @@ import {
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
   browserTabTitleForUrl,
+  isSameBrowserLoadError,
   isTabIdlePastWindow,
   type BrowserGroupAppearance,
   type GlobalBrowserGroup,
@@ -599,6 +600,7 @@ export class GlobalBrowserState {
       current.muted === state.muted &&
       current.capturing === state.capturing &&
       current.loading === state.loading &&
+      isSameBrowserLoadError(current.loadError, state.loadError) &&
       current.canGoBack === state.canGoBack &&
       current.canGoForward === state.canGoForward
     ) {
@@ -609,6 +611,7 @@ export class GlobalBrowserState {
       muted: state.muted,
       capturing: state.capturing,
       loading: state.loading,
+      loadError: state.loadError,
       canGoBack: state.canGoBack,
       canGoForward: state.canGoForward
     })

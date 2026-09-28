@@ -8,12 +8,16 @@
  * one vocabulary instead of inventing labels per surface.
  */
 
+import type { BrowserLoadError } from '$shared/ipc-contract'
+
 /** Live runtime state of one global tab, keyed by tab id. */
 export interface GlobalBrowserRuntime {
   audible: boolean
   muted: boolean
   capturing: boolean
   loading: boolean
+  /** The failure that left this tab with no page, or null while it has one. */
+  loadError: BrowserLoadError | null
   /** Whether the page's own history can step back / forward. */
   canGoBack: boolean
   canGoForward: boolean
@@ -25,6 +29,7 @@ export const IDLE_GLOBAL_BROWSER_RUNTIME: GlobalBrowserRuntime = Object.freeze({
   muted: false,
   capturing: false,
   loading: false,
+  loadError: null,
   canGoBack: false,
   canGoForward: false
 })
@@ -89,6 +94,17 @@ export const MAX_GLOBAL_BROWSER_GROUPS = 40
 export const MAX_BROWSER_GROUP_ICON_TYPE_LENGTH = 64
 export const MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH = 16_384
 export const MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH = 2_048
+
+/** Whether two load errors describe the same failure. Main sends a fresh object
+ *  with every state report, so identity would report a change on every publish. */
+export function isSameBrowserLoadError(
+  a: BrowserLoadError | null,
+  b: BrowserLoadError | null
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.kind === b.kind && a.code === b.code && a.description === b.description
+}
 
 /**
  * The tab title a fresh tab shows before the page reports its own.

@@ -3,9 +3,10 @@
   import type { Attachment } from 'svelte/attachments'
   import { invoke } from '$lib/ipc.svelte'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
-  import { GLOBAL_BROWSER_CONTEXT } from '$lib/stores/global-browser.svelte'
+  import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
   import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
 
   interface Props {
     tab: GlobalBrowserTab
@@ -45,6 +46,14 @@
    *  combines them itself. */
   let pageVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
 
+  /** Live state of this tab: the loading flag and progress and the failure that
+   *  left it with nothing to show. */
+  const runtime = $derived(globalBrowser.runtimeFor(tabId))
+  /** The failure that replaced this tab's page, or null while it has one. The
+   *  native view is detached while it is set, so the error card is what the user
+   *  sees where the page would be. */
+  const loadError = $derived(runtime.loadError)
+
   function contentBounds(): BrowserViewBounds | null {
     if (!contentElement) return null
     const rect = contentElement.getBoundingClientRect()
@@ -71,6 +80,11 @@
     // the rectangle the store has to test an overlay against.
     contentRect = bounds
     if (!bounds) return
+    // A tab showing the error card has no page to place. The attachment is not
+    // applied on this edge, but the resize observer and the window listener are
+    // live the whole time, so this guard is what keeps them from putting the
+    // empty native view back over the card.
+    if (loadError) return
     // Ask the store directly instead of reading the template's `pageVisible`
     // derived: this also runs from ResizeObserver and attachment continuations.
     if (!browserVisibility.isVisible(tabId, bounds)) return
@@ -146,7 +160,18 @@
 <div class="relative min-h-0 min-w-0 flex-1 bg-surface" data-region="browser-workspace">
   <div
     {@attach attachContentElement}
-    {@attach pageVisible && manageNativeView}
+    {@attach pageVisible && !loadError && manageNativeView}
     class="absolute inset-0"
-  ></div>
+  >
+    {#if loadError}
+      <BrowserLoadErrorView
+        error={loadError}
+        url={tab.url}
+        loading={runtime.loading}
+        canGoBack={runtime.canGoBack}
+        onRetry={() => void invoke('browser:reload', tabId).catch(() => {})}
+        onGoBack={() => void invoke('browser:goBack', tabId).catch(() => {})}
+      />
+    {/if}
+  </div>
 </div>

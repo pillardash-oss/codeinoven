@@ -37,6 +37,32 @@ export interface BrowserViewBounds {
   height: number
 }
 
+/**
+ * Why one browser tab's page could not be shown.
+ *
+ * `kind` names the layer that failed so a surface picks its copy without
+ * re-deriving Chromium's numbering: `network` is a net error, `http` is a
+ * status the server answered with, and `crashed` is a renderer that stopped.
+ */
+export type BrowserLoadFailureKind = 'network' | 'http' | 'crashed'
+
+/**
+ * A failure that left a browser tab with no page to show.
+ *
+ * This is metadata about the load, never page content: the raw code and the
+ * text Chromium or the server reported. The renderer turns it into copy.
+ */
+export interface BrowserLoadError {
+  kind: BrowserLoadFailureKind
+  /**
+   * Chromium's net error code (negative), or the HTTP status the server answered
+   * with, or the renderer's exit code. `0` when the layer reported none.
+   */
+  code: number
+  /** Chromium's own text: the net error name, the HTTP status text, or the crash reason. */
+  description: string
+}
+
 /** Navigation state mirrored from an app-scoped browser WebContentsView. */
 export interface BrowserPageState {
   tabId: string
@@ -45,6 +71,8 @@ export interface BrowserPageState {
   /** Favicon data URL reported by the page, or null until the page declares one. */
   favicon: string | null
   loading: boolean
+  /** The failure that left this tab with no page, or null while it has one. */
+  loadError: BrowserLoadError | null
   canGoBack: boolean
   canGoForward: boolean
   /** True while the page is emitting audio to the output device. Drives the

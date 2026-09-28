@@ -18,6 +18,7 @@
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
   import BrowserCommentEditor from './BrowserCommentEditor.svelte'
+  import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
@@ -79,6 +80,7 @@
       // A blank tab has no address yet and loads nothing, so it does not start
       // in the loading state; every real address does until main reports back.
       loading: tabInitialUrl !== '',
+      loadError: null,
       canGoBack: false,
       canGoForward: false,
       audible: false,
@@ -290,6 +292,11 @@
     // effect that owns a component derived may have been torn down.
     if (!browserVisibility.isVisible(tabId, bounds)) return
     if (!bounds) return
+    // A tab showing the error card has no page to place. The attachment is not
+    // applied on that edge, but the resize observer and the sidebar's entry
+    // animation keep calling here, so this guard is what stops them putting the
+    // empty native view back over the card.
+    if (pageState.loadError) return
     try {
       const currentUrl = untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl)
       pageState = await invoke('browser:show', tabId, tabProjectId, tabThreadId, currentUrl, bounds)
@@ -317,7 +324,13 @@
     addressError = ''
     address = resolution.url
     contextSidebarState.updateBrowserTab(tabId, resolution.url)
-    void invoke('browser:navigate', tabId, resolution.url).catch(() => {})
+    void invoke(
+      'browser:navigate',
+      tabId,
+      tabProjectId,
+      tabThreadId,
+      resolution.url
+    ).catch(() => {})
   }
 
   function applyPageState(next: BrowserPageState): void {
@@ -445,7 +458,10 @@
   })
 </script>
 
-<div {@attach panelVisible && manageNativeBrowserView} class="flex h-full min-h-0 flex-col bg-app">
+<div
+  {@attach panelVisible && !pageState.loadError && manageNativeBrowserView}
+  class="flex h-full min-h-0 flex-col bg-app"
+>
   <form
     class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2"
     onsubmit={(event) => {
@@ -609,8 +625,10 @@
     {@attach attachContentElement}
     data-native-browser-content
     class="min-h-0 min-w-0 flex-1 bg-surface"
-    role="document"
-    aria-label={`Browser content for ${pageState.title || address}`}
+    role={pageState.loadError ? undefined : 'document'}
+    aria-label={pageState.loadError
+      ? undefined
+      : `Browser content for ${pageState.title || address}`}
     oncontextmenu={(event) => {
       // The page itself never sees DOM context menus (it is a native view),
       // so the host offers the browser-level menu: soft and hard reload.
@@ -622,7 +640,18 @@
         Math.max(0, Math.round(event.clientY))
       ).catch(() => {})
     }}
-  ></div>
+  >
+    {#if pageState.loadError}
+      <BrowserLoadErrorView
+        error={pageState.loadError}
+        url={pageState.url}
+        loading={pageState.loading}
+        canGoBack={pageState.canGoBack}
+        onRetry={() => void invoke('browser:reload', tabId).catch(() => {})}
+        onGoBack={() => void invoke('browser:goBack', tabId).catch(() => {})}
+      />
+    {/if}
+  </div>
   {#if panelVisible && editingComment}
     <BrowserCommentEditor
       reference={editingComment.reference}

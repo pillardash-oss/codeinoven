@@ -10,6 +10,7 @@ import type {
   BrowserConsoleEntry,
   BrowserDesignTab,
   BrowserDownload,
+  BrowserLoadError,
   BrowserPermissionRequest,
   BrowserSiteDataScope
 } from '../../../lib/ipc-contract'
@@ -97,6 +98,24 @@ export interface BrowserTab {
   /** Counts committed navigations, so a runtime installed a moment ago can be told
    *  from one installed into a document that has since been replaced. */
   navigationGeneration: number
+  /**
+   * The failure the current document ended on, or null while the tab has a page.
+   *
+   * Held on the tab rather than recomputed so the renderer keeps showing the
+   * error card across every unrelated `browser:state` report until a navigation
+   * actually succeeds.
+   */
+  loadError: BrowserLoadError | null
+  /**
+   * The failure recorded for the navigation currently in flight, before it is
+   * known whether it is a failure at all.
+   *
+   * A network error is a failure the moment `did-fail-load` fires, but an HTTP
+   * error status is only one when the document it served turns out to be empty,
+   * which cannot be read until `did-finish-load`. This is that provisional value;
+   * a main-frame navigation start clears it.
+   */
+  navigationFailure: BrowserLoadError | null
 }
 
 export interface PendingBrowserPermission {

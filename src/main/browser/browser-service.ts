@@ -26,6 +26,7 @@ import type {
   BrowserConsoleLevel,
   BrowserDesignTab,
   BrowserDevToolsState,
+  BrowserLoadError,
   BrowserPageState,
   BrowserPanelShortcutAction,
   BrowserPermissionRequest,
@@ -1462,7 +1463,9 @@ export class BrowserService {
       composition: null,
       transport: null,
       transportMuted: false,
-      navigationGeneration: 0
+      navigationGeneration: 0,
+      loadError: null,
+      navigationFailure: null
     }
     this.tabs.set(tabId, tab)
 
@@ -1499,6 +1502,9 @@ export class BrowserService {
       // covers a preview reloading itself: the folder is recognised on the
       // navigation, and the playback runtime is installed here.
       if (tab.composition) this.armCompositionQuietly(tabId, tab)
+      // The document that arrived is the answer to whether the navigation failed,
+      // so this is where the error card is confirmed or lifted.
+      this.resolveLoadOutcome(tabId)
     })
     view.webContents.on(
       'did-frame-finish-load',
@@ -1523,7 +1529,30 @@ export class BrowserService {
       // own arm already happened.
       if (tab.composition) this.armCompositionQuietly(tabId, tab)
     })
-    view.webContents.on('did-navigate', () => {
+    // A main-frame navigation is a fresh attempt, so the provisional failure of
+    // the last one is dropped here. The published `loadError` is deliberately left
+    // in place until this navigation resolves, so the card cannot flicker away for
+    // the empty frame a load starts with.
+    view.webContents.on('did-start-navigation', (details) => {
+      if (!details.isMainFrame || details.isSameDocument) return
+      tab.navigationFailure = null
+    })
+    view.webContents.on('did-navigate', (_event, _url, httpResponseCode, httpStatusText) => {
+      // An HTTP error status is provisional: it becomes the tab's error only if
+      // the document the server sent turns out to be empty, which is read when
+      // the load finishes. A network failure already recorded for this navigation
+      // outranks it, because the error document the failure commits reports no
+      // status of its own.
+      if (tab.navigationFailure?.kind !== 'network') {
+        tab.navigationFailure =
+          httpResponseCode >= 400
+            ? {
+                kind: 'http',
+                code: httpResponseCode,
+                description: httpStatusText || `HTTP ${httpResponseCode}`
+              }
+            : null
+      }
       // A new document starts without an icon; the old site's favicon must not linger.
       tab.favicon = null
       // Capture state belongs to the document that ended here, so the tab must
@@ -1570,10 +1599,21 @@ export class BrowserService {
     view.webContents.on(
       'did-fail-load',
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        // -3 is ERR_ABORTED, which a redirect or a cancelled load produces and is
+        // not a failure worth a page of its own.
         if (!isMainFrame || errorCode === -3) return
         // The failed navigation can still commit an error document, which has no
         // shim of its own, so the record of what is installed must not survive it.
         this.injectedDialogLabels.delete(tabId)
+        const failure: BrowserLoadError = {
+          kind: 'network',
+          code: errorCode,
+          description: errorDescription
+        }
+        tab.navigationFailure = failure
+        // A network failure is final the moment it is reported, so the card goes
+        // up without waiting for the error document that may or may not commit.
+        this.setTabLoadError(tabId, failure)
         this.appendConsoleEntry(tabId, {
           level: 'error',
           message: `Navigation failed (${errorCode}): ${errorDescription}`,
@@ -1586,6 +1626,15 @@ export class BrowserService {
       // The recovered document is brand new and may not report a navigation
       // commit, so nothing about the dead document's injection may be trusted.
       this.injectedDialogLabels.delete(tabId)
+      // A renderer that exited on its own (window teardown, a reload of the app)
+      // is not a page error; every other reason leaves the tab with nothing.
+      if (details.reason !== 'clean-exit') {
+        this.setTabLoadError(tabId, {
+          kind: 'crashed',
+          code: details.exitCode,
+          description: details.reason
+        })
+      }
       this.appendConsoleEntry(tabId, {
         level: 'error',
         message: `Browser renderer stopped: ${details.reason} (exit ${details.exitCode})`,
@@ -1995,6 +2044,68 @@ export class BrowserService {
     menu.popup({ window: this.window, x, y })
   }
 
+  /**
+   * Settle the error state of the tab once a navigation has finished.
+   *
+   * A network failure and a crash are already final; an HTTP error status is
+   * only an error when the document it served is empty, so that one case is
+   * read from the page before it is published. Identity is re-checked after
+   * the read, because the user can navigate again while it is in flight.
+   */
+  private resolveLoadOutcome(tabId: string): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    const failure = tab.navigationFailure
+    if (!failure || failure.kind !== 'http') {
+      this.setTabLoadError(tabId, failure)
+      return
+    }
+    void this.documentIsBlank(tab.view.webContents).then((blank) => {
+      const current = this.tabs.get(tabId)
+      if (!current || current.navigationFailure !== failure) return
+      this.setTabLoadError(tabId, blank ? failure : null)
+    })
+  }
+
+  /** Publish a tab's load error only when it actually changed. */
+  private setTabLoadError(tabId: string, error: BrowserLoadError | null): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    const previous = tab.loadError
+    if (previous === error) return
+    if (
+      previous !== null &&
+      error !== null &&
+      previous.kind === error.kind &&
+      previous.code === error.code &&
+      previous.description === error.description
+    ) {
+      return
+    }
+    tab.loadError = error
+    this.publishState(tabId)
+  }
+
+  /**
+   * Whether the loaded document has nothing to show.
+   *
+   * Read in the page's own world: the main process cannot see page markup, and
+   * the question is exactly the user's   is there a page here, or only a blank
+   * frame. Any failure to answer is read as "not blank", so a real page is never
+   * masked by a probe that could not run.
+   */
+  private async documentIsBlank(contents: WebContents): Promise<boolean> {
+    if (contents.isDestroyed()) return false
+    try {
+      const result: unknown = await contents.executeJavaScript(
+        '(function () { var body = document.body; if (!body) return true; if (body.childElementCount > 0) return false; return (body.textContent || "").trim().length === 0 })()'
+      )
+      return result === true
+    } catch {
+      return false
+    }
+  }
+
   private stateFor(tabId: string, tab: BrowserTab): BrowserPageState {
     const contents = tab.view.webContents
     return {
@@ -2003,6 +2114,7 @@ export class BrowserService {
       title: contents.getTitle(),
       favicon: tab.favicon,
       loading: contents.isLoading(),
+      loadError: tab.loadError,
       // Read from the view rather than cached: these drive the tab's speaker and
       // recording indicators, and a muted tab that the page itself unmuted must
       // report the mute state that is actually in force.
