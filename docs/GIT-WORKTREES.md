@@ -244,20 +244,25 @@ the user repairs and retries without reopening the scope menu.
 
 Managed scopes expose a typed health result:
 
-| Category                 | Meaning                                                                           |
-| ------------------------ | --------------------------------------------------------------------------------- |
-| `healthy`                | Directory exists and Git registers it at the expected path on the expected branch |
-| `missing`                | The managed checkout directory is gone                                            |
-| `unregistered`           | Git does not register the expected directory as a worktree                        |
-| `locked`                 | The worktree is locked by Git                                                     |
-| `prunable`               | Git reports a stale registration                                                  |
-| `branch-mismatch`        | The worktree checks out a different branch                                        |
-| `path-mismatch`          | The expected branch is registered at another directory                            |
-| `repository-unavailable` | Git discovery failed or the project has no local repo                             |
+| Category                 | Meaning                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| `healthy`                | Directory exists and Git registers it at the expected path on the expected branch       |
+| `missing`                | The managed checkout directory is gone                                                  |
+| `unregistered`           | Git does not register the expected directory as a worktree                              |
+| `locked`                 | The worktree is locked by Git                                                           |
+| `prunable`               | Git reports a stale registration                                                        |
+| `branch-mismatch`        | The worktree checks out a different branch                                              |
+| `path-mismatch`          | The expected branch is registered at another directory                                  |
+| `not-managed`            | The scope has no managed worktree: it was removed, or it works in the project directory |
+| `repository-unavailable` | Git discovery failed or the project has no local repo                                   |
 
 Resolution fails closed for every non-`healthy` category. Repair, unlock,
 restore, adopt, or detach actions appear in the UI; unhealthy scopes show
-recovery guidance instead of operating on the project root. Detection is
+recovery guidance instead of operating on the project root. The probe itself is
+total: a scope that is no longer on the board, or that never owned a checkout,
+is described as `not-managed` rather than thrown as an error, and the renderer
+drops that verdict and reloads the board instead of pinning a scope main has
+already removed. Destructive operations still refuse those targets. Detection is
 passive but live: nothing polls the filesystem, and every surface that has a
 reason to touch a scope (entering the board or the scoped sidebar, switching
 the docked scope, attaching the Git panel, opening the scope's actions menu, or

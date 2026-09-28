@@ -29,7 +29,12 @@ import {
   destructiveConsequences,
   destructiveSummary
 } from './scope-tool/scope-tool-destructive'
-import { describeScope, readConflicts, summarizeBucket } from './scope-tool/scope-tool-reads'
+import {
+  describeScope,
+  readConflicts,
+  summarizeBucket,
+  unhealthyScopeAdvice
+} from './scope-tool/scope-tool-reads'
 import type { ScopeReadDeps } from './scope-tool/scope-tool-reads'
 import {
   requireScopeBucket,
@@ -381,7 +386,7 @@ export class ScopeToolService {
     })
     if (health.category !== 'healthy') {
       throw new Error(
-        `The scope “${bucket.name}” is unhealthy (${health.category}), so it cannot be synced. Run ${APP_SCOPE_UTILITY_ID} with action "repair" first.`
+        `The scope “${bucket.name}” cannot be synced. ${unhealthyScopeAdvice(health)}`
       )
     }
     const strategy = call.strategy ?? (await this.options.defaultPullStrategy?.()) ?? 'merge'

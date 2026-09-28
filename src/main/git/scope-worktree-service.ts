@@ -147,7 +147,7 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     this.healthInspector = new ScopeWorktreeHealthInspector({
       projects: this.projects,
       scopes: this.scopes,
-      requireManaged: (target) => this.requireManaged(target),
+      managedRoot: (target) => this.managedRoot(target),
       listWorktrees: (repoPath) => this.listWorktrees(repoPath),
       propagateEnvironment: (projectId, worktreePath, mode) =>
         propagateEnvironmentFiles(this.projects, projectId, worktreePath, mode)
@@ -392,13 +392,24 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     })
   }
 
+  /**
+   * The scope's managed worktree root, or null when it has none: the scope is
+   * not on the board any more, or it works in the project directory. The health
+   * probe answers that state; every mutation above still refuses it.
+   */
+  private managedRoot(target: ScopeTarget): ManagedWorktreeDescriptor | null {
+    const bucket = this.scopes
+      .getBoard(target.projectId)
+      .buckets.find((candidate) => candidate.id === target.scopeBucketId)
+    return bucket && bucket.root.kind === 'worktree' ? bucket.root : null
+  }
+
   private requireManaged(target: ScopeTarget): ManagedWorktreeDescriptor {
-    const board = this.scopes.getBoard(target.projectId)
-    const bucket = board.buckets.find((candidate) => candidate.id === target.scopeBucketId)
-    if (!bucket || bucket.root.kind !== 'worktree') {
+    const root = this.managedRoot(target)
+    if (!root) {
       throw new Error(`Scope ${target.scopeBucketId} has no managed worktree`)
     }
-    return bucket.root
+    return root
   }
 
   /** Copy or symlink eligible root-level environment files into the worktree. */
