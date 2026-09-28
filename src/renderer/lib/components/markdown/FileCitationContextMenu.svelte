@@ -43,6 +43,11 @@
 
   interface ResolvedCitation {
     projectId: string
+    /** Scope bucket the citation resolved against (managed worktree or the
+     *  project-rooted default). Every follow-up action reuses this instead of
+     *  re-deriving the scope, so a menu opened in a worktree never falls back
+     *  to the main project directory. */
+    scopeBucketId: string
     relativePath: string
     absolutePath: string
     kind: ProjectFileInfo['kind']
@@ -103,15 +108,24 @@
   async function resolveCitation(target: CitationTarget): Promise<ResolvedCitation | null> {
     const safeProjectId = projectId ?? workspaceState.activeProject?.id
     if (!safeProjectId) return null
+    // Resolve against the same scope root the file tree and citation links use:
+    // the open thread's scope (a managed worktree when one is active), not the
+    // main project directory. Without this the copied/revealed path is the
+    // project-root absolute path even though the cited file lives in a worktree.
+    const scopeBucketId = workspaceState.activeScopeBucketIdFor(safeProjectId)
     try {
-      const resolvedPaths = await invoke('projectFiles:resolveCitationPaths', safeProjectId, [
-        target.path
-      ])
+      const resolvedPaths = await invoke(
+        'projectFiles:resolveCitationPaths',
+        safeProjectId,
+        [target.path],
+        scopeBucketId
+      )
       const relativePath = resolvedPaths[target.path]
       if (!relativePath) return null
-      const info = await invoke('projectFiles:info', safeProjectId, relativePath)
+      const info = await invoke('projectFiles:info', safeProjectId, relativePath, scopeBucketId)
       return {
         projectId: safeProjectId,
+        scopeBucketId,
         relativePath,
         absolutePath: info.absolutePath,
         kind: info.kind
@@ -157,7 +171,7 @@
         'projectFiles:openInEditor',
         resolved.projectId,
         resolved.relativePath,
-        workspaceState.activeScopeBucketIdFor(resolved.projectId)
+        resolved.scopeBucketId
       )
     } catch (error) {
       reportError(error, 'Could not open the file.')
@@ -172,7 +186,7 @@
         resolved.projectId,
         resolved.relativePath,
         editorId,
-        workspaceState.activeScopeBucketIdFor(resolved.projectId)
+        resolved.scopeBucketId
       )
     } catch (error) {
       reportError(error, 'Could not open the file.')
@@ -185,7 +199,8 @@
       const savedPath = await invoke(
         'projectFiles:saveAs',
         resolved.projectId,
-        resolved.relativePath
+        resolved.relativePath,
+        resolved.scopeBucketId
       )
       if (savedPath) toast.success('File saved.')
     } catch (error) {
@@ -201,7 +216,12 @@
   async function copyContents(): Promise<void> {
     if (!resolved) return
     try {
-      const textFile = await invoke('projectFiles:read', resolved.projectId, resolved.relativePath)
+      const textFile = await invoke(
+        'projectFiles:read',
+        resolved.projectId,
+        resolved.relativePath,
+        resolved.scopeBucketId
+      )
       if (!textFile) {
         toast.error('This file cannot be copied as text.')
         return
