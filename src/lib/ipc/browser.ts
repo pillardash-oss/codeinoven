@@ -311,6 +311,23 @@ export interface BrowserShortcutChord {
 export type BrowserShortcutBindings = Partial<Record<BrowserShortcutAction, BrowserShortcutChord[]>>
 
 /**
+ * The Ctrl+Tab switcher chords, resolved per platform.
+ *
+ * The switcher is a renderer DOM surface, but a key pressed in a native browser
+ * page never reaches it. Main claims these chords in the page and forwards the
+ * gesture, so the app's switcher opens from inside a page too. It is a flat list
+ * rather than a per-action table because the switcher has one gesture: main only
+ * reports whether Shift was held, and the renderer decides the direction.
+ */
+export type BrowserSwitcherBindings = BrowserShortcutChord[]
+
+/** One switcher gesture forwarded from a key pressed in a native page. */
+export interface BrowserSwitcherKey {
+  /** Whether Shift was held, i.e. the user is cycling backward. */
+  backward: boolean
+}
+
+/**
  * A browser action the renderer owns, because only the renderer knows the tab
  * strip: focusing the address bar, and closing or opening a tab.
  */

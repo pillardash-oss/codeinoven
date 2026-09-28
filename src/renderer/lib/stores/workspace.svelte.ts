@@ -17,36 +17,13 @@ import { openComposerFocusWindow } from '$lib/focus/composer-focus'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { threadMessages } from './thread-messages.svelte'
 import { scopeState } from './scope.svelte'
-import { APP_SLUG } from '$shared/brand'
 import { invoke } from '$lib/ipc.svelte'
+import { recentVisits, threadVisitKey } from './recent-visits.svelte'
 
-const RECENT_THREAD_VISITS_KEY = `${APP_SLUG}.recent-thread-visits.v1`
-const RECENT_THREAD_VISITS_LIMIT = 50
-
-function loadRecentThreadVisits(): string[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(RECENT_THREAD_VISITS_KEY) ?? '[]')
-    return Array.isArray(parsed)
-      ? parsed.filter((value): value is string => typeof value === 'string')
-      : []
-  } catch {
-    return []
-  }
-}
-
-function persistRecentThreadVisits(visits: readonly string[]): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(RECENT_THREAD_VISITS_KEY, JSON.stringify(visits))
-  } catch {
-    // Recent navigation history is optional and must never block task switching.
-  }
-}
-
-export function threadVisitKey(thread: Pick<Thread, 'projectId' | 'id'>): string {
-  return `${thread.projectId}:${thread.id}`
-}
+// Thread navigation history is shared with the browser tab visits so the Ctrl+Tab
+// switcher can interleave both kinds of surface in one recency order. The keys
+// and the persisted list live in `recent-visits.svelte`.
+export { threadVisitKey }
 
 export interface JumpTarget {
   id: string
@@ -100,7 +77,9 @@ class WorkspaceState {
   /** Signal used by AppHeader to ask Workspace to open the edit modal. */
   projectIdToEdit: string | null = $state(null)
   /** Globally ordered task visits, newest first, independent of project. */
-  recentThreadVisits: string[] = $state(loadRecentThreadVisits())
+  get recentThreadVisits(): readonly string[] {
+    return recentVisits.threadKeys
+  }
   /**
    * The thread each content-view family (Projects, Chats, Assistant) was last
    * showing. Switching views restores the family's own thread instead of a
@@ -204,12 +183,7 @@ class WorkspaceState {
     // "Loading conversation…". In-flight loads are shared, so the view's own
     // load never duplicates this read.
     void threadMessages.preload(thread.projectId, thread.id)
-    const visitKey = threadVisitKey(thread)
-    this.recentThreadVisits = [
-      visitKey,
-      ...this.recentThreadVisits.filter((candidate) => candidate !== visitKey)
-    ].slice(0, RECENT_THREAD_VISITS_LIMIT)
-    persistRecentThreadVisits(this.recentThreadVisits)
+    recentVisits.recordThread(thread)
     this.selectedThread = thread
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null

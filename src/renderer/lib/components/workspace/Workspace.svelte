@@ -106,6 +106,12 @@
     findEmptyNewThread,
     threadVisitKey
   } from '$lib/stores/workspace.svelte'
+  import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
+  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import {
+    buildThreadSwitcherEntries,
+    type ThreadSwitcherEntry
+  } from '../threads/thread-switcher-entries'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import { threadHasVisibleWork } from './workspace-thread-helpers'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -1553,17 +1559,25 @@
     return [...pinned, ...unpinned]
   })
 
-  let recentThreads = $derived.by(() => {
-    const availableThreads = allThreads.filter((thread) => !thread.archived)
-    const byVisitKey = new Map(availableThreads.map((thread) => [threadVisitKey(thread), thread]))
-    const visited = workspaceState.recentThreadVisits
-      .map((visitKey) => byVisitKey.get(visitKey))
-      .filter((thread): thread is Thread => thread !== undefined)
-    const visitedIds = new Set(visited.map((thread) => threadVisitKey(thread)))
-    const activityFallback = availableThreads
-      .filter((thread) => !visitedIds.has(threadVisitKey(thread)))
-      .sort((a, b) => b.lastActivity - a.lastActivity)
-    return [...visited, ...activityFallback].slice(0, 10)
+  let recentSwitcherEntries = $derived.by(() =>
+    buildThreadSwitcherEntries({
+      // One recency order across every switchable surface: a project thread, a
+      // chat, an assistant task or an open browser tab, interleaved by when each
+      // was last visited.
+      visits: recentVisits.all,
+      threads: allThreads.filter((thread) => !thread.archived),
+      tabs: globalBrowser.tabs
+    })
+  )
+
+  /** The entry the switcher starts cycling from: the active browser tab while the
+   *  browser view is on screen, otherwise the selected thread. */
+  let switcherSelectedKey = $derived.by(() => {
+    if (!active && globalBrowser.opened && globalBrowser.activeTabId) {
+      return browserTabVisitKey(globalBrowser.activeTabId)
+    }
+    const thread = selectedThread
+    return thread ? threadVisitKey(thread) : null
   })
 
   let recentScopeLoadRequest = 0
@@ -3585,6 +3599,20 @@
     void tick().then(() => revealThreadInSidebar(thread.id))
   }
 
+  /**
+   * Open whatever the Ctrl+Tab switcher landed on. A browser entry reveals the
+   * browser view and activates that tab; a thread entry takes the same path it
+   * always did, landing in the view that owns the thread's family.
+   */
+  async function openSwitcherEntry(entry: ThreadSwitcherEntry): Promise<void> {
+    if (entry.kind === 'browser') {
+      navigate('browser')
+      globalBrowser.activate(entry.tab.id)
+      return
+    }
+    await openThreadFromSwitcher(entry.thread)
+  }
+
   async function openProjectFileFromCommand(
     projectId: string,
     path: string,
@@ -4004,11 +4032,11 @@
 <WorkspaceEditProjectModal dialogs={projectDialogs} {projectIcons} />
 
 <ThreadSwitcher
-  threads={recentThreads}
+  entries={recentSwitcherEntries}
   projects={visibleProjects}
   projectIconUrls={projectIcons}
-  selectedThreadId={selectedThread?.id ?? null}
-  onSelect={openThreadFromSwitcher}
+  selectedKey={switcherSelectedKey}
+  onSelect={openSwitcherEntry}
 />
 
 <WorkspaceFullscreenTerminal

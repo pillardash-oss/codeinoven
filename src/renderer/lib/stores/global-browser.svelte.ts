@@ -23,6 +23,7 @@ import { contextSidebarState, type TemporaryChatContextTab } from './context-sid
 import { sidebarState } from './sidebar.svelte'
 import { defaultSettingsFor } from './thread-settings.svelte'
 import { threadNotesState } from './thread-notes.svelte'
+import { recentVisits } from './recent-visits.svelte'
 import {
   loadGlobalBrowserSnapshot,
   persistGlobalBrowserSnapshot,
@@ -360,6 +361,10 @@ export class GlobalBrowserState {
    * is idempotent, so re-activating a tab costs nothing.
    */
   private setActiveTab(tabId: string | null): void {
+    // Every activation, from any surface (strip, sidebar, switcher, a popup that
+    // reveals itself), counts as a visit so the Ctrl+Tab switcher lists this tab
+    // by the moment it was last used, exactly as it does a thread.
+    if (tabId) recentVisits.recordBrowserTab(tabId)
     this.activeTabId = tabId
     this.dockActiveTabNote()
     // The rail follows the active tab: while the agent tool is shown, the new

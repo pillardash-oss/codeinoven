@@ -15,7 +15,8 @@
 import type {
   BrowserShortcutAction,
   BrowserShortcutBindings,
-  BrowserShortcutChord
+  BrowserShortcutChord,
+  BrowserSwitcherBindings
 } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
 import { isMacPlatform, parseKeymapTrigger, resolveChordModifiers } from './keymap'
@@ -79,6 +80,19 @@ export function browserShortcutBindings(source: BrowserShortcutKeySource): Brows
 }
 
 /**
+ * The Ctrl+Tab switcher chords, resolved for this platform.
+ *
+ * The switcher is a global gesture, not a browser action, but a key pressed in a
+ * native page never reaches the renderer. So its chords travel to main the same
+ * way the browser table does: main claims them in the page and forwards the
+ * gesture back. An unbound entry resolves to no chords, which leaves Ctrl+Tab to
+ * the page.
+ */
+export function browserSwitcherChords(source: BrowserShortcutKeySource): BrowserSwitcherBindings {
+  return resolveChords(source.keysFor('thread-switcher'), isMacPlatform())
+}
+
+/**
  * Hand the table to the main process. Called on startup and on every keymap
  * change, so the reported chords are always the effective ones. A failure is
  * silent: the feature handlers are not registered until after the first paint,
@@ -86,4 +100,5 @@ export function browserShortcutBindings(source: BrowserShortcutKeySource): Brows
  */
 export function publishBrowserShortcutBindings(source: BrowserShortcutKeySource): void {
   void invoke('browser:setShortcutBindings', browserShortcutBindings(source)).catch(() => {})
+  void invoke('browser:setSwitcherBindings', browserSwitcherChords(source)).catch(() => {})
 }

@@ -37,6 +37,7 @@ import type {
   BrowserPermissionRequest,
   BrowserShortcutAction,
   BrowserShortcutBindings,
+  BrowserSwitcherBindings,
   BrowserScrollbarTheme,
   BrowserTransportCommand,
   BrowserViewBounds
@@ -58,7 +59,11 @@ import {
   type BrowserContextMenuActions,
   type BrowserContextMenuContext
 } from './browser-service/browser-context-menu'
-import { matchBrowserShortcut } from './browser-service/browser-shortcuts'
+import {
+  matchBrowserShortcut,
+  matchesBrowserChord,
+  type ShortcutKeyInput
+} from './browser-service/browser-shortcuts'
 import {
   permissionCheckKey,
   permissionGrantKeys,
@@ -105,6 +110,7 @@ import {
   validateBoundedHost,
   validateBrowserSearchEngine,
   validateBrowserShortcutBindings,
+  validateBrowserSwitcherBindings,
   validateBrowserUrl,
   validateDownloadId,
   validateInspectorMarkers,
@@ -199,6 +205,9 @@ export class BrowserService {
   /** Chords the browser claims, resolved from the keymap by the renderer. Empty
    *  until that report arrives, which leaves every key to the rest of the app. */
   private shortcutBindings: BrowserShortcutBindings = {}
+  /** The Ctrl+Tab switcher chords, pushed by the renderer from its keymap. A key
+   *  pressed in a page never reaches the renderer, so main claims these here. */
+  private switcherBindings: BrowserSwitcherBindings = []
   /**
    * The tab whose toolbar holds DOM focus (address bar, navigation buttons), or
    * null while none does.
@@ -468,6 +477,9 @@ export class BrowserService {
     })
     ipcMain.handle('browser:setShortcutBindings', (_event, rawBindings) => {
       this.shortcutBindings = validateBrowserShortcutBindings(rawBindings)
+    })
+    ipcMain.handle('browser:setSwitcherBindings', (_event, rawBindings) => {
+      this.switcherBindings = validateBrowserSwitcherBindings(rawBindings)
     })
     ipcMain.handle('browser:setSearchEngine', (_event, rawEngine) => {
       this.contextMenuSearchEngine = validateBrowserSearchEngine(rawEngine)
@@ -1451,6 +1463,27 @@ export class BrowserService {
   }
 
   /**
+   * Claim the Ctrl+Tab switcher gesture pressed in a page.
+   *
+   * The switcher is a renderer DOM surface, but a key pressed in the page never
+   * reaches it. So the app claims the chord here (the app always wins; a site
+   * cannot override Ctrl+Tab), hands the renderer the keyboard and forwards the
+   * gesture. Once the renderer owns the keyboard the real Control release reaches
+   * the DOM and commits the highlight, so only the first press is forwarded.
+   *
+   * Returns whether the key was claimed, so the caller prevents it. Preventing it
+   * is what stops the page and the application menu from also acting on it.
+   */
+  private consumeSwitcherKey(input: ShortcutKeyInput): boolean {
+    if (!matchesBrowserChord(input, this.switcherBindings)) return false
+    if (!this.window.webContents.isDestroyed()) {
+      this.window.webContents.focus()
+      sendToRenderer(this.window.webContents, 'browser:switcherKey', { backward: input.shift })
+    }
+    return true
+  }
+
+  /**
    * Ask the renderer to act on the tab strip, which only the renderer owns.
    *
    * When the key came from the page, this process still holds the OS keyboard
@@ -1587,6 +1620,12 @@ export class BrowserService {
     // a development build the menu is Electron's default one) and Cmd/Ctrl+W
     // from closing its window.
     view.webContents.on('before-input-event', (event, input) => {
+      // The switcher is claimed first: it is an app-level gesture that must work
+      // from inside a page, and it must never be shadowed by a browser binding.
+      if (this.consumeSwitcherKey(input)) {
+        event.preventDefault()
+        return
+      }
       const action = matchBrowserShortcut(input, this.shortcutBindings)
       if (!action) return
       event.preventDefault()

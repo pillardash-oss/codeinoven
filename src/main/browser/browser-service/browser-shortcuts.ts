@@ -60,6 +60,19 @@ function chordMatchesInput(chord: BrowserShortcutChord, input: ShortcutKeyInput)
 }
 
 /**
+ * Whether a key press matches any chord in a flat list, for a gesture that is
+ * not a browser action table. Auto-repeat is allowed: holding the key is how the
+ * switcher cycles, exactly as it does when the app's own DOM handles it.
+ */
+export function matchesBrowserChord(
+  input: ShortcutKeyInput,
+  chords: readonly BrowserShortcutChord[]
+): boolean {
+  if (input.type !== 'keyDown') return false
+  return chords.some((chord) => chordMatchesInput(chord, input))
+}
+
+/**
  * The action a key press claims for the browser, or null when the browser has
  * no binding for it and the key belongs to the rest of the app.
  */

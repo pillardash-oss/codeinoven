@@ -7,6 +7,7 @@ import type {
   BrowserPermissionDecision,
   BrowserPermissionPromptContext,
   BrowserShortcutBindings,
+  BrowserSwitcherBindings,
   BrowserSiteDataScope,
   BrowserScrollbarTheme,
   BrowserTransportCommand,
@@ -60,6 +61,12 @@ export const invokeBrowserContract = {
    * application menu can and holds no keymap of its own.
    */
   'browser:setShortcutBindings': {} as Contract<[bindings: BrowserShortcutBindings], void>,
+  /**
+   * Replace the Ctrl+Tab switcher chords. A key pressed in a native page never
+   * reaches the renderer, so main claims these chords there and forwards the
+   * gesture; the chords come from the renderer's keymap, which main cannot read.
+   */
+  'browser:setSwitcherBindings': {} as Contract<[bindings: BrowserSwitcherBindings], void>,
   /**
    * Report the address bar's active search engine. Main builds the browser's
    * native context menu and its "Search <engine> for ..." item, and holds no

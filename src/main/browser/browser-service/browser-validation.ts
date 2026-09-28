@@ -12,6 +12,7 @@ import type {
   BrowserShortcutAction,
   BrowserShortcutBindings,
   BrowserShortcutChord,
+  BrowserSwitcherBindings,
   BrowserSiteDataScope,
   BrowserTransportCommand,
   BrowserViewBounds
@@ -77,6 +78,8 @@ const INSPECTOR_MARKER_ID_PATTERN = /^[a-f0-9-]{36}$/u
 /** Chords an action may carry. The keymap binds one or two alternatives per
  *  action, so a larger list is a caller bug rather than a layout. */
 const MAX_SHORTCUT_CHORDS_PER_ACTION = 6
+/** The switcher is one gesture, so it carries at most these chords. */
+const MAX_SWITCHER_CHORDS = 6
 /** Ceiling on a chord's key token, matching the longest DOM key name. */
 const MAX_SHORTCUT_KEY_LENGTH = 24
 
@@ -109,6 +112,23 @@ export function validateBrowserShortcutBindings(value: unknown): BrowserShortcut
     )
   }
   return bindings
+}
+
+/**
+ * Validate the Ctrl+Tab switcher chords pushed by the renderer.
+ *
+ * The same trust boundary as the action table applies: a bad chord could claim
+ * any key in every page, so every entry is a single key with an explicit
+ * modifier set, and the list is capped.
+ */
+export function validateBrowserSwitcherBindings(value: unknown): BrowserSwitcherBindings {
+  if (!Array.isArray(value)) {
+    throw new TypeError('Browser switcher bindings must be an array')
+  }
+  if (value.length > MAX_SWITCHER_CHORDS) {
+    throw new TypeError('Browser switcher chord count exceeds the cap')
+  }
+  return value.map((entry) => validateBrowserShortcutChord(entry))
 }
 
 function validateBrowserShortcutChord(value: unknown): BrowserShortcutChord {

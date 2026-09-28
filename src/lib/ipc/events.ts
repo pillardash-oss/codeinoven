@@ -15,7 +15,8 @@ import type {
   BrowserOpenRequestContext,
   BrowserPageState,
   BrowserPanelShortcutAction,
-  BrowserPermissionRequest
+  BrowserPermissionRequest,
+  BrowserSwitcherKey
 } from './browser'
 import type {
   AgentNotificationPayload,
@@ -178,6 +179,12 @@ export const IPC_EVENT_CONTRACT = {
    * decides the key, the renderer decides what the tab strip does with it.
    */
   'browser:panelShortcut': [] as unknown as [tabId: string, action: BrowserPanelShortcutAction],
+  /**
+   * A Ctrl+Tab switcher gesture pressed while a native page held the keyboard.
+   * Main claimed the chord and handed this renderer the keyboard, so the switcher
+   * opens from inside a page exactly as it does from the app's own chrome.
+   */
+  'browser:switcherKey': [] as unknown as [key: BrowserSwitcherKey],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
   /**
    * Delivered to the native permission-prompt popup window (not the main
