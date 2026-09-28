@@ -9,6 +9,8 @@
     Mic,
     Moon,
     Pencil,
+    Pin,
+    PinOff,
     StickyNote,
     Volume2,
     VolumeX,
@@ -19,15 +21,18 @@
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { harnessName } from '$lib/components/shared/model-picker-helpers'
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
-  import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import { browserTabAccent, browserTabIconUrl } from './browser-tab-appearance'
 
   interface Props {
     tab: GlobalBrowserTab
     /** Open the group editor for a group id, or with null to create one. */
     onOpenGroupEditor: (groupId: string | null) => void
+    /** Open this tab's own editor (title, colour, icon). */
+    onEditTab: (tabId: string) => void
   }
 
-  let { tab, onOpenGroupEditor }: Props = $props()
+  let { tab, onOpenGroupEditor, onEditTab }: Props = $props()
 
   /**
    * One row in the browser tab strip.
@@ -46,6 +51,11 @@
 
   const runtime = $derived(globalBrowser.runtimeFor(tab.id))
   const active = $derived(globalBrowser.activeTabId === tab.id)
+  /** The label the row shows: the user's own title when set, else the page's. */
+  const label = $derived(browserTabLabel(tab))
+  /** The tab's custom icon as an image, or null to fall back to the favicon. */
+  const customIconUrl = $derived(browserTabIconUrl(tab, globalBrowser.tabIconUrl(tab.id)))
+  const accent = $derived(browserTabAccent(tab))
   /** While this tab's agent sidebar is open the row grows a second line naming
    *  the harness the conversation runs on, so the strip says which agent is
    *  answering without opening the panel. */
@@ -115,7 +125,7 @@
           ? 'bg-elevated'
           : 'hover:bg-elevated'}"
         aria-current={active}
-        title={tab.url || tab.title}
+        title={tab.url || label}
         draggable="true"
         ondragstart={onDragStart}
         ondragend={() => {
@@ -131,7 +141,9 @@
         }}
       >
         <span class="flex h-4 w-4 shrink-0 items-center justify-center">
-          {#if runtime.loading}
+          {#if customIconUrl}
+            <img src={customIconUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+          {:else if runtime.loading}
             <Loader2 size={13} class="animate-spin text-muted" />
           {:else if tab.favicon}
             <img src={tab.favicon} alt="" class="h-4 w-4 rounded-sm object-contain" />
@@ -144,8 +156,9 @@
             class="truncate text-xs {tab.hibernated ? 'text-dimmed' : 'text-foreground'} {active
               ? 'font-medium'
               : ''}"
+            style={accent ? `color: ${accent}` : undefined}
           >
-            {tab.title}
+            {label}
           </span>
           {#if agentHarness}
             <span class="flex items-center gap-1 text-[0.625rem] leading-tight text-dimmed">
@@ -157,6 +170,16 @@
       </button>
 
       <div class="pointer-events-none absolute right-1 flex items-center gap-0.5">
+        {#if tab.pinned}
+          <span
+            role="img"
+            class="pointer-events-none flex h-6 w-6 items-center justify-center text-accent"
+            title="Pinned tab"
+            aria-label="Pinned tab"
+          >
+            <Pin size={12} />
+          </span>
+        {/if}
         {#if threadNotesState.has(tab.id)}
           <span
             role="img"
@@ -208,8 +231,8 @@
         <button
           type="button"
           class="pointer-events-auto flex h-6 w-6 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
-          aria-label={`Close ${tab.title}`}
-          title={`Close ${tab.title}`}
+          aria-label={`Close ${label}`}
+          title={`Close ${label}`}
           onclick={closeTab}
         >
           <X size={12} />
@@ -228,8 +251,22 @@
       <p
         class="truncate px-2.5 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
       >
-        {tab.title}
+        {label}
       </p>
+      <ContextMenu.Item class={itemClass} onSelect={() => onEditTab(tab.id)}>
+        <Pencil size={13} class="shrink-0 text-muted" />
+        Edit tab
+      </ContextMenu.Item>
+      <ContextMenu.Item class={itemClass} onSelect={() => globalBrowser.toggleTabPin(tab.id)}>
+        {#if tab.pinned}
+          <PinOff size={13} class="shrink-0 text-muted" />
+          Unpin tab
+        {:else}
+          <Pin size={13} class="shrink-0 text-muted" />
+          Pin tab
+        {/if}
+      </ContextMenu.Item>
+      <ContextMenu.Separator class="my-1 h-px bg-border" />
       <ContextMenu.Item class={itemClass} onSelect={createGroupFromTab}>
         <FolderPlus size={13} class="shrink-0 text-muted" />
         New tab group

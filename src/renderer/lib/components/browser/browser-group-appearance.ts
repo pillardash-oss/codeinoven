@@ -32,3 +32,36 @@ export function browserGroupIconUrl(
     storedImageUrl ?? undefined
   )
 }
+
+/**
+ * The image path a tab or group should end up with after an edit, mirroring how
+ * a routine's image and SVG icon interact:
+ *
+ *  - a freshly picked image wins,
+ *  - a pasted SVG replaces a stored image,
+ *  - switching to a library SVG icon clears the stored image,
+ *  - otherwise the stored image is kept.
+ *
+ * Kept pure and shared so the tab editor and the group editor cannot drift.
+ */
+export function resolveAppearanceImagePath(params: {
+  currentImagePath: string | null
+  currentIconType: string | null
+  customSvgSelected: boolean
+  customSvg: string | null
+  pendingIconPath: string | null
+  chosenIconType: string | null
+}): string | null {
+  const {
+    currentImagePath,
+    currentIconType,
+    customSvgSelected,
+    customSvg,
+    pendingIconPath,
+    chosenIconType
+  } = params
+  if (customSvgSelected && customSvg && currentImagePath) return null
+  if (pendingIconPath && !customSvgSelected) return pendingIconPath
+  const switchingToSvgIcon = chosenIconType !== currentIconType && chosenIconType !== null
+  return currentImagePath && switchingToSvgIcon ? null : currentImagePath
+}

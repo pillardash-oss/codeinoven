@@ -35,17 +35,12 @@ export const IDLE_GLOBAL_BROWSER_RUNTIME: GlobalBrowserRuntime = Object.freeze({
 })
 
 /**
- * One group of tabs in the browser sidebar: a named, coloured, iconed fold.
- *
- * Its appearance is deliberately the *same* model projects and assistant
- * routines use   a hex colour, a `PROJECT_SVG_ICONS` key, a sanitized custom
- * SVG, and a picked image file   so all three are edited with the one
- * `AppearancePicker` and drawn by the one `getProjectIcon` resolver. Nothing
- * here invents a parallel colour or icon vocabulary.
+ * The appearance vocabulary a browser tab and a browser group share, copied
+ * from the project/routine model: a hex colour, a `PROJECT_SVG_ICONS` key, a
+ * sanitized custom SVG, and a picked image file. One shape means one editor and
+ * one icon resolver for every browser surface that carries an identity.
  */
-export interface GlobalBrowserGroup {
-  id: string
-  name: string
+export interface BrowserAppearance {
   /** A `PROJECT_COLORS` hex, or a custom hex, or null for no colour. */
   color: string | null
   /** A `PROJECT_SVG_ICONS` key, or null. */
@@ -56,14 +51,20 @@ export interface GlobalBrowserGroup {
   imagePath: string | null
 }
 
+export interface GlobalBrowserGroup extends BrowserAppearance {
+  id: string
+  name: string
+  /** A free-form note about what the fold is for, or an empty string. */
+  description: string
+  /** A pinned fold stays at the top of the strip, like a pinned thread. */
+  pinned: boolean
+}
+
 /**
  * The appearance fields a group carries, named once so the store's create and
  * update signatures cannot drift from the modal that fills them in.
  */
-export type BrowserGroupAppearance = Pick<
-  GlobalBrowserGroup,
-  'color' | 'iconType' | 'customSvg' | 'imagePath'
->
+export type BrowserGroupAppearance = BrowserAppearance
 
 /**
  * One global browser tab.
@@ -73,9 +74,15 @@ export type BrowserGroupAppearance = Pick<
  * `url` the next time it is shown. Restored tabs start hibernated so a restart
  * never silently reloads dozens of pages.
  */
-export interface GlobalBrowserTab {
+export interface GlobalBrowserTab extends BrowserAppearance {
   id: string
   title: string
+  /**
+   * A label the user typed, shown instead of the page's own title. Null means
+   * the live title is used, so a rename survives the page reporting its title
+   * on the next load while an unnamed tab keeps tracking the page.
+   */
+  customTitle: string | null
   url: string
   favicon: string | null
   groupId: string | null
@@ -83,10 +90,16 @@ export interface GlobalBrowserTab {
   /** Last moment the tab was shown to the user; the hibernation clock reads it. */
   lastUsedAt: number
   hibernated: boolean
+  /** A pinned tab stays at the top of the strip and is never hibernated. */
+  pinned: boolean
+  /** When the tab was pinned, so the pinned block keeps a stable order. */
+  pinnedAt: number | null
 }
 
-/** Group names and tab titles are bounded the same way thread titles are. */
+/** Group names, tab titles and descriptions are bounded the way thread titles are. */
 export const MAX_BROWSER_GROUP_NAME_LENGTH = 60
+export const MAX_BROWSER_GROUP_DESCRIPTION_LENGTH = 240
+export const MAX_BROWSER_TAB_TITLE_LENGTH = 120
 export const MAX_GLOBAL_BROWSER_TABS = 100
 export const MAX_GLOBAL_BROWSER_GROUPS = 40
 /** Bounds for the appearance payload a group may persist. The SVG ceiling
@@ -122,8 +135,24 @@ export function browserTabTitleForUrl(url: string): string {
   }
 }
 
-/** Whether an idle tab is past the configured hibernation window. */
+/** Whether an idle tab is past the configured hibernation window. A pinned tab
+ *  never hibernates: it survives the sweep the way a pinned thread survives
+ *  cleanup. */
 export function isTabIdlePastWindow(tab: GlobalBrowserTab, now: number, windowMs: number): boolean {
   if (tab.hibernated) return false
+  if (tab.pinned) return false
   return now - tab.lastUsedAt >= windowMs
+}
+
+/**
+ * The label the strip, the notes rail and the close affordances show: the
+ * user's own title when there is one, otherwise the page's live title. A blank
+ * custom title is treated as "no custom title" so clearing the field restores
+ * the page title instead of leaving an unnamed tab.
+ */
+export function browserTabLabel(tab: Pick<GlobalBrowserTab, 'title' | 'customTitle'>): string {
+  const custom = tab.customTitle?.trim() ?? ''
+  if (custom !== '') return custom
+  const title = tab.title.trim()
+  return title !== '' ? title : 'New Tab'
 }

@@ -15,12 +15,14 @@ import { APP_SLUG } from '$shared/brand'
 import { isBrowserTabId } from '$shared/ipc-contract'
 import {
   MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH,
+  MAX_BROWSER_GROUP_DESCRIPTION_LENGTH,
   MAX_BROWSER_GROUP_ICON_TYPE_LENGTH,
   MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH,
   MAX_BROWSER_GROUP_NAME_LENGTH,
+  MAX_BROWSER_TAB_TITLE_LENGTH,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
-  type BrowserGroupAppearance,
+  type BrowserAppearance,
   type GlobalBrowserGroup,
   type GlobalBrowserTab
 } from './global-browser-types'
@@ -42,8 +44,8 @@ function parseOptionalString(value: unknown, maxLength: number): string | null {
   return typeof value === 'string' && value.length <= maxLength ? value : null
 }
 
-/** The appearance payload a group persisted, validated field by field. */
-function parseAppearance(record: Record<string, unknown>): BrowserGroupAppearance {
+/** The appearance payload a tab or group persisted, validated field by field. */
+function parseAppearance(record: Record<string, unknown>): BrowserAppearance {
   const color = record['color']
   const imagePath = parseOptionalString(record['imagePath'], MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH)
   return {
@@ -80,17 +82,27 @@ function parseGroups(value: unknown): GlobalBrowserGroup[] {
     const record = entry as Record<string, unknown>
     const id = record['id']
     const name = record['name']
+    const description = record['description']
     if (
       typeof id !== 'string' ||
       !GROUP_ID_PATTERN.test(id) ||
       groups.some((candidate) => candidate.id === id) ||
       typeof name !== 'string' ||
       name.trim() === '' ||
-      name.length > MAX_BROWSER_GROUP_NAME_LENGTH
+      name.length > MAX_BROWSER_GROUP_NAME_LENGTH ||
+      (description !== undefined &&
+        (typeof description !== 'string' ||
+          description.length > MAX_BROWSER_GROUP_DESCRIPTION_LENGTH))
     ) {
       continue
     }
-    groups.push({ id, name: name.trim(), ...parseAppearance(record) })
+    groups.push({
+      id,
+      name: name.trim(),
+      description: typeof description === 'string' ? description : '',
+      pinned: record['pinned'] === true,
+      ...parseAppearance(record)
+    })
   }
   return groups
 }
@@ -105,30 +117,37 @@ function parseTabs(value: unknown, groups: readonly GlobalBrowserGroup[]): Globa
     const record = entry as Record<string, unknown>
     const id = record['id']
     const title = record['title']
+    const customTitle = record['customTitle']
     const url = parseUrl(record['url'])
     const groupId = record['groupId']
     const createdAt = record['createdAt']
     const lastUsedAt = record['lastUsedAt']
     const hibernated = record['hibernated']
+    const pinnedAt = record['pinnedAt']
     if (
       typeof id !== 'string' ||
       !isBrowserTabId(id) ||
       tabs.some((candidate) => candidate.id === id) ||
       typeof title !== 'string' ||
       title.length > 300 ||
+      (customTitle !== undefined &&
+        customTitle !== null &&
+        (typeof customTitle !== 'string' || customTitle.length > MAX_BROWSER_TAB_TITLE_LENGTH)) ||
       url === null ||
       (groupId !== null && (typeof groupId !== 'string' || !groupIds.has(groupId))) ||
       typeof createdAt !== 'number' ||
       !Number.isSafeInteger(createdAt) ||
       typeof lastUsedAt !== 'number' ||
       !Number.isSafeInteger(lastUsedAt) ||
-      typeof hibernated !== 'boolean'
+      typeof hibernated !== 'boolean' ||
+      (pinnedAt !== undefined && pinnedAt !== null && typeof pinnedAt !== 'number')
     ) {
       continue
     }
     tabs.push({
       id,
       title,
+      customTitle: typeof customTitle === 'string' ? customTitle : null,
       url,
       favicon: null,
       groupId,
@@ -136,7 +155,10 @@ function parseTabs(value: unknown, groups: readonly GlobalBrowserGroup[]): Globa
       lastUsedAt,
       // A restored page is never live: the snapshot's own flag is validated but
       // never trusted, because no page survives a restart.
-      hibernated: true
+      hibernated: true,
+      pinned: record['pinned'] === true,
+      pinnedAt: typeof pinnedAt === 'number' ? pinnedAt : null,
+      ...parseAppearance(record)
     })
   }
   return tabs
@@ -173,11 +195,18 @@ export function persistGlobalBrowserSnapshot(snapshot: GlobalBrowserSnapshot): v
         tabs: snapshot.tabs.map((tab) => ({
           id: tab.id,
           title: tab.title,
+          customTitle: tab.customTitle,
           url: tab.url,
           groupId: tab.groupId,
           createdAt: tab.createdAt,
           lastUsedAt: tab.lastUsedAt,
-          hibernated: tab.hibernated
+          hibernated: tab.hibernated,
+          pinned: tab.pinned,
+          pinnedAt: tab.pinnedAt,
+          color: tab.color,
+          iconType: tab.iconType,
+          customSvg: tab.customSvg,
+          imagePath: tab.imagePath
         })),
         activeTabId: snapshot.activeTabId
       })
