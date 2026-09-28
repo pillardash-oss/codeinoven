@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import { cubicOut } from 'svelte/easing'
-  import { Bot, Download, Globe, Plus, StickyNote } from '@lucide/svelte'
+  import { AppWindow, Bot, Download, Globe, Plus, StickyNote } from '@lucide/svelte'
   import { subscribe } from '$lib/ipc.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
+  import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { motionDuration, slideWidth } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
@@ -48,6 +49,12 @@
     const tab = activeTab
     const hasNote = tab ? threadNotesState.has(tab.id) : false
     const hasAgent = tab ? globalBrowser.agentChatTabFor(tab.id) !== null : false
+    /** The popup windows this tab's page opened. They are the tab's own windows,
+     *  so the tool is beside the note and the agent chat rather than beside the
+     *  profile's downloads, and it stays in the rail while the panel is open so a
+     *  last popup closing itself does not take the user's close button with it. */
+    const popupWindows = tab ? browserPopupWindows.forTab(tab.id) : []
+    const hasPopups = popupWindows.length > 0 || globalBrowser.popupsSidebarShown
     const tabTools: ContextDockItem[] = tab
       ? [
           {
@@ -64,7 +71,21 @@
             icon: Bot,
             active: globalBrowser.agentSidebarShown,
             onSelect: () => globalBrowser.toggleAgentSidebar()
-          }
+          },
+          ...(hasPopups
+            ? [
+                {
+                  id: 'popups',
+                  label:
+                    popupWindows.length === 1
+                      ? 'Popup window'
+                      : `Popup windows (${popupWindows.length})`,
+                  icon: AppWindow,
+                  active: globalBrowser.popupsSidebarShown,
+                  onSelect: () => globalBrowser.togglePopupsSidebar()
+                }
+              ]
+            : [])
         ]
       : []
     const profileTools: ContextDockItem[] = [

@@ -152,6 +152,32 @@ class BrowserVisibilityState {
     return this.isCovered(bounds) ? 'covered-by-overlay' : null
   }
 
+  /** Whether a popup window's page may be displayed at `bounds`. */
+  isPopupVisible(bounds: BrowserViewBounds | null): boolean {
+    return this.popupHideReasonFor(bounds) === null
+  }
+
+  /**
+   * Why a popup window's native view must stay hidden, or null when it may be
+   * shown. `bounds` is the frame the rail's panel would occupy.
+   *
+   * A popup window's page is a second native view, so it needs the same answer a
+   * tab's page does for everything that has to stay in front of it: a full-window
+   * DOM surface, the thread switcher, or a floating overlay over the panel. It has
+   * no claim to resolve   the rail decides which popup it is showing   so this is
+   * the published blocks plus occlusion, and nothing else.
+   */
+  popupHideReasonFor(bounds: BrowserViewBounds | null): BrowserHideReason | null {
+    for (const reason of this.blocks.values()) {
+      // The popup panel lives in the browser's own top-level view, which is not
+      // inside the workspace shell, so the shell's own hidden state says nothing
+      // about it (see `hideReasonFor`).
+      if (reason === 'workspace-inactive') continue
+      return reason
+    }
+    return this.isCovered(bounds) ? 'covered-by-overlay' : null
+  }
+
   /** Whether the native view for `tabId` may be displayed at `bounds`. */
   isVisible(tabId: string, bounds: BrowserViewBounds | null): boolean {
     return this.hideReasonFor(tabId, bounds) === null

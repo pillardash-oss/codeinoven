@@ -23,6 +23,7 @@ export type {
   ActionsContextTab,
   BrowserContextTab,
   BrowserDownloadsContextTab,
+  BrowserPopupWindowsContextTab,
   CloudDeploymentContextTab,
   ContextSidebarTab,
   CoordinatorContextTab,

@@ -3,6 +3,7 @@
   import {
     contextSidebarState,
     type BrowserDownloadsContextTab,
+    type BrowserPopupWindowsContextTab,
     type ContextSidebarTab
   } from '$lib/stores/context-sidebar.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
@@ -26,6 +27,7 @@
    *   differs),
    * - the active tab's agent conversation, the app's own temporary side chat
    *   bound to the tab instead of to a workspace thread,
+   * - the active tab's popup windows, one tab per window the page opened,
    * - the profile's downloads, which need no tab and keep the rail present.
    *
    * Exactly one is on screen at a time, chosen by the context dock rail, exactly
@@ -51,6 +53,16 @@
     title: 'Downloads'
   }
   /**
+   * The popup windows panel. A popup belongs to the tab whose page opened it,
+   * like the note and the agent chat do, so the panel is only listed while a tab
+   * is on screen.
+   */
+  const popupsTab: BrowserPopupWindowsContextTab = {
+    id: 'browser-popup-windows',
+    kind: 'popup-windows',
+    title: 'Popup windows'
+  }
+  /**
    * The notifications panel is the app's own panel, opened by the header bell,
    * so the rail reads the shared flag instead of keeping a second one. Reading
    * it is what makes notification, note and agent the one right sidebar.
@@ -64,6 +76,7 @@
   const tabs = $derived([
     ...(noteTab ? [noteTab] : []),
     ...(agentTab ? [agentTab] : []),
+    popupsTab,
     downloadsTab,
     ...(notificationsTab ? [notificationsTab] : [])
   ] satisfies ContextSidebarTab[])
@@ -71,9 +84,11 @@
     notificationsTab?.id ??
       (globalBrowser.agentSidebarShown
         ? (agentTab?.id ?? null)
-        : globalBrowser.downloadsSidebarShown
-          ? downloadsTab.id
-          : (noteTab?.id ?? null))
+        : globalBrowser.popupsSidebarShown
+          ? popupsTab.id
+          : globalBrowser.downloadsSidebarShown
+            ? downloadsTab.id
+            : (noteTab?.id ?? null))
   )
 
   /** Switching tools keeps the rail on the chosen panel; closing a panel hides
@@ -81,6 +96,10 @@
    *  conversation (closing the browser tab does). */
   function selectTool(tabId: string): void {
     if (notificationsTab && tabId === notificationsTab.id) return
+    if (tabId === popupsTab.id) {
+      globalBrowser.showPopupsSidebar()
+      return
+    }
     if (tabId === downloadsTab.id) {
       globalBrowser.showDownloadsSidebar()
       return
@@ -92,6 +111,10 @@
   function closeTab(tabId: string): void {
     if (notificationsTab && tabId === notificationsTab.id) {
       contextSidebarState.toggleNotifications()
+      return
+    }
+    if (tabId === popupsTab.id) {
+      globalBrowser.closePopupsSidebar()
       return
     }
     if (tabId === downloadsTab.id) {
@@ -107,6 +130,10 @@
   {#if notificationsTab}
     {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
       <NotificationPanel />
+    {/await}
+  {:else if globalBrowser.popupsSidebarShown}
+    {#await import('./BrowserPopupWindowsPanel.svelte') then { default: BrowserPopupWindowsPanel }}
+      <BrowserPopupWindowsPanel />
     {/await}
   {:else if globalBrowser.downloadsSidebarShown}
     {#await import('./BrowserDownloadsPanel.svelte') then { default: BrowserDownloadsPanel }}

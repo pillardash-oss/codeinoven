@@ -141,6 +141,20 @@ export interface BrowserDownloadsContextTab {
   title: string
 }
 
+/**
+ * The global browser's popup windows panel.
+ *
+ * A popup window is a page's own `window.open` with a window in it: a sign-in, a
+ * checkout, a share dialog. It belongs to the tab whose page opened it, and it
+ * ends when the page inside it ends, so the panel belongs to the tab on screen
+ * and is the one place a popup's page is displayed.
+ */
+export interface BrowserPopupWindowsContextTab {
+  id: string
+  kind: 'popup-windows'
+  title: string
+}
+
 export type MemorySection = 'active' | 'proposed'
 
 export interface MemoryContextTab {
@@ -247,6 +261,7 @@ export type ContextSidebarTab =
   | TemporaryChatContextTab
   | NotificationContextTab
   | BrowserDownloadsContextTab
+  | BrowserPopupWindowsContextTab
   | MemoryContextTab
   | CoordinatorContextTab
   | AssistantHowToContextTab

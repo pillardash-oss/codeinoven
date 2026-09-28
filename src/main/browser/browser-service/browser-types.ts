@@ -21,6 +21,23 @@ export interface BrowserViewport {
   height: number
 }
 
+/**
+ * The browser tab a page belongs to, and the project and thread a page it opens
+ * inherits.
+ *
+ * One shape covers both kinds of page the browser hosts: a tab names itself, and
+ * a popup window names the tab whose page opened it. Everything that decides
+ * where a new page lands (a background tab, a popup window in the rail) reads
+ * those three fields and nothing else, so a page opened by a page is owned the
+ * same way whether the opener was a tab or a popup.
+ */
+export interface BrowserPageOwner {
+  /** The tab the page belongs to, or its owning tab for a popup window. */
+  tabId: string
+  projectId: string
+  threadId: string
+}
+
 /** A viewport the page was laid out at, and when that happened. */
 export interface BrowserViewportApplication {
   viewport: BrowserViewport

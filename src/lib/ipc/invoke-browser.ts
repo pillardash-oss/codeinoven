@@ -6,6 +6,7 @@ import type {
   BrowserPageState,
   BrowserPermissionDecision,
   BrowserPermissionPromptContext,
+  BrowserPopupWindow,
   BrowserShortcutBindings,
   BrowserSwitcherBindings,
   BrowserSiteDataScope,
@@ -28,6 +29,30 @@ export const invokeBrowserContract = {
     BrowserPageState
   >,
   'browser:hide': {} as Contract<[tabId: string], void>,
+  /**
+   * Place a popup window's page over the frame the rail measured for it. The
+   * popup is a native view like a tab's page is, so the rail's rectangle is
+   * what puts it on screen inside the panel rather than over the window.
+   */
+  'browser:showPopupWindow': {} as Contract<
+    [popupId: string, bounds: BrowserViewBounds],
+    void
+  >,
+  /**
+   * Take a popup window's page off screen. The page keeps running, laid out
+   * offscreen at the size it was last displayed at, exactly as a parked tab
+   * does, so a sign-in that is still completing does not freeze.
+   */
+  'browser:hidePopupWindow': {} as Contract<[popupId: string], void>,
+  /** Give a popup window's page the keyboard, after the user picks it in the rail. */
+  'browser:focusPopupWindow': {} as Contract<[popupId: string], void>,
+  /**
+   * Close a popup window on the user's behalf: its page stops and it leaves the
+   * rail. A page that closes itself needs nothing here, it is reported closed.
+   */
+  'browser:closePopupWindow': {} as Contract<[popupId: string], void>,
+  /** The popup windows the browser is holding for one project. */
+  'browser:getPopupWindows': {} as Contract<[projectId: string], BrowserPopupWindow[]>,
   'browser:setToastVisible': {} as Contract<[visible: boolean], void>,
   'browser:navigate': {} as Contract<
     [tabId: string, projectId: string, threadId: string, url: string],

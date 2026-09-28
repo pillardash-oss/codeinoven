@@ -30,6 +30,45 @@ export function isBrowserTabId(value: unknown): value is string {
   return typeof value === 'string' && BROWSER_TAB_ID_PATTERN.test(value)
 }
 
+/**
+ * The shape of one popup window's id.
+ *
+ * A popup window is not a tab: it belongs to the tab whose page opened it, it
+ * is hosted by the app's own view rather than by an operating-system window, and
+ * it lives exactly as long as the page inside it does. Its id names that
+ * lifetime, so every handler that takes one can read the rule from here rather
+ * than keep a copy.
+ */
+export const BROWSER_POPUP_WINDOW_ID_PATTERN = /^popup:[a-zA-Z0-9:_-]{1,240}$/u
+
+export function isBrowserPopupWindowId(value: unknown): value is string {
+  return typeof value === 'string' && BROWSER_POPUP_WINDOW_ID_PATTERN.test(value)
+}
+
+/**
+ * One popup window a page opened, as the rail renders it.
+ *
+ * A popup window is a page's own `window.open` with a window in it: a sign-in,
+ * a checkout, a share dialog. The app hosts the page itself instead of letting
+ * the operating system open a window, so the rail can show one tab per popup.
+ * This record is metadata about that page, never its content.
+ */
+export interface BrowserPopupWindow {
+  id: string
+  /**
+   * The browser tab whose page opened this popup. The rail panel belongs to
+   * that tab, and closing it closes what it opened.
+   */
+  tabId: string
+  projectId: string
+  /** Address the popup is showing, or `about:blank` while it has none yet. */
+  url: string
+  title: string
+  /** Favicon data URL the popup reported, or null until it declares one. */
+  favicon: string | null
+  loading: boolean
+}
+
 /** Native browser content rectangle in BrowserWindow density-independent pixels. */
 export interface BrowserViewBounds {
   x: number

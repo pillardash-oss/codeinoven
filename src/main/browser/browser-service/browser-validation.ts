@@ -17,7 +17,7 @@ import type {
   BrowserTransportCommand,
   BrowserViewBounds
 } from '../../../lib/ipc-contract'
-import { BROWSER_SHORTCUT_ACTIONS, isBrowserTabId } from '../../../lib/ipc-contract'
+import { BROWSER_SHORTCUT_ACTIONS, isBrowserPopupWindowId, isBrowserTabId } from '../../../lib/ipc-contract'
 import {
   buildBrowserSearchUrl,
   MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH,
@@ -56,6 +56,25 @@ export const DEFAULT_PARKED_VIEWPORT: BrowserViewport = { width: 1280, height: 8
 /** Ceiling on a marker's CSS path, so a hostile or broken page cannot make the
  *  app carry an unbounded string in its marker set. */
 export const MAX_INSPECTOR_SELECTOR_LENGTH = 2_000
+
+/**
+ * Most popup windows one browser tab may hold open at once.
+ *
+ * A popup window is hosted by the app's own view, so a page that opens them in
+ * a loop would grow the app's view count without limit. A real page opens one
+ * or two (a sign-in, a checkout); past a dozen the page is refused, which is the
+ * same answer the app gives any other popup it will not host.
+ */
+export const MAX_POPUP_WINDOWS_PER_TAB = 12
+
+/**
+ * Smallest and largest popup window viewport the app lays an offscreen popup out
+ * at. A page chooses its own popup size, so the value is clamped rather than
+ * trusted: a zero would leave the page with no viewport at all, and a huge one
+ * would lay a hidden page out at a size no display has.
+ */
+const POPUP_VIEWPORT_MIN = 200
+const POPUP_VIEWPORT_MAX = 4_096
 
 /** One step of the browser's own zoom. Chromium's zoom level is logarithmic, so
  *  0.5 is the familiar 120% step Chrome takes per press. */
@@ -364,6 +383,13 @@ export function validateTabId(value: unknown): string {
   return value
 }
 
+export function validatePopupWindowId(value: unknown): string {
+  if (!isBrowserPopupWindowId(value)) {
+    throw new TypeError('Browser popup window ID is invalid')
+  }
+  return value
+}
+
 export function validateProjectId(value: unknown): string {
   if (typeof value !== 'string' || !PROJECT_ID_PATTERN.test(value)) {
     throw new TypeError('Browser project ID is invalid')
@@ -544,6 +570,53 @@ export function validateBrowserUrl(value: unknown): string {
     throw new TypeError('Browser URL must not contain credentials')
   }
   return parsed.href
+}
+
+/**
+ * Whether a popup window may be opened on, and later navigate to, this address.
+ *
+ * A popup is allowed one document the rest of the browser refuses: `about:blank`.
+ * Pages open blank popups deliberately   a checkout or a sign-in writes its form
+ * into the new window itself   and refusing that document would break the flow
+ * before the popup ever had an address to validate.
+ */
+export function isAllowedPopupWindowUrl(value: unknown): value is string {
+  if (value === 'about:blank') return true
+  try {
+    validateBrowserUrl(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The viewport a popup window asked for in its `window.open` features, or null
+ * when it asked for none the app can use.
+ *
+ * The size is the page's own claim, so it is clamped rather than trusted: it is
+ * only ever used to lay the page out at a size while it is off screen, and a
+ * page must not be able to ask for a viewport no display has.
+ */
+export function popupWindowViewport(features: unknown): BrowserViewport | null {
+  if (typeof features !== 'string' || features.length === 0) return null
+  let width: number | null = null
+  let height: number | null = null
+  for (const part of features.split(',')) {
+    const [rawKey, rawValue] = part.split('=', 2)
+    if (rawValue === undefined) continue
+    const key = rawKey.trim().toLowerCase()
+    if (key !== 'width' && key !== 'height' && key !== 'innerwidth' && key !== 'innerheight') {
+      continue
+    }
+    const value = Number.parseInt(rawValue.trim(), 10)
+    if (!Number.isInteger(value)) continue
+    const clamped = Math.min(POPUP_VIEWPORT_MAX, Math.max(POPUP_VIEWPORT_MIN, value))
+    if (key === 'width' || key === 'innerwidth') width = clamped
+    if (key === 'height' || key === 'innerheight') height = clamped
+  }
+  if (width === null && height === null) return null
+  return { width: width ?? DEFAULT_PARKED_VIEWPORT.width, height: height ?? DEFAULT_PARKED_VIEWPORT.height }
 }
 
 /**

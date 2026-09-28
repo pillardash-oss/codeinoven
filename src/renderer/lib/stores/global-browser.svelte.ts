@@ -13,9 +13,13 @@
  * user is actually looking at.
  */
 
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import type { BrowserOpenRequestContext, BrowserPageState } from '$shared/ipc-contract'
+import type {
+  BrowserOpenRequestContext,
+  BrowserPageState,
+  BrowserPopupWindow
+} from '$shared/ipc-contract'
 import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '$shared/ipc-contract'
 import { appConfigState } from './app-config.svelte'
 import { reportError } from './app-errors.svelte'
@@ -71,7 +75,7 @@ export class GlobalBrowserState {
    *  is shown at a time, the way the context dock picks one tool in every other
    *  view. Downloads belong to the shared profile rather than a tab, so that tool
    *  is the one entry that can stay open with no tab. */
-  contextSidebarTool = $state<'note' | 'agent' | 'downloads'>('note')
+  contextSidebarTool = $state<'note' | 'agent' | 'downloads' | 'popups'>('note')
   /** Whether the address spotlight is up. It lives here rather than in a surface
    *  because it is summoned from anywhere in the browser view (Cmd/Ctrl+L) and
    *  from a freshly opened tab, which has no surface of its own yet. */
@@ -99,6 +103,10 @@ export class GlobalBrowserState {
    *  and its backend session does not outlive the app, so a restart starts fresh
    *  rather than pointing at a session that is gone. */
   private readonly agentChatIds = new SvelteMap<string, string>()
+  /** Popup windows this renderer has already reported on, so only the arrival of
+   *  a new one brings the rail's popup panel up. Bounded by the live list: an id
+   *  whose popup is gone is forgotten. */
+  private readonly seenPopupWindowIds = new SvelteSet<string>()
   private sweepTimer: number | null = null
 
   constructor(snapshot: GlobalBrowserSnapshot = loadGlobalBrowserSnapshot()) {
@@ -113,6 +121,12 @@ export class GlobalBrowserState {
     // own "open in new window") is routed by main into a new tab under this same
     // reserved context, so the strip adopts it instead of losing it.
     subscribe('browser:openRequested', (url, context) => this.adoptOpenRequest(url, context))
+    // A popup window is a window the user asked for by clicking something, so the
+    // first one a page opens for the tab on screen reveals the rail's popup panel,
+    // exactly as the operating system would have put a window in front of them. A
+    // further popup only joins the list, so a page cannot move the panel under the
+    // user's hands while they are using the one already up.
+    subscribe('browser:popupWindows', (popups) => this.revealNewPopupWindows(popups))
     if (typeof window !== 'undefined') {
       this.sweepTimer = window.setInterval(
         () => this.sweepIdleTabs(),
@@ -126,6 +140,28 @@ export class GlobalBrowserState {
   dispose(): void {
     if (this.sweepTimer !== null) window.clearInterval(this.sweepTimer)
     this.sweepTimer = null
+  }
+
+  /**
+   * Reveal the popup panel when a page opens a popup for the tab on screen.
+   *
+   * A popup opened by a background tab is not a reason to move the user away from
+   * what they are reading: it waits in its own tab's panel, which is where the dock
+   * item for that tab appears.
+   */
+  private revealNewPopupWindows(popups: BrowserPopupWindow[]): void {
+    // The live ids are a list rather than a set: there are as many as the tab has
+    // popups open, which is a handful, and this runs on every report about one.
+    const live = popups.map((popup) => popup.id)
+    for (const id of [...this.seenPopupWindowIds]) {
+      if (!live.includes(id)) this.seenPopupWindowIds.delete(id)
+    }
+    const tabId = this.activeTabId
+    for (const popup of popups) {
+      if (this.seenPopupWindowIds.has(popup.id)) continue
+      this.seenPopupWindowIds.add(popup.id)
+      if (tabId !== null && popup.tabId === tabId) this.showPopupsSidebar()
+    }
   }
 
   // ─── Reads ────────────────────────────────────────────────────────────────
@@ -157,6 +193,11 @@ export class GlobalBrowserState {
     if (!this.contextSidebarVisible) return false
     if (this.contextSidebarTool === 'downloads') return true
     return this.activeTab !== null
+  }
+
+  /** Whether the rail is currently showing the browser's popup windows. */
+  get popupsSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'popups'
   }
 
   /** Whether the rail is currently showing the browser's downloads. */
@@ -301,6 +342,34 @@ export class GlobalBrowserState {
 
   closeDownloadsSidebar(): void {
     if (this.contextSidebarTool === 'downloads') this.contextSidebarVisible = false
+  }
+
+  /**
+   * Reveal the rail on the active tab's popup windows.
+   *
+   * A popup window is a window the user asked for by clicking something in the
+   * page, so it is shown rather than parked in silence. The panel belongs to the
+   * tab on screen, which is the tab whose page opened it in every flow that has
+   * one (a sign-in, a checkout), and a popup opened by a background tab waits in
+   * its own tab's panel until the user goes back to it.
+   */
+  showPopupsSidebar(): void {
+    if (!this.activeTab) return
+    this.dismissNotifications()
+    this.contextSidebarTool = 'popups'
+    this.contextSidebarVisible = true
+  }
+
+  togglePopupsSidebar(): void {
+    if (this.contextSidebarTool === 'popups' && this.contextSidebarVisible) {
+      this.closePopupsSidebar()
+      return
+    }
+    this.showPopupsSidebar()
+  }
+
+  closePopupsSidebar(): void {
+    if (this.contextSidebarTool === 'popups') this.contextSidebarVisible = false
   }
 
   /**

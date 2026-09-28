@@ -16,6 +16,7 @@ import type {
   BrowserPageState,
   BrowserPanelShortcutAction,
   BrowserPermissionRequest,
+  BrowserPopupWindow,
   BrowserSwitcherKey
 } from './browser'
 import type {
@@ -186,6 +187,13 @@ export const IPC_EVENT_CONTRACT = {
    */
   'browser:switcherKey': [] as unknown as [key: BrowserSwitcherKey],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
+  /**
+   * Every popup window the browser holds, whole, after any change to one of
+   * them: one opened, closed itself, or moved on to another address. The rail
+   * draws one tab per entry, and the list is short, so it is published whole
+   * rather than as add/remove/update deltas.
+   */
+  'browser:popupWindows': [] as unknown as [popups: BrowserPopupWindow[]],
   /**
    * Delivered to the native permission-prompt popup window (not the main
    * renderer): the page permission awaiting a decision, plus how many requests

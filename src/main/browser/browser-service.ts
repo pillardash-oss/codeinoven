@@ -42,6 +42,7 @@ import type {
   BrowserTransportCommand,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
+import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc-contract'
 import { isVideoCaptureUrl } from '../../lib/video/project'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -52,6 +53,11 @@ import { BrowserDownloadTracker } from './browser-service/browser-downloads'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
 import { BrowserInspector } from './browser-service/browser-inspector'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
+import {
+  BrowserPopupWindows,
+  type BrowserPopupWindowHost,
+  type BrowserPopupWindowRecord
+} from './browser-service/browser-popup-windows'
 import { dialogContextScript } from './browser-service/browser-dialog-context'
 import {
   buildBrowserContextMenuItems,
@@ -79,6 +85,7 @@ import {
   type PermissionMemoryPersistence
 } from './browser-service/browser-permission-memory'
 import type {
+  BrowserPageOwner,
   BrowserTab,
   BrowserViewport,
   ParkBrowserTabOptions,
@@ -94,6 +101,7 @@ import {
   MAX_CONSOLE_ENTRIES,
   MAX_DIALOG_LABEL_LENGTH,
   MAX_PARKED_TABS,
+  MAX_POPUP_WINDOWS_PER_TAB,
   MAX_TRANSPORT_ERROR_LENGTH,
   MAX_ZOOM_LEVEL,
   PERMISSION_TIMEOUT_MS,
@@ -102,8 +110,10 @@ import {
   SCREENSHOT_MAX_BYTES,
   ZOOM_STEP,
   browserContextKey,
+  isAllowedPopupWindowUrl,
   isSameBounds,
   isSameViewport,
+  popupWindowViewport,
   safeBasename,
   validateAttention,
   validateBounds,
@@ -119,6 +129,7 @@ import {
   validateOptionalBrowserUrl,
   validatePermissionDecision,
   validatePermissionRequestId,
+  validatePopupWindowId,
   validateProjectId,
   validateScrollbarTheme,
   validateSiteDataScopes,
@@ -157,6 +168,61 @@ import {
   compositionTransportScript,
   compositionTransportStateScript
 } from './browser-service/browser-transport-script'
+
+/**
+ * The page a native context menu was opened over.
+ *
+ * One shape covers both kinds of page the browser hosts   a tab's own page and a
+ * popup window's   so one menu builder and one action set serve both: what
+ * differs between them is only which page the actions act on and which tab a page
+ * they open belongs to.
+ */
+interface BrowserMenuPage {
+  contents: WebContents
+  owner: BrowserPageOwner
+}
+
+/** The menu's view of one browser tab's own page. */
+function menuPageFor(tabId: string, tab: BrowserTab): BrowserMenuPage {
+  return {
+    contents: tab.view.webContents,
+    owner: { tabId, projectId: tab.projectId, threadId: tab.threadId }
+  }
+}
+
+/** The owner of a popup window's page: the tab whose page opened it. */
+function popupPageOwner(record: BrowserPopupWindowRecord): BrowserPageOwner {
+  return { tabId: record.tabId, projectId: record.projectId, threadId: record.threadId }
+}
+
+/**
+ * The `WebContents` Chromium created for a popup window, read off the options it
+ * hands the `createWindow` hook.
+ *
+ * The hook is called instead of Electron creating a window, and the popup's own
+ * `WebContents` travels on an options field the constructor type does not declare.
+ * It is therefore read from the object itself and checked before use, because the
+ * hook must answer with that exact object: any other one is reported as
+ * unconnected and the popup never opens.
+ */
+function popupWindowContents(options: Electron.BrowserWindowConstructorOptions): WebContents | null {
+  const candidate: unknown = Reflect.get(options, 'webContents')
+  return isWebContents(candidate) ? candidate : null
+}
+
+/**
+ * Whether a value is a live `WebContents`, checked by the methods the app uses
+ * on it rather than by `instanceof`: the popup's own contents arrives on an
+ * options field with no declared type, so the check has to be structural.
+ */
+function isWebContents(value: unknown): value is WebContents {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    typeof Reflect.get(value, 'getURL') === 'function' &&
+    typeof Reflect.get(value, 'isDestroyed') === 'function' &&
+    typeof Reflect.get(value, 'loadURL') === 'function'
+  )
+}
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -286,6 +352,24 @@ export class BrowserService {
    *  the previous one instead of stacking. */
   private scrollbarStyles = new Map<string, string>()
   private consoleSequence = 0
+  /**
+   * The popup windows pages have opened, hosted by the app rather than by the
+   * system. Created with the rest of the view plumbing below, because its host
+   * is this service's own window handling.
+   */
+  private readonly popupWindows: BrowserPopupWindows
+  /**
+   * The popup views currently mounted in the app window.
+   *
+   * Tracked rather than read back from `contentView.children`: a popup's page can
+   * destroy itself at any moment (that is how a finished sign-in ends), and once
+   * its view no longer carries web contents the window's own child list throws
+   * when it is read. The app therefore has to know what it mounted itself.
+   */
+  private readonly mountedPopupViews = new Set<WebContentsView>()
+  /** The frame each mounted popup view was last placed at, so a move is reported
+   *  as a move rather than as another placement. */
+  private readonly popupViewFrames = new Map<WebContentsView, BrowserViewBounds>()
 
   constructor(
     private readonly window: BrowserWindow,
@@ -297,12 +381,12 @@ export class BrowserService {
     this.permissionMemory = new BrowserPermissionMemory(permissionPersistence)
     this.projects = new ProjectRepo(db)
     this.threads = new ThreadRepo(db)
+    this.popupWindows = new BrowserPopupWindows(this.popupWindowHost())
     this.downloadTracker = new BrowserDownloadTracker({
       window,
-      findTabId: (projectId, contentsId) =>
-        [...this.tabs.entries()].find(
-          ([, tab]) => tab.projectId === projectId && tab.view.webContents.id === contentsId
-        )?.[0]
+      // A download started by a popup window is the tab's download: the row the
+      // user sees must name the tab they were reading, not a page with no strip.
+      findTabId: (projectId, contentsId) => this.tabIdForContents(projectId, contentsId)
     })
     this.siteData = new BrowserSiteDataService({
       window,
@@ -414,6 +498,21 @@ export class BrowserService {
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
     })
+    ipcMain.handle('browser:showPopupWindow', (_event, rawPopupId, rawBounds) => {
+      this.popupWindows.show(validatePopupWindowId(rawPopupId), validateBounds(rawBounds))
+    })
+    ipcMain.handle('browser:hidePopupWindow', (_event, rawPopupId) => {
+      this.popupWindows.hide(validatePopupWindowId(rawPopupId))
+    })
+    ipcMain.handle('browser:focusPopupWindow', (_event, rawPopupId) => {
+      this.popupWindows.focus(validatePopupWindowId(rawPopupId))
+    })
+    ipcMain.handle('browser:closePopupWindow', (_event, rawPopupId) => {
+      this.popupWindows.close(validatePopupWindowId(rawPopupId), 'the user closed it')
+    })
+    ipcMain.handle('browser:getPopupWindows', (_event, rawProjectId) =>
+      this.popupWindows.list(validateProjectId(rawProjectId))
+    )
     ipcMain.handle('browser:setToastVisible', (_event, rawVisible) => {
       this.setToastVisible(rawVisible === true)
     })
@@ -500,7 +599,7 @@ export class BrowserService {
       this.setScrollbarTheme(validateScrollbarTheme(rawTheme))
     })
     ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) =>
-      this.toggleTabDevTools(this.requireTab(validateTabId(rawTabId)))
+      this.toggleDevTools(this.requireTab(validateTabId(rawTabId)).view.webContents)
     )
     ipcMain.handle('browser:inspectSetArmed', (_event, rawTabId, rawArmed, rawTheme) => {
       const tabId = validateTabId(rawTabId)
@@ -622,6 +721,9 @@ export class BrowserService {
   }
 
   dispose(): void {
+    this.popupWindows.closeAll('the browser was torn down')
+    this.mountedPopupViews.clear()
+    this.popupViewFrames.clear()
     this.activeTabId = null
     this.toastVisible = false
     this.activeTabBounds = null
@@ -1460,10 +1562,10 @@ export class BrowserService {
         contents.setZoomLevel(0)
         return
       case 'toggleDevTools':
-        this.toggleTabDevTools(tab)
+        this.toggleDevTools(contents)
         return
       case 'savePage':
-        void this.saveTabPage(tab)
+        void this.savePage(contents)
         return
       case 'focusAddress':
       case 'closeTab':
@@ -1533,8 +1635,7 @@ export class BrowserService {
   }
 
   /** Toggle the web page's own DevTools. Returns whether it is now open. */
-  private toggleTabDevTools(tab: BrowserTab): boolean {
-    const contents = tab.view.webContents
+  private toggleDevTools(contents: WebContents): boolean {
     if (contents.isDevToolsOpened()) {
       contents.closeDevTools()
       return false
@@ -1552,16 +1653,18 @@ export class BrowserService {
   }
 
   /**
-   * Save the page to a file the user picks.
+   * Save a page to a file the user picks.
    *
    * Chromium writes the page as it stands (markup plus its resources) rather
    * than the raw response, which is what Chrome's own "Web page, complete"
    * does and the only useful answer for a page a script rendered. A refusal or a
    * write failure has no UI of its own, so it is reported as an app toast
    * instead of leaving the user with a key that silently did nothing.
+   *
+   * The page is a `WebContents` rather than a tab, because a popup window's page
+   * is saved exactly the way a tab's is.
    */
-  private async saveTabPage(tab: BrowserTab): Promise<void> {
-    const contents = tab.view.webContents
+  private async savePage(contents: WebContents): Promise<void> {
     if (contents.isDestroyed() || this.window.isDestroyed()) return
     const title = contents.getTitle() || contents.getURL()
     const { canceled, filePath } = await dialog.showSaveDialog(this.window, {
@@ -1819,15 +1922,264 @@ export class BrowserService {
         event.preventDefault()
       }
     })
-    view.webContents.setWindowOpenHandler(({ url }) => {
-      try {
-        this.openNewTabFor(tab, validateBrowserUrl(url), 'a popup opened in the background')
-      } catch (error) {
-        Logger.error('Browser popup rejected unsafe URL:', error)
-      }
-      return { action: 'deny' }
-    })
+    this.installWindowOpenPolicy(view, { tabId, projectId, threadId })
     return tab
+  }
+  /**
+   * Decide where a page's `window.open` lands.
+   *
+   * Two answers, by what the page asked for:
+   *
+   * - a popup window   Chromium reports `new-window`, which is what a `features`
+   *   string produces   is hosted by the app, so a sign-in or a checkout happens
+   *   inside the browser instead of in an operating-system window of its own;
+   * - anything else, such as a link that asks for its own tab, keeps the app's
+   *   tabs: a safe https address becomes a background tab.
+   *
+   * A popup window is only hosted for the global browser, which is the one with a
+   * rail to show it in. A project's browser   and every page an agent drives   keeps
+   * the tab behaviour it had, where an opened window is a tab with an address the
+   * user can see and steer.
+   *
+   * Shared by tabs and popup windows, because a popup may open a popup (a
+   * sign-in that takes a second step) and both must land the same way.
+   */
+  private windowOpenResponse(
+    owner: BrowserPageOwner,
+    details: Electron.HandlerDetails
+  ): Electron.WindowOpenHandlerResponse {
+    if (details.disposition === 'new-window' && owner.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      const popup = this.openPopupWindowFor(owner, details)
+      if (popup) return popup
+    }
+    try {
+      this.openNewTabFor(owner, validateBrowserUrl(details.url), 'a popup opened in the background')
+    } catch (error: unknown) {
+      Logger.error('Browser popup rejected unsafe URL:', error)
+    }
+    return { action: 'deny' }
+  }
+
+  /**
+   * Host the popup window a page asked for, or answer null to let the caller
+   * fall back to opening it as a tab.
+   *
+   * A popup that cannot be hosted   an address the browser will not navigate to,
+   * or a tab that already holds as many popups as it may   still gets its window,
+   * it just gets it as a tab, which is what the page's own code can survive.
+   */
+  private openPopupWindowFor(
+    owner: BrowserPageOwner,
+    details: Electron.HandlerDetails
+  ): Electron.WindowOpenHandlerResponse | null {
+    const url = details.url === '' ? 'about:blank' : details.url
+    if (!isAllowedPopupWindowUrl(url)) {
+      Logger.error('Browser popup window refused an address it may not navigate to:', url)
+      return null
+    }
+    if (this.popupWindows.countForTab(owner.tabId) >= MAX_POPUP_WINDOWS_PER_TAB) {
+      Logger.dev('Browser popup window refused: the tab already holds the maximum', {
+        tabId: owner.tabId
+      })
+      return null
+    }
+    const viewport = popupWindowViewport(details.features)
+    return {
+      action: 'allow',
+      // `createWindow` runs instead of Electron creating a window, and is handed
+      // the popup's own `WebContents`. Presenting that one is what keeps the popup
+      // a real popup: it keeps its opener, its opener's session and the ability to
+      // close itself, none of which survive a page the app loads on its own.
+      createWindow: (options) => {
+        const contents = popupWindowContents(options)
+        if (!contents) {
+          Logger.error('Browser popup window was offered no web contents to host')
+          throw new Error('Browser popup window was offered no web contents to host')
+        }
+        return this.popupWindows.host(contents, { owner, url, viewport })
+      }
+    }
+  }
+
+  /**
+   * The view plumbing popup windows run on.
+   *
+   * The registry owns popup lifetimes; every native call a view needs stays here,
+   * beside the tab ones, so a popup and a tab are placed, parked and dropped the
+   * same way and there is one place to look when a page is not where it should be.
+   */
+  private popupWindowHost(): BrowserPopupWindowHost {
+    return {
+      mount: (view, bounds) => {
+        if (this.window.isDestroyed()) return
+        try {
+          const previous = this.popupViewFrames.get(view)
+          this.popupViewFrames.set(view, bounds)
+          if (this.mountedPopupViews.has(view)) {
+            // Already on screen: only a moved frame needs a native call, so the
+            // rail's own resize reports cost one comparison each.
+            view.setBounds(bounds)
+            if (previous && !isSameBounds(previous, bounds)) {
+              Logger.dev('Browser popup window moved', { from: previous, to: bounds })
+            }
+            return
+          }
+          this.stage.release(view)
+          this.window.contentView.addChildView(view)
+          this.mountedPopupViews.add(view)
+          view.setBounds(bounds)
+          Logger.dev('Browser popup window placed', { bounds })
+        } catch (error: unknown) {
+          Logger.error('Browser popup window could not be placed:', error)
+        }
+      },
+      unmount: (view, viewport) => {
+        if (this.detachPopupView(view)) {
+          Logger.dev('Browser popup window parked', { viewport })
+        }
+        this.stage.park(view, viewport)
+      },
+      discard: (view) => {
+        this.detachPopupView(view)
+        this.stage.release(view)
+      },
+      wire: (record) => this.wirePopupWindow(record),
+      changed: () => this.publishPopupWindows()
+    }
+  }
+
+  /**
+   * Take a popup's view out of the app window, answering whether it was in it.
+   *
+   * A view whose page destroyed itself cannot be handed to the window at all, so
+   * every native call is defended: the popup is gone and the app must not follow
+   * it.
+   */
+  private detachPopupView(view: WebContentsView): boolean {
+    this.popupViewFrames.delete(view)
+    if (!this.mountedPopupViews.has(view)) return false
+    this.mountedPopupViews.delete(view)
+    if (this.window.isDestroyed()) return false
+    try {
+      this.window.contentView.removeChildView(view)
+    } catch (error: unknown) {
+      Logger.error('Browser popup window could not be detached:', error)
+      return false
+    }
+    return true
+  }
+
+  /**
+   * Give a popup window's page its own browser behaviour.
+   *
+   * It is a page in the app's browser, so it gets what a tab's page gets: the
+   * browser's own keyboard chords rather than the application menu's, the browser's
+   * right-click menu over its content, the browser's navigation policy, and a
+   * landing place for a window it opens itself.
+   */
+  private wirePopupWindow(record: BrowserPopupWindowRecord): void {
+    const contents = record.view.webContents
+    // A popup's keys reach its own page and then the application menu, where
+    // Cmd/Ctrl+W would close the app window rather than this popup.
+    contents.on('before-input-event', (event, input) => {
+      if (this.consumeSwitcherKey(input)) {
+        event.preventDefault()
+        return
+      }
+      const action = matchBrowserShortcut(input, this.shortcutBindings)
+      if (!action) return
+      event.preventDefault()
+      this.runPopupWindowShortcut(record, action)
+    })
+    contents.on('context-menu', (_event, params) => {
+      this.showPopupWindowContextMenu(record, params)
+    })
+    contents.on('will-navigate', (event, url) => {
+      if (!isAllowedPopupWindowUrl(url)) event.preventDefault()
+    })
+    this.installWindowOpenPolicy(record.view, popupPageOwner(record))
+  }
+
+  /** Install the landing policy for the windows a page opens. */
+  private installWindowOpenPolicy(view: WebContentsView, owner: BrowserPageOwner): void {
+    view.webContents.setWindowOpenHandler((details) => this.windowOpenResponse(owner, details))
+  }
+
+  /**
+   * Run one browser chord pressed inside a popup window.
+   *
+   * Closing a popup closes the popup and not the browser: to the user a popup is
+   * its own window, so Cmd/Ctrl+W must end it. The chords that belong to the app's
+   * own chrome (the address bar, a new tab, the note) are forwarded to the
+   * renderer under the owning tab, which is the tab the app would act on.
+   */
+  private runPopupWindowShortcut(
+    record: BrowserPopupWindowRecord,
+    action: BrowserShortcutAction
+  ): void {
+    const contents = record.view.webContents
+    if (contents.isDestroyed()) return
+    switch (action) {
+      case 'reload':
+        contents.reload()
+        return
+      case 'hardReload':
+        contents.reloadIgnoringCache()
+        return
+      case 'back':
+        if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack()
+        return
+      case 'forward':
+        if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward()
+        return
+      case 'zoomIn':
+        this.stepTabZoom(contents, ZOOM_STEP)
+        return
+      case 'zoomOut':
+        this.stepTabZoom(contents, -ZOOM_STEP)
+        return
+      case 'zoomReset':
+        contents.setZoomLevel(0)
+        return
+      case 'toggleDevTools':
+        this.toggleDevTools(contents)
+        return
+      case 'savePage':
+        void this.savePage(contents)
+        return
+      case 'closeTab':
+        this.popupWindows.close(record.id, 'the user closed its window')
+        return
+      case 'focusAddress':
+      case 'newTab':
+      case 'toggleNotes':
+        this.requestPanelShortcut(record.tabId, PANEL_SHORTCUT_TARGETS[action])
+        return
+    }
+  }
+
+  /** Publish the popup windows the browser holds, whole, after any change. */
+  private publishPopupWindows(): void {
+    if (this.window.webContents.isDestroyed()) return
+    sendToRenderer(this.window.webContents, 'browser:popupWindows', this.popupWindows.list())
+  }
+
+  /**
+   * The tab that owns a page inside one project's browser session.
+   *
+   * A page is either a tab's own or a popup window's, and the reports that arrive
+   * with a `WebContents`   a permission a page asks for, a file it downloads   name
+   * the tab the user was reading, so the prompt and the download row belong to
+   * something on screen.
+   */
+  private tabIdForContents(projectId: string, contentsId: number): string | undefined {
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.projectId === projectId && tab.view.webContents.id === contentsId) return tabId
+    }
+    const ownerTabId = this.popupWindows.tabIdForContents(contentsId)
+    if (!ownerTabId) return undefined
+    const owner = this.tabs.get(ownerTabId)
+    return owner && owner.projectId === projectId ? ownerTabId : undefined
   }
 
   private requireTab(tabId: string): BrowserTab {
@@ -1872,9 +2224,6 @@ export class BrowserService {
       return !denies.has(key) && grants.has(key)
     })
     browserSession.setPermissionRequestHandler((contents, permission, callback, details) => {
-      const tabEntry = [...this.tabs.entries()].find(
-        ([, tab]) => tab.projectId === projectId && tab.view.webContents.id === contents.id
-      )
       const requestingUrl = Reflect.get(details, 'requestingUrl')
       const securityOrigin = Reflect.get(details, 'securityOrigin')
       const origin = permissionOrigin(
@@ -1884,11 +2233,14 @@ export class BrowserService {
             ? securityOrigin
             : contents.getURL()
       )
-      if (!tabEntry || !origin || this.window.webContents.isDestroyed()) {
+      // A popup window's page asks for its own permissions   a camera prompt in a
+      // popup is the same decision as one in a tab. The owner tab is what the
+      // prompt is labelled with and what a grant is remembered against.
+      const tabId = this.tabIdForContents(projectId, contents.id)
+      if (!tabId || !origin || this.window.webContents.isDestroyed()) {
         callback(false)
         return
       }
-      const [tabId] = tabEntry
       const id = crypto.randomUUID()
       const rawMediaTypes: unknown = Reflect.get(details, 'mediaTypes')
       const mediaTypes = Array.isArray(rawMediaTypes)
@@ -2194,8 +2546,9 @@ export class BrowserService {
   private showPageMenu(tabId: string, x: number, y: number): void {
     if (this.window.isDestroyed()) return
     const tab = this.requireTab(tabId)
+    const page = menuPageFor(tabId, tab)
     const menu = Menu.buildFromTemplate(
-      buildBrowserPageMenuItems(this.contextMenuContext(tab), this.contextMenuActions(tab))
+      buildBrowserPageMenuItems(this.contextMenuContext(page.contents), this.contextMenuActions(page))
     )
     menu.popup({ window: this.window, x, y })
   }
@@ -2211,21 +2564,50 @@ export class BrowserService {
   private showTabContextMenu(tabId: string, params: Electron.ContextMenuParams): void {
     const tab = this.tabs.get(tabId)
     if (!tab || this.window.isDestroyed() || tab.view.webContents.isDestroyed()) return
+    const frame = this.activeTabId === tabId ? this.activeTabBounds : null
+    this.showPageContextMenu(menuPageFor(tabId, tab), params, frame)
+  }
+
+  /**
+   * Open the full right-click menu for one point in a popup window's page.
+   *
+   * It is the same menu a tab's page gets, over the popup's own page and anchored
+   * at the frame the rail has it on screen at.
+   */
+  private showPopupWindowContextMenu(
+    record: BrowserPopupWindowRecord,
+    params: Electron.ContextMenuParams
+  ): void {
+    const contents = record.view.webContents
+    if (contents.isDestroyed() || this.window.isDestroyed()) return
+    this.showPageContextMenu(
+      { contents, owner: popupPageOwner(record) },
+      params,
+      record.displayedBounds
+    )
+  }
+
+  /** Build and pop the point-specific context menu for one page. */
+  private showPageContextMenu(
+    page: BrowserMenuPage,
+    params: Electron.ContextMenuParams,
+    frame: BrowserViewBounds | null
+  ): void {
     const menu = Menu.buildFromTemplate(
       buildBrowserContextMenuItems(
         params,
-        this.contextMenuContext(tab),
-        this.contextMenuActions(tab)
+        this.contextMenuContext(page.contents),
+        this.contextMenuActions(page)
       )
     )
-    const frame = this.activeTabId === tabId ? this.activeTabBounds : null
+    // The point Electron reports is in the page's own coordinates, and a native
+    // menu wants the window's, so the frame the page is displayed at is added.
     if (frame) menu.popup({ window: this.window, x: frame.x + params.x, y: frame.y + params.y })
     else menu.popup({ window: this.window })
   }
 
-  /** Live facts the context menu needs about a tab. */
-  private contextMenuContext(tab: BrowserTab): BrowserContextMenuContext {
-    const contents = tab.view.webContents
+  /** Live facts the context menu needs about a page. */
+  private contextMenuContext(contents: WebContents): BrowserContextMenuContext {
     return {
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward(),
@@ -2234,19 +2616,24 @@ export class BrowserService {
   }
 
   /**
-   * The actions a tab's context menu can run.
+   * The actions a page's context menu can run.
    *
-   * Every action re-checks that its tab is alive when it fires, because the menu
+   * Every action re-checks that its page is alive when it fires, because the menu
    * can outlive the page it was opened over. A link or media URL the browser's
    * navigation policy refuses is dropped with a log rather than opened.
+   *
+   * One set serves a tab's page and a popup window's, because the menu offers the
+   * same actions over both: what differs is only which page they act on and which
+   * tab a page they open belongs to.
    */
-  private contextMenuActions(tab: BrowserTab): BrowserContextMenuActions {
-    const contents = tab.view.webContents
+  private contextMenuActions(page: BrowserMenuPage): BrowserContextMenuActions {
+    const contents = page.contents
+    const owner = page.owner
     const live = (): WebContents | null =>
       contents.isDestroyed() || this.window.isDestroyed() ? null : contents
     const openInNewTab = (url: string): void => {
       try {
-        this.openNewTabFor(tab, validateBrowserUrl(url), 'a context-menu link')
+        this.openNewTabFor(owner, validateBrowserUrl(url), 'a context-menu link')
       } catch (error: unknown) {
         Logger.error('Browser context menu refused a link:', error)
       }
@@ -2269,9 +2656,9 @@ export class BrowserService {
       },
       reload: () => live()?.reload(),
       hardReload: () => live()?.reloadIgnoringCache(),
-      savePage: () => void this.saveTabPage(tab),
+      savePage: () => void this.savePage(contents),
       print: () => live()?.print({}),
-      viewSource: () => this.openViewSourceInNewTab(tab),
+      viewSource: () => this.openViewSourceInNewTab(page),
       copyPageAddress: () => {
         const current = live()
         if (current) clipboard.writeText(current.getURL())
@@ -2285,7 +2672,7 @@ export class BrowserService {
       copyImage: (x, y) => live()?.copyImageAt(x, y),
       copyAddress: (url) => clipboard.writeText(url),
       copyText: (text) => clipboard.writeText(text),
-      searchFor: (text) => this.searchSelectionInNewTab(tab, text),
+      searchFor: (text) => this.searchSelectionInNewTab(owner, text),
       undo: () => live()?.undo(),
       redo: () => live()?.redo(),
       cut: () => live()?.cut(),
@@ -2305,15 +2692,15 @@ export class BrowserService {
    * that open an address in a new tab, so every new tab is parked, loaded and
    * announced the same way.
    */
-  private openNewTabFor(source: BrowserTab, url: string, reason: string): void {
+  private openNewTabFor(owner: BrowserPageOwner, url: string, reason: string): void {
     const tabId = `browser:${crypto.randomUUID()}`
-    const tab = this.ensureTab(tabId, source.projectId, source.threadId)
+    const tab = this.ensureTab(tabId, owner.projectId, owner.threadId)
     tab.initialNavigationStarted = true
     this.parkTab(tabId, { reason })
     this.load(tabId, url)
     sendToRenderer(this.window.webContents, 'browser:openRequested', url, {
-      projectId: source.projectId,
-      threadId: source.threadId,
+      projectId: owner.projectId,
+      threadId: owner.threadId,
       requestedTabId: tabId,
       reveal: true
     })
@@ -2327,8 +2714,8 @@ export class BrowserService {
    * page's own navigation rules never see. The displayed address keeps the
    * `view-source:` prefix, exactly as a normal browser shows it.
    */
-  private openViewSourceInNewTab(tab: BrowserTab): void {
-    const contents = tab.view.webContents
+  private openViewSourceInNewTab(page: BrowserMenuPage): void {
+    const contents = page.contents
     if (contents.isDestroyed()) return
     const current = contents.getURL()
     const inner = current.startsWith('view-source:')
@@ -2341,24 +2728,24 @@ export class BrowserService {
       return
     }
     const tabId = `browser:${crypto.randomUUID()}`
-    const sourceTab = this.ensureTab(tabId, tab.projectId, tab.threadId)
+    const sourceTab = this.ensureTab(tabId, page.owner.projectId, page.owner.threadId)
     sourceTab.initialNavigationStarted = true
     this.parkTab(tabId, { reason: 'the user opened a page source' })
     this.navigateTo(tabId, target)
     sendToRenderer(this.window.webContents, 'browser:openRequested', target, {
-      projectId: tab.projectId,
-      threadId: tab.threadId,
+      projectId: page.owner.projectId,
+      threadId: page.owner.threadId,
       requestedTabId: tabId,
       reveal: true
     })
   }
 
   /** Run the context-menu web search in a new tab, using the reported engine. */
-  private searchSelectionInNewTab(tab: BrowserTab, query: string): void {
+  private searchSelectionInNewTab(owner: BrowserPageOwner, query: string): void {
     const url = buildBrowserSearchUrl(this.contextMenuSearchEngine, query)
     if (!url) return
     try {
-      this.openNewTabFor(tab, validateBrowserUrl(url), 'a context-menu web search')
+      this.openNewTabFor(owner, validateBrowserUrl(url), 'a context-menu web search')
     } catch (error: unknown) {
       Logger.error('Browser context menu could not run a search:', error)
     }
@@ -2863,6 +3250,10 @@ export class BrowserService {
    *  its viewport. */
   private setToastVisible(visible: boolean): void {
     this.toastVisible = visible
+    // A popup window's page is a native view too, so a DOM toast under it would be
+    // invisible. It steps aside with the tab's page and comes back at the same
+    // frame, which is what keeps a momentary toast from resizing a page.
+    this.popupWindows.setSuspended(visible)
     if (!this.activeTabId) return
     const tab = this.tabs.get(this.activeTabId)
     if (!tab) return
@@ -2885,6 +3276,10 @@ export class BrowserService {
     this.cancelPendingPark(tabId)
     const tab = this.tabs.get(tabId)
     if (!tab) return
+    // A popup window is the tab's own window as far as the user is concerned, so
+    // closing the tab closes what its page opened rather than leaving a sign-in
+    // stranded behind a tab that no longer exists.
+    this.popupWindows.closeForTab(tabId, 'its tab closed')
     for (const [requestId, pending] of this.pendingPermissions) {
       if (pending.request.tabId === tabId)
         this.resolvePermission(requestId, permissionResolutions.dismiss)
