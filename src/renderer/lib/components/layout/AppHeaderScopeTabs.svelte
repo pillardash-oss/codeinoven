@@ -48,12 +48,22 @@
     aria-label="Project tabs"
     tabindex="0"
   >
-    <div class="ml-auto flex h-full w-max items-center gap-0.5">
+    <!-- `w-max max-w-full` is the shrink-before-scroll primitive: the row takes
+         its content width when it fits, but is capped at the viewport width when
+         it does not, so tabs shrink and their project names keep truncating down
+         to the icon-only floor before the row overflows into a horizontal scroll.
+         `w-max` alone would skip straight to scrolling, and `w-fit` cannot be
+         used because the row's intrinsic min-content still counts the
+         untruncated labels, which makes it clamp straight back to max-content. -->
+    <div class="ml-auto flex h-full w-max max-w-full items-center gap-0.5">
       {#each scopeState.projects as project (project.id)}
         {@const projectColor = project.color ?? pickColorForSeed(project.id)}
         {@const isActiveProject = scopeState.activeProjectId === project.id}
+        <!-- min-w is the icon-only floor: 1.25rem icon + 0.375rem gap +
+             1.5rem horizontal padding. The button shrinks to it as its name is
+             truncated, then the row scrolls. -->
         <button
-          class="flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors {isActiveProject
+          class="flex min-h-9 min-w-[3.125rem] items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors {isActiveProject
             ? 'bg-foreground font-medium text-app'
             : 'text-muted hover:bg-elevated hover:text-foreground'}"
           role="tab"
