@@ -10,6 +10,7 @@ import type {
   ComputerUsePipState,
   CuaBridgeStatus,
   CuaUpdateCheck,
+  CuaUpdateProgress,
   DiscoveredBaseUrlModel,
   HarnessAccount,
   HarnessInstallHandoff,
@@ -236,6 +237,12 @@ export const invokeProviderContract = {
    * `computerUse:cuaUpdate` while it runs.
    */
   'computerUse:updateCua': {} as Contract<[], CuaBridgeStatus>,
+  /**
+   * Current or most recently finished Cua Driver update run, so a settings page
+   * that is reopened mid-download (or after it finished) shows the real state
+   * instead of offering the update again. Null when this session has run none.
+   */
+  'computerUse:getCuaUpdateState': {} as Contract<[], CuaUpdateProgress | null>,
   'computerUse:pipGetState': {} as Contract<[], ComputerUsePipState>,
   /** Every thread whose agent is currently driving the computer, so a renderer
    *  that reloads mid-run re-seeds its row indicators. */

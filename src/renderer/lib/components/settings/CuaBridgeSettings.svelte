@@ -111,7 +111,10 @@
     updateError = ''
     try {
       update = await invoke('computerUse:checkCuaUpdate', skipCache)
+      // A previous run's verdict is stale the moment a newer release is offered,
+      // so the still-visible result gives way to the update instead of hiding it.
       if (updateProgress?.state === 'failed') updateProgress = null
+      else if (update?.updateAvailable && updateProgress?.state === 'installed') updateProgress = null
     } catch (checkError) {
       updateError = errorMessage(checkError, 'Cua Driver updates could not be checked.')
     } finally {
@@ -168,13 +171,37 @@
   }
 
   let unsubscribeUpdate: (() => void) | null = null
+  /**
+   * True once this mount has seen a live milestone. It keeps the hydration read
+   * below from overwriting a newer event that landed while it was in flight.
+   */
+  let receivedUpdateEvent = false
+
+  /**
+   * Seed the progress row from the main process.
+   *
+   * A mounted-again settings page never witnessed the milestones of a run that is
+   * already in flight, so it reads the authoritative state instead of starting
+   * from nothing and offering the update again.
+   */
+  async function hydrateUpdateState(): Promise<void> {
+    try {
+      const stored = await invoke('computerUse:getCuaUpdateState')
+      if (!receivedUpdateEvent) updateProgress = stored
+    } catch {
+      // A cosmetic read: the live subscription still carries anything the run
+      // publishes from here on.
+    }
+  }
 
   onMount(() => {
     // Installer milestones for an update this window did not start (another
     // window can) still land here, so the row reflects the real run either way.
     unsubscribeUpdate = subscribe('computerUse:cuaUpdate', (progress) => {
+      receivedUpdateEvent = true
       updateProgress = progress
     })
+    void hydrateUpdateState()
     void loadStatus()
   })
 
