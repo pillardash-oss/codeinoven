@@ -52,7 +52,11 @@ import type {
   EngineeringSpecContent
 } from '../../src/lib/types'
 import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../src/lib/types'
-import { DEFAULT_BROWSER_HIBERNATION_MINUTES } from '../../src/lib/types/settings'
+import {
+  DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS
+} from '../../src/lib/types/settings'
 import { ProjectManager } from '../../src/lib/engines/project-manager'
 import { exportEngineeringSpecMarkdown } from '../../src/lib/spec/spec-markdown'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
@@ -120,6 +124,11 @@ const defaultConfig: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  backgroundMode: 'scheduled',
+  launchAtLogin: true,
+  autoRunMissedAssistantRuns: true,
+  backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   browserSearchEngine: 'duckduckgo',
   browserCustomSearchEngines: [],
   sound: structuredClone(DEFAULT_SPEECH_SETTINGS)

@@ -188,6 +188,7 @@
     {@attach attachContentElement}
     {@attach pageVisible && !loadError && manageNativeView}
     class="absolute inset-0"
+    role="presentation"
     oncontextmenu={(event) => {
       // The page itself renders in a native view above this host, so a click it
       // does not take (the load-error card, a blank frame) lands here. Main
