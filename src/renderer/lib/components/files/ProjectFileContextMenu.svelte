@@ -11,6 +11,7 @@
     Info,
     Pencil,
     Scissors,
+    Terminal,
     Trash2
   } from '@lucide/svelte'
   import type { ProjectFileEntry } from '$shared/types'
@@ -31,6 +32,7 @@
     onInfo: () => void
     onReveal: () => void
     onOpenInBrowser: () => void
+    onOpenInTerminal: () => void
   }
 
   let {
@@ -48,7 +50,8 @@
     onDelete,
     onInfo,
     onReveal,
-    onOpenInBrowser
+    onOpenInBrowser,
+    onOpenInTerminal
   }: Props = $props()
 
   let selectedCount = $derived(
@@ -95,6 +98,11 @@
           Open in browser
         </ContextMenu.Item>
       {/if}
+
+      <ContextMenu.Item class={itemClass} onSelect={onOpenInTerminal}>
+        <Terminal size={13} class="text-muted" />
+        Open in terminal
+      </ContextMenu.Item>
 
       {#if entry}
         <ContextMenu.Item class={itemClass} disabled={!canPaste} onSelect={onPaste}>

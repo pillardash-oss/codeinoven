@@ -653,6 +653,11 @@ class ContextSidebarState {
     return this.tabContexts.openNewTerminal(projectId, threadId)
   }
 
+  /** Open a new terminal tab whose shell starts in `directory` (project-relative). */
+  openTerminalAt(projectId: string, threadId: string, directory: string): string {
+    return this.tabContexts.openTerminalAt(projectId, threadId, directory)
+  }
+
   openDebugger(projectId: string, threadId: string): void {
     this.tabContexts.openDebugger(projectId, threadId)
   }

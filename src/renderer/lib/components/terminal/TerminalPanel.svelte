@@ -13,9 +13,12 @@
     threadId: string
     /** Scope bucket whose own shell this panel shows. */
     scopeBucketId?: string
+    /** Project-relative folder the shell starts in, set when the terminal was
+     *  opened at a specific path from the file tree. */
+    directory?: string
   }
 
-  let { terminalId, projectId, threadId, scopeBucketId }: Props = $props()
+  let { terminalId, projectId, threadId, scopeBucketId, directory }: Props = $props()
 
   /**
    * Every scope owns its own shell. Qualifying the session id by the scope
@@ -39,14 +42,24 @@
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const scopeBindings = new Map<string, TerminalSpawnBinding>()
 
-  function bindingFor(scopedId: string, scope: string, thread: string): TerminalSpawnBinding {
+  function bindingFor(
+    scopedId: string,
+    scope: string,
+    thread: string,
+    startingDirectory?: string
+  ): TerminalSpawnBinding {
     const existing = scopeBindings.get(scopedId)
     if (existing) {
       existing.scopeBucketId = scope
       existing.threadId = thread
+      existing.directory = startingDirectory
       return existing
     }
-    const binding: TerminalSpawnBinding = { threadId: thread, scopeBucketId: scope }
+    const binding: TerminalSpawnBinding = {
+      threadId: thread,
+      scopeBucketId: scope,
+      directory: startingDirectory
+    }
     scopeBindings.set(scopedId, binding)
     return binding
   }
@@ -68,6 +81,7 @@
     currentProjectId: string,
     currentScopeKey: string,
     currentThreadId: string,
+    currentDirectory: string | undefined,
     retry: number
   ): Attachment<HTMLDivElement> {
     // Focus only when the attach is user-initiated: the first mount (the user
@@ -77,7 +91,7 @@
     const focus = firstAttach || isRetry
     firstAttach = false
     lastRetrySequence = retry
-    const binding = bindingFor(currentScopedId, currentScopeKey, currentThreadId)
+    const binding = bindingFor(currentScopedId, currentScopeKey, currentThreadId, currentDirectory)
     return (container) => {
       // A thread switch inside one scope re-runs this attachment with the very
       // same scoped session already in place. Leave it completely untouched:
@@ -88,6 +102,7 @@
         live.binding = binding
         live.threadId = currentThreadId
         live.scopeBucketId = currentScopeKey
+        live.directory = currentDirectory ?? null
         return
       }
       let cancelled = false
@@ -120,7 +135,7 @@
   <div tabindex="-1" class="terminal-wrap relative min-h-0 flex-1 overflow-hidden">
     <div
       class="h-full w-full overflow-hidden py-1 pl-2"
-      {@attach attachTerminal(scopedTerminalId, projectId, scopeKey, threadId, retrySequence)}
+      {@attach attachTerminal(scopedTerminalId, projectId, scopeKey, threadId, directory, retrySequence)}
     ></div>
     {#if loading}
       <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">

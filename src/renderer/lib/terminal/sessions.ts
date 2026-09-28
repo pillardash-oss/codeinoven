@@ -30,6 +30,9 @@ export interface TerminalAttachOptions {
 export interface TerminalSpawnBinding {
   threadId: string
   scopeBucketId?: string
+  /** Project-relative folder the shell must start in, when the terminal was
+   *  explicitly opened at a path (the file tree's "Open in terminal"). */
+  directory?: string
 }
 
 export interface TerminalSession {
@@ -45,6 +48,10 @@ export interface TerminalSession {
   threadId: string | null
   /** Scope bucket captured with the thread binding, or null for the project root. */
   scopeBucketId: string | null
+  /** Project-relative folder this terminal was opened at, or null for the
+   *  scope root. Read at respawn time so a shell always returns to where the
+   *  user opened it. */
+  directory: string | null
   /** Live spawn binding from the owning panel, when it supplied one. Read at
    *  respawn time so a thread switch retargets the next shell without the
    *  panel having to detach and re-attach the session. */
@@ -185,12 +192,19 @@ class TerminalSessionManager {
     session.binding = binding
     session.threadId = binding.threadId
     session.scopeBucketId = binding.scopeBucketId ?? null
+    session.directory = binding.directory ?? null
     // Navigation never kills a shell. Each scope owns its own session (the
     // panel qualifies the session id by the scope bucket), so a thread switch
     // inside a scope only refreshes this binding while a scope switch mounts a
     // different session. A respawn (shell exit, Ctrl-D) lands in this scope
     // through spawnTargetOf().
-    await this.ensurePty(session, projectId, binding.threadId, binding.scopeBucketId)
+    await this.ensurePty(
+      session,
+      projectId,
+      binding.threadId,
+      binding.scopeBucketId,
+      binding.directory
+    )
     this.focusIfRequested(session, options)
   }
 
@@ -199,7 +213,8 @@ class TerminalSessionManager {
   private spawnTargetOf(session: TerminalSession): TerminalSpawnBinding {
     return {
       threadId: session.binding?.threadId ?? session.threadId ?? '',
-      scopeBucketId: session.binding?.scopeBucketId ?? session.scopeBucketId ?? undefined
+      scopeBucketId: session.binding?.scopeBucketId ?? session.scopeBucketId ?? undefined,
+      directory: session.binding?.directory ?? session.directory ?? undefined
     }
   }
 
@@ -276,7 +291,8 @@ class TerminalSessionManager {
     session: TerminalSession,
     projectId: string,
     threadId: string,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    directory?: string
   ): Promise<void> {
     if (session.ptySpawned) return
     session.projectId = projectId
@@ -289,7 +305,8 @@ class TerminalSessionManager {
         threadId,
         session.term.cols,
         session.term.rows,
-        scopeBucketId
+        scopeBucketId,
+        directory
       )
     } catch (error) {
       session.ptySpawned = false
@@ -350,6 +367,7 @@ class TerminalSessionManager {
       projectId: null,
       threadId: null,
       scopeBucketId: null,
+      directory: null,
       respawnCount: 0,
       kind: 'shell'
     }
@@ -415,7 +433,13 @@ class TerminalSessionManager {
       session.ptySpawned = false
       try {
         const target = this.spawnTargetOf(session)
-        await this.ensurePty(session, session.projectId, target.threadId, target.scopeBucketId)
+        await this.ensurePty(
+          session,
+          session.projectId,
+          target.threadId,
+          target.scopeBucketId,
+          target.directory
+        )
         session.exited = false
         // A shell that survives this window is healthy, so reset the guard.
         respawnTimer = setTimeout(() => {

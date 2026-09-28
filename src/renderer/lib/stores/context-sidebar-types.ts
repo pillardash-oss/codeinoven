@@ -9,6 +9,9 @@ export interface TerminalContextTab {
   terminalId: string
   projectId: string
   threadId: string
+  /** Project-relative folder the shell starts in, set when the tab was opened
+   *  at a path from the file tree. Undefined starts at the scope root. */
+  startingDirectory?: string
 }
 
 export interface FilesContextTab {

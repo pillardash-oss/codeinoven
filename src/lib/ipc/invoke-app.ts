@@ -52,7 +52,10 @@ export const invokeAppContract = {
       threadId: string,
       columns: number,
       rows: number,
-      scopeBucketId?: string
+      scopeBucketId?: string,
+      /** Project-relative folder the shell must start in ('' is the root).
+       *  Resolved and containment-checked against the scope root. */
+      directory?: string
     ],
     { id: string; pid: number }
   >,

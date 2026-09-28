@@ -188,6 +188,7 @@
           projectId={activeContextTab.projectId}
           threadId={activeContextTab.threadId}
           scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
+          directory={activeContextTab.startingDirectory}
         />
       {/if}
     {:else if activeContextTab.kind === 'actions'}

@@ -18,6 +18,7 @@ import {
   type SubagentContextTab,
   type TemporaryChatContextTab,
   type TemporaryChatMode,
+  type TerminalContextTab,
   type TerminalPlacement,
   type ThreadSidebarContext
 } from './context-sidebar-types'
@@ -863,20 +864,29 @@ export class SidebarTabContexts {
     this.openNewTerminal(projectId, threadId)
   }
 
-  openNewTerminal(projectId: string, threadId: string): string {
+  openNewTerminal(projectId: string, threadId: string, startingDirectory?: string): string {
     const context = this.ensureProjectContext(projectId)
     context.terminalSequence += 1
     const sequence = context.terminalSequence
     const id = `terminal:${projectId}:${sequence}`
-    this.openProject(context, {
+    const tab: TerminalContextTab = {
       id,
       kind: 'terminal',
       title: sequence === 1 ? 'Terminal' : `Terminal ${sequence}`,
       terminalId: `workbench-${projectId}-${sequence}`,
       projectId,
       threadId
-    })
+    }
+    if (startingDirectory !== undefined) tab.startingDirectory = startingDirectory
+    this.openProject(context, tab)
     return id
+  }
+
+  /** Open a fresh terminal whose shell starts in `directory` (project-relative,
+   *  '' for the scope root). Always a new tab so the user can keep their other
+   *  shells untouched. */
+  openTerminalAt(projectId: string, threadId: string, directory: string): string {
+    return this.openNewTerminal(projectId, threadId, directory)
   }
 
   openDebugger(projectId: string, threadId: string): void {
