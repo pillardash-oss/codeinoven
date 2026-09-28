@@ -17,7 +17,11 @@ import type {
   BrowserTransportCommand,
   BrowserViewBounds
 } from '../../../lib/ipc-contract'
-import { BROWSER_SHORTCUT_ACTIONS, isBrowserPopupWindowId, isBrowserTabId } from '../../../lib/ipc-contract'
+import {
+  BROWSER_SHORTCUT_ACTIONS,
+  isBrowserPopupWindowId,
+  isBrowserTabId
+} from '../../../lib/ipc-contract'
 import {
   buildBrowserSearchUrl,
   MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH,
@@ -314,6 +318,19 @@ export const AGENT_REVEAL_GRACE_MS = 8_000
 export const MAX_ABANDONED_REVEALS = 2
 /** How long agent reveals stay muted for a thread after that. */
 export const RELAX_COOLDOWN_MS = 5 * 60_000
+/** How long a hide the renderer asked for is held before it parks a view.
+ *
+ *  The renderer detaches a page the moment its visibility answer stops coming out
+ *  for it, and that answer is recomputed every frame from state that moves: a
+ *  surface mid-transition, an overlay whose rectangle is being re-measured, a
+ *  claim published one frame after the surface that needs it. Those answers flap,
+ *  and a flap that reaches main pairs a park with a re-attach a few milliseconds
+ *  later, which pulls the page off screen for a frame and paints it back: a
+ *  flicker of a page nothing asked to move. Holding the hide over a couple of
+ *  frames lets the show that follows it cancel it outright, so a page that is
+ *  still wanted never leaves the screen, while a page that is genuinely going
+ *  still parks a few frames after the click that decided it. */
+export const RENDERER_PARK_GRACE_MS = 80
 /** Bounds for a requested parked viewport: below the minimum no layout is
  *  meaningful, above the maximum a single page would waste main memory. */
 export const MIN_VIEWPORT_SIDE = 240
@@ -616,7 +633,10 @@ export function popupWindowViewport(features: unknown): BrowserViewport | null {
     if (key === 'height' || key === 'innerheight') height = clamped
   }
   if (width === null && height === null) return null
-  return { width: width ?? DEFAULT_PARKED_VIEWPORT.width, height: height ?? DEFAULT_PARKED_VIEWPORT.height }
+  return {
+    width: width ?? DEFAULT_PARKED_VIEWPORT.width,
+    height: height ?? DEFAULT_PARKED_VIEWPORT.height
+  }
 }
 
 /**

@@ -107,6 +107,7 @@ import {
   MAX_ZOOM_LEVEL,
   PERMISSION_TIMEOUT_MS,
   RELAX_COOLDOWN_MS,
+  RENDERER_PARK_GRACE_MS,
   SCREENSHOT_JPEG_QUALITY,
   SCREENSHOT_MAX_BYTES,
   ZOOM_STEP,
@@ -308,15 +309,20 @@ export class BrowserService {
    *  never moved is the difference between an instant switch and a hitch. */
   private displayedTab: { tabId: string; bounds: BrowserViewBounds } | null = null
   /**
-   * Hides the renderer asked for, with the tick that will carry them out.
+   * Hides the renderer asked for, with the handle waiting out their grace window
+   * and the moment each one arrived.
    *
-   * A surface switch unmounts one panel and mounts the next for the same tab, so
-   * the renderer's hide and the show that follows describe one continuous view
-   * that never actually left. Parking in between is a window-server teardown and a
-   * re-parent the page feels, so a hide waits one tick for a show to cancel it. A
-   * hide with nothing behind it parks on that tick, as it always did.
+   * A surface switch unmounts one panel and mounts the next for the same tab, and
+   * the renderer's own visibility answer is recomputed every frame, so it flaps:
+   * a hide and the show that follows it describe one continuous view that never
+   * actually left. Parking in between is a window-server teardown and a re-parent
+   * the page feels, and a re-attach a few milliseconds later is a flicker of a
+   * page nothing asked to move. So a hide waits `RENDERER_PARK_GRACE_MS` for a
+   * show to cancel it, and a hide nothing contradicts still parks, a few frames
+   * after the decision that produced it. The arrival time is kept so a cancelled
+   * park can report how long the answer it acted on lasted.
    */
-  private readonly pendingParks = new Map<string, ReturnType<typeof setImmediate>>()
+  private readonly pendingParks = new Map<string, { handle: ReturnType<typeof setTimeout>; at: number }>()
   /** The dialog-context label already installed in each tab's current document.
    *  The shim is idempotent per document, so a repeat is a script evaluation
    *  per frame for no change. Cleared when a new document commits. */
@@ -439,9 +445,10 @@ export class BrowserService {
         const bounds = validateBounds(rawBounds)
         const tab = this.ensureTab(tabId, projectId, threadId)
 
-        // A show that lands in the same tick as a hide is a surface switch, not a
-        // departure: dropping the deferred park keeps the page where it is instead
-        // of parking it and re-parenting it straight back.
+        // A show that lands inside the grace window of a hide is a surface switch
+        // or a visibility answer that flapped, not a departure: dropping the
+        // deferred park keeps the page where it is instead of parking it and
+        // re-parenting it straight back, which is the flicker the user sees.
         this.cancelPendingPark(tabId)
         // Leaving a tab costs nothing now: the outgoing tab keeps running in an
         // invisible stage window instead of going dead behind the app window.
@@ -729,7 +736,7 @@ export class BrowserService {
     this.toastVisible = false
     this.activeTabBounds = null
     this.displayedTab = null
-    for (const handle of this.pendingParks.values()) clearImmediate(handle)
+    for (const pending of this.pendingParks.values()) clearTimeout(pending.handle)
     this.pendingParks.clear()
     this.injectedDialogLabels.clear()
     this.parkedOrder.length = 0
@@ -2971,24 +2978,51 @@ export class BrowserService {
   }
 
   /**
-   * Carry out a hide the renderer asked for on the next tick, so a show that
-   * follows in the same turn can cancel it.
+   * Carry out a hide the renderer asked for after a short grace window, so a show
+   * that lands inside it cancels the park instead of being served a view that was
+   * pulled out from under it for a frame.
+   *
+   * See `RENDERER_PARK_GRACE_MS`: the renderer's answer to "is this surface still
+   * showing the page" is recomputed every frame and flaps, and a park that a
+   * re-attach follows a few milliseconds later is a visible flicker of a page
+   * nothing asked to move. A hide no show ever contradicts still parks, a few
+   * frames after the decision that produced it.
    */
   private schedulePark(tabId: string, reason: string): void {
     if (this.pendingParks.has(tabId)) return
-    const handle = setImmediate(() => {
+    const handle = setTimeout(() => {
       this.pendingParks.delete(tabId)
       this.parkTab(tabId, { reason })
-    })
-    this.pendingParks.set(tabId, handle)
+    }, RENDERER_PARK_GRACE_MS)
+    this.pendingParks.set(tabId, { handle, at: Date.now() })
   }
 
   /** Drop a deferred hide, because the tab is being shown again after all. */
   private cancelPendingPark(tabId: string): void {
-    const handle = this.pendingParks.get(tabId)
-    if (handle === undefined) return
-    clearImmediate(handle)
+    const pending = this.dropPendingPark(tabId)
+    if (pending === null) return
+    // Dev-only, and deliberately one line per cancelled hide: it is the record
+    // that the page never left the screen, and that the hide which would have
+    // taken it off was the renderer's own answer flapping rather than a surface
+    // change the user made.
+    Logger.dev('Browser view park cancelled', {
+      tabId,
+      afterMs: Date.now() - pending.at
+    })
+  }
+
+  /**
+   * Forget a deferred hide silently, for the two callers whose park is settled
+   * some other way: the park itself, and the tab being destroyed. Their cancelled
+   * timer is bookkeeping, and logging it as a cancelled park would read as a page
+   * that stayed on screen when it is about to leave.
+   */
+  private dropPendingPark(tabId: string): { at: number } | null {
+    const pending = this.pendingParks.get(tabId)
+    if (pending === undefined) return null
+    clearTimeout(pending.handle)
     this.pendingParks.delete(tabId)
+    return pending
   }
 
   /**
@@ -3002,6 +3036,8 @@ export class BrowserService {
    * matched to the moment that produced it.
    */
   private parkTab(tabId: string, options: ParkBrowserTabOptions): void {
+    // The park this timer was going to do is happening now, so it is spent.
+    this.dropPendingPark(tabId)
     const tab = this.tabs.get(tabId)
     if (!tab || tab.view.webContents.isDestroyed()) return
     // A deferred hide can land after the app window is gone (the app is quitting),
@@ -3278,9 +3314,10 @@ export class BrowserService {
   }
 
   private destroy(tabId: string): void {
-    // A hide that was waiting for its tick must not park a tab that is about to be
-    // gone: the view would be handed to the stage window only to be destroyed.
-    this.cancelPendingPark(tabId)
+    // A hide that is still inside its grace window must not park a tab that is
+    // about to be gone: the view would be handed to the stage window only to be
+    // destroyed.
+    this.dropPendingPark(tabId)
     const tab = this.tabs.get(tabId)
     if (!tab) return
     // A popup window is the tab's own window as far as the user is concerned, so
