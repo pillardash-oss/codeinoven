@@ -1,16 +1,18 @@
 /**
  * Page-chunk preload warmers.
  *
- * Settings and Scope are lazy-loaded chunks (`{#await import(...)}` in
- * App.svelte), so the very first open pays the chunk fetch + module eval.
- * Firing the import on hover   while the mouse is still over the entry
- * button   makes the subsequent click resolve instantly, because the module
- * registry already holds the chunk. Re-invocations are no-ops.
+ * Settings, Scope and the Task Manager are lazy-loaded chunks
+ * (`{#await import(...)}` at their render sites), so the very first open pays
+ * the chunk fetch + module eval. Firing the import on hover   while the mouse is
+ * still over the entry button   makes the subsequent click resolve instantly,
+ * because the module registry already holds the chunk. Re-invocations are
+ * no-ops.
  */
 
 let settingsChunkPromise: Promise<unknown> | null = null
 let scopeChunkPromise: Promise<unknown> | null = null
 let browserChunkPromise: Promise<unknown> | null = null
+let taskManagerChunkPromise: Promise<unknown> | null = null
 
 /** Warm the SettingsView module chunk so opening Settings is instant. */
 export function preloadSettingsChunk(): void {
@@ -27,6 +29,16 @@ export function preloadScopeChunk(): void {
     scopeChunkPromise = null
     throw error
   })
+}
+
+/** Warm the Task Manager module chunk so opening the rail's process list is instant. */
+export function preloadTaskManagerChunk(): void {
+  taskManagerChunkPromise ??= import('$lib/components/workspace/TaskManagerModal.svelte').catch(
+    (error) => {
+      taskManagerChunkPromise = null
+      throw error
+    }
+  )
 }
 
 /**

@@ -12,10 +12,9 @@
   } from '@lucide/svelte'
   import type { Component } from 'svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { preloadSettingsChunk } from '$lib/page-preload'
+  import { preloadSettingsChunk, preloadTaskManagerChunk } from '$lib/page-preload'
   import { updaterState } from '$lib/stores/updater.svelte'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
-  import TaskManagerModal from '$lib/components/workspace/TaskManagerModal.svelte'
   import AppRailButton from './AppRailButton.svelte'
 
   interface Props {
@@ -147,6 +146,7 @@
   <AppRailButton
     label="Task manager: running processes"
     icon={Plug}
+    onHover={preloadTaskManagerChunk}
     onSelect={() => (taskManagerOpen = true)}
   />
 
@@ -160,4 +160,13 @@
   />
 </div>
 
-<TaskManagerModal open={taskManagerOpen} onClose={() => (taskManagerOpen = false)} />
+<!-- The process list is a secondary surface behind one rail button, so its
+     module stays out of the first-paint chunk: the button's hover warms it
+     (`preloadTaskManagerChunk`) and the mount below only happens once it is
+     actually open. The modal renders nothing while closed, so gating on the
+     open flag mounts the same surface, just later. -->
+{#if taskManagerOpen}
+  {#await import('$lib/components/workspace/TaskManagerModal.svelte') then { default: TaskManagerModal }}
+    <TaskManagerModal open={taskManagerOpen} onClose={() => (taskManagerOpen = false)} />
+  {/await}
+{/if}
