@@ -23,6 +23,14 @@
    */
   const VOICE_SEND_DOUBLE_CLICK_MS = 320
 
+  /**
+   * Frames a waiting transcript is retried for while its field is still
+   * initialising. A rich editor binds its element after the component that owns
+   * it has mounted, so a single attempt can find the field before it can take
+   * text at all.
+   */
+  const PENDING_DELIVERY_FRAMES = 20
+
   interface Props {
     targetId: string
     getTarget: () => SpeechEditorTarget | null
@@ -270,13 +278,32 @@
   // A recording outlives the field it was started in: navigating away destroys
   // this button and its editor while the capture keeps running. When the same
   // input comes back, hand the controller the live target so the transcript
-  // lands in the field the user is looking at instead of behind it. Doing it
-  // here rather than in each surface keeps every mic in the app behaving the
-  // same way.
+  // lands in the field the user is looking at instead of behind it.
+  //
+  // The same moment is when a transcript that landed while this field was gone
+  // gets its chance: it was held for this target id, and only now is there a
+  // field to put it in. An editor that has not finished initialising reports
+  // itself as still waiting, so the insert is retried for a few frames. This
+  // lives on the mic rather than in each surface, so every recorder in the app
+  // behaves the same way.
   $effect(() => {
-    if (disabled) return
     const target = getTarget()
-    if (target) speechController.reattachTarget(target)
+    if (!target) return
+    speechController.reattachTarget(target)
+    if (!speechController.hasPendingDelivery(target.id)) return
+    let frame = 0
+    let attempts = 0
+    const insertWaitingTranscript = (): void => {
+      frame = 0
+      if (speechController.deliverPending(target) !== 'waiting') return
+      if (attempts >= PENDING_DELIVERY_FRAMES) return
+      attempts += 1
+      frame = requestAnimationFrame(insertWaitingTranscript)
+    }
+    insertWaitingTranscript()
+    return () => {
+      if (frame) cancelAnimationFrame(frame)
+    }
   })
 
   function prepareTarget(): void {

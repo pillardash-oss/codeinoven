@@ -50,12 +50,29 @@ import {
 import type {
   ActiveCapture,
   RendererSpeechState,
+  SpeechPendingDelivery,
   VoiceSendIntent,
   VoiceSendStage,
   VoiceTranscriptionRecord
 } from './speech-controller-types'
 
 export type { RendererSpeechState, VoiceSendStage } from './speech-controller-types'
+
+/**
+ * Most waiting transcripts to hold at once.
+ *
+ * The cap only exists so a long session of abandoned fields cannot pin an
+ * unbounded number of strings: the oldest wait is dropped first, and the
+ * transcript is always on the clipboard as well.
+ */
+const MAX_PENDING_DELIVERIES = 12
+
+/** One transcript held for a field that was not on screen when it landed. */
+interface PendingDeliveryRecord {
+  transcript: string
+  attemptId: string
+  scope: SpeechScope
+}
 
 class SpeechController {
   state = $state<RendererSpeechState>({ state: 'idle' })
@@ -157,6 +174,16 @@ class SpeechController {
   /** Dictations the user armed to deliver themselves (see `armVoiceSend`). */
   private voiceSends = $state<VoiceSendIntent[]>([])
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
+  /**
+   * Transcripts still waiting for the field they were recorded for.
+   *
+   * A dictation whose editor was destroyed before the transcript landed, and
+   * whose target has no stored value to mirror into, is held here by target id.
+   * The field asks for it the moment it mounts again, so leaving a view while
+   * the model is still transcribing cannot lose the recording: the text lands
+   * in the field it belongs to as soon as that field is back on screen.
+   */
+  private readonly pendingDeliveries = new Map<string, PendingDeliveryRecord>()
   private stopPromise: Promise<void> | null = null
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
   /** Whether `sound` has been loaded from config at least once. Until then a
@@ -929,25 +956,35 @@ class SpeechController {
         applied = active.target.fallbackApply(insertionSnapshot, transcript)
       }
       if (!applied.ok) {
-        const insertionNotice =
-          'Transcript copied to the clipboard. It could not be inserted into the recording field.'
+        // The field is still on screen but no longer holds what the recording
+        // was measured against (an editor that re-rendered or normalised its
+        // content while the model worked). Inserting against its value as it is
+        // now is what the user asked for when they pressed the mic, and it is
+        // the only reading that works for an editor whose serialized form is not
+        // byte-stable.
+        const fresh = active.target.capture()
+        if (fresh) applied = active.target.apply(fresh, transcript)
+      }
+      if (!applied.ok) {
+        // Nothing on screen can take it. Hold the transcript for its field
+        // instead of dropping it: the same field asks for it when it mounts
+        // again, which is what makes leaving a view mid-transcription safe.
+        this.holdPendingDelivery(active, transcript)
+        const insertionNotice = 'Voice recording kept for its field'
         try {
-          toast.info(insertionNotice, { closeButton: true })
+          toast.info(insertionNotice, {
+            id: 'voice-recording-pending',
+            description:
+              'The field was closed while the model was transcribing. The transcript is on the clipboard, and it will be inserted into that field when you reopen it.',
+            closeButton: true,
+            duration: 8000
+          })
         } catch (cause) {
           logRendererError('Could not show the voice recording clipboard notice.', cause)
         }
         return
       }
-      const span: SpeechDictationSpan = {
-        id: crypto.randomUUID(),
-        attemptId: active.attemptId,
-        editorId: active.target.id,
-        insertedText: transcript,
-        insertedAt: Date.now(),
-        scope: structuredClone(active.scope)
-      }
-      const current = this.spans.get(active.target.id) ?? []
-      this.spans.set(active.target.id, [...current.slice(-7), span])
+      this.recordDictationSpan(active.attemptId, active.target.id, transcript, active.scope)
       playSpeechCue(this.sound, 'completed')
       // Armed dictation: the transcript has landed, so hand it over now. The
       // composer drives its own send path whenever the transcript reached the
@@ -971,6 +1008,79 @@ class SpeechController {
       this.endTranscription(active.attemptId)
       this.settleCaptureDraft(transcribingScope)
     }
+  }
+
+  /**
+   * Hold a transcript whose field was not there to take it, and keep the last
+   * `MAX_PENDING_DELIVERIES` of them.
+   */
+  private holdPendingDelivery(active: ActiveCapture, transcript: string): void {
+    if (this.pendingDeliveries.size >= MAX_PENDING_DELIVERIES) {
+      const oldest = this.pendingDeliveries.keys().next().value
+      if (oldest !== undefined) this.pendingDeliveries.delete(oldest)
+    }
+    this.pendingDeliveries.set(active.target.id, {
+      transcript,
+      attemptId: active.attemptId,
+      scope: structuredClone(active.scope)
+    })
+  }
+
+  /** Whether this field is still owed a transcript its recording produced. */
+  hasPendingDelivery(targetId: string): boolean {
+    return this.pendingDeliveries.has(targetId)
+  }
+
+  /**
+   * Insert a transcript that is still waiting for its field.
+   *
+   * Called by the mic of a field that has just mounted. The insertion is
+   * measured against the value the field holds at this instant, so it lands at
+   * the caret the user is about to see rather than at an offset captured before
+   * the field was destroyed.
+   */
+  deliverPending(target: SpeechEditorTarget): SpeechPendingDelivery {
+    const pending = this.pendingDeliveries.get(target.id)
+    if (!pending) return 'none'
+    const snapshot = target.capture()
+    if (!snapshot) return 'waiting'
+    const applied = target.apply(snapshot, pending.transcript)
+    if (!applied.ok) return 'waiting'
+    this.pendingDeliveries.delete(target.id)
+    this.recordDictationSpan(pending.attemptId, target.id, pending.transcript, pending.scope)
+    playSpeechCue(this.sound, 'completed')
+    try {
+      toast.success('Voice recording inserted into its field', {
+        id: 'voice-recording-delivered',
+        description: 'It was recorded before that field was reopened.',
+        duration: 4000
+      })
+    } catch (cause) {
+      logRendererError('Could not show the voice recording delivery notice.', cause)
+    }
+    return 'inserted'
+  }
+
+  /**
+   * Remember one landed dictation so a later send of the same field can be
+   * compared against what the model produced.
+   */
+  private recordDictationSpan(
+    attemptId: string,
+    editorId: string,
+    transcript: string,
+    scope: SpeechScope
+  ): void {
+    const span: SpeechDictationSpan = {
+      id: crypto.randomUUID(),
+      attemptId,
+      editorId,
+      insertedText: transcript,
+      insertedAt: Date.now(),
+      scope: structuredClone(scope)
+    }
+    const current = this.spans.get(editorId) ?? []
+    this.spans.set(editorId, [...current.slice(-7), span])
   }
 
   /**

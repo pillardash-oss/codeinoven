@@ -183,7 +183,16 @@
   const overlay = new StudioAnnotationOverlay<AssignmentAnnotation>('assignment-annotation-anchor')
   const pendingAnnotation = $derived(overlay.pending)
   let annotationBody = $state('')
-  const pendingSpeechTargetId = `assignment-annotation-${crypto.randomUUID()}`
+  /**
+   * A dictation is delivered to whichever field carries its target id, so the id
+   * has to outlive the component that draws the field. A per-mount id made the
+   * field unrecognisable the moment the view was left and reopened, and the
+   * transcript had nowhere to land. Name the body by the assignment it belongs
+   * to and by the passage it was captured from.
+   */
+  const pendingSpeechTargetId = $derived(
+    `assignment-annotation-${assignment.id}-${assignment.version}-${overlay.pending?.startOffset ?? -1}-${overlay.pending?.endOffset ?? -1}`
+  )
   const speechScope = $derived({
     kind: 'project',
     projectId: assignment.projectId,

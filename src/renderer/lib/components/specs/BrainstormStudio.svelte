@@ -143,8 +143,17 @@
   const pendingAnnotation = $derived(overlay.pending)
   let annotationBody = $state('')
   let decisionNotesEditor = $state<RichMarkdownEditor>()
-  const pendingSpeechTargetId = `brainstorm-annotation-${crypto.randomUUID()}`
-  const decisionSpeechTargetId = `brainstorm-decision-${crypto.randomUUID()}`
+  /**
+   * A dictation is delivered to whichever field carries its target id, so the id
+   * has to outlive the component that draws the field. A per-mount id made the
+   * field unrecognisable the moment the view was left and reopened, and the
+   * transcript had nowhere to land. Name the field by the document it belongs
+   * to, and an annotation body also by the passage it was captured from.
+   */
+  const pendingSpeechTargetId = $derived(
+    `brainstorm-annotation-${brainstorm.id}-${brainstorm.version}-${overlay.pending?.startOffset ?? -1}-${overlay.pending?.endOffset ?? -1}`
+  )
+  const decisionSpeechTargetId = $derived(`brainstorm-decision-${brainstorm.id}-${brainstorm.version}`)
   const speechScope = $derived({
     kind: 'project',
     projectId: brainstorm.projectId,
