@@ -1,9 +1,9 @@
 <script lang="ts">
-  import type { Attachment } from 'svelte/attachments'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import WorkingCountBadge from '$lib/components/shared/WorkingCountBadge.svelte'
   import AppRailButton from './AppRailButton.svelte'
   import AppRailUtilities from './AppRailUtilities.svelte'
+  import RailHighlight from './RailHighlight.svelte'
   import type { HeaderViewOption, HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
   import { ViewRailActivity, viewBadgeFor } from './view-rail-activity.svelte'
 
@@ -23,52 +23,12 @@
 
   const activity = new ViewRailActivity()
 
-  let railEl = $state<HTMLElement | null>(null)
-  /** Where the current-item surface sits right now; null when no item is current. */
-  let surface = $state<{ top: number; height: number } | null>(null)
-  /** Last measured box, kept while no item is current so the surface fades in
-   *  place instead of snapping back to the top of the rail. */
-  let lastSurface = $state({ top: 0, height: 32 })
-
-  /**
-   * The surface follows whichever item carries `aria-current`   a view button or
-   * the Settings utility   so switching views slides one highlight across the
-   * rail rather than fading two separate ones.
-   */
-  function syncSurface(): void {
-    const root = railEl
-    const current = root?.querySelector<HTMLElement>('[aria-current="page"]')
-    if (!root || !current) {
-      surface = null
-      return
-    }
-    const rootBox = root.getBoundingClientRect()
-    const itemBox = current.getBoundingClientRect()
-    // Measured into a local first: assigning `lastSurface` to `surface` directly
-    // would read the state this effect writes, which Svelte treats as a loop.
-    const box = { top: itemBox.top - rootBox.top, height: itemBox.height }
-    lastSurface = box
-    surface = box
-  }
-
-  const measureRail: Attachment<HTMLElement> = (element) => {
-    railEl = element
-    const observer = new ResizeObserver(syncSurface)
-    observer.observe(element)
-    return () => {
-      observer.disconnect()
-      railEl = null
-    }
-  }
-
-  // The rail's own box never changes when the view does, so the item change is
-  // what re-measures here; the attachment's observer covers layout resizes (the
-  // utility group is pinned to the bottom, so a shorter window moves it).
-  $effect(() => {
-    void activeView
-    void shownOption
-    syncSurface()
-  })
+  /** Identity of what the rail currently shows, plus its item list: either one
+   *  changing moves the current item, which is the only thing that re-measures
+   *  the shared surface. */
+  let highlightRevision = $derived(
+    `${activeView}|${shownOption ?? ''}|${options.map((option) => option.id).join(',')}`
+  )
 
   function isActive(id: HeaderViewOptionId): boolean {
     return id === shownOption
@@ -86,23 +46,10 @@
   class="relative flex h-full w-10 shrink-0 flex-col items-center gap-0.5 bg-surface py-2"
   aria-label="Primary views"
   data-region="view-rail"
-  {@attach measureRail}
 >
   <!-- One current-item surface for the whole rail, shared by the view buttons and
-       the utility group, so a view switch slides it to the icon that took over.
-       `top-0` anchors it to the rail's padding box so the measured offset below
-       places it exactly on the item; without it the box would fall back to its
-       static position, which already sits inside the rail's `py-2`. -->
-  <span
-    class="pointer-events-none absolute left-1 right-1 top-0 rounded-lg bg-elevated transition-[transform,height,opacity] duration-200 ease-out motion-reduce:transition-none {surface
-      ? 'opacity-100'
-      : 'opacity-0'}"
-    style:transform="translateY({surface?.top ?? lastSurface.top}px)"
-    style:height="{surface?.height ?? lastSurface.height}px"
-    aria-hidden="true"
-  >
-    <span class="absolute right-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary"></span>
-  </span>
+       the utility group, so a view switch slides it to the icon that took over. -->
+  <RailHighlight revision={highlightRevision} currentValue="page" accentSide="right" />
 
   <div class="flex flex-col items-center gap-0.5" data-onboarding="view-switcher">
     {#each options as option (option.id)}

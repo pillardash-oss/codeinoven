@@ -327,7 +327,7 @@
               {@const runtime = contextSidebarState.browserRuntime(tab.id)}
               {@const indicators = browserTabIndicators(runtime)}
               <div
-                class="group relative flex max-w-52 items-center border-r border-border {activeTabId ===
+                class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {activeTabId ===
                 tab.id
                   ? 'bg-app text-foreground'
                   : 'text-muted hover:bg-elevated hover:text-foreground'} {onMoveTab

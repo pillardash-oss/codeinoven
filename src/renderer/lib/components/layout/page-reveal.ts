@@ -7,6 +7,11 @@ const REVEAL_MS = 180
 /** How far a view rises while it appears. Barely perceptible on its own, but it
  *  is what makes the switch read as movement instead of a hard swap. */
 const REVEAL_RISE_PX = 6
+/** Cross-fade time for the context sidebar's panel switching tools. Shorter than
+ *  a page switch: the panel is small, and its content is usually already warm. */
+const PANEL_REVEAL_MS = 160
+/** How far a panel rises while it appears. */
+const PANEL_REVEAL_RISE_PX = 4
 
 /**
  * The shell's view switch, used as `transition:fly={pageReveal()}` on the
@@ -23,6 +28,26 @@ export function pageReveal(): FlyParams {
     y: REVEAL_RISE_PX,
     opacity: 0,
     duration: motionDuration(REVEAL_MS),
+    easing: cubicOut
+  }
+}
+
+/**
+ * The context sidebar's panel switch, used as `in:fly`/`out:fly` on the keyed
+ * panel body, so moving from one sidebar tool to another cross-fades instead of
+ * hard-swapping.
+ *
+ * Pass `fadeOnly` for a panel backed by a native surface (the browser's
+ * `WebContentsView` floats above the DOM): a translate would move the box the
+ * panel reports as the view's bounds, while an opacity fade cannot.
+ *
+ * `motionDuration` zeroes the duration when the OS asks for reduced motion.
+ */
+export function panelReveal(fadeOnly = false): FlyParams {
+  return {
+    y: fadeOnly ? 0 : PANEL_REVEAL_RISE_PX,
+    opacity: 0,
+    duration: motionDuration(PANEL_REVEAL_MS),
     easing: cubicOut
   }
 }

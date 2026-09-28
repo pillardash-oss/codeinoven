@@ -39,6 +39,7 @@
 
 <script lang="ts">
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import RailHighlight from './RailHighlight.svelte'
 
   interface Props {
     /** Ordered groups. Empty groups are dropped so no stray hairline renders. */
@@ -49,18 +50,24 @@
 
   let visibleGroups = $derived(groups.filter((group) => group.length > 0))
 
+  /** Identity of every item and which one is current, both of which move the
+   *  shared highlight. The dock's own box never resizes when a tool takes over,
+   *  so nothing else would re-measure it. */
+  let highlightRevision = $derived(
+    visibleGroups
+      .map((group) => group.map((item) => `${item.id}:${item.active}`).join(','))
+      .join('|')
+  )
+
   /** Toned tools keep their colour in every state so the rail icon reads as the
-   *  same tool as its panel icon; untoned tools use the neutral active styling. */
+   *  same tool as its panel icon; the shared highlight behind the current item
+   *  paints the active background for every tool. */
   function toneClass(item: ContextDockItem): string {
     if (item.tone === 'warning') return 'text-warning hover:bg-elevated'
     if (item.tone === 'info') {
-      return item.active
-        ? 'bg-elevated text-info'
-        : 'text-info/80 hover:bg-elevated hover:text-info'
+      return item.active ? 'text-info' : 'text-info/80 hover:bg-elevated hover:text-info'
     }
-    return item.active
-      ? 'bg-elevated text-foreground'
-      : 'text-muted hover:bg-elevated hover:text-foreground'
+    return item.active ? 'text-foreground' : 'text-muted hover:bg-elevated hover:text-foreground'
   }
 </script>
 
@@ -70,10 +77,13 @@
   same place whether the context sidebar is open or closed.
 -->
 <nav
-  class="flex h-full w-10 shrink-0 flex-col items-center gap-0.5 bg-surface py-2"
+  class="relative flex h-full w-10 shrink-0 flex-col items-center gap-0.5 bg-surface py-2"
   aria-label="Context tools"
   data-region="context-dock"
 >
+  <!-- One current-tool surface for the whole dock, so switching tools slides it
+       to the icon that took over instead of fading two separate ones. -->
+  <RailHighlight revision={highlightRevision} currentValue="true" accentSide="left" />
   {#each visibleGroups as group, groupIndex (groupIndex)}
     {#if groupIndex > 0}
       <div class="my-1.5 h-px w-5 shrink-0 bg-border" aria-hidden="true"></div>
@@ -92,12 +102,6 @@
           onclick={item.onSelect}
           oncontextmenu={item.onContextMenu}
         >
-          <span
-            class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary transition-opacity duration-150 {item.active
-              ? 'opacity-100'
-              : 'opacity-0'}"
-            aria-hidden="true"
-          ></span>
           {#if item.countLabel !== undefined}
             <span class="text-[0.6875rem] font-semibold tabular-nums">{item.countLabel}</span>
           {:else if Icon}
