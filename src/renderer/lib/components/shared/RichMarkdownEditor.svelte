@@ -3,7 +3,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     applyCodeFenceOnEnter,
-    applyEmptyPairCodeRule,
+    applyInlineCodeRules,
     applyMarkdownInputRule,
     caretBlock,
     exitEmptyListItemOnEnter,
@@ -691,8 +691,12 @@
     event.preventDefault()
     insertPlainText(editor, text)
     // Pasting content right after a fresh `` pair opens an inline code span,
-    // exactly like typing the first character there would.
-    applyEmptyPairCodeRule(editor)
+    // exactly like typing the first character there would   and so does pasting
+    // between the two backticks of a pair. Only the caret's own run is read: the
+    // whole-document re-render this used to do reformatted every other block the
+    // user had already written (a literal `2. item` line became an ordered list,
+    // `x * y * z` became emphasis), so a paste may never re-parse the document.
+    applyInlineCodeRules(editor)
     // Insert the clipboard text verbatim and leave every other block in the
     // document exactly as the user wrote it. Serializing the whole editor and
     // re-rendering it here would re-parse every untouched block as markdown and
