@@ -48,6 +48,7 @@
   import MediaPreview from '../chats/MediaPreview.svelte'
   import AttachmentPreview from '../chats/AttachmentPreview.svelte'
   import { createComposerAttachmentPreview } from '../chats/chat-composer-preview.svelte'
+  import type { PreviewPagerState } from '../ui/PreviewPager.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
@@ -2032,12 +2033,22 @@
   const checkpointRefreshGuard = new LatestRequestGuard()
   let showSpecStudio = $state(false)
   let threadViewElement = $state<HTMLDivElement | null>(null)
-  let previewFile = $state<{ url: string; filename: string; mime: string } | null>(null)
   let imageUrls = new FileBlobUrlManager()
-  /** Fullscreen preview for a message attachment that carries no media to show
-   *  inline (PDF, document, Markdown, plain text): the same cache the composer
+  /** One file part of a message the fullscreen preview can render, and whether
+   *  it renders in the media lightbox or the document/text preview. */
+  interface PreviewableFilePart {
+    url: string
+    filename: string
+    mime: string
+    media: boolean
+  }
+  /** Fullscreen preview for a message attachment: the same cache the composer
    *  previews attachments with, keyed by the attachment's `file://` URL. */
   const attachmentPreview = createComposerAttachmentPreview()
+  /** The message file parts a fullscreen preview can render, and which one is
+   *  open. Parts no preview can render stay out of `items`, so the pager walks
+   *  only the attachments that can be shown. */
+  let messageViewer = $state<{ items: PreviewableFilePart[]; index: number } | null>(null)
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
@@ -6730,13 +6741,76 @@
   }
 
   /**
-   * Open a message attachment that has no inline thumbnail but that the
-   * fullscreen preview can render: a PDF, a Word/OpenDocument file, Markdown or
-   * plain text opens on the spot through the same cache the composer uses.
+   * Every file part of `msg` that the fullscreen preview can render, in the
+   * order the message shows them. A part with no preview is left out, so
+   * navigation never lands on an empty frame.
    */
-  function previewDocumentPart(part: Extract<AgentPart, { type: 'file' }>): void {
-    attachmentPreview.open({ mime: part.mime, url: part.url, filename: part.filename })
+  function previewableFileParts(msg: AgentMessage): PreviewableFilePart[] {
+    const items: PreviewableFilePart[] = []
+    for (const part of msg.parts) {
+      if (part.type !== 'file') continue
+      const filename = part.filename ?? part.url.split('/').pop() ?? 'file'
+      const kind = attachmentPreviewKind(part.mime, filename)
+      if (!kind) continue
+      items.push({
+        url: part.url,
+        filename,
+        mime: part.mime,
+        media: kind === 'image' || kind === 'video' || kind === 'audio'
+      })
+    }
+    return items
   }
+
+  /** Prepare the payload for the item a preview is about to show: media render
+   *  straight from the file through the blob cache, every other kind through
+   *  the shared document/text cache. */
+  function loadViewerItem(item: PreviewableFilePart): void {
+    if (item.media) return
+    attachmentPreview.open({ mime: item.mime, url: item.url, filename: item.filename })
+  }
+
+  /**
+   * Open one of a message's attachments in the fullscreen preview, collected
+   * with its previewable siblings so the modal can step between them. This is
+   * the click behaviour for an image thumbnail and for a chip the preview can
+   * render (PDF, document, Markdown, text); media chips land here too.
+   */
+  function openMessageViewer(msg: AgentMessage, part: Extract<AgentPart, { type: 'file' }>): void {
+    const items = previewableFileParts(msg)
+    const index = items.findIndex((item) => item.url === part.url)
+    if (index === -1) return
+    messageViewer = { items, index }
+    loadViewerItem(items[index])
+  }
+
+  /** Move the open preview by `delta` items, loading the payload it lands on. */
+  function stepMessageViewer(delta: number): void {
+    const viewer = messageViewer
+    if (!viewer) return
+    const index = viewer.index + delta
+    if (index < 0 || index >= viewer.items.length) return
+    messageViewer = { items: viewer.items, index }
+    loadViewerItem(viewer.items[index])
+  }
+
+  function closeMessageViewer(): void {
+    messageViewer = null
+    attachmentPreview.close()
+  }
+
+  /** Sibling navigation for the open message preview, absent for a message with
+   *  fewer than two previewable attachments. */
+  const messageViewerPager = $derived.by<PreviewPagerState | undefined>(() => {
+    const viewer = messageViewer
+    if (!viewer || viewer.items.length < 2) return undefined
+    return {
+      index: viewer.index,
+      count: viewer.items.length,
+      onPrevious: () => stepMessageViewer(-1),
+      onNext: () => stepMessageViewer(1)
+    }
+  })
 
   /**
    * Click behaviour for a message attachment nothing in the app can render: the
@@ -10830,30 +10904,33 @@
   })
 </script>
 
-{#if previewFile}
-  <MediaPreview
-    src={imageUrls.getUrl(previewFile.url)}
-    revealUrl={previewFile.url}
-    filename={previewFile.filename}
-    mime={previewFile.mime}
-    onClose={() => (previewFile = null)}
-    onLoadError={(el) => {
-      const target = previewFile
-      if (target) void imageUrls.bindMedia(target.url, target.mime, el)
-    }}
-  />
-{/if}
-
-{#if attachmentPreview.file}
-  {@const sentAttachment = attachmentPreview.file}
-  <AttachmentPreview
-    attachment={sentAttachment}
-    src={attachmentPreview.urls[sentAttachment.url]}
-    text={attachmentPreview.texts[sentAttachment.url]}
-    documentHtml={attachmentPreview.documents[sentAttachment.url]}
-    documentLoading={attachmentPreview.documentLoading[sentAttachment.url] ?? false}
-    onClose={() => attachmentPreview.close()}
-  />
+{#if messageViewer}
+  {@const viewerItem = messageViewer.items[messageViewer.index]}
+  {#if viewerItem.media}
+    <MediaPreview
+      src={imageUrls.getUrl(viewerItem.url)}
+      revealUrl={viewerItem.url}
+      filename={viewerItem.filename}
+      mime={viewerItem.mime}
+      pager={messageViewerPager}
+      onClose={closeMessageViewer}
+      onLoadError={(el) => {
+        const viewer = messageViewer
+        const target = viewer?.items[viewer.index]
+        if (target) void imageUrls.bindMedia(target.url, target.mime, el)
+      }}
+    />
+  {:else}
+    <AttachmentPreview
+      attachment={viewerItem}
+      src={attachmentPreview.urls[viewerItem.url]}
+      text={attachmentPreview.texts[viewerItem.url]}
+      documentHtml={attachmentPreview.documents[viewerItem.url]}
+      documentLoading={attachmentPreview.documentLoading[viewerItem.url] ?? false}
+      pager={messageViewerPager}
+      onClose={closeMessageViewer}
+    />
+  {/if}
 {/if}
 
 {#if responseSelection}
@@ -11388,12 +11465,7 @@
                                     class="group relative overflow-hidden rounded-lg border border-border transition-shadow hover:shadow-md"
                                     title="Preview {part.filename ?? 'image'}"
                                     aria-label="Preview {part.filename ?? 'image'}"
-                                    onclick={() =>
-                                      (previewFile = {
-                                        url: part.url,
-                                        filename: part.filename ?? 'image',
-                                        mime: part.mime
-                                      })}
+                                    onclick={() => openMessageViewer(msg, part)}
                                   >
                                     <img
                                       src={imageUrls.getUrl(part.url)}
@@ -11426,12 +11498,7 @@
                                     partName,
                                     mediaKind,
                                     `Preview ${partName}`,
-                                    () =>
-                                      (previewFile = {
-                                        url: part.url,
-                                        filename: part.filename ?? mediaKind,
-                                        mime: part.mime
-                                      })
+                                    () => openMessageViewer(msg, part)
                                   )}
                                 </FileCitationContextMenu>
                               {:else if renderable}
@@ -11443,7 +11510,7 @@
                                     partName,
                                     'renderable',
                                     `Preview ${partName}`,
-                                    () => previewDocumentPart(part)
+                                    () => openMessageViewer(msg, part)
                                   )}
                                 </FileCitationContextMenu>
                               {:else}
@@ -12321,8 +12388,8 @@
                     {chatMode
                       ? 'Send a message to begin no project needed'
                       : centeredModelName
-                        ? `What should ${centeredModelName} work on?`
-                        : 'How can CIO serve you today?'}
+                        ? `What should ${centeredModelName} work on using CodeInOven?`
+                        : 'How can CodeInOven serve you today?'}
                   </p>
                 </div>
               {/if}

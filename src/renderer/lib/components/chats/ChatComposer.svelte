@@ -15,9 +15,10 @@
   import { modelKey } from '$lib/model-keys'
   import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
   import { visionModels } from '$lib/stores/vision-models.svelte'
-  import { fileUrlToPath, mimeFromPath, pathToFileUrl } from '$lib/mime'
+  import { fileUrlToPath, mimeFromPath, pathToFileUrl, attachmentPreviewKind } from '$lib/mime'
   import { placeCaretAtEnd } from '../shared/rich-markdown'
   import AttachmentPreview from './AttachmentPreview.svelte'
+  import type { PreviewPagerState } from '../ui/PreviewPager.svelte'
   import StartAfterThreadPicker from './StartAfterThreadPicker.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
@@ -462,6 +463,35 @@
     dropRegion = null
   }
   const preview = createComposerAttachmentPreview()
+
+  /** Attachments the fullscreen preview can render, in strip order. The pager
+   *  walks this list, so an attachment with no preview is skipped instead of
+   *  opening as an empty frame. */
+  const previewableAttachments = $derived(
+    attachments.filter((file) => attachmentPreviewKind(file.mime, file.filename ?? '') !== null)
+  )
+
+  /** Sibling navigation for the open fullscreen preview, absent when the
+   *  composer holds fewer than two previewable attachments. */
+  const previewPager = $derived.by<PreviewPagerState | undefined>(() => {
+    const open = preview.file
+    if (!open) return undefined
+    const list = previewableAttachments
+    const index = list.findIndex((file) => file.url === open.url)
+    if (index === -1 || list.length < 2) return undefined
+    return {
+      index,
+      count: list.length,
+      onPrevious: () => {
+        const target = list[index - 1]
+        if (target) preview.open(target)
+      },
+      onNext: () => {
+        const target = list[index + 1]
+        if (target) preview.open(target)
+      }
+    }
+  })
   /** Image-descriptor gate state: intercepts sending an image to a text-only model. */
   let imageDescriptorGateOpen = $state(false)
   let gateVisionSelection = $state<AgentModelSelection | null>(null)
@@ -1594,6 +1624,7 @@
     documentHtml={preview.documents[previewAttachment.url]}
     documentLoading={preview.documentLoading[previewAttachment.url] ?? false}
     onSaveText={isEditablePastedTextAttachment(previewAttachment) ? savePreviewText : undefined}
+    pager={previewPager}
     onClose={() => {
       preview.close()
       focusComposerAtSavedCaret()
