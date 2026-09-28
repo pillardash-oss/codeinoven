@@ -142,17 +142,24 @@ export interface BrowserDownloadsContextTab {
 }
 
 /**
- * The global browser's popup windows panel.
+ * One popup window on the browser's right rail.
  *
  * A popup window is a page's own `window.open` with a window in it: a sign-in, a
- * checkout, a share dialog. It belongs to the tab whose page opened it, and it
- * ends when the page inside it ends, so the panel belongs to the tab on screen
- * and is the one place a popup's page is displayed.
+ * checkout, a share dialog. The app hosts it and displays it in the rail, so the
+ * rail carries one tab per popup, exactly as it carries one tab per open file:
+ * the tab is the popup, and closing the tab closes the window. The tab carries no
+ * data of its own beyond that identity, because the popup itself lives in main and
+ * the renderer's mirror of it (see `browser-popup-windows.svelte.ts`).
  */
-export interface BrowserPopupWindowsContextTab {
+export interface BrowserPopupWindowContextTab {
+  /** The popup window's own id, so a tab and a window are the same thing. */
   id: string
-  kind: 'popup-windows'
+  kind: 'popup-window'
   title: string
+  /** The browser tab whose page opened it, for the label when a title is missing. */
+  openerTabId: string
+  /** Live page favicon (data URL) from the browser, if the popup reported one. */
+  favicon?: string
 }
 
 export type MemorySection = 'active' | 'proposed'
@@ -261,7 +268,7 @@ export type ContextSidebarTab =
   | TemporaryChatContextTab
   | NotificationContextTab
   | BrowserDownloadsContextTab
-  | BrowserPopupWindowsContextTab
+  | BrowserPopupWindowContextTab
   | MemoryContextTab
   | CoordinatorContextTab
   | AssistantHowToContextTab

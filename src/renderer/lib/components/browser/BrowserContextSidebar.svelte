@@ -3,10 +3,10 @@
   import {
     contextSidebarState,
     type BrowserDownloadsContextTab,
-    type BrowserPopupWindowsContextTab,
     type ContextSidebarTab
   } from '$lib/stores/context-sidebar.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 
   interface Props {
@@ -22,13 +22,13 @@
    * every workspace thread docks its panels into, and it hosts the same tools
    * the rest of the app uses, so none is re-implemented here:
    *
-   * - notifications, the app's own panel the header bell opens,
+   * - the popup windows the active page opened, one tab per window,
+   * - the profile's downloads, which need no tab and keep the rail present,
    * - the active tab's note, the same note a thread has (only the subject
    *   differs),
    * - the active tab's agent conversation, the app's own temporary side chat
    *   bound to the tab instead of to a workspace thread,
-   * - the active tab's popup windows, one tab per window the page opened,
-   * - the profile's downloads, which need no tab and keep the rail present.
+   * - notifications, the app's own panel the header bell opens.
    *
    * Exactly one is on screen at a time, chosen by the context dock rail, exactly
    * as the workspace picks one tool from its own dock.
@@ -53,15 +53,19 @@
     title: 'Downloads'
   }
   /**
-   * The popup windows panel. A popup belongs to the tab whose page opened it,
-   * like the note and the agent chat do, so the panel is only listed while a tab
-   * is on screen.
+   * The popup windows the active page opened, one tab per window.
+   *
+   * A popup belongs to the tab whose page opened it, like the note and the agent
+   * chat do, and the list is main's: the tabs are derived from it, so a window that
+   * ends leaves the strip with no surface having to prune anything.
    */
-  const popupsTab: BrowserPopupWindowsContextTab = {
-    id: 'browser-popup-windows',
-    kind: 'popup-windows',
-    title: 'Popup windows'
-  }
+  const popupTabs = $derived(activeTab ? browserPopupWindows.tabsFor(activeTab.id) : [])
+  /** The popup the rail is showing, or null while no popup tool is up. */
+  const activePopup = $derived(
+    activeTab && globalBrowser.popupsSidebarShown
+      ? browserPopupWindows.activeFor(activeTab.id)
+      : null
+  )
   /**
    * The notifications panel is the app's own panel, opened by the header bell,
    * so the rail reads the shared flag instead of keeping a second one. Reading
@@ -74,10 +78,10 @@
   )
 
   const tabs = $derived([
+    ...popupTabs,
+    downloadsTab,
     ...(noteTab ? [noteTab] : []),
     ...(agentTab ? [agentTab] : []),
-    popupsTab,
-    downloadsTab,
     ...(notificationsTab ? [notificationsTab] : [])
   ] satisfies ContextSidebarTab[])
   const activeTabId = $derived(
@@ -85,18 +89,25 @@
       (globalBrowser.agentSidebarShown
         ? (agentTab?.id ?? null)
         : globalBrowser.popupsSidebarShown
-          ? popupsTab.id
+          ? (activePopup?.id ?? null)
           : globalBrowser.downloadsSidebarShown
             ? downloadsTab.id
             : (noteTab?.id ?? null))
   )
+
+  /** Whether the tool on screen is a popup window, for the two callbacks that
+   *  have to answer differently for it. */
+  function isPopupTab(tabId: string): boolean {
+    return popupTabs.some((tab) => tab.id === tabId)
+  }
 
   /** Switching tools keeps the rail on the chosen panel; closing a panel hides
    *  it, so a browser tab's agent chat closes the rail rather than dropping the
    *  conversation (closing the browser tab does). */
   function selectTool(tabId: string): void {
     if (notificationsTab && tabId === notificationsTab.id) return
-    if (tabId === popupsTab.id) {
+    if (isPopupTab(tabId)) {
+      browserPopupWindows.select(tabId)
       globalBrowser.showPopupsSidebar()
       return
     }
@@ -113,8 +124,8 @@
       contextSidebarState.toggleNotifications()
       return
     }
-    if (tabId === popupsTab.id) {
-      globalBrowser.closePopupsSidebar()
+    if (isPopupTab(tabId)) {
+      browserPopupWindows.close(tabId)
       return
     }
     if (tabId === downloadsTab.id) {
@@ -124,6 +135,13 @@
     if (agentTab && tabId === agentTab.id) globalBrowser.closeAgentSidebar()
     else onClose()
   }
+
+  /** End every popup the page on screen opened, from the rail's own close button.
+   *  Each window ends itself through the store, and the strip follows the list, so
+   *  there is nothing else to tidy here. */
+  function closeAllPopups(): void {
+    if (activeTab) browserPopupWindows.closeForTab(activeTab.id)
+  }
 </script>
 
 {#snippet railContent()}
@@ -132,8 +150,8 @@
       <NotificationPanel />
     {/await}
   {:else if globalBrowser.popupsSidebarShown}
-    {#await import('./BrowserPopupWindowsPanel.svelte') then { default: BrowserPopupWindowsPanel }}
-      <BrowserPopupWindowsPanel />
+    {#await import('./BrowserPopupWindowPanel.svelte') then { default: BrowserPopupWindowPanel }}
+      <BrowserPopupWindowPanel popupId={activePopup?.id ?? ''} />
     {/await}
   {:else if globalBrowser.downloadsSidebarShown}
     {#await import('./BrowserDownloadsPanel.svelte') then { default: BrowserDownloadsPanel }}
@@ -164,6 +182,7 @@
     content={railContent}
     onSelect={selectTool}
     onClose={closeTab}
+    onCloseAllPopupWindows={closeAllPopups}
     onWidthChange={(width) => contextSidebarState.setWidth(width)}
     onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
     onTerminalPlacementChange={() => {}}

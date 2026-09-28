@@ -1,14 +1,14 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { cubicOut } from 'svelte/easing'
   import { AppWindow, Bot, Download, Globe, Plus, StickyNote } from '@lucide/svelte'
   import { subscribe } from '$lib/ipc.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
-  import { motionDuration, slideWidth } from '$lib/motion'
+  import { motionDuration } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -40,21 +40,45 @@
    * The browser view's tools for the context rail.
    *
    * The rail is constant, exactly as it is in every other view: the window's
-   * right edge always carries the context tools. The note and the agent
-   * conversation belong to the tab on screen, so they only exist while a tab is
-   * open. Downloads belong to the shared profile, not a tab, so that tool is
-   * always present: it is what keeps the rail here with the strip empty.
+   * right edge always carries the context tools. The browser's own tools come
+   * first   downloads, then the popup windows the page opened, with the
+   * extensions and profiles that belong beside them still to be built   and the
+   * tab on screen's own tools follow. Downloads and popups belong to the profile
+   * and the page rather than to a thread, and downloads are what keep the rail
+   * here with the strip empty.
    */
   const dockGroups = $derived.by((): ContextDockItem[][] => {
     const tab = activeTab
     const hasNote = tab ? threadNotesState.has(tab.id) : false
     const hasAgent = tab ? globalBrowser.agentChatTabFor(tab.id) !== null : false
-    /** The popup windows this tab's page opened. They are the tab's own windows,
-     *  so the tool is beside the note and the agent chat rather than beside the
-     *  profile's downloads, and it stays in the rail while the panel is open so a
-     *  last popup closing itself does not take the user's close button with it. */
+    /** The popup windows this tab's page opened. A popup that ends leaves the list
+     *  and takes the rail's panel with it when it was the last, so the tool is only
+     *  offered while there is a window for it to show. */
     const popupWindows = tab ? browserPopupWindows.forTab(tab.id) : []
-    const hasPopups = popupWindows.length > 0 || globalBrowser.popupsSidebarShown
+    const browserTools: ContextDockItem[] = [
+      {
+        id: 'downloads',
+        label: activeDownloadCount > 0 ? `Downloads (${activeDownloadCount} active)` : 'Downloads',
+        icon: Download,
+        active: globalBrowser.downloadsSidebarShown,
+        countBadge: activeDownloadCount > 0 ? String(activeDownloadCount) : undefined,
+        onSelect: () => globalBrowser.toggleDownloadsSidebar()
+      },
+      ...(popupWindows.length > 0
+        ? [
+            {
+              id: 'popups',
+              label:
+                popupWindows.length === 1
+                  ? 'Popup window'
+                  : `Popup windows (${popupWindows.length})`,
+              icon: AppWindow,
+              active: globalBrowser.popupsSidebarShown,
+              onSelect: () => globalBrowser.togglePopupsSidebar()
+            }
+          ]
+        : [])
+    ]
     const tabTools: ContextDockItem[] = tab
       ? [
           {
@@ -71,35 +95,15 @@
             icon: Bot,
             active: globalBrowser.agentSidebarShown,
             onSelect: () => globalBrowser.toggleAgentSidebar()
-          },
-          ...(hasPopups
-            ? [
-                {
-                  id: 'popups',
-                  label:
-                    popupWindows.length === 1
-                      ? 'Popup window'
-                      : `Popup windows (${popupWindows.length})`,
-                  icon: AppWindow,
-                  active: globalBrowser.popupsSidebarShown,
-                  onSelect: () => globalBrowser.togglePopupsSidebar()
-                }
-              ]
-            : [])
+          }
         ]
       : []
-    const profileTools: ContextDockItem[] = [
-      {
-        id: 'downloads',
-        label: activeDownloadCount > 0 ? `Downloads (${activeDownloadCount} active)` : 'Downloads',
-        icon: Download,
-        active: globalBrowser.downloadsSidebarShown,
-        countBadge: activeDownloadCount > 0 ? String(activeDownloadCount) : undefined,
-        onSelect: () => globalBrowser.toggleDownloadsSidebar()
-      }
-    ]
-    return [tabTools, profileTools].filter((group) => group.length > 0)
+    return [browserTools, tabTools].filter((group) => group.length > 0)
   })
+
+  /** Whether the right rail is on screen, for a tool of the browser's or the app's
+   *  own notifications panel. */
+  const railShown = $derived(globalBrowser.contextSidebarShown || globalBrowser.notificationsShown)
 
   /**
    * The view's quick actions, rendered beside the view switcher exactly like
@@ -212,21 +216,30 @@
     </div>
   {/if}
 
-  {#if globalBrowser.contextSidebarShown || globalBrowser.notificationsShown}
-    <!-- The rail is the same left-sidebar motion on the other edge: its width is
-         what animates, so the page beside it is released frame by frame rather
-         than jumping to its final frame and watching the panel slide across. -->
-    <div
-      class="flex h-full min-h-0 shrink-0"
-      in:slideWidth={{ duration: motionDuration(200), easing: cubicOut }}
-      out:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
-    >
+  <!-- The rail's track. It is always in the layout, so the panel opens and closes
+       by growing and shrinking this one box   the same motion the workspace rail's
+       track makes. A Svelte transition here waited on an animation event that a
+       renderer whose window is in the background never sends, which pinned the rail
+       at zero width and left the page beside it half open. -->
+  <div
+    class="context-rail flex h-full min-h-0 shrink-0 overflow-hidden"
+    style:width="{railShown ? contextSidebarState.width : 0}px"
+    style:transition-duration="{motionDuration(railShown ? 200 : 160)}ms"
+  >
+    {#if railShown}
       <BrowserContextSidebar onClose={() => globalBrowser.toggleContextSidebar()} />
-    </div>
-  {/if}
+    {/if}
+  </div>
 
   <ContextDock groups={dockGroups} />
 </div>
+
+<style>
+  .context-rail {
+    transition-property: width;
+    transition-timing-function: cubic-bezier(0.215, 0.61, 0.355, 1);
+  }
+</style>
 
 {#if addressSpotlightOpen}
   <BrowserAddressSpotlight onClose={() => globalBrowser.closeAddressSpotlight()} />

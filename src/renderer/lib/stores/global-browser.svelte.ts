@@ -23,6 +23,7 @@ import type {
 import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '$shared/ipc-contract'
 import { appConfigState } from './app-config.svelte'
 import { reportError } from './app-errors.svelte'
+import { browserPopupWindows } from './browser-popup-windows.svelte'
 import { contextSidebarState, type TemporaryChatContextTab } from './context-sidebar.svelte'
 import { sidebarState } from './sidebar.svelte'
 import { defaultSettingsFor } from './thread-settings.svelte'
@@ -123,10 +124,10 @@ export class GlobalBrowserState {
     subscribe('browser:openRequested', (url, context) => this.adoptOpenRequest(url, context))
     // A popup window is a window the user asked for by clicking something, so the
     // first one a page opens for the tab on screen reveals the rail's popup panel,
-    // exactly as the operating system would have put a window in front of them. A
-    // further popup only joins the list, so a page cannot move the panel under the
-    // user's hands while they are using the one already up.
-    subscribe('browser:popupWindows', (popups) => this.revealNewPopupWindows(popups))
+    // exactly as the operating system would have put a window in front of them,
+    // and the other direction of the same rule closes the panel when the last one
+    // ends.
+    subscribe('browser:popupWindows', (popups) => this.applyPopupWindows(popups))
     if (typeof window !== 'undefined') {
       this.sweepTimer = window.setInterval(
         () => this.sweepIdleTabs(),
@@ -143,13 +144,16 @@ export class GlobalBrowserState {
   }
 
   /**
-   * Reveal the popup panel when a page opens a popup for the tab on screen.
+   * Take main's popup windows into the rail.
    *
-   * A popup opened by a background tab is not a reason to move the user away from
-   * what they are reading: it waits in its own tab's panel, which is where the dock
-   * item for that tab appears.
+   * A popup opened by the tab on screen is shown, because the user asked for it by
+   * clicking something: the rail comes up on it and the tab it just opened reads as
+   * current. A popup opened by a background tab is not a reason to move the user
+   * away from what they are reading, so it waits in its own tab's strip. A further
+   * popup only joins the list, so a page cannot move the panel under the user's
+   * hands while they are using the one already up.
    */
-  private revealNewPopupWindows(popups: BrowserPopupWindow[]): void {
+  private applyPopupWindows(popups: BrowserPopupWindow[]): void {
     // The live ids are a list rather than a set: there are as many as the tab has
     // popups open, which is a handful, and this runs on every report about one.
     const live = popups.map((popup) => popup.id)
@@ -160,8 +164,24 @@ export class GlobalBrowserState {
     for (const popup of popups) {
       if (this.seenPopupWindowIds.has(popup.id)) continue
       this.seenPopupWindowIds.add(popup.id)
-      if (tabId !== null && popup.tabId === tabId) this.showPopupsSidebar()
+      if (tabId !== null && popup.tabId === tabId) {
+        browserPopupWindows.select(popup.id)
+        this.showPopupsSidebar()
+      }
     }
+    // The panel belongs to one tab's windows, so when that tab holds none there is
+    // nothing left for the rail to show and it closes with the last of them rather
+    // than sitting there as an empty strip.
+    this.closePopupsWithNoWindows()
+  }
+
+  /** Close the popup tool once the tab on screen has no popup windows left. */
+  private closePopupsWithNoWindows(): void {
+    if (!this.contextSidebarVisible) return
+    if (this.contextSidebarTool !== 'popups') return
+    const tab = this.activeTab
+    if (tab && browserPopupWindows.forTab(tab.id).length > 0) return
+    this.contextSidebarVisible = false
   }
 
   // ─── Reads ────────────────────────────────────────────────────────────────
@@ -465,10 +485,13 @@ export class GlobalBrowserState {
     this.activeTabId = tabId
     this.dockActiveTabNote()
     // The rail follows the active tab: while the agent tool is shown, the new
-    // tab's own conversation must be the one on screen.
+    // tab's own conversation must be the one on screen, and the popup panel, which
+    // belongs to the tab whose page opened the windows, closes when that tab has
+    // none.
     if (this.contextSidebarTool === 'agent' && this.contextSidebarVisible && this.activeTab) {
       this.ensureAgentChat(this.activeTab)
     }
+    if (this.contextSidebarTool === 'popups') this.closePopupsWithNoWindows()
   }
 
   private dockActiveTabNote(): void {

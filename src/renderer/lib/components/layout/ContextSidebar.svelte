@@ -10,6 +10,7 @@
     Cloud,
     FileDiff,
     MonitorCog,
+    AppWindow,
     Files,
     GitBranch,
     GlobeCode,
@@ -65,6 +66,10 @@
      *  "+"; temporary chats are tabbed but are only ever opened from a thread. */
     onNewTerminal?: () => void
     onNewBrowser?: () => void
+    /** Close every popup window the tab's page opened. The popup rail's own close
+     *  button ends all of them at once: one tab close per window is the strip's
+     *  job, and this is the way out of a pile of them. */
+    onCloseAllPopupWindows?: () => void
   }
 
   let {
@@ -83,7 +88,8 @@
     onTerminalPlacementChange,
     onTerminalDockToggle,
     onNewTerminal,
-    onNewBrowser
+    onNewBrowser,
+    onCloseAllPopupWindows
   }: Props = $props()
 
   let resizing = $state(false)
@@ -102,7 +108,8 @@
     'terminal',
     'browser',
     'temporary-chat',
-    'subagent'
+    'subagent',
+    'popup-window'
   ])
 
   // These tools are opened and closed from their own rail icon, and each one
@@ -143,6 +150,9 @@
   /** Terminals alone own the placement toggle, fullscreen and the "+". */
   let terminalMode = $derived(activeTab?.kind === 'terminal')
   let browserMode = $derived(activeTab?.kind === 'browser')
+  /** A popup window's page. Its tabs are the windows the page opened, so the tool
+   *  is tabbed like a terminal and still owns a close-all control of its own. */
+  let popupMode = $derived(activeTab?.kind === 'popup-window')
   /** Other open panels of the active tool, e.g. several open files. Without a
    *  strip these would be unreachable, so the header offers them in a picker. */
   let siblingTabs = $derived(
@@ -151,7 +161,7 @@
   /** Temporary chats close from their own tab, so they need no header cluster
    *  rendering it anyway would leave a stray divider on the right edge. */
   let showHeaderControls = $derived(
-    terminalMode || browserMode || (activeTab !== null && !tabbedMode)
+    terminalMode || browserMode || popupMode || (activeTab !== null && !tabbedMode)
   )
 
   let dragTabId = $state<string | null>(null)
@@ -310,6 +320,12 @@
       <Cloud size={12} class="shrink-0" />
     {:else if tab.kind === 'thread-note'}
       <StickyNote size={12} class="shrink-0" />
+    {:else if tab.kind === 'popup-window'}
+      {#if tab.favicon}
+        <img src={tab.favicon} alt="" class="h-3 w-3 shrink-0" aria-hidden="true" />
+      {:else}
+        <AppWindow size={12} class="shrink-0" />
+      {/if}
     {:else if tab.kind === 'coordinator'}
       <Network size={12} class="shrink-0 text-primary" />
     {:else if tab.kind === 'assistant-how-to'}
@@ -551,9 +567,9 @@
             <button
               type="button"
               class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label={`Close ${activeTab.title}`}
-              title="Close panel"
-              onclick={() => onClose(activeTab.id)}
+              aria-label={popupMode ? 'Close all popup windows' : `Close ${activeTab.title}`}
+              title={popupMode ? 'Close all popup windows' : 'Close panel'}
+              onclick={() => (popupMode ? onCloseAllPopupWindows?.() : onClose(activeTab.id))}
             >
               <X size={13} />
             </button>

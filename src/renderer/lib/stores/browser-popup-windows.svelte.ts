@@ -1,6 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import type { BrowserPopupWindow, BrowserViewBounds } from '$shared/ipc-contract'
+import type { BrowserPopupWindowContextTab } from './context-sidebar-types'
 import { reportError } from './app-errors.svelte'
 
 /**
@@ -20,6 +21,13 @@ import { reportError } from './app-errors.svelte'
 class BrowserPopupWindowsState {
   private readonly popups = new SvelteMap<string, BrowserPopupWindow>()
 
+  /**
+   * The popup the rail is showing. Only the id is kept, so a popup that ends
+   * cannot leave a stale record behind, and a pick survives the reports that
+   * rewrite the list around it.
+   */
+  private selectedId = $state<string | null>(null)
+
   constructor() {
     // One app-lifetime subscription: a popup that opens while the browser view is
     // closed still has to be there when the user opens it, and one that closes
@@ -34,6 +42,9 @@ class BrowserPopupWindowsState {
       if (!live.has(id)) this.popups.delete(id)
     }
     for (const popup of popups) this.popups.set(popup.id, popup)
+    // A popup that ended hands the rail to the newest one left rather than
+    // leaving a pick that no longer exists.
+    if (this.selectedId !== null && !live.has(this.selectedId)) this.selectedId = null
   }
 
   /** Re-read the popups a project holds, so a panel opened on a new session (or
@@ -56,6 +67,53 @@ class BrowserPopupWindowsState {
       if (popup.tabId === tabId) popups.push(popup)
     }
     return popups
+  }
+
+  /**
+   * One rail tab per popup a browser tab holds, in the order they opened.
+   *
+   * The tab is the popup: the rail's strip is the list of windows and a popup
+   * that ends simply stops appearing here, so no surface has to prune the strip.
+   */
+  tabsFor(tabId: string): BrowserPopupWindowContextTab[] {
+    return this.forTab(tabId).map((popup) => ({
+      id: popup.id,
+      kind: 'popup-window',
+      title: popup.title || popup.url || 'Popup window',
+      openerTabId: popup.tabId,
+      favicon: popup.favicon ?? undefined
+    }))
+  }
+
+  /** One popup by id, or null once it is gone. */
+  find(popupId: string): BrowserPopupWindow | null {
+    return this.popups.get(popupId) ?? null
+  }
+
+  /**
+   * The popup the rail shows for a browser tab: the one the user picked, or the
+   * newest still open. Null when that tab holds none, which is when the rail has
+   * nothing left to display.
+   */
+  activeFor(tabId: string): BrowserPopupWindow | null {
+    const popups = this.forTab(tabId)
+    if (popups.length === 0) return null
+    const picked = popups.find((popup) => popup.id === this.selectedId)
+    if (picked) return picked
+    return popups[popups.length - 1] ?? null
+  }
+
+  /** Show one popup: the rail's frame places it and its tab reads as current. */
+  select(popupId: string): void {
+    this.selectedId = popupId
+  }
+
+  /**
+   * Close every popup one browser tab holds, for the rail's own close control:
+   * the windows end and their tabs leave the strip with them.
+   */
+  closeForTab(tabId: string): void {
+    for (const popup of this.forTab(tabId)) this.close(popup.id)
   }
 
   /** Place a popup's page over the frame the panel measured for it. */
