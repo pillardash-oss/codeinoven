@@ -3,12 +3,10 @@
   import { fly } from 'svelte/transition'
   import type { Thread } from '$shared/types'
   import { panelReveal } from '$lib/components/layout/page-reveal'
-  // TerminalPanel and BrowserPanel stay static on purpose: both are also
-  // statically imported by the keep-mounted fullscreen and terminal-dock
-  // wrappers, so a dynamic import here cannot move them out of the eager
-  // closure. Deferring them means deferring those wrappers too, which is the
-  // native-view mount path, not a chunk split.
-  import BrowserPanel from '$lib/components/browser/BrowserPanel.svelte'
+  // BrowserPanel is a dynamic import: terminal and browser panels are the dock's
+  // two heaviest residents, and the browser one drags the browser's whole model
+  // with it. A browser panel can only appear once a browser tab exists, which is
+  // also when its chunk is warmed, so nothing on the first paint waits for it.
   import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { Network } from '@lucide/svelte'
@@ -227,7 +225,9 @@
           {:else if browser.clearDataConfirmOpen && browser.clearDataProjectId === activeContextTab.projectId}
             <div class="h-full bg-app" aria-hidden="true"></div>
           {:else}
-            <BrowserPanel tab={activeContextTab} />
+            {#await import('$lib/components/browser/BrowserPanel.svelte') then { default: BrowserPanel }}
+              <BrowserPanel tab={activeContextTab} />
+            {/await}
           {/if}
         {:else if activeContextTab.kind === 'debugger'}
           {#await import('../debug/AgentDebugPanel.svelte') then { default: AgentDebugPanel }}

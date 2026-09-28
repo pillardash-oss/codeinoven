@@ -4,7 +4,6 @@
   import { getProjectIcon } from '$lib/project-icons'
   import { contentFamilyIcon } from '$lib/content-view-icons'
   import ThreadRow from './ThreadRow.svelte'
-  import SwitcherBrowserRow from './SwitcherBrowserRow.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -224,7 +223,13 @@
         onclick={() => void selectEntry(entry)}
       >
         {#if entry.kind === 'browser'}
-          <SwitcherBrowserRow tab={entry.tab} selected={index === highlightedIndex} />
+          <!-- A browser row is a dynamic import: the switcher is mounted long
+               before any browser is, and this is the only place it knows about
+               one, so importing the row statically would carry the browser's
+               model into the first-paint chunk for a row that cannot appear. -->
+          {#await import('./SwitcherBrowserRow.svelte') then { default: SwitcherBrowserRow }}
+            <SwitcherBrowserRow tab={entry.tab} selected={index === highlightedIndex} />
+          {/await}
         {:else}
           <ThreadRow
             thread={entry.thread}

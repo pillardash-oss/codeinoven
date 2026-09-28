@@ -5,7 +5,7 @@
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { startBrowserRuntime } from '$lib/stores/browser-runtime'
+  import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
@@ -171,10 +171,11 @@
   }
 
   onMount(() => {
-    // This surface asks for the browser's renderer runtime itself: the runtime is
-    // not wired at boot (see `startBrowserRuntime`), so the view that needs it is
-    // the one that starts it, before it reads any of the state below.
-    startBrowserRuntime()
+    // This surface asks for the browser itself: nothing about the browser is built
+    // at boot (see `browser-access.svelte`), so the view that needs it is the one
+    // that asks. Idempotent, and it is also what publishes the store to the eager
+    // surfaces that read it.
+    void loadBrowser()
     globalBrowser.markOpened()
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', handlePanelShortcut)
     document.addEventListener('focusin', onFocusIn)

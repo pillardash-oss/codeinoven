@@ -11,6 +11,7 @@ import type {
 import { findBrowserSearchEngine, type BrowserSearchEngine } from '$shared/browser-search-engines'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { publishBrowserSearchEngine } from '$lib/browser-search-context'
+import { isBrowserLoaded } from '$lib/stores/browser-access.svelte'
 
 /** Fallback used until the persisted config loads (mirrors App.svelte defaults). */
 const DEFAULT_MAX_DIFF_LINES = 100
@@ -114,10 +115,15 @@ export const appConfigState = {
     browserCustomSearchEngines = config.browserCustomSearchEngines ?? []
     // Main builds the browser's native context menu, so it needs the active
     // engine to label and run "Search <engine> for ...". It holds no config of
-    // its own, so the resolved engine is pushed on every sync.
-    publishBrowserSearchEngine(
-      findBrowserSearchEngine(browserSearchEngineId, browserCustomSearchEngines)
-    )
+    // its own, so the resolved engine is pushed whenever it changes - but the
+    // push waits for a browser to exist, because nothing about the browser
+    // belongs on a launch that never reaches one. The browser's runtime sends the
+    // value it missed the moment it comes up.
+    if (isBrowserLoaded()) {
+      publishBrowserSearchEngine(
+        findBrowserSearchEngine(browserSearchEngineId, browserCustomSearchEngines)
+      )
+    }
     inAppNotificationSound = {
       ...DEFAULT_IN_APP_NOTIFICATION_SOUND,
       ...config.inAppNotificationSound

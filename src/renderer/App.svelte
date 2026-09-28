@@ -40,7 +40,7 @@
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { isBrowserLoaded, loadBrowser, withBrowser } from '$lib/stores/browser-access.svelte'
   import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { schemeState } from '$lib/stores/scheme.svelte'
@@ -68,8 +68,7 @@
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
-  import { preloadBrowserChunk, preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
-  import { startBrowserRuntime } from '$lib/stores/browser-runtime'
+  import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import type { ActionSelection } from '$lib/actions'
   import { actionContext } from '$lib/stores/action-context.svelte'
@@ -294,8 +293,11 @@
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
     schemeState.sync(effectiveTheme)
     // A browser tab's page is a native view, so its default scrollbar cannot be
-    // reached by the stylesheet: hand the app's colours to main instead.
-    publishBrowserScrollbarTheme()
+    // reached by the stylesheet: hand the app's colours to main instead. Nothing
+    // about the browser belongs on a launch that never reaches it, so the push
+    // waits until there is a browser to theme - the runtime makes the first one
+    // when it comes up, and this covers every theme change after that.
+    if (isBrowserLoaded()) publishBrowserScrollbarTheme()
   }
 
   /** Welcome screen (and other surfaces) can request the getting-started tour. */
@@ -391,10 +393,11 @@
       scopeState.clearSidebarContext()
     }
     activeView = view
-    // Reaching the browser view is the moment its runtime is needed. The view
-    // wires it on mount too, for the session that restores straight onto it
-    // without ever navigating here.
-    if (view === 'browser') startBrowserRuntime()
+    // Reaching the browser view is the moment its code and its runtime are both
+    // needed: the view itself is a dynamic import, and this warms the chunks and
+    // builds the stores before it renders. The view asks too, for the session
+    // that restores straight onto it without ever navigating here.
+    if (view === 'browser') void loadBrowser()
     // Persists the view and tracks the last content / non-settings views, so
     // returning from Settings (even across a restart) lands back where the user
     // was instead of resetting to Projects.
@@ -418,11 +421,8 @@
   function handleViewOptionHover(id: HeaderViewOptionId): void {
     if (id === 'scope-board' || id === 'scoped-threads') preloadScopeChunk()
     // Pointing at the browser is the moment we know the user is going there, so
-    // its chunk and its runtime are both warmed here rather than at boot.
-    if (id === 'browser') {
-      preloadBrowserChunk()
-      startBrowserRuntime()
-    }
+    // its chunks and its runtime are both warmed here rather than at boot.
+    if (id === 'browser') void loadBrowser()
     if (id === 'chats') navigation.preloadNavigationThreads('chats')
     else navigation.preloadNavigationThreads('projects')
   }
@@ -1249,7 +1249,7 @@
       if (activeView === 'browser') {
         e.preventDefault()
         if (e.repeat) return
-        globalBrowser.toggleContextSidebar()
+        void withBrowser((store) => store.toggleContextSidebar())
         return
       }
       const rightSidebarViews = ['projects', 'projects-scope', 'chats', 'threads', 'assistant']
@@ -1355,7 +1355,7 @@
 
       // The browser view owns it for a new tab, which is what a browser does.
       if (activeView === 'browser') {
-        globalBrowser.openNewTabAddress()
+        void withBrowser((store) => store.openNewTabAddress())
         return
       }
 
@@ -1441,10 +1441,12 @@
     }
     observeNavigationLocation()
     void loadConfig()
-    // The in-app browser is not part of the first paint: the app opens on
-    // projects and chat, so its runtime is wired only once the first frame has
-    // painted, and sooner if the browser is reached for before that.
-    scheduleDeferredWork('browser:start', () => startBrowserRuntime())
+    // Every launch leaves the browser alone: no chunk fetched, no store built,
+    // no stored tab list read, no listener registered. The one exception is a
+    // session that restores straight onto the browser view, where the page the
+    // user was reading is what they came back to, so its runtime is asked for at
+    // boot instead of on the first reach.
+    if (activeView === 'browser') void loadBrowser()
     // Fire-and-forget: the app's own record of models reported as
     // vision-capable, consulted before any vision-capability gate.
     void visionModels.load().catch(() => {})

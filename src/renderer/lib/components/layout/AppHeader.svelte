@@ -23,7 +23,6 @@
   import AppHeaderViewActions from './AppHeaderViewActions.svelte'
   import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
   import AppHeaderCenter from './AppHeaderCenter.svelte'
-  import AppHeaderBrowserCenter from './AppHeaderBrowserCenter.svelte'
   import AppHeaderThreadModals from './AppHeaderThreadModals.svelte'
   import AppHeaderEditorMenu from './AppHeaderEditorMenu.svelte'
   import AppHeaderGitChip from './AppHeaderGitChip.svelte'
@@ -275,7 +274,13 @@
   {#if onScope}
     <AppHeaderScopeTabs />
   {:else if onBrowser}
-    <AppHeaderBrowserCenter />
+    <!-- The browser's own centre, and its own chunk: the header is on screen for
+         every view, so importing this statically would put the browser's model in
+         the first-paint chunk. It is fetched the moment the browser view is the
+         one on screen, which is also when its runtime is wired. -->
+    {#await import('./AppHeaderBrowserCenter.svelte') then { default: AppHeaderBrowserCenter }}
+      <AppHeaderBrowserCenter />
+    {/await}
   {:else}
     <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} />
   {/if}

@@ -40,7 +40,6 @@
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
-  import BrowserTabIndicator from '$lib/components/browser/BrowserTabIndicator.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
 
@@ -435,7 +434,14 @@
                   <div
                     class="absolute left-2.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5"
                   >
-                    <BrowserTabIndicator tabId={tab.id} />
+                    <!-- Loaded on demand: the browser indicator is a dynamic
+                         import so the sidebar does not carry the browser's
+                         status module into the first-paint chunk. An indicator
+                         only ever appears on a tab that is playing or
+                         capturing, so the browser is open and it is warm. -->
+                    {#await import('$lib/components/browser/BrowserTabIndicator.svelte') then { default: BrowserTabIndicator }}
+                      <BrowserTabIndicator tabId={tab.id} />
+                    {/await}
                   </div>
                 {/if}
               </div>

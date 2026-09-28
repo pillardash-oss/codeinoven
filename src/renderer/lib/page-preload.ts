@@ -30,15 +30,32 @@ export function preloadScopeChunk(): void {
 }
 
 /**
- * Warm the BrowserView module chunk so opening the browser is instant.
+ * Warm every browser surface's module chunk so opening the browser is instant.
  *
- * Only the chunk is warmed here. The browser's stores are wired by
- * `startBrowserRuntime`, which the caller fires alongside this, because a chunk
- * is not a surface: loading the module must not subscribe the renderer to browser
- * state on its own.
+ * The browser is not in the first-paint chunk, so each of its surfaces is a
+ * dynamic import: the view itself, the app header's centre, the switcher's
+ * browser row, the workspace's fullscreen browser and its browser menus, and the
+ * sidebar's browser panel. They are all warmed together, because reaching for the
+ * browser reaches for more than one of them in the same interaction - clicking a
+ * tab in the sidebar opens the panel and moves the header centre at once.
+ *
+ * Only chunks are warmed here. The browser's stores are wired by `loadBrowser`,
+ * because a chunk is not a surface: loading a module must not subscribe the
+ * renderer to browser state on its own. `loadBrowser` calls this, so a caller only
+ * ever has to ask for the browser once.
  */
 export function preloadBrowserChunk(): void {
-  browserChunkPromise ??= import('$lib/components/browser/BrowserView.svelte').catch((error) => {
+  browserChunkPromise ??= Promise.all([
+    import('$lib/components/browser/BrowserView.svelte'),
+    import('$lib/components/browser/BrowserPanel.svelte'),
+    import('$lib/components/layout/AppHeaderBrowserCenter.svelte'),
+    import('$lib/components/threads/SwitcherBrowserRow.svelte'),
+    import('$lib/components/workspace/WorkspaceFullscreenBrowser.svelte'),
+    import('$lib/components/workspace/WorkspaceBrowserMenu.svelte'),
+    import('$lib/components/workspace/WorkspaceBrowserDataModal.svelte'),
+    import('$lib/components/workspace/WorkspaceBrowserDownloadsModal.svelte')
+  ]).catch((error: unknown) => {
+    // Reset so a transient failure can be retried on the next reach.
     browserChunkPromise = null
     throw error
   })

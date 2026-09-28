@@ -1,30 +1,34 @@
 /**
  * The one seam that wires the in-app browser's renderer runtime.
  *
- * The browser is not part of the app's first paint. The app opens on projects and
- * chat, so a launch that never touches the browser should pay nothing for it. The
- * expensive half of the browser has always behaved that way: the main process
- * creates a tab's native view, its partition session and its download listeners
- * only when a tab is actually shown. The renderer half did not, because four
- * stores did their setup in their constructors and were evaluated while the
- * renderer document evaluated. That put five IPC listeners, a 60s idle sweep, a
- * `MutationObserver` on `documentElement` and a `browser:loadTabs` round trip
- * (with the file read behind it) on the first-paint path, plus a synchronous
- * `localStorage` parse in the sidebar's browser controller.
+ * This module is deliberately reachable only through a dynamic import, from
+ * `browser-access.svelte.ts`. It statically imports every browser store, so
+ * anything that imported it statically would pull the whole browser - the strip's
+ * model, its persistence, the sidebar's tab controller, the design inspector -
+ * into the first-paint chunk. Keeping the import dynamic is what puts that code in
+ * its own chunk, fetched the first time something actually reaches for the
+ * browser.
  *
- * Those stores are now inert until `start` is called on them. This module is the
- * one place that calls, so every path that can put a browser on screen asks here
- * first and the wiring happens exactly once, ahead of the first surface that needs
- * it. `App.svelte` calls it from a post-paint deferral (so the strip is warm for
- * anything that reaches the browser later) and from the moment the browser view or
- * its rail entry is reached for (so the first open is not the one that waits).
+ * The expensive half of the browser has always behaved that way: the main process
+ * creates a tab's native view, its partition session and its download listeners
+ * only when a tab is actually shown. The renderer half did not, because the stores
+ * did their setup in their constructors and were evaluated while the renderer
+ * document evaluated. They are inert until `start` is called on them now, and this
+ * module is the one place that calls, so a launch that never touches the browser
+ * pays nothing: no listener, no timer, no stored-tab read, no `MutationObserver`.
  */
 
+import { publishBrowserSearchEngine } from '$lib/browser-search-context'
+import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
+import { appConfigState } from './app-config.svelte'
 import { browserDownloads } from './browser-downloads.svelte'
 import { browserInspector } from './browser-inspector.svelte'
 import { browserPopupWindows } from './browser-popup-windows.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { globalBrowser } from './global-browser.svelte'
+
+/** The live browser store, re-exported so the access seam needs one import. */
+export { globalBrowser }
 
 let started = false
 
@@ -40,4 +44,10 @@ export function startBrowserRuntime(): void {
   browserDownloads.start()
   browserInspector.start()
   contextSidebarState.startBrowserTabs()
+  // Two pushes to main describe the browser's chrome rather than its state, and
+  // both are skipped while no browser exists (see `publishBrowserScrollbarTheme`
+  // and `appConfigState.sync`). This is where the values they held back are sent,
+  // before the first page exists to use them.
+  publishBrowserScrollbarTheme()
+  publishBrowserSearchEngine(appConfigState.browserSearchEngine)
 }

@@ -183,7 +183,6 @@
     responseReferencesState,
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
-  import { browserInspector } from '$lib/stores/browser-inspector.svelte'
   import { isTodoToolPart, latestAgentTodo, todoSnapshotMatchesTurn } from '$lib/agent-todos'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
@@ -2325,7 +2324,14 @@
       return
     }
     contextSidebarState.focus(tabId)
-    browserInspector.focusComment(tabId, reference.id)
+    // The design inspector is the browser's own session and is not part of the
+    // conversation this view owns. Importing it statically would carry the browser
+    // inspector into the first-paint chunk through the thread view, so it is
+    // loaded on demand; by the time a comment needs focusing the browser is open
+    // and the module is already in memory.
+    void import('$lib/stores/browser-inspector.svelte').then((module) =>
+      module.browserInspector.focusComment(tabId, reference.id)
+    )
   }
 
   /**

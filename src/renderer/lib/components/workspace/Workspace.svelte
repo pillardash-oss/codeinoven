@@ -39,14 +39,10 @@
   import { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
   import WorkspaceSidebar from './WorkspaceSidebar.svelte'
-  import WorkspaceBrowserMenu from './WorkspaceBrowserMenu.svelte'
   import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
-  import WorkspaceBrowserDataModal from './WorkspaceBrowserDataModal.svelte'
-  import WorkspaceBrowserDownloadsModal from './WorkspaceBrowserDownloadsModal.svelte'
   import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
   import WorkspaceEditProjectModal from './WorkspaceEditProjectModal.svelte'
   import WorkspaceFullscreenTerminal from './WorkspaceFullscreenTerminal.svelte'
-  import WorkspaceFullscreenBrowser from './WorkspaceFullscreenBrowser.svelte'
   import WorkspaceUnsavedChangesDialog from './WorkspaceUnsavedChangesDialog.svelte'
   import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
@@ -109,7 +105,8 @@
     threadVisitKey
   } from '$lib/stores/workspace.svelte'
   import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
-  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { browserStore, loadBrowser } from '$lib/stores/browser-access.svelte'
+  import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import {
     buildThreadSwitcherEntries,
     type ThreadSwitcherEntry
@@ -1582,6 +1579,11 @@
     return [...pinned, ...unpinned]
   })
 
+  /** What the switcher sees while the browser's modules are still unloaded: no
+   *  browser tab can be switched to until one exists, and the derived re-runs the
+   *  moment the store arrives. */
+  const NO_BROWSER_TABS: readonly GlobalBrowserTab[] = []
+
   let recentSwitcherEntries = $derived.by(() =>
     buildThreadSwitcherEntries({
       // One recency order across every switchable surface: a project thread, a
@@ -1589,15 +1591,16 @@
       // was last visited.
       visits: recentVisits.all,
       threads: allThreads.filter((thread) => !thread.archived),
-      tabs: globalBrowser.tabs
+      tabs: browserStore()?.tabs ?? NO_BROWSER_TABS
     })
   )
 
   /** The entry the switcher starts cycling from: the active browser tab while the
    *  browser view is on screen, otherwise the selected thread. */
   let switcherSelectedKey = $derived.by(() => {
-    if (!active && globalBrowser.opened && globalBrowser.activeTabId) {
-      return browserTabVisitKey(globalBrowser.activeTabId)
+    const browser = browserStore()
+    if (!active && browser?.opened && browser.activeTabId) {
+      return browserTabVisitKey(browser.activeTabId)
     }
     const thread = selectedThread
     return thread ? threadVisitKey(thread) : null
@@ -3634,7 +3637,10 @@
   async function openSwitcherEntry(entry: ThreadSwitcherEntry): Promise<void> {
     if (entry.kind === 'browser') {
       navigate('browser')
-      globalBrowser.switchTo(entry.tab.id)
+      // An entry for a browser tab only exists once the browser is loaded, so
+      // this resolves immediately; asking through the access seam is what keeps
+      // that fact out of this component's imports.
+      void loadBrowser().then((browser) => browser.switchTo(entry.tab.id))
       return
     }
     await openThreadFromSwitcher(entry.thread)
@@ -4047,12 +4053,23 @@
 {/snippet}
 
 {#snippet browserMenu()}
-  <WorkspaceBrowserMenu {browser} />
+  {#await import('./WorkspaceBrowserMenu.svelte') then { default: WorkspaceBrowserMenu }}
+    <WorkspaceBrowserMenu {browser} />
+  {/await}
 {/snippet}
 
-<WorkspaceBrowserDataModal {browser} {projects} />
+<!-- Every browser surface waits for `browserStore()` so its chunk is not even
+     fetched on a launch that never reaches the browser. The store arrives with
+     the runtime, which is also what warms these chunks. -->
+{#if browserStore()}
+  {#await import('./WorkspaceBrowserDataModal.svelte') then { default: WorkspaceBrowserDataModal }}
+    <WorkspaceBrowserDataModal {browser} {projects} />
+  {/await}
 
-<WorkspaceBrowserDownloadsModal {browser} />
+  {#await import('./WorkspaceBrowserDownloadsModal.svelte') then { default: WorkspaceBrowserDownloadsModal }}
+    <WorkspaceBrowserDownloadsModal {browser} />
+  {/await}
+{/if}
 
 <WorkspaceRemoveProjectModals dialogs={projectDialogs} />
 
@@ -4072,12 +4089,16 @@
   onNewTerminal={openNewTerminal}
   onCloseTab={(id) => closeFullscreenTab('terminal', id)}
 />
-<WorkspaceFullscreenBrowser
-  tabId={browserFullscreenTabId}
-  onTabIdChange={(id) => (browserFullscreenTabId = id)}
-  onNewBrowser={openNewBrowser}
-  onCloseTab={(id) => closeFullscreenTab('browser', id)}
-/>
+{#if browserStore()}
+  {#await import('./WorkspaceFullscreenBrowser.svelte') then { default: WorkspaceFullscreenBrowser }}
+    <WorkspaceFullscreenBrowser
+      tabId={browserFullscreenTabId}
+      onTabIdChange={(id) => (browserFullscreenTabId = id)}
+      onNewBrowser={openNewBrowser}
+      onCloseTab={(id) => closeFullscreenTab('browser', id)}
+    />
+  {/await}
+{/if}
 
 <!-- Closing a files tab with unsaved changes -->
 <WorkspaceUnsavedChangesDialog
