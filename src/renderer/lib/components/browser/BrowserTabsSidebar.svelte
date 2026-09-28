@@ -17,7 +17,7 @@
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
-  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
   import { type GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import BrowserTabRow from './BrowserTabRow.svelte'
@@ -113,7 +113,14 @@
     addressFocused = false
     // With a tab on screen the address drives it. With none it is the way in, so
     // it opens the first tab instead of doing nothing.
-    if (activeTab) void invoke('browser:navigate', activeTab.id, resolution.url).catch(() => {})
+    if (activeTab)
+      void invoke(
+        'browser:navigate',
+        activeTab.id,
+        GLOBAL_BROWSER_CONTEXT.projectId,
+        GLOBAL_BROWSER_CONTEXT.threadId,
+        resolution.url
+      ).catch(() => {})
     else globalBrowser.createTab(resolution.url)
   }
 

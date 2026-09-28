@@ -4,7 +4,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import { appConfigState } from '$lib/stores/app-config.svelte'
-  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
 
   interface Props {
     onClose: () => void
@@ -37,7 +37,13 @@
       return
     }
     if (tab) {
-      void invoke('browser:navigate', tab.id, resolution.url).catch(() => {})
+      void invoke(
+        'browser:navigate',
+        tab.id,
+        GLOBAL_BROWSER_CONTEXT.projectId,
+        GLOBAL_BROWSER_CONTEXT.threadId,
+        resolution.url
+      ).catch(() => {})
     } else {
       globalBrowser.createTab(resolution.url)
     }

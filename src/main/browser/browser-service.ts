@@ -372,8 +372,20 @@ export class BrowserService {
     ipcMain.handle('browser:setToastVisible', (_event, rawVisible) => {
       this.setToastVisible(rawVisible === true)
     })
-    ipcMain.handle('browser:navigate', (_event, rawTabId, rawUrl) => {
-      this.load(validateTabId(rawTabId), validateBrowserUrl(rawUrl))
+    ipcMain.handle('browser:navigate', (_event, rawTabId, rawProjectId, rawThreadId, rawUrl) => {
+      const tabId = validateTabId(rawTabId)
+      const projectId = validateProjectId(rawProjectId)
+      const threadId = validateThreadId(rawThreadId)
+      const url = validateBrowserUrl(rawUrl)
+      // Main creates a tab on `browser:show`, so a tab the renderer already knows
+      // can still be unknown here: a fresh tab whose page has not been shown yet
+      // because an overlay (the address spotlight) covers its frame. Ensuring the
+      // tab makes an address load regardless of whether its page is on screen.
+      const tab = this.ensureTab(tabId, projectId, threadId)
+      // The navigation below is this tab's first, so a later show must not load
+      // the stale initial URL over it.
+      tab.initialNavigationStarted = true
+      this.load(tabId, url)
     })
     ipcMain.handle('browser:goBack', (_event, rawTabId) => {
       const tab = this.requireTab(validateTabId(rawTabId))

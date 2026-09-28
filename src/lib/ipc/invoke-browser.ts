@@ -26,7 +26,10 @@ export const invokeBrowserContract = {
   >,
   'browser:hide': {} as Contract<[tabId: string], void>,
   'browser:setToastVisible': {} as Contract<[visible: boolean], void>,
-  'browser:navigate': {} as Contract<[tabId: string, url: string], void>,
+  'browser:navigate': {} as Contract<
+    [tabId: string, projectId: string, threadId: string, url: string],
+    void
+  >,
   'browser:goBack': {} as Contract<[tabId: string], void>,
   'browser:goForward': {} as Contract<[tabId: string], void>,
   'browser:reload': {} as Contract<[tabId: string], void>,
