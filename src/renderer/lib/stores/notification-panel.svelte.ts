@@ -246,13 +246,39 @@ class NotificationPanelState {
   hydrateFromThreads(threads: Thread[], projects: Project[] = []): void {
     const projectById = new Map(projects.map((project) => [project.id, project]))
     for (const thread of threads) {
-      if (
-        (thread.status === 'awaiting_approval' || thread.status === 'spec') &&
-        !thread.read &&
-        !isOrchestrationChildThread(thread)
-      ) {
-        const project = projectById.get(thread.projectId)
-        const isChat = thread.projectId === INBOX_PROJECT_ID
+      if (isOrchestrationChildThread(thread) || thread.read) continue
+
+      const project = projectById.get(thread.projectId)
+      const isChat = thread.projectId === INBOX_PROJECT_ID
+
+      // A run that settled `failed` while no window was open keeps its
+      // persisted diagnostic on the thread row. Rehydrate it as an error entry
+      // so the panel explains the failure instead of showing a bare status.
+      if (thread.status === 'failed') {
+        const isAssistant = thread.projectId === ASSISTANT_SPACE_ID
+        const sourceName = isChat
+          ? 'Chat'
+          : isAssistant
+            ? 'Assistant'
+            : (project?.name ?? thread.title)
+        const errorDetail = thread.lastError?.trim() || undefined
+        const errorHeadline = errorDetail?.split('\n', 1)[0]?.trim() || undefined
+        this.add({
+          id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,
+          kind: 'error',
+          title: `${sourceName} hit an error`,
+          body: errorHeadline ?? `${thread.title} stopped with an error.`,
+          ...(errorDetail ? { errorDetail } : {}),
+          projectId: thread.projectId,
+          threadId: thread.id,
+          source: isChat ? 'chat' : isAssistant ? 'assistant' : 'project',
+          projectName: project?.name ?? '',
+          projectColor: project?.color
+        })
+        continue
+      }
+
+      if (thread.status === 'awaiting_approval' || thread.status === 'spec') {
         const sourceName = isChat ? 'Chat' : (project?.name ?? thread.title)
         this.add({
           id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,

@@ -303,6 +303,51 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: ['limit', 'slash commands', 'timeout'],
     icon: SlidersHorizontal
   },
+  {
+    id: 'general-background',
+    section: 'general',
+    blockId: 'general-threads',
+    title: 'Run in the background',
+    description: 'Keep Assistant routines on schedule after the window closes.',
+    keywords: ['background', 'menu bar', 'tray', 'scheduled', 'close', 'quit'],
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'general-background-mode',
+    section: 'general',
+    blockId: 'general-threads',
+    title: 'Background mode',
+    description: 'Park only when work is running or due, or never quit on close.',
+    keywords: ['scheduled', 'always', 'background', 'close', 'quit'],
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'general-launch-at-login',
+    section: 'general',
+    blockId: 'general-threads',
+    title: 'Start at login',
+    description: 'Launch CodeInOven at login so a schedule can fire after a restart.',
+    keywords: ['login', 'autostart', 'startup', 'boot'],
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'general-missed-runs',
+    section: 'general',
+    blockId: 'general-threads',
+    title: 'Run missed scheduled work on return',
+    description: 'Catch up on assistant slots missed to sleep or a closed app.',
+    keywords: ['missed', 'catch up', 'scheduled', 'sleep', 'resume'],
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'general-wake-lead',
+    section: 'general',
+    blockId: 'general-threads',
+    title: 'Wake lead',
+    description: 'How long before a due run the device is held awake.',
+    keywords: ['wake', 'sleep', 'lead', 'prevent sleep', 'battery'],
+    icon: SlidersHorizontal
+  },
   // ── Blocks on Browser ─────────────────────────────────────────────────
   {
     id: 'browser-links',

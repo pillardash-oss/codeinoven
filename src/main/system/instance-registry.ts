@@ -174,6 +174,23 @@ export class InstanceRegistry {
   }
 
   /**
+   * The process id the election would pick, or null when it cannot be resolved.
+   * A secondary instance uses this to address the owner ("bring your window
+   * forward"), so it must answer with the same deterministic rule
+   * {@link isIncumbentInstance} uses rather than a second derivation.
+   */
+  incumbentPid(): number | null {
+    try {
+      const entries = this.liveEntries()
+      if (entries.length === 0) return null
+      entries.sort((left, right) => left.startedAt - right.startedAt || left.pid - right.pid)
+      return entries[0]?.pid ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * Announce that the set of turns this process is running may have changed.
    *
    * The shared `active_turns` ledger is the single source of truth for turn

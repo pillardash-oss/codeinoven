@@ -847,6 +847,7 @@ export class Database {
       this.migrateThreadAccountColumn(connection)
       this.migrateThreadDraftColumns(connection)
       this.migrateThreadAssistantColumns(connection)
+      this.migrateThreadFailureColumns(connection)
       this.migrateAgentMessageGenerationColumn(connection)
       this.migrateAgentMessageAccountColumns(connection)
       this.migrateAgentMessageContextEstimatedColumn(connection)
@@ -1430,6 +1431,33 @@ export class Database {
       'UPDATE threads SET pinned = 1, pinned_at = COALESCE(pinned_at, updated_at) ' +
         'WHERE assistant_getting_started = 1 AND pinned = 0'
     )
+  }
+
+  /**
+   * Existing databases predate durable unattended-failure evidence: without
+   * these columns a run that failed while no window was open reads back as a
+   * bare `failed` status with no explanation. `last_outcome` is nullable so a
+   * row that never settled carries no outcome, and the CHECK keeps the domain
+   * closed on old rows (SQLite skips the check for NULL). Fresh databases
+   * already carry all three, and the guarded `ALTER TABLE` is idempotent.
+   */
+  private migrateThreadFailureColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('last_error')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN last_error TEXT')
+    }
+    if (!columns.has('last_error_at')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN last_error_at INTEGER')
+    }
+    if (!columns.has('last_outcome')) {
+      connection.exec(
+        "ALTER TABLE threads ADD COLUMN last_outcome TEXT CHECK(last_outcome IN ('completed','failed','parked'))"
+      )
+    }
   }
 
   /** Existing databases predate the per-message generation duration used by

@@ -94,31 +94,42 @@ export interface CloseConfirmationDeps {
   state: QuitLifecycleState
   database: Database
   window: BrowserWindow | null
+  /**
+   * Park the window (destroy it, keep the backend alive) instead of quitting.
+   * The renderer still answers the unsaved-file question, then calls
+   * `app:parkWindow` rather than `app:confirmClose`.
+   */
+  park?: boolean
 }
 
 /**
  * Decide whether a close/quit can proceed. With nothing working (or no window
  * to ask) the quit continues immediately; otherwise the renderer is prompted
- * and the quit pauses until `app:confirmClose` arrives.
+ * and the quit pauses until `app:confirmClose` (or `app:parkWindow`) arrives.
  *
  * The renderer is always asked   it owns the unsaved-file editor state, which
  * also gates the close. It replies through `app:confirmClose` immediately when
  * nothing is pending, or shows the confirmation modal otherwise.
  */
 export function requestCloseConfirmation(deps: CloseConfirmationDeps): void {
-  const { state, window } = deps
+  const { state, window, park = false } = deps
   if (state.quitCleanupStarted || state.quitConfirmed) return
   if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+    // No window to ask. A park with nothing to park is a no-op; a real quit
+    // proceeds immediately.
+    if (park) return
     state.quitConfirmed = true
     app.quit()
     return
   }
-  // When another live instance can keep a project's threads running, working
-  // threads don't need to gate this instance's close   a surviving instance can
-  // continue them. The renderer still owns the unsaved-file gate, which is
-  // reported separately, so closing never silently drops unsaved editor state.
-  const working = instanceRegistry.hasOtherLiveInstance()
-    ? []
-    : getActiveThreadProjects(deps.database)
-  sendToRenderer(window.webContents, 'window:confirmClose', { projects: working, files: [] })
+  // In background mode the working-thread half of the prompt disappears: closing
+  // does not stop the runs, so there is nothing to warn about. The renderer still
+  // owns the unsaved-file gate, which it computes locally.
+  const working =
+    park || instanceRegistry.hasOtherLiveInstance() ? [] : getActiveThreadProjects(deps.database)
+  sendToRenderer(window.webContents, 'window:confirmClose', {
+    projects: working,
+    files: [],
+    ...(park ? { park: true } : {})
+  })
 }

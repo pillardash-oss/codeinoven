@@ -4,7 +4,9 @@ import { DEFAULT_WORK_ROOTS } from '$shared/design/work-roots'
 import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '$shared/prototypes/prototype-cdn'
 import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
 import {
+  DEFAULT_BACKGROUND_WAKE_LEAD_MS,
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   DEFAULT_MAX_CONFLICT_FILE_BYTES,
   DEFAULT_IN_APP_NOTIFICATION_SOUND,
   type AppConfig
@@ -46,6 +48,11 @@ export const defaultConfig: AppConfig = {
   openLocalhostInCioBrowser: true,
   openAllLinksInCioBrowser: false,
   browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  backgroundMode: 'scheduled',
+  launchAtLogin: true,
+  autoRunMissedAssistantRuns: true,
+  backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   browserSearchEngine: DEFAULT_BROWSER_SEARCH_ENGINE_ID,
   browserCustomSearchEngines: [],
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,

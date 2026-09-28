@@ -177,7 +177,13 @@ the app's clock for Assistant View.
   run on it, using the task's bound settings with the routine's primary model
   overlaid (`sendPrompt` with `origin: 'internal'`). The run thread inherits the
   task's `routineId`, so the engine composes the routine how-to and the run
-  contract into its system prompt exactly as it does for the task.
+  contract into its system prompt exactly as it does for the task. The tick also
+  runs with no window at all in background mode (see **Background mode**), so "the
+  app is open" now means "the backend is running", not "a window is visible".
+- **Firing happens exactly once, on the elected owner.** Every scheduler tick is
+  gated on `instanceRegistry.isIncumbentInstance()`, so a second CodeInOven
+  process on the same config root schedules nothing and can never double-fire a
+  slot.
 - **A run is named for what it runs.** The run's visible prompt is built by
   `routineRunPrompt` (`src/lib/routine-run.ts`). A user's own task is named by
   its title, but a routine's Getting started thread is its authoring host, not
@@ -189,13 +195,18 @@ the app's clock for Assistant View.
   stops every task in it while keeping the tasks, their how-to, and their
   history. Resume from the panel's **All** tab. A routine-less task is never
   paused.
-- **No auto catch-up.** A slot that came due while the app was closed (or a
-  machine slept through it) is recorded as a missed run, never run in a burst.
-  The grace window is `MISS_GRACE_MS`; a fire before process start is always a
-  miss. Each record carries a `reason` `app-closed` when the app was not
-  running at the due time, `delayed` when it was running but could not start the
-  run in time and both surfaces state it instead of always claiming the app
-  was closed.
+- **Catch-up is opt-in and bounded.** A slot that came due while the app was
+  closed (or a machine slept through it) is recorded as a missed run. By default
+  those records are only surfaced for the user to run. When
+  `autoRunMissedAssistantRuns` is on (the default), the slots are dispatched on
+  relaunch, on wake, and on take-over, in sequence and at most
+  `MAX_CATCH_UP_PER_PASS` per pass, so an outage can never dump a burst of runs.
+  The record is claimed by its `(threadId, dueAt)` identity before the run is
+  created, so repeated relaunches stay idempotent. The grace window is
+  `MISS_GRACE_MS`; a fire before process start is always a miss. Each record
+  carries a `reason` `app-closed` when the app was not running at the due time,
+  `delayed` when it was running but could not start the run in time and both
+  surfaces state it instead of always claiming the app was closed.
 - **A slot before the schedule existed is never due.** The scheduler floors a
   due slot at the later of the task's last fire and the moment its schedule
   became active (`Routine.scheduleUpdatedAt`, stamped when the schedule changes
@@ -210,10 +221,53 @@ the app's clock for Assistant View.
   `scheduler/missed-runs.json` through the storage engine. Records are
   idempotent by `(threadId, dueAt)`, so repeated relaunches cannot
   double-count or double-badge one miss.
+- **Unattended-run ledger.** Every dispatch the scheduler makes on its own  
+  a scheduled fire, a catch-up run, and a run that failed while handing off to
+  the engine   is recorded in `BackgroundRunLedger`
+  (`src/main/scheduler/background-run-ledger.ts`), a bounded (`MAX_ENTRIES`),
+  versioned `scheduler/background-runs.json`. Each entry carries its own
+  snapshot of the run, so deleting the run thread later cannot erase the fact
+  that it happened. A user's own "Run now" is deliberately not recorded.
 - **Dismiss vs Run Now.** `assistant:dismissMissedRun` acknowledges a record
   without running it; `assistant:runMissedRunNow` creates a fresh run thread,
   dispatches the run on it, settles the record on success, and returns the run so
   the caller can open it. Neither is automatic.
+
+## Background mode (menu bar)
+
+Background mode keeps the backend running after the window is closed   or after
+Cmd+Q   so a routine still fires on time. It is on by default
+(`backgroundMode: 'scheduled'`) and can be turned off in **General → Threads**.
+
+- **Closed means closed.** Parking destroys the window and its renderer process;
+  there is no hidden window and no warm renderer. The main process keeps only
+  SQLite, the 30s tick, the menu bar icon, and window-bound services are torn
+  down before the renderer dies (`BackgroundLifecycleService.park`). A login
+  launch in background mode boots with no splash and no window at all.
+- **One backend, one owner.** Every process attaches to the same config root, and
+  the longest-running live process owns the scheduled work
+  (`instanceRegistry.isIncumbentInstance()`); the routine, retry, and heartbeat
+  schedulers are all gated on it. A secondary instance keeps a fully usable
+  window, shows a standing **Running in another instance** notice, and quits on
+  close rather than parking.
+- **Menu bar, not Dock.** The tray carries exactly two items, **Open CodeInOven**
+  and **Quit CodeInOven**; the icon is the monochrome mark, or the mark with an
+  exclamation when attention is needed. While windowless the Dock icon is hidden
+  and restored when a window opens. The icon's attention state is computed in
+  main from SQLite (a thread parked on approval, or an unread failed assistant
+  run), never from a renderer, because there is no renderer.
+- **Gates.** A question with a timer answers itself through `questionTimeoutMs`
+  as it always has. A permission or secret gate has no timer, so it parks
+  durably and flips the icon; nothing proceeds until the user answers.
+- **Sleep.** A machine that is asleep cannot run work. Inside
+  `backgroundWakeLeadMs` before a due run the app holds
+  `prevent-app-suspension`, capped by `maxBackgroundWakeHoldMs` so a
+  mis-scheduled task cannot pin the machine; a slot missed anyway is caught up on
+  resume (`PowerMonitorService`) or relaunch.
+- **What survives.** A run that failed while nobody was watching keeps its
+  message: `last_error`, `last_error_at`, and `last_outcome` are real columns
+  (`src/main/database/schema.ts`), the badge and the notification panel
+  rehydrate `failed` threads, and the ledger above records the dispatch.
 
 ## Missed colour token
 

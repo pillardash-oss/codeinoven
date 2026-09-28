@@ -6,6 +6,7 @@ import type {
   AttachmentStorageScope,
   EditorId,
   EditorInfo,
+  InstanceRole,
   ProjectTextFile
 } from '../types'
 import type { RendererLogEntry } from './logging'
@@ -95,6 +96,20 @@ export const invokeAppContract = {
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': {} as Contract<[hostnames: string[]], Record<string, string | null>>,
   'app:confirmClose': {} as Contract<[], void>,
+  /**
+   * The renderer approved parking the window: it is torn down and the backend
+   * keeps running in the menu bar so scheduled work still fires. Distinct from
+   * `app:confirmClose`, which really quits the process.
+   */
+  'app:parkWindow': {} as Contract<[], void>,
+  /** This process's role against the shared backend, for hydration on mount. */
+  'app:instanceRole': {} as Contract<[], InstanceRole>,
+  /**
+   * Ask the process that owns scheduled work to bring its window forward. Used
+   * by a secondary instance's "Open running instance" action. Returns false
+   * when the owner could not be reached or already exited.
+   */
+  'app:openInstanceOwner': {} as Contract<[], boolean>,
   /** Resolves after post-paint feature IPC and harness services are registered. */
   'app:waitForFeatures': {} as Contract<[], void>,
   /**

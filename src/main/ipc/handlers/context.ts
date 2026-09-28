@@ -41,6 +41,7 @@ import type { DiagnosticsService } from '../../system/diagnostics-service'
 import type { MemoryService } from '../../chat/memory-service'
 import type { HarnessManifestService } from '../../agents/harness-manifest-service'
 import type { PowerWakeService } from '../../system/power-wake-service'
+import type { BackgroundLifecycleService } from '../../system/background-lifecycle-service'
 import type { RetrySchedulerService } from '../../system/retry-scheduler-service'
 import type { HeartbeatSchedulerService } from '../../system/heartbeat-scheduler-service'
 import type { AttachmentGrantRepo } from '../../database/repositories/attachment-grant-repo'
@@ -61,6 +62,8 @@ export interface RegisterIpcHandlersOptions {
   /** Prototype preview server, so a CDN settings change applies to the next preview. */
   prototypePreviewService?: PrototypePreviewService
   powerWakeService?: PowerWakeService
+  /** Background mode: stay-alive, menu bar icon, instance role. */
+  backgroundLifecycle?: BackgroundLifecycleService
   /** Auto-resume scheduler gated by the General settings toggle. */
   retryScheduler?: RetrySchedulerService
   /** Timed usage-window "keep warm" ping scheduler backing the Heartbeat settings page. */

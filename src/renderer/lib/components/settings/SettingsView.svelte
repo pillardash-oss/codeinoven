@@ -17,7 +17,9 @@
   import { APP_NAME, APP_SLUG, GITHUB_URL, ORG_SLUG, WEBSITE_URL, X_URL } from '$shared/brand'
   import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import {
+    MAX_BACKGROUND_WAKE_LEAD_MS,
     MAX_MAX_CONFLICT_FILE_BYTES,
+    MIN_BACKGROUND_WAKE_LEAD_MS,
     MIN_MAX_CONFLICT_FILE_BYTES,
     type AppConfig,
     type AppConfigPatch,
@@ -313,6 +315,14 @@
     { id: 'ff-only', label: 'Fast-forward only' }
   ]
 
+  const backgroundModeOptions: Array<{
+    id: 'scheduled' | 'always'
+    label: string
+  }> = [
+    { id: 'scheduled', label: 'Scheduled' },
+    { id: 'always', label: 'Always' }
+  ]
+
   function saveThreadLimit(event: Event): void {
     const input = event.currentTarget
     if (!(input instanceof HTMLInputElement)) return
@@ -337,6 +347,24 @@
     }
 
     void updateConfig({ questionTimeoutMs: seconds * 1_000 })
+  }
+
+  /** Wake lead is stored in milliseconds and shown in whole seconds. */
+  function saveBackgroundWakeLead(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const seconds = Number(input.value)
+    if (
+      !Number.isInteger(seconds) ||
+      seconds < MIN_BACKGROUND_WAKE_LEAD_MS / 1_000 ||
+      seconds > MAX_BACKGROUND_WAKE_LEAD_MS / 1_000
+    ) {
+      input.value = String(config.backgroundWakeLeadMs / 1_000)
+      return
+    }
+
+    void updateConfig({ backgroundWakeLeadMs: seconds * 1_000 })
   }
 
   function saveAgentQuestionCap(event: Event): void {
@@ -1033,6 +1061,96 @@
                   aria-label="Maximum questions per agent question card"
                   onchange={saveAgentQuestionCap}
                 />
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Run in the background</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Keep Assistant routines on schedule after the window closes
+                  </p>
+                </div>
+                <Switch
+                  checked={config.backgroundMode !== 'off'}
+                  onchange={(checked) =>
+                    void updateConfig({ backgroundMode: checked ? 'scheduled' : 'off' })}
+                  aria-label="Toggle running the app in the background"
+                  disabled={!settingsReady}
+                />
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Background mode</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Scheduled parks only when work is running or due; Always never quits on close
+                  </p>
+                </div>
+                <select
+                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  value={config.backgroundMode === 'off' ? 'scheduled' : config.backgroundMode}
+                  disabled={!settingsReady || config.backgroundMode === 'off'}
+                  aria-label="Background mode"
+                  onchange={(event: SelectChangeEvent) =>
+                    void updateConfig({
+                      backgroundMode: event.currentTarget.value as 'scheduled' | 'always'
+                    })}
+                >
+                  {#each backgroundModeOptions as option (option.id)}
+                    <option value={option.id}>{option.label}</option>
+                  {/each}
+                </select>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Start at login</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Launch CodeInOven at login so a schedule can fire after a restart
+                  </p>
+                </div>
+                <Switch
+                  checked={config.launchAtLogin}
+                  onchange={() => void updateConfig({ launchAtLogin: !config.launchAtLogin })}
+                  aria-label="Toggle starting the app at login"
+                  disabled={!settingsReady}
+                />
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Run missed scheduled work on return</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Catch up on assistant slots missed to sleep or a closed app
+                  </p>
+                </div>
+                <Switch
+                  checked={config.autoRunMissedAssistantRuns}
+                  onchange={() =>
+                    void updateConfig({
+                      autoRunMissedAssistantRuns: !config.autoRunMissedAssistantRuns
+                    })}
+                  aria-label="Toggle running missed scheduled work on return"
+                  disabled={!settingsReady}
+                />
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Wake lead</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    How long before a due run the device is held awake
+                  </p>
+                </div>
+                <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+                  <input
+                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    type="number"
+                    min={MIN_BACKGROUND_WAKE_LEAD_MS / 1_000}
+                    max={MAX_BACKGROUND_WAKE_LEAD_MS / 1_000}
+                    step="1"
+                    value={config.backgroundWakeLeadMs / 1_000}
+                    disabled={!settingsReady}
+                    aria-label="Wake lead in seconds"
+                    onchange={saveBackgroundWakeLead}
+                  />
+                  seconds
+                </label>
               </div>
             </div>
           </div>

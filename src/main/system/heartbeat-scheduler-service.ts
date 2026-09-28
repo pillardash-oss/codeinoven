@@ -1,4 +1,5 @@
 import { Logger } from './logger'
+import { instanceRegistry } from './instance-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { HeartbeatConfig } from '../../lib/types'
 import { generateId } from '../../lib/utils'
@@ -132,6 +133,9 @@ export class HeartbeatSchedulerService {
   }
 
   private tick(): void {
+    // Heartbeats are shared work: only the elected owner fires them, so two
+    // live instances never send the same ping twice.
+    if (!instanceRegistry.isIncumbentInstance()) return
     const now = Date.now()
     for (const config of this.heartbeats) {
       if (!config.enabled || config.times.length === 0) continue

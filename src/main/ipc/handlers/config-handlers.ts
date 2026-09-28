@@ -356,6 +356,14 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     }
     options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
     options.retryScheduler?.setEnabled(config.autoRetryAfterReset)
+    // Background mode is applied live: the login item, the menu bar icon, and the
+    // wake policy all follow the saved value without a restart.
+    options.powerWakeService?.setBackgroundPolicy({
+      enabled: config.backgroundMode !== 'off',
+      wakeLeadMs: config.backgroundWakeLeadMs,
+      maxHoldMs: config.maxBackgroundWakeHoldMs
+    })
+    void options.backgroundLifecycle?.applyConfig(config)
     if (patch.sound && options.speechService) {
       options.speechService.updateUnloadOptions({
         asr: patch.sound.asrUnload,

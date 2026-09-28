@@ -59,6 +59,9 @@ interface ThreadRow {
   last_success_at: number | null
   assistant_getting_started: number
   assistant_task_id: string | null
+  last_error: string | null
+  last_error_at: number | null
+  last_outcome: string | null
   drafting: number
   draft_json: string | null
   created_at: number
@@ -196,6 +199,11 @@ function rowToThread(row: ThreadRow): Thread {
     lastSuccessAt: row.last_success_at ?? undefined,
     ...(row.assistant_getting_started === 1 ? { assistantGettingStarted: true } : {}),
     ...(row.assistant_task_id !== null ? { assistantTaskId: row.assistant_task_id } : {}),
+    ...(row.last_error !== null ? { lastError: row.last_error } : {}),
+    ...(row.last_error_at !== null ? { lastErrorAt: row.last_error_at } : {}),
+    ...(row.last_outcome !== null
+      ? { lastOutcome: row.last_outcome as Thread['lastOutcome'] }
+      : {}),
     ...(row.drafting === 1 ? { drafting: true } : {}),
     ...(row.draft_json !== null ? { draftJson: row.draft_json } : {}),
     createdAt: row.created_at,
@@ -331,9 +339,10 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   routine_id, assistant_icon_type, assistant_icon, schedule_override, last_run_at, last_dispatched_at, last_success_at,
   assistant_getting_started,
   assistant_task_id,
+  last_error, last_error_at, last_outcome,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -378,6 +387,9 @@ ON CONFLICT(id) DO UPDATE SET
   last_success_at=excluded.last_success_at,
   assistant_getting_started=excluded.assistant_getting_started,
   assistant_task_id=excluded.assistant_task_id,
+  last_error=excluded.last_error,
+  last_error_at=excluded.last_error_at,
+  last_outcome=excluded.last_outcome,
   created_at=excluded.created_at,
   updated_at=excluded.updated_at,
   last_activity=excluded.last_activity,
@@ -430,6 +442,9 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.lastSuccessAt ?? null,
     thread.assistantGettingStarted ? 1 : 0,
     thread.assistantTaskId ?? null,
+    thread.lastError ?? null,
+    thread.lastErrorAt ?? null,
+    thread.lastOutcome ?? null,
     thread.createdAt,
     thread.updatedAt,
     thread.lastActivity,
@@ -965,6 +980,16 @@ export class ThreadRepo {
 
   markRead(id: string): void {
     this.db.run('UPDATE threads SET read = 1 WHERE id = ? AND read = 0', id)
+  }
+
+  /**
+   * Mark a thread unread. Used to surface an unattended assistant run that
+   * settled failed while nobody was watching, so the durable failure reaches the
+   * badge and the notification panel on the next open instead of reading as
+   * already-seen.
+   */
+  markUnread(id: string): void {
+    this.db.run('UPDATE threads SET read = 0 WHERE id = ? AND read = 1', id)
   }
 
   countByProject(projectId: string): number {

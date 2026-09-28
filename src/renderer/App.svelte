@@ -3,6 +3,7 @@
   import { FileSearch, FolderKanban, MessagesSquare } from '@lucide/svelte'
   import type { CommandPaletteProps } from '$lib/components/actions/CommandPalette.svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
+  import InstanceRoleNotice from '$lib/components/layout/InstanceRoleNotice.svelte'
   import AppViewRail from '$lib/components/layout/AppViewRail.svelte'
   import {
     AppHeaderNavigationController,
@@ -85,6 +86,7 @@
     threadTracksReadStatus,
     type AppConfig,
     type AppConfigPatch,
+    type InstanceRole,
     type Project,
     type ThemePreference,
     type Thread
@@ -114,6 +116,7 @@
   let activeView = $state<View>(rendererRecovery.activeView)
   let commandPaletteOpen = $state(false)
   let closeConfirmation = $state<CloseConfirmationPayload | null>(null)
+  let instanceRole = $state<InstanceRole | null>(null)
   const fileSearch = new FileSearchPaletteController()
   const threadSearch = new ThreadSearchPaletteController({
     openThread: (thread) => void openThreadFromSearch(thread)
@@ -981,9 +984,19 @@
     }
   }
 
-  /** The user approved the force close   tell main to proceed with quitting. */
+  /** True when the pending close is a park (background mode), not a quit. */
+  function closeIsPark(): boolean {
+    return closeConfirmation?.park === true
+  }
+
+  /** The user approved parking the window; main keeps the backend alive. */
+  async function parkWindow(): Promise<void> {
+    await invoke('app:parkWindow')
+  }
+
+  /** The user approved the force close   tell main to park or to quit. */
   async function confirmForceClose(): Promise<void> {
-    await invoke('app:confirmClose')
+    await (closeIsPark() ? invoke('app:parkWindow') : invoke('app:confirmClose'))
   }
 
   /**
@@ -1007,8 +1020,9 @@
     if (projects.length === current.projects.length) return
 
     if (projects.length === 0 && current.files.length === 0) {
+      const park = current.park === true
       closeConfirmation = null
-      void confirmForceClose()
+      void (park ? parkWindow() : confirmForceClose())
       return
     }
     closeConfirmation = { ...current, projects }
@@ -1021,7 +1035,7 @@
     // nothing else would ever write their drafts.
     const savedStandaloneFiles = await standaloneFiles.saveAllUnsaved()
     if (savedProjectFiles && savedStandaloneFiles) {
-      await invoke('app:confirmClose')
+      await (closeIsPark() ? invoke('app:parkWindow') : invoke('app:confirmClose'))
     } else {
       toast.error('Some files could not be saved', {
         description: 'The application stayed open so you can review them.'
@@ -1399,6 +1413,8 @@
       openThreadFromNotification,
       setCloseConfirmation: (payload) => (closeConfirmation = payload),
       confirmForceClose,
+      parkWindow,
+      setInstanceRole: (role) => (instanceRole = role),
       settleCloseConfirmationThread,
       handleCloseShortcut,
       handleNewTerminalShortcut,
@@ -1406,6 +1422,11 @@
       goForward: () => handleMouseHistoryNavigation('forward'),
       handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps)
     })
+    // Hydrate the instance role: the push fires before this renderer mounts, so
+    // this read is what shows the "running in another instance" notice on load.
+    void invoke('app:instanceRole')
+      .then((role) => (instanceRole = role))
+      .catch(() => undefined)
     const unsubscribeShutdown = installShutdownSubscription()
     const unsubscribeConfig = installConfigSubscription()
     const originalOpenThread = workspaceState.openThread.bind(workspaceState)
@@ -1457,6 +1478,14 @@
 
 <div class="flex h-screen flex-col bg-app">
   <AppHeader {activeView} {goBack} {goForward} {navigation} />
+
+  {#if instanceRole?.role === 'secondary'}
+    <InstanceRoleNotice
+      ownerPid={instanceRole.ownerPid}
+      onOpenOwner={() => void invoke('app:openInstanceOwner')}
+      onQuit={() => void invoke('app:confirmClose')}
+    />
+  {/if}
 
   <div class="flex min-h-0 flex-1">
     <AppViewRail

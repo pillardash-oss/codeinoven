@@ -21,7 +21,13 @@ import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { threadNotesState } from '$lib/stores/thread-notes.svelte'
 import { updaterState } from '$lib/stores/updater.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
-import { DEFAULT_THREAD_TITLE, type OpenedPath, type Project, type Thread } from '$shared/types'
+import {
+  DEFAULT_THREAD_TITLE,
+  type InstanceRole,
+  type OpenedPath,
+  type Project,
+  type Thread
+} from '$shared/types'
 import { notificationSoundKind } from '$shared/ipc-contract'
 import type {
   AgentNotificationPayload,
@@ -37,6 +43,9 @@ export interface AppIpcSubscriptionDeps {
   ) => Promise<void>
   setCloseConfirmation: (payload: CloseConfirmationPayload | null) => void
   confirmForceClose: () => Promise<void>
+  /** Park the window (destroy it, keep the backend alive) instead of quitting. */
+  parkWindow: () => Promise<void>
+  setInstanceRole: (role: InstanceRole) => void
   settleCloseConfirmationThread: (thread: Thread) => void
   handleCloseShortcut: () => void
   handleNewTerminalShortcut: () => void
@@ -152,13 +161,18 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   )
   const unsubscribeConfirmClose = subscribe('window:confirmClose', (payload) => {
     // The renderer owns the unsaved-file editor state, so it computes the
-    // pending files here. With nothing pending the close proceeds right away.
+    // pending files here. With nothing pending the close proceeds right away
+    // as a park when background mode keeps the backend alive, otherwise a quit.
     const files = [...projectFilesWorkspace.getUnsavedFiles(), ...standaloneFiles.getUnsavedFiles()]
+    const park = payload.park === true
     if (payload.projects.length === 0 && files.length === 0) {
-      void deps.confirmForceClose()
+      void (park ? deps.parkWindow() : deps.confirmForceClose())
       return
     }
-    deps.setCloseConfirmation({ projects: payload.projects, files })
+    deps.setCloseConfirmation({ projects: payload.projects, files, park })
+  })
+  const unsubscribeInstanceRole = subscribe('app:instanceRole', (role) => {
+    deps.setInstanceRole(role)
   })
   const unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
     const thread = args[0] as Thread
@@ -234,6 +248,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeClick()
     unsubscribeShow()
     unsubscribeConfirmClose()
+    unsubscribeInstanceRole()
     unsubscribeThreadUpdated()
     unsubscribeThreadDeleted()
     unsubscribeScopeBoardChanged()

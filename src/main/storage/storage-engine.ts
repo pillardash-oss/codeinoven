@@ -16,7 +16,13 @@ import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/ty
 import {
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_MAX_CONFLICT_FILE_BYTES,
-  DEFAULT_IN_APP_NOTIFICATION_SOUND
+  DEFAULT_IN_APP_NOTIFICATION_SOUND,
+  DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
+  MAX_BACKGROUND_WAKE_LEAD_MS,
+  MIN_BACKGROUND_WAKE_LEAD_MS,
+  MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
+  MIN_MAX_BACKGROUND_WAKE_HOLD_MS
 } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { DEFAULT_WORK_ROOTS, workRootsFromConfig } from '../../lib/design/work-roots'
@@ -57,6 +63,12 @@ import { MAX_DESIGN_ASSIGNMENTS, isUsableDesignAssignment } from '../../lib/desi
 import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
 import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/image-descriptor'
 
+/** Coerce an untrusted numeric config value into its allowed range, or default. */
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
 const DEFAULT_CONFIG: AppConfig = {
   theme: 'system',
   fontFamily: 'jetbrains-mono',
@@ -92,6 +104,11 @@ const DEFAULT_CONFIG: AppConfig = {
   openLocalhostInCioBrowser: true,
   openAllLinksInCioBrowser: false,
   browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  backgroundMode: 'scheduled',
+  launchAtLogin: true,
+  autoRunMissedAssistantRuns: true,
+  backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   browserSearchEngine: DEFAULT_BROWSER_SEARCH_ENGINE_ID,
   browserCustomSearchEngines: [],
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
@@ -233,6 +250,35 @@ export class StorageEngine {
           ? config.browserSearchEngine
           : DEFAULT_CONFIG.browserSearchEngine,
       browserCustomSearchEngines: sanitizeCustomSearchEngines(config?.browserCustomSearchEngines),
+      // Background settings are read tolerantly: a hand-edited value outside the
+      // closed set or the bounds falls back instead of disabling the feature
+      // silently, and `launchAtLogin` follows the mode when it is off.
+      backgroundMode:
+        config?.backgroundMode === 'off' ||
+        config?.backgroundMode === 'always' ||
+        config?.backgroundMode === 'scheduled'
+          ? config.backgroundMode
+          : DEFAULT_CONFIG.backgroundMode,
+      launchAtLogin:
+        typeof config?.launchAtLogin === 'boolean'
+          ? config.launchAtLogin
+          : DEFAULT_CONFIG.launchAtLogin,
+      autoRunMissedAssistantRuns:
+        typeof config?.autoRunMissedAssistantRuns === 'boolean'
+          ? config.autoRunMissedAssistantRuns
+          : DEFAULT_CONFIG.autoRunMissedAssistantRuns,
+      backgroundWakeLeadMs: clampNumber(
+        config?.backgroundWakeLeadMs,
+        MIN_BACKGROUND_WAKE_LEAD_MS,
+        MAX_BACKGROUND_WAKE_LEAD_MS,
+        DEFAULT_CONFIG.backgroundWakeLeadMs
+      ),
+      maxBackgroundWakeHoldMs: clampNumber(
+        config?.maxBackgroundWakeHoldMs,
+        MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
+        MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
+        DEFAULT_CONFIG.maxBackgroundWakeHoldMs
+      ),
       sound: {
         ...DEFAULT_CONFIG.sound,
         ...(config?.sound ?? {}),

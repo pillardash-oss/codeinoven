@@ -932,10 +932,13 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
-    // Carry the failure's diagnostic text on the in-memory thread snapshot so
-    // downstream consumers (error notifications, panels) can show what actually
-    // went wrong. Never persisted: `threadUpsertParams` serializes an explicit
-    // column list, so `lastError` is dropped on write and resets on restart.
+    const now = Date.now()
+
+    // Carry the failure's diagnostic text on the thread row so downstream
+    // consumers (error notifications, the notification panel, and the next
+    // launch after an unattended run) can show what actually went wrong. It is
+    // persisted through `threadUpsertParams` and cleared the moment the thread
+    // leaves `failed`.
     const lastError =
       status === 'failed'
         ? (() => {
@@ -949,6 +952,18 @@ export class ThreadManager {
           })()
         : undefined
 
+    // The outcome of the most recent settled run. A status that is not itself a
+    // settle point (planning/executing/interrupted) leaves the previous outcome
+    // in place, so resuming a failed run does not erase the fact that it failed.
+    const lastOutcome: Thread['lastOutcome'] =
+      status === 'failed'
+        ? 'failed'
+        : status === 'completed'
+          ? 'completed'
+          : status === 'awaiting_approval'
+            ? 'parked'
+            : existing.lastOutcome
+
     const updated: Thread = {
       ...existing,
       status,
@@ -958,8 +973,10 @@ export class ThreadManager {
           : undefined,
       read: opts?.read ?? existing.read,
       lastError,
-      updatedAt: Date.now(),
-      lastActivity: Date.now()
+      lastErrorAt: status === 'failed' ? now : undefined,
+      lastOutcome,
+      updatedAt: now,
+      lastActivity: now
     }
 
     await this.threadRepo.upsertViaWorker(updated)

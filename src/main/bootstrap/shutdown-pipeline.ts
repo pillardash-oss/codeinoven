@@ -82,6 +82,27 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    state.powerMonitorService?.stop()
+    state.powerMonitorService = null
+  } catch (error) {
+    Logger.error('Power monitor cleanup failed during shutdown:', error)
+  }
+
+  try {
+    state.backgroundLifecycle?.stop()
+    state.backgroundLifecycle = null
+  } catch (error) {
+    Logger.error('Background lifecycle cleanup failed during shutdown:', error)
+  }
+
+  try {
+    await state.backgroundRunLedger?.flush()
+    state.backgroundRunLedger = null
+  } catch (error) {
+    Logger.error('Background-run ledger flush failed during shutdown:', error)
+  }
+
+  try {
     state.modelPricingService?.stop()
   } catch (error) {
     Logger.error('Model pricing cleanup failed during shutdown:', error)

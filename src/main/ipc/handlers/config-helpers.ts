@@ -42,7 +42,11 @@ import {
   MAX_BROWSER_HIBERNATION_MINUTES,
   MAX_MAX_CONFLICT_FILE_BYTES,
   MIN_BROWSER_HIBERNATION_MINUTES,
-  MIN_MAX_CONFLICT_FILE_BYTES
+  MIN_MAX_CONFLICT_FILE_BYTES,
+  MAX_BACKGROUND_WAKE_LEAD_MS,
+  MIN_BACKGROUND_WAKE_LEAD_MS,
+  MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
+  MIN_MAX_BACKGROUND_WAKE_HOLD_MS
 } from '../../../lib/types'
 import { validateBoundedString, validateEntityId, validateMergeMethod } from '../ipc-validation'
 import { isRecord, requireString } from './shared'
@@ -146,6 +150,14 @@ function validateLocalUsageClearInput(value: unknown): LocalUsageClearInput {
   }
 }
 
+/** Validate an integer inside an inclusive range, rejecting floats and strings. */
+function validateBoundedInteger(value: unknown, label: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new TypeError(`${label} must be an integer between ${min} and ${max}`)
+  }
+  return value
+}
+
 const CONFIG_PATCH_FIELDS = new Set([
   'theme',
   'fontFamily',
@@ -179,6 +191,11 @@ const CONFIG_PATCH_FIELDS = new Set([
   'maxConflictFileBytes',
   'openLocalhostInCioBrowser',
   'openAllLinksInCioBrowser',
+  'backgroundMode',
+  'launchAtLogin',
+  'autoRunMissedAssistantRuns',
+  'backgroundWakeLeadMs',
+  'maxBackgroundWakeHoldMs',
   'browserSearchEngine',
   'browserCustomSearchEngines',
   'allowPrototypeExternalCdn',
@@ -950,6 +967,49 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('resumeWorkOnRestart must be a boolean')
     }
     patch.resumeWorkOnRestart = value.resumeWorkOnRestart
+  }
+
+  if ('backgroundMode' in value) {
+    if (
+      value.backgroundMode !== 'off' &&
+      value.backgroundMode !== 'scheduled' &&
+      value.backgroundMode !== 'always'
+    ) {
+      throw new TypeError('backgroundMode must be "off", "scheduled" or "always"')
+    }
+    patch.backgroundMode = value.backgroundMode
+  }
+
+  if ('launchAtLogin' in value) {
+    if (typeof value.launchAtLogin !== 'boolean') {
+      throw new TypeError('launchAtLogin must be a boolean')
+    }
+    patch.launchAtLogin = value.launchAtLogin
+  }
+
+  if ('autoRunMissedAssistantRuns' in value) {
+    if (typeof value.autoRunMissedAssistantRuns !== 'boolean') {
+      throw new TypeError('autoRunMissedAssistantRuns must be a boolean')
+    }
+    patch.autoRunMissedAssistantRuns = value.autoRunMissedAssistantRuns
+  }
+
+  if ('backgroundWakeLeadMs' in value) {
+    patch.backgroundWakeLeadMs = validateBoundedInteger(
+      value.backgroundWakeLeadMs,
+      'Background wake lead',
+      MIN_BACKGROUND_WAKE_LEAD_MS,
+      MAX_BACKGROUND_WAKE_LEAD_MS
+    )
+  }
+
+  if ('maxBackgroundWakeHoldMs' in value) {
+    patch.maxBackgroundWakeHoldMs = validateBoundedInteger(
+      value.maxBackgroundWakeHoldMs,
+      'Background wake hold cap',
+      MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
+      MAX_MAX_BACKGROUND_WAKE_HOLD_MS
+    )
   }
 
   if ('defaultMergeMethod' in value) {
