@@ -9,8 +9,20 @@ import { IDLE_BROWSER_TAB_RUNTIME, type BrowserTabRuntime } from './browser-tab-
 
 const EMPTY_BROWSER_TABS: BrowserContextTab[] = []
 
-/** Parsed once at module load: the persisted tab list plus the last active tab. */
-const persistedBrowserTabs = loadPersistedBrowserTabs()
+/**
+ * The persisted browser tab list, parsed on first use.
+ *
+ * Reading it is synchronous: a JSON parse of up to fifty tabs out of
+ * `localStorage`. Doing that at module load put it on the first-paint path, so
+ * it is deferred to the moment the sidebar's browser tabs are actually wired
+ * (see `SidebarBrowserTabs.start`).
+ */
+let persistedBrowserTabs: { tabs: BrowserContextTab[]; activeTabId: string | null } | null = null
+
+function restoredBrowserTabs(): { tabs: BrowserContextTab[]; activeTabId: string | null } {
+  persistedBrowserTabs ??= loadPersistedBrowserTabs()
+  return persistedBrowserTabs
+}
 
 /**
  * Host access the browser-tabs controller needs from the sidebar store.
@@ -38,9 +50,23 @@ export interface SidebarBrowserTabsHost {
  * stays the active-identity owner.
  */
 export class SidebarBrowserTabs {
-  tabs: BrowserContextTab[] = $state(persistedBrowserTabs.tabs)
-  activeTabId: string | null = $state(persistedBrowserTabs.activeTabId)
+  tabs: BrowserContextTab[] = $state([])
+  activeTabId: string | null = $state(null)
   visible = $state(false)
+
+  /**
+   * Whether {@link start} has restored the stored tabs and wired the runtime.
+   * The sidebar's browser is not part of the first paint, so both the parse above
+   * and the page-state subscription wait for the runtime seam.
+   */
+  private started = false
+
+  /** Host access the controller needs, resolved by the sidebar store. */
+  private readonly host: SidebarBrowserTabsHost
+
+  constructor(host: SidebarBrowserTabsHost) {
+    this.host = host
+  }
 
   /** Live audio and capture state per tab, keyed by tab id. Main reports it
    *  through `browser:state` for every tab it owns, whether or not the tab is on
@@ -48,7 +74,19 @@ export class SidebarBrowserTabs {
    *  is deliberately never persisted: it describes a live page, not the tab. */
   private readonly runtime = new SvelteMap<string, BrowserTabRuntime>()
 
-  constructor(private readonly host: SidebarBrowserTabsHost) {
+  /** Restore the stored tabs and wire the runtime's subscription. Idempotent.
+   *
+   * The stored list only lands while the strip is still empty: a tab the user
+   * created before this ran is theirs, and must not be replaced by what was on
+   * disk. */
+  start(): void {
+    if (this.started) return
+    this.started = true
+    const restored = restoredBrowserTabs()
+    if (this.tabs.length === 0) {
+      this.tabs = restored.tabs
+      this.activeTabId = restored.activeTabId
+    }
     // One app-lifetime subscription drives every tab's runtime state. A panel
     // only exists for the tab on screen, so a page that keeps playing audio in
     // a background tab would otherwise have no listener at all.
@@ -370,6 +408,9 @@ export class SidebarBrowserTabs {
   }
 
   private persist(): void {
+    // Never write before the stored list has landed: an unread list is not an
+    // empty one, and writing here would replace what the user had with nothing.
+    if (!this.started) return
     persistBrowserTabs(this.tabs, this.activeTabId)
   }
 }

@@ -67,7 +67,9 @@
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
-  import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
+  import { preloadBrowserChunk, preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
+  import { startBrowserRuntime } from '$lib/stores/browser-runtime'
+  import { scheduleDeferredWork } from '$lib/deferred-work'
   import type { ActionSelection } from '$lib/actions'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import {
@@ -386,6 +388,10 @@
       scopeState.clearSidebarContext()
     }
     activeView = view
+    // Reaching the browser view is the moment its runtime is needed. The view
+    // wires it on mount too, for the session that restores straight onto it
+    // without ever navigating here.
+    if (view === 'browser') startBrowserRuntime()
     // Persists the view and tracks the last content / non-settings views, so
     // returning from Settings (even across a restart) lands back where the user
     // was instead of resetting to Projects.
@@ -408,6 +414,12 @@
   /** Warm the target view's threads (and lazy chunk) before a rail hover lands. */
   function handleViewOptionHover(id: HeaderViewOptionId): void {
     if (id === 'scope-board' || id === 'scoped-threads') preloadScopeChunk()
+    // Pointing at the browser is the moment we know the user is going there, so
+    // its chunk and its runtime are both warmed here rather than at boot.
+    if (id === 'browser') {
+      preloadBrowserChunk()
+      startBrowserRuntime()
+    }
     if (id === 'chats') navigation.preloadNavigationThreads('chats')
     else navigation.preloadNavigationThreads('projects')
   }
@@ -1408,11 +1420,21 @@
     }
     observeNavigationLocation()
     void loadConfig()
+    // The in-app browser is not part of the first paint: the app opens on
+    // projects and chat, so its runtime is wired only once the first frame has
+    // painted, and sooner if the browser is reached for before that.
+    scheduleDeferredWork('browser:start', () => startBrowserRuntime())
     // Fire-and-forget: the app's own record of models reported as
     // vision-capable, consulted before any vision-capability gate.
     void visionModels.load().catch(() => {})
     // Fire-and-forget: probes opted-in harnesses and docks quiet auto-updates.
-    void harnessLifecycleStore.autoUpdateOnStartup()
+    // Nothing on the first frame reads it (the update badges live in Settings and
+    // in the rail's control), so it waits for the renderer to go idle rather than
+    // starting its harness probes while the thread list is still hydrating.
+    scheduleDeferredWork(
+      'harness:autoUpdate',
+      () => void harnessLifecycleStore.autoUpdateOnStartup()
+    )
     // Workspace owns the initial project/thread hydration. Keeping this signal
     // there prevents App and Workspace from issuing the same startup queries.
 

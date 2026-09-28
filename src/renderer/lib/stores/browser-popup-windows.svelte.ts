@@ -28,7 +28,17 @@ class BrowserPopupWindowsState {
    */
   private selectedId = $state<string | null>(null)
 
-  constructor() {
+  /**
+   * Whether {@link start} has wired the listener. Popups belong to the browser,
+   * and the browser is not part of the first paint, so this stays inert until the
+   * runtime seam asks for it.
+   */
+  private started = false
+
+  /** Register the runtime's one subscription. Idempotent. */
+  start(): void {
+    if (this.started) return
+    this.started = true
     // One app-lifetime subscription: a popup that opens while the browser view is
     // closed still has to be there when the user opens it, and one that closes
     // itself while the rail is showing another tool must still leave the list.

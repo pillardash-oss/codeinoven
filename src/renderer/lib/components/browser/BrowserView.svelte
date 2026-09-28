@@ -5,6 +5,7 @@
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { startBrowserRuntime } from '$lib/stores/browser-runtime'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
@@ -170,6 +171,10 @@
   }
 
   onMount(() => {
+    // This surface asks for the browser's renderer runtime itself: the runtime is
+    // not wired at boot (see `startBrowserRuntime`), so the view that needs it is
+    // the one that starts it, before it reads any of the state below.
+    startBrowserRuntime()
     globalBrowser.markOpened()
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', handlePanelShortcut)
     document.addEventListener('focusin', onFocusIn)
@@ -234,13 +239,13 @@
   <ContextDock groups={dockGroups} />
 </div>
 
+{#if addressSpotlightOpen}
+  <BrowserAddressSpotlight onClose={() => globalBrowser.closeAddressSpotlight()} />
+{/if}
+
 <style>
   .context-rail {
     transition-property: width;
     transition-timing-function: cubic-bezier(0.215, 0.61, 0.355, 1);
   }
 </style>
-
-{#if addressSpotlightOpen}
-  <BrowserAddressSpotlight onClose={() => globalBrowser.closeAddressSpotlight()} />
-{/if}

@@ -130,7 +130,28 @@ export class GlobalBrowserState {
    *  than replaced by what was read. */
   private mutatedSinceBoot = false
 
-  constructor() {
+  /**
+   * Whether {@link start} has wired the runtime.
+   *
+   * The strip's shape lives here for the renderer's whole lifetime, but nothing
+   * that registers a listener, starts a timer or talks to main may happen until
+   * the browser is asked for. The store is built while the renderer document
+   * evaluates, so the app opens on projects and chat and a launch that never
+   * touches the browser must not pay for one.
+   */
+  private started = false
+
+  /**
+   * Wire the runtime and read the stored tab list.
+   *
+   * This is the whole of the browser's startup cost, which is why it is not in
+   * the constructor. `startBrowserRuntime` calls it from the runtime seam once the
+   * first frame has painted, or sooner when something reaches for the browser.
+   * Idempotent, so every caller can ask without coordinating.
+   */
+  start(): void {
+    if (this.started) return
+    this.started = true
     // One app-lifetime subscription keeps every tab's runtime state current,
     // including tabs with no surface mounted: a background tab that starts
     // playing audio must still light up its indicator in the strip.
@@ -162,6 +183,7 @@ export class GlobalBrowserState {
    *  renderer's lifetime, so this exists for tests and a deliberate teardown
    *  rather than normal use. */
   dispose(): void {
+    this.started = false
     if (this.sweepTimer !== null) window.clearInterval(this.sweepTimer)
     this.sweepTimer = null
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer)

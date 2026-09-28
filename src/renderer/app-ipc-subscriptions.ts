@@ -1,5 +1,6 @@
 import { toast } from 'svelte-sonner'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { scheduleDeferredWork } from '$lib/deferred-work'
 import { playInAppAlert } from '$lib/notification-sound'
 import {
   captureError,
@@ -214,10 +215,14 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   void invoke('openWith:consumePending')
     .then((paths: OpenedPath[]) => deps.handleOpenedPaths(paths))
     .catch(() => undefined)
-  updaterState.init()
-  // Background skill updates follow the same push channel as the app updater,
-  // so the Utilities page shows a pass that is already running at startup.
-  skillUpdateState.init()
+  // The updater and the skill-update badge describe surfaces nobody has opened
+  // yet (the rail's update control, the Utilities page), so they are read after
+  // the first frame has painted instead of competing with the thread list for
+  // the main process. Deferring `init` also defers its two push subscriptions;
+  // both stores read the current status, so a push that lands in the gap is
+  // recovered by that read rather than lost.
+  scheduleDeferredWork('updater:init', () => updaterState.init())
+  scheduleDeferredWork('skillUpdates:init', () => skillUpdateState.init())
   // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
   // initialise the store here so the overlay's dynamic import can be gated on
   // `pipState.active` without ever missing a frame.

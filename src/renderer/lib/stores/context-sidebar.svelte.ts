@@ -102,6 +102,15 @@ class ContextSidebarState {
     }
   })
 
+  /** Wire the sidebar's browser tabs.
+   *
+   * The sidebar's browser is not part of the first paint, so its stored tab list
+   * and its page-state listener are held back until the runtime seam asks for
+   * them (see `startBrowserRuntime`). Idempotent. */
+  startBrowserTabs(): void {
+    this.browser.start()
+  }
+
   /** Register the workspace's thread-to-conversation resolver (see
    *  `threadBrowserScopeResolver`). */
   setThreadBrowserScopeResolver(resolver: (projectId: string, threadId: string) => string): void {
