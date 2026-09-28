@@ -158,6 +158,11 @@ const PANEL_SHORTCUT_TARGETS: Readonly<
 }
 
 import {
+  faviconForCommittedUrl,
+  faviconOriginOf,
+  rememberFavicon
+} from './browser-service/browser-favicon-memory'
+import {
   NO_TAB_MARK,
   isSameTabMark,
   tabMarkFor,
@@ -1750,6 +1755,7 @@ export class BrowserService {
       initialNavigationStarted: false,
       consoleEntries: [],
       favicon: null,
+      faviconByOrigin: new Map(),
       requestedViewport: null,
       displayedViewport: null,
       design: null,
@@ -1845,7 +1851,7 @@ export class BrowserService {
       if (!details.isMainFrame || details.isSameDocument) return
       tab.navigationFailure = null
     })
-    view.webContents.on('did-navigate', (_event, _url, httpResponseCode, httpStatusText) => {
+    view.webContents.on('did-navigate', (_event, url, httpResponseCode, httpStatusText) => {
       // An HTTP error status is provisional: it becomes the tab's error only if
       // the document the server sent turns out to be empty, which is read when
       // the load finishes. A network failure already recorded for this navigation
@@ -1861,8 +1867,12 @@ export class BrowserService {
               }
             : null
       }
-      // A new document starts without an icon; the old site's favicon must not linger.
-      tab.favicon = null
+      // A committed document comes back with the icon its own origin is known by.
+      // Chromium announces an icon only when it changes, so clearing the tab here
+      // and waiting for the announcement left a reload, a client-side redirect, or
+      // a link inside one site iconless, and the strip fell back to the globe. An
+      // origin the tab has never shown still starts out without an icon.
+      tab.favicon = faviconForCommittedUrl(tab.faviconByOrigin, url)
       // Capture state belongs to the document that ended here, so the tab must
       // not keep claiming it is recording until the new page says otherwise.
       this.capture.reset(tabId)
@@ -1892,10 +1902,21 @@ export class BrowserService {
     view.webContents.on('page-favicon-updated', (_event, favicons) => {
       const source = favicons.find((candidate) => candidate.length > 0) ?? null
       if (!source) return
+      // Read now, not when the fetch resolves: the document that declared this
+      // icon is the one that owns it, whatever the tab moves on to while the icon
+      // is in flight.
+      const declaredBy = faviconOriginOf(view.webContents.getURL())
       // Electron reports icon URLs, but remote images are blocked by the
       // renderer CSP   convert to a data URL so any consumer can render it.
       void fetchIconAsDataUrl(source).then((favicon) => {
-        if (!favicon || tab.favicon === favicon) return
+        if (!favicon) return
+        if (declaredBy !== null) rememberFavicon(tab.faviconByOrigin, declaredBy, favicon)
+        // An answer for a document the tab has already left is remembered for that
+        // document's origin and goes no further, so the icon on screen always
+        // belongs to the origin on screen.
+        if (view.webContents.isDestroyed()) return
+        if (declaredBy !== faviconOriginOf(view.webContents.getURL())) return
+        if (tab.favicon === favicon) return
         tab.favicon = favicon
         publish()
       })

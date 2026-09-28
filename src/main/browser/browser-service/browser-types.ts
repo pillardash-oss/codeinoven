@@ -68,8 +68,17 @@ export interface BrowserTab {
   threadId: string
   initialNavigationStarted: boolean
   consoleEntries: BrowserConsoleEntry[]
-  /** Favicon data URL from the last `page-favicon-updated`, cleared on navigation. */
+  /**
+   * Favicon data URL for the document on screen: the last one `page-favicon-updated`
+   * announced, or the icon the committed URL's origin is already known by.
+   */
   favicon: string | null
+  /**
+   * The icons this tab has shown, keyed by the origin that showed them, most
+   * recently used last and bounded per tab. Checked on every committed navigation,
+   * because Chromium announces an icon only when it changes.
+   */
+  faviconByOrigin: Map<string, string>
   /**
    * The viewport an agent asked this tab to be laid out at while parked, and when
    * it asked. Null until an agent requests one, which leaves the desktop default.
