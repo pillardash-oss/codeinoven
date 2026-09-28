@@ -3,7 +3,7 @@ import { dirname, join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
-import { APP_ID, APP_NAME } from '../lib/brand'
+import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
 import { LOGS_DIRECTORY } from './system/log-paths'
@@ -53,6 +53,10 @@ declare const __CODEINOVEN_APP_VERSION__: string
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
 app.setName(APP_NAME)
+// Naming the app is not enough on its own: Chromium still advertises
+// `Electron/<version>` to every site, so the fallback every web contents
+// inherits is rewritten here, before the first window exists.
+app.userAgentFallback = brandUserAgent(app.userAgentFallback, __CODEINOVEN_APP_VERSION__)
 
 configureLinuxElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
