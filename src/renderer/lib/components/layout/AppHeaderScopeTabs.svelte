@@ -59,12 +59,13 @@
       {#each scopeState.projects as project (project.id)}
         {@const projectColor = project.color ?? pickColorForSeed(project.id)}
         {@const isActiveProject = scopeState.activeProjectId === project.id}
-        <!-- min-w is the icon-only floor: 1.25rem icon + 0.375rem gap +
-             1.5rem horizontal padding. The button shrinks to it as its name is
-             truncated, then the row scrolls. -->
+        <!-- min-w is the icon-only floor: 1.25rem icon + 0.25rem gap + 1rem
+             horizontal padding. The button shrinks to it as its name is
+             truncated, then the row scrolls. `overflow-hidden` keeps the active
+             underline inside the rounded corners. -->
         <button
-          class="flex min-h-9 min-w-[3.125rem] items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors {isActiveProject
-            ? 'bg-foreground font-medium text-app'
+          class="relative flex min-h-8 min-w-[2.5rem] items-center gap-1 overflow-hidden rounded-md px-2 py-0.5 transition-colors {isActiveProject
+            ? 'bg-selected text-foreground'
             : 'text-muted hover:bg-elevated hover:text-foreground'}"
           role="tab"
           aria-selected={isActiveProject}
@@ -72,8 +73,7 @@
           onclick={() => void switchProject(project.id)}
         >
           <span
-            class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-raised"
-            style:border-color={`color-mix(in srgb, ${projectColor} 45%, transparent)`}
+            class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-md"
             style:background-color={`color-mix(in srgb, ${projectColor} 6%, var(--color-raised))`}
             aria-hidden="true"
           >
@@ -89,10 +89,19 @@
           <ProjectIdentity
             {project}
             class="max-w-36 text-left"
-            nameClass="text-xs font-medium"
-            locationClass="text-[0.5625rem] text-dimmed"
+            nameClass="text-[0.6875rem] font-medium"
+            locationClass="text-[0.5rem] text-dimmed"
             showLocation={hasProjectNameCollision(project, scopeState.projects)}
           />
+          <!-- The active tab is marked by the current-row surface plus a bottom
+               rule, never a filled block: on dark it is the light rule, on
+               light the dark one. -->
+          {#if isActiveProject}
+            <span
+              class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground"
+              aria-hidden="true"
+            ></span>
+          {/if}
         </button>
       {/each}
     </div>
