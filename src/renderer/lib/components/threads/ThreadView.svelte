@@ -304,9 +304,11 @@
     type SubagentPart
   } from './thread-turn-parts'
   import {
+    annotationFallbackAnchor,
     applyAnnotationHighlights,
     measureAnnotationBubbles,
     releaseAnnotationHighlights,
+    withUnmeasuredAnchors,
     ANNOTATION_BUBBLE_SIZE,
     type AnnotationBubblePosition
   } from '$lib/selection-anchors'
@@ -2064,13 +2066,18 @@
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
+  /** How many frames a range rebuild is retried for while its anchor has not
+   *  mounted yet, before the annotation settles for the fallback anchor. */
+  const RESPONSE_RANGE_RETRIES = 3
   /** Selection references shown in the composer (controller-driven for temporary chats). */
   let composerReferences = $derived(controller?.references ?? responseReferences)
   const responseReferenceRanges = new SvelteMap<string, Range>()
   /** Identity of this view as the CSS highlight registry's owner, so its
    *  teardown can never clear highlights another view published. */
   const responseHighlightOwner = {}
-  /** Viewport position for the comment bubble of each reference anchor. */
+  /** Viewport position for the comment bubble of each reference anchor. Every
+   *  live reference has an entry, so a comment whose highlight cannot be
+   *  measured still has an anchor its editor can open at. */
   let responseBubblePositions = $state<Record<string, AnnotationBubblePosition>>({})
   let commentEditorReferenceId = $state<string | null>(null)
   let messageEditEditor = $state<RichMarkdownEditor>()
@@ -2101,10 +2108,38 @@
     // reading every range rect costs, so the common conversation pays nothing.
     if (responseReferenceRanges.size === 0 && Object.keys(responseBubblePositions).length === 0)
       return
-    responseBubblePositions = measureAnnotationBubbles(scrollEl, responseReferenceRanges)
+    responseBubblePositions = withUnmeasuredAnchors(
+      measureAnnotationBubbles(scrollEl, responseReferenceRanges),
+      responseReferences.map((reference) => reference.id),
+      responseAnchorFallback
+    )
+  }
+
+  /**
+   * Where a selection's comment opens when its highlight cannot be measured.
+   *
+   * A quoted excerpt has no rect while its message is outside the mounted
+   * window, while the conversation is hidden behind another view, or after a
+   * rebuild failed. The comment is still attached to the next message, so its
+   * editor docks on the message that carries the excerpt, and on the top of the
+   * conversation when even that message is not mounted.
+   */
+  function responseAnchorFallback(id: string): { x: number; y: number } | null {
+    const messageId = responseReferences.find((reference) => reference.id === id)?.messageId
+    const rect = messageId
+      ? document.getElementById(`msg-${messageId}`)?.getBoundingClientRect()
+      : undefined
+    if (rect && rect.width > 0 && rect.height > 0) {
+      return { x: Math.round(rect.left + Math.min(rect.width / 2, 240)), y: Math.round(rect.top) }
+    }
+    return annotationFallbackAnchor(scrollEl)
   }
 
   let responseBubblePositionFrame = 0
+  /** Frame handle and budget for the bounded retry that rebuilds a range whose
+   *  anchor has not mounted yet (see `syncResponseHighlights`). */
+  let responseRangeRetryFrame = 0
+  let responseRangeRetriesLeft = RESPONSE_RANGE_RETRIES
 
   function scheduleResponseBubbleUpdate(): void {
     if (responseBubblePositionFrame) return
@@ -2131,7 +2166,28 @@
    * conversation publish.
    */
   function syncResponseHighlights(references: ResponseReferenceAnchor[]): void {
+    const missing = rebuildResponseRanges(references)
+    scheduleResponseBubbleUpdate()
+    // A rebuild can miss for a single frame while the anchor mounts: a history
+    // window that has just been merged, or the newest answer leaving the
+    // working trace for its final-answer block. Retrying a bounded number of
+    // frames turns "the comment is gone for good" into "the comment arrives a
+    // frame late", and stops the moment every reference has its range.
+    if (missing === 0 || responseRangeRetriesLeft === 0) return
+    if (responseRangeRetryFrame) return
+    responseRangeRetriesLeft -= 1
+    responseRangeRetryFrame = requestAnimationFrame(() => {
+      responseRangeRetryFrame = 0
+      if (!alive) return
+      if (rebuildResponseRanges(references) === 0) scheduleResponseBubbleUpdate()
+    })
+  }
+
+  /** Rebuild every stale range from the conversation DOM, and report how many
+   *  references still have no range once the pass is over. */
+  function rebuildResponseRanges(references: ResponseReferenceAnchor[]): number {
     let changed = false
+    let missing = 0
     const liveIds = references.map((reference) => reference.id)
     for (const reference of references) {
       const existing = responseReferenceRanges.get(reference.id)
@@ -2140,9 +2196,12 @@
       if (range) {
         responseReferenceRanges.set(reference.id, range)
         changed = true
-      } else if (existing) {
-        responseReferenceRanges.delete(reference.id)
-        changed = true
+      } else {
+        missing += 1
+        if (existing) {
+          responseReferenceRanges.delete(reference.id)
+          changed = true
+        }
       }
     }
     // A detached selection is no longer part of the chat component.
@@ -2152,7 +2211,7 @@
       changed = true
     }
     if (changed) refreshResponseHighlights()
-    scheduleResponseBubbleUpdate()
+    return missing
   }
 
   function scheduleResponseHighlightRestore(references: ResponseReferenceAnchor[]): void {
@@ -2269,8 +2328,17 @@
     browserInspector.focusComment(tabId, reference.id)
   }
 
-  /** Jump back to a selection's highlight and open its comment editor. */
-  function editResponseReference(id: string): void {
+  /**
+   * Jump back to a selection's highlight and open its comment editor.
+   *
+   * The editor opens first, before the excerpt is found: the commented message
+   * can sit outside the mounted window, in which case there is no range to pin
+   * a bubble to, and a comment that is merely not on screen must still be
+   * readable and editable rather than the action silently doing nothing. The
+   * message is then brought on screen, the range rebuilt, and the highlight
+   * scrolled to.
+   */
+  async function editResponseReference(id: string): Promise<void> {
     const reference = responseReferences.find((candidate) => candidate.id === id)
     if (!reference) return
     // A document annotation is drawn in the file panel and a design element in
@@ -2286,18 +2354,22 @@
     }
     if (!isResponseSelection(reference)) return
     commentEditorReferenceId = id
-    void tick().then(() => {
-      updateResponseBubblePositions()
-      const range = responseReferenceRanges.get(id)
-      if (range && scrollEl) {
-        const element =
-          range.startContainer.parentElement ??
-          (range.startContainer.parentNode instanceof Element
-            ? range.startContainer.parentNode
-            : null)
-        element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      }
-    })
+    // Bring the commented message back on screen first. It can lie outside the
+    // mounted window entirely (a restore, a long transcript), and the range is
+    // built from that element   without it there is no highlight to scroll to
+    // and no bubble to pin.
+    if (reference.messageId) await jumpToMessage(reference.messageId)
+    if (!alive) return
+    syncResponseHighlights(responseReferences)
+    await tick()
+    if (!alive) return
+    updateResponseBubblePositions()
+    const range = responseReferenceRanges.get(id)
+    if (!range) return
+    const element =
+      range.startContainer.parentElement ??
+      (range.startContainer.parentNode instanceof Element ? range.startContainer.parentNode : null)
+    element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
   /** Remove a single composer selection reference, routing to the controller for temporary chats. */
@@ -2324,6 +2396,18 @@
     return responseReferences.find((reference) => reference.id === id) ?? null
   }
 
+  /** Where the open comment editor anchors.
+   *
+   * The measured bubble position when the highlight is on screen, and the
+   * message's own anchor when it is not: the editor is gated on this reference
+   * existing, never on the highlight happening to be measurable, so editing a
+   * comment can never silently do nothing. */
+  const commentEditorAnchor = $derived.by(() => {
+    const id = commentEditorReferenceId
+    if (!id) return null
+    return responseBubblePositions[id] ?? responseAnchorFallback(id)
+  })
+
   // Keep comment bubbles and highlights anchored to their text as the
   // conversation re-renders. Every trigger below can change which DOM nodes
   // carry the annotated text: a streamed publish, the mounted history window
@@ -2333,16 +2417,41 @@
   // ran once - before that anchor existed - and never ran again, so the
   // highlights and comment bubbles stayed missing until a new selection
   // happened to re-trigger it.
+  //
+  // Becoming active again is one of those triggers: every position measured
+  // while the conversation was off screen or covered by another view is stale,
+  // and a range that failed to rebuild in that state was never retried. That is
+  // what left a comment with no bubble and no highlight on return.
   $effect(() => {
     void responseReferences.length
     void visibleMessages.length
     void conversationBusy
     void threadMessages.streamRevision(thread.projectId, conversationId)
+    void active
     if (responseReferences.length === 0) return
+    responseRangeRetriesLeft = RESPONSE_RANGE_RETRIES
     void tick().then(() => {
       if (!alive) return
       syncResponseHighlights(responseReferences)
     })
+  })
+
+  // A bubble is measured in viewport coordinates, so it has to be re-measured
+  // when the conversation changes width: a sidebar drag or a docked panel moves
+  // every highlight without firing a window resize. A height change is content,
+  // which the publish trigger already covers, and re-measuring on every
+  // streamed frame would force layout for nothing.
+  $effect(() => {
+    const element = scrollEl
+    if (!element) return
+    let lastWidth = element.clientWidth
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth === lastWidth) return
+      lastWidth = element.clientWidth
+      scheduleResponseBubbleUpdate()
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
   })
 
   function responseReferenceContext(): string | undefined {
@@ -10907,6 +11016,8 @@
   })
 
   onDestroy(() => {
+    if (responseRangeRetryFrame) cancelAnimationFrame(responseRangeRetryFrame)
+    responseRangeRetryFrame = 0
     releaseAnnotationHighlights(responseHighlightOwner, RESPONSE_HIGHLIGHT_NAME)
     imageUrls.destroy()
     attachmentPreview.revokeAll()
@@ -10978,9 +11089,7 @@
 
 {#if commentEditorReferenceId}
   {@const editorReference = commentEditorReference()}
-  {@const editorPosition = commentEditorReferenceId
-    ? responseBubblePositions[commentEditorReferenceId]
-    : undefined}
+  {@const editorPosition = commentEditorAnchor}
   {#if editorReference && editorPosition}
     <ResponseAnnotationComment
       x={editorPosition.x + ANNOTATION_BUBBLE_SIZE / 2}

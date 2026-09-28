@@ -267,6 +267,18 @@
 
   onDestroy(clearPendingRestart)
 
+  // A recording outlives the field it was started in: navigating away destroys
+  // this button and its editor while the capture keeps running. When the same
+  // input comes back, hand the controller the live target so the transcript
+  // lands in the field the user is looking at instead of behind it. Doing it
+  // here rather than in each surface keeps every mic in the app behaving the
+  // same way.
+  $effect(() => {
+    if (disabled) return
+    const target = getTarget()
+    if (target) speechController.reattachTarget(target)
+  })
+
   function prepareTarget(): void {
     if (disabled || action !== 'start') return
     preparedTarget = getTarget()

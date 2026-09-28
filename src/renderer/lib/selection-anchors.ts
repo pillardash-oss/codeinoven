@@ -213,6 +213,63 @@ export function measureAnnotationBubbles(
 }
 
 /**
+ * Where a note's editor opens when the passage it is attached to cannot be
+ * measured.
+ *
+ * The note outlives the anchor it was pinned to: its excerpt can sit outside
+ * the mounted window, its document can have been rewritten, or the surface can
+ * currently be hidden. The note itself is still attached to the message being
+ * composed, so its editor has to open somewhere on screen rather than the
+ * comment becoming unreachable.
+ */
+export function annotationFallbackAnchor(container: HTMLElement | null | undefined): {
+  x: number
+  y: number
+} {
+  const rect = container?.getBoundingClientRect()
+  if (rect && rect.width > 0 && rect.height > 0) {
+    return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top) + 8 }
+  }
+  return { x: Math.round(window.innerWidth / 2), y: 96 }
+}
+
+/**
+ * Give every annotation a position, including the ones whose range could not be
+ * measured.
+ *
+ * `measureAnnotationBubbles` only reports what it can measure, so an
+ * annotation whose passage left the mounted window (or whose surface was
+ * hidden while it was measured) simply vanished from the record. Both the
+ * comment bubble and the comment editor are gated on that record, which is why
+ * a comment could become permanently unreachable. A fallback entry keeps the
+ * annotation addressable: the bubble still requires `visible`, so nothing is
+ * pinned to text that is not there, while the editor can dock at the fallback.
+ */
+export function withUnmeasuredAnchors(
+  measured: Record<string, AnnotationBubblePosition>,
+  ids: readonly string[],
+  fallbackFor: (id: string) => { x: number; y: number } | null
+): Record<string, AnnotationBubblePosition> {
+  const live = new Set(ids)
+  let merged: Record<string, AnnotationBubblePosition> | null = null
+  // A detached annotation gives its entry up, exactly as the measurement did
+  // when it reported every position in one fresh record.
+  for (const id of Object.keys(measured)) {
+    if (live.has(id)) continue
+    merged ??= { ...measured }
+    delete merged[id]
+  }
+  for (const id of ids) {
+    if ((merged ?? measured)[id]) continue
+    const fallback = fallbackFor(id)
+    if (!fallback) continue
+    merged ??= { ...measured }
+    merged[id] = { x: fallback.x, y: fallback.y, visible: false }
+  }
+  return merged ?? measured
+}
+
+/**
  * The ranges each view contributed to a highlight name.
  *
  * The registry is document-global and keyed by name, and more than one view can
