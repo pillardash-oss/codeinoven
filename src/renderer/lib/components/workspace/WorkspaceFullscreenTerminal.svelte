@@ -43,6 +43,7 @@
           projectId={terminalTab.projectId}
           threadId={terminalTab.threadId}
           scopeBucketId={workspaceState.activeScopeBucketIdFor(terminalTab.projectId)}
+          directory={terminalTab.startingDirectory}
         />
       {/key}
     {/if}

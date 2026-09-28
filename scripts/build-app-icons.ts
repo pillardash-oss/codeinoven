@@ -89,14 +89,39 @@ if (process.platform === 'darwin') {
   for (const [name, size] of entries) {
     writeFileSync(join(setDir, name), renderPng(master, size))
   }
-  execFileSync('iconutil', [
-    '-c',
-    'icns',
-    setDir,
-    '-o',
-    join(macosDir, 'AppIcon.icns')
-  ])
+  execFileSync('iconutil', ['-c', 'icns', setDir, '-o', join(macosDir, 'AppIcon.icns')])
   rmSync(iconset, { recursive: true, force: true })
   Logger.dev('[build-app-icons] Wrote macos/AppIcon.icns.')
 }
+
+// Menu bar tray template images.
+//
+// macOS treats a `...Template.png` filename as a template image and derives its
+// own tint from the alpha channel, so the mark is rendered in solid black and a
+// matching `@2x` file is picked up automatically for Retina menu bars. The
+// artwork is the existing monochrome mark, recoloured to pure black. The
+// attention variant adds a bold exclamation mark beside the mark so the menu bar
+// can say "something needs you" without a second colour.
+const monoMaster = readFileSync(join(staticDir, 'icon-mono.svg'), 'utf8').replace(
+  'color:#a1a1aa',
+  'color:#000000'
+)
+// The attention variant scales the mark down and sets a bold exclamation beside
+// it, so the two shapes stay legible at menu bar size instead of overlapping.
+const attentionMaster = monoMaster
+  .replace('<g id="svg"', '<g transform="matrix(0.78,0,0,0.78,6,120)"><g id="svg"')
+  .replace(
+    '</svg>',
+    '</g><g id="attention-badge"><rect x="1044" y="170" width="132" height="430" rx="66" fill="#000000"/><circle cx="1110" cy="760" r="78" fill="#000000"/></g></svg>'
+  )
+const trayOutputs: Array<[string, Buffer]> = [
+  ['trayTemplate.png', renderPng(monoMaster, 16)],
+  ['trayTemplate@2x.png', renderPng(monoMaster, 32)],
+  ['trayAttentionTemplate.png', renderPng(attentionMaster, 16)],
+  ['trayAttentionTemplate@2x.png', renderPng(attentionMaster, 32)]
+]
+for (const [name, buffer] of trayOutputs) {
+  writeFileSync(join(macosDir, name), buffer)
+}
+Logger.dev(`[build-app-icons] Wrote ${trayOutputs.length} menu bar template assets to ${macosDir}.`)
 Logger.dev('[build-app-icons] Done.')

@@ -29,9 +29,25 @@ import {
   isValidMediaModel,
   isMediaProviderId
 } from '../../../lib/media-generation'
+import {
+  MAX_BROWSER_CUSTOM_SEARCH_ENGINES,
+  MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH,
+  isBuiltInBrowserSearchEngineId,
+  normalizeBrowserSearchUrlTemplate,
+  type BrowserSearchEngine
+} from '../../../lib/browser-search-engines'
 import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
 import { validateMemoryConfig } from '../../chat/memory-service'
-import { MAX_MAX_CONFLICT_FILE_BYTES, MIN_MAX_CONFLICT_FILE_BYTES } from '../../../lib/types'
+import {
+  MAX_BROWSER_HIBERNATION_MINUTES,
+  MAX_MAX_CONFLICT_FILE_BYTES,
+  MIN_BROWSER_HIBERNATION_MINUTES,
+  MIN_MAX_CONFLICT_FILE_BYTES,
+  MAX_BACKGROUND_WAKE_LEAD_MS,
+  MIN_BACKGROUND_WAKE_LEAD_MS,
+  MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
+  MIN_MAX_BACKGROUND_WAKE_HOLD_MS
+} from '../../../lib/types'
 import { validateBoundedString, validateEntityId, validateMergeMethod } from '../ipc-validation'
 import { isRecord, requireString } from './shared'
 import type {
@@ -134,6 +150,14 @@ function validateLocalUsageClearInput(value: unknown): LocalUsageClearInput {
   }
 }
 
+/** Validate an integer inside an inclusive range, rejecting floats and strings. */
+function validateBoundedInteger(value: unknown, label: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new TypeError(`${label} must be an integer between ${min} and ${max}`)
+  }
+  return value
+}
+
 const CONFIG_PATCH_FIELDS = new Set([
   'theme',
   'fontFamily',
@@ -167,6 +191,13 @@ const CONFIG_PATCH_FIELDS = new Set([
   'maxConflictFileBytes',
   'openLocalhostInCioBrowser',
   'openAllLinksInCioBrowser',
+  'backgroundMode',
+  'launchAtLogin',
+  'autoRunMissedAssistantRuns',
+  'backgroundWakeLeadMs',
+  'maxBackgroundWakeHoldMs',
+  'browserSearchEngine',
+  'browserCustomSearchEngines',
   'allowPrototypeExternalCdn',
   'prototypeCdnAllowlist',
   'inAppNotificationSound',
@@ -480,6 +511,44 @@ const FONT_FAMILIES = new Set([
   'fira-code'
 ])
 
+/** Validate a user-authored search engine list, rejecting the whole patch on
+ *  the first bad entry so a half-applied list can never reach the config. */
+function validateBrowserCustomSearchEngines(value: unknown): BrowserSearchEngine[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError('Custom search engines must be an array')
+  }
+  if (value.length > MAX_BROWSER_CUSTOM_SEARCH_ENGINES) {
+    throw new TypeError(
+      `At most ${MAX_BROWSER_CUSTOM_SEARCH_ENGINES} custom search engines are allowed`
+    )
+  }
+  const engines: BrowserSearchEngine[] = []
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      throw new TypeError('Each custom search engine must be an object')
+    }
+    const id = requireString(entry.id, 'Custom search engine id')
+    const name = requireString(entry.name, 'Custom search engine name').trim()
+    if (name === '' || name.length > MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH) {
+      throw new TypeError('Custom search engine name must be 1 to 48 characters')
+    }
+    if (isBuiltInBrowserSearchEngineId(id)) {
+      throw new TypeError('A built-in search engine id cannot be reused')
+    }
+    if (engines.some((engine) => engine.id === id)) {
+      throw new TypeError('Custom search engine ids must be unique')
+    }
+    const template = normalizeBrowserSearchUrlTemplate(
+      requireString(entry.searchUrlTemplate, 'Custom search engine URL')
+    )
+    if (!template) {
+      throw new TypeError('Custom search engine URL must be an http or https address')
+    }
+    engines.push({ id, name, searchUrlTemplate: template })
+  }
+  return engines
+}
+
 /** Validate the complete renderer-controlled config boundary. */
 export function validateAppConfigPatch(value: unknown): AppConfigPatch {
   if (!isRecord(value)) throw new TypeError('Config patch must be an object')
@@ -600,6 +669,18 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.maxDiffLines = value.maxDiffLines
   }
 
+  if ('browserHibernationMinutes' in value) {
+    if (
+      typeof value.browserHibernationMinutes !== 'number' ||
+      !Number.isInteger(value.browserHibernationMinutes) ||
+      value.browserHibernationMinutes < MIN_BROWSER_HIBERNATION_MINUTES ||
+      value.browserHibernationMinutes > MAX_BROWSER_HIBERNATION_MINUTES
+    ) {
+      throw new TypeError('Browser hibernation minutes must be a whole number between 5 and 120')
+    }
+    patch.browserHibernationMinutes = value.browserHibernationMinutes
+  }
+
   if ('maxConflictFileBytes' in value) {
     if (
       typeof value.maxConflictFileBytes !== 'number' ||
@@ -636,6 +717,23 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Open all links in CIO browser must be a boolean')
     }
     patch.openAllLinksInCioBrowser = value.openAllLinksInCioBrowser
+  }
+
+  if ('browserSearchEngine' in value) {
+    if (
+      typeof value.browserSearchEngine !== 'string' ||
+      value.browserSearchEngine.trim() === '' ||
+      value.browserSearchEngine.length > 128
+    ) {
+      throw new TypeError('Browser search engine must be a non-empty id')
+    }
+    patch.browserSearchEngine = value.browserSearchEngine
+  }
+
+  if ('browserCustomSearchEngines' in value) {
+    patch.browserCustomSearchEngines = validateBrowserCustomSearchEngines(
+      value.browserCustomSearchEngines
+    )
   }
 
   if ('allowPrototypeExternalCdn' in value) {
@@ -869,6 +967,49 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('resumeWorkOnRestart must be a boolean')
     }
     patch.resumeWorkOnRestart = value.resumeWorkOnRestart
+  }
+
+  if ('backgroundMode' in value) {
+    if (
+      value.backgroundMode !== 'off' &&
+      value.backgroundMode !== 'scheduled' &&
+      value.backgroundMode !== 'always'
+    ) {
+      throw new TypeError('backgroundMode must be "off", "scheduled" or "always"')
+    }
+    patch.backgroundMode = value.backgroundMode
+  }
+
+  if ('launchAtLogin' in value) {
+    if (typeof value.launchAtLogin !== 'boolean') {
+      throw new TypeError('launchAtLogin must be a boolean')
+    }
+    patch.launchAtLogin = value.launchAtLogin
+  }
+
+  if ('autoRunMissedAssistantRuns' in value) {
+    if (typeof value.autoRunMissedAssistantRuns !== 'boolean') {
+      throw new TypeError('autoRunMissedAssistantRuns must be a boolean')
+    }
+    patch.autoRunMissedAssistantRuns = value.autoRunMissedAssistantRuns
+  }
+
+  if ('backgroundWakeLeadMs' in value) {
+    patch.backgroundWakeLeadMs = validateBoundedInteger(
+      value.backgroundWakeLeadMs,
+      'Background wake lead',
+      MIN_BACKGROUND_WAKE_LEAD_MS,
+      MAX_BACKGROUND_WAKE_LEAD_MS
+    )
+  }
+
+  if ('maxBackgroundWakeHoldMs' in value) {
+    patch.maxBackgroundWakeHoldMs = validateBoundedInteger(
+      value.maxBackgroundWakeHoldMs,
+      'Background wake hold cap',
+      MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
+      MAX_MAX_BACKGROUND_WAKE_HOLD_MS
+    )
   }
 
   if ('defaultMergeMethod' in value) {

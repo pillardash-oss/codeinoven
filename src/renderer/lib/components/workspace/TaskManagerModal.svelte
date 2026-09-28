@@ -68,15 +68,21 @@
 
   const SORT_MODES: readonly TaskSortMode[] = ['memory', 'cpu', 'name']
 
-  /** One foldable owner node: a project or a thread and the processes it owns. */
-  interface OwnerGroup {
+  /** Identity of one foldable owner node: a project, or a thread inside one. */
+  interface OwnerIdentity {
+    /** Stable tree key: `project:<id>` or `thread:<id>`. */
     id: string
     kind: 'project' | 'thread'
     label: string
     /** Project a thread node belongs to; null for a project node. */
     projectName: string | null
     projectId: string | null
+  }
+
+  /** One foldable owner node and everything the app runs for it. */
+  interface OwnerGroup extends OwnerIdentity {
     processes: TaskManagerProcess[]
+    services: TaskManagerService[]
     pids: number[]
     memoryBytes: number
     cpuPercent: number
@@ -98,7 +104,7 @@
   /** Project filter for project-owned processes; null shows everything. */
   let filterProjectId = $state<string | null>(null)
   let selected = new SvelteSet<number>()
-  /** Tree nodes folded away, keyed by node id (`app`, `services`, `group:<id>`). */
+  /** Tree nodes folded away, keyed by node id (`app`, `project:<id>`, `thread:<id>`). */
   let collapsed = new SvelteSet<string>()
   let ending = $state(false)
   let forceEndTargets = $state<readonly TaskManagerProcess[]>([])
@@ -159,34 +165,72 @@
   }
 
   /**
-   * Visible processes grouped by their most specific owner: a thread node when
-   * the process belongs to a thread (a routine run), otherwise a project node.
-   * App-scoped processes have no owner and render as standalone leaves instead.
+   * The owner node a runtime belongs to: its thread when it has one (a routine
+   * run), otherwise its project. App-scoped runtimes have neither and return
+   * null, so they list under the app node instead.
+   */
+  function ownerOf(
+    projectId: string | null,
+    threadId: string | null,
+    threadTitle: string | null | undefined,
+    projectName: string | null | undefined
+  ): OwnerIdentity | null {
+    if (!projectId && !threadId) return null
+    const isThread = Boolean(threadId)
+    return {
+      id: isThread ? `thread:${threadId}` : `project:${projectId}`,
+      kind: isThread ? 'thread' : 'project',
+      label: isThread ? (threadTitle ?? 'Untitled thread') : (projectName ?? 'Untitled project'),
+      projectName: projectName ?? null,
+      projectId: projectId ?? null
+    }
+  }
+
+  /** Fetch or create the node for one owner, so all of its runtimes share it. */
+  function ensureOwnerGroup(
+    groups: SvelteMap<string, OwnerGroup>,
+    owner: OwnerIdentity
+  ): OwnerGroup {
+    const existing = groups.get(owner.id)
+    if (existing) return existing
+    const group: OwnerGroup = {
+      ...owner,
+      processes: [],
+      services: [],
+      pids: [],
+      memoryBytes: 0,
+      cpuPercent: 0
+    }
+    groups.set(owner.id, group)
+    return group
+  }
+
+  /**
+   * Visible runtimes grouped by their owner. Each node holds both the processes
+   * and the services that owner started, so a project's whole footprint reads
+   * as one branch. App-scoped runtimes have no owner and are excluded here.
    */
   const ownerGroups = $derived.by(() => {
     const groups = new SvelteMap<string, OwnerGroup>()
     for (const process of visibleProcesses) {
-      if (!process.projectId && !process.threadId) continue
-      const id = process.threadId ? `thread:${process.threadId}` : `project:${process.projectId}`
-      let group = groups.get(id)
-      if (!group) {
-        const isThread = Boolean(process.threadId)
-        group = {
-          id,
-          kind: isThread ? 'thread' : 'project',
-          label: isThread
-            ? (process.threadTitle ?? 'Untitled thread')
-            : (process.projectName ?? 'Untitled project'),
-          projectName: process.projectName ?? null,
-          projectId: process.projectId ?? null,
-          processes: [],
-          pids: [],
-          memoryBytes: 0,
-          cpuPercent: 0
-        }
-        groups.set(id, group)
-      }
-      group.processes.push(process)
+      const owner = ownerOf(
+        process.projectId,
+        process.threadId,
+        process.threadTitle,
+        process.projectName
+      )
+      if (!owner) continue
+      ensureOwnerGroup(groups, owner).processes.push(process)
+    }
+    for (const service of visibleServices) {
+      const owner = ownerOf(
+        service.projectId,
+        service.threadId,
+        service.threadTitle,
+        service.projectName
+      )
+      if (!owner) continue
+      ensureOwnerGroup(groups, owner).services.push(service)
     }
     const list = [...groups.values()]
     for (const group of list) {
@@ -203,7 +247,14 @@
     visibleProcesses.filter((process) => !process.projectId && !process.threadId)
   )
 
-  const allProcessPids = $derived(visibleProcesses.map((process) => process.pid))
+  /** App-owned services that belong to no project or thread (the config part). */
+  const appOwnedServices = $derived(
+    visibleServices.filter((service) => !service.projectId && !service.threadId)
+  )
+
+  const appOwnedPids = $derived(appScopedProcesses.map((process) => process.pid))
+
+  const appOwnedTotals = $derived(aggregateResources(appScopedProcesses))
 
   function compareGroups(a: OwnerGroup, b: OwnerGroup): number {
     if (sortMode === 'name') {
@@ -414,14 +465,6 @@
     return `${head}…${tail}`
   }
 
-  function locationLabel(process: TaskManagerProcess): string {
-    if (process.threadTitle && process.projectName) {
-      return `${process.projectName} · ${process.threadTitle}`
-    }
-    if (process.projectName) return process.projectName
-    return 'Shared server'
-  }
-
   /**
    * Resolve the project/thread to open a browser or terminal in for a process.
    * Uses the process's owning thread when present and valid; otherwise falls
@@ -563,14 +606,6 @@
     }
   }
 
-  function serviceLocationLabel(service: TaskManagerService): string {
-    if (service.threadTitle && service.projectName) {
-      return `${service.projectName} · ${service.threadTitle}`
-    }
-    if (service.projectName) return service.projectName
-    return 'App-wide'
-  }
-
   /** Stopping a service ends a loopback server or MCP child, so confirm first. */
   function requestStopService(service: TaskManagerService): void {
     if (!service.stoppable || stopping) return
@@ -700,7 +735,6 @@
                   <span>PID {service.pid}</span>
                 {/if}
                 <span>{formatDuration(service.startedAt)}</span>
-                <span class="shrink-0">{serviceLocationLabel(service)}</span>
               </div>
             </div>
             <div class="mt-0.5 flex shrink-0 items-center gap-1">
@@ -820,7 +854,6 @@
                   <span class="min-w-0 truncate" title={process.cwd ?? undefined}>
                     {shortPath(process.cwd)}
                   </span>
-                  <span class="shrink-0">{locationLabel(process)}</span>
                 </div>
               </div>
             </button>
@@ -867,82 +900,73 @@
           </li>
         {/snippet}
 
-        <TaskManagerNode
-          label={APP_NAME}
-          expanded={!isCollapsed('app')}
-          ontoggle={() => toggleCollapsed('app')}
-          count={visibleServices.length + visibleProcesses.length}
-          memoryLabel={formatMemory(processTotals.memoryBytes)}
-          cpuLabel={formatCpu(processTotals.cpuPercent)}
-          switchChecked={allSelected(allProcessPids)}
-          switchLabel={allProcessPids.length > 0
-            ? `Select every process under ${APP_NAME}`
-            : 'No processes to select'}
-          onswitch={allProcessPids.length > 0 ? () => toggleGroup(allProcessPids) : undefined}
-        >
-          {#snippet icon()}
-            <VendorIcon id="codeinoven" name={APP_NAME} size={18} class="shrink-0" />
-          {/snippet}
+        {#if appScopedProcesses.length > 0 || appOwnedServices.length > 0}
+          <TaskManagerNode
+            label={APP_NAME}
+            expanded={!isCollapsed('app')}
+            ontoggle={() => toggleCollapsed('app')}
+            count={appScopedProcesses.length + appOwnedServices.length}
+            memoryLabel={formatMemory(appOwnedTotals.memoryBytes)}
+            cpuLabel={formatCpu(appOwnedTotals.cpuPercent)}
+            switchChecked={allSelected(appOwnedPids)}
+            switchLabel={appOwnedPids.length > 0
+              ? `Select every app-owned process under ${APP_NAME}`
+              : 'No processes to select'}
+            onswitch={appOwnedPids.length > 0 ? () => toggleGroup(appOwnedPids) : undefined}
+          >
+            {#snippet icon()}
+              <VendorIcon id="codeinoven" name={APP_NAME} size={18} class="shrink-0" />
+            {/snippet}
 
-          {#if visibleServices.length > 0}
-            <TaskManagerNode
-              label="Services"
-              expanded={!isCollapsed('services')}
-              ontoggle={() => toggleCollapsed('services')}
-              count={visibleServices.length}
-            >
-              {#snippet icon()}
-                <Server size={14} class="shrink-0 text-primary" />
-              {/snippet}
-              <ul class="divide-y divide-border">
-                {#each visibleServices as service (service.id)}
-                  {@render serviceRow(service)}
-                {/each}
-              </ul>
-            </TaskManagerNode>
-          {/if}
-
-          {#each ownerGroups as group (group.id)}
-            <TaskManagerNode
-              label={group.label}
-              hint={group.kind === 'thread' ? group.projectName : null}
-              expanded={!isCollapsed(group.id)}
-              ontoggle={() => toggleCollapsed(group.id)}
-              count={group.processes.length}
-              memoryLabel={formatMemory(group.memoryBytes)}
-              cpuLabel={formatCpu(group.cpuPercent)}
-              switchChecked={allSelected(group.pids)}
-              switchLabel={`Select every process under ${group.label}`}
-              onswitch={() => toggleGroup(group.pids)}
-            >
-              {#snippet icon()}
-                <!-- A group is an owner   a project, or a thread inside one   so it
-                carries the icon and colour of the project it belongs to. The
-                harness mark stays on the process rows, where it identifies the
-                run itself rather than the project. -->
-                {@render projectIconTile(
-                  group.projectId ?? group.id,
-                  group.projectName ?? group.label,
-                  'h-6 w-6 rounded-md',
-                  'h-4 w-4'
-                )}
-              {/snippet}
-              <ul class="divide-y divide-border">
-                {#each group.processes as process (process.pid)}
-                  {@render processRow(process)}
-                {/each}
-              </ul>
-            </TaskManagerNode>
-          {/each}
-
-          {#if appScopedProcesses.length > 0}
+            <!-- The app node holds only what the app owns for its whole run:
+            the config-rooted services and the app-scoped processes such as the
+            shared model server. Projects and routines are never nested here. -->
             <ul class="divide-y divide-border">
               {#each appScopedProcesses as process (process.pid)}
                 {@render processRow(process)}
               {/each}
+              {#each appOwnedServices as service (service.id)}
+                {@render serviceRow(service)}
+              {/each}
             </ul>
-          {/if}
-        </TaskManagerNode>
+          </TaskManagerNode>
+        {/if}
+
+        {#each ownerGroups as group (group.id)}
+          <TaskManagerNode
+            label={group.label}
+            hint={group.kind === 'thread' ? group.projectName : null}
+            expanded={!isCollapsed(group.id)}
+            ontoggle={() => toggleCollapsed(group.id)}
+            count={group.processes.length + group.services.length}
+            memoryLabel={formatMemory(group.memoryBytes)}
+            cpuLabel={formatCpu(group.cpuPercent)}
+            switchChecked={allSelected(group.pids)}
+            switchLabel={`Select every process under ${group.label}`}
+            onswitch={group.pids.length > 0 ? () => toggleGroup(group.pids) : undefined}
+          >
+            {#snippet icon()}
+              <!-- A group is an owner   a project, or a thread inside one   so it
+              carries the icon and colour of the project it belongs to. The
+              harness mark stays on the process rows, where it identifies the
+              run itself rather than the project. -->
+              {@render projectIconTile(
+                group.projectId ?? group.id,
+                group.projectName ?? group.label,
+                'h-6 w-6 rounded-md',
+                'h-4 w-4'
+              )}
+            {/snippet}
+            <ul class="divide-y divide-border">
+              {#each group.processes as process (process.pid)}
+                {@render processRow(process)}
+              {/each}
+              {#each group.services as service (service.id)}
+                {@render serviceRow(service)}
+              {/each}
+            </ul>
+          </TaskManagerNode>
+        {/each}
       {/if}
     </div>
   </div>

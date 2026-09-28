@@ -9,6 +9,9 @@ export interface TerminalContextTab {
   terminalId: string
   projectId: string
   threadId: string
+  /** Project-relative folder the shell starts in, set when the tab was opened
+   *  at a path from the file tree. Undefined starts at the scope root. */
+  startingDirectory?: string
 }
 
 export interface FilesContextTab {
@@ -125,6 +128,54 @@ export interface NotificationContextTab {
   title: string
 }
 
+/**
+ * The rail panel that lists the gates the app resolved without the user.
+ *
+ * Unlike a notification, an auto-resolved decision is not dismissed by an
+ * action inside the panel: the record stays until the user reads it, so the
+ * tab carries no project or thread scope and the rail icon only exists while
+ * at least one record is unread.
+ */
+export interface AttentionContextTab {
+  id: string
+  kind: 'attention'
+  title: string
+}
+
+/**
+ * The global browser's downloads panel.
+ *
+ * Downloads belong to the shared browser profile, not to a project or thread,
+ * so the tab carries no scope and is the one browser rail tool that can be
+ * docked with no tab on screen.
+ */
+export interface BrowserDownloadsContextTab {
+  id: string
+  kind: 'downloads'
+  title: string
+}
+
+/**
+ * One popup window on the browser's right rail.
+ *
+ * A popup window is a page's own `window.open` with a window in it: a sign-in, a
+ * checkout, a share dialog. The app hosts it and displays it in the rail, so the
+ * rail carries one tab per popup, exactly as it carries one tab per open file:
+ * the tab is the popup, and closing the tab closes the window. The tab carries no
+ * data of its own beyond that identity, because the popup itself lives in main and
+ * the renderer's mirror of it (see `browser-popup-windows.svelte.ts`).
+ */
+export interface BrowserPopupWindowContextTab {
+  /** The popup window's own id, so a tab and a window are the same thing. */
+  id: string
+  kind: 'popup-window'
+  title: string
+  /** The browser tab whose page opened it, for the label when a title is missing. */
+  openerTabId: string
+  /** Live page favicon (data URL) from the browser, if the popup reported one. */
+  favicon?: string
+}
+
 export type MemorySection = 'active' | 'proposed'
 
 export interface MemoryContextTab {
@@ -230,6 +281,9 @@ export type ContextSidebarTab =
   | CloudDeploymentContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
+  | AttentionContextTab
+  | BrowserDownloadsContextTab
+  | BrowserPopupWindowContextTab
   | MemoryContextTab
   | CoordinatorContextTab
   | AssistantHowToContextTab
@@ -261,6 +315,11 @@ export const NOTIFICATIONS_TAB: NotificationContextTab = {
   id: 'notifications',
   kind: 'notifications',
   title: 'Notifications'
+}
+export const ATTENTION_TAB: AttentionContextTab = {
+  id: 'attention',
+  kind: 'attention',
+  title: 'Decisions made for you'
 }
 
 /** Tabs whose component/session state belongs to a project. Every other tab

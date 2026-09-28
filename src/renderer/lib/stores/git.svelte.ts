@@ -1,3 +1,4 @@
+import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { loadRepositoryPreflight } from '$lib/repository-preflight-cache'
@@ -88,6 +89,34 @@ const REMOTE_FETCH_STALE_MS = 5 * 60_000
 const GIT_WARM_TTL_MS = 15_000
 
 /**
+ * How long a project's panel chrome stays reusable after it was read.
+ *
+ * Branches, identity, remotes, credential status and stashes are five separate
+ * `git` spawns, and they answer questions that only move when the user acts,
+ * which the mutation paths re-read live rather than reusing. Switching back to
+ * a project inside this window therefore reuses the last answer instead of
+ * spawning five processes again, which is what switching between projects in a
+ * burst used to pay each time. The working tree read is never reused: it is
+ * what the header chip and the file list show, so it always reads live.
+ *
+ * The window matches the switch path's other freshness bound, the process
+ * count's 30s: both answer questions that only move when the user acts, and a
+ * branch changed out of band is still corrected the moment the panel opens,
+ * since that path reads live.
+ */
+const GIT_CHROME_REUSE_MS = 30_000
+
+/** Panel chrome read for one project and scope, kept for reuse. */
+interface GitChromeSnapshot {
+  branches: GitBranchInfo[]
+  identity: GitIdentity
+  remotes: GitRemoteInfo[]
+  credentialStatus: GitCredentialStatus | null
+  stashes: GitStashEntry[]
+  readAt: number
+}
+
+/**
  * Per-project git runtime state, refreshed on panel activation, after every
  * app-driven mutation, and after agent turns land (`checkpoint.updated`).
  */
@@ -164,6 +193,14 @@ export class GitState {
    * it would re-run the very effects that trigger a refresh.
    */
   private statusReadAt = 0
+
+  /**
+   * Panel chrome already read per project and scope, so a switch back into a
+   * project that was read moments ago reuses it instead of spawning five git
+   * processes again. Keyed by target rather than held for the active project
+   * alone, because the point is to have the answer when the user returns.
+   */
+  private readonly chromeByTarget = new SvelteMap<string, GitChromeSnapshot>()
 
   /** Local git state and operations: status, branches, remotes, stashes, conflicts. */
   private readonly local = new GitLocalOperations({
@@ -474,7 +511,9 @@ export class GitState {
    * something.
    */
   private scheduleRefresh(projectId: string): void {
-    scheduleDeferredWork('git:refresh', () => this.refreshThenFetchIfDue(projectId))
+    scheduleDeferredWork('git:refresh', () =>
+      this.refreshThenFetchIfDue(projectId, { reuseChrome: true })
+    )
   }
 
   /**
@@ -511,8 +550,8 @@ export class GitState {
    * status/stage/commit queue, and every caller reaches it behind a deferred or
    * microtask hop, so it starts after the frame the user asked for has painted.
    */
-  private refreshThenFetchIfDue(projectId: string): void {
-    void this.refresh(projectId)
+  private refreshThenFetchIfDue(projectId: string, options: { reuseChrome?: boolean } = {}): void {
+    void this.refresh(projectId, options)
       .then(() => {
         if (this.activeProjectId !== projectId) return
         if (!this.fetchIsDue(projectId)) return
@@ -699,7 +738,7 @@ export class GitState {
     })
   }
 
-  async refresh(projectId: string): Promise<void> {
+  async refresh(projectId: string, options: { reuseChrome?: boolean } = {}): Promise<void> {
     if (projectId === INBOX_PROJECT_ID || projectId !== this.activeProjectId) return
     const scopeBucketId = this.scopeFor(projectId)
     const generation = this.activationGeneration
@@ -707,7 +746,7 @@ export class GitState {
     const inflight = this.refreshes.get(targetKey)
     if (inflight) return inflight
 
-    const refresh = this.runRefresh(projectId, generation)
+    const refresh = this.runRefresh(projectId, generation, options.reuseChrome === true)
     this.refreshes.set(targetKey, refresh)
     try {
       await refresh
@@ -716,7 +755,11 @@ export class GitState {
     }
   }
 
-  private async runRefresh(projectId: string, generation: number): Promise<void> {
+  private async runRefresh(
+    projectId: string,
+    generation: number,
+    reuseChrome: boolean
+  ): Promise<void> {
     this.markBusy('refresh', true)
     // The refresh targets whichever project is active right now; if the panel
     // has already switched to another project, the result is stale and must
@@ -740,17 +783,33 @@ export class GitState {
       // reads did exactly that: `status` was only published once the slowest of
       // them had answered, which is what made a local operation look like it was
       // waiting on the network.
-      const chrome = Promise.all([
-        invoke('git:branches', projectId, targetScope ?? undefined),
-        invoke('git:getIdentity', projectId),
-        invoke('git:remotes', projectId, targetScope ?? undefined).catch(
-          () => [] as GitRemoteInfo[]
-        ),
-        invoke('git:getCredentialStatus', projectId).catch(
-          () => null as GitCredentialStatus | null
-        ),
-        invoke('git:stashList', projectId).catch(() => [] as GitStashEntry[])
-      ])
+      const chromeKey = `${targetProject ?? ''}:${targetScope ?? ''}`
+      const cachedChrome = reuseChrome ? this.chromeByTarget.get(chromeKey) : undefined
+      const freshChrome =
+        cachedChrome !== undefined && Date.now() - cachedChrome.readAt <= GIT_CHROME_REUSE_MS
+          ? cachedChrome
+          : null
+      const chrome: Promise<
+        [GitBranchInfo[], GitIdentity, GitRemoteInfo[], GitCredentialStatus | null, GitStashEntry[]]
+      > = freshChrome
+        ? Promise.resolve([
+            freshChrome.branches,
+            freshChrome.identity,
+            freshChrome.remotes,
+            freshChrome.credentialStatus,
+            freshChrome.stashes
+          ])
+        : Promise.all([
+            invoke('git:branches', projectId, targetScope ?? undefined),
+            invoke('git:getIdentity', projectId),
+            invoke('git:remotes', projectId, targetScope ?? undefined).catch(
+              () => [] as GitRemoteInfo[]
+            ),
+            invoke('git:getCredentialStatus', projectId).catch(
+              () => null as GitCredentialStatus | null
+            ),
+            invoke('git:stashList', projectId).catch(() => [] as GitStashEntry[])
+          ])
       // Every read here is best-effort, and a failed status read returns above
       // without ever awaiting this: without a handler attached now, a chrome
       // failure would surface as an unhandled rejection for an error the panel
@@ -793,6 +852,23 @@ export class GitState {
       this.remotes = Array.isArray(remotes) ? remotes : []
       this.credentialStatus = credentialStatus
       this.stashes = stashes
+      if (!freshChrome) {
+        // Remember what this target's chrome answered while it is still fresh,
+        // and drop the entries nobody can reuse any more so the map cannot grow
+        // with every project the session touches.
+        const now = Date.now()
+        for (const [key, snapshot] of this.chromeByTarget) {
+          if (now - snapshot.readAt > GIT_CHROME_REUSE_MS) this.chromeByTarget.delete(key)
+        }
+        this.chromeByTarget.set(chromeKey, {
+          branches,
+          identity,
+          remotes: Array.isArray(remotes) ? remotes : [],
+          credentialStatus,
+          stashes,
+          readAt: now
+        })
+      }
       // Refresh the open-PR conflict indicator (cooldown-gated) so the header
       // badge stays current without a GitHub round trip on every mutation.
       void this.refreshPrConflictIndicators(projectId).catch(() => {})

@@ -205,42 +205,64 @@ its `cio/` branch, not the project root:
 
 ## 6b. Long worktree runs live in the dock
 
-Creating, adopting, re-running setup for, and deleting a scope all mutate a
-checkout, so none of them is instant. Each one runs as an **app-level job**
-(`src/renderer/lib/stores/scope-jobs.svelte.ts`) rendered by
+Creating, adopting, re-running setup for, merging, and deleting a scope all
+mutate a checkout, so none of them is instant. Each one runs as an **app-level
+job** (`src/renderer/lib/stores/scope-jobs.svelte.ts`) rendered by
 `src/renderer/lib/components/scope/ScopeJobDockHost.svelte` at the app root, not
 as a modal the user has to sit through. A job survives navigation, can be
 minimized to a dock chip that still names what it is doing, states its outcome
-in the panel (branch and directory for a created or adopted worktree, the
-removed checkout for a deletion), and can be dismissed once it is finished.
+in the panel (branch and directory for a created or adopted worktree, where the
+commits landed for a merge, the removed checkout for a deletion), and can be
+dismissed once it is finished.
 
 Worktree stages stream from main on `scope:worktree:progress`, so a job a user
 started and a job an agent started through `cio:scope` render identically. A
 removal has no streamed stages main can send: the renderer performs it as an
 ordered sequence of its own steps (settle the scope's threads, remove the
 managed checkout and its branch when the scope has one, drop the scope from the
-board), and the checklist reports those steps instead. A removal job never
-absorbs worktree progress events, so a create or adopt running in the same
+board), and the checklist reports those steps instead. A removal, like a merge,
+never absorbs worktree progress events, so a create or adopt running in the same
 project still shows its own live stages.
+
+A merge is the same kind of job: the confirmation stays the dialog the user
+answered, and confirming closes it and hands the run to the dock, which mints
+its own fresh preflight token and merges. Only a `{ merged: true }` answer from
+main counts as success. Main fails closed: it verifies the source checkout's
+typed health both when the preflight is computed and again immediately before the
+merge, so a checkout the app can no longer verify is never merged from, and
+therefore never cleaned up. A conflict is a failed run, not an exception, and
+deletes nothing: the panel names the conflicted paths and the user is handed to
+the Git panel.
+
+A failed run never leaves the user without a way forward. The job store
+re-reads that scope's health when a run fails, and the panel renders the shared
+`ScopeHealthNotice` (cause, fix and the **Repair worktree** action) whenever the
+verdict is repairable, plus a **Try again** footer action on a failed merge so
+the user repairs and retries without reopening the scope menu.
 
 ## 7. Health states
 
 Managed scopes expose a typed health result:
 
-| Category                 | Meaning                                                                           |
-| ------------------------ | --------------------------------------------------------------------------------- |
-| `healthy`                | Directory exists and Git registers it at the expected path on the expected branch |
-| `missing`                | The managed checkout directory is gone                                            |
-| `unregistered`           | Git does not register the expected directory as a worktree                        |
-| `locked`                 | The worktree is locked by Git                                                     |
-| `prunable`               | Git reports a stale registration                                                  |
-| `branch-mismatch`        | The worktree checks out a different branch                                        |
-| `path-mismatch`          | The expected branch is registered at another directory                            |
-| `repository-unavailable` | Git discovery failed or the project has no local repo                             |
+| Category                 | Meaning                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| `healthy`                | Directory exists and Git registers it at the expected path on the expected branch       |
+| `missing`                | The managed checkout directory is gone                                                  |
+| `unregistered`           | Git does not register the expected directory as a worktree                              |
+| `locked`                 | The worktree is locked by Git                                                           |
+| `prunable`               | Git reports a stale registration                                                        |
+| `branch-mismatch`        | The worktree checks out a different branch                                              |
+| `path-mismatch`          | The expected branch is registered at another directory                                  |
+| `not-managed`            | The scope has no managed worktree: it was removed, or it works in the project directory |
+| `repository-unavailable` | Git discovery failed or the project has no local repo                                   |
 
 Resolution fails closed for every non-`healthy` category. Repair, unlock,
 restore, adopt, or detach actions appear in the UI; unhealthy scopes show
-recovery guidance instead of operating on the project root. Detection is
+recovery guidance instead of operating on the project root. The probe itself is
+total: a scope that is no longer on the board, or that never owned a checkout,
+is described as `not-managed` rather than thrown as an error, and the renderer
+drops that verdict and reloads the board instead of pinning a scope main has
+already removed. Destructive operations still refuse those targets. Detection is
 passive but live: nothing polls the filesystem, and every surface that has a
 reason to touch a scope (entering the board or the scoped sidebar, switching
 the docked scope, attaching the Git panel, opening the scope's actions menu, or
@@ -318,6 +340,21 @@ stale or mismatched IDs are rejected.
   dialog closes on the run already in progress instead of queueing a second
   removal that could only fail.
 
+- **Merge into project:** a managed-worktree scope's `cio/` branch is merged
+  into the Default scope (or a chosen target scope) in one of three
+  dispositions merge and keep the scope, merge and delete the scope with its
+  threads, or merge and delete the scope while moving its threads into the
+  target. The confirmation stays a dialog, but the merge itself is a dock job
+  (section 6b). Nothing is ever dismissed before the merge is verified: main
+  checks the source checkout's typed health in `mergePreflight` and again at the
+  start of `confirmMerge`, so an unhealthy source is refused with the typed
+  `ScopeRootUnavailableError` before a single commit moves or a single file is
+  removed. Only a landed, conflict-free merge reaches the cleanup, and that
+  cleanup runs in the order (remove the checkout, dispose the threads, delete
+  the branch, drop the scope) that leaves the scope whole when a step fails. A
+  conflict returns before any of it and deletes nothing. A failed merge offers
+  **Repair worktree** and **Try again** in its panel, so the user is never left
+  with only an error message.
 - **Archive / Restore:** never destructive. Hides or restores the scope on the
   board without touching Git, the worktree, or threads; archiving never
   implies removal.

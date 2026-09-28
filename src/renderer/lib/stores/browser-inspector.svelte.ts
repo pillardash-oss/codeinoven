@@ -62,7 +62,24 @@ class BrowserInspectorSession {
   /** Last theme read from the stylesheet, reused while a token is unavailable. */
   private themeCache: BrowserInspectorTheme | null = null
 
-  constructor() {
+  /**
+   * Whether {@link start} has wired the session. Inspection is a browser-only
+   * concern and the browser is not part of the first paint, so the subscriptions
+   * and the document observer wait for the runtime seam.
+   */
+  private started = false
+
+  /**
+   * Wire the session's listeners. Idempotent.
+   *
+   * The document observer is deliberately here rather than in the constructor:
+   * the store is built while the renderer document evaluates, and observing
+   * `documentElement` for the app's whole lifetime to theme a page that does not
+   * exist is work the first paint should not carry.
+   */
+  start(): void {
+    if (this.started) return
+    this.started = true
     subscribe('browser:state', (state) => this.notePageState(state.tabId, state.design))
     subscribe('browser:inspector', (tabId, event) => this.onPageEvent(tabId, event))
     // Pins and the open comment are consequences of the reference list, which is

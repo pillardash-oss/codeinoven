@@ -5,6 +5,7 @@
   import Modal from '../ui/Modal.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
+  import PreviewPager, { type PreviewPagerState } from '../ui/PreviewPager.svelte'
   import { revealAttachmentFile } from '$lib/reveal-file'
 
   interface Props {
@@ -20,9 +21,12 @@
      * action needs the untouched source url instead.
      */
     revealUrl?: string
+    /** Sibling navigation when the caller opened this lightbox over more than
+     *  one previewable attachment. Absent for a lone file. */
+    pager?: PreviewPagerState
   }
 
-  let { src, filename, mime, onClose, onLoadError, revealUrl }: Props = $props()
+  let { src, filename, mime, onClose, onLoadError, revealUrl, pager }: Props = $props()
 
   const kind = $derived(isVideoMime(mime) ? 'video' : isAudioMime(mime) ? 'audio' : 'image')
 
@@ -35,6 +39,10 @@
   function revealFromButton(event: MouseEvent): void {
     event.stopPropagation()
     if (revealUrl) void revealAttachmentFile(revealUrl)
+    // The reveal lands behind this overlay (the file tree, or the OS file
+    // manager), so the lightbox closes itself: staying open hides the result
+    // and reads as a button that did nothing.
+    onClose()
   }
 
   function mediaError(event: Event): void {
@@ -136,8 +144,15 @@
         <span class="text-xs text-white/70">{filename}</span>
       </div>
     </div>
-    {#if kind === 'image'}
-      <PanZoomToolbar {panZoom} viewport={imageViewport} class="absolute right-4 bottom-4" />
+    {#if kind === 'image' || pager}
+      <div class="absolute right-4 bottom-4 flex items-center gap-2">
+        {#if pager}
+          <PreviewPager {pager} />
+        {/if}
+        {#if kind === 'image'}
+          <PanZoomToolbar {panZoom} viewport={imageViewport} />
+        {/if}
+      </div>
     {/if}
     <div class="absolute right-4 top-4 flex flex-col gap-2">
       <button

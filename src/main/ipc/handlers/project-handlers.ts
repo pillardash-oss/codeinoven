@@ -7,6 +7,7 @@ import { atomicWrite, getConfigRoot } from '../../../lib/utils'
 import { posixDirname } from '../../../lib/paths'
 import { Logger } from '../../system/logger'
 import { openWithService } from '../../system/open-with-service'
+import { broadcastAutoAnswersChanged } from '../../scheduler/assistant-events'
 import { sendToRenderer } from '../renderer-delivery'
 import { ScopeToolService } from '../../workspaces/scope-tool-service'
 import type { ScopeToolServiceOptions } from '../../workspaces/scope-tool-service'
@@ -156,7 +157,31 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     // a closed or reloaded renderer from parking the agent's turn forever.
     const timeout = setTimeout(
       () => {
-        if (pendingScopeConfirmations.delete(request.requestId)) settle?.(false)
+        if (pendingScopeConfirmations.delete(request.requestId)) {
+          settle?.(false)
+          // A destructive action that nobody answered denies itself. Record the
+          // cancelled choice so the attention rail can tell the user what the
+          // app refused on their behalf while they were away.
+          const store = ctx.autoAnswerStore
+          if (store) {
+            store.record({
+              id: request.requestId,
+              kind: 'scope-confirmation',
+              outcome: 'expired',
+              projectId: request.projectId,
+              threadId: request.threadId,
+              entries: [
+                {
+                  prompt: request.summary,
+                  options: ['Confirm', 'Cancel'],
+                  picked: 'Cancel'
+                }
+              ],
+              at: Date.now()
+            })
+            broadcastAutoAnswersChanged(store.list())
+          }
+        }
       },
       Math.max(0, request.expiresAt - Date.now())
     )

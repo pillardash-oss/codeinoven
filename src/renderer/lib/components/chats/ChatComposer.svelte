@@ -11,13 +11,15 @@
   import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
   import { posixBasename } from '$shared/paths'
   import { showToastWarning } from '$lib/stores/app-errors.svelte'
+  import { ipcErrorMessage } from '$lib/ipc-errors'
   import { invoke } from '$lib/ipc.svelte'
   import { modelKey } from '$lib/model-keys'
   import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
   import { visionModels } from '$lib/stores/vision-models.svelte'
-  import { fileUrlToPath, mimeFromPath, pathToFileUrl } from '$lib/mime'
+  import { fileUrlToPath, mimeFromPath, pathToFileUrl, attachmentPreviewKind } from '$lib/mime'
   import { placeCaretAtEnd } from '../shared/rich-markdown'
   import AttachmentPreview from './AttachmentPreview.svelte'
+  import type { PreviewPagerState } from '../ui/PreviewPager.svelte'
   import StartAfterThreadPicker from './StartAfterThreadPicker.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
@@ -29,6 +31,7 @@
   import ChatComposerPermissionPicker from './ChatComposerPermissionPicker.svelte'
   import ChatComposerPlusMenu from './ChatComposerPlusMenu.svelte'
   import { installComposerDropListeners, type ComposerDropRegion } from './chat-composer-drop'
+  import { readComposerDrop } from './chat-composer-drop-source'
   import { handleComposerKeydown, type ComposerKeydownContext } from './chat-composer-keydown'
   import { handleComposerPaste, type ComposerPasteContext } from './chat-composer-paste'
   import { createComposerSlashActions, isSlashRoutedAction } from './chat-composer-slash.svelte'
@@ -462,6 +465,35 @@
     dropRegion = null
   }
   const preview = createComposerAttachmentPreview()
+
+  /** Attachments the fullscreen preview can render, in strip order. The pager
+   *  walks this list, so an attachment with no preview is skipped instead of
+   *  opening as an empty frame. */
+  const previewableAttachments = $derived(
+    attachments.filter((file) => attachmentPreviewKind(file.mime, file.filename ?? '') !== null)
+  )
+
+  /** Sibling navigation for the open fullscreen preview, absent when the
+   *  composer holds fewer than two previewable attachments. */
+  const previewPager = $derived.by<PreviewPagerState | undefined>(() => {
+    const open = preview.file
+    if (!open) return undefined
+    const list = previewableAttachments
+    const index = list.findIndex((file) => file.url === open.url)
+    if (index === -1 || list.length < 2) return undefined
+    return {
+      index,
+      count: list.length,
+      onPrevious: () => {
+        const target = list[index - 1]
+        if (target) preview.open(target)
+      },
+      onNext: () => {
+        const target = list[index + 1]
+        if (target) preview.open(target)
+      }
+    }
+  })
   /** Image-descriptor gate state: intercepts sending an image to a text-only model. */
   let imageDescriptorGateOpen = $state(false)
   let gateVisionSelection = $state<AgentModelSelection | null>(null)
@@ -1380,14 +1412,6 @@
 
   onMount(() => {
     void preview.loadAll(attachments)
-    // A voice recording started in this thread keeps running while the user
-    // navigates away and back, which destroys and remounts this composer. The
-    // speech controller still holds the destroyed editor target, so the
-    // transcript would silently land in the draft store without appearing in
-    // the visible editor. Hand the live editor target back to the controller
-    // when one is mid-capture for this composer.
-    const liveTarget = composerSpeechTarget()
-    if (liveTarget) speechController.reattachTarget(liveTarget)
   })
 
   /** Explain a drop or paste that only repeated files already attached, instead
@@ -1488,21 +1512,54 @@
     focusComposerAtSavedCaret()
   }
 
-  async function handleDropFiles(dt: DataTransfer | null): Promise<void> {
+  /**
+   * Attach whatever a conversation drop carried.
+   *
+   * A drop out of a web page hands over a link and no file (Chromium keeps the
+   * files to itself across documents), so a drop that brought no files is read as
+   * the media links it named and those are fetched into attachment storage.
+   */
+  async function handleDropData(dt: DataTransfer | null): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
     if (selectedHarnessLacksAttachments) {
       attachmentBlockedNotice = true
       return
     }
     if (!dt) return
-    const files = dt.files
-    if (!files || files.length === 0) return
-    for (const file of Array.from(files)) {
+    const { files, urls } = readComposerDrop(dt)
+    if (files.length > 0) {
+      for (const file of files) {
+        try {
+          const filePath = await window.api.registerFileSelection(file, attachmentStorage)
+          if (filePath) await addFileAttachment(filePath, file)
+        } catch {
+          // Not a local file (e.g., an image dragged from a web page); its link
+          // reading is handled above.
+        }
+      }
+      return
+    }
+    if (urls.length === 0) {
+      // The drag looked attachable but named nothing this chat can take (an
+      // inline `data:` image, say). Say so instead of swallowing the gesture.
+      showToastWarning('Nothing in that drag can be attached.')
+      return
+    }
+    await attachRemoteMedia(urls)
+  }
+
+  /** Fetch the links one drop named and attach each file that comes back. */
+  async function attachRemoteMedia(urls: readonly string[]): Promise<void> {
+    if (!attachmentStorage) {
+      showToastWarning('This chat has nowhere to store an attachment.')
+      return
+    }
+    for (const url of urls) {
       try {
-        const filePath = await window.api.registerFileSelection(file, attachmentStorage)
-        if (filePath) await addFileAttachment(filePath, file)
-      } catch {
-        // Not a local file (e.g., an image dragged from a web page); skip it.
+        const filePath = await invoke('attachment:retainRemote', attachmentStorage, url)
+        await addFileAttachment(filePath)
+      } catch (error) {
+        showToastWarning(ipcErrorMessage(error, 'That link could not be attached.'))
       }
     }
   }
@@ -1522,7 +1579,7 @@
       setDragging: (dragging) => (isDragging = dragging),
       setDropRegion: (region) => (dropRegion = region),
       setAttachmentBlockedNotice: (blocked) => (attachmentBlockedNotice = blocked),
-      handleDropFiles
+      handleDropData
     })
   )
 
@@ -1594,6 +1651,7 @@
     documentHtml={preview.documents[previewAttachment.url]}
     documentLoading={preview.documentLoading[previewAttachment.url] ?? false}
     onSaveText={isEditablePastedTextAttachment(previewAttachment) ? savePreviewText : undefined}
+    pager={previewPager}
     onClose={() => {
       preview.close()
       focusComposerAtSavedCaret()
@@ -1604,7 +1662,7 @@
 <ChatComposerDropZone
   region={isDragging ? dropRegion : null}
   onAnchorChange={handleDropAnchorChange}
-  onDropFiles={handleDropFiles}
+  onDropData={handleDropData}
   onClearDropState={clearDropState}
 />
 
@@ -1940,15 +1998,19 @@
 </div>
 
 <!-- Scope shoe   floats underneath the composer as its own inset bar,
-     centered at 80% of the composer width; project mode only. It slides up
-     behind the composer (z below it) so the shoe's top edge is tucked under
-     the composer's bottom border   only the lower half shows, like a shoe.
+     sized to the status row it holds, centered under the composer; project mode
+     only. It slides up behind the composer (z below it) so the shoe's top edge
+     is tucked under the composer's bottom border   only the lower half shows,
+     like a shoe.
      No z-index on the wrapper: the composer (z-10) paints over the card, but
-     the shoe's dropdown (z-40 inside) still opens above the composer. -->
+     the shoe's dropdown (z-40 inside) still opens above the composer.
+     The wrapper is the shoe's own inline-size query container: the composer
+     cannot query a sibling, and the card must stay free of containment so it
+     can size itself to its content. -->
 {#if scopeShoe}
-  <div class="composer-shoe relative -mt-4 flex w-full justify-center px-6 pt-3 pb-2">
+  <div class="composer-shoe relative -mt-4 flex w-full justify-center px-4 pt-3 pb-2 @container">
     <div
-      class="composer-shoe-card flex w-[80%] min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md @container"
+      class="composer-shoe-card flex min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md"
     >
       <ComposerShoe
         bind:this={scopeShoeComponent}
@@ -2053,11 +2115,25 @@
     }
   }
 
-  /* Shoe stays at 80% width; expands up to 95% as the conversation screen
-     shrinks (e.g. a very wide right sidebar), so its content keeps fitting. */
-  @container (max-width: 640px) {
+  /* The shoe sizes to the status row it holds: never narrower than its 80%
+     resting share of the composer, never wider than the room the composer
+     leaves it. A long scope, project, or branch therefore widens the shoe
+     instead of squeezing the row   which used to push the scope badge out of
+     its own box and under the project icon. `.composer-shoe` is the query
+     container (see its `@container` class), so these rules and the shoe's own
+     truncation stages measure the composer, minus that wrapper's own inline
+     padding. */
+  .composer-shoe-card {
+    width: max-content;
+    min-width: 80%;
+    max-width: 100%;
+  }
+
+  /* Tight composer: the shoe trims its own inline padding before the status row
+     has to ellipsize, so the row keeps the room it needs. */
+  @container (max-width: 630px) {
     .composer-shoe-card {
-      width: 95%;
+      padding-inline: 0.375rem;
     }
   }
 </style>

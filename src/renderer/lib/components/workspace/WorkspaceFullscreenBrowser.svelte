@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { Globe2 } from '@lucide/svelte'
   import BrowserPanel from '$lib/components/browser/BrowserPanel.svelte'
   import BrowserTabIndicator from '$lib/components/browser/BrowserTabIndicator.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { browserTabIndicators } from '$lib/stores/browser-tab-status'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { GlobeCode } from '@lucide/svelte'
 
   interface Props {
     tabId: string | null
@@ -58,7 +58,7 @@
       onMinimize={() => onTabIdChange(null)}
     >
       {#snippet icon()}
-        <Globe2 size={11} class="shrink-0" />
+        <GlobeCode size={11} class="shrink-0" />
       {/snippet}
       {#snippet tabIndicator(entry)}
         <BrowserTabIndicator tabId={entry.id} />

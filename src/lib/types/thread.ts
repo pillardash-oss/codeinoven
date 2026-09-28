@@ -89,11 +89,16 @@ export interface Thread {
   /** Account container that owns the bound native session. */
   sessionAccountId?: string
   /** Diagnostic text of the most recent failure (message plus any raw
-   *  detail/stack the engine captured). In-memory only: it is never persisted
-   *  and exists so error notifications and panels can show what actually went
-   *  wrong instead of a generic "hit an error" label. Cleared whenever the
-   *  thread leaves the `failed` status. */
+   *  detail/stack the engine captured). Persisted on the thread row so a run
+   *  that failed while no window was open still explains itself when the app is
+   *  next opened. Cleared whenever the thread leaves the `failed` status. */
   lastError?: string
+  /** Epoch ms the failure in `lastError` was recorded. Absent when the thread
+   *  is not currently failed. */
+  lastErrorAt?: number
+  /** Outcome of the most recent settled run. Absent while a run is in flight
+   *  or has never settled; `parked` marks a gate that waited for the user. */
+  lastOutcome?: 'completed' | 'failed' | 'parked'
   /** Last specification card explicitly dismissed by the user. */
   dismissedSpecId?: string
   dismissedSpecVersion?: number

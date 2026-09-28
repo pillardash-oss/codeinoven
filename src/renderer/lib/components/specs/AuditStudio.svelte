@@ -134,8 +134,17 @@
   const overlay = new StudioAnnotationOverlay<AuditAnnotation>('audit-annotation-anchor')
   const pendingAnnotation = $derived(overlay.pending)
   let reviewNotesEditor = $state<RichMarkdownEditor>()
-  const pendingSpeechTargetId = `audit-annotation-${crypto.randomUUID()}`
-  const reviewSpeechTargetId = `audit-review-${crypto.randomUUID()}`
+  /**
+   * A dictation is delivered to whichever field carries its target id, so the id
+   * has to outlive the component that draws the field. A per-mount id made the
+   * field unrecognisable the moment the view was left and reopened, and the
+   * transcript had nowhere to land. Name the field by the report it belongs to,
+   * and an annotation body also by the passage it was captured from.
+   */
+  const pendingSpeechTargetId = $derived(
+    `audit-annotation-${report.id}-${report.version}-${overlay.pending?.startOffset ?? -1}-${overlay.pending?.endOffset ?? -1}`
+  )
+  const reviewSpeechTargetId = $derived(`audit-review-${report.id}-${report.version}`)
   const speechScope = $derived({
     kind: 'project',
     projectId: report.projectId,

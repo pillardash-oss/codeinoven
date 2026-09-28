@@ -54,10 +54,56 @@ export interface SpeechEditorTarget {
 interface PlainTextTargetOptions {
   id: string
   element: () => HTMLInputElement | HTMLTextAreaElement | null
+  /**
+   * The durable value behind this field, and the only way it is written.
+   *
+   * A recording outlives the box it was started in: the popover can be closed,
+   * the view switched, or the surface re-rendered while the model is still
+   * transcribing. Supplying the mirror makes the target self-sufficient
+   * instead of losing the transcript the moment the element is gone: whatever
+   * the field stores is where the recording lands, whether or not the element
+   * is still on screen to receive it.
+   */
+  mirror?: {
+    read: () => string
+    write: (value: string) => void
+  }
+}
+
+function appendToMirror(
+  id: string,
+  mirror: NonNullable<PlainTextTargetOptions['mirror']>,
+  snapshot: SpeechEditorSnapshot,
+  transcript: string
+): SpeechEditorApplyResult {
+  const base = mirror.read()
+  // The recording started from exactly this value, so the caret it was left at
+  // still describes where the transcript belongs. A field that changed
+  // underneath the model keeps its new text and takes the transcript after it,
+  // which is the only insertion that cannot destroy what the user typed.
+  const baseMatchesSnapshot = snapshot.targetId === id && snapshot.value === base
+  let start: number
+  let next: string
+  if (baseMatchesSnapshot) {
+    const selectionStart = Math.min(snapshot.selection.anchor, snapshot.selection.focus)
+    const selectionEnd = Math.max(snapshot.selection.anchor, snapshot.selection.focus)
+    start = selectionStart
+    next = base.slice(0, selectionStart) + transcript + base.slice(selectionEnd)
+  } else if (base.length === 0) {
+    start = 0
+    next = transcript
+  } else {
+    const separator = /\s$/.test(base) ? '' : ' '
+    start = base.length + separator.length
+    next = base + separator + transcript
+  }
+  mirror.write(next)
+  return { ok: true, value: next, startOffset: start, endOffset: start + transcript.length }
 }
 
 /** A selection-safe adapter for the native text controls used by compact popovers. */
 export function plainTextEditorTarget(options: PlainTextTargetOptions): SpeechEditorTarget {
+  const mirror = options.mirror
   return {
     id: options.id,
     capture: () => {
@@ -95,6 +141,12 @@ export function plainTextEditorTarget(options: PlainTextTargetOptions): SpeechEd
         startOffset: start,
         endOffset: start + transcript.length
       }
-    }
+    },
+    ...(mirror
+      ? {
+          fallbackApply: (snapshot: SpeechEditorSnapshot, transcript: string) =>
+            appendToMirror(options.id, mirror, snapshot, transcript)
+        }
+      : {})
   }
 }

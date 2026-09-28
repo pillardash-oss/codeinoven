@@ -33,7 +33,7 @@ import type { BrowserViewBounds } from '$shared/ipc-contract'
 import { contextSidebarState } from './context-sidebar.svelte'
 
 /** The places the browser can display native content. */
-export type BrowserSurface = 'sidebar' | 'fullscreen'
+export type BrowserSurface = 'sidebar' | 'fullscreen' | 'workspace'
 
 /**
  * A reason a DOM surface publishes while it is on screen and the native view
@@ -134,10 +134,47 @@ class BrowserVisibilityState {
    * placement and overlay occlusion itself.
    */
   hideReasonFor(tabId: string, bounds: BrowserViewBounds | null): BrowserHideReason | null {
-    for (const reason of this.blocks.values()) return reason
     const surface = this.owningSurface
+    for (const reason of this.blocks.values()) {
+      // `workspace-inactive` reports that the workspace shell is hidden because
+      // another top-level view owns the window, which is equally true while the
+      // browser view is the active one   the shell stays mounted but hidden.
+      // That reason exists to stop a browser docked inside the shell from
+      // floating over Settings or Scope, so it must never suppress the browser's
+      // own top-level workspace surface, which is not inside the shell at all.
+      // Without this, opening the browser view published the block and the page
+      // was attached in main but never shown.
+      if (reason === 'workspace-inactive' && surface === 'workspace') continue
+      return reason
+    }
     if (surface === null) return 'not-placed'
     if (this.claims.get(surface) !== tabId) return 'owned-elsewhere'
+    return this.isCovered(bounds) ? 'covered-by-overlay' : null
+  }
+
+  /** Whether a popup window's page may be displayed at `bounds`. */
+  isPopupVisible(bounds: BrowserViewBounds | null): boolean {
+    return this.popupHideReasonFor(bounds) === null
+  }
+
+  /**
+   * Why a popup window's native view must stay hidden, or null when it may be
+   * shown. `bounds` is the frame the rail's panel would occupy.
+   *
+   * A popup window's page is a second native view, so it needs the same answer a
+   * tab's page does for everything that has to stay in front of it: a full-window
+   * DOM surface, the thread switcher, or a floating overlay over the panel. It has
+   * no claim to resolve   the rail decides which popup it is showing   so this is
+   * the published blocks plus occlusion, and nothing else.
+   */
+  popupHideReasonFor(bounds: BrowserViewBounds | null): BrowserHideReason | null {
+    for (const reason of this.blocks.values()) {
+      // The popup panel lives in the browser's own top-level view, which is not
+      // inside the workspace shell, so the shell's own hidden state says nothing
+      // about it (see `hideReasonFor`).
+      if (reason === 'workspace-inactive') continue
+      return reason
+    }
     return this.isCovered(bounds) ? 'covered-by-overlay' : null
   }
 
@@ -148,11 +185,13 @@ class BrowserVisibilityState {
 
   /**
    * The surface that currently owns the native view. Only one view can be on
-   * screen at a time, so a fullscreen surface outranks the sidebar, and the
-   * sidebar owns it only while it is actually displaying the tab that claimed
-   * it. Other tabs are not detached any more, they run parked offscreen.
+   * screen at a time, so a full-window surface outranks the sidebar: the
+   * global browser workspace, then the full screen dialog, then the sidebar,
+   * which owns it only while it is actually displaying the tab that claimed it.
+   * Other tabs are not detached any more, they run parked offscreen.
    */
   private get owningSurface(): BrowserSurface | null {
+    if (this.claims.has('workspace')) return 'workspace'
     if (this.claims.has('fullscreen')) return 'fullscreen'
     const tabId = this.claims.get('sidebar')
     if (tabId === undefined) return null

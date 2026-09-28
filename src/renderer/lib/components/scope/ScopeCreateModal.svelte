@@ -17,9 +17,21 @@
     /** Pre-fills the display name — e.g. from a failed scope search. */
     initialName?: string
     onCreated?: (bucketId: string) => void
+    /** Fires the moment the create run is handed to the app-level dock, so a host dialog that only
+     *  launched this form (the change-scope flow) can dismiss itself with it instead of returning
+     *  behind a run that keeps streaming in the dock. */
+    onStarted?: () => void
   }
 
-  let { open, projectId, onClose, existingBucketId = null, initialName = '', onCreated }: Props = $props()
+  let {
+    open,
+    projectId,
+    onClose,
+    existingBucketId = null,
+    initialName = '',
+    onCreated,
+    onStarted
+  }: Props = $props()
 
   const componentId = $props.id()
   const formId = `${componentId}-create-scope-form`
@@ -123,7 +135,9 @@
     const targetProjectId = projectId
     const targetBucketId = existingBucketId
     const handleCreated = onCreated
+    const handleStarted = onStarted
     onClose()
+    handleStarted?.()
     scopeJobs.create(targetProjectId, input, {
       existingBucketId: targetBucketId,
       onCreated: handleCreated
@@ -232,8 +246,8 @@
                   {sourceInfo.dirtyFiles.length} uncommitted change{sourceInfo.dirtyFiles.length ===
                   1
                     ? ''
-                    : 's'} in this checkout will not be included   commit them first if they belong in
-                  this feature.
+                    : 's'} in this checkout will not be included commit them first if they belong in this
+                  feature.
                 </span>
               </div>
             {/if}

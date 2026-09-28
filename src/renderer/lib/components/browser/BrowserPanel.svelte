@@ -14,14 +14,23 @@
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { normalizeBrowserUrl } from '$shared/local-development-url'
+  import { resolveBrowserAddress } from '$shared/browser-search-engines'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
   import BrowserCommentEditor from './BrowserCommentEditor.svelte'
+  import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { browserInspector } from '$lib/stores/browser-inspector.svelte'
+  import {
+    browserSiteHost,
+    openBrowserDownloadsMenu,
+    openBrowserPageMenu,
+    openBrowserPageMenuAt,
+    openBrowserSiteMenu
+  } from './browser-chrome-menus'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import type {
@@ -78,6 +87,7 @@
       // A blank tab has no address yet and loads nothing, so it does not start
       // in the loading state; every real address does until main reports back.
       loading: tabInitialUrl !== '',
+      loadError: null,
       canGoBack: false,
       canGoForward: false,
       audible: false,
@@ -135,13 +145,7 @@
   function openDownloadsMenu(event: MouseEvent): void {
     const button = event.currentTarget
     if (!(button instanceof HTMLElement)) return
-    const rect = button.getBoundingClientRect()
-    void invoke(
-      'browser:downloadsMenu',
-      tabProjectId,
-      Math.max(0, Math.round(rect.left)),
-      Math.max(0, Math.round(rect.bottom + 4))
-    ).catch(() => {})
+    openBrowserDownloadsMenu(tabProjectId, button)
   }
 
   /** Left click reloads, or aborts the in-flight navigation while loading. */
@@ -154,22 +158,10 @@
     event.preventDefault()
     const button = event.currentTarget
     if (!(button instanceof HTMLElement)) return
-    const rect = button.getBoundingClientRect()
-    void invoke(
-      'browser:pageMenu',
-      tabId,
-      Math.max(0, Math.round(rect.left)),
-      Math.max(0, Math.round(rect.bottom + 4))
-    ).catch(() => {})
+    openBrowserPageMenu(tabId, button)
   }
 
-  let siteHost = $derived.by(() => {
-    try {
-      return new URL(pageState.url).host
-    } catch {
-      return ''
-    }
-  })
+  let siteHost = $derived(browserSiteHost(pageState.url))
 
   /** Open the native site-settings menu anchored at the lock button. The main
    *  process builds an OS context menu (with native destructive-action
@@ -178,16 +170,9 @@
   function openSiteMenu(event: MouseEvent): void {
     const button = event.currentTarget
     if (!(button instanceof HTMLElement)) return
-    const rect = button.getBoundingClientRect()
     siteMenuOpen = true
-    void invoke(
-      'browser:siteMenu',
-      tabProjectId,
-      siteHost,
-      Math.max(0, Math.round(rect.left)),
-      Math.max(0, Math.round(rect.bottom + 4))
-    ).catch(() => {
-      siteMenuOpen = false
+    void openBrowserSiteMenu(tabProjectId, siteHost, button).then((opened) => {
+      if (!opened) siteMenuOpen = false
     })
   }
 
@@ -289,6 +274,11 @@
     // effect that owns a component derived may have been torn down.
     if (!browserVisibility.isVisible(tabId, bounds)) return
     if (!bounds) return
+    // A tab showing the error card has no page to place. The attachment is not
+    // applied on that edge, but the resize observer and the sidebar's entry
+    // animation keep calling here, so this guard is what stops them putting the
+    // empty native view back over the card.
+    if (pageState.loadError) return
     try {
       const currentUrl = untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl)
       pageState = await invoke('browser:show', tabId, tabProjectId, tabThreadId, currentUrl, bounds)
@@ -308,15 +298,17 @@
   }
 
   function navigate(): void {
-    const url = normalizeBrowserUrl(address)
-    if (!url) {
-      addressError = 'Enter an http or https address'
+    const resolution = resolveBrowserAddress(address, appConfigState.browserSearchEngine)
+    if (!resolution) {
+      addressError = 'Enter a search or an address'
       return
     }
     addressError = ''
-    address = url
-    contextSidebarState.updateBrowserTab(tabId, url)
-    void invoke('browser:navigate', tabId, url).catch(() => {})
+    address = resolution.url
+    contextSidebarState.updateBrowserTab(tabId, resolution.url)
+    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, resolution.url).catch(
+      () => {}
+    )
   }
 
   function applyPageState(next: BrowserPageState): void {
@@ -388,7 +380,10 @@
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', onPanelShortcut)
     // Only the sidebar report is focus-driven: a single panel decides it for the
     // whole sidebar, so one listener is enough. The full screen overlay claims
-    // the keyboard for as long as it is mounted instead (WorkspaceFullscreenBrowser).
+    // the keyboard for as long as it is mounted instead
+    // (WorkspaceFullscreenBrowser), and the Browser view claims it while its page
+    // is the surface on screen (BrowserWorkspace), so a press anywhere in those
+    // views is the browser's.
     if (surface === 'sidebar') {
       document.addEventListener('focusin', onSidebarFocusIn)
       document.addEventListener('focusout', onSidebarFocusOut)
@@ -444,7 +439,10 @@
   })
 </script>
 
-<div {@attach panelVisible && manageNativeBrowserView} class="flex h-full min-h-0 flex-col bg-app">
+<div
+  {@attach panelVisible && !pageState.loadError && manageNativeBrowserView}
+  class="flex h-full min-h-0 flex-col bg-app"
+>
   <form
     class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2"
     onsubmit={(event) => {
@@ -472,20 +470,25 @@
     >
       <ArrowRight size={14} />
     </button>
-    <button
-      type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
-      title={pageState.loading ? 'Stop loading' : 'Reload page'}
-      onclick={onReloadButton}
-      oncontextmenu={onReloadContextMenu}
-    >
-      {#if pageState.loading}
-        <X size={14} />
-      {:else}
-        <RotateCw size={13} />
-      {/if}
-    </button>
+    <!-- Reload is shown only when there is a page to act on: an empty tab has
+         nothing to reload, and the button becomes the stop affordance while a
+         load is in flight. -->
+    {#if pageState.loading || pageState.url !== ''}
+      <button
+        type="button"
+        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
+        title={pageState.loading ? 'Stop loading' : 'Reload page'}
+        onclick={onReloadButton}
+        oncontextmenu={onReloadContextMenu}
+      >
+        {#if pageState.loading}
+          <X size={14} />
+        {:else}
+          <RotateCw size={13} />
+        {/if}
+      </button>
+    {/if}
     <div class="relative min-w-0 flex-1">
       <span class="sr-only">Browser address</span>
       {#if pageState.url !== ''}
@@ -608,20 +611,29 @@
     {@attach attachContentElement}
     data-native-browser-content
     class="min-h-0 min-w-0 flex-1 bg-surface"
-    role="document"
-    aria-label={`Browser content for ${pageState.title || address}`}
+    role={pageState.loadError ? undefined : 'document'}
+    aria-label={pageState.loadError
+      ? undefined
+      : `Browser content for ${pageState.title || address}`}
     oncontextmenu={(event) => {
-      // The page itself never sees DOM context menus (it is a native view),
-      // so the host offers the browser-level menu: soft and hard reload.
+      // The page itself renders in a native view above this host, so a click it
+      // does not take (the load-error card, a blank frame) lands here. Main
+      // builds the same page-level menu the page's own right-click does.
       event.preventDefault()
-      void invoke(
-        'browser:pageMenu',
-        tabId,
-        Math.max(0, Math.round(event.clientX)),
-        Math.max(0, Math.round(event.clientY))
-      ).catch(() => {})
+      openBrowserPageMenuAt(tabId, event.clientX, event.clientY)
     }}
-  ></div>
+  >
+    {#if pageState.loadError}
+      <BrowserLoadErrorView
+        error={pageState.loadError}
+        url={pageState.url}
+        loading={pageState.loading}
+        canGoBack={pageState.canGoBack}
+        onRetry={() => void invoke('browser:reload', tabId).catch(() => {})}
+        onGoBack={() => void invoke('browser:goBack', tabId).catch(() => {})}
+      />
+    {/if}
+  </div>
   {#if panelVisible && editingComment}
     <BrowserCommentEditor
       reference={editingComment.reference}

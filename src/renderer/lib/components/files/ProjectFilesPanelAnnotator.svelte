@@ -7,10 +7,12 @@
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import {
     anchorTextMatches,
+    annotationFallbackAnchor,
     applyAnnotationHighlights,
     measureAnnotationBubbles,
     rangeForAnnotation,
     releaseAnnotationHighlights,
+    withUnmeasuredAnchors,
     ANNOTATION_BUBBLE_SIZE,
     type AnnotationBubblePosition
   } from '$lib/selection-anchors'
@@ -83,7 +85,13 @@
   const editingReference = $derived(
     annotations.find((reference) => reference.id === editingId) ?? null
   )
-  const editingPosition = $derived(editingId ? bubblePositions[editingId] : undefined)
+  /** Where the open note editor anchors. A note whose passage can no longer be
+   *  found in the document (the agent rewrote it) is still attached to the next
+   *  message, so its editor docks on the panel instead of the action doing
+   *  nothing. */
+  const editingAnchor = $derived(
+    editingId ? (bubblePositions[editingId] ?? annotationFallbackAnchor(scroller)) : null
+  )
 
   /** One-based position in the composer, so a bubble and the composer chip for
    *  the same annotation are named by the same number. */
@@ -93,7 +101,11 @@
 
   /** Re-measure where each annotation's bubble belongs in the viewport. */
   function updateBubbles(): void {
-    bubblePositions = measureAnnotationBubbles(scroller, ranges)
+    bubblePositions = withUnmeasuredAnchors(
+      measureAnnotationBubbles(scroller, ranges),
+      annotations.map((reference) => reference.id),
+      () => annotationFallbackAnchor(scroller)
+    )
   }
 
   function scheduleBubbleUpdate(): void {
@@ -333,10 +345,10 @@
   />
 {/if}
 
-{#if editingReference && editingPosition}
+{#if editingReference && editingAnchor}
   <ResponseAnnotationComment
-    x={editingPosition.x + ANNOTATION_BUBBLE_SIZE / 2}
-    y={editingPosition.y}
+    x={editingAnchor.x + ANNOTATION_BUBBLE_SIZE / 2}
+    y={editingAnchor.y}
     initialComment={editingReference.comment ?? ''}
     targetId={`document-annotation-${threadId}-${editingReference.id}`}
     scope={{ kind: 'project', projectId }}

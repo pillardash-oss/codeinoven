@@ -56,6 +56,41 @@ export interface MissedRun {
   status: 'pending' | 'dismissed' | 'run'
 }
 
+/** Why an unattended (background) run was dispatched. */
+export type BackgroundRunReason = 'scheduled' | 'caught-up'
+
+/** How an unattended run settled. `parked` marks a gate that waited on the user. */
+export type BackgroundRunOutcome = 'completed' | 'failed' | 'parked'
+
+/**
+ * One unattended run the backend dispatched while no window was open.
+ *
+ * Recorded in the bounded background-run ledger so the outcome survives
+ * independently of the run thread: the ledger stores its own snapshot, so a
+ * later thread deletion can never erase the evidence that the run happened.
+ * An entry is pending until `settledAt` and `outcome` are written by `settle`.
+ */
+export interface BackgroundRun {
+  /** The assistant task whose run this is. */
+  taskId: string
+  /** Owning routine, when the task belongs to one. */
+  routineId?: string
+  /** Thread the run executed on. The ledger never joins to this row. */
+  runThreadId: string
+  /** Why the run started: its scheduled slot, or a catch-up after sleep/relaunch. */
+  reason: BackgroundRunReason
+  /** Epoch ms the run was dispatched. */
+  startedAt: number
+  /** Epoch ms the run settled; absent while it is still running. */
+  settledAt?: number
+  /** How the run settled; absent while it is still running. */
+  outcome?: BackgroundRunOutcome
+  /** First-line diagnostic recorded when the run failed. */
+  errorSummary?: string
+  /** How many gates the run answered automatically while the user was away. */
+  autoAnswered: number
+}
+
 export const SCHEDULE_CADENCES: readonly ScheduleCadence[] = [
   'once',
   'hourly',

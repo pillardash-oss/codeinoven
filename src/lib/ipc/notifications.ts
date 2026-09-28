@@ -37,6 +37,12 @@ export interface CloseConfirmationFile {
 export interface CloseConfirmationPayload {
   projects: CloseConfirmationProject[]
   files: CloseConfirmationFile[]
+  /**
+   * The close is a park, not a quit: the window is torn down but the backend
+   * keeps running so scheduled work still fires. The renderer answers with
+   * `app:parkWindow` instead of `app:confirmClose`.
+   */
+  park?: boolean
 }
 
 export type AgentNotificationKind = 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'

@@ -9,6 +9,7 @@ import {
   ROUTINE_TIMELINESS_IDS
 } from '../../../lib/routine-reporting'
 import {
+  broadcastAutoAnswersChanged,
   broadcastMissedRunsChanged,
   broadcastRoutinesChanged
 } from '../../scheduler/assistant-events'
@@ -388,6 +389,33 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   })
 
   ipcMain.handle('assistant:listMissedRuns', () => requireScheduler().listMissedRuns())
+
+  // The durable record of unattended runs. Read from the ledger, not the thread
+  // table, so a run whose thread was evicted or deleted still reports what
+  // happened on the "While you were away" surfaces.
+  ipcMain.handle('assistant:listBackgroundRuns', () => requireScheduler().listBackgroundRuns())
+
+  ipcMain.handle('assistant:listAutoAnswers', () => ctx.autoAnswerStore?.list() ?? [])
+
+  /**
+   * Dismiss one auto-resolved gate (or all of them). The store owns the durable
+   * flag; the fresh list is pushed so every open attention panel updates, and
+   * the amber rail icon leaves once nothing is left unread.
+   */
+  ipcMain.handle('assistant:dismissAutoAnswer', (_, id: unknown) => {
+    const store = ctx.autoAnswerStore
+    if (!store) return
+    store.dismiss(requireString(id, 'Auto-answer ID').slice(0, 300))
+    broadcastAutoAnswersChanged(store.list())
+  })
+
+  ipcMain.handle('assistant:dismissAllAutoAnswers', () => {
+    const store = ctx.autoAnswerStore
+    if (!store) return 0
+    const dismissed = store.dismissAll()
+    broadcastAutoAnswersChanged(store.list())
+    return dismissed
+  })
 
   /**
    * Post the saved-how-to next-steps turn into the routine's Getting started

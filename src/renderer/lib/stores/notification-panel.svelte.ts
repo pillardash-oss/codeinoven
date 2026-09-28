@@ -43,6 +43,26 @@ const SUB_FILTER_KINDS: Record<Exclude<NotificationSubFilter, 'all'>, InAppNotif
   issues: 'error'
 }
 
+/**
+ * Canonical accent colour for a notification kind, keyed to the very token the
+ * app paints the same meaning with everywhere else: a spec is the spec purple,
+ * a failure the danger red, a request for attention the warning amber, a chat
+ * message the chat teal, and a completed project message the success green its
+ * entry already carries. The bell's dots and an entry's leading dot both read
+ * from here, so the colour on the notification badge is always the status
+ * colour the rest of the app uses for the same thing   never a one-off hue.
+ *
+ * An assistant notice wears the assistant space's own colour instead (see
+ * `accentColor`), which is how the assistant is identified across the app.
+ */
+export const NOTIFICATION_KIND_COLORS: Record<InAppNotification['kind'], string> = {
+  completed: 'var(--color-success)',
+  'chat-completed': 'var(--color-chat-success)',
+  attention: 'var(--color-warning)',
+  spec: 'var(--color-thread-spec)',
+  error: 'var(--color-danger)'
+}
+
 class NotificationPanelState {
   private _notifications: InAppNotification[] = $state([])
   topTab: NotificationTopTab = $state('projects')
@@ -56,8 +76,19 @@ class NotificationPanelState {
   /** Assistant notices come from the hidden assistant space (routine runs).
    *  The source tag is authoritative; the project id covers any payload that
    *  predates the dedicated source. */
-  private isAssistant(n: InAppNotification): boolean {
+  isAssistant(n: InAppNotification): boolean {
     return n.source === 'assistant' || n.projectId === ASSISTANT_SPACE_ID
+  }
+
+  /**
+   * The colour a notification wears on its leading dot and its card border:
+   * an assistant notice takes the assistant space colour, everything else the
+   * canonical kind colour. One rule shared by the bell and the panel, so the
+   * two surfaces can never disagree about what colour a notification is.
+   */
+  accentColor(n: InAppNotification): string {
+    if (this.isAssistant(n)) return this.assistantColor ?? 'var(--color-dimmed)'
+    return NOTIFICATION_KIND_COLORS[n.kind]
   }
 
   private byKind(items: InAppNotification[], sub: NotificationSubFilter): InAppNotification[] {
@@ -117,42 +148,53 @@ class NotificationPanelState {
   }
 
   /**
-   * The most urgent status the assistant space carries right now, or `null`
-   * when it has nothing to show. It drives the header bell's assistant badge:
-   * one badge whose colour is the assistant's own status colour, so an
-   * assistant run never reads as a project thread badge.
+   * The assistant space's own accent colour, carried on every assistant
+   * notification (the payload's `projectColor`), so the bell badge, the panel
+   * entry and the toast brand themselves as assistant instead of reading as a
+   * project or chat. Falls back to the space's stored colour when only a missed
+   * run is pending and no notification payload carries it.
    */
-  get assistantStatus(): 'error' | 'attention' | 'missed' | 'spec' | 'completed' | null {
-    const notices = this.assistantNotifications
-    if (notices.some((n) => n.kind === 'error')) return 'error'
-    if (notices.some((n) => n.kind === 'attention')) return 'attention'
-    if (assistantRoutines.missedRuns.length > 0) return 'missed'
-    if (notices.some((n) => n.kind === 'spec')) return 'spec'
-    if (notices.length > 0) return 'completed'
-    return null
+  get assistantColor(): string | null {
+    return (
+      this.assistantNotifications.findLast((n) => n.projectColor)?.projectColor ??
+      assistantRoutines.spaceColor
+    )
   }
 
-  /** True when the header bell must show its assistant status badge. */
+  /** True when the header bell must show its assistant dot: an assistant run
+   *  that completed, or a scheduled run that was missed while the app was
+   *  closed. An assistant run that failed lights the error dot instead, so a
+   *  failure is never hidden behind the assistant colour. */
   get hasAssistant(): boolean {
-    return this.assistantStatus !== null
+    return (
+      this.assistantNotifications.some((n) => n.kind === 'completed') ||
+      assistantRoutines.missedRuns.length > 0
+    )
   }
 
-  // Assistant notices are represented by the single assistant badge (see
-  // `assistantStatus`), so they never double up as a project/chat kind badge.
+  // A completed project thread. An assistant completion wears the assistant
+  // colour (see `hasAssistant`), so it never doubles up as a project dot.
   get hasCompleted(): boolean {
     return this._notifications.some((n) => n.kind === 'completed' && !this.isAssistant(n))
   }
 
+  /** A completed chat (inbox) turn, which the bell shows as its own chat dot. */
+  get hasChatCompleted(): boolean {
+    return this._notifications.some((n) => n.kind === 'chat-completed')
+  }
+
+  // Status kinds light their canonical status colour for every source,
+  // including the assistant space: a failed run must read as an error.
   get hasAttention(): boolean {
-    return this._notifications.some((n) => n.kind === 'attention' && !this.isAssistant(n))
+    return this._notifications.some((n) => n.kind === 'attention')
   }
 
   get hasError(): boolean {
-    return this._notifications.some((n) => n.kind === 'error' && !this.isAssistant(n))
+    return this._notifications.some((n) => n.kind === 'error')
   }
 
   get hasSpec(): boolean {
-    return this._notifications.some((n) => n.kind === 'spec' && !this.isAssistant(n))
+    return this._notifications.some((n) => n.kind === 'spec')
   }
 
   get totalCount(): number {
@@ -204,13 +246,39 @@ class NotificationPanelState {
   hydrateFromThreads(threads: Thread[], projects: Project[] = []): void {
     const projectById = new Map(projects.map((project) => [project.id, project]))
     for (const thread of threads) {
-      if (
-        (thread.status === 'awaiting_approval' || thread.status === 'spec') &&
-        !thread.read &&
-        !isOrchestrationChildThread(thread)
-      ) {
-        const project = projectById.get(thread.projectId)
-        const isChat = thread.projectId === INBOX_PROJECT_ID
+      if (isOrchestrationChildThread(thread) || thread.read) continue
+
+      const project = projectById.get(thread.projectId)
+      const isChat = thread.projectId === INBOX_PROJECT_ID
+
+      // A run that settled `failed` while no window was open keeps its
+      // persisted diagnostic on the thread row. Rehydrate it as an error entry
+      // so the panel explains the failure instead of showing a bare status.
+      if (thread.status === 'failed') {
+        const isAssistant = thread.projectId === ASSISTANT_SPACE_ID
+        const sourceName = isChat
+          ? 'Chat'
+          : isAssistant
+            ? 'Assistant'
+            : (project?.name ?? thread.title)
+        const errorDetail = thread.lastError?.trim() || undefined
+        const errorHeadline = errorDetail?.split('\n', 1)[0]?.trim() || undefined
+        this.add({
+          id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,
+          kind: 'error',
+          title: `${sourceName} hit an error`,
+          body: errorHeadline ?? `${thread.title} stopped with an error.`,
+          ...(errorDetail ? { errorDetail } : {}),
+          projectId: thread.projectId,
+          threadId: thread.id,
+          source: isChat ? 'chat' : isAssistant ? 'assistant' : 'project',
+          projectName: project?.name ?? '',
+          projectColor: project?.color
+        })
+        continue
+      }
+
+      if (thread.status === 'awaiting_approval' || thread.status === 'spec') {
         const sourceName = isChat ? 'Chat' : (project?.name ?? thread.title)
         this.add({
           id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,

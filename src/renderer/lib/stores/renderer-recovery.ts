@@ -14,6 +14,7 @@ export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 export type SettingsSection =
   | 'profile'
   | 'general'
+  | 'browser'
   | 'memory'
   | 'audits'
   | 'design'
@@ -33,10 +34,12 @@ export type MainView =
   | 'projects-scope'
   | 'chats'
   | 'assistant'
+  | 'browser'
   | 'scope'
   | 'threads'
   | 'settings'
   | 'settings-profile'
+  | 'settings-browser'
   | 'settings-memory'
   | 'settings-audits'
   | 'settings-design'
@@ -159,6 +162,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'projects-scope',
   'chats',
   'assistant',
+  'browser',
   'scope',
   'threads',
   'settings',
@@ -177,6 +181,7 @@ const MAIN_VIEWS: readonly MainView[] = [
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'profile',
   'general',
+  'browser',
   'memory',
   'audits',
   'design',
@@ -349,6 +354,7 @@ function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
     value === 'projects-scope' ||
     value === 'chats' ||
     value === 'assistant' ||
+    value === 'browser' ||
     value === 'scope' ||
     value === 'threads'
   ) {

@@ -1,8 +1,8 @@
 import type { WebContents } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
-import { existsSync } from 'fs'
+import { existsSync, realpathSync, statSync } from 'fs'
 import { homedir } from 'os'
-import { basename } from 'path'
+import { basename, isAbsolute, relative, resolve } from 'path'
 import * as pty from 'node-pty'
 import { APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
@@ -107,6 +107,40 @@ function buildShellEnv(): Record<string, string> {
   }
 }
 
+/**
+ * Resolve the working directory for a terminal that was explicitly opened at a
+ * folder from the file tree. `directory` is a project-relative path ('' is the
+ * root itself); the resolved real path must exist, be a directory, and stay
+ * inside `baseCwd`, so a crafted path can never spawn a shell outside the
+ * project or the active scope's checkout.
+ */
+function resolveStartingDirectory(baseCwd: string, directory: string): string {
+  if (directory.includes('\0')) {
+    throw new Error('Terminal directory is invalid')
+  }
+  let real: string
+  try {
+    real = realpathSync(resolve(baseCwd, directory))
+  } catch {
+    throw new Error('Terminal directory is unavailable')
+  }
+  let isDirectory: boolean
+  try {
+    isDirectory = statSync(real).isDirectory()
+  } catch {
+    isDirectory = false
+  }
+  if (!isDirectory) {
+    throw new Error('Terminal path is not a directory')
+  }
+  const root = realpathSync(baseCwd)
+  const contained = relative(root, real)
+  if (contained.startsWith('..') || isAbsolute(contained)) {
+    throw new Error('Terminal directory is outside the project')
+  }
+  return real
+}
+
 /** Resolve the user's preferred shell: $SHELL → zsh → bash. */
 function resolveShell(): string {
   const preferred = process.env['SHELL']
@@ -176,8 +210,9 @@ export class PtyService {
         threadId: string,
         cols: number,
         rows: number,
-        scopeBucketId?: string
-      ) => this.create(id, projectId, threadId, cols, rows, scopeBucketId)
+        scopeBucketId?: string,
+        directory?: string
+      ) => this.create(id, projectId, threadId, cols, rows, scopeBucketId, directory)
     )
     ipcMain.handle(
       'pty:createCommand',
@@ -240,7 +275,8 @@ export class PtyService {
     threadId: string,
     cols: number,
     rows: number,
-    scopeBucketId?: string
+    scopeBucketId?: string,
+    directory?: string
   ): Promise<{ id: string; pid: number }> {
     const reused = this.reuseLiveSession(id)
     if (reused) return reused
@@ -252,14 +288,17 @@ export class PtyService {
 
     // Resolve the terminal root through the scope when one is supplied; a
     // managed scope's worktree is captured here and kept for the session
-    // lifetime, even if the UI later switches scope.
-    const cwd =
+    // lifetime, even if the UI later switches scope. An explicit starting
+    // directory (the file tree's "Open in terminal") is resolved against that
+    // root and must stay inside it.
+    const baseCwd =
       scopeBucketId && this.scopeRoots
         ? await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
         : project.path
-    if (!cwd || !existsSync(cwd)) {
+    if (!baseCwd || !existsSync(baseCwd)) {
       throw new Error(`Project directory is unavailable`)
     }
+    const cwd = directory === undefined ? baseCwd : resolveStartingDirectory(baseCwd, directory)
 
     const shell = resolveShell()
     const createdAt = Date.now()

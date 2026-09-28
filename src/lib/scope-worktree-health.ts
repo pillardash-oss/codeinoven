@@ -73,6 +73,11 @@ const GUIDANCE: Record<ScopeWorktreeHealthCategory, ScopeWorktreeHealthGuidance>
     fix: `${REPAIR_HINT} It moves the checkout back under the app's project directory.`,
     repairable: true
   },
+  'not-managed': {
+    cause: 'This scope has no managed worktree',
+    fix: 'Nothing to repair here. A scope that works in the project directory has no checkout of its own, and one that was removed leaves the board as soon as it reloads.',
+    repairable: false
+  },
   'repository-unavailable': {
     cause: 'The project repository is unavailable',
     fix: "Restore the project's local Git repository (or point the project at it again), then reload the project. Repairing the worktree cannot help until Git can read the repository.",

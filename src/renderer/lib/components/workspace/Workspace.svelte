@@ -15,13 +15,14 @@
     FileDiff,
     MonitorCog,
     FolderTree,
-    Globe2,
+    GlobeCode,
     Hammer,
     History,
     Info,
     MessageCircleDashed,
     SquareTerminal,
-    StickyNote
+    StickyNote,
+    TriangleAlert
   } from '@lucide/svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
@@ -38,14 +39,10 @@
   import { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
   import WorkspaceSidebar from './WorkspaceSidebar.svelte'
-  import WorkspaceBrowserMenu from './WorkspaceBrowserMenu.svelte'
   import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
-  import WorkspaceBrowserDataModal from './WorkspaceBrowserDataModal.svelte'
-  import WorkspaceBrowserDownloadsModal from './WorkspaceBrowserDownloadsModal.svelte'
   import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
   import WorkspaceEditProjectModal from './WorkspaceEditProjectModal.svelte'
   import WorkspaceFullscreenTerminal from './WorkspaceFullscreenTerminal.svelte'
-  import WorkspaceFullscreenBrowser from './WorkspaceFullscreenBrowser.svelte'
   import WorkspaceUnsavedChangesDialog from './WorkspaceUnsavedChangesDialog.svelte'
   import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
@@ -54,8 +51,10 @@
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { attentionState } from '$lib/stores/attention.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
@@ -105,6 +104,13 @@
     findEmptyNewThread,
     threadVisitKey
   } from '$lib/stores/workspace.svelte'
+  import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
+  import { browserStore, loadBrowser } from '$lib/stores/browser-access.svelte'
+  import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import {
+    buildThreadSwitcherEntries,
+    type ThreadSwitcherEntry
+  } from '../threads/thread-switcher-entries'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import { threadHasVisibleWork } from './workspace-thread-helpers'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -600,6 +606,33 @@
   }
 
   /**
+   * Panels that paint the app background instead of the sidebar's own surface.
+   * The sidebar shell is `bg-surface`, so a panel that sets `bg-app` bleeds
+   * straight into the conversation behind it and the two regions read as one.
+   * A subtle left border keeps them apart. Panels that keep the shell surface
+   * (sources, memory, notifications, the debugger, coordinators) already stand
+   * apart from the app background and need no border.
+   */
+  const APP_BACKGROUND_PANEL_KINDS: ReadonlySet<ContextSidebarTab['kind']> = new Set([
+    'files',
+    'diff',
+    'git',
+    'terminal',
+    'actions',
+    'browser',
+    'thread-note',
+    'temporary-chat',
+    'attention'
+  ])
+
+  /** Whether the right sidebar's active panel would otherwise flush into the
+   *  conversation background, so the shell draws a subtle left border. */
+  let rightSidebarFlushes = $derived.by(() => {
+    const tab = contextSidebarState.sidebarActiveTab
+    return tab !== null && APP_BACKGROUND_PANEL_KINDS.has(tab.kind)
+  })
+
+  /**
    * The dock's toggle contract: clicking the active tool collapses the panel,
    * clicking any other tool swaps the panel content without closing it.
    */
@@ -1070,7 +1103,7 @@
       threadNote.push({
         id: 'browser',
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
-        icon: Globe2,
+        icon: GlobeCode,
         active: dockKindActive('browser'),
         countBadge:
           browser.activeDownloadCount > 0 ? String(browser.activeDownloadCount) : undefined,
@@ -1101,6 +1134,25 @@
       })
     }
 
+    // Auto-resolved gates sit at the very bottom of the rail: they are the
+    // app's own record of what it decided while the user was away, not a
+    // workspace tool. The whole group disappears once every record is read.
+    const autoAnswerTools: ContextDockItem[] =
+      attentionState.unreadCount > 0
+        ? [
+            {
+              id: 'attention',
+              label: 'Decisions made for you',
+              icon: TriangleAlert,
+              tone: 'warning',
+              countBadge: String(attentionState.unreadCount),
+              active: dockKindActive('attention'),
+              onSelect: () =>
+                toggleDockPanel('attention', () => contextSidebarState.openAttention())
+            }
+          ]
+        : []
+
     return [
       history,
       assistantTools,
@@ -1109,7 +1161,8 @@
       temporaryChats,
       coordination,
       threadNote,
-      subagents
+      subagents,
+      autoAnswerTools
     ]
   })
 
@@ -1263,9 +1316,38 @@
 
   let contextPanelColumns = $derived(
     sidebarTrackReserved
-      ? `minmax(360px, 1fr) minmax(0, min(${contextSidebarState.width}px, calc(100% - 360px)))`
+      ? 'minmax(360px, 1fr) max(0px, min(calc(100% - 360px), var(--context-rail-width)))'
       : 'minmax(0, 1fr)'
   )
+
+  /**
+   * The rail's animated track width, in the registered property the column
+   * above reads. It is a length at every moment, so the track grows and shrinks
+   * frame by frame and the thread beside it follows, the same motion the left
+   * sidebar gets from `slideWidth`.
+   */
+  let railTrackWidth = $derived(
+    sidebarVisible ? `${Math.round(contextSidebarState.width)}px` : '0px'
+  )
+  /**
+   * True while the user drags the rail's edge. A drag has to track the pointer
+   * exactly, so the track's transition is switched off for its duration instead
+   * of easing behind every pointer move.
+   */
+  let railDragging = $state(false)
+  let railDragTimer: ReturnType<typeof setTimeout> | undefined
+  let railTrackDuration = $derived(
+    railDragging ? '0ms' : `${motionDuration(sidebarVisible ? 200 : PANEL_EXIT_MS)}ms`
+  )
+
+  /** Move the rail: a drag writes the width straight through, everything else
+   *  is the open/close transition above. */
+  function handleRailWidthChange(width: number): void {
+    railDragging = true
+    clearTimeout(railDragTimer)
+    railDragTimer = setTimeout(() => (railDragging = false), motionDuration(160))
+    contextSidebarState.setWidth(width)
+  }
   // A folded dock leaves no restore strip behind: the context dock's terminal
   // icon is always on screen and is the way back, so hiding the terminal really
   // does give the full height back to the thread.
@@ -1497,17 +1579,31 @@
     return [...pinned, ...unpinned]
   })
 
-  let recentThreads = $derived.by(() => {
-    const availableThreads = allThreads.filter((thread) => !thread.archived)
-    const byVisitKey = new Map(availableThreads.map((thread) => [threadVisitKey(thread), thread]))
-    const visited = workspaceState.recentThreadVisits
-      .map((visitKey) => byVisitKey.get(visitKey))
-      .filter((thread): thread is Thread => thread !== undefined)
-    const visitedIds = new Set(visited.map((thread) => threadVisitKey(thread)))
-    const activityFallback = availableThreads
-      .filter((thread) => !visitedIds.has(threadVisitKey(thread)))
-      .sort((a, b) => b.lastActivity - a.lastActivity)
-    return [...visited, ...activityFallback].slice(0, 10)
+  /** What the switcher sees while the browser's modules are still unloaded: no
+   *  browser tab can be switched to until one exists, and the derived re-runs the
+   *  moment the store arrives. */
+  const NO_BROWSER_TABS: readonly GlobalBrowserTab[] = []
+
+  let recentSwitcherEntries = $derived.by(() =>
+    buildThreadSwitcherEntries({
+      // One recency order across every switchable surface: a project thread, a
+      // chat, an assistant task or an open browser tab, interleaved by when each
+      // was last visited.
+      visits: recentVisits.all,
+      threads: allThreads.filter((thread) => !thread.archived),
+      tabs: browserStore()?.tabs ?? NO_BROWSER_TABS
+    })
+  )
+
+  /** The entry the switcher starts cycling from: the active browser tab while the
+   *  browser view is on screen, otherwise the selected thread. */
+  let switcherSelectedKey = $derived.by(() => {
+    const browser = browserStore()
+    if (!active && browser?.opened && browser.activeTabId) {
+      return browserTabVisitKey(browser.activeTabId)
+    }
+    const thread = selectedThread
+    return thread ? threadVisitKey(thread) : null
   })
 
   let recentScopeLoadRequest = 0
@@ -1752,7 +1848,7 @@
         workspaceState.selectedThread?.projectId === projectId &&
         workspaceState.selectedThread.id === threadId
       ) {
-        void workspaceState.refreshSourceProcessCount(projectId, threadId)
+        void workspaceState.refreshSourceProcessCount(projectId, threadId, { force: true })
       }
     })
   })
@@ -1770,6 +1866,9 @@
 
   $effect(() => {
     return subscribe('browser:openRequested', (url, context) => {
+      // A tab opened by the global browser belongs to the global strip, which
+      // adopts it in its own store; the workspace sidebar must not mirror it.
+      if (context?.projectId === GLOBAL_BROWSER_PROJECT_ID) return
       if (context) {
         contextSidebarState.openBrowserForContext(
           url,
@@ -2386,7 +2485,10 @@
       // so routine/missed-run reads can never occupy the startup frame or race
       // the project and thread hydration for the main process. Idempotent: a
       // second call is a no-op, and re-scheduling replaces the pending task.
-      scheduleDeferredWork('assistant:hydrate', () => assistantRoutines.initialize())
+      scheduleDeferredWork('assistant:hydrate', () => {
+        assistantRoutines.initialize()
+        attentionState.initialize()
+      })
     }
   }
 
@@ -3526,6 +3628,24 @@
     void tick().then(() => revealThreadInSidebar(thread.id))
   }
 
+  /**
+   * Open whatever the Ctrl+Tab switcher landed on. A browser entry reveals the
+   * browser view and switches to that tab, which also hands the page the keyboard
+   * (or opens a blank tab's address spotlight); a thread entry takes the same path
+   * it always did, landing in the view that owns the thread's family.
+   */
+  async function openSwitcherEntry(entry: ThreadSwitcherEntry): Promise<void> {
+    if (entry.kind === 'browser') {
+      navigate('browser')
+      // An entry for a browser tab only exists once the browser is loaded, so
+      // this resolves immediately; asking through the access seam is what keeps
+      // that fact out of this component's imports.
+      void loadBrowser().then((browser) => browser.switchTo(entry.tab.id))
+      return
+    }
+    await openThreadFromSwitcher(entry.thread)
+  }
+
   async function openProjectFileFromCommand(
     projectId: string,
     path: string,
@@ -3727,7 +3847,6 @@
         runsByTask={assistantRunsByTask}
         runsByRoutine={assistantRunsByRoutine}
         selectedThreadId={activeThreadRowId(selectedThread)}
-        {navigate}
         onOpenTask={openAssistantTask}
         onOpenTaskHowTo={openAssistantHowToForTask}
         onOpenRoutineHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
@@ -3751,7 +3870,6 @@
       bind:scroller={sidebarScroller}
       {mode}
       {active}
-      {navigate}
       {projects}
       {visibleProjects}
       {projectIcons}
@@ -3790,12 +3908,22 @@
     />
   {/if}
 
-  <!-- Main Content -->
-  <section class="flex min-w-0 flex-1 overflow-hidden">
+  <!-- Main Content. `overflow-clip`, not `overflow-hidden`: hidden is still a
+       scroll container, and a panel sliding in on `fly` translates past this
+       box, which grows the scrollable area. A focused control inside the
+       arriving panel (the terminal is the one that focuses itself) then
+       scrolls the whole shell down and the scroll clamps back as the slide
+       settles, so the thread visibly dropped and rose. Clip makes this box
+       never scrollable, so nothing can move it. -->
+  <section class="flex min-w-0 flex-1 overflow-clip">
     <div
       class="grid h-full min-h-0 min-w-0 flex-1"
       style:grid-template-columns={contextPanelColumns}
       style:grid-template-rows={contextPanelRows}
+      style:--context-rail-width={railTrackWidth}
+      style:transition-property="--context-rail-width"
+      style:transition-timing-function="cubic-bezier(0.215, 0.61, 0.355, 1)"
+      style:transition-duration={railTrackDuration}
     >
       <WorkspaceConversationPane
         {mode}
@@ -3820,7 +3948,7 @@
         }}
       />
 
-      {#if sidebarVisible}
+      {#if sidebarTrackReserved}
         {#snippet contextSidebarContent()}
           <WorkspaceContextPanelContent
             {gitPanelProjectId}
@@ -3842,7 +3970,7 @@
           />
         {/snippet}
         <div
-          class="min-h-0 min-w-0"
+          class="min-h-0 min-w-0 {rightSidebarFlushes ? 'border-l border-border' : ''}"
           style:grid-column="2"
           style:grid-row="1"
           in:fly={{ x: contextSidebarState.width, duration: motionDuration(200), easing: cubicOut }}
@@ -3864,7 +3992,7 @@
             onFullscreenTab={openTabFullscreen}
             onMoveTab={(id, targetId, position) =>
               contextSidebarState.reorder(id, targetId, position)}
-            onWidthChange={(width) => contextSidebarState.setWidth(width)}
+            onWidthChange={(width) => handleRailWidthChange(width)}
             onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
@@ -3925,23 +4053,34 @@
 {/snippet}
 
 {#snippet browserMenu()}
-  <WorkspaceBrowserMenu {browser} />
+  {#await import('./WorkspaceBrowserMenu.svelte') then { default: WorkspaceBrowserMenu }}
+    <WorkspaceBrowserMenu {browser} />
+  {/await}
 {/snippet}
 
-<WorkspaceBrowserDataModal {browser} {projects} />
+<!-- Every browser surface waits for `browserStore()` so its chunk is not even
+     fetched on a launch that never reaches the browser. The store arrives with
+     the runtime, which is also what warms these chunks. -->
+{#if browserStore()}
+  {#await import('./WorkspaceBrowserDataModal.svelte') then { default: WorkspaceBrowserDataModal }}
+    <WorkspaceBrowserDataModal {browser} {projects} />
+  {/await}
 
-<WorkspaceBrowserDownloadsModal {browser} />
+  {#await import('./WorkspaceBrowserDownloadsModal.svelte') then { default: WorkspaceBrowserDownloadsModal }}
+    <WorkspaceBrowserDownloadsModal {browser} />
+  {/await}
+{/if}
 
 <WorkspaceRemoveProjectModals dialogs={projectDialogs} />
 
 <WorkspaceEditProjectModal dialogs={projectDialogs} {projectIcons} />
 
 <ThreadSwitcher
-  threads={recentThreads}
+  entries={recentSwitcherEntries}
   projects={visibleProjects}
   projectIconUrls={projectIcons}
-  selectedThreadId={selectedThread?.id ?? null}
-  onSelect={openThreadFromSwitcher}
+  selectedKey={switcherSelectedKey}
+  onSelect={openSwitcherEntry}
 />
 
 <WorkspaceFullscreenTerminal
@@ -3950,12 +4089,16 @@
   onNewTerminal={openNewTerminal}
   onCloseTab={(id) => closeFullscreenTab('terminal', id)}
 />
-<WorkspaceFullscreenBrowser
-  tabId={browserFullscreenTabId}
-  onTabIdChange={(id) => (browserFullscreenTabId = id)}
-  onNewBrowser={openNewBrowser}
-  onCloseTab={(id) => closeFullscreenTab('browser', id)}
-/>
+{#if browserStore()}
+  {#await import('./WorkspaceFullscreenBrowser.svelte') then { default: WorkspaceFullscreenBrowser }}
+    <WorkspaceFullscreenBrowser
+      tabId={browserFullscreenTabId}
+      onTabIdChange={(id) => (browserFullscreenTabId = id)}
+      onNewBrowser={openNewBrowser}
+      onCloseTab={(id) => closeFullscreenTab('browser', id)}
+    />
+  {/await}
+{/if}
 
 <!-- Closing a files tab with unsaved changes -->
 <WorkspaceUnsavedChangesDialog

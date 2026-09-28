@@ -7,6 +7,7 @@ import { SidebarTabContexts } from './context-sidebar-tabs.svelte'
 import {
   EMPTY_TABS,
   isProjectTab,
+  ATTENTION_TAB,
   NOTIFICATIONS_TAB,
   TEMPORARY_CHAT_INACTIVITY_MS,
   type ContextSidebarTab,
@@ -14,13 +15,17 @@ import {
   type TemporaryChatContextTab,
   type TemporaryChatMode,
   type TerminalContextTab,
-  type TerminalPlacement
+  type TerminalPlacement,
+  type ThreadNoteContextTab
 } from './context-sidebar-types'
 import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } from '$shared/types'
 
 export type {
   ActionsContextTab,
+  AttentionContextTab,
   BrowserContextTab,
+  BrowserDownloadsContextTab,
+  BrowserPopupWindowContextTab,
   CloudDeploymentContextTab,
   ContextSidebarTab,
   CoordinatorContextTab,
@@ -55,6 +60,9 @@ class ContextSidebarState {
    *  instead of an empty one. See `activeThreadRowId`. */
   private activeRowThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
+  /** The auto-resolved decision panel. Mutually exclusive with notifications,
+   *  like any two global rail panels: only one owns the sidebar at a time. */
+  private attentionVisible = $state(false)
   /**
    * How the sidebar resolves a thread's browser scope. The sidebar holds no
    * thread rows, and the workspace owns the only list of them, so the workspace
@@ -87,6 +95,7 @@ class ContextSidebarState {
     hideBrowserForFocus: () => this.browser.hideForFocus(),
     clearNotifications: () => {
       this.notificationsVisible = false
+      this.attentionVisible = false
     }
   })
 
@@ -96,8 +105,18 @@ class ContextSidebarState {
     threadScopeId: (projectId, threadId) => this.threadBrowserScopeId(projectId, threadId),
     clearNotifications: () => {
       this.notificationsVisible = false
+      this.attentionVisible = false
     }
   })
+
+  /** Wire the sidebar's browser tabs.
+   *
+   * The sidebar's browser is not part of the first paint, so its stored tab list
+   * and its page-state listener are held back until the runtime seam asks for
+   * them (see `startBrowserRuntime`). Idempotent. */
+  startBrowserTabs(): void {
+    this.browser.start()
+  }
 
   /** Register the workspace's thread-to-conversation resolver (see
    *  `threadBrowserScopeResolver`). */
@@ -117,7 +136,8 @@ class ContextSidebarState {
       ...(this.tabContexts.activeProjectContext?.tabs ?? EMPTY_TABS),
       ...(this.tabContexts.activeContext?.tabs.filter((tab) => !isProjectTab(tab)) ?? EMPTY_TABS),
       ...this.browser.activeTabs,
-      ...(this.notificationsVisible ? [NOTIFICATIONS_TAB] : [])
+      ...(this.notificationsVisible ? [NOTIFICATIONS_TAB] : []),
+      ...(this.attentionVisible ? [ATTENTION_TAB] : [])
     ]
   }
 
@@ -125,6 +145,29 @@ class ContextSidebarState {
    *  through a component prop. The sidebar store remains the sole owner. */
   temporaryChatTab(tabId: string): TemporaryChatContextTab | null {
     return this.tabContexts.temporaryChatTab(tabId)
+  }
+
+  /** Create a global browser tab's agent side chat in its reserved context
+   *  without focusing the workspace rail; the browser rail owns that panel. */
+  ensureBrowserAgentChat(
+    projectId: string,
+    threadId: string,
+    temporaryChatId: string,
+    settings: ThreadSettings,
+    initialContext: string
+  ): TemporaryChatContextTab {
+    return this.tabContexts.ensureBrowserAgentChat(
+      projectId,
+      threadId,
+      temporaryChatId,
+      settings,
+      initialContext
+    )
+  }
+
+  /** Drop a browser tab's agent chat when its browser tab closes. */
+  removeBrowserAgentChat(projectId: string, threadId: string, temporaryChatId: string): void {
+    this.tabContexts.removeTemporaryChat(projectId, threadId, temporaryChatId)
   }
 
   get activeTabId(): string | null {
@@ -156,7 +199,10 @@ class ContextSidebarState {
     ]
     const positionedTabs =
       this.terminalPlacement === 'bottom' ? tabs.filter((tab) => tab.kind !== 'terminal') : tabs
-    return this.notificationsVisible ? [...positionedTabs, NOTIFICATIONS_TAB] : positionedTabs
+    const withNotifications = this.notificationsVisible
+      ? [...positionedTabs, NOTIFICATIONS_TAB]
+      : positionedTabs
+    return this.attentionVisible ? [...withNotifications, ATTENTION_TAB] : withNotifications
   }
 
   /** Tabs shown in the bottom terminal dock. Empty while docked to the right. */
@@ -174,6 +220,7 @@ class ContextSidebarState {
    */
   get sidebarVisible(): boolean {
     if (this.notificationsVisible) return true
+    if (this.attentionVisible) return true
     if (this.browser.visible && this.browser.activeTabs.length > 0) return true
     return this.activeThreadId !== null && (this.tabContexts.activeProjectContext?.visible ?? false)
   }
@@ -248,6 +295,7 @@ class ContextSidebarState {
   /** Active tab id for the right sidebar (ignores terminal tabs). */
   get sidebarActiveTabId(): string | null {
     if (this.notificationsVisible) return NOTIFICATIONS_TAB.id
+    if (this.attentionVisible) return ATTENTION_TAB.id
     if (this.browser.visible) {
       return this.browser.activeTabIdOrLast()
     }
@@ -278,6 +326,7 @@ class ContextSidebarState {
   /** The tab the sidebar content should render for. */
   get sidebarActiveTab(): ContextSidebarTab | null {
     if (this.notificationsVisible) return NOTIFICATIONS_TAB
+    if (this.attentionVisible) return ATTENTION_TAB
     return this.sidebarTabs.find((tab) => tab.id === this.sidebarActiveTabId) ?? null
   }
 
@@ -301,6 +350,7 @@ class ContextSidebarState {
     rowThreadId?: string
   ): void {
     const keepNotificationsVisible = this.notificationsVisible
+    const keepAttentionVisible = this.attentionVisible
     const projectChanged = this.activeProjectId !== projectId
     // Capture before `activeProjectId` moves: the native view (if any) belongs
     // to the outgoing project and must be detached from the store layer so the
@@ -317,8 +367,10 @@ class ContextSidebarState {
     this.tabContexts.rebindProjectTabs(projectId, contextThreadId)
     this.tabContexts.ensureActiveThreadPanel(projectId, contextThreadId, threadTitle)
     this.notificationsVisible = keepNotificationsVisible
+    this.attentionVisible = keepAttentionVisible
     this.browser.visible =
       !keepNotificationsVisible &&
+      !keepAttentionVisible &&
       !projectChanged &&
       this.browser.visible &&
       this.browser.activeTabs.length > 0
@@ -340,7 +392,7 @@ class ContextSidebarState {
    * toggle shortcut (Cmd/Ctrl+Shift+S) can bring back exactly what the user was
    * looking at instead of guessing from whatever panel is still remembered.
    */
-  private lastRegion: 'context' | 'browser' | 'notifications' = 'context'
+  private lastRegion: 'context' | 'browser' | 'notifications' | 'attention' = 'context'
 
   /**
    * Toggle the sidebar region without picking a panel for it: hide whatever is
@@ -359,6 +411,11 @@ class ContextSidebarState {
       // Notifications are hidden right now, so this reveals them again (and
       // detaches the browser view the same way the header button does).
       this.toggleNotifications()
+      return true
+    }
+    if (this.lastRegion === 'attention') {
+      // The decision panel is hidden right now, so this reveals it again.
+      this.toggleAttention()
       return true
     }
     if (this.lastRegion === 'browser') {
@@ -381,6 +438,11 @@ class ContextSidebarState {
     if (this.notificationsVisible) {
       this.lastRegion = 'notifications'
       this.notificationsVisible = false
+      return
+    }
+    if (this.attentionVisible) {
+      this.lastRegion = 'attention'
+      this.attentionVisible = false
       return
     }
     if (this.browser.visible) {
@@ -548,6 +610,28 @@ class ContextSidebarState {
     this.tabContexts.openThreadNote(projectId, threadId, threadTitle, options)
   }
 
+  /**
+   * The note docked for one subject, read directly from its own context rather
+   * than from the active one.
+   *
+   * The global browser view is not a workspace thread context, so its notes are
+   * keyed by browser tab and live outside whatever context is active. This is
+   * the read the browser rail uses; the workspace reads its own active context
+   * through `sidebarTabs`.
+   */
+  noteTabFor(projectId: string, threadId: string): ThreadNoteContextTab | null {
+    const tab = this.tabContexts
+      .contextFor(projectId, threadId)
+      ?.tabs.find((candidate) => candidate.kind === 'thread-note')
+    return tab?.kind === 'thread-note' ? tab : null
+  }
+
+  /** Create and load a subject's note tab without focusing it. See `noteTabFor`
+   *  for why the browser view needs a read that does not steal focus. */
+  ensureNoteTab(projectId: string, threadId: string, threadTitle: string): void {
+    this.tabContexts.ensureThreadNote(projectId, threadId, threadTitle)
+  }
+
   openCloudDeployments(projectId: string, threadId: string): void {
     this.tabContexts.openCloudDeployments(projectId, threadId)
   }
@@ -597,7 +681,30 @@ class ContextSidebarState {
     if (this.notificationsVisible) {
       if (this.browser.visible) this.browser.detachView()
       this.browser.visible = false
+      this.attentionVisible = false
     }
+  }
+
+  /**
+   * Show or hide the auto-resolved decision panel. Notifications and the
+   * decision panel are both global rail surfaces, so opening one closes the
+   * other and detaches the browser view, exactly as the notifications toggle
+   * does, so a stale native view can never float over the panel.
+   */
+  toggleAttention(): void {
+    if (this.attentionVisible) {
+      this.attentionVisible = false
+      return
+    }
+    this.openAttention()
+  }
+
+  /** Reveal the decision panel and make it the sidebar's active surface. */
+  openAttention(): void {
+    this.attentionVisible = true
+    if (this.browser.visible) this.browser.detachView()
+    this.browser.visible = false
+    this.notificationsVisible = false
   }
 
   openTemporaryChat(
@@ -653,6 +760,11 @@ class ContextSidebarState {
     return this.tabContexts.openNewTerminal(projectId, threadId)
   }
 
+  /** Open a new terminal tab whose shell starts in `directory` (project-relative). */
+  openTerminalAt(projectId: string, threadId: string, directory: string): string {
+    return this.tabContexts.openTerminalAt(projectId, threadId, directory)
+  }
+
   openDebugger(projectId: string, threadId: string): void {
     this.tabContexts.openDebugger(projectId, threadId)
   }
@@ -686,6 +798,10 @@ class ContextSidebarState {
   close(id: string): void {
     if (id === NOTIFICATIONS_TAB.id) {
       this.notificationsVisible = false
+      return
+    }
+    if (id === ATTENTION_TAB.id) {
+      this.attentionVisible = false
       return
     }
     if (this.browser.has(id)) {

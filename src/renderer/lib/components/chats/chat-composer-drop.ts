@@ -1,12 +1,14 @@
 /**
- * Conversation-scoped file drop detection for the chat composer.
+ * Conversation-scoped attachment drop detection for the chat composer.
  *
  * Document-level listeners keep the detection simple, but a drag is only
  * captured while the pointer is inside the conversation region. The project
  * sidebar (left) and the file tree (right) therefore keep their own drop
  * targets: dragging right imports into the project, dragging left adds a
- * project, and only the conversation attaches files to the message.
+ * project, and only the conversation attaches to the message.
  */
+
+import { dropCarriesAttachable } from './chat-composer-drop-source'
 
 export interface ComposerDropRegion {
   left: number
@@ -24,7 +26,11 @@ export interface ComposerDropContext {
   setDragging(value: boolean): void
   setDropRegion(region: ComposerDropRegion | null): void
   setAttachmentBlockedNotice(value: boolean): void
-  handleDropFiles(dataTransfer: DataTransfer | null): void | Promise<void>
+  /**
+   * Attach whatever the drop carried: files it handed over, or the media links a
+   * browser-page drag names instead of files.
+   */
+  handleDropData(dataTransfer: DataTransfer | null): void | Promise<void>
 }
 
 /**
@@ -37,13 +43,6 @@ export interface ComposerDropContext {
  */
 const SELF_HANDLED_DROP_REGIONS =
   '[data-region="file-tree"], [data-drop-region="sidebar"], [data-drop-region="file-request-card"]'
-
-function hasFiles(dt: DataTransfer | null): boolean {
-  if (!dt) return false
-  // `types` can be a DOMStringList (contains) or FrozenArray (includes).
-  const types = Array.from(dt.types ?? [])
-  return types.includes('Files')
-}
 
 function insideRect(rect: DOMRect, e: { clientX: number; clientY: number }): boolean {
   return (
@@ -132,7 +131,7 @@ export function installComposerDropListeners(ctx: ComposerDropContext): () => vo
       clearDropState()
       return
     }
-    if (!hasFiles(e.dataTransfer)) return
+    if (!dropCarriesAttachable(e.dataTransfer)) return
     const rect = conversationRegionRect()
     if (!rect || !insideRect(rect, e) || overSelfHandledDropRegion(e)) {
       // Outside the conversation (or over a surface that owns the drop): leave
@@ -181,7 +180,7 @@ export function installComposerDropListeners(ctx: ComposerDropContext): () => vo
     clearDropState()
     if (ctx.getReadOnlyMode() && !ctx.getAllowAttachments()) return
     if (ctx.getSelectedHarnessLacksAttachments()) {
-      if (hasFiles(e.dataTransfer)) {
+      if (dropCarriesAttachable(e.dataTransfer)) {
         e.preventDefault()
         ctx.setAttachmentBlockedNotice(true)
       }
@@ -190,7 +189,7 @@ export function installComposerDropListeners(ctx: ComposerDropContext): () => vo
     const rect = conversationRegionRect()
     if (!rect || !insideRect(rect, e) || overSelfHandledDropRegion(e)) return
     e.preventDefault()
-    void ctx.handleDropFiles(e.dataTransfer)
+    void ctx.handleDropData(e.dataTransfer)
   }
 
   document.addEventListener('dragover', onDragOver)

@@ -1,6 +1,7 @@
 import type { Database } from '../database'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import {
+  GLOBAL_BROWSER_PROJECT_ID,
   sanitizeThreadSettings,
   type AgentRateLimitWindow,
   type AgentTokenUsage,
@@ -58,6 +59,9 @@ interface ThreadRow {
   last_success_at: number | null
   assistant_getting_started: number
   assistant_task_id: string | null
+  last_error: string | null
+  last_error_at: number | null
+  last_outcome: string | null
   drafting: number
   draft_json: string | null
   created_at: number
@@ -195,6 +199,11 @@ function rowToThread(row: ThreadRow): Thread {
     lastSuccessAt: row.last_success_at ?? undefined,
     ...(row.assistant_getting_started === 1 ? { assistantGettingStarted: true } : {}),
     ...(row.assistant_task_id !== null ? { assistantTaskId: row.assistant_task_id } : {}),
+    ...(row.last_error !== null ? { lastError: row.last_error } : {}),
+    ...(row.last_error_at !== null ? { lastErrorAt: row.last_error_at } : {}),
+    ...(row.last_outcome !== null
+      ? { lastOutcome: row.last_outcome as Thread['lastOutcome'] }
+      : {}),
     ...(row.drafting === 1 ? { drafting: true } : {}),
     ...(row.draft_json !== null ? { draftJson: row.draft_json } : {}),
     createdAt: row.created_at,
@@ -330,9 +339,10 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   routine_id, assistant_icon_type, assistant_icon, schedule_override, last_run_at, last_dispatched_at, last_success_at,
   assistant_getting_started,
   assistant_task_id,
+  last_error, last_error_at, last_outcome,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -377,6 +387,9 @@ ON CONFLICT(id) DO UPDATE SET
   last_success_at=excluded.last_success_at,
   assistant_getting_started=excluded.assistant_getting_started,
   assistant_task_id=excluded.assistant_task_id,
+  last_error=excluded.last_error,
+  last_error_at=excluded.last_error_at,
+  last_outcome=excluded.last_outcome,
   created_at=excluded.created_at,
   updated_at=excluded.updated_at,
   last_activity=excluded.last_activity,
@@ -429,6 +442,9 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.lastSuccessAt ?? null,
     thread.assistantGettingStarted ? 1 : 0,
     thread.assistantTaskId ?? null,
+    thread.lastError ?? null,
+    thread.lastErrorAt ?? null,
+    thread.lastOutcome ?? null,
     thread.createdAt,
     thread.updatedAt,
     thread.lastActivity,
@@ -655,7 +671,11 @@ export class ThreadRepo {
   }
 
   listByProject(projectId: string, options: ThreadListOptions = {}): Thread[] {
-    const { where, params, limit } = buildListClauses(['project_id = ?'], [projectId], options)
+    const { where, params, limit } = buildListClauses(
+      ['project_id = ?', 'project_id != ?'],
+      [projectId, GLOBAL_BROWSER_PROJECT_ID],
+      options
+    )
     const rows = this.db.all<ThreadRow>(
       `SELECT * FROM threads ${where}
        ${buildOrderBy(options)}${limit}`,
@@ -670,7 +690,11 @@ export class ThreadRepo {
     projectId: string,
     options: ThreadListOptions = {}
   ): Promise<Thread[]> {
-    const { where, params, limit } = buildListClauses(['project_id = ?'], [projectId], options)
+    const { where, params, limit } = buildListClauses(
+      ['project_id = ?', 'project_id != ?'],
+      [projectId, GLOBAL_BROWSER_PROJECT_ID],
+      options
+    )
     const result = await this.db.queryViaWorker(
       `SELECT * FROM threads ${where}
        ${buildOrderBy(options)}${limit}`,
@@ -741,7 +765,11 @@ export class ThreadRepo {
   }
 
   listAll(options: ThreadListOptions = {}): Thread[] {
-    const { where, params, limit } = buildListClauses([], [], options)
+    const { where, params, limit } = buildListClauses(
+      ['project_id != ?'],
+      [GLOBAL_BROWSER_PROJECT_ID],
+      options
+    )
     const rows = this.db.all<ThreadRow>(
       `SELECT * FROM threads ${where}
        ${buildOrderBy(options)}${limit}`,
@@ -752,7 +780,11 @@ export class ThreadRepo {
 
   /** Load every thread on the database worker so unbounded hydration does not block Electron. */
   async listAllViaWorker(options: ThreadListOptions = {}, hydrateUsage = true): Promise<Thread[]> {
-    const { where, params, limit } = buildListClauses([], [], options)
+    const { where, params, limit } = buildListClauses(
+      ['project_id != ?'],
+      [GLOBAL_BROWSER_PROJECT_ID],
+      options
+    )
     const result = await this.db.queryViaWorker(
       `SELECT * FROM threads ${where}
        ${buildOrderBy(options)}${limit}`,
@@ -807,6 +839,7 @@ export class ThreadRepo {
          ) AS rn
          FROM threads
          WHERE archived = 0
+           AND project_id != ?
            AND (
              pinned = 1
              OR (
@@ -817,7 +850,7 @@ export class ThreadRepo {
            )
        ) WHERE rn <= ${quotaExpr} OR read = 0 OR drafting = 1 OR pinned = 1
        ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC`,
-      [],
+      [GLOBAL_BROWSER_PROJECT_ID],
       0
     )
     if (!result.ok) return this.listAll({ includeArchived: false })
@@ -949,6 +982,16 @@ export class ThreadRepo {
     this.db.run('UPDATE threads SET read = 1 WHERE id = ? AND read = 0', id)
   }
 
+  /**
+   * Mark a thread unread. Used to surface an unattended assistant run that
+   * settled failed while nobody was watching, so the durable failure reaches the
+   * badge and the notification panel on the next open instead of reading as
+   * already-seen.
+   */
+  markUnread(id: string): void {
+    this.db.run('UPDATE threads SET read = 0 WHERE id = ? AND read = 1', id)
+  }
+
   countByProject(projectId: string): number {
     const row = this.db.get<{ cnt: number }>(
       'SELECT count(*) as cnt FROM threads WHERE project_id = ?',
@@ -1003,7 +1046,11 @@ export class ThreadRepo {
    * Message matches surface user messages and the agent's final output
    * from conversation-scoped records.
    */
-  search(query: string, options: ThreadSearchOptions = {}, useSearchMeta = false): ThreadSearchResult[] {
+  search(
+    query: string,
+    options: ThreadSearchOptions = {},
+    useSearchMeta = false
+  ): ThreadSearchResult[] {
     const raw = query.trim()
     if (!raw) return []
     const built = buildThreadSearchSql(raw, options, useSearchMeta)
@@ -1060,9 +1107,10 @@ export function buildThreadSearchSql(
   const title = {
     sql: `SELECT t.* FROM threads t
       WHERE (? IS NULL OR t.project_id = ?)
+        AND t.project_id != ?
         AND (t.title LIKE ? ESCAPE '\\' OR t.id = ?)
       ORDER BY t.last_activity DESC`,
-    params: [projectId, projectId, `%${escapeLike(trimmed)}%`, trimmed]
+    params: [projectId, projectId, GLOBAL_BROWSER_PROJECT_ID, `%${escapeLike(trimmed)}%`, trimmed]
   }
   const ftsQuery = toFtsQuery(trimmed)
   const messageLimit = threadSearchMessageLimit(limit)
@@ -1082,13 +1130,14 @@ export function buildThreadSearchSql(
             AND m.session_id IS NULL
             AND m.visibility = 'conversation'
             AND (? IS NULL OR st.project_id = ?)
+            AND st.project_id != ?
           ORDER BY bm25(agent_messages_fts), m.created_at DESC
           LIMIT ?
         ) meta
         JOIN agent_messages am ON am.rowid = meta.msg_rowid
         JOIN threads t ON t.id = meta.msg_thread_id
         ORDER BY meta.fts_rank, meta.created_at DESC`,
-          params: [ftsQuery, projectId, projectId, messageLimit]
+          params: [ftsQuery, projectId, projectId, GLOBAL_BROWSER_PROJECT_ID, messageLimit]
         }
       : {
           sql: `SELECT t.*, am.role AS match_role, substr(am.search_text, 1, 2000) AS snippet_text,
@@ -1100,8 +1149,9 @@ export function buildThreadSearchSql(
           AND am.session_id IS NULL
           AND am.visibility = 'conversation'
           AND (? IS NULL OR t.project_id = ?)
+          AND t.project_id != ?
         ORDER BY bm25(agent_messages_fts), am.created_at DESC`,
-          params: [ftsQuery, projectId, projectId]
+          params: [ftsQuery, projectId, projectId, GLOBAL_BROWSER_PROJECT_ID]
         }
     : null
   return { title, fts, limit }

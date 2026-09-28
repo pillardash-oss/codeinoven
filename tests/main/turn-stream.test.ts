@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { foldTurnStreamEvents, type TurnStreamEvent } from '../../src/main/chat/turn-stream'
+import { pageTurnStreamParts } from '../../src/main/chat/turn-stream-page'
 import type { AgentPart } from '../../src/lib/types'
 
 function reasoning(id: string, text: string): AgentPart {
@@ -17,7 +18,9 @@ function tool(id: string): AgentPart {
   }
 }
 
-function ev(partial: Partial<TurnStreamEvent> & { kind: 'part.updated' | 'part.delta' }): TurnStreamEvent {
+function ev(
+  partial: Partial<TurnStreamEvent> & { kind: 'part.updated' | 'part.delta' }
+): TurnStreamEvent {
   return {
     sessionId: 's',
     messageId: 'm',
@@ -25,7 +28,12 @@ function ev(partial: Partial<TurnStreamEvent> & { kind: 'part.updated' | 'part.d
     ts: 1,
     ...(partial.kind === 'part.updated'
       ? { kind: 'part.updated', part: partial.part! }
-      : { kind: 'part.delta', partId: partial.partId!, field: partial.field ?? 'text', delta: partial.delta ?? '' })
+      : {
+          kind: 'part.delta',
+          partId: partial.partId!,
+          field: partial.field ?? 'text',
+          delta: partial.delta ?? ''
+        })
   } as TurnStreamEvent
 }
 
@@ -79,5 +87,38 @@ describe('foldTurnStreamEvents', () => {
     const folded = foldTurnStreamEvents(events, 'turn-2')
     expect(folded.map((p) => p.id)).toEqual(['new'])
     expect(folded[0].type === 'reasoning' && folded[0].text).toBe('fresh')
+  })
+})
+
+describe('pageTurnStreamParts', () => {
+  function todoPart(id: string): AgentPart {
+    return {
+      type: 'tool',
+      id,
+      messageID: `m-${id}`,
+      callID: `c-${id}`,
+      tool: 'cio_todo_write',
+      state: { status: 'completed', input: { todos: [{ content: 'Task', status: 'pending' }] } }
+    }
+  }
+
+  const events: TurnStreamEvent[] = [
+    ev({ kind: 'part.updated', part: reasoning('a', 'work') }),
+    ev({ kind: 'part.updated', part: todoPart('todo') })
+  ]
+
+  it('carries the fold boundary so the card can reject a stale snapshot', () => {
+    const folded = foldTurnStreamEvents(events)
+
+    const windowPage = pageTurnStreamParts(folded, events, { limit: 10 }, 1790)
+    expect(windowPage.kind === 'window' && windowPage.turnStartTs).toBe(1790)
+
+    const changePage = pageTurnStreamParts(folded, events, { changedSince: 0 }, 1790)
+    expect(changePage.kind === 'change' && changePage.turnStartTs).toBe(1790)
+  })
+
+  it('reports no boundary on a thread with no prompt yet', () => {
+    const page = pageTurnStreamParts([], [], { limit: 10 })
+    expect(page.kind === 'window' && page.turnStartTs).toBeNull()
   })
 })

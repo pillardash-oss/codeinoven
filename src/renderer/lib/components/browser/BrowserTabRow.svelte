@@ -1,0 +1,316 @@
+<script lang="ts">
+  import {
+    Bot,
+    FolderInput,
+    FolderMinus,
+    FolderPlus,
+    Globe,
+    Loader2,
+    Mic,
+    Moon,
+    Pencil,
+    Pin,
+    PinOff,
+    StickyNote,
+    Volume2,
+    VolumeX,
+    X
+  } from '@lucide/svelte'
+  import { ContextMenu } from 'bits-ui'
+  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { harnessName } from '$lib/components/shared/model-picker-helpers'
+  import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
+  import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import { browserTabAccent, browserTabIconUrl } from './browser-tab-appearance'
+
+  interface Props {
+    tab: GlobalBrowserTab
+    /** Open the group editor for a group id, or with null to create one. */
+    onOpenGroupEditor: (groupId: string | null) => void
+    /** Open this tab's own editor (title, colour, icon). */
+    onEditTab: (tabId: string) => void
+  }
+
+  let { tab, onOpenGroupEditor, onEditTab }: Props = $props()
+
+  /**
+   * One row in the browser tab strip.
+   *
+   * It reads like a thread row: what the page is, whether it is still loading,
+   * and whether it wants the user (audio or a live capture). The row's own
+   * controls sit in a cluster beside the activation button, never inside it,
+   * which is invalid markup and would also make the mute toggle fire the row.
+   * The cluster takes its place in the row's flow instead of floating over the
+   * label, so a standing status icon (a pinned pin, the hibernation moon) can
+   * never print on top of the tab's name, and revealing the close button on
+   * hover shifts nothing. Because the cluster now owns the row's right edge, the
+   * hover and active pill is painted by the row itself rather than by the
+   * activation button, so the highlight still spans the full width.
+   *
+   * The row is also the strip's drag handle and drop target: dragging it onto a
+   * group header files it under that group, and dropping it beside another tab
+   * reorders it and adopts that tab's group. Grouping is deliberately sourced
+   * from the row (right-click and drag) rather than a toolbar button.
+   */
+
+  const runtime = $derived(globalBrowser.runtimeFor(tab.id))
+  const active = $derived(globalBrowser.activeTabId === tab.id)
+  /** The label the row shows: the user's own title when set, else the page's. */
+  const label = $derived(browserTabLabel(tab))
+  /** The tab's custom icon as an image, or null to fall back to the favicon. */
+  const customIconUrl = $derived(browserTabIconUrl(tab, globalBrowser.tabIconUrl(tab.id)))
+  const accent = $derived(browserTabAccent(tab))
+  /** While this tab's agent sidebar is open the row grows a second line naming
+   *  the harness the conversation runs on, so the strip says which agent is
+   *  answering without opening the panel. */
+  const agentHarness = $derived(
+    globalBrowser.agentSidebarShown && active ? globalBrowser.agentHarnessFor(tab.id) : null
+  )
+  const groups = $derived(globalBrowser.groups)
+  const group = $derived(tab.groupId ? globalBrowser.groupById(tab.groupId) : null)
+  /** True while a drag is over this row and would reorder here. */
+  let dropTarget = $state(false)
+
+  const itemClass =
+    'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
+
+  function closeTab(event: MouseEvent): void {
+    event.preventDefault()
+    event.stopPropagation()
+    globalBrowser.close(tab.id)
+  }
+
+  /** Start a group from this tab: the group exists before the editor opens, so
+   *  the editor always edits something real and the row's placement is settled
+   *  even if the user dismisses the dialog. */
+  function createGroupFromTab(): void {
+    const id = globalBrowser.createGroup('New group')
+    globalBrowser.moveToGroup(tab.id, id)
+    onOpenGroupEditor(id)
+  }
+
+  function onDragStart(event: DragEvent): void {
+    globalBrowser.beginDrag(tab.id)
+    if (!event.dataTransfer) return
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', tab.id)
+  }
+
+  function onDragOver(event: DragEvent): void {
+    const dragged = globalBrowser.draggingTabId
+    if (!dragged || dragged === tab.id) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    dropTarget = true
+  }
+
+  function onDrop(event: DragEvent): void {
+    dropTarget = false
+    const dragged = globalBrowser.draggingTabId ?? event.dataTransfer?.getData('text/plain') ?? ''
+    if (!dragged || dragged === tab.id) return
+    event.preventDefault()
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    const position = event.clientY < box.top + box.height / 2 ? 'before' : 'after'
+    globalBrowser.reorder(dragged, tab.id, position)
+    globalBrowser.endDrag()
+  }
+</script>
+
+<ContextMenu.Root>
+  <ContextMenu.Trigger class="contents">
+    <div
+      class="group flex items-center rounded-md transition-colors {dropTarget
+        ? 'bg-info/10'
+        : active
+          ? 'bg-elevated'
+          : 'hover:bg-elevated'}"
+    >
+      <button
+        type="button"
+        class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left"
+        aria-current={active}
+        title={tab.url || label}
+        draggable="true"
+        ondragstart={onDragStart}
+        ondragend={() => {
+          dropTarget = false
+          globalBrowser.endDrag()
+        }}
+        ondragover={onDragOver}
+        ondragleave={() => (dropTarget = false)}
+        ondrop={onDrop}
+        onclick={() => globalBrowser.switchTo(tab.id)}
+        onauxclick={(event: MouseEvent) => {
+          if (event.button === 1) closeTab(event)
+        }}
+      >
+        <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+          {#if customIconUrl}
+            <img src={customIconUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+          {:else if runtime.loading}
+            <Loader2 size={13} class="animate-spin text-muted" />
+          {:else if tab.favicon}
+            <img src={tab.favicon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+          {:else}
+            <Globe size={12} class="text-dimmed" />
+          {/if}
+        </span>
+        <span class="flex min-w-0 flex-1 flex-col">
+          <span
+            class="truncate text-xs {tab.hibernated ? 'text-dimmed' : 'text-foreground'} {active
+              ? 'font-medium'
+              : ''}"
+            style={accent ? `color: ${accent}` : undefined}
+          >
+            {label}
+          </span>
+          {#if agentHarness}
+            <span class="flex items-center gap-1 text-[0.625rem] leading-tight text-dimmed">
+              <Bot size={10} class="shrink-0" />
+              <span class="truncate">{harnessName(agentHarness)}</span>
+            </span>
+          {/if}
+        </span>
+      </button>
+
+      <div class="flex shrink-0 items-center gap-0.5 pr-1">
+        {#if tab.pinned}
+          <span
+            role="img"
+            class="flex h-6 w-6 items-center justify-center text-accent"
+            title="Pinned tab"
+            aria-label="Pinned tab"
+          >
+            <Pin size={12} />
+          </span>
+        {/if}
+        {#if threadNotesState.has(tab.id)}
+          <span
+            role="img"
+            class="flex h-6 w-6 items-center justify-center text-dimmed"
+            title="This tab has a note"
+            aria-label="Tab has a note"
+          >
+            <StickyNote size={12} />
+          </span>
+        {/if}
+        {#if runtime.capturing}
+          <span
+            role="img"
+            class="flex h-6 w-6 items-center justify-center text-accent"
+            title={BROWSER_TAB_CAPTURE_LABEL}
+            aria-label={BROWSER_TAB_CAPTURE_LABEL}
+          >
+            <Mic size={12} />
+          </span>
+        {/if}
+        {#if runtime.audible || runtime.muted}
+          <button
+            type="button"
+            class="flex h-6 w-6 items-center justify-center rounded-md text-accent transition-colors hover:bg-overlay"
+            aria-pressed={runtime.muted}
+            title={browserTabMuteLabel(runtime.muted)}
+            aria-label={browserTabMuteLabel(runtime.muted)}
+            onclick={(event: MouseEvent) => {
+              event.stopPropagation()
+              globalBrowser.toggleMute(tab.id)
+            }}
+          >
+            {#if runtime.muted}
+              <VolumeX size={12} />
+            {:else}
+              <Volume2 size={12} />
+            {/if}
+          </button>
+        {:else if tab.hibernated}
+          <span
+            role="img"
+            class="flex h-6 w-6 items-center justify-center text-dimmed"
+            title="Hibernated to save memory. Open the tab to reload it."
+            aria-label="Hibernated tab"
+          >
+            <Moon size={12} />
+          </span>
+        {/if}
+        <button
+          type="button"
+          class="flex h-6 w-6 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
+          aria-label={`Close ${label}`}
+          title={`Close ${label}`}
+          onclick={closeTab}
+        >
+          <X size={12} />
+        </button>
+      </div>
+    </div>
+  </ContextMenu.Trigger>
+
+  <ContextMenu.Portal>
+    <ContextMenu.Content
+      avoidCollisions
+      collisionPadding={12}
+      updatePositionStrategy="always"
+      class="z-50 max-h-[calc(100vh-1.5rem)] min-w-56 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+    >
+      <p
+        class="truncate px-2.5 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+      >
+        {label}
+      </p>
+      <ContextMenu.Item class={itemClass} onSelect={() => onEditTab(tab.id)}>
+        <Pencil size={13} class="shrink-0 text-muted" />
+        Edit tab
+      </ContextMenu.Item>
+      <ContextMenu.Item class={itemClass} onSelect={() => globalBrowser.toggleTabPin(tab.id)}>
+        {#if tab.pinned}
+          <PinOff size={13} class="shrink-0 text-muted" />
+          Unpin tab
+        {:else}
+          <Pin size={13} class="shrink-0 text-muted" />
+          Pin tab
+        {/if}
+      </ContextMenu.Item>
+      <ContextMenu.Separator class="my-1 h-px bg-border" />
+      <ContextMenu.Item class={itemClass} onSelect={createGroupFromTab}>
+        <FolderPlus size={13} class="shrink-0 text-muted" />
+        New tab group
+      </ContextMenu.Item>
+      {#if group}
+        <ContextMenu.Item class={itemClass} onSelect={() => onOpenGroupEditor(tab.groupId)}>
+          <Pencil size={13} class="shrink-0 text-muted" />
+          Edit {group.name}
+        </ContextMenu.Item>
+        <ContextMenu.Item
+          class={itemClass}
+          onSelect={() => globalBrowser.moveToGroup(tab.id, null)}
+        >
+          <FolderMinus size={13} class="shrink-0 text-muted" />
+          Remove from group
+        </ContextMenu.Item>
+      {/if}
+
+      {#if groups.some((candidate) => candidate.id !== tab.groupId)}
+        <ContextMenu.Separator class="my-1 h-px bg-border" />
+        {#each groups.filter((candidate) => candidate.id !== tab.groupId) as candidate (candidate.id)}
+          <ContextMenu.Item
+            class={itemClass}
+            onSelect={() => globalBrowser.moveToGroup(tab.id, candidate.id)}
+          >
+            <FolderInput size={13} class="shrink-0 text-muted" />
+            Move to {candidate.name}
+          </ContextMenu.Item>
+        {/each}
+      {/if}
+
+      <ContextMenu.Separator class="my-1 h-px bg-border" />
+      <ContextMenu.Item
+        class="{itemClass} text-danger data-[highlighted]:bg-danger/10"
+        onSelect={() => globalBrowser.close(tab.id)}
+      >
+        <X size={13} class="shrink-0" />
+        Close tab
+      </ContextMenu.Item>
+    </ContextMenu.Content>
+  </ContextMenu.Portal>
+</ContextMenu.Root>

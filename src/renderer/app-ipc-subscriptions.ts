@@ -1,5 +1,6 @@
 import { toast } from 'svelte-sonner'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { scheduleDeferredWork } from '$lib/deferred-work'
 import { playInAppAlert } from '$lib/notification-sound'
 import {
   captureError,
@@ -20,7 +21,13 @@ import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { threadNotesState } from '$lib/stores/thread-notes.svelte'
 import { updaterState } from '$lib/stores/updater.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
-import { DEFAULT_THREAD_TITLE, type OpenedPath, type Project, type Thread } from '$shared/types'
+import {
+  DEFAULT_THREAD_TITLE,
+  type InstanceRole,
+  type OpenedPath,
+  type Project,
+  type Thread
+} from '$shared/types'
 import { notificationSoundKind } from '$shared/ipc-contract'
 import type {
   AgentNotificationPayload,
@@ -36,6 +43,9 @@ export interface AppIpcSubscriptionDeps {
   ) => Promise<void>
   setCloseConfirmation: (payload: CloseConfirmationPayload | null) => void
   confirmForceClose: () => Promise<void>
+  /** Park the window (destroy it, keep the backend alive) instead of quitting. */
+  parkWindow: () => Promise<void>
+  setInstanceRole: (role: InstanceRole) => void
   settleCloseConfirmationThread: (thread: Thread) => void
   handleCloseShortcut: () => void
   handleNewTerminalShortcut: () => void
@@ -106,8 +116,16 @@ function showAgentNotification(
     '--success-bg: color-mix(in srgb, var(--color-chat-success) 12%, var(--color-surface));' +
     ' --success-border: var(--color-chat-success);' +
     ' --success-text: var(--color-chat-success);'
+  // The assistant surface carries its own accent colour (the assistant space's
+  // colour, on every assistant payload), so a completed run brands its toast
+  // with that colour instead of reading as a generic success. The branded toast
+  // stylesheet derives its border, wash, title and icon from `--status`, so
+  // overriding it here recolours the whole card.
+  const assistantToastStyle = `--status: ${payload.projectColor ?? 'var(--color-dimmed)'};`
 
-  if (payload.kind === 'completed') {
+  if (payload.source === 'assistant' && payload.kind === 'completed') {
+    toast.success(payload.title, { ...options, style: assistantToastStyle })
+  } else if (payload.kind === 'completed') {
     toast.success(payload.title, options)
   } else if (payload.kind === 'chat-completed') {
     toast.success(payload.title, { ...options, style: chatResponseToastStyle })
@@ -143,13 +161,18 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   )
   const unsubscribeConfirmClose = subscribe('window:confirmClose', (payload) => {
     // The renderer owns the unsaved-file editor state, so it computes the
-    // pending files here. With nothing pending the close proceeds right away.
+    // pending files here. With nothing pending the close proceeds right away
+    // as a park when background mode keeps the backend alive, otherwise a quit.
     const files = [...projectFilesWorkspace.getUnsavedFiles(), ...standaloneFiles.getUnsavedFiles()]
+    const park = payload.park === true
     if (payload.projects.length === 0 && files.length === 0) {
-      void deps.confirmForceClose()
+      void (park ? deps.parkWindow() : deps.confirmForceClose())
       return
     }
-    deps.setCloseConfirmation({ projects: payload.projects, files })
+    deps.setCloseConfirmation({ projects: payload.projects, files, park })
+  })
+  const unsubscribeInstanceRole = subscribe('app:instanceRole', (role) => {
+    deps.setInstanceRole(role)
   })
   const unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
     const thread = args[0] as Thread
@@ -206,10 +229,14 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   void invoke('openWith:consumePending')
     .then((paths: OpenedPath[]) => deps.handleOpenedPaths(paths))
     .catch(() => undefined)
-  updaterState.init()
-  // Background skill updates follow the same push channel as the app updater,
-  // so the Utilities page shows a pass that is already running at startup.
-  skillUpdateState.init()
+  // The updater and the skill-update badge describe surfaces nobody has opened
+  // yet (the rail's update control, the Utilities page), so they are read after
+  // the first frame has painted instead of competing with the thread list for
+  // the main process. Deferring `init` also defers its two push subscriptions;
+  // both stores read the current status, so a push that lands in the gap is
+  // recovered by that read rather than lost.
+  scheduleDeferredWork('updater:init', () => updaterState.init())
+  scheduleDeferredWork('skillUpdates:init', () => skillUpdateState.init())
   // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
   // initialise the store here so the overlay's dynamic import can be gated on
   // `pipState.active` without ever missing a frame.
@@ -221,6 +248,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeClick()
     unsubscribeShow()
     unsubscribeConfirmClose()
+    unsubscribeInstanceRole()
     unsubscribeThreadUpdated()
     unsubscribeThreadDeleted()
     unsubscribeScopeBoardChanged()

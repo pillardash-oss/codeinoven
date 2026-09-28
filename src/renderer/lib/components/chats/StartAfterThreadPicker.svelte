@@ -5,7 +5,6 @@
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { statusBadgeForThread } from '$lib/thread-status-badge'
-  import CommandPalette from '../actions/CommandPalette.svelte'
   import type { ActionDefinition, ActionSelection } from '$lib/actions'
 
   interface Props {
@@ -105,17 +104,25 @@
   }
 </script>
 
-<CommandPalette
-  {open}
-  {actions}
-  title="Start after threads"
-  placeholder="Search working or attention threads…"
-  emptyLabel={loading ? 'Loading active threads…' : 'No working or attention threads'}
-  headerIcon={Clock}
-  headerIconBadge
-  headerIconBadgeClass="border-info/25 bg-info/10 text-info"
-  closeOnSelect={false}
-  onSelect={selectThread}
-  {onClose}
-  shortcutLabel="ESC"
-/>
+<!-- The picker is a dialog palette, so its module is only needed once it is
+     open. Deferring the import is what keeps CommandPalette out of the
+     first-paint chunk: this component is reachable from the composer and the
+     thread view, both of which render on the first screen. -->
+{#if open}
+  {#await import('../actions/CommandPalette.svelte') then { default: CommandPalette }}
+    <CommandPalette
+      {open}
+      {actions}
+      title="Start after threads"
+      placeholder="Search working or attention threads…"
+      emptyLabel={loading ? 'Loading active threads…' : 'No working or attention threads'}
+      headerIcon={Clock}
+      headerIconBadge
+      headerIconBadgeClass="border-info/25 bg-info/10 text-info"
+      closeOnSelect={false}
+      onSelect={selectThread}
+      {onClose}
+      shortcutLabel="ESC"
+    />
+  {/await}
+{/if}

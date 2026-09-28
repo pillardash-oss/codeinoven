@@ -25,6 +25,9 @@ declare global {
 /** IPC channels registered before the first renderer paint. */
 const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'app:confirmClose',
+  'app:parkWindow',
+  'app:instanceRole',
+  'app:openInstanceOwner',
   'app:rendererReady',
   'app:waitForFeatures',
   'config:get',

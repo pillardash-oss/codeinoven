@@ -2,6 +2,7 @@
 export * from './types/common'
 export * from './types/project'
 export * from './types/schedule'
+export * from './types/attention'
 export * from './types/routine'
 export * from './types/scope'
 export * from './types/scope-worktree'

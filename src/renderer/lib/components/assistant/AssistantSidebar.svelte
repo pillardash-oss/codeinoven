@@ -3,10 +3,8 @@
   import { Workflow } from '@lucide/svelte'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
-  import SidebarFooterControls from '$lib/components/workspace/SidebarFooterControls.svelte'
   import PinnedSection from '$lib/components/threads/PinnedSection.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { pinnedThreadSort } from '$lib/stores/workspace.svelte'
   import {
     isAssistantSetupThread,
@@ -38,7 +36,6 @@
     selectedThreadId: string | null
     /** Bind the scroll container so the workspace can reveal the active row. */
     scroller?: HTMLElement | null
-    navigate: (view: MainView) => void
     onOpenTask: (task: Thread) => void
     onOpenTaskHowTo: (task: Thread) => void
     onOpenRoutineHowTo: (routine: Routine) => void
@@ -68,7 +65,6 @@
     runsByRoutine,
     selectedThreadId,
     scroller = $bindable(null),
-    navigate,
     onOpenTask,
     onOpenTaskHowTo,
     onOpenRoutineHowTo,
@@ -379,10 +375,6 @@
 {/snippet}
 
 <CollapsibleSidebar title="Assistant" hideHeader bind:scroller>
-  {#snippet footer()}
-    <SidebarFooterControls {navigate} />
-  {/snippet}
-
   <div class="flex h-full min-h-0 flex-col">
     <div
       class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5"

@@ -6,7 +6,7 @@
     Clock,
     FilePenLine,
     FilePlus2,
-    Globe2,
+    GlobeCode,
     Loader2,
     Search,
     Terminal,
@@ -204,7 +204,7 @@
     {:else if toolKind === 'search'}
       <Search size={12} class="shrink-0 text-dimmed" />
     {:else if toolKind === 'web'}
-      <Globe2 size={12} class="shrink-0 text-dimmed" />
+      <GlobeCode size={12} class="shrink-0 text-dimmed" />
     {:else if toolKind === 'shell'}
       <Terminal size={12} class="shrink-0 text-dimmed" />
     {:else}

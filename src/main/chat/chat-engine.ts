@@ -244,6 +244,7 @@ import type {
   AgentQuestionResolution,
   AgentProviderIssue,
   AgentProviderIssueKind,
+  AgentQuestion,
   AgentSessionStatus,
   AgentSubagentActivity,
   AgentToolCatalog,
@@ -264,6 +265,7 @@ import type {
   AssignmentToolResult,
   AssignmentTaskReport,
   AssignmentTaskReview,
+  AutoAnswerEntry,
   AuditGenerationRequest,
   AuditReport,
   AuditReportContent,
@@ -406,10 +408,12 @@ import {
   presentProviderError
 } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
+import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc/browser'
 import { GenerationClock, generatedTokens } from '../../lib/usage-rate'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
   ASSISTANT_CWD_DIR,
+  BROWSER_CWD_DIR,
   CHATS_CWD_DIR,
   PROJECT_DATA_DIRECTORY,
   assistantThreadWorkspaceDirectory,
@@ -451,6 +455,7 @@ import type {
   FallbackRankingJudgeRoute,
   ChildSessionInfo,
   CoordinatorHandoffQueue,
+  AutoAnswerReport,
   HeldSteer,
   ImageDescriptorUserDecision,
   PendingImageDescriptorDecision,
@@ -1190,6 +1195,13 @@ export class ChatEngine {
    * outcomes are not tracked.
    */
   private assistantRunSettled: ((threadId: string, status: ThreadStatus) => void) | null = null
+  /**
+   * Receives one report per gate the engine resolves without the user: a
+   * question whose timer answered it, a secret card whose deadline closed it,
+   * or an image-descriptor decision that timed out. Attached by the bootstrap,
+   * which owns the durable attention store; absent means nothing is recorded.
+   */
+  private autoAnswerRecorder: ((report: AutoAnswerReport) => void) | null = null
   /** Coalesces live-activity repairs of a task's persisted working status. */
   private workingStatusReconciliations = new Map<string, Promise<void>>()
 
@@ -9360,6 +9372,9 @@ export class ChatEngine {
       ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
       : createMessageId()
     this.markProjectActive(projectId)
+    // A global-browser tab has no project folder; make sure its reserved scope
+    // exists before the ownership and working-directory lookups below need it.
+    await this.ensureGlobalBrowserScope(projectId)
     if (!Array.isArray(attachments)) {
       throw new TypeError('Temporary chat attachments must be an array')
     }
@@ -10009,6 +10024,9 @@ export class ChatEngine {
     kind: 'completed' | 'error',
     errorDetail?: string
   ): Promise<void> {
+    // A global-browser agent sidebar is on screen beside the page it answers
+    // about, so it never needs an out-of-view notification.
+    if (projectId === GLOBAL_BROWSER_PROJECT_ID) return
     try {
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread) return
@@ -10842,6 +10860,23 @@ export class ChatEngine {
         resolve,
         resumeStatus,
         timer: setTimeout(() => {
+          // The card is about to resolve itself as ignored, so record what the
+          // user was offered and what the app chose on their behalf.
+          this.reportAutoAnswer({
+            id: requestForCard.id,
+            kind: 'image-descriptor',
+            outcome: 'ignored',
+            projectId: request.projectId,
+            threadId: request.threadId,
+            entries: [
+              {
+                prompt: requestForCard.error,
+                options: ['Retry', 'Pick new image', 'Ignore'],
+                picked: 'Ignore'
+              }
+            ],
+            at: Date.now()
+          })
           // Never leave the card behind when this decision auto-resolves: a
           // card whose request is gone is a card the user cannot dismiss.
           this.settleImageDescriptorDecision(pending)
@@ -20684,8 +20719,26 @@ export class ChatEngine {
       await this.storage.ensureDirectory(ASSISTANT_CWD_DIR)
       projectPath = this.storage.resolve(ASSISTANT_CWD_DIR)
     }
+    // The global browser is hidden too, and its tabs are web pages rather than
+    // files: a per-tab agent session runs in a neutral app-storage directory so
+    // it never touches a real project folder.
+    if (!projectPath && project.hidden && project.id === GLOBAL_BROWSER_PROJECT_ID) {
+      await this.storage.ensureDirectory(BROWSER_CWD_DIR)
+      projectPath = this.storage.resolve(BROWSER_CWD_DIR)
+    }
     if (!projectPath) throw new Error(`Project has no working directory: ${projectId}`)
     return projectPath
+  }
+
+  /**
+   * Ensure the reserved global-browser scope (its hidden project and its single
+   * hidden parent thread) exists before a per-tab agent session resolves scope
+   * against it. Idempotent, so it is safe on every first send.
+   */
+  private async ensureGlobalBrowserScope(projectId: string): Promise<void> {
+    if (projectId !== GLOBAL_BROWSER_PROJECT_ID) return
+    await this.projectManager.ensureGlobalBrowserSpace()
+    await this.threadManager.ensureGlobalBrowserThread()
   }
 
   /**
@@ -20854,6 +20907,15 @@ export class ChatEngine {
   private expireSecretQuestion(pending: PendingQuestionInfo): void {
     if (this.pendingQuestions.get(pending.request.requestId) !== pending) return
     pending.timer = undefined
+    this.reportAutoAnswer({
+      id: pending.request.requestId,
+      kind: 'secret',
+      outcome: 'expired',
+      projectId: pending.request.projectId,
+      threadId: pending.request.threadId,
+      entries: this.autoAnswerEntries(pending.request.questions, undefined),
+      at: Date.now()
+    })
     this.finalizePendingQuestion(pending.request.requestId, 'dismissed')
   }
 
@@ -20947,6 +21009,17 @@ export class ChatEngine {
 
       const answers = pending.request.answers.map((answer) => [...answer])
       pending.request.expiresAt = undefined
+      // The timer is answering for the user, so record exactly what was asked,
+      // what was offered and what was chosen before the reply travels.
+      this.reportAutoAnswer({
+        id: pending.request.requestId,
+        kind: 'question',
+        outcome: 'auto-answered',
+        projectId: pending.request.projectId,
+        threadId: pending.request.threadId,
+        entries: this.autoAnswerEntries(pending.request.questions, answers),
+        at: Date.now()
+      })
       void this.resolvePendingQuestion(pending, 'timed_out', answers, () =>
         driver.replyToQuestion(
           pending.projectPath,
@@ -21093,9 +21166,14 @@ export class ChatEngine {
     pending.timeoutMs = timeoutMs
     pending.request.expiresAt = pending.request.createdAt + timeoutMs
     this.schedulePendingQuestion(pending)
-    await this.threadManager.setStatus(session.projectId, session.threadId, 'awaiting_approval', {
-      read: false
-    })
+    // A temporary side chat (including a global browser's agent sidebar) owns no
+    // status of its own: its parent thread must not be marked as awaiting input
+    // for a question the side chat asked.
+    if (!session.ephemeral) {
+      await this.threadManager.setStatus(session.projectId, session.threadId, 'awaiting_approval', {
+        read: false
+      })
+    }
     this.broadcast(event)
   }
 
@@ -21564,9 +21642,13 @@ export class ChatEngine {
       const pending = this.pendingPermissions.get(event.requestId)
       if (pending) {
         this.pendingPermissions.delete(event.requestId)
-        void this.threadManager
-          .setStatus(pending.session.projectId, pending.session.threadId, pending.resumeStatus)
-          .catch((error) => Logger.error('Permission resolution status update failed:', error))
+        // An ephemeral side chat has no thread status to restore; only a real
+        // thread turn resumes through this path.
+        if (!pending.session.ephemeral) {
+          void this.threadManager
+            .setStatus(pending.session.projectId, pending.session.threadId, pending.resumeStatus)
+            .catch((error) => Logger.error('Permission resolution status update failed:', error))
+        }
       }
     }
     if (event.type === 'question.asked') {
@@ -22305,7 +22387,7 @@ export class ChatEngine {
     const size = await this.storage.rawSize(streamPath)
     if (size === null) {
       this.turnStreamCache.delete(streamPath)
-      return pageTurnStreamParts([], [], query)
+      return pageTurnStreamParts([], [], query, null)
     }
 
     const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
@@ -22336,7 +22418,7 @@ export class ChatEngine {
       const tail = await this.storage.readRawTail(streamPath, entry.consumedBytes)
       if (!tail) {
         this.turnStreamCache.delete(streamPath)
-        return pageTurnStreamParts([], [], query)
+        return pageTurnStreamParts([], [], query, turnStartTs ?? null)
       }
       for (const line of tail.content.split('\n')) {
         const trimmed = line.trim()
@@ -22382,7 +22464,7 @@ export class ChatEngine {
       entry.folded = folded
       entry.foldKey = foldKey
     }
-    return pageTurnStreamParts(folded, entry.events, query)
+    return pageTurnStreamParts(folded, entry.events, query, turnStartTs ?? null)
   }
 
   /**
@@ -22648,6 +22730,52 @@ export class ChatEngine {
     recorder: ((threadId: string, status: ThreadStatus) => void) | null
   ): void {
     this.assistantRunSettled = recorder
+  }
+
+  /**
+   * Wire the auto-answer recorder. Fired the moment the engine settles a gate
+   * on the user's behalf   a question's timer picking the recommended option, a
+   * secret card expiring unanswered, or an image-descriptor decision timing out   so
+   * the app can record what was asked, offered and chosen and surface it on the
+   * attention rail.
+   */
+  attachAutoAnswerRecorder(recorder: ((report: AutoAnswerReport) => void) | null): void {
+    this.autoAnswerRecorder = recorder
+  }
+
+  /** Report an auto-resolved gate, never letting a recording failure affect the
+   *  resolution itself. */
+  private reportAutoAnswer(report: AutoAnswerReport): void {
+    try {
+      this.autoAnswerRecorder?.(report)
+    } catch (error) {
+      Logger.error('Auto-answer recording failed:', error)
+    }
+  }
+
+  /**
+   * Build the attention entries for one request: each question's prompt, its
+   * offered option labels, and what the engine chose (null when it could not
+   * choose). Falls back to the rich-option labels when the plain option list
+   * was not supplied.
+   */
+  private autoAnswerEntries(
+    questions: AgentQuestion[],
+    answers: string[][] | undefined
+  ): AutoAnswerEntry[] {
+    return questions.map((question, index) => {
+      const options =
+        question.options && question.options.length > 0
+          ? [...question.options]
+          : (question.richOptions?.map((option) => option.label) ?? [])
+      const picked = answers?.[index]?.find((value) => value.length > 0) ?? null
+      return {
+        prompt: question.prompt,
+        ...(question.header ? { header: question.header } : {}),
+        options,
+        picked
+      }
+    })
   }
 
   /**

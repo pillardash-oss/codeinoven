@@ -437,6 +437,16 @@ export const invokeAgentContract = {
     [scope: AttachmentStorageScope, text: string, existingPath?: string],
     string
   >,
+  /**
+   * Retain a media link a drag carried as a real attachment file, and answer its
+   * absolute path. A browser-page drag hands over the link and no file, so this
+   * is what fetches those bytes; anything that is not image, video or audio is
+   * refused with the reason rather than kept.
+   */
+  'attachment:retainRemote': {} as Contract<
+    [scope: AttachmentStorageScope, source: string],
+    string
+  >,
   'heartbeat:list': {} as Contract<[], HeartbeatConfig[]>,
   'heartbeat:create': {} as Contract<
     [input: Omit<HeartbeatConfig, 'id' | 'lastRun'>],

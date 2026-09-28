@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FileText, Globe2, Hash, Image as ImageIcon } from '@lucide/svelte'
+  import { FileText, GlobeCode, Hash, Image as ImageIcon } from '@lucide/svelte'
   import type {
     AgentSource,
     FileAgentSource,
@@ -43,7 +43,7 @@
         {#if favicon}
           <img src={favicon} alt="" class="h-5 w-5 rounded-sm object-contain" />
         {:else}
-          <Globe2 size={15} />
+          <GlobeCode size={15} />
         {/if}
       </span>
     {:else if source.kind === 'file-citation'}

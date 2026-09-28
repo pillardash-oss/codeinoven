@@ -19,6 +19,7 @@ import { Logger } from '../system/logger'
 import type { WindowStateService } from '../system/window-state'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import type { BootstrapState } from './bootstrap-state'
+import { flushSessionStorage } from './quit-lifecycle'
 
 export interface ShutdownContext {
   state: BootstrapState
@@ -78,6 +79,29 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
     state.routineScheduler?.dispose()
   } catch (error) {
     Logger.error('Routine scheduler cleanup failed during shutdown:', error)
+  }
+
+  try {
+    state.powerMonitorService?.stop()
+    state.powerMonitorService = null
+  } catch (error) {
+    Logger.error('Power monitor cleanup failed during shutdown:', error)
+  }
+
+  try {
+    state.backgroundLifecycle?.stop()
+    state.backgroundLifecycle = null
+  } catch (error) {
+    Logger.error('Background lifecycle cleanup failed during shutdown:', error)
+  }
+
+  try {
+    await state.backgroundRunLedger?.flush()
+    state.backgroundRunLedger = null
+    await state.autoAnswerStore?.flush()
+    state.autoAnswerStore = null
+  } catch (error) {
+    Logger.error('Background-run ledger flush failed during shutdown:', error)
   }
 
   try {
@@ -180,6 +204,11 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   instanceRegistry.stop()
+
+  // A clean quit must commit the renderer's pending localStorage writes too, so
+  // the flush runs after the beforeQuit grace period gave the renderer a last
+  // chance to write. The will-quit handler flushes again as a final guard.
+  flushSessionStorage()
 
   app.quit()
 }

@@ -2,6 +2,7 @@ import type { AgentDefaultsConfig, AuxiliaryAgentConfig, RankingJudgeConfig } fr
 import type { AgentModelSelection } from './common'
 import type { GitPullPreference, PrMergeMethod } from './git'
 import type { MediaProviderId } from '../media-generation'
+import type { BrowserSearchEngine } from '../browser-search-engines'
 
 export interface WorkflowStage {
   id: string
@@ -263,6 +264,46 @@ export interface MediaGenerationConfig {
   providerId: MediaProviderId | null
 }
 
+/** Bounds for `AppConfig.browserHibernationMinutes`. */
+export const MIN_BROWSER_HIBERNATION_MINUTES = 5
+export const MAX_BROWSER_HIBERNATION_MINUTES = 120
+export const DEFAULT_BROWSER_HIBERNATION_MINUTES = 30
+
+/**
+ * How the app behaves once its last window closes.
+ *
+ * - `off` is the original behaviour: closing the last window quits the process.
+ * - `scheduled` keeps the backend alive while work is running or due inside the
+ *   wake lead, so a routine can fire on time from the menu bar.
+ * - `always` never quits on close.
+ */
+export type BackgroundMode = 'off' | 'scheduled' | 'always'
+
+/** Bounds for `AppConfig.backgroundWakeLeadMs`. */
+export const MIN_BACKGROUND_WAKE_LEAD_MS = 0
+export const MAX_BACKGROUND_WAKE_LEAD_MS = 30 * 60 * 1000
+export const DEFAULT_BACKGROUND_WAKE_LEAD_MS = 2 * 60 * 1000
+
+/** Bounds for `AppConfig.maxBackgroundWakeHoldMs`, the hard awake-time cap. */
+export const MIN_MAX_BACKGROUND_WAKE_HOLD_MS = 60 * 1000
+export const MAX_MAX_BACKGROUND_WAKE_HOLD_MS = 60 * 60 * 1000
+export const DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS = 10 * 60 * 1000
+
+/**
+ * This process's role against the shared config root's single backend.
+ *
+ * There is exactly one backend per config root (one database, one scheduler),
+ * and exactly one running process owns the scheduled work for it. A secondary
+ * instance keeps a fully usable window but schedules nothing and shows the
+ * "running in another instance" notice.
+ */
+export interface InstanceRole {
+  /** `owner` runs scheduled work; `secondary` is a window into the owner. */
+  role: 'owner' | 'secondary'
+  /** Process id of the elected owner, or 0 when it could not be resolved. */
+  ownerPid: number
+}
+
 export interface AppConfig {
   theme: ThemePreference
   /** Font family id used across the app UI. */
@@ -350,6 +391,34 @@ export interface AppConfig {
    */
   openAllLinksInCioBrowser: boolean
   /**
+   * Minutes a global-browser tab may sit idle before it hibernates. Bounded to
+   * `MIN/MAX_BROWSER_HIBERNATION_MINUTES`.
+   */
+  browserHibernationMinutes: number
+  /**
+   * How the app behaves once its last window closes. On by default (`scheduled`)
+   * so Assistant routines can fire while the window is closed.
+   */
+  backgroundMode: BackgroundMode
+  /** Launch CodeInOven at login so a schedule can fire after a restart. */
+  launchAtLogin: boolean
+  /** Run assistant slots missed to sleep or a closed app when the app returns. */
+  autoRunMissedAssistantRuns: boolean
+  /** How long before a due run the app holds the machine awake. Bounded to
+   *  `MIN/MAX_BACKGROUND_WAKE_LEAD_MS`. */
+  backgroundWakeLeadMs: number
+  /** Hard cap on uninterrupted awake time held for background scheduling.
+   *  Bounded to `MIN/MAX_MAX_BACKGROUND_WAKE_HOLD_MS`. */
+  maxBackgroundWakeHoldMs: number
+  /**
+   * Search engine id used when typed address text is not a URL. Names a built-in
+   * engine or one of `browserCustomSearchEngines`; an unknown id falls back to
+   * the shipped default.
+   */
+  browserSearchEngine: string
+  /** User-added search engines, offered after the built-ins. */
+  browserCustomSearchEngines: BrowserSearchEngine[]
+  /**
    * Let prototype previews load fonts, styles, and scripts from the approved
    * CDNs. Off confines every prototype to assets inlined in its own folder.
    */
@@ -408,6 +477,14 @@ export type AppConfigPatch = Partial<
     | 'maxConflictFileBytes'
     | 'openLocalhostInCioBrowser'
     | 'openAllLinksInCioBrowser'
+    | 'browserHibernationMinutes'
+    | 'backgroundMode'
+    | 'launchAtLogin'
+    | 'autoRunMissedAssistantRuns'
+    | 'backgroundWakeLeadMs'
+    | 'maxBackgroundWakeHoldMs'
+    | 'browserSearchEngine'
+    | 'browserCustomSearchEngines'
     | 'allowPrototypeExternalCdn'
     | 'prototypeCdnAllowlist'
     | 'inAppNotificationSound'

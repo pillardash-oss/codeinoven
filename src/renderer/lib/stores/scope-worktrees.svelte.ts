@@ -92,16 +92,37 @@ export class ScopeWorktrees {
   /** Read the typed health of a managed scope worktree. */
   async worktreeHealth(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
     const health = await invoke('scope:worktree:health', target)
-    this.healthByTarget.set(`${target.projectId}:${target.scopeBucketId}`, health)
+    this.recordHealth(target, health)
     return health
   }
 
   /** Repair an unhealthy managed scope and refresh its cached health. */
   async repairWorktree(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
     const health = await invoke('scope:worktree:repair', target)
-    this.healthByTarget.set(`${target.projectId}:${target.scopeBucketId}`, health)
+    this.recordHealth(target, health)
     await this.host.reloadBoard(target.projectId)
     return health
+  }
+
+  /**
+   * Cache one verdict, or drop it and refresh the board when it describes a
+   * scope this window should not be showing.
+   *
+   * `not-managed` means main has no managed worktree for that target: the scope
+   * was removed while the board here was cached, or it works in the project
+   * directory. Caching it would pin a ghost scope with a warning the user cannot
+   * act on, so the entry goes and the board reload is what takes the scope off
+   * the board, the sidebar and the Git panel.
+   */
+  private recordHealth(target: ScopeTarget, health: ScopeWorktreeHealth): void {
+    const key = `${target.projectId}:${target.scopeBucketId}`
+    if (health.category !== 'not-managed') {
+      this.healthByTarget.set(key, health)
+      return
+    }
+    this.healthByTarget.delete(key)
+    this.healthCheckTimes.delete(key)
+    void this.host.reloadBoard(target.projectId).catch(() => undefined)
   }
 
   /** Preview whether an existing Git worktree checkout can be adopted. */

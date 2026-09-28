@@ -198,6 +198,18 @@ export interface CuaOperationEvent {
   /** Turn-scoped Cua cursor session, when the driver declared one. */
   sessionId?: string
   /**
+   * Where the run's own cursor now sits, in screen points, or null when the
+   * driver reported no position.
+   *
+   * Read here, on this turn's own driver connection, because a Cua session
+   * belongs to the MCP transport that created it: `get_agent_cursor_state`
+   * refuses a session another transport opened ("session is not available to
+   * this transport"). The PiP monitor owns a transport of its own for capture,
+   * so only this client can read it, and the point travels with the operation
+   * that moved the cursor.
+   */
+  cursor: { x: number; y: number } | null
+  /**
    * The tier this turn runs at. The daemon's authorization mode is fixed when it
    * starts, so the PiP monitor has to ask for the same one the run already owns
    * rather than starting a second, differently-tiered daemon under it.
@@ -1712,6 +1724,7 @@ export class UtilityOrchestrationService {
           operation,
           pid: operationPid(routedInput),
           sessionId: state.cuaSessionIds.get(utilityId),
+          cursor: await this.readAgentCursor(state, utilityId, client),
           permissionLevel: state.request.permissionLevel
         })
       }
@@ -1846,6 +1859,31 @@ export class UtilityOrchestrationService {
       })
     } catch (error) {
       Logger.dev('Cua agent cursor motion could not be configured:', error)
+    }
+  }
+
+  /**
+   * Where this run's Cua cursor sits right now, in screen points, or null when
+   * the driver has reported no position yet or the read failed.
+   *
+   * The read is decoration for the PiP monitor and never changes the run's state,
+   * so a failure is a dev-level detail and the next operation reports again: the
+   * operation that just ran already changed whatever the run meant to change.
+   */
+  private async readAgentCursor(
+    state: TurnState,
+    utilityId: string,
+    client: McpClient
+  ): Promise<{ x: number; y: number } | null> {
+    const sessionId = state.cuaSessionIds.get(utilityId)
+    if (!sessionId) return null
+    try {
+      return agentCursorPoint(
+        await client.callTool('get_agent_cursor_state', { session: sessionId })
+      )
+    } catch (error) {
+      Logger.dev('Cua agent cursor position could not be read:', error)
+      return null
     }
   }
 
@@ -1986,4 +2024,26 @@ export class UtilityOrchestrationService {
     response.writeHead(status, { 'Content-Type': 'application/json' })
     response.end(JSON.stringify(body))
   }
+}
+
+/**
+ * The screen-point cursor one `get_agent_cursor_state` result reports, or null.
+ *
+ * The driver answers `structuredContent.position` with `{x, y}` in screen points
+ * while the cursor is known, and with `null` before the session's cursor has
+ * moved. Its refusals arrive as a resolved result carrying `isError`, so a
+ * payload that has no point reads as "no position" rather than throwing. The
+ * coordinates have to be real numbers: a payload with a missing one is not the
+ * point `(0, 0)`.
+ */
+function agentCursorPoint(result: unknown): { x: number; y: number } | null {
+  if (typeof result !== 'object' || result === null) return null
+  const structured = (result as Record<string, unknown>)['structuredContent']
+  if (typeof structured !== 'object' || structured === null) return null
+  const position = (structured as Record<string, unknown>)['position']
+  if (typeof position !== 'object' || position === null) return null
+  const x = (position as Record<string, unknown>)['x']
+  const y = (position as Record<string, unknown>)['y']
+  if (typeof x !== 'number' || typeof y !== 'number') return null
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null
 }

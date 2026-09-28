@@ -11,11 +11,12 @@
  * paint, in the exact order the bootstrap established.
  */
 
-import { app } from 'electron'
+import { app, type BrowserWindow } from 'electron'
 import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
+import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { workRootsFromConfig } from '../../lib/design/work-roots'
 import { setWorkRoots } from '../design/work-roots-state'
@@ -33,11 +34,87 @@ import {
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
+import { ThreadRepo } from '../database/repositories/thread-repo'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
+import type { DesignService } from '../design/design-service'
 import type { BootstrapState } from './bootstrap-state'
+
+/** Boot-scoped collaborators a per-window browser attach needs. */
+interface BrowserAttachContext {
+  state: BootstrapState
+  storage: StorageEngine
+  database: Database
+  designService: DesignService
+}
+
+/**
+ * Create (or recreate) the window-bound browser service and wire its two
+ * collaborators. Called once for the first window and again for every window
+ * opened after the previous one was destroyed, so parking to the menu bar and
+ * reopening rebuilds exactly the same browser wiring instead of leaving a stale
+ * service pointing at a dead window.
+ */
+async function attachBrowserService(
+  context: BrowserAttachContext,
+  window: BrowserWindow
+): Promise<void> {
+  const { state, storage, database, designService } = context
+  const chatEngine = state.chatEngine
+  if (!chatEngine) return
+  if (state.browserService) {
+    state.browserService.dispose()
+    state.browserService = null
+  }
+  const service = new BrowserService(window, database, storage)
+  state.browserService = service
+  // Remembered permission decisions load before the service accepts browser
+  // IPC, so a site is never re-prompted for a permission the user already
+  // granted in this or an earlier run.
+  await service.hydratePermissionMemory()
+  service.register()
+  // The browser's native context menu is built in main, so it needs the address
+  // bar's search engine. The config is read once at attach; the renderer pushes
+  // later changes.
+  void storage
+    .getConfig()
+    .then((config) =>
+      service.setSearchEngine(
+        findBrowserSearchEngine(config.browserSearchEngine, config.browserCustomSearchEngines)
+      )
+    )
+    .catch(() => {})
+  chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
+    service.executeUtility(operation, input, browserContext)
+  )
+  service.setTabMarkRecogniser((projectId, threadId, url) =>
+    designService.observeShownFolder(projectId, threadId, url)
+  )
+}
+
+/**
+ * Attach every window-bound service to a newly created window.
+ *
+ * The core service graph boots once, headlessly if necessary, and the pieces
+ * that need a window (the PTY sender, the browser, the `app:featuresReady`
+ * signal) are attached here for each window. Running this on every window
+ * creation is what makes reopen work: the previous window's renderer is gone,
+ * so none of these can be inherited.
+ */
+export async function attachWindowServices(
+  state: BootstrapState,
+  window: BrowserWindow
+): Promise<void> {
+  if (window.isDestroyed() || window.webContents.isDestroyed()) return
+  if (!state.chatEngine) return
+  state.ptyService?.attach(window.webContents)
+  await state.attachBrowserToWindow?.(window)
+  if (state.featuresReady) {
+    sendToRenderer(window.webContents, 'app:featuresReady')
+  }
+}
 import { reconcileInterruptedWork, watchForInstanceTakeOver } from './interrupted-work-recovery'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
@@ -79,7 +156,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { ThreadTransferService },
     { RoutineManager },
     { RoutineSchedulerService },
-    { broadcastMissedRunsChanged },
+    { broadcastMissedRunsChanged, broadcastAutoAnswersChanged, broadcastBackgroundRunsChanged },
     { SkillUpdateService },
     { SecretVault },
     { GitHubAuthService }
@@ -195,8 +272,46 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.chatEngine.attachHeartbeatScheduler(state.heartbeatScheduler)
   state.routineManager = new RoutineManager(database)
   const routineManager = state.routineManager
+  // Durable evidence of unattended runs, loaded before the scheduler can
+  // dispatch so a run that fails at 3am is never invisible on the next launch.
+  const { BackgroundRunLedger } = await import('../scheduler/background-run-ledger')
+  state.backgroundRunLedger = new BackgroundRunLedger(storage)
+  await state.backgroundRunLedger.load()
+  // Durable record of gates the app resolved without the user. Written the
+  // instant one settles, so the attention rail can explain what was asked,
+  // offered and chosen even after a restart.
+  const { AutoAnswerStore } = await import('../system/auto-answer-store')
+  state.autoAnswerStore = new AutoAnswerStore(storage)
+  await state.autoAnswerStore.load()
+  state.chatEngine.attachAutoAnswerRecorder((report) => {
+    const store = state.autoAnswerStore
+    if (!store) return
+    store.record({
+      id: report.id,
+      kind: report.kind,
+      outcome: report.outcome,
+      projectId: report.projectId,
+      threadId: report.threadId,
+      entries: report.entries,
+      at: report.at
+    })
+    broadcastAutoAnswersChanged(store.list())
+    state.backgroundLifecycle?.refreshAttention()
+  })
   state.routineScheduler = new RoutineSchedulerService(storage, {
     routines: routineManager,
+    backgroundLedger: state.backgroundRunLedger,
+    // A run that failed while nobody was watching becomes unread, so its
+    // persisted message reaches the badge and the panel on the next open and the
+    // menu bar icon can say something needs attention.
+    onRunFailed: (runThreadId) => {
+      try {
+        new ThreadRepo(database).markUnread(runThreadId)
+        state.backgroundLifecycle?.refreshAttention()
+      } catch (error) {
+        Logger.error('Could not flag a failed run as unread:', error)
+      }
+    },
     onTaskChanged: (task) => broadcastThreadUpdate(task),
     // Every run executes on a fresh thread: a scheduled fire and a manual
     // "Run now" both create one, so a run never lands in the task's own
@@ -255,7 +370,25 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   })
   state.routineScheduler.attachChangeListener(() => {
     broadcastMissedRunsChanged(state.routineScheduler?.listMissedRuns() ?? [])
+    broadcastBackgroundRunsChanged(state.routineScheduler?.listBackgroundRuns() ?? [])
+    state.backgroundLifecycle?.refreshAttention()
   })
+  // Background wake: the machine is held awake inside the lead window before a
+  // due scheduled run, capped so a mis-scheduled task cannot pin it. The next
+  // due moment is read lazily from the scheduler, so a change is never cached.
+  state.powerWakeService.attachScheduledRunSource(
+    () => state.routineScheduler?.nextDueAt(Date.now()) ?? null
+  )
+  try {
+    const backgroundConfig = await storage.getConfig()
+    state.powerWakeService.setBackgroundPolicy({
+      enabled: backgroundConfig.backgroundMode !== 'off',
+      wakeLeadMs: backgroundConfig.backgroundWakeLeadMs,
+      maxHoldMs: backgroundConfig.maxBackgroundWakeHoldMs
+    })
+  } catch (error) {
+    Logger.error('Background wake policy could not be applied', error)
+  }
   // Scheduled assistant runs fall over to the routine's next model when the
   // current one fails, instead of waiting out the failed provider's reset.
   state.chatEngine.attachAssistantAgentsResolver((task) =>
@@ -266,6 +399,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // successful run once the run's turn actually completes.
   state.chatEngine.attachAssistantRunSettledRecorder((threadId, status) => {
     state.routineScheduler?.settleRun(threadId, status)
+    // A settled run's outcome now belongs in the "While you were away" list.
+    broadcastBackgroundRunsChanged(state.routineScheduler?.listBackgroundRuns() ?? [])
   })
   state.speechService = new SpeechService(
     {
@@ -348,18 +483,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       allocatedPort: port
     }).origin
   })
-  if (state.mainWindow && !state.mainWindow.isDestroyed()) {
-    const service = new BrowserService(state.mainWindow, database, storage)
-    state.browserService = service
-    // Remembered permission decisions load before the service accepts browser
-    // IPC, so a site is never re-prompted for a permission the user already
-    // granted in this or an earlier run.
-    await service.hydratePermissionMemory()
-    service.register()
-    state.chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
-      service.executeUtility(operation, input, browserContext)
-    )
-  }
+  // The browser is window-bound: it owns the WebContentsViews the window's stage
+  // hosts. It is created by `attachBrowserToWindow` for the current window and
+  // again for every window opened after the first one was destroyed, so a
+  // reopen after parking gets exactly the same wiring as the first launch.
+  // Nothing to do here when there is no window (a headless background launch);
+  // the design capability reads it lazily and degrades when it is absent.
   // The design capability's `preview` operation composes the two services above:
   // the loopback static host that serves a folder and the thread's browser tab
   // that shows it. Serving must keep working with no window to host a tab, so the
@@ -394,10 +523,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // opened it, so a design the agent opened itself and a tab the renderer restored
   // after a restart are designs too, and a tab that navigated away stops being one.
   // The same recognition arms a composition's playback transport, which is why it
-  // answers with the folder, its kind and, for a composition, its timeline.
-  state.browserService?.setTabMarkRecogniser((projectId, threadId, url) =>
-    designService.observeShownFolder(projectId, threadId, url)
-  )
+  // answers with the folder, its kind and, for a composition, its timeline. The
+  // wiring is captured once and applied to every window's browser below.
+  state.attachBrowserToWindow = (window) =>
+    attachBrowserService({ state, storage, database, designService }, window)
+  if (state.mainWindow && !state.mainWindow.isDestroyed()) {
+    await state.attachBrowserToWindow(state.mainWindow)
+  }
   const { createDesignPreviewExecutor } = await import('../preview/design-preview-executor')
   state.chatEngine.setDesignPreviewExecutor(
     createDesignPreviewExecutor({
@@ -491,10 +623,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     directoryPreviewService: state.directoryPreviewService,
     prototypePreviewService: state.prototypePreviewService ?? undefined,
     powerWakeService: state.powerWakeService,
+    backgroundLifecycle: state.backgroundLifecycle ?? undefined,
     retryScheduler: state.retryScheduler,
     heartbeatScheduler: state.heartbeatScheduler,
     routineManager: state.routineManager ?? undefined,
     routineScheduler: state.routineScheduler ?? undefined,
+    autoAnswerStore: state.autoAnswerStore ?? undefined,
     harnessManifestService: state.harnessManifestService,
     worktreeService: scopeWorktreeService,
     threadCreation: context.threadCreation,
@@ -689,8 +823,35 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     try {
       await state.routineScheduler?.start()
+      // A slot the app was closed (or asleep) through is dispatched on return
+      // when the user allows it, bounded per pass and idempotent across relaunch.
+      if (state.backgroundLifecycle?.autoRunMissedRuns) {
+        void state.routineScheduler
+          ?.runPendingMisses()
+          .catch((error) => Logger.error('Auto-run of missed assistant runs failed:', error))
+      }
     } catch (error) {
       Logger.error('Routine scheduler startup failed (non-fatal):', error)
+    }
+
+    // A machine that slept through a slot catches up when it wakes or unlocks.
+    try {
+      if (!state.powerMonitorService) {
+        const { PowerMonitorService } = await import('../system/power-monitor-service')
+        state.powerMonitorService = new PowerMonitorService({
+          onResume: () => {
+            state.routineScheduler?.evaluate()
+            if (state.backgroundLifecycle?.autoRunMissedRuns) {
+              void state.routineScheduler
+                ?.runPendingMisses()
+                .catch((error) => Logger.error('Resume catch-up failed:', error))
+            }
+          }
+        })
+      }
+      state.powerMonitorService.start()
+    } catch (error) {
+      Logger.error('Power monitor startup failed (non-fatal):', error)
     }
 
     try {

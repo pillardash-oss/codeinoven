@@ -177,7 +177,13 @@ the app's clock for Assistant View.
   run on it, using the task's bound settings with the routine's primary model
   overlaid (`sendPrompt` with `origin: 'internal'`). The run thread inherits the
   task's `routineId`, so the engine composes the routine how-to and the run
-  contract into its system prompt exactly as it does for the task.
+  contract into its system prompt exactly as it does for the task. The tick also
+  runs with no window at all in background mode (see **Background mode**), so "the
+  app is open" now means "the backend is running", not "a window is visible".
+- **Firing happens exactly once, on the elected owner.** Every scheduler tick is
+  gated on `instanceRegistry.isIncumbentInstance()`, so a second CodeInOven
+  process on the same config root schedules nothing and can never double-fire a
+  slot.
 - **A run is named for what it runs.** The run's visible prompt is built by
   `routineRunPrompt` (`src/lib/routine-run.ts`). A user's own task is named by
   its title, but a routine's Getting started thread is its authoring host, not
@@ -189,13 +195,18 @@ the app's clock for Assistant View.
   stops every task in it while keeping the tasks, their how-to, and their
   history. Resume from the panel's **All** tab. A routine-less task is never
   paused.
-- **No auto catch-up.** A slot that came due while the app was closed (or a
-  machine slept through it) is recorded as a missed run, never run in a burst.
-  The grace window is `MISS_GRACE_MS`; a fire before process start is always a
-  miss. Each record carries a `reason` `app-closed` when the app was not
-  running at the due time, `delayed` when it was running but could not start the
-  run in time and both surfaces state it instead of always claiming the app
-  was closed.
+- **Catch-up is opt-in and bounded.** A slot that came due while the app was
+  closed (or a machine slept through it) is recorded as a missed run. By default
+  those records are only surfaced for the user to run. When
+  `autoRunMissedAssistantRuns` is on (the default), the slots are dispatched on
+  relaunch, on wake, and on take-over, in sequence and at most
+  `MAX_CATCH_UP_PER_PASS` per pass, so an outage can never dump a burst of runs.
+  The record is claimed by its `(threadId, dueAt)` identity before the run is
+  created, so repeated relaunches stay idempotent. The grace window is
+  `MISS_GRACE_MS`; a fire before process start is always a miss. Each record
+  carries a `reason` `app-closed` when the app was not running at the due time,
+  `delayed` when it was running but could not start the run in time and both
+  surfaces state it instead of always claiming the app was closed.
 - **A slot before the schedule existed is never due.** The scheduler floors a
   due slot at the later of the task's last fire and the moment its schedule
   became active (`Routine.scheduleUpdatedAt`, stamped when the schedule changes
@@ -210,10 +221,59 @@ the app's clock for Assistant View.
   `scheduler/missed-runs.json` through the storage engine. Records are
   idempotent by `(threadId, dueAt)`, so repeated relaunches cannot
   double-count or double-badge one miss.
+- **Unattended-run ledger.** Every dispatch the scheduler makes on its own  
+  a scheduled fire, a catch-up run, and a run that failed while handing off to
+  the engine is recorded in `BackgroundRunLedger`
+  (`src/main/scheduler/background-run-ledger.ts`), a bounded (`MAX_ENTRIES`),
+  versioned `scheduler/background-runs.json`. Each entry carries its own
+  snapshot of the run, so deleting the run thread later cannot erase the fact
+  that it happened. A user's own "Run now" is deliberately not recorded. The
+  ledger feeds the **While you were away** section of the notification panel's
+  Assistants tab and the **Run history** section of a routine's (or task's)
+  how-to panel.
 - **Dismiss vs Run Now.** `assistant:dismissMissedRun` acknowledges a record
   without running it; `assistant:runMissedRunNow` creates a fresh run thread,
   dispatches the run on it, settles the record on success, and returns the run so
   the caller can open it. Neither is automatic.
+
+## Background mode (menu bar)
+
+Background mode keeps the backend running after the window is closed or after
+Cmd+Q so a routine still fires on time. It is on by default
+(`backgroundMode: 'scheduled'`) and can be turned off in **General → Threads**.
+
+- **Closed means closed.** Parking destroys the window and its renderer process;
+  there is no hidden window and no warm renderer. The main process keeps only
+  SQLite, the 30s tick, the menu bar icon, and window-bound services are torn
+  down before the renderer dies (`BackgroundLifecycleService.park`). A login
+  launch in background mode boots with no splash and no window at all.
+- **One backend, one owner.** Every process attaches to the same config root, and
+  the longest-running live process owns the scheduled work
+  (`instanceRegistry.isIncumbentInstance()`); the routine, retry, and heartbeat
+  schedulers are all gated on it. A secondary instance keeps a fully usable
+  window, shows a standing **Running in another instance** notice, and quits on
+  close rather than parking.
+- **Menu bar, not Dock.** The tray carries exactly two items, **Open CodeInOven**
+  and **Quit CodeInOven**; the icon is the monochrome mark, or the mark with an
+  exclamation when attention is needed. While windowless the Dock icon is hidden
+  and restored when a window opens. The icon's attention state is computed in
+  main from SQLite (a thread parked on approval, or an unread failed assistant
+  run), never from a renderer, because there is no renderer.
+- **Gates.** A question with a timer answers itself with its recommended option
+  through `questionTimeoutMs`; a secret card runs its own absolute timer and
+  closes unanswered; a destructive scope confirmation denies itself at its
+  `expiresAt`. Every one of those is recorded so the app never decides silently
+  (see **Auto-resolved gates**). A permission gate has no timer, so it parks
+  durably and flips the icon; nothing proceeds until the user answers.
+- **Sleep.** A machine that is asleep cannot run work. Inside
+  `backgroundWakeLeadMs` before a due run the app holds
+  `prevent-app-suspension`, capped by `maxBackgroundWakeHoldMs` so a
+  mis-scheduled task cannot pin the machine; a slot missed anyway is caught up on
+  resume (`PowerMonitorService`) or relaunch.
+- **What survives.** A run that failed while nobody was watching keeps its
+  message: `last_error`, `last_error_at`, and `last_outcome` are real columns
+  (`src/main/database/schema.ts`), the badge and the notification panel
+  rehydrate `failed` threads, and the ledger above records the dispatch.
 
 ## Missed colour token
 
@@ -247,7 +307,39 @@ default:
   Assistants tab exposes no sub-filter buttons; with nothing to show it renders
   only a neutral empty state. Each entry states why the fire was not run
   (`missedRunReasonText` in `assistant-view.ts`), so the copy never claims the
-  app was closed when the machine simply slept through the window.
+  app was closed when the machine simply slept through the window;
+- the **While you were away** section of the same Assistants tab, which lists the
+  recent unattended runs straight from the ledger (outcome, why it ran, when it
+  settled, any persisted failure, and how many gates it answered for you), and a
+  routine profile's **Run history** list in the how-to panel. A run whose thread
+  was later deleted still shows, as non-clickable evidence.
+
+## Auto-resolved gates (attention rail)
+
+Some cards settle without the user: a question whose timer answers it, a secret
+card that expires, an image-descriptor decision that times out, and a destructive
+scope confirmation that denies itself. Each is recorded in `AutoAnswerStore`
+(`src/main/system/auto-answer-store.ts`) as one `AutoAnswerItem` carrying the
+prompt, every option that was offered, what was chosen, and when. The store is
+written the instant the gate settles (idempotent by request id) and is kept
+independently of the transcript, so a decision stays auditable even if its thread
+is later deleted.
+
+The records surface on a dedicated right-rail attention panel:
+
+- a new amber triangle-exclamation item sits at the bottom of the context dock
+  rail, present only while at least one record is unread;
+- the panel lists each record with its kind, the resolved thread title, relative
+  and absolute time, the options, and the chosen one highlighted, with a button
+  to open the thread and a per-item dismiss, plus **Dismiss all** for the unread
+  set.
+
+`assistant:listAutoAnswers`, `assistant:dismissAutoAnswer`, and
+`assistant:dismissAllAutoAnswers` back the panel, and
+`assistant:autoAnswersChanged` pushes the fresh list to every window. Permission
+gates are deliberately not recorded here: they have no timer and park until
+answered, and an approval that merely expires on a late reply is already in
+`permission-events.jsonl`.
 
 ### Assistant notifications
 
@@ -255,15 +347,44 @@ Every assistant run notifies as its own entry on the **Assistants** tab. The
 main process tags a run thread's notification with `source: 'assistant'`
 (`notificationSource` in `src/main/notifications/notification-service.ts`), so
 the panel routes it to the Assistants tab instead of Projects and the card names
-its own status (done, needs attention, spec ready, error). The header bell shows
-one **assistant** badge whose colour is the assistant space's most urgent status
-(error > attention > missed > spec > done), so an assistant run never reads as a
-project or chat badge. The badge is a bot icon rather than a plain status dot to
-keep it distinct from the project/chat kind dots.
+its own status (done, needs attention, spec ready, error).
 
-The renderer state lives in `assistantRoutines`
-(`src/renderer/lib/stores/assistant-routines.svelte.ts`), fed by the
-`routine:changed` and `assistant:missedRunsChanged` events.
+The assistant is a surface with its own accent colour, the colour stored on the
+hidden assistant space project (the payload's `projectColor`, `#ec4899` by
+default). Every assistant notification surface uses that colour and **never an
+icon**, keeping the notification badge contract (just the colour of what it
+represents).
+
+The header bell draws one plain colour dot per waiting kind, each in the exact
+status colour the app uses for the same meaning everywhere else
+(`NOTIFICATION_KIND_COLORS` in
+`src/renderer/lib/stores/notification-panel.svelte.ts`), so a glance at the bell
+says what is waiting without opening the panel:
+
+- a **project message** (a completed project thread), the success green its
+  entry carries;
+- a **chat message** (a completed chat turn), the chat teal;
+- an **assistant message** (a completed run, or a pending missed run), the
+  assistant accent colour (`assistantColor`), the assistant's own identity
+  across the app;
+- a **spec ready**, the spec purple;
+- a **request for attention**, the warning amber;
+- an **error**, the danger red. A failed run reads as an error even inside the
+  assistant space, so a failure is never hidden behind the assistant colour.
+
+The **panel entry** wears the same colour on its leading dot and its card's left
+border (`accentColor`, shared by the bell and the panel). An assistant entry
+therefore reads as assistant, a chat entry as chat, and a project entry as its
+kind, exactly like the project-colour dot beside a project entry's name.
+
+The renderer learns the accent colour two ways: each notification payload
+carries it, and `assistantRoutines.spaceColor`
+(`src/renderer/lib/stores/assistant-routines.svelte.ts`) holds it from
+`routine:ensureSpace`, so the bell can badge a missed run before any notice has
+arrived. The renderer state is fed by the `routine:changed` and
+`assistant:missedRunsChanged` events. The **toast** for a completed run brands
+itself with the same accent colour (via `--status`) instead of the generic
+success green, mirroring how a chat response toast uses its own colour.
 
 ## Assistant sidebar
 

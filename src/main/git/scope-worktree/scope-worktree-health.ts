@@ -18,13 +18,35 @@ import { restoreCheckout, runRepairStep } from './scope-worktree-git'
 export interface ScopeWorktreeHealthDeps {
   projects: Pick<ProjectManager, 'getProject'>
   scopes: ScopeManager
-  requireManaged(target: ScopeTarget): ManagedWorktreeDescriptor
+  /** The scope's managed root, or null when it has none (see {@link notManaged}). */
+  managedRoot(target: ScopeTarget): ManagedWorktreeDescriptor | null
   listWorktrees(repoPath: string): Promise<WorktreeRegistration[]>
   propagateEnvironment(
     projectId: string,
     worktreePath: string,
     mode: ScopeEnvironmentMode
   ): Promise<void>
+}
+
+/**
+ * Why a scope has no managed worktree to inspect.
+ *
+ * Both cases are states the board is about to correct, not failures: a scope
+ * removed in another window is dropped by the next board reload, and a scope
+ * that works in the project directory never had a checkout of its own. So the
+ * health probe describes them instead of throwing, which is what keeps a
+ * removal racing the window from surfacing as an error nobody can act on.
+ */
+function notManaged(target: ScopeTarget, scopes: ScopeManager): ScopeWorktreeHealth {
+  const bucket = scopes
+    .getBoard(target.projectId)
+    .buckets.find((candidate) => candidate.id === target.scopeBucketId)
+  return {
+    category: 'not-managed',
+    detail: bucket
+      ? `The scope “${bucket.name}” works in the project directory, so it has no managed worktree`
+      : `The scope ${target.scopeBucketId} is no longer on this project's board`
+  }
 }
 
 /**
@@ -38,7 +60,8 @@ export class ScopeWorktreeHealthInspector {
 
   /** Compute health for a managed scope's worktree. */
   async health(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
-    const descriptor = this.deps.requireManaged(target)
+    const descriptor = this.deps.managedRoot(target)
+    if (!descriptor) return notManaged(target, this.deps.scopes)
     const project = await this.deps.projects.getProject(target.projectId)
     if (!project || project.source !== 'local' || !project.path) {
       return { category: 'repository-unavailable', detail: 'Project repository is unavailable' }
@@ -90,7 +113,11 @@ export class ScopeWorktreeHealthInspector {
    * no longer has. Returns the fresh health state.
    */
   async repair(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
-    const descriptor = this.deps.requireManaged(target)
+    const descriptor = this.deps.managedRoot(target)
+    // Nothing to repair on a scope that has no managed worktree, so the guided
+    // action answers with the same verdict the probe does instead of failing on
+    // a scope the board is about to drop.
+    if (!descriptor) return notManaged(target, this.deps.scopes)
     const expectedPath = getScopeRootPath(target.projectId, descriptor.directoryName)
     const project = await this.deps.projects.getProject(target.projectId)
     const repoPath = project?.source === 'local' && project.path ? project.path : undefined
@@ -99,6 +126,7 @@ export class ScopeWorktreeHealthInspector {
     let restoredCheckout = false
     switch (before.category) {
       case 'healthy':
+      case 'not-managed':
         return before
       case 'repository-unavailable':
         throw new Error(before.detail ?? 'The project repository is unavailable')
@@ -153,7 +181,7 @@ export class ScopeWorktreeHealthInspector {
         )
         break
     }
-    if (restoredCheckout) await this.reconcileRestoredCheckout(target, expectedPath)
+    if (restoredCheckout) await this.reconcileRestoredCheckout(target, descriptor, expectedPath)
     return this.health(target)
   }
 
@@ -166,9 +194,9 @@ export class ScopeWorktreeHealthInspector {
    */
   private async reconcileRestoredCheckout(
     target: ScopeTarget,
+    descriptor: ManagedWorktreeDescriptor,
     worktreePath: string
   ): Promise<void> {
-    const descriptor = this.deps.requireManaged(target)
     const project = await this.deps.projects.getProject(target.projectId)
     if (project?.source === 'local' && project.path) {
       try {

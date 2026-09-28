@@ -140,6 +140,9 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   last_success_at      INTEGER,
   assistant_getting_started INTEGER NOT NULL DEFAULT 0,
   assistant_task_id    TEXT,
+  last_error           TEXT,
+  last_error_at        INTEGER,
+  last_outcome         TEXT CHECK(last_outcome IN ('completed','failed','parked')),
   drafting             INTEGER NOT NULL DEFAULT 0,
   draft_json           TEXT,
   created_at           INTEGER NOT NULL,
@@ -925,6 +928,24 @@ CREATE TABLE IF NOT EXISTS thread_notes (
 );`
 
 /**
+ * Private user-only notes attached to global browser tabs.
+ *
+ * Notes are one feature; only the subject differs. A thread note cascades with
+ * its `threads` row, and a browser tab is not a threads row, so a tab's note is
+ * stored here keyed by the id the tab carries in the browser strip. The renderer
+ * reuses the very same Notes panel and `note:*` IPC for both subjects, which is
+ * why this table mirrors `thread_notes` column for column.
+ */
+export const BROWSER_TAB_NOTES_SQL = `
+-- ─── Global browser tab notes (user-only scratch space) ──────────────────
+CREATE TABLE IF NOT EXISTS browser_tab_notes (
+  tab_id     TEXT PRIMARY KEY NOT NULL,
+  body       TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);`
+
+/**
  * Assistant routines: the top-level grouping for assistant tasks. A routine
  * owns the agent-authored how-to, a default schedule, and its connection picks;
  * tasks are threads in the assistant space that reference `routines.id`.
@@ -1022,6 +1043,7 @@ export const DATABASE_SCHEMA_SQL = [
   PERSISTENCE_SQL,
   HARNESS_USAGE_SQL,
   THREAD_NOTES_SQL,
+  BROWSER_TAB_NOTES_SQL,
   THREAD_DESIGNS_SQL,
   THREAD_EXPERTS_SQL,
   ROUTINES_SQL

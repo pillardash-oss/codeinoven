@@ -10,9 +10,10 @@
     Cloud,
     FileDiff,
     MonitorCog,
+    AppWindow,
     Files,
     GitBranch,
-    Globe2,
+    GlobeCode,
     Hammer,
     Info,
     Maximize2,
@@ -23,6 +24,7 @@
     Plus,
     SquareTerminal,
     StickyNote,
+    TriangleAlert,
     X
   } from '@lucide/svelte'
   import {
@@ -35,9 +37,9 @@
     browserTabIndicatorSlotClass
   } from '$lib/stores/browser-tab-status'
   import { faviconState } from '$lib/stores/favicons.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
-  import BrowserTabIndicator from '$lib/components/browser/BrowserTabIndicator.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
 
@@ -64,6 +66,10 @@
      *  "+"; temporary chats are tabbed but are only ever opened from a thread. */
     onNewTerminal?: () => void
     onNewBrowser?: () => void
+    /** Close every popup window the tab's page opened. The popup rail's own close
+     *  button ends all of them at once: one tab close per window is the strip's
+     *  job, and this is the way out of a pile of them. */
+    onCloseAllPopupWindows?: () => void
   }
 
   let {
@@ -82,7 +88,8 @@
     onTerminalPlacementChange,
     onTerminalDockToggle,
     onNewTerminal,
-    onNewBrowser
+    onNewBrowser,
+    onCloseAllPopupWindows
   }: Props = $props()
 
   let resizing = $state(false)
@@ -101,7 +108,8 @@
     'terminal',
     'browser',
     'temporary-chat',
-    'subagent'
+    'subagent',
+    'popup-window'
   ])
 
   // These tools are opened and closed from their own rail icon, and each one
@@ -117,6 +125,8 @@
     'cloud-deployment',
     'debugger',
     'notifications',
+    'attention',
+    'downloads',
     'git',
     'actions',
     'thread-note',
@@ -141,6 +151,9 @@
   /** Terminals alone own the placement toggle, fullscreen and the "+". */
   let terminalMode = $derived(activeTab?.kind === 'terminal')
   let browserMode = $derived(activeTab?.kind === 'browser')
+  /** A popup window's page. Its tabs are the windows the page opened, so the tool
+   *  is tabbed like a terminal and still owns a close-all control of its own. */
+  let popupMode = $derived(activeTab?.kind === 'popup-window')
   /** Other open panels of the active tool, e.g. several open files. Without a
    *  strip these would be unreachable, so the header offers them in a picker. */
   let siblingTabs = $derived(
@@ -149,13 +162,27 @@
   /** Temporary chats close from their own tab, so they need no header cluster
    *  rendering it anyway would leave a stray divider on the right edge. */
   let showHeaderControls = $derived(
-    terminalMode || browserMode || (activeTab !== null && !tabbedMode)
+    terminalMode || browserMode || popupMode || (activeTab !== null && !tabbedMode)
   )
 
   let dragTabId = $state<string | null>(null)
   let dropTargetId = $state<string | null>(null)
   let dropPosition = $state<'before' | 'after' | null>(null)
   let stripScroller = $state<HTMLDivElement>()
+
+  /** File tabs with unsaved edits, so the strip can flag the file that needs
+   *  save attention the same way the explorer tree already does. Reads the
+   *  files workspace per tab; nothing is flagged when state is not prepared. */
+  let dirtyFileTabIds = $derived(
+    new Set(
+      tabs
+        .filter((tab) => tab.kind === 'files' && tab.path !== null)
+        .filter((tab) =>
+          tab.kind === 'files' ? projectFilesWorkspace.isDirty(tab.projectId, tab.path) : false
+        )
+        .map((tab) => tab.id)
+    )
+  )
 
   // Keep the active tab visible in the strip: whenever the strip mounts or the
   // active tab changes (a link opened a new browser tab, a tab was selected,
@@ -238,10 +265,7 @@
 </script>
 
 <aside
-  class="relative flex h-full min-h-0 w-full min-w-0 flex-col border-border bg-surface {placement ===
-  'bottom'
-    ? 'border-t'
-    : 'border-l'}"
+  class="relative flex h-full min-h-0 w-full min-w-0 flex-col bg-surface"
   class:select-none={resizing}
   aria-label="Context sidebar"
   data-region="context-sidebar"
@@ -279,7 +303,7 @@
           aria-hidden="true"
         />
       {:else}
-        <Globe2 size={12} class="shrink-0" />
+        <GlobeCode size={12} class="shrink-0" />
       {/if}
     {:else if tab.kind === 'debugger'}
       <Bug size={12} class="shrink-0 text-accent" />
@@ -289,6 +313,8 @@
       <MessageCircleDashed size={12} class="shrink-0 text-info" />
     {:else if tab.kind === 'notifications'}
       <Bell size={12} class="shrink-0" />
+    {:else if tab.kind === 'attention'}
+      <TriangleAlert size={12} class="shrink-0 text-warning" />
     {:else if tab.kind === 'memory'}
       <BrainCircuit size={12} class="shrink-0" />
     {:else if tab.kind === 'git'}
@@ -297,6 +323,12 @@
       <Cloud size={12} class="shrink-0" />
     {:else if tab.kind === 'thread-note'}
       <StickyNote size={12} class="shrink-0" />
+    {:else if tab.kind === 'popup-window'}
+      {#if tab.favicon}
+        <img src={tab.favicon} alt="" class="h-3 w-3 shrink-0" aria-hidden="true" />
+      {:else}
+        <AppWindow size={12} class="shrink-0" />
+      {/if}
     {:else if tab.kind === 'coordinator'}
       <Network size={12} class="shrink-0 text-primary" />
     {:else if tab.kind === 'assistant-how-to'}
@@ -315,7 +347,7 @@
               {@const runtime = contextSidebarState.browserRuntime(tab.id)}
               {@const indicators = browserTabIndicators(runtime)}
               <div
-                class="group relative flex max-w-52 items-center border-r border-border {activeTabId ===
+                class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {activeTabId ===
                 tab.id
                   ? 'bg-app text-foreground'
                   : 'text-muted hover:bg-elevated hover:text-foreground'} {onMoveTab
@@ -378,6 +410,14 @@
                       <StatusBadge stage="working" animated title="Working" />
                     {/if}
                   {/if}
+                  {#if dirtyFileTabIds.has(tab.id)}
+                    <span
+                      class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                      role="status"
+                      aria-label="Unsaved changes"
+                      title="Unsaved changes"
+                    ></span>
+                  {/if}
                 </button>
                 <button
                   type="button"
@@ -394,7 +434,14 @@
                   <div
                     class="absolute left-2.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5"
                   >
-                    <BrowserTabIndicator tabId={tab.id} />
+                    <!-- Loaded on demand: the browser indicator is a dynamic
+                         import so the sidebar does not carry the browser's
+                         status module into the first-paint chunk. An indicator
+                         only ever appears on a tab that is playing or
+                         capturing, so the browser is open and it is warm. -->
+                    {#await import('$lib/components/browser/BrowserTabIndicator.svelte') then { default: BrowserTabIndicator }}
+                      <BrowserTabIndicator tabId={tab.id} />
+                    {/await}
                   </div>
                 {/if}
               </div>
@@ -530,9 +577,9 @@
             <button
               type="button"
               class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label={`Close ${activeTab.title}`}
-              title="Close panel"
-              onclick={() => onClose(activeTab.id)}
+              aria-label={popupMode ? 'Close all popup windows' : `Close ${activeTab.title}`}
+              title={popupMode ? 'Close all popup windows' : 'Close panel'}
+              onclick={() => (popupMode ? onCloseAllPopupWindows?.() : onClose(activeTab.id))}
             >
               <X size={13} />
             </button>

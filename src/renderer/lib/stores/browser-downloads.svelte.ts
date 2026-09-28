@@ -16,7 +16,17 @@ import { reportError } from './app-errors.svelte'
 class BrowserDownloadsState {
   private readonly downloads = new SvelteMap<string, BrowserDownload>()
 
-  constructor() {
+  /**
+   * Whether {@link start} has wired the listener. Downloads belong to the
+   * browser, and the browser is not part of the first paint, so this stays inert
+   * until the runtime seam asks for it.
+   */
+  private started = false
+
+  /** Register the runtime's one subscription. Idempotent. */
+  start(): void {
+    if (this.started) return
+    this.started = true
     // One app-lifetime subscription: a download that starts while the browser
     // panel is closed still has to appear, and its progress events must not race
     // the surface that opens later.

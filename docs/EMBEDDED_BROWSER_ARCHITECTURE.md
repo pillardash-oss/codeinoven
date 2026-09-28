@@ -27,6 +27,21 @@ material way, and the difference is deliberate.
     tab list is scoped to the open conversation, so a background routine's tabs never
     surface in another conversation and cannot be closed from there.
   - Closing a thread destroys exactly that thread's tabs (`browser:destroyThread`).
+- **Popup windows are a global-browser feature.** The personal browser hosts a page's
+  `window.open` in a view its right rail shows, one tab per popup
+  (`src/main/browser/browser-service/browser-popup-windows.ts`, see *Popup windows*
+  below). A project's browser and every page an agent drives keep the older behaviour,
+  where an opened window is a tab, because those surfaces have no rail to show a popup
+  in and an agent's pages must stay addressable.
+- **The global browser's tab list is durable app state, owned by main.** It lives in an
+  atomically written JSON file under the config root
+  (`state/global-browser-tabs.json`, written by
+  `src/main/browser/global-browser-tabs-store.ts`) and crosses the IPC contract as
+  `browser:loadTabs` / `browser:saveTabs`. It deliberately does **not** live in the
+  renderer's `localStorage`: that storage is scoped to the renderer origin and silently
+  degrades to an empty, process-local storage whenever another app instance already
+  holds the profile's storage database, so a second instance read no tabs, saved none,
+  and the next launch restored nothing without a single error being raised.
 
 Treat the rest of this document as the target-state design; the points above describe the
 shipped behavior.
@@ -74,6 +89,20 @@ There must be no bridge from remote page JavaScript to privileged application AP
 - Block `file:`, `javascript:`, `data:`, `blob:` as top-level destinations, `devtools:`, `chrome:`, custom external protocols, and filesystem access by default.
 - Validate top-level navigation and redirects in main. The address bar is untrusted input and must be parsed with `URL`, not accepted through prefix checks.
 - Handle `window.open` in main. Safe HTTPS popups become controlled tabs or an explicit same-profile child surface; unsupported/external protocols require a user confirmation and are opened by the OS only after validation.
+
+### Popup windows
+
+A page's `window.open(url, name, features)` is a popup window, not a tab: a sign-in, a checkout, a share dialog. The browser hosts it itself, in a `WebContentsView` the browser rail shows, so a popup is a panel of the browser the user is already in rather than an operating-system window that can hide behind the app or land on another screen. Only the global (personal) browser hosts popups this way; a project's browser and every page an agent drives keep the older behaviour, where an opened window is a tab with an address the user can see and steer.
+
+- The hosting hook is Electron's own: `setWindowOpenHandler` answers `{ action: 'allow', createWindow }` for a `new-window` disposition, and the hook is handed the `WebContents` Chromium created for the popup. That one is presented by the app; the native window is never created.
+- Presenting that exact `WebContents` is what keeps the popup a real popup: `window.opener` and `window.opener.postMessage` reach the opening page, the popup inherits the opener's session so the cookies a sign-in just set are the ones the page around it already has, and the opener closing destroys what it opened.
+- The popup closes itself: `window.close()` (what every completed sign-in and checkout calls) destroys the popup's own `WebContents`, the app is told, and the panel drops the tab. Closing the tab that opened it does the same.
+- Adopting the `WebContents` of a popup Electron created as a *window* is refused (`options.webContents is already attached to a window`), which is why the native window is never created in the first place.
+- A popup starts at `about:blank` legitimately (a checkout writes its own form into the new window), so that one document is allowed alongside the `https:` the browser navigates to; everything else is refused.
+- A popup is a second native view over a DOM panel, so the same visibility rules apply to it as to a tab's page: a full-window DOM surface, the thread switcher or an overlay over the panel keeps it off screen, and hiding it parks it offscreen instead of pausing it.
+- The rail carries one tab per popup, in its own single-row strip (`BrowserPopupWindowContextTab`): the tab *is* the window, so a window that ends stops appearing and its tab leaves the strip with it. Each tab closes its own window, the rail's far-right close ends every window the page on screen opened, and the tool closes itself with the last window rather than sitting there as an empty strip.
+- The rail animates the width of its own track with a plain CSS transition (`src/renderer/lib/components/browser/BrowserView.svelte`), the same motion the workspace rail's track makes. It must not go back to a Svelte `css` transition: those wait for a zero-duration dummy animation's `finish` event before the real animation starts, and a renderer whose window is not visible never sends that event, which pinned the rail at its first keyframe   `width: 0`   and left the page beside it half open until the view remounted.
+- The rail's popup panel places the popup's page by following the frame while the track opens, and re-follows it when the window becomes visible again, because a rail that opened while the window was in the background resumes its opening when the user comes back.
 - Install permission request and permission check handlers on the browser session. Default deny; prompt for the exact origin and permission; support Allow once, Always allow for this site, and Deny. Start with camera, microphone, geolocation, notifications, HID, serial, USB, MIDI, screen capture, and filesystem access denied.
 - Prevent silent downloads. A later download phase may use a native save dialog, safe filename normalization, progress UI, cancel, and an explicit “open” action. Downloads must never land in the active repository automatically.
 - Redact browser URLs/query strings from general logs and diagnostics. Sensitive page titles should not enter agent context or telemetry.

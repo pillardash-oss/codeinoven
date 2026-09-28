@@ -59,7 +59,21 @@
   // svelte-ignore state_referenced_locally
   const initialCursorPosition = initialComment.length
   let textarea: HTMLTextAreaElement | null = null
-  const speechTarget = $derived(plainTextEditorTarget({ id: targetId, element: () => textarea }))
+  // The field's own value is the mirror this target writes through, so a
+  // recording made here always lands somewhere that outlives the popover: the
+  // textarea when it is still mounted, and the persisted draft when it is not.
+  // svelte-ignore state_referenced_locally
+  const speechTarget = plainTextEditorTarget({
+    id: targetId,
+    element: () => textarea,
+    mirror: {
+      read: () => comment,
+      write: (value) => {
+        comment = value
+        onDraftChange(value)
+      }
+    }
+  })
 
   function focusTextarea(element: HTMLTextAreaElement): void {
     element.focus()

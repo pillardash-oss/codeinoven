@@ -1,4 +1,5 @@
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
+import { GLOBAL_BROWSER_PROJECT_ID, isBrowserTabId } from '../../../lib/ipc/browser'
 import { broadcastNoteChanged } from '../../chat/thread-events'
 import { parseThreadContextUsage } from '../../database/repositories/thread-repo'
 import {
@@ -21,33 +22,76 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
 
   const NOTE_BODY_MAX = 100_000
 
-  ipcMain.handle('note:save', async (_, projectId: unknown, threadId: unknown, body: unknown) => {
+  /**
+   * Resolve a note's subject. Every project keys a note by a real thread, and
+   * the reserved global browser project keys it by a browser tab instead. The
+   * renderer passes the tab id in the same `threadId` position, which is what
+   * lets one Notes panel and one `note:*` surface serve both subjects.
+   */
+  function validateNoteSubject(
+    projectId: unknown,
+    subjectId: unknown
+  ): { projectId: string; subjectId: string; browserTab: boolean } {
     const validProjectId = validateEntityId(projectId, 'Project ID')
-    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    if (validProjectId === GLOBAL_BROWSER_PROJECT_ID) {
+      if (!isBrowserTabId(subjectId)) throw new TypeError('Browser tab ID is invalid')
+      return { projectId: validProjectId, subjectId, browserTab: true }
+    }
+    return {
+      projectId: validProjectId,
+      subjectId: validateEntityId(subjectId, 'Thread ID'),
+      browserTab: false
+    }
+  }
+
+  ipcMain.handle('note:save', async (_, projectId: unknown, threadId: unknown, body: unknown) => {
+    const subject = validateNoteSubject(projectId, threadId)
     const validBody = validateBoundedString(body, 'Note body', 0, NOTE_BODY_MAX)
-    const thread = await threadManager.getThread(validProjectId, validThreadId)
-    if (!thread) throw new Error('Thread not found')
-    const previous = noteRepo.get(validThreadId)
     const now = Date.now()
+    if (subject.browserTab) {
+      const previous = noteRepo.getForBrowserTab(subject.subjectId)
+      const note = {
+        tabId: subject.subjectId,
+        body: validBody,
+        createdAt: previous?.createdAt ?? now,
+        updatedAt: now
+      }
+      noteRepo.upsertForBrowserTab(note)
+      broadcastNoteChanged(subject.projectId, subject.subjectId, true)
+      // Reported in the shape the one Notes panel already reads.
+      return {
+        threadId: note.tabId,
+        body: note.body,
+        createdAt: note.createdAt,
+        updatedAt: note.updatedAt
+      }
+    }
+    const thread = await threadManager.getThread(subject.projectId, subject.subjectId)
+    if (!thread) throw new Error('Thread not found')
+    const previous = noteRepo.get(subject.subjectId)
     const note = {
-      threadId: validThreadId,
+      threadId: subject.subjectId,
       body: validBody,
       createdAt: previous?.createdAt ?? now,
       updatedAt: now
     }
     noteRepo.upsert(note)
-    broadcastNoteChanged(validProjectId, validThreadId, true)
+    broadcastNoteChanged(subject.projectId, subject.subjectId, true)
     return note
   })
   ipcMain.handle('note:delete', async (_, projectId: unknown, threadId: unknown) => {
-    const validProjectId = validateEntityId(projectId, 'Project ID')
-    const validThreadId = validateEntityId(threadId, 'Thread ID')
-    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    const subject = validateNoteSubject(projectId, threadId)
+    if (subject.browserTab) {
+      noteRepo.deleteForBrowserTab(subject.subjectId)
+      broadcastNoteChanged(subject.projectId, subject.subjectId, false)
+      return
+    }
+    const thread = await threadManager.getThread(subject.projectId, subject.subjectId)
     if (!thread) throw new Error('Thread not found')
-    noteRepo.delete(validThreadId)
-    broadcastNoteChanged(validProjectId, validThreadId, false)
+    noteRepo.delete(subject.subjectId)
+    broadcastNoteChanged(subject.projectId, subject.subjectId, false)
   })
-  ipcMain.handle('note:list', () => noteRepo.listThreadIds())
+  ipcMain.handle('note:list', () => noteRepo.listThreadIds().concat(noteRepo.listBrowserTabIds()))
   ipcMain.handle(
     'thread:dismissSpecReview',
     async (_, projectId: unknown, threadId: unknown, specId: unknown, specVersion: unknown) => {

@@ -6,14 +6,28 @@ import type {
   BrowserPageState,
   BrowserPermissionDecision,
   BrowserPermissionPromptContext,
+  BrowserPopupWindow,
   BrowserShortcutBindings,
+  BrowserSwitcherBindings,
   BrowserSiteDataScope,
+  BrowserScrollbarTheme,
   BrowserTransportCommand,
   BrowserViewBounds
 } from './browser'
 import type { Contract } from './contract-helpers'
+import type { BrowserSearchEngine } from '../browser-search-engines'
+import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
 
 export const invokeBrowserContract = {
+  /**
+   * The global browser's durable tab list, or null before it has ever been
+   * stored. It lives in the config directory rather than the renderer's
+   * `localStorage` because that storage is scoped to the renderer origin and is
+   * silently in-memory whenever another app instance holds the profile, which
+   * lost every open tab on the next launch.
+   */
+  'browser:loadTabs': {} as Contract<[], GlobalBrowserTabsSnapshot | null>,
+  'browser:saveTabs': {} as Contract<[snapshot: GlobalBrowserTabsSnapshot], void>,
   'browser:show': {} as Contract<
     [
       tabId: string,
@@ -25,10 +39,39 @@ export const invokeBrowserContract = {
     BrowserPageState
   >,
   'browser:hide': {} as Contract<[tabId: string], void>,
+  /**
+   * Place a popup window's page over the frame the rail measured for it. The
+   * popup is a native view like a tab's page is, so the rail's rectangle is
+   * what puts it on screen inside the panel rather than over the window.
+   */
+  'browser:showPopupWindow': {} as Contract<
+    [popupId: string, bounds: BrowserViewBounds],
+    void
+  >,
+  /**
+   * Take a popup window's page off screen. The page keeps running, laid out
+   * offscreen at the size it was last displayed at, exactly as a parked tab
+   * does, so a sign-in that is still completing does not freeze.
+   */
+  'browser:hidePopupWindow': {} as Contract<[popupId: string], void>,
+  /** Give a popup window's page the keyboard, after the user picks it in the rail. */
+  'browser:focusPopupWindow': {} as Contract<[popupId: string], void>,
+  /**
+   * Close a popup window on the user's behalf: its page stops and it leaves the
+   * rail. A page that closes itself needs nothing here, it is reported closed.
+   */
+  'browser:closePopupWindow': {} as Contract<[popupId: string], void>,
+  /** The popup windows the browser is holding for one project. */
+  'browser:getPopupWindows': {} as Contract<[projectId: string], BrowserPopupWindow[]>,
   'browser:setToastVisible': {} as Contract<[visible: boolean], void>,
-  'browser:navigate': {} as Contract<[tabId: string, url: string], void>,
+  'browser:navigate': {} as Contract<
+    [tabId: string, projectId: string, threadId: string, url: string],
+    void
+  >,
   'browser:goBack': {} as Contract<[tabId: string], void>,
   'browser:goForward': {} as Contract<[tabId: string], void>,
+  /** Route a mouse history button to the focused browser page when one owns focus. */
+  'browser:mouseHistoryNavigation': {} as Contract<[direction: 'back' | 'forward'], boolean>,
   'browser:reload': {} as Contract<[tabId: string], void>,
   /**
    * Run one playback action on a composition tab and answer with the state it
@@ -56,12 +99,39 @@ export const invokeBrowserContract = {
    */
   'browser:setShortcutBindings': {} as Contract<[bindings: BrowserShortcutBindings], void>,
   /**
+   * Replace the Ctrl+Tab switcher chords. A key pressed in a native page never
+   * reaches the renderer, so main claims these chords there and forwards the
+   * gesture; the chords come from the renderer's keymap, which main cannot read.
+   */
+  'browser:setSwitcherBindings': {} as Contract<[bindings: BrowserSwitcherBindings], void>,
+  /**
+   * Report the address bar's active search engine. Main builds the browser's
+   * native context menu and its "Search <engine> for ..." item, and holds no
+   * config of its own, so the resolved engine is pushed whenever the config
+   * loads or is patched. A failure is ignored until the handlers are live.
+   */
+  'browser:setSearchEngine': {} as Contract<[engine: BrowserSearchEngine], void>,
+  /** The app's scrollbar colours, applied to every browser tab so a default
+   *  page scrollbar is drawn on brand. A user-origin stylesheet yields to a
+   *  site's own scrollbar styling. */
+  'browser:setScrollbarTheme': {} as Contract<[theme: BrowserScrollbarTheme], void>,
+  /**
    * Report which tab's toolbar (address bar, buttons) holds DOM focus, or null
    * when none does. A key pressed in a native page view never reaches the
    * renderer, so main needs the focus the toolbar holds to route the same
    * chords when the user is typing an address.
    */
   'browser:setChromeFocus': {} as Contract<[tabId: string | null], void>,
+  /**
+   * Hand a tab's page the keyboard.
+   *
+   * A page is a native `WebContentsView` above the DOM, so DOM focus in the app
+   * chrome never reaches it and a tab switch has to hand the keyboard over
+   * deliberately. When the tab is already on screen main focuses it now; a tab
+   * whose show is still in flight has the intent held until it is shown, which is
+   * what keeps a switch raced against the page's own mount focused.
+   */
+  'browser:focusPage': {} as Contract<[tabId: string], void>,
   /** Toggle the web page's native DevTools. Returns whether it is now open. */
   'browser:toggleDevTools': {} as Contract<[tabId: string], boolean>,
   /**

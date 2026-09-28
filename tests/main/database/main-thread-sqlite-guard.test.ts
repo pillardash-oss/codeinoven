@@ -87,7 +87,7 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
     maxSites: 8,
     reason: REPOSITORY_READ
   },
-  { file: 'src/main/database/repositories/note-repo.ts', maxSites: 2, reason: REPOSITORY_READ },
+  { file: 'src/main/database/repositories/note-repo.ts', maxSites: 4, reason: REPOSITORY_READ },
   { file: 'src/main/database/repositories/project-repo.ts', maxSites: 5, reason: REPOSITORY_READ },
   { file: 'src/main/database/repositories/routine-repo.ts', maxSites: 1, reason: REPOSITORY_READ },
   { file: 'src/main/database/repositories/thread-repo.ts', maxSites: 9, reason: REPOSITORY_READ },

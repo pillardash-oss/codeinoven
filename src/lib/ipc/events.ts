@@ -15,7 +15,9 @@ import type {
   BrowserOpenRequestContext,
   BrowserPageState,
   BrowserPanelShortcutAction,
-  BrowserPermissionRequest
+  BrowserPermissionRequest,
+  BrowserPopupWindow,
+  BrowserSwitcherKey
 } from './browser'
 import type {
   AgentNotificationPayload,
@@ -73,6 +75,14 @@ export const IPC_EVENT_CONTRACT = {
   'routine:checkpointChanged': [] as unknown as [routineId: string],
   /** The set of pending missed scheduled runs changed. */
   'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
+  /** The durable record of unattended runs changed (a run started or settled). */
+  'assistant:backgroundRunsChanged': [] as unknown as [runs: import('../types').BackgroundRun[]],
+  /**
+   * The set of gates the app resolved without the user changed: one settled, or
+   * the user dismissed one or all. Drives the amber attention rail item and its
+   * panel.
+   */
+  'assistant:autoAnswersChanged': [] as unknown as [items: import('../types').AutoAnswerItem[]],
   /** The off-app audible alert for a notification, dispatched by the main
    *  process to a live renderer while the app is in the background. The in-app
    *  alert for a focused toast is played by the renderer itself, at the moment
@@ -107,6 +117,20 @@ export const IPC_EVENT_CONTRACT = {
    *  state and either confirms the close or shows the confirmation modal. */
   'window:confirmClose': [] as unknown as [payload: CloseConfirmationPayload],
   /**
+   * Emitted just before the window is destroyed to keep running in the
+   * background (park, not quit). The renderer gets a short grace window to
+   * persist anything only it holds   the durable browser tab lists, editor
+   * drafts it wants to keep   before the renderer process goes away.
+   */
+  'window:beforePark': [] as [],
+  /**
+   * This process's role against the shared backend, pushed on mount and
+   * whenever the running instance set changes. A secondary shows the
+   * "running in another instance" notice; the push is what clears it when
+   * this instance is promoted after the owner exits.
+   */
+  'app:instanceRole': [] as unknown as [role: import('../types').InstanceRole],
+  /**
    * Emitted when the user presses Cmd/Ctrl+W. The main process intercepts the
    * key (so the macOS "Close Window" menu accelerator never fires) and asks the
    * renderer to close the active in-app surface: modal, settings page, sidebar
@@ -123,10 +147,11 @@ export const IPC_EVENT_CONTRACT = {
   /**
    * Emitted when the user presses the mouse's back side button. Windows and
    * Linux surface it as the `browser-backward` app command in the main process;
-   * the main process forwards it here so the renderer can walk its own
-   * in-app navigation history (the window has no native browser history).
-   * On macOS the renderer instead sees a raw `mousedown`/`auxclick` with
-   * button 3: handled directly in App.svelte.
+   * the main process forwards it here so the renderer can route it to the
+   * focused browser page's native history, or the app's history when the
+   * browser does not own focus.
+   * On macOS the renderer may see a raw `mousedown`/`auxclick` with button 3;
+   * App.svelte sends it through the same focus-aware routing.
    */
   'window:historyBack': [] as [],
   /** Emitted when the user presses the mouse's forward side button. */
@@ -178,7 +203,20 @@ export const IPC_EVENT_CONTRACT = {
    * decides the key, the renderer decides what the tab strip does with it.
    */
   'browser:panelShortcut': [] as unknown as [tabId: string, action: BrowserPanelShortcutAction],
+  /**
+   * A Ctrl+Tab switcher gesture pressed while a native page held the keyboard.
+   * Main claimed the chord and handed this renderer the keyboard, so the switcher
+   * opens from inside a page exactly as it does from the app's own chrome.
+   */
+  'browser:switcherKey': [] as unknown as [key: BrowserSwitcherKey],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
+  /**
+   * Every popup window the browser holds, whole, after any change to one of
+   * them: one opened, closed itself, or moved on to another address. The rail
+   * draws one tab per entry, and the list is short, so it is published whole
+   * rather than as add/remove/update deltas.
+   */
+  'browser:popupWindows': [] as unknown as [popups: BrowserPopupWindow[]],
   /**
    * Delivered to the native permission-prompt popup window (not the main
    * renderer): the page permission awaiting a decision, plus how many requests

@@ -3,7 +3,15 @@
   import { FileSearch, FolderKanban, MessagesSquare } from '@lucide/svelte'
   import type { CommandPaletteProps } from '$lib/components/actions/CommandPalette.svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
+  import InstanceRoleNotice from '$lib/components/layout/InstanceRoleNotice.svelte'
+  import AppViewRail from '$lib/components/layout/AppViewRail.svelte'
+  import {
+    AppHeaderNavigationController,
+    type HeaderViewOptionId
+  } from '$lib/components/layout/AppHeaderNavigationController.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
+  import { fly } from 'svelte/transition'
+  import { pageReveal } from '$lib/components/layout/page-reveal'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
@@ -32,8 +40,11 @@
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { isBrowserLoaded, loadBrowser, withBrowser } from '$lib/stores/browser-access.svelte'
+  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { schemeState } from '$lib/stores/scheme.svelte'
+  import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
@@ -58,6 +69,7 @@
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
+  import { scheduleDeferredWork } from '$lib/deferred-work'
   import type { ActionSelection } from '$lib/actions'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import {
@@ -73,6 +85,7 @@
     threadTracksReadStatus,
     type AppConfig,
     type AppConfigPatch,
+    type InstanceRole,
     type Project,
     type ThemePreference,
     type Thread
@@ -102,6 +115,7 @@
   let activeView = $state<View>(rendererRecovery.activeView)
   let commandPaletteOpen = $state(false)
   let closeConfirmation = $state<CloseConfirmationPayload | null>(null)
+  let instanceRole = $state<InstanceRole | null>(null)
   const fileSearch = new FileSearchPaletteController()
   const threadSearch = new ThreadSearchPaletteController({
     openThread: (thread) => void openThreadFromSearch(thread)
@@ -258,6 +272,16 @@
    *  view still returns to the previous content view instead of resetting to Projects. */
   let lastContentView = $derived(rendererRecovery.lastContentView)
 
+  /** True while the workspace shell renders the view (Projects, Chats, Threads
+   *  and Assistant); the takeover pages (Scope, Settings) layer on top of it. */
+  let showsContentView = $derived(
+    activeView === 'projects' ||
+      activeView === 'projects-scope' ||
+      activeView === 'chats' ||
+      activeView === 'threads' ||
+      activeView === 'assistant'
+  )
+
   /** The view the user was on before opening Settings   the Settings back button returns here. */
   let lastViewBeforeSettings = $derived(rendererRecovery.lastViewBeforeSettings)
 
@@ -268,6 +292,12 @@
   function applyTheme(): void {
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
     schemeState.sync(effectiveTheme)
+    // A browser tab's page is a native view, so its default scrollbar cannot be
+    // reached by the stylesheet: hand the app's colours to main instead. Nothing
+    // about the browser belongs on a launch that never reaches it, so the push
+    // waits until there is a browser to theme - the runtime makes the first one
+    // when it comes up, and this covers every theme change after that.
+    if (isBrowserLoaded()) publishBrowserScrollbarTheme()
   }
 
   /** Welcome screen (and other surfaces) can request the getting-started tour. */
@@ -363,6 +393,11 @@
       scopeState.clearSidebarContext()
     }
     activeView = view
+    // Reaching the browser view is the moment its code and its runtime are both
+    // needed: the view itself is a dynamic import, and this warms the chunks and
+    // builds the stores before it renders. The view asks too, for the session
+    // that restores straight onto it without ever navigating here.
+    if (view === 'browser') void loadBrowser()
     // Persists the view and tracks the last content / non-settings views, so
     // returning from Settings (even across a restart) lands back where the user
     // was instead of resetting to Projects.
@@ -373,6 +408,23 @@
 
   function observeNavigationLocation(): void {
     navigationHistoryState.observe(currentLocation())
+  }
+
+  /** Primary-view navigation is owned here, so the header and the left view rail
+   *  share one controller (one `lastViewBeforeScope`/`shownHeaderViewOption`). */
+  const navigation = new AppHeaderNavigationController({
+    getActiveView: () => activeView,
+    navigate: (view) => navigate(view)
+  })
+
+  /** Warm the target view's threads (and lazy chunk) before a rail hover lands. */
+  function handleViewOptionHover(id: HeaderViewOptionId): void {
+    if (id === 'scope-board' || id === 'scoped-threads') preloadScopeChunk()
+    // Pointing at the browser is the moment we know the user is going there, so
+    // its chunks and its runtime are both warmed here rather than at boot.
+    if (id === 'browser') void loadBrowser()
+    if (id === 'chats') navigation.preloadNavigationThreads('chats')
+    else navigation.preloadNavigationThreads('projects')
   }
 
   /** The most recently visited thread of one content-view family that still exists. */
@@ -932,9 +984,19 @@
     }
   }
 
-  /** The user approved the force close   tell main to proceed with quitting. */
+  /** True when the pending close is a park (background mode), not a quit. */
+  function closeIsPark(): boolean {
+    return closeConfirmation?.park === true
+  }
+
+  /** The user approved parking the window; main keeps the backend alive. */
+  async function parkWindow(): Promise<void> {
+    await invoke('app:parkWindow')
+  }
+
+  /** The user approved the force close   tell main to park or to quit. */
   async function confirmForceClose(): Promise<void> {
-    await invoke('app:confirmClose')
+    await (closeIsPark() ? invoke('app:parkWindow') : invoke('app:confirmClose'))
   }
 
   /**
@@ -958,8 +1020,9 @@
     if (projects.length === current.projects.length) return
 
     if (projects.length === 0 && current.files.length === 0) {
+      const park = current.park === true
       closeConfirmation = null
-      void confirmForceClose()
+      void (park ? parkWindow() : confirmForceClose())
       return
     }
     closeConfirmation = { ...current, projects }
@@ -972,7 +1035,7 @@
     // nothing else would ever write their drafts.
     const savedStandaloneFiles = await standaloneFiles.saveAllUnsaved()
     if (savedProjectFiles && savedStandaloneFiles) {
-      await invoke('app:confirmClose')
+      await (closeIsPark() ? invoke('app:parkWindow') : invoke('app:confirmClose'))
     } else {
       toast.error('Some files could not be saved', {
         description: 'The application stayed open so you can review them.'
@@ -1181,6 +1244,14 @@
       // decided inside Workspace, which owns what the on-screen thread actually
       // offers (file tree, git, terminal, sources...), so the chord only
       // forwards the request. Only the workspace views own that sidebar.
+      // The browser view's right rail is its own (per-tab notes), so it answers
+      // the same chord directly instead of forwarding a thread-sidebar request.
+      if (activeView === 'browser') {
+        e.preventDefault()
+        if (e.repeat) return
+        void withBrowser((store) => store.toggleContextSidebar())
+        return
+      }
       const rightSidebarViews = ['projects', 'projects-scope', 'chats', 'threads', 'assistant']
       if (!rightSidebarViews.includes(activeView)) return
       e.preventDefault()
@@ -1189,6 +1260,16 @@
       return
     }
     if (keymapState.matches('nav-toggle-left-sidebar', e)) {
+      // The browser view's left sidebar is the app's own sidebar (its chrome and
+      // tab strip), so the chord folds it the same way it folds the workspace
+      // one. (While the browser owns the keyboard this chord belongs to Save
+      // page, which is why the browser entry in the header also toggles it.)
+      if (activeView === 'browser') {
+        e.preventDefault()
+        if (e.repeat) return
+        sidebarState.toggle()
+        return
+      }
       // On the plain workspace (no studio, no conflict being resolved, no dirty
       // file tab, no edited file opened from the OS) the Cmd/Ctrl+S save chord
       // is otherwise unused, so it folds/unfolds the left sidebar. Anywhere a
@@ -1272,29 +1353,44 @@
         return
       }
 
+      // The browser view owns it for a new tab, which is what a browser does.
+      if (activeView === 'browser') {
+        void withBrowser((store) => store.openNewTabAddress())
+        return
+      }
+
       requestThreadForCurrentView()
     }
   }
 
   navigationHistoryState.init(rendererRecovery.activeView, rendererRecovery.selectedThread)
 
-  /**
-   * Timestamp of the last mouse side-button navigation. Windows/Linux deliver
-   * a side press both as an app command (forwarded over IPC) and   through
-   * Chromium   as a renderer mouse event; macOS only delivers the raw event.
-   * A short dedupe window keeps one physical press from navigating twice.
-   */
-  let lastMouseHistoryNavAt = 0
+  /** Windows/Linux may report both an app command and a renderer mouse event.
+   *  macOS can report a raw mouse event or a native swipe. Collapse duplicate
+   *  same-direction reports from one physical press. */
+  let lastMouseHistoryNavigation: { direction: 'back' | 'forward'; at: number } | null = null
 
-  /** Mouse back/forward buttons (button 3 = back, 4 = forward)   macOS path. */
+  /** Route a mouse history button to the focused browser page first, then the
+   *  app's location history when focus is elsewhere. */
+  async function handleMouseHistoryNavigation(direction: 'back' | 'forward'): Promise<void> {
+    const now = Date.now()
+    const previous = lastMouseHistoryNavigation
+    if (previous && previous.direction === direction && now - previous.at < 150) return
+    lastMouseHistoryNavigation = { direction, at: now }
+
+    const handledByBrowser = await invoke('browser:mouseHistoryNavigation', direction).catch(
+      () => false
+    )
+    if (handledByBrowser) return
+    if (direction === 'back') void goBack()
+    else void goForward()
+  }
+
+  /** Mouse back/forward buttons (button 3 = back, 4 = forward). */
   function onMouseHistoryButton(e: MouseEvent): void {
     if (e.button !== 3 && e.button !== 4) return
-    const now = Date.now()
-    if (now - lastMouseHistoryNavAt < 150) return
-    lastMouseHistoryNavAt = now
     e.preventDefault()
-    if (e.button === 3) void goBack()
-    else void goForward()
+    void handleMouseHistoryNavigation(e.button === 3 ? 'back' : 'forward')
   }
 
   onMount(() => {
@@ -1317,13 +1413,20 @@
       openThreadFromNotification,
       setCloseConfirmation: (payload) => (closeConfirmation = payload),
       confirmForceClose,
+      parkWindow,
+      setInstanceRole: (role) => (instanceRole = role),
       settleCloseConfirmationThread,
       handleCloseShortcut,
       handleNewTerminalShortcut,
-      goBack,
-      goForward,
+      goBack: () => handleMouseHistoryNavigation('back'),
+      goForward: () => handleMouseHistoryNavigation('forward'),
       handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps)
     })
+    // Hydrate the instance role: the push fires before this renderer mounts, so
+    // this read is what shows the "running in another instance" notice on load.
+    void invoke('app:instanceRole')
+      .then((role) => (instanceRole = role))
+      .catch(() => undefined)
     const unsubscribeShutdown = installShutdownSubscription()
     const unsubscribeConfig = installConfigSubscription()
     const originalOpenThread = workspaceState.openThread.bind(workspaceState)
@@ -1338,11 +1441,23 @@
     }
     observeNavigationLocation()
     void loadConfig()
+    // Every launch leaves the browser alone: no chunk fetched, no store built,
+    // no stored tab list read, no listener registered. The one exception is a
+    // session that restores straight onto the browser view, where the page the
+    // user was reading is what they came back to, so its runtime is asked for at
+    // boot instead of on the first reach.
+    if (activeView === 'browser') void loadBrowser()
     // Fire-and-forget: the app's own record of models reported as
     // vision-capable, consulted before any vision-capability gate.
     void visionModels.load().catch(() => {})
     // Fire-and-forget: probes opted-in harnesses and docks quiet auto-updates.
-    void harnessLifecycleStore.autoUpdateOnStartup()
+    // Nothing on the first frame reads it (the update badges live in Settings and
+    // in the rail's control), so it waits for the renderer to go idle rather than
+    // starting its harness probes while the thread list is still hydrating.
+    scheduleDeferredWork(
+      'harness:autoUpdate',
+      () => void harnessLifecycleStore.autoUpdateOnStartup()
+    )
     // Workspace owns the initial project/thread hydration. Keeping this signal
     // there prevents App and Workspace from issuing the same startup queries.
 
@@ -1364,60 +1479,95 @@
 </script>
 
 <div class="flex h-screen flex-col bg-app">
-  <AppHeader {activeView} {navigate} {goBack} {goForward} />
+  <AppHeader {activeView} {goBack} {goForward} {navigation} />
 
-  <main class="flex-1 overflow-hidden">
-    <!-- One shell for all views   the workspace (and the open thread) stays
+  {#if instanceRole?.role === 'secondary'}
+    <InstanceRoleNotice
+      ownerPid={instanceRole.ownerPid}
+      onOpenOwner={() => void invoke('app:openInstanceOwner')}
+      onQuit={() => void invoke('app:confirmClose')}
+    />
+  {/if}
+
+  <div class="flex min-h-0 flex-1">
+    <AppViewRail
+      options={navigation.headerViewOptions()}
+      shownOption={navigation.shownHeaderViewOption}
+      projectBadgeOption={navigation.projectBadgeOption}
+      {activeView}
+      {navigate}
+      onOptionHover={handleViewOptionHover}
+    />
+
+    <!-- `overflow-clip`, not `overflow-hidden`: the arriving view slides up on
+         its reveal transition, and a scroll container here would let that
+         offset scroll the shell before it clamps back. Clip keeps this frame
+         fixed. -->
+    <main class="relative min-w-0 flex-1 overflow-clip">
+      <!-- One shell for all views   the workspace (and the open thread) stays
          mounted across Settings/Scope so returning never reloads the thread
-         list or reconnects the harness; it's simply hidden while away. -->
-    <div
-      class={activeView === 'projects' ||
-      activeView === 'projects-scope' ||
-      activeView === 'chats' ||
-      activeView === 'threads' ||
-      activeView === 'assistant'
-        ? 'h-full'
-        : 'hidden'}
-    >
-      <Workspace
-        mode={lastContentView}
-        active={activeView === 'projects' ||
-          activeView === 'projects-scope' ||
-          activeView === 'chats' ||
-          activeView === 'threads' ||
-          activeView === 'assistant'}
-        scopeViewActive={activeView === 'scope'}
-        {navigate}
-        {config}
-        {updateConfig}
-      />
-    </div>
-    {#if activeView === 'scope'}
-      {#await import('$lib/components/scope/ScopeView.svelte') then { default: ScopeView }}
-        <ScopeView {navigateToScopedThreads} />
-      {/await}
-    {:else if isSettingsView(activeView)}
-      <!-- Each settings section is its own dedicated page in the navigation model.
+         list or reconnects the harness. It fades out rather than going
+         `display: none`, so the swap cross-fades with the page arriving on top
+         while keeping it out of the tab order and the accessibility tree. -->
+      <div
+        class="h-full transition-[opacity,visibility] duration-200 ease-out motion-reduce:transition-none {showsContentView
+          ? 'visible opacity-100'
+          : 'invisible pointer-events-none opacity-0'}"
+      >
+        <Workspace
+          mode={lastContentView}
+          active={showsContentView}
+          scopeViewActive={activeView === 'scope'}
+          {navigate}
+          {config}
+          {updateConfig}
+        />
+      </div>
+      {#if activeView === 'scope'}
+        {#await import('$lib/components/scope/ScopeView.svelte') then { default: ScopeView }}
+          <div class="absolute inset-0" transition:fly={pageReveal()}>
+            <ScopeView {navigateToScopedThreads} />
+          </div>
+        {/await}
+      {:else if isSettingsView(activeView)}
+        <!-- Each settings section is its own dedicated page in the navigation model.
            The view stays mounted and SettingsView swaps its content on the section
            prop   a keyed remount here would flash the screen on every tab switch. -->
-      {#await import('$lib/components/settings/SettingsView.svelte') then { default: SettingsView }}
-        <SettingsView
-          {config}
-          {settingsReady}
-          error={settingsError}
-          {setPreference}
-          {updateConfig}
-          section={settingsSectionForView(activeView) ?? 'general'}
-          onNavigateSection={(section) => navigate(settingsViewForSection(section))}
-          onBack={() => navigate(lastViewBeforeSettings)}
-        />
-      {/await}
-    {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads' || activeView === 'assistant')}
-      <div class="flex h-full items-center justify-center">
-        <p class="text-sm text-dimmed">Coming soon</p>
-      </div>
-    {/if}
-  </main>
+        {#await import('$lib/components/settings/SettingsView.svelte') then { default: SettingsView }}
+          <div class="absolute inset-0" transition:fly={pageReveal()}>
+            <SettingsView
+              {config}
+              {settingsReady}
+              error={settingsError}
+              {setPreference}
+              {updateConfig}
+              section={settingsSectionForView(activeView) ?? 'general'}
+              onNavigateSection={(section) => navigate(settingsViewForSection(section))}
+              onBack={() => navigate(lastViewBeforeSettings)}
+            />
+          </div>
+        {/await}
+      {:else if activeView === 'browser'}
+        <!-- The global browser is its own workspace   the app header above it is
+             the only shared chrome. It is pinned to the stage instead of left in
+             normal flow, because the workspace shell behind it stays mounted as a
+             full-height sibling: in flow the browser sits below the fold and only
+             enters view once focus scrolls the stage. -->
+        {#await import('$lib/components/browser/BrowserView.svelte') then { default: BrowserView }}
+          <div class="absolute inset-0">
+            <BrowserView />
+          </div>
+        {/await}
+      {:else if !showsContentView}
+        <div
+          class="absolute inset-0 flex items-center justify-center"
+          transition:fly={pageReveal()}
+        >
+          <p class="text-sm text-dimmed">Coming soon</p>
+        </div>
+      {/if}
+    </main>
+  </div>
   {#if spotlightScreenId}
     {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
       <CommandPalette {...spotlightPalette} />
@@ -1543,9 +1693,14 @@
     {/await}
   {/if}
 
+  <!-- Scope and Settings render notifications as a floating panel because they
+       have no shared right sidebar of their own. The Browser view does: its rail
+       hosts the notifications panel beside its note, agent and downloads tools,
+       so it must not also get this second, invented rail. -->
   {#if (activeView === 'scope' || isSettingsView(activeView)) && contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'}
     <div
       class="fixed bottom-0 right-0 top-12 z-40 w-[480px] border-l border-border bg-surface shadow-xl"
+      {@attach trackBrowserOcclusion}
     >
       {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
         <NotificationPanel />

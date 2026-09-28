@@ -425,6 +425,7 @@ export function registerIpcHandlers(
     noteRepo,
     routineManager,
     routineScheduler: options.routineScheduler,
+    autoAnswerStore: options.autoAnswerStore,
     privilegedIpc,
     privileged,
     attachmentStorageDirectory,

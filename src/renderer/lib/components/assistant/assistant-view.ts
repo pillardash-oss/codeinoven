@@ -5,6 +5,9 @@ import {
   routineAgentsComplete,
   routineHowToComplete,
   type AgentCapabilityCatalog,
+  type BackgroundRun,
+  type BackgroundRunOutcome,
+  type BackgroundRunReason,
   type MissedRun,
   type MissedRunReason,
   type Routine,
@@ -21,7 +24,7 @@ import {
   type RoutinePlan,
   type RoutinePlanConnection
 } from '$shared/routine-plan'
-import { threadStatusPolicy } from '$shared/thread-status-policy'
+import { threadStatusPolicy, type ThreadStatusTone } from '$shared/thread-status-policy'
 import {
   buildConnectionLibrary,
   connectionNamesOverlap,
@@ -89,6 +92,79 @@ export function groupMissedRunsByRoutine(
     group.runs.push(run)
   }
   return [...groups.values()]
+}
+
+/** Group key for background runs whose task belongs to no routine. */
+export const UNGROUPED_BACKGROUND_RUNS = '__ungrouped_background_runs__'
+
+/** One routine's unattended (background) runs. */
+export interface BackgroundRunGroup {
+  /** Routine id, or `UNGROUPED_BACKGROUND_RUNS` for routine-less tasks. */
+  key: string
+  /** Routine name, or the neutral label used for routine-less tasks. */
+  label: string
+  runs: BackgroundRun[]
+}
+
+/**
+ * Unattended runs are surfaced per routine, mirroring missed runs: one group per
+ * owning routine, plus a single group for routine-less tasks. The store already
+ * lists runs newest first, so group order and intra-group order both follow it.
+ */
+export function groupBackgroundRunsByRoutine(
+  runs: readonly BackgroundRun[],
+  routineNameById: ReadonlyMap<string, string>
+): BackgroundRunGroup[] {
+  const groups = new Map<string, BackgroundRunGroup>()
+  for (const run of runs) {
+    const key = run.routineId ?? UNGROUPED_BACKGROUND_RUNS
+    let group = groups.get(key)
+    if (!group) {
+      group = {
+        key,
+        label: run.routineId
+          ? (routineNameById.get(run.routineId) ?? 'Routine')
+          : 'Tasks without a routine',
+        runs: []
+      }
+      groups.set(key, group)
+    }
+    group.runs.push(run)
+  }
+  return [...groups.values()]
+}
+
+/** Human label for why an unattended run started. */
+export function backgroundRunReasonText(reason: BackgroundRunReason): string {
+  return reason === 'caught-up' ? 'Caught up after sleep' : 'Scheduled'
+}
+
+/** Human label for how an unattended run settled. */
+export function backgroundRunOutcomeLabel(outcome: BackgroundRunOutcome | undefined): string {
+  switch (outcome) {
+    case 'completed':
+      return 'Completed'
+    case 'failed':
+      return 'Failed'
+    case 'parked':
+      return 'Needs you'
+    default:
+      return 'Running'
+  }
+}
+
+/** Status tone an unattended run's outcome wears on badges and accents. */
+export function backgroundRunTone(outcome: BackgroundRunOutcome | undefined): ThreadStatusTone {
+  switch (outcome) {
+    case 'completed':
+      return 'done'
+    case 'failed':
+      return 'error'
+    case 'parked':
+      return 'attention'
+    default:
+      return 'working'
+  }
 }
 
 /** Whether a task row shows the missed badge. */

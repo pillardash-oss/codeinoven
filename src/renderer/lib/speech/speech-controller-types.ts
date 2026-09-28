@@ -37,6 +37,17 @@ export type VoiceSendStage = 'send' | 'steer'
  *  intent instead of escalating past it, so the ladder is a cycle. */
 export type VoiceSendLevel = 1 | 2 | 3
 
+/**
+ * Outcome of handing a transcript that is still waiting for its field.
+ *
+ * - `inserted`: the field took it.
+ * - `waiting`: the transcript is still held, and the field exists but cannot
+ *   accept text yet (an editor that has not finished initialising), so the
+ *   caller should ask again on the next frame.
+ * - `none`: nothing is waiting for this field.
+ */
+export type SpeechPendingDelivery = 'inserted' | 'waiting' | 'none'
+
 /** One detached transcription job: the mic has closed, the transcript has not
  *  landed yet. */
 export interface VoiceTranscriptionRecord {

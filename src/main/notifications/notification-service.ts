@@ -419,8 +419,14 @@ export class NotificationService {
       const threads = await this.threadRepo.listAllViaWorker()
       const validKeys = new Set<string>()
       for (const thread of threads) {
+        // A failure is durable evidence of an unattended run: badge it so the
+        // app icon counts a run that failed while no window was open. `failed`
+        // already carries the `error` notification kind (so it is in
+        // NOTIFIABLE_STATUSES); naming it here keeps the durable-failure
+        // guarantee from silently regressing if that map changes.
+        const isDurableFailure = thread.status === 'failed'
         if (
-          NOTIFIABLE_STATUSES.has(thread.status) &&
+          (isDurableFailure || NOTIFIABLE_STATUSES.has(thread.status)) &&
           !thread.read &&
           !this.isSuppressedOrchestration(thread) &&
           !this.isPrematureCoordinatorCompletion(thread)

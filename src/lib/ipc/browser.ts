@@ -1,9 +1,106 @@
+/**
+ * The reserved ownership context of the global (personal) browser workspace.
+ *
+ * Every browser tab is keyed by a `(projectId, threadId)` pair in the main
+ * process, and the session partition is derived from `projectId`. The global
+ * browser deliberately rides the same machinery with one reserved pair, which
+ * gives it a single durable profile (`persist:codeinoven-browser:browser-global`)
+ * shared by every global tab, isolated from every project's browser and from
+ * the agent-controlled project sessions.
+ *
+ * The pair names no user-visible project or thread, so `BrowserService` treats
+ * a global tab as project-less and main resolves its dialog and permission
+ * labels to null. It does name a reserved hidden project and one hidden parent
+ * thread (see `ProjectManager.ensureGlobalBrowserSpace` and
+ * `ThreadManager.ensureGlobalBrowserThread`), which is what lets a per-tab agent
+ * conversation resolve its scope through the ordinary chat pipeline. Because
+ * that container is a scope anchor rather than a conversation, every thread
+ * listing and search excludes its threads.
+ */
+export { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '../types/project'
+
+/**
+ * The shape of one global browser tab's id. A tab's note is keyed by this same
+ * id, so the main-process validators, the note handlers and the renderer's own
+ * persistence all read the rule from here instead of keeping a copy each.
+ */
+export const BROWSER_TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
+
+export function isBrowserTabId(value: unknown): value is string {
+  return typeof value === 'string' && BROWSER_TAB_ID_PATTERN.test(value)
+}
+
+/**
+ * The shape of one popup window's id.
+ *
+ * A popup window is not a tab: it belongs to the tab whose page opened it, it
+ * is hosted by the app's own view rather than by an operating-system window, and
+ * it lives exactly as long as the page inside it does. Its id names that
+ * lifetime, so every handler that takes one can read the rule from here rather
+ * than keep a copy.
+ */
+export const BROWSER_POPUP_WINDOW_ID_PATTERN = /^popup:[a-zA-Z0-9:_-]{1,240}$/u
+
+export function isBrowserPopupWindowId(value: unknown): value is string {
+  return typeof value === 'string' && BROWSER_POPUP_WINDOW_ID_PATTERN.test(value)
+}
+
+/**
+ * One popup window a page opened, as the rail renders it.
+ *
+ * A popup window is a page's own `window.open` with a window in it: a sign-in,
+ * a checkout, a share dialog. The app hosts the page itself instead of letting
+ * the operating system open a window, so the rail can show one tab per popup.
+ * This record is metadata about that page, never its content.
+ */
+export interface BrowserPopupWindow {
+  id: string
+  /**
+   * The browser tab whose page opened this popup. The rail panel belongs to
+   * that tab, and closing it closes what it opened.
+   */
+  tabId: string
+  projectId: string
+  /** Address the popup is showing, or `about:blank` while it has none yet. */
+  url: string
+  title: string
+  /** Favicon data URL the popup reported, or null until it declares one. */
+  favicon: string | null
+  loading: boolean
+}
+
 /** Native browser content rectangle in BrowserWindow density-independent pixels. */
 export interface BrowserViewBounds {
   x: number
   y: number
   width: number
   height: number
+}
+
+/**
+ * Why one browser tab's page could not be shown.
+ *
+ * `kind` names the layer that failed so a surface picks its copy without
+ * re-deriving Chromium's numbering: `network` is a net error, `http` is a
+ * status the server answered with, and `crashed` is a renderer that stopped.
+ */
+export type BrowserLoadFailureKind = 'network' | 'http' | 'crashed'
+
+/**
+ * A failure that left a browser tab with no page to show.
+ *
+ * This is metadata about the load, never page content: the raw code and the
+ * text Chromium or the server reported. The renderer turns it into copy.
+ */
+export interface BrowserLoadError {
+  kind: BrowserLoadFailureKind
+  /**
+   * Chromium's net error code (negative), or the HTTP status the server answered
+   * with, or the renderer's exit code. `0` when the layer reported none.
+   */
+  code: number
+  /** Chromium's own text: the net error name, the HTTP status text, or the crash reason. */
+  description: string
 }
 
 /** Navigation state mirrored from an app-scoped browser WebContentsView. */
@@ -14,6 +111,8 @@ export interface BrowserPageState {
   /** Favicon data URL reported by the page, or null until the page declares one. */
   favicon: string | null
   loading: boolean
+  /** The failure that left this tab with no page, or null while it has one. */
+  loadError: BrowserLoadError | null
   canGoBack: boolean
   canGoForward: boolean
   /** True while the page is emitting audio to the output device. Drives the
@@ -169,6 +268,23 @@ export interface BrowserInspectorTheme {
 }
 
 /**
+ * The app's scrollbar colours, pushed to every browser tab so a page's own
+ * scrollbar is drawn in the application's palette instead of the platform
+ * default.
+ *
+ * It is installed as a *user-origin* stylesheet, which is the whole point: author
+ * styles outrank user styles in the cascade, so a site that styles its own
+ * `::-webkit-scrollbar` (or `scrollbar-color`) keeps it, and only the default
+ * scrollbar is brought on brand.
+ */
+export interface BrowserScrollbarTheme {
+  /** The thumb, matching the app's own `::-webkit-scrollbar-thumb`. */
+  thumb: string
+  /** The thumb on hover, matching the app's own hover rule. */
+  thumbHover: string
+}
+
+/**
  * What the injected inspector reports back to the app.
  *
  * `pick` is a fresh element selection, `open` is the user clicking an existing
@@ -210,7 +326,8 @@ export const BROWSER_SHORTCUT_ACTIONS = [
   'zoomReset',
   'toggleDevTools',
   'closeTab',
-  'newTab'
+  'newTab',
+  'toggleNotes'
 ] as const
 
 export type BrowserShortcutAction = (typeof BROWSER_SHORTCUT_ACTIONS)[number]
@@ -233,10 +350,27 @@ export interface BrowserShortcutChord {
 export type BrowserShortcutBindings = Partial<Record<BrowserShortcutAction, BrowserShortcutChord[]>>
 
 /**
+ * The Ctrl+Tab switcher chords, resolved per platform.
+ *
+ * The switcher is a renderer DOM surface, but a key pressed in a native browser
+ * page never reaches it. Main claims these chords in the page and forwards the
+ * gesture, so the app's switcher opens from inside a page too. It is a flat list
+ * rather than a per-action table because the switcher has one gesture: main only
+ * reports whether Shift was held, and the renderer decides the direction.
+ */
+export type BrowserSwitcherBindings = BrowserShortcutChord[]
+
+/** One switcher gesture forwarded from a key pressed in a native page. */
+export interface BrowserSwitcherKey {
+  /** Whether Shift was held, i.e. the user is cycling backward. */
+  backward: boolean
+}
+
+/**
  * A browser action the renderer owns, because only the renderer knows the tab
  * strip: focusing the address bar, and closing or opening a tab.
  */
-export type BrowserPanelShortcutAction = 'focus-address' | 'close-tab' | 'new-tab'
+export type BrowserPanelShortcutAction = 'focus-address' | 'close-tab' | 'new-tab' | 'toggle-notes'
 
 /** Ownership metadata for a browser tab requested by the main process. */
 export interface BrowserOpenRequestContext {

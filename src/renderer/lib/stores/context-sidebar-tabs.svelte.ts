@@ -18,6 +18,7 @@ import {
   type SubagentContextTab,
   type TemporaryChatContextTab,
   type TemporaryChatMode,
+  type TerminalContextTab,
   type TerminalPlacement,
   type ThreadSidebarContext
 } from './context-sidebar-types'
@@ -81,10 +82,16 @@ export class SidebarTabContexts {
   }
 
   /** Resolve a live temporary-chat tab without passing its mutable proxy
-   *  through a component prop. The sidebar store remains the sole owner. */
+   *  through a component prop. The sidebar store remains the sole owner. The
+   *  lookup spans every thread context, not just the active one, because the
+   *  global browser's agent side chats live in their own reserved context while
+   *  a project thread may be the active one. */
   temporaryChatTab(tabId: string): TemporaryChatContextTab | null {
-    const tab = this.activeContext?.tabs.find((candidate) => candidate.id === tabId)
-    return tab?.kind === 'temporary-chat' ? tab : null
+    for (const context of Object.values(this.contexts)) {
+      const tab = context.tabs.find((candidate) => candidate.id === tabId)
+      if (tab?.kind === 'temporary-chat') return tab
+    }
+    return null
   }
 
   ensureContext(projectId: string, threadId: string): ThreadSidebarContext {
@@ -577,6 +584,39 @@ export class SidebarTabContexts {
     }
   }
 
+  /**
+   * Ensure a subject's note tab exists and load its body, without focusing it.
+   *
+   * The global browser view reads a tab's note from its own context, which is
+   * never the active workspace context, so it must not steal focus, flip the
+   * active project panel or detach the workspace browser the way
+   * `openThreadNote` does. The tab is the same one every other note uses.
+   */
+  ensureThreadNote(projectId: string, threadId: string, threadTitle: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `note:${projectId}:${threadId}`
+    if (context.tabs.some((tab) => tab.id === id)) return
+    context.tabs = [
+      ...context.tabs,
+      {
+        id,
+        kind: 'thread-note',
+        title: 'Notes',
+        projectId,
+        threadId,
+        threadTitle,
+        savedBody: null,
+        draftBody: '',
+        mode: 'edit',
+        focusRequest: 0,
+        loading: true,
+        saving: false,
+        error: null
+      }
+    ]
+    void this.loadThreadNote(context, id, projectId, threadId)
+  }
+
   openCloudDeployments(projectId: string, threadId: string): void {
     const context = this.ensureProjectContext(projectId)
     const id = `cloud-deployment:${projectId}`
@@ -850,6 +890,61 @@ export class SidebarTabContexts {
     this.scheduleTemporaryChatExpiry(tab)
   }
 
+  /**
+   * Materialize a global browser tab's agent chat without focusing anything.
+   *
+   * A browser tab's agent sidebar is the app's own temporary side chat under the
+   * browser's reserved context, so it is created through the same tab shape and
+   * streamed through the same pipeline as every other side chat. The browser
+   * rail owns the panel and decides what is on screen, so this only creates the
+   * tab   it must never flip the workspace rail's focus, which
+   * `openTemporaryChat` does. Idempotent: an existing live chat is returned
+   * unchanged.
+   */
+  ensureBrowserAgentChat(
+    projectId: string,
+    threadId: string,
+    temporaryChatId: string,
+    settings: ThreadSettings,
+    initialContext: string
+  ): TemporaryChatContextTab {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `temporary-chat:${temporaryChatId}`
+    const existing = context.tabs.find((candidate) => candidate.id === id)
+    if (existing?.kind === 'temporary-chat') return existing
+    const tab: TemporaryChatContextTab = {
+      id,
+      kind: 'temporary-chat',
+      title: 'Agent',
+      projectId,
+      threadId,
+      temporaryChatId,
+      sessionId: null,
+      mode: 'quick',
+      selections: [],
+      initialContext,
+      settings: { ...settings, permissionLevel: 'auto_review' },
+      selectionAttached: false,
+      autoPromptSent: false,
+      autoPromptMessageId: null,
+      sessionStarted: false,
+      expired: false,
+      expiresAt: Date.now() + TEMPORARY_CHAT_INACTIVITY_MS
+    }
+    context.tabs = [...context.tabs, tab]
+    this.scheduleTemporaryChatExpiry(tab)
+    return tab
+  }
+
+  /** Drop a browser tab's agent chat from its reserved context when the browser
+   *  tab closes. The caller is responsible for closing the remote session. */
+  removeTemporaryChat(projectId: string, threadId: string, temporaryChatId: string): void {
+    this.clearTemporaryChatExpiry(temporaryChatId)
+    const context = this.contextFor(projectId, threadId)
+    if (!context) return
+    context.tabs = context.tabs.filter((tab) => tab.id !== `temporary-chat:${temporaryChatId}`)
+  }
+
   openPrimaryTerminal(projectId: string, threadId: string): void {
     const context = this.ensureProjectContext(projectId)
     const existing = context.tabs.find(
@@ -863,20 +958,29 @@ export class SidebarTabContexts {
     this.openNewTerminal(projectId, threadId)
   }
 
-  openNewTerminal(projectId: string, threadId: string): string {
+  openNewTerminal(projectId: string, threadId: string, startingDirectory?: string): string {
     const context = this.ensureProjectContext(projectId)
     context.terminalSequence += 1
     const sequence = context.terminalSequence
     const id = `terminal:${projectId}:${sequence}`
-    this.openProject(context, {
+    const tab: TerminalContextTab = {
       id,
       kind: 'terminal',
       title: sequence === 1 ? 'Terminal' : `Terminal ${sequence}`,
       terminalId: `workbench-${projectId}-${sequence}`,
       projectId,
       threadId
-    })
+    }
+    if (startingDirectory !== undefined) tab.startingDirectory = startingDirectory
+    this.openProject(context, tab)
     return id
+  }
+
+  /** Open a fresh terminal whose shell starts in `directory` (project-relative,
+   *  '' for the scope root). Always a new tab so the user can keep their other
+   *  shells untouched. */
+  openTerminalAt(projectId: string, threadId: string, directory: string): string {
+    return this.openNewTerminal(projectId, threadId, directory)
   }
 
   openDebugger(projectId: string, threadId: string): void {

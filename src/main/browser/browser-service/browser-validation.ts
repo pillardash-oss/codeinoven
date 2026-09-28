@@ -8,14 +8,26 @@ import type {
   BrowserInspectorMarker,
   BrowserInspectorTheme,
   BrowserPermissionDecision,
+  BrowserScrollbarTheme,
   BrowserShortcutAction,
   BrowserShortcutBindings,
   BrowserShortcutChord,
+  BrowserSwitcherBindings,
   BrowserSiteDataScope,
   BrowserTransportCommand,
   BrowserViewBounds
 } from '../../../lib/ipc-contract'
-import { BROWSER_SHORTCUT_ACTIONS } from '../../../lib/ipc-contract'
+import {
+  BROWSER_SHORTCUT_ACTIONS,
+  isBrowserPopupWindowId,
+  isBrowserTabId
+} from '../../../lib/ipc-contract'
+import {
+  buildBrowserSearchUrl,
+  MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH,
+  MAX_BROWSER_SEARCH_URL_TEMPLATE_LENGTH,
+  type BrowserSearchEngine
+} from '../../../lib/browser-search-engines'
 import type { BrowserViewport } from './browser-types'
 
 export const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
@@ -24,8 +36,9 @@ export const MAX_CONSOLE_ENTRIES = 500
 export const MAX_TRACKED_DOWNLOADS = 50
 export const DOWNLOAD_EVENT_INTERVAL_MS = 150
 export const PERMISSION_TIMEOUT_MS = 60_000
-const TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
 const PROJECT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,240}$/u
+/** Ceiling on a search engine id chosen in the settings page and reported here. */
+const MAX_SEARCH_ENGINE_ID_LENGTH = 128
 const PERMISSION_REQUEST_ID_PATTERN = /^[a-f0-9-]{36}$/u
 const DOWNLOAD_ID_PATTERN = /^[a-f0-9-]{36}$/u
 /** Character cap for the "<project> - <thread>" context line shown above
@@ -48,6 +61,25 @@ export const DEFAULT_PARKED_VIEWPORT: BrowserViewport = { width: 1280, height: 8
  *  app carry an unbounded string in its marker set. */
 export const MAX_INSPECTOR_SELECTOR_LENGTH = 2_000
 
+/**
+ * Most popup windows one browser tab may hold open at once.
+ *
+ * A popup window is hosted by the app's own view, so a page that opens them in
+ * a loop would grow the app's view count without limit. A real page opens one
+ * or two (a sign-in, a checkout); past a dozen the page is refused, which is the
+ * same answer the app gives any other popup it will not host.
+ */
+export const MAX_POPUP_WINDOWS_PER_TAB = 12
+
+/**
+ * Smallest and largest popup window viewport the app lays an offscreen popup out
+ * at. A page chooses its own popup size, so the value is clamped rather than
+ * trusted: a zero would leave the page with no viewport at all, and a huge one
+ * would lay a hidden page out at a size no display has.
+ */
+const POPUP_VIEWPORT_MIN = 200
+const POPUP_VIEWPORT_MAX = 4_096
+
 /** One step of the browser's own zoom. Chromium's zoom level is logarithmic, so
  *  0.5 is the familiar 120% step Chrome takes per press. */
 export const ZOOM_STEP = 0.5
@@ -69,6 +101,8 @@ const INSPECTOR_MARKER_ID_PATTERN = /^[a-f0-9-]{36}$/u
 /** Chords an action may carry. The keymap binds one or two alternatives per
  *  action, so a larger list is a caller bug rather than a layout. */
 const MAX_SHORTCUT_CHORDS_PER_ACTION = 6
+/** The switcher is one gesture, so it carries at most these chords. */
+const MAX_SWITCHER_CHORDS = 6
 /** Ceiling on a chord's key token, matching the longest DOM key name. */
 const MAX_SHORTCUT_KEY_LENGTH = 24
 
@@ -101,6 +135,23 @@ export function validateBrowserShortcutBindings(value: unknown): BrowserShortcut
     )
   }
   return bindings
+}
+
+/**
+ * Validate the Ctrl+Tab switcher chords pushed by the renderer.
+ *
+ * The same trust boundary as the action table applies: a bad chord could claim
+ * any key in every page, so every entry is a single key with an explicit
+ * modifier set, and the list is capped.
+ */
+export function validateBrowserSwitcherBindings(value: unknown): BrowserSwitcherBindings {
+  if (!Array.isArray(value)) {
+    throw new TypeError('Browser switcher bindings must be an array')
+  }
+  if (value.length > MAX_SWITCHER_CHORDS) {
+    throw new TypeError('Browser switcher chord count exceeds the cap')
+  }
+  return value.map((entry) => validateBrowserShortcutChord(entry))
 }
 
 function validateBrowserShortcutChord(value: unknown): BrowserShortcutChord {
@@ -210,6 +261,39 @@ export function validateInspectorTheme(value: unknown): BrowserInspectorTheme {
   return theme
 }
 
+/** The two colours the page's default scrollbar is drawn with. */
+const SCROLLBAR_THEME_KEYS = [
+  'thumb',
+  'thumbHover'
+] as const satisfies readonly (keyof BrowserScrollbarTheme)[]
+
+/**
+ * Validate the app scrollbar colours pushed for every browser tab's page.
+ *
+ * The values become a user-origin stylesheet, so each one is bounded and checked
+ * against the characters that could end the rule it is placed in.
+ */
+export function validateScrollbarTheme(value: unknown): BrowserScrollbarTheme {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('Scrollbar theme must be an object')
+  }
+  const record = value as Record<string, unknown>
+  const theme = {} as BrowserScrollbarTheme
+  for (const key of SCROLLBAR_THEME_KEYS) {
+    const raw = record[key]
+    if (
+      typeof raw !== 'string' ||
+      raw.length === 0 ||
+      raw.length > MAX_INSPECTOR_THEME_VALUE_LENGTH ||
+      /[;{}]|<\//u.test(raw)
+    ) {
+      throw new TypeError(`Scrollbar theme token "${key}" is invalid`)
+    }
+    theme[key] = raw
+  }
+  return theme
+}
+
 /**
  * Validate the reference a renderer asks the page to highlight, or null for
  * "nothing in particular". It is matched against the marker set the page holds,
@@ -234,6 +318,19 @@ export const AGENT_REVEAL_GRACE_MS = 8_000
 export const MAX_ABANDONED_REVEALS = 2
 /** How long agent reveals stay muted for a thread after that. */
 export const RELAX_COOLDOWN_MS = 5 * 60_000
+/** How long a hide the renderer asked for is held before it parks a view.
+ *
+ *  The renderer detaches a page the moment its visibility answer stops coming out
+ *  for it, and that answer is recomputed every frame from state that moves: a
+ *  surface mid-transition, an overlay whose rectangle is being re-measured, a
+ *  claim published one frame after the surface that needs it. Those answers flap,
+ *  and a flap that reaches main pairs a park with a re-attach a few milliseconds
+ *  later, which pulls the page off screen for a frame and paints it back: a
+ *  flicker of a page nothing asked to move. Holding the hide over a couple of
+ *  frames lets the show that follows it cancel it outright, so a page that is
+ *  still wanted never leaves the screen, while a page that is genuinely going
+ *  still parks a few frames after the click that decided it. */
+export const RENDERER_PARK_GRACE_MS = 80
 /** Bounds for a requested parked viewport: below the minimum no layout is
  *  meaningful, above the maximum a single page would waste main memory. */
 export const MIN_VIEWPORT_SIDE = 240
@@ -297,8 +394,15 @@ export const INSPECTOR_REARM_INTERVAL_MS = 120
 export const MAX_INSPECTOR_ARM_FAILURES = 4
 
 export function validateTabId(value: unknown): string {
-  if (typeof value !== 'string' || !TAB_ID_PATTERN.test(value)) {
+  if (!isBrowserTabId(value)) {
     throw new TypeError('Browser tab ID is invalid')
+  }
+  return value
+}
+
+export function validatePopupWindowId(value: unknown): string {
+  if (!isBrowserPopupWindowId(value)) {
+    throw new TypeError('Browser popup window ID is invalid')
   }
   return value
 }
@@ -485,6 +589,98 @@ export function validateBrowserUrl(value: unknown): string {
   return parsed.href
 }
 
+/**
+ * Whether a popup window may be opened on, and later navigate to, this address.
+ *
+ * A popup is allowed one document the rest of the browser refuses: `about:blank`.
+ * Pages open blank popups deliberately   a checkout or a sign-in writes its form
+ * into the new window itself   and refusing that document would break the flow
+ * before the popup ever had an address to validate.
+ */
+export function isAllowedPopupWindowUrl(value: unknown): value is string {
+  if (value === 'about:blank') return true
+  try {
+    validateBrowserUrl(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The viewport a popup window asked for in its `window.open` features, or null
+ * when it asked for none the app can use.
+ *
+ * The size is the page's own claim, so it is clamped rather than trusted: it is
+ * only ever used to lay the page out at a size while it is off screen, and a
+ * page must not be able to ask for a viewport no display has.
+ */
+export function popupWindowViewport(features: unknown): BrowserViewport | null {
+  if (typeof features !== 'string' || features.length === 0) return null
+  let width: number | null = null
+  let height: number | null = null
+  for (const part of features.split(',')) {
+    const [rawKey, rawValue] = part.split('=', 2)
+    if (rawValue === undefined) continue
+    const key = rawKey.trim().toLowerCase()
+    if (key !== 'width' && key !== 'height' && key !== 'innerwidth' && key !== 'innerheight') {
+      continue
+    }
+    const value = Number.parseInt(rawValue.trim(), 10)
+    if (!Number.isInteger(value)) continue
+    const clamped = Math.min(POPUP_VIEWPORT_MAX, Math.max(POPUP_VIEWPORT_MIN, value))
+    if (key === 'width' || key === 'innerwidth') width = clamped
+    if (key === 'height' || key === 'innerheight') height = clamped
+  }
+  if (width === null && height === null) return null
+  return {
+    width: width ?? DEFAULT_PARKED_VIEWPORT.width,
+    height: height ?? DEFAULT_PARKED_VIEWPORT.height
+  }
+}
+
+/**
+ * Validate the search engine the renderer reports for the browser's native
+ * context menu.
+ *
+ * Main builds the "Search <engine> for ..." item and the URL it opens, and it
+ * holds no config of its own, so the resolved engine arrives over IPC. The
+ * template must be able to produce a navigable http(s) URL, which is the same
+ * contract the browser's own navigation validation enforces; anything else is
+ * refused rather than turned into a dead menu item.
+ */
+export function validateBrowserSearchEngine(value: unknown): BrowserSearchEngine {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('Browser search engine must be an object')
+  }
+  const record = value as Record<string, unknown>
+  const id = record['id']
+  const name = record['name']
+  const template = record['searchUrlTemplate']
+  if (typeof id !== 'string' || id.length === 0 || id.length > MAX_SEARCH_ENGINE_ID_LENGTH) {
+    throw new TypeError('Browser search engine needs a bounded id')
+  }
+  if (
+    typeof name !== 'string' ||
+    name.trim().length === 0 ||
+    name.length > MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH
+  ) {
+    throw new TypeError('Browser search engine needs a bounded name')
+  }
+  if (
+    typeof template !== 'string' ||
+    template.length === 0 ||
+    template.length > MAX_BROWSER_SEARCH_URL_TEMPLATE_LENGTH
+  ) {
+    throw new TypeError('Browser search engine needs a bounded URL template')
+  }
+  const engine: BrowserSearchEngine = { id, name, searchUrlTemplate: template }
+  if (buildBrowserSearchUrl(engine, 'query') === null) {
+    throw new TypeError('Browser search engine template cannot produce an http or https URL')
+  }
+  return engine
+}
+
 function validatedViewportSide(value: unknown, label: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new TypeError(`Browser viewport ${label} must be a number`)
@@ -569,4 +765,14 @@ export function validateBounds(value: unknown): BrowserViewBounds {
  */
 export function isSameBounds(a: BrowserViewBounds, b: BrowserViewBounds): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
+/**
+ * Whether two viewports lay a page out at the same size. A park that keeps the
+ * page at the size it was already laid out at costs it nothing; a park that
+ * changes it re-runs layout, which is a reflow the user can see when the view
+ * comes back on screen.
+ */
+export function isSameViewport(a: BrowserViewport | undefined | null, b: BrowserViewport): boolean {
+  return a !== undefined && a !== null && a.width === b.width && a.height === b.height
 }

@@ -8,6 +8,8 @@
    * dockable behaviour are shared with the pull request batches.
    */
   import JobPanel from '$lib/components/ui/JobPanel.svelte'
+  import ScopeHealthNotice from './ScopeHealthNotice.svelte'
+  import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import type { JobStatus, JobStepView } from '$lib/components/ui/job-view'
   import {
     scopeJobActiveStepId,
@@ -28,6 +30,9 @@
   const running = $derived(job.status === 'running')
   const done = $derived(job.status === 'succeeded')
   const removing = $derived(job.kind === 'remove')
+  const merging = $derived(job.kind === 'merge')
+  /** A failed merge can be re-run from its panel once its checkout is repaired. */
+  const canRetry = $derived(job.kind === 'merge' && job.status === 'failed')
   /** Step the run is on right now, or the one it stopped on. */
   const active = $derived(scopeJobActiveStepId(job))
 
@@ -37,6 +42,13 @@
 
   /** Panel title: who the run belongs to and where it stands. */
   function headingFor(run: ScopeJob): string {
+    if (run.kind === 'merge') {
+      const target = run.merge?.targetLabel ?? 'the target scope'
+      if (running) return `Merging “${run.title}” into ${target}…`
+      return done
+        ? `“${run.title}” was merged into ${target}`
+        : `Merging “${run.title}” into ${target} stopped`
+    }
     const outcome =
       run.kind === 'remove'
         ? { present: 'Deleting', done: 'is deleted', failed: 'could not be deleted' }
@@ -102,10 +114,18 @@
     running
       ? 'You can keep working. The run continues in the background.'
       : done
-        ? doneNote
-        : removing
-          ? 'The scope is still there. Fix the problem above and delete it again from the scope menu.'
-          : 'Nothing else changed. Fix the problem above and run it again from the scope menu.'
+        ? merging
+          ? job.merge?.mode === 'merge-keep'
+            ? 'The commits are in the target scope and this scope is still here.'
+            : 'The commits are in the target scope and this scope is gone.'
+          : doneNote
+        : merging
+          ? job.conflictFiles.length > 0
+            ? 'Nothing was deleted. Resolve the conflicts in the Git panel, then run the merge again.'
+            : 'Nothing was deleted. Repair the worktree above if it is flagged, then try again.'
+          : removing
+            ? 'The scope is still there. Fix the problem above and delete it again from the scope menu.'
+            : 'Nothing else changed. Fix the problem above and run it again from the scope menu.'
   )
 </script>
 
@@ -120,9 +140,28 @@
   {onMinimize}
   {onClose}
   {storageKey}
+  actionLabel={canRetry ? 'Try again' : undefined}
+  onAction={canRetry ? () => scopeJobs.retry(job.id) : undefined}
   dragLabel="Drag to move the worktree run"
 >
   {#snippet details()}
+    {#if job.conflictFiles.length > 0}
+      <!--
+        A conflicted merge is a failed run that needs the user: the commits that
+        arrived are on disk, and the paths below are what the Git panel shows.
+      -->
+      <div
+        class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-[0.6875rem] text-warning"
+      >
+        <p class="font-medium">The merge hit conflicts ({job.conflictFiles.length})</p>
+        <ul class="mt-1 max-h-24 list-inside list-disc overflow-y-auto">
+          {#each job.conflictFiles.slice(0, 20) as file (file)}
+            <li class="truncate">{file}</li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+
     {#if job.result}
       <div class="space-y-1 rounded-lg border bg-overlay px-3 py-2 text-[0.6875rem] text-muted">
         <p class="flex min-w-0 items-center gap-1.5">
@@ -134,6 +173,19 @@
           <code class="truncate font-mono text-foreground">{job.result.directoryName}</code>
         </p>
       </div>
+    {/if}
+
+    {#if job.status === 'failed' && job.scopeBucketId}
+      <!--
+        A failed run is usually a checkout the app can no longer verify, so the
+        panel carries the cause, the fix and the Repair action itself instead of
+        only naming a menu the user has to go find.
+      -->
+      <ScopeHealthNotice
+        projectId={job.projectId}
+        scopeBucketId={job.scopeBucketId}
+        name={job.title}
+      />
     {/if}
   {/snippet}
 </JobPanel>

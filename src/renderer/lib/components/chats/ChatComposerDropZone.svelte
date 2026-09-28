@@ -4,17 +4,19 @@
   import type { ComposerDropRegion } from './chat-composer-drop'
 
   interface Props {
-    /** Region the overlay covers, or null when no file drag is over the
+    /** Region the overlay covers, or null when no attachable drag is over the
      *  conversation. The measurement anchor always renders. */
     region: ComposerDropRegion | null
     /** Reports the mounted anchor element so the host can resolve the overlay's
      *  fixed-position origin against it. */
     onAnchorChange: (element: HTMLElement | null) => void
-    onDropFiles: (dataTransfer: DataTransfer | null) => void
+    /** Attach what the drop carried: files, or the media links a drag out of a
+     *  web page names instead of files. */
+    onDropData: (dataTransfer: DataTransfer | null) => void
     onClearDropState: () => void
   }
 
-  let { region, onAnchorChange, onDropFiles, onClearDropState }: Props = $props()
+  let { region, onAnchorChange, onDropData, onClearDropState }: Props = $props()
 
   const captureDropAnchorProbe: Attachment<HTMLElement> = (element) => {
     onAnchorChange(element)
@@ -55,12 +57,12 @@
       e.preventDefault()
       e.stopPropagation()
       onClearDropState()
-      onDropFiles(e.dataTransfer)
+      onDropData(e.dataTransfer)
     }}
   >
     <div class="flex flex-col items-center gap-2 text-primary">
       <Upload size={32} />
-      <span class="text-base font-medium">Drop files to attach</span>
+      <span class="text-base font-medium">Drop to attach</span>
     </div>
   </div>
 {/if}

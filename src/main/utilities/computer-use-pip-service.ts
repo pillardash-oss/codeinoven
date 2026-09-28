@@ -27,13 +27,6 @@ const BASE_FRAME_DIMENSION = 448
  *  both the per-frame encode cost and the bytes streamed over IPC. */
 const MAX_FRAME_DIMENSION = 896
 const JPEG_QUALITY = 78
-const MAX_CURSOR_POINT_NODES = 32
-const CURSOR_POINT_CONTAINER_KEYS = [
-  'position',
-  'screen_position',
-  'screenPosition',
-  'coordinates'
-] as const
 
 interface WindowBounds {
   x: number
@@ -50,12 +43,6 @@ interface WindowRecord {
   on_current_space?: boolean | null
   z_index?: number | null
   bounds?: WindowBounds
-}
-
-interface CursorPosition {
-  x: number
-  y: number
-  visible?: boolean
 }
 
 /**
@@ -106,7 +93,18 @@ export class ComputerUsePipService {
    * instead of pinning a mode of its own.
    */
   private targetPermissionLevel: PermissionLevel = 'auto_review'
-  private cursor: ComputerUsePipCursor | null = null
+  /**
+   * Where the tracked run's own cursor last was, in screen points, as reported by
+   * the turn that owns the run, or null while the run has not moved a cursor.
+   *
+   * Deliberately kept unprojected: the window is re-resolved every frame, so a
+   * window that moved, resized, or was replaced reprojects this same point
+   * instead of carrying pixel offsets that describe the window it left.
+   */
+  private agentCursorScreen: { x: number; y: number } | null = null
+  /** The cursor last painted into a frame, in that frame's pixels. Kept only so a
+   *  frame whose window reports no bounds still paints the marker it had. */
+  private frameCursor: ComputerUsePipCursor | null = null
   private dismissedThreadId: string | null = null
   /** Device pixels of preview the renderer is about to paint, as reported by
    *  the overlay. The capture is scaled to cover it so a scaled-up preview is
@@ -125,13 +123,40 @@ export class ComputerUsePipService {
   /**
    * Called for every computer-use operation an agent performs. The activity
    * mirror is updated unconditionally; window tracking only starts when the
-   * operation named a target process.
+   * operation named a target process, and the run's cursor follows whatever moved
+   * it.
    */
   onActivity(event: CuaOperationEvent): void {
     this.recordActivity(event)
     if (event.pid !== null) {
       void this.track(event.pid, event.threadId, event.sessionId, event.permissionLevel)
     }
+    this.noteAgentCursor(event)
+  }
+
+  /**
+   * Keep the tracked run's most recent cursor position, in screen points.
+   *
+   * The position is handed over by the turn's own driver connection rather than
+   * read here: a Cua session belongs to the MCP transport that created it, so
+   * `get_agent_cursor_state` refuses a session this monitor's own transport opens
+   * ("session is not available to this transport"). Reading it here is what left
+   * every preview without a cursor, silently, because the refusal arrives as a
+   * resolved result rather than an error.
+   */
+  private noteAgentCursor(event: CuaOperationEvent): void {
+    if (!event.cursor) return
+    // Two threads can drive the computer at once and this overlay shows one of
+    // them, so only the tracked run may move its marker.
+    if (!this.active || event.threadId !== this.ownerThreadId) return
+    if ((event.sessionId ?? null) !== this.targetSessionId) return
+    this.agentCursorScreen = event.cursor
+  }
+
+  /** Forget the tracked run's cursor, both the point and the painted projection. */
+  private clearCursor(): void {
+    this.agentCursorScreen = null
+    this.frameCursor = null
   }
 
   /** Every thread whose agent is currently driving the computer. */
@@ -183,7 +208,7 @@ export class ComputerUsePipService {
     this.targetSessionId = sessionId ?? null
     this.targetPermissionLevel = permissionLevel
     if (targetChanged) {
-      this.cursor = null
+      this.clearCursor()
       this.captureGeneration += 1
     }
     if (this.active && this.targetPid === pid) return
@@ -263,10 +288,17 @@ export class ComputerUsePipService {
    * Clears the user's close so the next turn may show the PiP again if CUA is
    * used, cancels a pending auto-dismiss from a just-finished turn, and drops
    * any computer-use activity a crashed previous turn never cleared.
+   *
+   * The previous turn's cursor goes with it: each turn runs on its own driver
+   * session, so a marker left over from the turn before points at where that run
+   * last clicked, in a preview that may well still be up.
    */
   notifyTurnStarted(threadId: string): void {
     if (this.dismissedThreadId === threadId) this.dismissedThreadId = null
-    if (this.ownerThreadId === threadId) this.clearAutoDismiss()
+    if (this.ownerThreadId === threadId) {
+      this.clearAutoDismiss()
+      this.clearCursor()
+    }
     this.clearActivity(threadId)
   }
 
@@ -303,7 +335,7 @@ export class ComputerUsePipService {
     this.misses = 0
     this.ownerThreadId = null
     this.targetSessionId = null
-    this.cursor = null
+    this.clearCursor()
     this.clearAutoDismiss()
     this.clearLoop()
     await this.releaseDriverConnection()
@@ -333,6 +365,7 @@ export class ComputerUsePipService {
     this.active = false
     this.runGeneration += 1
     this.captureGeneration += 1
+    this.clearCursor()
     this.clearLoop()
     await this.releaseDriverConnection()
   }
@@ -463,20 +496,17 @@ export class ComputerUsePipService {
       // driver refuses window-scope tools on a session the agent escalated to
       // desktop scope ("window-scope tool 'get_window_state' is disabled while
       // session '<id>' is in desktop scope"), which silently killed every frame
-      // of a desktop-scope run. The agent cursor is still read from that session
-      // below, and `get_agent_cursor_state` works in either scope.
-      const screenshotRequest = client.callTool('get_window_state', {
-        pid,
-        window_id: window.window_id,
-        include_screenshot: true,
-        max_elements: 1
-      })
-      const cursorRequest = sessionId
-        ? client.callTool('get_agent_cursor_state', { session: sessionId })
-        : Promise.resolve(null)
-      const [screenshotResult, cursorResult] = await Promise.allSettled([
-        screenshotRequest,
-        cursorRequest
+      // of a desktop-scope run. The cursor is not read from that session here
+      // either: this monitor's own connection cannot see it (see
+      // `noteAgentCursor`), so the position arrives with the operation that moved
+      // it.
+      const [screenshotResult] = await Promise.allSettled([
+        client.callTool('get_window_state', {
+          pid,
+          window_id: window.window_id,
+          include_screenshot: true,
+          max_elements: 1
+        })
       ])
       const image =
         screenshotResult.status === 'fulfilled' ? extractImage(screenshotResult.value) : null
@@ -494,8 +524,6 @@ export class ComputerUsePipService {
         return
       }
       const optimizedImage = optimizeImage(image, this.frameCap())
-      const cursorPosition =
-        cursorResult.status === 'fulfilled' ? extractCursorPosition(cursorResult.value) : null
       // The overlay may have been dismissed, re-targeted, or re-latched while we
       // awaited the driver   never paint a stale frame, or record the run's state
       // from a stale window, into the run that replaced it.
@@ -503,10 +531,12 @@ export class ComputerUsePipService {
       this.misses = 0
       this.appName = window.app_name || this.appName || 'App'
       this.windowId = window.window_id
-      if (cursorPosition) {
-        const projectedCursor = projectCursor(cursorPosition, window, optimizedImage)
-        if (projectedCursor) this.cursor = projectedCursor
-      }
+      // Reprojected every frame against the window this frame really shows, so the
+      // marker holds its place in the app when the window moves or is replaced.
+      const projectedCursor = this.agentCursorScreen
+        ? projectCursor(this.agentCursorScreen, window, optimizedImage)
+        : null
+      if (projectedCursor) this.frameCursor = projectedCursor
       const frame: ComputerUsePipFrame = {
         pid,
         appName: this.appName,
@@ -515,7 +545,7 @@ export class ComputerUsePipService {
         width: optimizedImage.width,
         height: optimizedImage.height,
         timestamp: Date.now(),
-        ...(this.cursor ? { cursor: this.cursor } : {})
+        ...(this.frameCursor ? { cursor: this.frameCursor } : {})
       }
       this.broadcast('computerUse:pipFrame', frame)
     } catch (error) {
@@ -823,81 +853,25 @@ function settledFailureText(result: PromiseSettledResult<unknown>): string | nul
   return null
 }
 
-function extractCursorPosition(result: unknown): CursorPosition | null {
-  const structured = recordValue(result)['structuredContent']
-  const roots = [structured, result]
-  for (const root of roots) {
-    const record = recordValue(root)
-    const point = firstPoint([
-      record['position'],
-      record['screen_position'],
-      record['screenPosition'],
-      record['coordinates'],
-      record['cursor_position'],
-      record['cursor'],
-      record
-    ])
-    if (!point) continue
-    const visible = booleanValue(record['visible']) ?? booleanValue(record['enabled'])
-    return { ...point, ...(visible === undefined ? {} : { visible }) }
-  }
-  return null
-}
-
-function firstPoint(values: unknown[]): { x: number; y: number } | null {
-  for (const value of values) {
-    const point = pointValue(value)
-    if (point) return point
-  }
-  return null
-}
-
-function pointValue(value: unknown): { x: number; y: number } | null {
-  const pending: unknown[] = [value]
-  const visited = new Set<object>()
-  let examined = 0
-
-  while (pending.length > 0 && examined < MAX_CURSOR_POINT_NODES) {
-    const current = pending.pop()
-    if (Array.isArray(current)) {
-      if (current.length < 2) continue
-      const x = Number(current[0])
-      const y = Number(current[1])
-      if (Number.isFinite(x) && Number.isFinite(y)) return { x, y }
-      continue
-    }
-    if (!isRecord(current) || visited.has(current)) continue
-    visited.add(current)
-    examined += 1
-
-    const x = Number(current['x'])
-    const y = Number(current['y'])
-    if (Number.isFinite(x) && Number.isFinite(y)) return { x, y }
-
-    for (let index = CURSOR_POINT_CONTAINER_KEYS.length - 1; index >= 0; index -= 1) {
-      const nested = current[CURSOR_POINT_CONTAINER_KEYS[index]]
-      if (nested !== undefined && nested !== null) pending.push(nested)
-    }
-  }
-  return null
-}
-
-function booleanValue(value: unknown): boolean | undefined {
-  return typeof value === 'boolean' ? value : undefined
-}
-
+/**
+ * Where a cursor point sits inside one frame: the point is in screen points, the
+ * frame is the window's own screenshot, scaled and cropped by the capture.
+ *
+ * A point outside the window is pinned to the frame's edge: an agent cursor that
+ * left this window is still worth seeing at the boundary rather than not at all.
+ */
 function projectCursor(
-  position: CursorPosition,
+  point: { x: number; y: number },
   window: WindowRecord,
   image: { width: number; height: number }
 ): ComputerUsePipCursor | null {
   const bounds = window.bounds
   if (!bounds || image.width <= 0 || image.height <= 0) return null
-  const x = ((position.x - bounds.x) / bounds.width) * image.width
-  const y = ((position.y - bounds.y) / bounds.height) * image.height
+  const x = ((point.x - bounds.x) / bounds.width) * image.width
+  const y = ((point.y - bounds.y) / bounds.height) * image.height
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null
   return {
-    visible: position.visible !== false,
+    visible: true,
     x: Math.min(Math.max(0, x), image.width),
     y: Math.min(Math.max(0, y), image.height)
   }

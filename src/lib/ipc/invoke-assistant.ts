@@ -1,4 +1,6 @@
 import type {
+  AutoAnswerItem,
+  BackgroundRun,
   CreateRoutineInput,
   MissedRun,
   Project,
@@ -71,7 +73,22 @@ export const invokeAssistantContract = {
    */
   'assistant:postSetup': {} as Contract<[routineId: string], void>,
   'assistant:listMissedRuns': {} as Contract<[], MissedRun[]>,
+  /**
+   * Durable record of unattended runs, newest first. The "While you were away"
+   * list and a routine's own history read this so a run whose thread was since
+   * evicted or deleted still shows what happened.
+   */
+  'assistant:listBackgroundRuns': {} as Contract<[], BackgroundRun[]>,
   'assistant:dismissMissedRun': {} as Contract<[id: string], void>,
+  /**
+   * Gates the app resolved without the user (a question whose timer answered
+   * it, a secret card that expired, an image-descriptor decision that timed
+   * out). The right-rail attention panel lists these until dismissed.
+   */
+  'assistant:listAutoAnswers': {} as Contract<[], AutoAnswerItem[]>,
+  'assistant:dismissAutoAnswer': {} as Contract<[id: string], void>,
+  /** Dismiss every unread auto-resolved gate. Returns how many were cleared. */
+  'assistant:dismissAllAutoAnswers': {} as Contract<[], number>,
   /** Dispatch the missed run on a fresh run thread and settle the record. */
   'assistant:runMissedRunNow': {} as Contract<[id: string], Thread | null>,
   /**

@@ -1,9 +1,10 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   Menu,
-  MenuItem,
+  screen,
   session,
   webFrameMain,
   WebContentsView,
@@ -18,6 +19,11 @@ import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Project, Thread } from '../../lib/types'
 import { isPreviewOriginUrl, originOf } from '../../lib/local-development-url'
+import {
+  BUILT_IN_BROWSER_SEARCH_ENGINES,
+  buildBrowserSearchUrl,
+  type BrowserSearchEngine
+} from '../../lib/browser-search-engines'
 import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../lib/image-payload'
 import type {
   BrowserCompositionPlayback,
@@ -25,14 +31,18 @@ import type {
   BrowserConsoleLevel,
   BrowserDesignTab,
   BrowserDevToolsState,
+  BrowserLoadError,
   BrowserPageState,
   BrowserPanelShortcutAction,
   BrowserPermissionRequest,
   BrowserShortcutAction,
   BrowserShortcutBindings,
+  BrowserSwitcherBindings,
+  BrowserScrollbarTheme,
   BrowserTransportCommand,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
+import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc-contract'
 import { isVideoCaptureUrl } from '../../lib/video/project'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -43,8 +53,23 @@ import { BrowserDownloadTracker } from './browser-service/browser-downloads'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
 import { BrowserInspector } from './browser-service/browser-inspector'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
+import {
+  BrowserPopupWindows,
+  type BrowserPopupWindowHost,
+  type BrowserPopupWindowRecord
+} from './browser-service/browser-popup-windows'
 import { dialogContextScript } from './browser-service/browser-dialog-context'
-import { matchBrowserShortcut } from './browser-service/browser-shortcuts'
+import {
+  buildBrowserContextMenuItems,
+  buildBrowserPageMenuItems,
+  type BrowserContextMenuActions,
+  type BrowserContextMenuContext
+} from './browser-service/browser-context-menu'
+import {
+  matchBrowserShortcut,
+  matchesBrowserChord,
+  type ShortcutKeyInput
+} from './browser-service/browser-shortcuts'
 import {
   permissionCheckKey,
   permissionGrantKeys,
@@ -59,8 +84,15 @@ import {
   BrowserPermissionMemory,
   type PermissionMemoryPersistence
 } from './browser-service/browser-permission-memory'
-import type { BrowserTab, PendingBrowserPermission } from './browser-service/browser-types'
+import type {
+  BrowserPageOwner,
+  BrowserTab,
+  BrowserViewport,
+  ParkBrowserTabOptions,
+  PendingBrowserPermission
+} from './browser-service/browser-types'
 import { BrowserTabStage } from './browser-service/browser-stage'
+import { applyBrowserPageBackground } from './browser-service/browser-page-background'
 import {
   AGENT_REVEAL_GRACE_MS,
   BROWSER_PARTITION_PREFIX,
@@ -70,20 +102,27 @@ import {
   MAX_CONSOLE_ENTRIES,
   MAX_DIALOG_LABEL_LENGTH,
   MAX_PARKED_TABS,
+  MAX_POPUP_WINDOWS_PER_TAB,
   MAX_TRANSPORT_ERROR_LENGTH,
   MAX_ZOOM_LEVEL,
   PERMISSION_TIMEOUT_MS,
   RELAX_COOLDOWN_MS,
+  RENDERER_PARK_GRACE_MS,
   SCREENSHOT_JPEG_QUALITY,
   SCREENSHOT_MAX_BYTES,
   ZOOM_STEP,
   browserContextKey,
+  isAllowedPopupWindowUrl,
   isSameBounds,
+  isSameViewport,
+  popupWindowViewport,
   safeBasename,
   validateAttention,
   validateBounds,
   validateBoundedHost,
+  validateBrowserSearchEngine,
   validateBrowserShortcutBindings,
+  validateBrowserSwitcherBindings,
   validateBrowserUrl,
   validateDownloadId,
   validateInspectorMarkers,
@@ -92,7 +131,9 @@ import {
   validateOptionalBrowserUrl,
   validatePermissionDecision,
   validatePermissionRequestId,
+  validatePopupWindowId,
   validateProjectId,
+  validateScrollbarTheme,
   validateSiteDataScopes,
   validateSiteMenuPoint,
   validateTabId,
@@ -101,7 +142,6 @@ import {
   validateTransportValue,
   validateViewportRequest
 } from './browser-service/browser-validation'
-import type { BrowserViewport } from './browser-service/browser-types'
 
 /**
  * Where a renderer-owned shortcut lands. The key is decided in this process,
@@ -109,13 +149,19 @@ import type { BrowserViewport } from './browser-service/browser-types'
  * strip stays the renderer's: it opens, closes and focuses its own tabs.
  */
 const PANEL_SHORTCUT_TARGETS: Readonly<
-  Record<'focusAddress' | 'closeTab' | 'newTab', BrowserPanelShortcutAction>
+  Record<'focusAddress' | 'closeTab' | 'newTab' | 'toggleNotes', BrowserPanelShortcutAction>
 > = {
   focusAddress: 'focus-address',
   closeTab: 'close-tab',
-  newTab: 'new-tab'
+  newTab: 'new-tab',
+  toggleNotes: 'toggle-notes'
 }
 
+import {
+  faviconForCommittedUrl,
+  faviconOriginOf,
+  rememberFavicon
+} from './browser-service/browser-favicon-memory'
 import {
   NO_TAB_MARK,
   isSameTabMark,
@@ -129,6 +175,61 @@ import {
   compositionTransportScript,
   compositionTransportStateScript
 } from './browser-service/browser-transport-script'
+
+/**
+ * The page a native context menu was opened over.
+ *
+ * One shape covers both kinds of page the browser hosts   a tab's own page and a
+ * popup window's   so one menu builder and one action set serve both: what
+ * differs between them is only which page the actions act on and which tab a page
+ * they open belongs to.
+ */
+interface BrowserMenuPage {
+  contents: WebContents
+  owner: BrowserPageOwner
+}
+
+/** The menu's view of one browser tab's own page. */
+function menuPageFor(tabId: string, tab: BrowserTab): BrowserMenuPage {
+  return {
+    contents: tab.view.webContents,
+    owner: { tabId, projectId: tab.projectId, threadId: tab.threadId }
+  }
+}
+
+/** The owner of a popup window's page: the tab whose page opened it. */
+function popupPageOwner(record: BrowserPopupWindowRecord): BrowserPageOwner {
+  return { tabId: record.tabId, projectId: record.projectId, threadId: record.threadId }
+}
+
+/**
+ * The `WebContents` Chromium created for a popup window, read off the options it
+ * hands the `createWindow` hook.
+ *
+ * The hook is called instead of Electron creating a window, and the popup's own
+ * `WebContents` travels on an options field the constructor type does not declare.
+ * It is therefore read from the object itself and checked before use, because the
+ * hook must answer with that exact object: any other one is reported as
+ * unconnected and the popup never opens.
+ */
+function popupWindowContents(options: Electron.BrowserWindowConstructorOptions): WebContents | null {
+  const candidate: unknown = Reflect.get(options, 'webContents')
+  return isWebContents(candidate) ? candidate : null
+}
+
+/**
+ * Whether a value is a live `WebContents`, checked by the methods the app uses
+ * on it rather than by `instanceof`: the popup's own contents arrives on an
+ * options field with no declared type, so the check has to be structural.
+ */
+function isWebContents(value: unknown): value is WebContents {
+  if (typeof value !== 'object' || value === null) return false
+  return (
+    typeof Reflect.get(value, 'getURL') === 'function' &&
+    typeof Reflect.get(value, 'isDestroyed') === 'function' &&
+    typeof Reflect.get(value, 'loadURL') === 'function'
+  )
+}
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -177,16 +278,36 @@ export class BrowserService {
   /** Chords the browser claims, resolved from the keymap by the renderer. Empty
    *  until that report arrives, which leaves every key to the rest of the app. */
   private shortcutBindings: BrowserShortcutBindings = {}
+  /** The Ctrl+Tab switcher chords, pushed by the renderer from its keymap. A key
+   *  pressed in a page never reaches the renderer, so main claims these here. */
+  private switcherBindings: BrowserSwitcherBindings = []
   /**
-   * The tab whose toolbar holds DOM focus (address bar, navigation buttons), or
-   * null while none does.
+   * The tab whose surface holds the keyboard, or null while none does.
    *
    * A key pressed inside the page arrives on the tab's own web contents; a key
-   * pressed in the toolbar arrives on the window's, where the application menu
-   * would otherwise act on it. This is the one fact main cannot read for itself,
-   * so the panel reports it and the window-level interception routes to this tab.
+   * pressed in the toolbar, or anywhere in the Browser view's own DOM, arrives on
+   * the window's, where the application menu would otherwise act on it. This is
+   * the one fact main cannot read for itself, so the surface that holds the
+   * keyboard reports it and the window-level interception routes to this tab.
+   *
+   * The report is kept exactly as it arrived and matched against the tab list when
+   * a key is consumed, rather than parked as null when the tab is not known yet: a
+   * view claims the keyboard as it mounts, which is a moment *before* the
+   * `browser:show` that creates the page it is about to display, and by the time a
+   * key arrives the tab is the one the renderer named. A destroyed tab is cleared
+   * here as well (`destroyTab`), so the match is what keeps a stale id from routing
+   * a key.
    */
   private focusedChromeTabId: string | null = null
+  /**
+   * The tab whose page should take the keyboard the moment it is on screen.
+   *
+   * A page can only be handed the keyboard while it is actually displayed, but a
+   * user switch asks the instant the user picks the tab, which can be before the
+   * show carrying that page lands. Holding the intent here is what keeps the
+   * switch focused instead of losing the race to the page's own mount.
+   */
+  private pendingPageFocusTabId: string | null = null
   /** Last known content bounds of the active tab's native view (window-content
    *  coordinates). The permission popup anchors itself to this area so it
    *  never collides with toasts at the window edge. */
@@ -200,6 +321,21 @@ export class BrowserService {
    *  window-server commit, and doing that sixty times a second for a frame that
    *  never moved is the difference between an instant switch and a hitch. */
   private displayedTab: { tabId: string; bounds: BrowserViewBounds } | null = null
+  /**
+   * Hides the renderer asked for, with the handle waiting out their grace window
+   * and the moment each one arrived.
+   *
+   * A surface switch unmounts one panel and mounts the next for the same tab, and
+   * the renderer's own visibility answer is recomputed every frame, so it flaps:
+   * a hide and the show that follows it describe one continuous view that never
+   * actually left. Parking in between is a window-server teardown and a re-parent
+   * the page feels, and a re-attach a few milliseconds later is a flicker of a
+   * page nothing asked to move. So a hide waits `RENDERER_PARK_GRACE_MS` for a
+   * show to cancel it, and a hide nothing contradicts still parks, a few frames
+   * after the decision that produced it. The arrival time is kept so a cancelled
+   * park can report how long the answer it acted on lasted.
+   */
+  private readonly pendingParks = new Map<string, { handle: ReturnType<typeof setTimeout>; at: number }>()
   /** The dialog-context label already installed in each tab's current document.
    *  The shim is idempotent per document, so a repeat is a script evaluation
    *  per frame for no change. Cleared when a new document commits. */
@@ -222,7 +358,38 @@ export class BrowserService {
    *  WebContentsView floats above every DOM surface, so while this is set the
    *  active browser view stays detached and the DOM toast composites normally. */
   private toastVisible = false
+  /**
+   * The address bar's active search engine, reported by the renderer (which
+   * owns the config) so the native context menu can label and run its
+   * "Search <engine> for ..." item. Defaults to the shipped engine until the
+   * first report lands.
+   */
+  private contextMenuSearchEngine: BrowserSearchEngine = BUILT_IN_BROWSER_SEARCH_ENGINES[0]
+  /** The app's default-scrollbar colours, applied to every tab's page. Null
+   *  until the renderer pushes them once at boot. */
+  private scrollbarTheme: BrowserScrollbarTheme | null = null
+  /** The user-origin stylesheet inserted per tab, so a theme swap can replace
+   *  the previous one instead of stacking. */
+  private scrollbarStyles = new Map<string, string>()
   private consoleSequence = 0
+  /**
+   * The popup windows pages have opened, hosted by the app rather than by the
+   * system. Created with the rest of the view plumbing below, because its host
+   * is this service's own window handling.
+   */
+  private readonly popupWindows: BrowserPopupWindows
+  /**
+   * The popup views currently mounted in the app window.
+   *
+   * Tracked rather than read back from `contentView.children`: a popup's page can
+   * destroy itself at any moment (that is how a finished sign-in ends), and once
+   * its view no longer carries web contents the window's own child list throws
+   * when it is read. The app therefore has to know what it mounted itself.
+   */
+  private readonly mountedPopupViews = new Set<WebContentsView>()
+  /** The frame each mounted popup view was last placed at, so a move is reported
+   *  as a move rather than as another placement. */
+  private readonly popupViewFrames = new Map<WebContentsView, BrowserViewBounds>()
 
   constructor(
     private readonly window: BrowserWindow,
@@ -234,12 +401,12 @@ export class BrowserService {
     this.permissionMemory = new BrowserPermissionMemory(permissionPersistence)
     this.projects = new ProjectRepo(db)
     this.threads = new ThreadRepo(db)
+    this.popupWindows = new BrowserPopupWindows(this.popupWindowHost())
     this.downloadTracker = new BrowserDownloadTracker({
       window,
-      findTabId: (projectId, contentsId) =>
-        [...this.tabs.entries()].find(
-          ([, tab]) => tab.projectId === projectId && tab.view.webContents.id === contentsId
-        )?.[0]
+      // A download started by a popup window is the tab's download: the row the
+      // user sees must name the tab they were reading, not a page with no strip.
+      findTabId: (projectId, contentsId) => this.tabIdForContents(projectId, contentsId)
     })
     this.siteData = new BrowserSiteDataService({
       window,
@@ -291,17 +458,39 @@ export class BrowserService {
         const bounds = validateBounds(rawBounds)
         const tab = this.ensureTab(tabId, projectId, threadId)
 
+        // A show that lands inside the grace window of a hide is a surface switch
+        // or a visibility answer that flapped, not a departure: dropping the
+        // deferred park keeps the page where it is instead of parking it and
+        // re-parenting it straight back, which is the flicker the user sees.
+        this.cancelPendingPark(tabId)
         // Leaving a tab costs nothing now: the outgoing tab keeps running in an
         // invisible stage window instead of going dead behind the app window.
-        if (this.activeTabId && this.activeTabId !== tabId) this.parkTab(this.activeTabId)
+        if (this.activeTabId && this.activeTabId !== tabId) {
+          this.parkTab(this.activeTabId, { reason: 'another tab took the view' })
+        }
         this.activeTabId = tabId
         this.activeTabBounds = bounds
+        // Remember the frame the page is on screen at. Parking lays the page out at
+        // this size from now on, so leaving a tab never resizes the page away from
+        // the size the user was reading it at.
+        tab.displayedViewport = {
+          viewport: { width: bounds.width, height: bounds.height },
+          at: Date.now()
+        }
         this.markRevealShown(tabId)
         if (this.toastVisible) {
           // A native view floats above every DOM surface, so while a toast is on
           // screen the tab stays parked at its on-screen size: the page keeps
-          // the exact viewport the user was looking at, and keeps running.
-          this.parkTab(tabId, { width: bounds.width, height: bounds.height }, true)
+          // the exact viewport the user was looking at, and keeps running. The
+          // panel re-reports the same frame while the toast is up and the view is
+          // already where it belongs, so only the first report parks it.
+          if (!this.stage.isParked(tab.view)) {
+            this.parkTab(tabId, {
+              size: { width: bounds.width, height: bounds.height },
+              keepActive: true,
+              reason: 'toast on screen'
+            })
+          }
         } else {
           this.showActiveView()
         }
@@ -323,15 +512,45 @@ export class BrowserService {
       // Leaving a tab right after an agent revealed it is the signal that the
       // agent's reveal was not welcome; it stops being counted after a while.
       this.noteDepartedReveal(tabId)
-      this.parkTab(tabId)
+      // Deferred by one tick, so a panel that unmounts because the same tab is
+      // moving to another surface (the sidebar handing the tab to the full screen
+      // browser) does not park a view that is about to be shown again.
+      this.schedulePark(tabId, 'the renderer left this surface')
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
     })
+    ipcMain.handle('browser:showPopupWindow', (_event, rawPopupId, rawBounds) => {
+      this.popupWindows.show(validatePopupWindowId(rawPopupId), validateBounds(rawBounds))
+    })
+    ipcMain.handle('browser:hidePopupWindow', (_event, rawPopupId) => {
+      this.popupWindows.hide(validatePopupWindowId(rawPopupId))
+    })
+    ipcMain.handle('browser:focusPopupWindow', (_event, rawPopupId) => {
+      this.popupWindows.focus(validatePopupWindowId(rawPopupId))
+    })
+    ipcMain.handle('browser:closePopupWindow', (_event, rawPopupId) => {
+      this.popupWindows.close(validatePopupWindowId(rawPopupId), 'the user closed it')
+    })
+    ipcMain.handle('browser:getPopupWindows', (_event, rawProjectId) =>
+      this.popupWindows.list(validateProjectId(rawProjectId))
+    )
     ipcMain.handle('browser:setToastVisible', (_event, rawVisible) => {
       this.setToastVisible(rawVisible === true)
     })
-    ipcMain.handle('browser:navigate', (_event, rawTabId, rawUrl) => {
-      this.load(validateTabId(rawTabId), validateBrowserUrl(rawUrl))
+    ipcMain.handle('browser:navigate', (_event, rawTabId, rawProjectId, rawThreadId, rawUrl) => {
+      const tabId = validateTabId(rawTabId)
+      const projectId = validateProjectId(rawProjectId)
+      const threadId = validateThreadId(rawThreadId)
+      const url = validateBrowserUrl(rawUrl)
+      // Main creates a tab on `browser:show`, so a tab the renderer already knows
+      // can still be unknown here: a fresh tab whose page has not been shown yet
+      // because an overlay (the address spotlight) covers its frame. Ensuring the
+      // tab makes an address load regardless of whether its page is on screen.
+      const tab = this.ensureTab(tabId, projectId, threadId)
+      // The navigation below is this tab's first, so a later show must not load
+      // the stale initial URL over it.
+      tab.initialNavigationStarted = true
+      this.load(tabId, url)
     })
     ipcMain.handle('browser:goBack', (_event, rawTabId) => {
       const tab = this.requireTab(validateTabId(rawTabId))
@@ -344,6 +563,12 @@ export class BrowserService {
       if (tab.view.webContents.navigationHistory.canGoForward()) {
         tab.view.webContents.navigationHistory.goForward()
       }
+    })
+    ipcMain.handle('browser:mouseHistoryNavigation', (_event, rawDirection) => {
+      if (rawDirection !== 'back' && rawDirection !== 'forward') {
+        throw new TypeError('Browser mouse history direction must be back or forward')
+      }
+      return this.navigateFocusedHistory(rawDirection)
     })
     ipcMain.handle('browser:reload', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.reload()
@@ -375,21 +600,29 @@ export class BrowserService {
       this.publishState(tabId)
     })
     ipcMain.handle('browser:setChromeFocus', (_event, rawTabId) => {
-      // The panel may name a tab that was already destroyed (a close racing the
-      // last focus report). Parking the answer as null is correct: no toolbar
-      // holds the keyboard any more.
-      if (rawTabId === null) {
-        this.focusedChromeTabId = null
-        return
-      }
-      const tabId = validateTabId(rawTabId)
-      this.focusedChromeTabId = this.tabs.has(tabId) ? tabId : null
+      // Kept as reported, including a tab this process has not created yet: the
+      // claim is matched against the tab list when a key is consumed (see
+      // `focusedChromeTabId`), because the surface reports it as it mounts, before
+      // the show that creates the page.
+      this.focusedChromeTabId = rawTabId === null ? null : validateTabId(rawTabId)
+    })
+    ipcMain.handle('browser:focusPage', (_event, rawTabId) => {
+      this.focusPage(validateTabId(rawTabId))
     })
     ipcMain.handle('browser:setShortcutBindings', (_event, rawBindings) => {
       this.shortcutBindings = validateBrowserShortcutBindings(rawBindings)
     })
+    ipcMain.handle('browser:setSwitcherBindings', (_event, rawBindings) => {
+      this.switcherBindings = validateBrowserSwitcherBindings(rawBindings)
+    })
+    ipcMain.handle('browser:setSearchEngine', (_event, rawEngine) => {
+      this.contextMenuSearchEngine = validateBrowserSearchEngine(rawEngine)
+    })
+    ipcMain.handle('browser:setScrollbarTheme', (_event, rawTheme) => {
+      this.setScrollbarTheme(validateScrollbarTheme(rawTheme))
+    })
     ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) =>
-      this.toggleTabDevTools(this.requireTab(validateTabId(rawTabId)))
+      this.toggleDevTools(this.requireTab(validateTabId(rawTabId)).view.webContents)
     )
     ipcMain.handle('browser:inspectSetArmed', (_event, rawTabId, rawArmed, rawTheme) => {
       const tabId = validateTabId(rawTabId)
@@ -511,10 +744,15 @@ export class BrowserService {
   }
 
   dispose(): void {
+    this.popupWindows.closeAll('the browser was torn down')
+    this.mountedPopupViews.clear()
+    this.popupViewFrames.clear()
     this.activeTabId = null
     this.toastVisible = false
     this.activeTabBounds = null
     this.displayedTab = null
+    for (const pending of this.pendingParks.values()) clearTimeout(pending.handle)
+    this.pendingParks.clear()
     this.injectedDialogLabels.clear()
     this.parkedOrder.length = 0
     this.agentReveals.clear()
@@ -565,7 +803,60 @@ export class BrowserService {
   setTabMarkRecogniser(recogniser: TabMarkRecogniser | null): void {
     this.tabMarkRecogniser = recogniser
   }
+  /**
+   * Set the search engine the context menu's web search uses.
+   *
+   * Called once with the boot config and again whenever the renderer reports a
+   * config change, because the browser's native context menu is built here and
+   * this process holds the config rather than the service.
+   */
+  setSearchEngine(engine: BrowserSearchEngine): void {
+    this.contextMenuSearchEngine = engine
+  }
 
+  /**
+   * Set the app's scrollbar colours and apply them to every open tab.
+   *
+   * Called once with the renderer's first push and again whenever the app theme
+   * changes, so a default page scrollbar stays on brand without the renderer
+   * having to know which tabs exist. A user-origin stylesheet is what keeps a
+   * site's own scrollbar styling in charge where it exists.
+   */
+  setScrollbarTheme(theme: BrowserScrollbarTheme): void {
+    this.scrollbarTheme = theme
+    for (const [tabId, tab] of this.tabs) this.applyScrollbarTheme(tabId, tab.view.webContents)
+  }
+
+  /** Build the user-origin stylesheet a page's default scrollbar is drawn with. */
+  private scrollbarThemeCss(theme: BrowserScrollbarTheme): string {
+    return (
+      '::-webkit-scrollbar{width:6px;height:6px}' +
+      '::-webkit-scrollbar-track{background:transparent}' +
+      `::-webkit-scrollbar-thumb{background:${theme.thumb};border-radius:3px}` +
+      `::-webkit-scrollbar-thumb:hover{background:${theme.thumbHover}}`
+    )
+  }
+
+  /**
+   * Install the current colours into one tab's document. Re-run on every
+   * `dom-ready`, because a navigation replaces the stylesheet with the document.
+   * The insert is user-origin on purpose: author styles win the cascade, so a
+   * site that styles its own scrollbar keeps it.
+   */
+  private applyScrollbarTheme(tabId: string, contents: WebContents): void {
+    const theme = this.scrollbarTheme
+    if (!theme || contents.isDestroyed()) return
+    const previous = this.scrollbarStyles.get(tabId)
+    this.scrollbarStyles.delete(tabId)
+    contents
+      .insertCSS(this.scrollbarThemeCss(theme), { cssOrigin: 'user' })
+      .then((key) => {
+        if (contents.isDestroyed()) return
+        this.scrollbarStyles.set(tabId, key)
+        if (previous) void contents.removeInsertedCSS(previous).catch(() => {})
+      })
+      .catch(() => {})
+  }
   /**
    * Decide, from the origin a tab is showing, what the app knows about its folder.
    *
@@ -646,7 +937,7 @@ export class BrowserService {
       tab.initialNavigationStarted = true
       // Mount the tab offscreen before anything else: the page must run whether
       // or not the user ends up looking at it.
-      this.parkTab(tabId)
+      this.parkTab(tabId, { reason: 'agent opened a tab in the background' })
       this.load(tabId, url)
       this.agentTabIds.set(contextKey, tabId)
       // An opportunistic reveal is skipped once the user has shown twice that
@@ -662,7 +953,7 @@ export class BrowserService {
       })
       return {
         ...this.utilityTabContext(tabId, tab),
-        viewport: tab.viewport,
+        viewport: this.parkedViewportFor(tab),
         attention: reveal ? 'focus' : 'background',
         relaxed,
         page: this.stateFor(tabId, tab)
@@ -677,12 +968,18 @@ export class BrowserService {
     }
     // An operation is a use: it revives a tab that was evicted from the parked
     // set, and protects it from eviction while the agent keeps working on it.
-    if (this.activeTabId !== tabId && !this.stage.isParked(tab.view)) this.parkTab(tabId)
-    else this.touchParkedTab(tabId)
+    if (this.activeTabId !== tabId && !this.stage.isParked(tab.view)) {
+      this.parkTab(tabId, { reason: 'agent operation on a tab that was not on screen' })
+    } else {
+      this.touchParkedTab(tabId)
+    }
     const utilityContext = this.utilityTabContext(tabId, tab)
     if (operation === 'viewport') {
-      const viewport = validateViewportRequest(input, tab.viewport)
-      tab.viewport = viewport
+      const viewport = validateViewportRequest(
+        input,
+        tab.requestedViewport?.viewport ?? DEFAULT_PARKED_VIEWPORT
+      )
+      tab.requestedViewport = { viewport, at: Date.now() }
       if (this.stage.isParked(tab.view)) {
         // Re-park rather than setBounds directly: the stage owns where each
         // parked view sits inside its window.
@@ -694,7 +991,7 @@ export class BrowserService {
         viewport,
         applied: 'displayed',
         detail:
-          'The user is viewing this tab, so it is laid out at the on-screen size right now. This viewport applies whenever the tab is parked offscreen.'
+          'The user is viewing this tab, so it is laid out at the on-screen size right now. This viewport applies the next time the tab is parked, unless the user displays it at a size of their own after this request.'
       }
     }
     if (operation === 'navigate') {
@@ -1256,10 +1553,10 @@ export class BrowserService {
    * Run one claimed browser action on a tab.
    *
    * The actions split by owner: what acts on the page happens here, and what
-   * acts on the tab strip (focusing the address bar, closing or opening a tab)
-   * is forwarded to the renderer, which is the only side that knows the strip.
-   * Saving is asynchronous because the save dialog is, and it must never block
-   * the key event that asked for it.
+   * acts on the tab strip (focusing the address bar, closing or opening a tab,
+   * showing the tab's notes) is forwarded to the renderer, which is the only side
+   * that knows the strip. Saving is asynchronous because the save dialog is, and
+   * it must never block the key event that asked for it.
    */
   private runBrowserShortcut(tabId: string, action: BrowserShortcutAction): void {
     const tab = this.tabs.get(tabId)
@@ -1288,22 +1585,56 @@ export class BrowserService {
         contents.setZoomLevel(0)
         return
       case 'toggleDevTools':
-        this.toggleTabDevTools(tab)
+        this.toggleDevTools(contents)
         return
       case 'savePage':
-        void this.saveTabPage(tab)
+        void this.savePage(contents)
         return
       case 'focusAddress':
       case 'closeTab':
       case 'newTab':
+      case 'toggleNotes':
         this.requestPanelShortcut(tabId, PANEL_SHORTCUT_TARGETS[action])
         return
     }
   }
 
-  /** Ask the renderer to act on the tab strip, which only the renderer owns. */
+  /**
+   * Claim the Ctrl+Tab switcher gesture pressed in a page.
+   *
+   * The switcher is a renderer DOM surface, but a key pressed in the page never
+   * reaches it. So the app claims the chord here (the app always wins; a site
+   * cannot override Ctrl+Tab), hands the renderer the keyboard and forwards the
+   * gesture. Once the renderer owns the keyboard the real Control release reaches
+   * the DOM and commits the highlight, so only the first press is forwarded.
+   *
+   * Returns whether the key was claimed, so the caller prevents it. Preventing it
+   * is what stops the page and the application menu from also acting on it.
+   */
+  private consumeSwitcherKey(input: ShortcutKeyInput): boolean {
+    if (!matchesBrowserChord(input, this.switcherBindings)) return false
+    if (!this.window.webContents.isDestroyed()) {
+      this.window.webContents.focus()
+      sendToRenderer(this.window.webContents, 'browser:switcherKey', { backward: input.shift })
+    }
+    return true
+  }
+
+  /**
+   * Ask the renderer to act on the tab strip, which only the renderer owns.
+   *
+   * When the key came from the page, this process still holds the OS keyboard
+   * through the page's own `WebContentsView`, so the renderer can move its
+   * `document.activeElement` into the address field but not take the user's
+   * typing with it. A shortcut whose whole point is a DOM field therefore hands
+   * the window's web contents the focus first: `focus-address` and `new-tab`
+   * both open a field the renderer immediately focuses. The tab-strip actions
+   * that do not involve a field (`close-tab`, `toggle-notes`) deliberately do
+   * not, because the page must keep the keyboard after them.
+   */
   private requestPanelShortcut(tabId: string, action: BrowserPanelShortcutAction): void {
     if (this.window.webContents.isDestroyed()) return
+    if (action === 'focus-address' || action === 'new-tab') this.window.webContents.focus()
     sendToRenderer(this.window.webContents, 'browser:panelShortcut', tabId, action)
   }
 
@@ -1318,7 +1649,11 @@ export class BrowserService {
    */
   consumeChromeShortcut(event: Electron.Event, input: Electron.Input): boolean {
     const tabId = this.focusedChromeTabId
-    if (!tabId) return false
+    // The claim can name a tab this process has not created yet (a view claims the
+    // keyboard as it mounts, before the show that creates its page), and a tab it
+    // no longer has is one whose keys belong to the app again, so the match is what
+    // decides.
+    if (!tabId || !this.tabs.has(tabId)) return false
     const action = matchBrowserShortcut(input, this.shortcutBindings)
     if (!action) return false
     event.preventDefault()
@@ -1326,9 +1661,27 @@ export class BrowserService {
     return true
   }
 
+  /** Route a mouse history button to the browser only when its active page or
+   *  toolbar owns focus. The caller falls back to app navigation when this
+   *  returns false. A focused browser consumes the input even at a history end. */
+  private navigateFocusedHistory(direction: 'back' | 'forward'): boolean {
+    const tabId = this.activeTabId
+    if (!tabId) return false
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return false
+
+    const isFocusedToolbar = tabId === this.focusedChromeTabId
+    const isFocusedPage = tab.view.webContents.isFocused()
+    if (!isFocusedToolbar && !isFocusedPage) return false
+
+    const history = tab.view.webContents.navigationHistory
+    if (direction === 'back' && history.canGoBack()) history.goBack()
+    if (direction === 'forward' && history.canGoForward()) history.goForward()
+    return true
+  }
+
   /** Toggle the web page's own DevTools. Returns whether it is now open. */
-  private toggleTabDevTools(tab: BrowserTab): boolean {
-    const contents = tab.view.webContents
+  private toggleDevTools(contents: WebContents): boolean {
     if (contents.isDevToolsOpened()) {
       contents.closeDevTools()
       return false
@@ -1346,16 +1699,18 @@ export class BrowserService {
   }
 
   /**
-   * Save the page to a file the user picks.
+   * Save a page to a file the user picks.
    *
    * Chromium writes the page as it stands (markup plus its resources) rather
    * than the raw response, which is what Chrome's own "Web page, complete"
    * does and the only useful answer for a page a script rendered. A refusal or a
    * write failure has no UI of its own, so it is reported as an app toast
    * instead of leaving the user with a key that silently did nothing.
+   *
+   * The page is a `WebContents` rather than a tab, because a popup window's page
+   * is saved exactly the way a tab's is.
    */
-  private async saveTabPage(tab: BrowserTab): Promise<void> {
-    const contents = tab.view.webContents
+  private async savePage(contents: WebContents): Promise<void> {
     if (contents.isDestroyed() || this.window.isDestroyed()) return
     const title = contents.getTitle() || contents.getURL()
     const { canceled, filePath } = await dialog.showSaveDialog(this.window, {
@@ -1398,7 +1753,9 @@ export class BrowserService {
         devTools: true
       }
     })
-    view.setBackgroundColor('#00000000')
+    // The tab carries no document yet, so nothing of the page's own surface is
+    // painted over the app until one commits.
+    applyBrowserPageBackground(view)
     const tab: BrowserTab = {
       view,
       projectId,
@@ -1406,12 +1763,16 @@ export class BrowserService {
       initialNavigationStarted: false,
       consoleEntries: [],
       favicon: null,
-      viewport: { ...DEFAULT_PARKED_VIEWPORT },
+      faviconByOrigin: new Map(),
+      requestedViewport: null,
+      displayedViewport: null,
       design: null,
       composition: null,
       transport: null,
       transportMuted: false,
-      navigationGeneration: 0
+      navigationGeneration: 0,
+      loadError: null,
+      navigationFailure: null
     }
     this.tabs.set(tabId, tab)
 
@@ -1423,10 +1784,22 @@ export class BrowserService {
     // a development build the menu is Electron's default one) and Cmd/Ctrl+W
     // from closing its window.
     view.webContents.on('before-input-event', (event, input) => {
+      // The switcher is claimed first: it is an app-level gesture that must work
+      // from inside a page, and it must never be shadowed by a browser binding.
+      if (this.consumeSwitcherKey(input)) {
+        event.preventDefault()
+        return
+      }
       const action = matchBrowserShortcut(input, this.shortcutBindings)
       if (!action) return
       event.preventDefault()
       this.runBrowserShortcut(tabId, action)
+    })
+    // The page itself never sees the application's DOM menus, so this is where
+    // the browser's own right-click menu is produced: link, image, media,
+    // selection, editing and page actions, decided from the point clicked.
+    view.webContents.on('context-menu', (_event, params) => {
+      this.showTabContextMenu(tabId, params)
     })
     // Audio the page emits is a tab-level fact the strip renders, so the state
     // event follows it the same way it follows a title or favicon change.
@@ -1437,6 +1810,9 @@ export class BrowserService {
     view.webContents.on('dom-ready', () => {
       this.capture.reset(tabId)
       this.watchCaptureMainFrame(tabId, view.webContents)
+      // The document that just arrived drops the last one's stylesheet, so the
+      // app's scrollbar colours are installed again here.
+      this.applyScrollbarTheme(tabId, view.webContents)
       publish()
     })
     view.webContents.on('did-finish-load', () => {
@@ -1448,6 +1824,9 @@ export class BrowserService {
       // covers a preview reloading itself: the folder is recognised on the
       // navigation, and the playback runtime is installed here.
       if (tab.composition) this.armCompositionQuietly(tabId, tab)
+      // The document that arrived is the answer to whether the navigation failed,
+      // so this is where the error card is confirmed or lifted.
+      this.resolveLoadOutcome(tabId)
     })
     view.webContents.on(
       'did-frame-finish-load',
@@ -1472,9 +1851,36 @@ export class BrowserService {
       // own arm already happened.
       if (tab.composition) this.armCompositionQuietly(tabId, tab)
     })
-    view.webContents.on('did-navigate', () => {
-      // A new document starts without an icon; the old site's favicon must not linger.
-      tab.favicon = null
+    // A main-frame navigation is a fresh attempt, so the provisional failure of
+    // the last one is dropped here. The published `loadError` is deliberately left
+    // in place until this navigation resolves, so the card cannot flicker away for
+    // the empty frame a load starts with.
+    view.webContents.on('did-start-navigation', (details) => {
+      if (!details.isMainFrame || details.isSameDocument) return
+      tab.navigationFailure = null
+    })
+    view.webContents.on('did-navigate', (_event, url, httpResponseCode, httpStatusText) => {
+      // An HTTP error status is provisional: it becomes the tab's error only if
+      // the document the server sent turns out to be empty, which is read when
+      // the load finishes. A network failure already recorded for this navigation
+      // outranks it, because the error document the failure commits reports no
+      // status of its own.
+      if (tab.navigationFailure?.kind !== 'network') {
+        tab.navigationFailure =
+          httpResponseCode >= 400
+            ? {
+                kind: 'http',
+                code: httpResponseCode,
+                description: httpStatusText || `HTTP ${httpResponseCode}`
+              }
+            : null
+      }
+      // A committed document comes back with the icon its own origin is known by.
+      // Chromium announces an icon only when it changes, so clearing the tab here
+      // and waiting for the announcement left a reload, a client-side redirect, or
+      // a link inside one site iconless, and the strip fell back to the globe. An
+      // origin the tab has never shown still starts out without an icon.
+      tab.favicon = faviconForCommittedUrl(tab.faviconByOrigin, url)
       // Capture state belongs to the document that ended here, so the tab must
       // not keep claiming it is recording until the new page says otherwise.
       this.capture.reset(tabId)
@@ -1493,6 +1899,10 @@ export class BrowserService {
       // The dialog shim lived in the document that just went away, so the next
       // report has to install it again rather than trust the old record.
       this.injectedDialogLabels.delete(tabId)
+      // The document that just committed is also what decides the surface it is
+      // drawn over, which is white for a loaded page and the app's own surface
+      // for an empty one.
+      applyBrowserPageBackground(tab.view)
       publish()
     })
     view.webContents.on('did-navigate-in-page', publish)
@@ -1500,10 +1910,21 @@ export class BrowserService {
     view.webContents.on('page-favicon-updated', (_event, favicons) => {
       const source = favicons.find((candidate) => candidate.length > 0) ?? null
       if (!source) return
+      // Read now, not when the fetch resolves: the document that declared this
+      // icon is the one that owns it, whatever the tab moves on to while the icon
+      // is in flight.
+      const declaredBy = faviconOriginOf(view.webContents.getURL())
       // Electron reports icon URLs, but remote images are blocked by the
       // renderer CSP   convert to a data URL so any consumer can render it.
       void fetchIconAsDataUrl(source).then((favicon) => {
-        if (!favicon || tab.favicon === favicon) return
+        if (!favicon) return
+        if (declaredBy !== null) rememberFavicon(tab.faviconByOrigin, declaredBy, favicon)
+        // An answer for a document the tab has already left is remembered for that
+        // document's origin and goes no further, so the icon on screen always
+        // belongs to the origin on screen.
+        if (view.webContents.isDestroyed()) return
+        if (declaredBy !== faviconOriginOf(view.webContents.getURL())) return
+        if (tab.favicon === favicon) return
         tab.favicon = favicon
         publish()
       })
@@ -1519,10 +1940,21 @@ export class BrowserService {
     view.webContents.on(
       'did-fail-load',
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        // -3 is ERR_ABORTED, which a redirect or a cancelled load produces and is
+        // not a failure worth a page of its own.
         if (!isMainFrame || errorCode === -3) return
         // The failed navigation can still commit an error document, which has no
         // shim of its own, so the record of what is installed must not survive it.
         this.injectedDialogLabels.delete(tabId)
+        const failure: BrowserLoadError = {
+          kind: 'network',
+          code: errorCode,
+          description: errorDescription
+        }
+        tab.navigationFailure = failure
+        // A network failure is final the moment it is reported, so the card goes
+        // up without waiting for the error document that may or may not commit.
+        this.setTabLoadError(tabId, failure)
         this.appendConsoleEntry(tabId, {
           level: 'error',
           message: `Navigation failed (${errorCode}): ${errorDescription}`,
@@ -1535,6 +1967,15 @@ export class BrowserService {
       // The recovered document is brand new and may not report a navigation
       // commit, so nothing about the dead document's injection may be trusted.
       this.injectedDialogLabels.delete(tabId)
+      // A renderer that exited on its own (window teardown, a reload of the app)
+      // is not a page error; every other reason leaves the tab with nothing.
+      if (details.reason !== 'clean-exit') {
+        this.setTabLoadError(tabId, {
+          kind: 'crashed',
+          code: details.exitCode,
+          description: details.reason
+        })
+      }
       this.appendConsoleEntry(tabId, {
         level: 'error',
         message: `Browser renderer stopped: ${details.reason} (exit ${details.exitCode})`,
@@ -1549,28 +1990,264 @@ export class BrowserService {
         event.preventDefault()
       }
     })
-    view.webContents.setWindowOpenHandler(({ url }) => {
-      try {
-        const safeUrl = validateBrowserUrl(url)
-        const popupTabId = `browser:${crypto.randomUUID()}`
-        const popupTab = this.ensureTab(popupTabId, tab.projectId, tab.threadId)
-        popupTab.initialNavigationStarted = true
-        // Park it like every other tab: a popup the user never goes on to view
-        // must still load and run.
-        this.parkTab(popupTabId)
-        this.load(popupTabId, safeUrl)
-        sendToRenderer(this.window.webContents, 'browser:openRequested', safeUrl, {
-          projectId: tab.projectId,
-          threadId: tab.threadId,
-          requestedTabId: popupTabId,
-          reveal: true
-        })
-      } catch (error) {
-        Logger.error('Browser popup rejected unsafe URL:', error)
-      }
-      return { action: 'deny' }
-    })
+    this.installWindowOpenPolicy(view, { tabId, projectId, threadId })
     return tab
+  }
+  /**
+   * Decide where a page's `window.open` lands.
+   *
+   * Two answers, by what the page asked for:
+   *
+   * - a popup window   Chromium reports `new-window`, which is what a `features`
+   *   string produces   is hosted by the app, so a sign-in or a checkout happens
+   *   inside the browser instead of in an operating-system window of its own;
+   * - anything else, such as a link that asks for its own tab, keeps the app's
+   *   tabs: a safe https address becomes a background tab.
+   *
+   * A popup window is only hosted for the global browser, which is the one with a
+   * rail to show it in. A project's browser   and every page an agent drives   keeps
+   * the tab behaviour it had, where an opened window is a tab with an address the
+   * user can see and steer.
+   *
+   * Shared by tabs and popup windows, because a popup may open a popup (a
+   * sign-in that takes a second step) and both must land the same way.
+   */
+  private windowOpenResponse(
+    owner: BrowserPageOwner,
+    details: Electron.HandlerDetails
+  ): Electron.WindowOpenHandlerResponse {
+    if (details.disposition === 'new-window' && owner.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      const popup = this.openPopupWindowFor(owner, details)
+      if (popup) return popup
+    }
+    try {
+      this.openNewTabFor(owner, validateBrowserUrl(details.url), 'a popup opened in the background')
+    } catch (error: unknown) {
+      Logger.error('Browser popup rejected unsafe URL:', error)
+    }
+    return { action: 'deny' }
+  }
+
+  /**
+   * Host the popup window a page asked for, or answer null to let the caller
+   * fall back to opening it as a tab.
+   *
+   * A popup that cannot be hosted   an address the browser will not navigate to,
+   * or a tab that already holds as many popups as it may   still gets its window,
+   * it just gets it as a tab, which is what the page's own code can survive.
+   */
+  private openPopupWindowFor(
+    owner: BrowserPageOwner,
+    details: Electron.HandlerDetails
+  ): Electron.WindowOpenHandlerResponse | null {
+    const url = details.url === '' ? 'about:blank' : details.url
+    if (!isAllowedPopupWindowUrl(url)) {
+      Logger.error('Browser popup window refused an address it may not navigate to:', url)
+      return null
+    }
+    if (this.popupWindows.countForTab(owner.tabId) >= MAX_POPUP_WINDOWS_PER_TAB) {
+      Logger.dev('Browser popup window refused: the tab already holds the maximum', {
+        tabId: owner.tabId
+      })
+      return null
+    }
+    const viewport = popupWindowViewport(details.features)
+    return {
+      action: 'allow',
+      // `createWindow` runs instead of Electron creating a window, and is handed
+      // the popup's own `WebContents`. Presenting that one is what keeps the popup
+      // a real popup: it keeps its opener, its opener's session and the ability to
+      // close itself, none of which survive a page the app loads on its own.
+      createWindow: (options) => {
+        const contents = popupWindowContents(options)
+        if (!contents) {
+          Logger.error('Browser popup window was offered no web contents to host')
+          throw new Error('Browser popup window was offered no web contents to host')
+        }
+        return this.popupWindows.host(contents, { owner, url, viewport })
+      }
+    }
+  }
+
+  /**
+   * The view plumbing popup windows run on.
+   *
+   * The registry owns popup lifetimes; every native call a view needs stays here,
+   * beside the tab ones, so a popup and a tab are placed, parked and dropped the
+   * same way and there is one place to look when a page is not where it should be.
+   */
+  private popupWindowHost(): BrowserPopupWindowHost {
+    return {
+      mount: (view, bounds) => {
+        if (this.window.isDestroyed()) return
+        try {
+          const previous = this.popupViewFrames.get(view)
+          this.popupViewFrames.set(view, bounds)
+          if (this.mountedPopupViews.has(view)) {
+            // Already on screen: only a moved frame needs a native call, so the
+            // rail's own resize reports cost one comparison each.
+            view.setBounds(bounds)
+            if (previous && !isSameBounds(previous, bounds)) {
+              Logger.dev('Browser popup window moved', { from: previous, to: bounds })
+            }
+            return
+          }
+          this.stage.release(view)
+          this.window.contentView.addChildView(view)
+          this.mountedPopupViews.add(view)
+          view.setBounds(bounds)
+          Logger.dev('Browser popup window placed', { bounds })
+        } catch (error: unknown) {
+          Logger.error('Browser popup window could not be placed:', error)
+        }
+      },
+      unmount: (view, viewport) => {
+        if (this.detachPopupView(view)) {
+          Logger.dev('Browser popup window parked', { viewport })
+        }
+        this.stage.park(view, viewport)
+      },
+      discard: (view) => {
+        this.detachPopupView(view)
+        this.stage.release(view)
+      },
+      wire: (record) => this.wirePopupWindow(record),
+      changed: () => this.publishPopupWindows()
+    }
+  }
+
+  /**
+   * Take a popup's view out of the app window, answering whether it was in it.
+   *
+   * A view whose page destroyed itself cannot be handed to the window at all, so
+   * every native call is defended: the popup is gone and the app must not follow
+   * it.
+   */
+  private detachPopupView(view: WebContentsView): boolean {
+    this.popupViewFrames.delete(view)
+    if (!this.mountedPopupViews.has(view)) return false
+    this.mountedPopupViews.delete(view)
+    if (this.window.isDestroyed()) return false
+    try {
+      this.window.contentView.removeChildView(view)
+    } catch (error: unknown) {
+      Logger.error('Browser popup window could not be detached:', error)
+      return false
+    }
+    return true
+  }
+
+  /**
+   * Give a popup window's page its own browser behaviour.
+   *
+   * It is a page in the app's browser, so it gets what a tab's page gets: the
+   * browser's own keyboard chords rather than the application menu's, the browser's
+   * right-click menu over its content, the browser's navigation policy, and a
+   * landing place for a window it opens itself.
+   */
+  private wirePopupWindow(record: BrowserPopupWindowRecord): void {
+    const contents = record.view.webContents
+    // A popup's keys reach its own page and then the application menu, where
+    // Cmd/Ctrl+W would close the app window rather than this popup.
+    contents.on('before-input-event', (event, input) => {
+      if (this.consumeSwitcherKey(input)) {
+        event.preventDefault()
+        return
+      }
+      const action = matchBrowserShortcut(input, this.shortcutBindings)
+      if (!action) return
+      event.preventDefault()
+      this.runPopupWindowShortcut(record, action)
+    })
+    contents.on('context-menu', (_event, params) => {
+      this.showPopupWindowContextMenu(record, params)
+    })
+    contents.on('will-navigate', (event, url) => {
+      if (!isAllowedPopupWindowUrl(url)) event.preventDefault()
+    })
+    this.installWindowOpenPolicy(record.view, popupPageOwner(record))
+  }
+
+  /** Install the landing policy for the windows a page opens. */
+  private installWindowOpenPolicy(view: WebContentsView, owner: BrowserPageOwner): void {
+    view.webContents.setWindowOpenHandler((details) => this.windowOpenResponse(owner, details))
+  }
+
+  /**
+   * Run one browser chord pressed inside a popup window.
+   *
+   * Closing a popup closes the popup and not the browser: to the user a popup is
+   * its own window, so Cmd/Ctrl+W must end it. The chords that belong to the app's
+   * own chrome (the address bar, a new tab, the note) are forwarded to the
+   * renderer under the owning tab, which is the tab the app would act on.
+   */
+  private runPopupWindowShortcut(
+    record: BrowserPopupWindowRecord,
+    action: BrowserShortcutAction
+  ): void {
+    const contents = record.view.webContents
+    if (contents.isDestroyed()) return
+    switch (action) {
+      case 'reload':
+        contents.reload()
+        return
+      case 'hardReload':
+        contents.reloadIgnoringCache()
+        return
+      case 'back':
+        if (contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack()
+        return
+      case 'forward':
+        if (contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward()
+        return
+      case 'zoomIn':
+        this.stepTabZoom(contents, ZOOM_STEP)
+        return
+      case 'zoomOut':
+        this.stepTabZoom(contents, -ZOOM_STEP)
+        return
+      case 'zoomReset':
+        contents.setZoomLevel(0)
+        return
+      case 'toggleDevTools':
+        this.toggleDevTools(contents)
+        return
+      case 'savePage':
+        void this.savePage(contents)
+        return
+      case 'closeTab':
+        this.popupWindows.close(record.id, 'the user closed its window')
+        return
+      case 'focusAddress':
+      case 'newTab':
+      case 'toggleNotes':
+        this.requestPanelShortcut(record.tabId, PANEL_SHORTCUT_TARGETS[action])
+        return
+    }
+  }
+
+  /** Publish the popup windows the browser holds, whole, after any change. */
+  private publishPopupWindows(): void {
+    if (this.window.webContents.isDestroyed()) return
+    sendToRenderer(this.window.webContents, 'browser:popupWindows', this.popupWindows.list())
+  }
+
+  /**
+   * The tab that owns a page inside one project's browser session.
+   *
+   * A page is either a tab's own or a popup window's, and the reports that arrive
+   * with a `WebContents`   a permission a page asks for, a file it downloads   name
+   * the tab the user was reading, so the prompt and the download row belong to
+   * something on screen.
+   */
+  private tabIdForContents(projectId: string, contentsId: number): string | undefined {
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.projectId === projectId && tab.view.webContents.id === contentsId) return tabId
+    }
+    const ownerTabId = this.popupWindows.tabIdForContents(contentsId)
+    if (!ownerTabId) return undefined
+    const owner = this.tabs.get(ownerTabId)
+    return owner && owner.projectId === projectId ? ownerTabId : undefined
   }
 
   private requireTab(tabId: string): BrowserTab {
@@ -1579,10 +2256,22 @@ export class BrowserService {
     return tab
   }
 
+  /**
+   * Whether a tab is showing a `view-source:` document.
+   *
+   * Chromium renders one as static text and never runs page scripts in it, and
+   * `executeJavaScript` against such a document never settles. The document
+   * shims that would otherwise be injected into it are therefore skipped, which
+   * keeps every injection point from parking on a promise that cannot resolve.
+   */
+  private isViewSourceDocument(contents: WebContents): boolean {
+    return contents.isDestroyed() || contents.getURL().startsWith('view-source:')
+  }
+
   /** Install the capture observer into a tab's main frame. Called again after
    *  every navigation, because an observer lives in one document's world. */
   private watchCaptureMainFrame(tabId: string, contents: WebContents): void {
-    if (contents.isDestroyed()) return
+    if (this.isViewSourceDocument(contents)) return
     this.capture.watch(tabId, contents.mainFrame)
   }
 
@@ -1603,9 +2292,6 @@ export class BrowserService {
       return !denies.has(key) && grants.has(key)
     })
     browserSession.setPermissionRequestHandler((contents, permission, callback, details) => {
-      const tabEntry = [...this.tabs.entries()].find(
-        ([, tab]) => tab.projectId === projectId && tab.view.webContents.id === contents.id
-      )
       const requestingUrl = Reflect.get(details, 'requestingUrl')
       const securityOrigin = Reflect.get(details, 'securityOrigin')
       const origin = permissionOrigin(
@@ -1615,11 +2301,14 @@ export class BrowserService {
             ? securityOrigin
             : contents.getURL()
       )
-      if (!tabEntry || !origin || this.window.webContents.isDestroyed()) {
+      // A popup window's page asks for its own permissions   a camera prompt in a
+      // popup is the same decision as one in a tab. The owner tab is what the
+      // prompt is labelled with and what a grant is remembered against.
+      const tabId = this.tabIdForContents(projectId, contents.id)
+      if (!tabId || !origin || this.window.webContents.isDestroyed()) {
         callback(false)
         return
       }
-      const [tabId] = tabEntry
       const id = crypto.randomUUID()
       const rawMediaTypes: unknown = Reflect.get(details, 'mediaTypes')
       const mediaTypes = Array.isArray(rawMediaTypes)
@@ -1862,7 +2551,7 @@ export class BrowserService {
     if (!label) return
     const script = dialogContextScript(label)
     const contents = tab.view.webContents
-    if (contents.isDestroyed()) return
+    if (this.isViewSourceDocument(contents)) return
     if (frame) {
       this.runDialogScript(frame, script)
       return
@@ -1919,29 +2608,295 @@ export class BrowserService {
     })
   }
 
-  /** Open the native page context menu. The OS popup composites above the
-   *  WebContentsView, so the page never has to detach for the menu. */
+  /** Open the page-level context menu anchored at a point (the toolbar's page
+   *  menu and the host's fallback for a click the native view did not take). The
+   *  right-click menu is this same page section plus the point-specific ones. */
   private showPageMenu(tabId: string, x: number, y: number): void {
     if (this.window.isDestroyed()) return
-    const contents = this.requireTab(tabId).view.webContents
-    const menu = new Menu()
-    menu.append(
-      new MenuItem({
-        label: 'Reload (keeps cache)',
-        click: () => {
-          if (!contents.isDestroyed()) contents.reload()
-        }
-      })
-    )
-    menu.append(
-      new MenuItem({
-        label: 'Hard reload (ignores cache)',
-        click: () => {
-          if (!contents.isDestroyed()) contents.reloadIgnoringCache()
-        }
-      })
+    const tab = this.requireTab(tabId)
+    const page = menuPageFor(tabId, tab)
+    const menu = Menu.buildFromTemplate(
+      buildBrowserPageMenuItems(this.contextMenuContext(page.contents), this.contextMenuActions(page))
     )
     menu.popup({ window: this.window, x, y })
+  }
+
+  /**
+   * Open the full right-click menu for one point in a tab's page.
+   *
+   * The OS popup composites above the native view, so the page never detaches
+   * for the menu. The reported point is in the view's own coordinates, so it is
+   * translated into the window's content space the popup expects; when the
+   * tab's on-screen frame is not known the popup falls back to the pointer.
+   */
+  private showTabContextMenu(tabId: string, params: Electron.ContextMenuParams): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || this.window.isDestroyed() || tab.view.webContents.isDestroyed()) return
+    const frame = this.activeTabId === tabId ? this.activeTabBounds : null
+    this.showPageContextMenu(menuPageFor(tabId, tab), params, frame)
+  }
+
+  /**
+   * Open the full right-click menu for one point in a popup window's page.
+   *
+   * It is the same menu a tab's page gets, over the popup's own page and anchored
+   * at the frame the rail has it on screen at.
+   */
+  private showPopupWindowContextMenu(
+    record: BrowserPopupWindowRecord,
+    params: Electron.ContextMenuParams
+  ): void {
+    const contents = record.view.webContents
+    if (contents.isDestroyed() || this.window.isDestroyed()) return
+    this.showPageContextMenu(
+      { contents, owner: popupPageOwner(record) },
+      params,
+      record.displayedBounds
+    )
+  }
+
+  /** Build and pop the point-specific context menu for one page. */
+  private showPageContextMenu(
+    page: BrowserMenuPage,
+    params: Electron.ContextMenuParams,
+    frame: BrowserViewBounds | null
+  ): void {
+    const menu = Menu.buildFromTemplate(
+      buildBrowserContextMenuItems(
+        params,
+        this.contextMenuContext(page.contents),
+        this.contextMenuActions(page)
+      )
+    )
+    // The point Electron reports is in the page's own coordinates, and a native
+    // menu wants the window's, so the frame the page is displayed at is added.
+    if (frame) menu.popup({ window: this.window, x: frame.x + params.x, y: frame.y + params.y })
+    else menu.popup({ window: this.window })
+  }
+
+  /** Live facts the context menu needs about a page. */
+  private contextMenuContext(contents: WebContents): BrowserContextMenuContext {
+    return {
+      canGoBack: contents.navigationHistory.canGoBack(),
+      canGoForward: contents.navigationHistory.canGoForward(),
+      searchEngineName: this.contextMenuSearchEngine.name
+    }
+  }
+
+  /**
+   * The actions a page's context menu can run.
+   *
+   * Every action re-checks that its page is alive when it fires, because the menu
+   * can outlive the page it was opened over. A link or media URL the browser's
+   * navigation policy refuses is dropped with a log rather than opened.
+   *
+   * One set serves a tab's page and a popup window's, because the menu offers the
+   * same actions over both: what differs is only which page they act on and which
+   * tab a page they open belongs to.
+   */
+  private contextMenuActions(page: BrowserMenuPage): BrowserContextMenuActions {
+    const contents = page.contents
+    const owner = page.owner
+    const live = (): WebContents | null =>
+      contents.isDestroyed() || this.window.isDestroyed() ? null : contents
+    const openInNewTab = (url: string): void => {
+      try {
+        this.openNewTabFor(owner, validateBrowserUrl(url), 'a context-menu link')
+      } catch (error: unknown) {
+        Logger.error('Browser context menu refused a link:', error)
+      }
+    }
+    const saveAs = (url: string): void => {
+      try {
+        live()?.downloadURL(validateBrowserUrl(url))
+      } catch (error: unknown) {
+        Logger.error('Browser context menu refused a download:', error)
+      }
+    }
+    return {
+      goBack: () => {
+        const current = live()
+        if (current?.navigationHistory.canGoBack()) current.navigationHistory.goBack()
+      },
+      goForward: () => {
+        const current = live()
+        if (current?.navigationHistory.canGoForward()) current.navigationHistory.goForward()
+      },
+      reload: () => live()?.reload(),
+      hardReload: () => live()?.reloadIgnoringCache(),
+      savePage: () => void this.savePage(contents),
+      print: () => live()?.print({}),
+      viewSource: () => this.openViewSourceInNewTab(page),
+      copyPageAddress: () => {
+        const current = live()
+        if (current) clipboard.writeText(current.getURL())
+      },
+      inspectElement: (x, y) => live()?.inspectElement(x, y),
+      selectAll: () => live()?.selectAll(),
+      openLinkInNewTab: openInNewTab,
+      saveLinkAs: saveAs,
+      openMediaInNewTab: openInNewTab,
+      saveMediaAs: saveAs,
+      copyImage: (x, y) => live()?.copyImageAt(x, y),
+      copyAddress: (url) => clipboard.writeText(url),
+      copyText: (text) => clipboard.writeText(text),
+      searchFor: (text) => this.searchSelectionInNewTab(owner, text),
+      undo: () => live()?.undo(),
+      redo: () => live()?.redo(),
+      cut: () => live()?.cut(),
+      copy: () => live()?.copy(),
+      paste: () => live()?.paste(),
+      pasteAndMatchStyle: () => live()?.pasteAndMatchStyle(),
+      deleteSelection: () => live()?.delete(),
+      replaceMisspelling: (word) => live()?.replaceMisspelling(word)
+    }
+  }
+
+  /**
+   * Create a tab in the same project and thread as `source`, load it, and ask
+   * the renderer to show it.
+   *
+   * Shared by the links and popups a page opens and by the context-menu actions
+   * that open an address in a new tab, so every new tab is parked, loaded and
+   * announced the same way.
+   */
+  private openNewTabFor(owner: BrowserPageOwner, url: string, reason: string): void {
+    const tabId = `browser:${crypto.randomUUID()}`
+    const tab = this.ensureTab(tabId, owner.projectId, owner.threadId)
+    tab.initialNavigationStarted = true
+    this.parkTab(tabId, { reason })
+    this.load(tabId, url)
+    sendToRenderer(this.window.webContents, 'browser:openRequested', url, {
+      projectId: owner.projectId,
+      threadId: owner.threadId,
+      requestedTabId: tabId,
+      reveal: true
+    })
+  }
+
+  /**
+   * Open the current document's source in a new tab.
+   *
+   * Chromium renders `view-source:` itself, but the browser's navigation
+   * validation accepts http and https only, so this is a main-initiated load the
+   * page's own navigation rules never see. The displayed address keeps the
+   * `view-source:` prefix, exactly as a normal browser shows it.
+   */
+  private openViewSourceInNewTab(page: BrowserMenuPage): void {
+    const contents = page.contents
+    if (contents.isDestroyed()) return
+    const current = contents.getURL()
+    const inner = current.startsWith('view-source:')
+      ? current.slice('view-source:'.length)
+      : current
+    let target: string
+    try {
+      target = `view-source:${validateBrowserUrl(inner)}`
+    } catch {
+      return
+    }
+    const tabId = `browser:${crypto.randomUUID()}`
+    const sourceTab = this.ensureTab(tabId, page.owner.projectId, page.owner.threadId)
+    sourceTab.initialNavigationStarted = true
+    this.parkTab(tabId, { reason: 'the user opened a page source' })
+    this.navigateTo(tabId, target)
+    sendToRenderer(this.window.webContents, 'browser:openRequested', target, {
+      projectId: page.owner.projectId,
+      threadId: page.owner.threadId,
+      requestedTabId: tabId,
+      reveal: true
+    })
+  }
+
+  /** Run the context-menu web search in a new tab, using the reported engine. */
+  private searchSelectionInNewTab(owner: BrowserPageOwner, query: string): void {
+    const url = buildBrowserSearchUrl(this.contextMenuSearchEngine, query)
+    if (!url) return
+    try {
+      this.openNewTabFor(owner, validateBrowserUrl(url), 'a context-menu web search')
+    } catch (error: unknown) {
+      Logger.error('Browser context menu could not run a search:', error)
+    }
+  }
+
+  /**
+   * Settle the error state of the tab once a navigation has finished.
+   *
+   * A network failure and a crash are already final; an HTTP error status is
+   * only this app's error to show when the page it served has nothing visible in
+   * it, so that one case is read from the page before it is published. Identity is
+   * re-checked after the read, because the user can navigate again while it is in
+   * flight.
+   */
+  private resolveLoadOutcome(tabId: string): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    const failure = tab.navigationFailure
+    if (!failure || failure.kind !== 'http') {
+      this.setTabLoadError(tabId, failure)
+      return
+    }
+    void this.documentHasNothingToShow(tab.view.webContents).then((nothingVisible) => {
+      const current = this.tabs.get(tabId)
+      if (!current || current.navigationFailure !== failure) return
+      this.setTabLoadError(tabId, nothingVisible ? failure : null)
+    })
+  }
+
+  /** Publish a tab's load error only when it actually changed. */
+  private setTabLoadError(tabId: string, error: BrowserLoadError | null): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    const previous = tab.loadError
+    if (previous === error) return
+    if (
+      previous !== null &&
+      error !== null &&
+      previous.kind === error.kind &&
+      previous.code === error.code &&
+      previous.description === error.description
+    ) {
+      return
+    }
+    tab.loadError = error
+    this.publishState(tabId)
+  }
+
+  /**
+   * Whether the loaded document shows the user anything at all.
+   *
+   * The catch-all rule for an HTTP error status: the app stands in only when the
+   * server's own answer has nothing to look at, and never covers a page that did
+   * render. Empty is judged by what is on screen, not by markup: an error body
+   * with a container but no text, image, control or drawn media is still a blank
+   * frame to the user, while any visible text or rendered element is the site's
+   * own page and is left alone.
+   *
+   * Read in the page's own world: the main process cannot see page markup, and
+   * `innerText` already excludes hidden text. Any failure to answer is read as
+   * "has content", so a real page is never masked by a probe that could not run.
+   */
+  private async documentHasNothingToShow(contents: WebContents): Promise<boolean> {
+    // A `view-source:` document never runs scripts, so the probe could not
+    // settle on it; it is treated as having content, which it plainly does.
+    if (this.isViewSourceDocument(contents)) return false
+    try {
+      const result: unknown = await contents.executeJavaScript(
+        '(function () {' +
+          ' var body = document.body; if (!body) return true;' +
+          ' if ((body.innerText || "").trim().length > 0) return false;' +
+          ' var nodes = body.querySelectorAll("img, svg, canvas, video, audio, iframe, embed, object, input, button, select, textarea, [style*=background], [style*=Background]");' +
+          ' for (var i = 0; i < nodes.length; i++) {' +
+          '  var rect = nodes[i].getBoundingClientRect();' +
+          '  if (rect.width > 1 && rect.height > 1) return false;' +
+          ' }' +
+          ' return true;' +
+          '})()'
+      )
+      return result === true
+    } catch {
+      return false
+    }
   }
 
   private stateFor(tabId: string, tab: BrowserTab): BrowserPageState {
@@ -1952,6 +2907,7 @@ export class BrowserService {
       title: contents.getTitle(),
       favicon: tab.favicon,
       loading: contents.isLoading(),
+      loadError: tab.loadError,
       // Read from the view rather than cached: these drive the tab's speaker and
       // recording indicators, and a muted tab that the page itself unmuted must
       // report the mute state that is actually in force.
@@ -2054,31 +3010,124 @@ export class BrowserService {
     this.toastVisible = false
     const parented = new Set(this.window.contentView.children)
     for (const [tabId, tab] of this.tabs) {
-      if (parented.has(tab.view)) this.parkTab(tabId)
+      if (parented.has(tab.view)) {
+        this.parkTab(tabId, { reason: 'the renderer reloaded or crashed' })
+      }
     }
   }
 
   /**
-   * Park a tab in an invisible stage window, where it keeps a real viewport and
-   * keeps producing frames no matter what the user is looking at. `size`
-   * overrides the tab's parked viewport for callers that must preserve the exact
-   * viewport the user was seeing (the toast case).
+   * The viewport a tab is laid out at while it is parked offscreen.
+   *
+   * The newest of the two records wins, because the newest one is the size
+   * something actually asked the page to be: an agent's explicit request, or the
+   * frame the user was reading the tab at. A tab that was never displayed and
+   * never asked for a viewport is mounted at `DEFAULT_PARKED_VIEWPORT`.
    */
-  private parkTab(tabId: string, size?: BrowserViewport, keepActive = false): void {
+  private parkedViewportFor(tab: BrowserTab): BrowserViewport {
+    const requested = tab.requestedViewport
+    const displayed = tab.displayedViewport
+    if (displayed && (!requested || requested.at <= displayed.at)) return displayed.viewport
+    return requested?.viewport ?? DEFAULT_PARKED_VIEWPORT
+  }
+
+  /**
+   * Carry out a hide the renderer asked for after a short grace window, so a show
+   * that lands inside it cancels the park instead of being served a view that was
+   * pulled out from under it for a frame.
+   *
+   * See `RENDERER_PARK_GRACE_MS`: the renderer's answer to "is this surface still
+   * showing the page" is recomputed every frame and flaps, and a park that a
+   * re-attach follows a few milliseconds later is a visible flicker of a page
+   * nothing asked to move. A hide no show ever contradicts still parks, a few
+   * frames after the decision that produced it.
+   */
+  private schedulePark(tabId: string, reason: string): void {
+    if (this.pendingParks.has(tabId)) return
+    const handle = setTimeout(() => {
+      this.pendingParks.delete(tabId)
+      this.parkTab(tabId, { reason })
+    }, RENDERER_PARK_GRACE_MS)
+    this.pendingParks.set(tabId, { handle, at: Date.now() })
+  }
+
+  /** Drop a deferred hide, because the tab is being shown again after all. */
+  private cancelPendingPark(tabId: string): void {
+    const pending = this.dropPendingPark(tabId)
+    if (pending === null) return
+    // Dev-only, and deliberately one line per cancelled hide: it is the record
+    // that the page never left the screen, and that the hide which would have
+    // taken it off was the renderer's own answer flapping rather than a surface
+    // change the user made.
+    Logger.dev('Browser view park cancelled', {
+      tabId,
+      afterMs: Date.now() - pending.at
+    })
+  }
+
+  /**
+   * Forget a deferred hide silently, for the two callers whose park is settled
+   * some other way: the park itself, and the tab being destroyed. Their cancelled
+   * timer is bookkeeping, and logging it as a cancelled park would read as a page
+   * that stayed on screen when it is about to leave.
+   */
+  private dropPendingPark(tabId: string): { at: number } | null {
+    const pending = this.pendingParks.get(tabId)
+    if (pending === undefined) return null
+    clearTimeout(pending.handle)
+    this.pendingParks.delete(tabId)
+    return pending
+  }
+
+  /**
+   * Park a tab in an invisible stage window, where it keeps a real viewport and
+   * keeps producing frames no matter what the user is looking at.
+   *
+   * The page is laid out at `options.size` when a caller has one to insist on
+   * (the toast case, which must preserve the frame the user is looking at), and at
+   * the tab's own parked viewport otherwise. Every park carries a reason and is
+   * logged at dev level: a recorded frame of the browser surface can then be
+   * matched to the moment that produced it.
+   */
+  private parkTab(tabId: string, options: ParkBrowserTabOptions): void {
+    // The park this timer was going to do is happening now, so it is spent.
+    this.dropPendingPark(tabId)
     const tab = this.tabs.get(tabId)
     if (!tab || tab.view.webContents.isDestroyed()) return
-    const viewport = size ?? tab.viewport
+    // A deferred hide can land after the app window is gone (the app is quitting),
+    // and there is no child list left to take the view out of.
+    if (this.window.isDestroyed()) return
+    // A switch waiting for this tab is spent only when the park is a real
+    // departure. A keep-active park (a toast holding the view off) leaves the tab
+    // as the one on screen, so the switch has to survive until the page comes back
+    // and `showActiveView` can honour it.
+    if (!options.keepActive && this.pendingPageFocusTabId === tabId) {
+      this.pendingPageFocusTabId = null
+    }
+    const viewport = options.size ?? this.parkedViewportFor(tab)
+    // Whether this view is the one the app window is showing: a park only re-lays
+    // the page out when it takes a view off the screen and gives it another size.
+    const wasOnScreen = this.displayedTab?.tabId === tabId
     this.window.contentView.removeChildView(tab.view)
     // The view is leaving the window, so whatever frame it was displayed at no
     // longer describes where it is.
     if (this.displayedTab?.tabId === tabId) this.displayedTab = null
     this.stage.park(tab.view, viewport)
     this.markParked(tabId)
-    if (this.activeTabId === tabId && !keepActive) {
+    if (this.activeTabId === tabId && !options.keepActive) {
       this.activeTabId = null
       this.activeTabBounds = null
     }
     this.enforceParkedCap(tabId)
+    // Dev-only, and deliberately one line per park: a recorded frame of the
+    // browser surface can then be matched against the park, the size it laid the
+    // page out at, and whether that size was a change the page had to reflow for.
+    Logger.dev('Browser view parked', {
+      tabId,
+      reason: options.reason,
+      viewport,
+      relayout: wasOnScreen && !isSameViewport(tab.displayedViewport?.viewport, viewport)
+    })
     // A stage window the window server stopped showing would silently freeze the
     // page (that is how a parked view dies), so confirm it once per park and hand
     // the tab a fresh window if it did not take. Fire and forget: parking must
@@ -2086,8 +3135,34 @@ export class BrowserService {
     void this.stage.verifyVisible(tab.view).then((visible) => {
       if (visible || !this.stage.isParked(tab.view)) return
       Logger.dev('Reparking a browser tab whose stage window stopped rendering', { tabId })
-      this.stage.restart(tab.view, this.tabs.get(tabId)?.viewport ?? viewport)
+      const current = this.tabs.get(tabId)
+      this.stage.restart(tab.view, current ? this.parkedViewportFor(current) : viewport)
     })
+  }
+
+  /**
+   * Deliver the current pointer position to a page that has just come back on
+   * screen.
+   *
+   * While a tab is parked its view sits in the stage window, so the pointer is not
+   * over the page any more and the page is told the pointer left. Chromium
+   * rebuilds hover state and the cursor shape only from an input event, so without
+   * this the page keeps what it decided back then: `cursor: pointer` never comes
+   * back, hover menus stay shut, and drag affordances stay inert until the user
+   * physically moves the mouse. One real mouse move, at the position the pointer
+   * is actually at, restores the state the user can already see they are in.
+   */
+  private primePagePointer(tab: BrowserTab, bounds: BrowserViewBounds | null): void {
+    if (bounds === null || this.window.isDestroyed()) return
+    if (tab.view.webContents.isDestroyed()) return
+    const cursor = screen.getCursorScreenPoint()
+    const content = this.window.getContentBounds()
+    const x = Math.round(cursor.x - content.x - bounds.x)
+    const y = Math.round(cursor.y - content.y - bounds.y)
+    // A pointer that is not over the page must not be reported as if it were: the
+    // page would gain a hover the user is not pointing at.
+    if (x < 0 || y < 0 || x >= bounds.width || y >= bounds.height) return
+    tab.view.webContents.sendInputEvent({ type: 'mouseMove', x, y })
   }
 
   /** Mount the current active tab in the app window at its display bounds. */
@@ -2112,9 +3187,23 @@ export class BrowserService {
       if (bounds !== null && !isSameBounds(displayed.bounds, bounds)) {
         this.displayedTab = { tabId, bounds }
         tab.view.setBounds(bounds)
+        // A size change re-lays the page out and hands it a new surface, which is
+        // worth seeing in the dev log next to a parked or re-attached view: the
+        // three together are what a recorded frame of this surface can be matched
+        // against. A position-only move re-lays nothing out.
+        if (bounds.width !== displayed.bounds.width || bounds.height !== displayed.bounds.height) {
+          Logger.dev('Browser view resized', { tabId, from: displayed.bounds, to: bounds })
+        }
       }
+      // The page is already on screen, which is the one moment a held switch can
+      // be honoured without waiting for another show.
+      this.takePendingPageFocus(tabId)
       return
     }
+    // A view the stage was holding is off the window, so the page has already been
+    // told the pointer left it and needs the pointer position again once it is
+    // back. Recorded before the release, which is what clears the parked state.
+    const wasParked = this.stage.isParked(tab.view)
     this.stage.release(tab.view)
     this.forgetParked(tabId)
     this.window.contentView.addChildView(tab.view)
@@ -2122,6 +3211,49 @@ export class BrowserService {
       this.displayedTab = { tabId, bounds }
       tab.view.setBounds(bounds)
     }
+    if (wasParked) {
+      this.primePagePointer(tab, bounds)
+      Logger.dev('Browser view re-attached', { tabId, bounds })
+    }
+    // A page that just landed is on screen now, so a switch that was waiting for
+    // it takes the keyboard here.
+    this.takePendingPageFocus(tabId)
+  }
+
+  /**
+   * Give a tab's page the keyboard, or remember that it wants it.
+   *
+   * The page is a native view above the DOM, so DOM focus in the app chrome never
+   * lands on it and a tab switch has to hand it over deliberately. A page that is
+   * not the one on screen yet   a show still in flight, a toast holding the view
+   * off, a tab main has not even heard of   keeps the intent until it is shown.
+   */
+  private focusPage(tabId: string): void {
+    const tab = this.tabs.get(tabId)
+    if (tab && !tab.view.webContents.isDestroyed() && this.isPageOnScreen(tabId)) {
+      this.pendingPageFocusTabId = null
+      tab.view.webContents.focus()
+      return
+    }
+    this.pendingPageFocusTabId = tabId
+  }
+
+  /** Whether a tab's page is the native view the window is currently showing. */
+  private isPageOnScreen(tabId: string): boolean {
+    if (this.toastVisible || this.activeTabId !== tabId) return false
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return false
+    return this.displayedTab?.tabId === tabId && !this.stage.isParked(tab.view)
+  }
+
+  /** Focus the page a switch asked for, now that it is the one on screen. The
+   *  intent is spent either way it resolves, so a stale one cannot fire later. */
+  private takePendingPageFocus(tabId: string): void {
+    if (this.pendingPageFocusTabId !== tabId) return
+    this.pendingPageFocusTabId = null
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return
+    tab.view.webContents.focus()
   }
 
   private markParked(tabId: string): void {
@@ -2215,23 +3347,37 @@ export class BrowserService {
    *  its viewport. */
   private setToastVisible(visible: boolean): void {
     this.toastVisible = visible
+    // A popup window's page is a native view too, so a DOM toast under it would be
+    // invisible. It steps aside with the tab's page and comes back at the same
+    // frame, which is what keeps a momentary toast from resizing a page.
+    this.popupWindows.setSuspended(visible)
     if (!this.activeTabId) return
     const tab = this.tabs.get(this.activeTabId)
     if (!tab) return
     if (visible) {
-      this.parkTab(
-        this.activeTabId,
-        this.activeTabBounds ?? { width: tab.viewport.width, height: tab.viewport.height },
-        true
-      )
+      // The on-screen frame is the whole point of this park: the toast is on screen
+      // for a moment and the page must come back at the size the user left it at.
+      this.parkTab(this.activeTabId, {
+        size: this.activeTabBounds ?? this.parkedViewportFor(tab),
+        keepActive: true,
+        reason: 'toast on screen'
+      })
       return
     }
     this.showActiveView()
   }
 
   private destroy(tabId: string): void {
+    // A hide that is still inside its grace window must not park a tab that is
+    // about to be gone: the view would be handed to the stage window only to be
+    // destroyed.
+    this.dropPendingPark(tabId)
     const tab = this.tabs.get(tabId)
     if (!tab) return
+    // A popup window is the tab's own window as far as the user is concerned, so
+    // closing the tab closes what its page opened rather than leaving a sign-in
+    // stranded behind a tab that no longer exists.
+    this.popupWindows.closeForTab(tabId, 'its tab closed')
     for (const [requestId, pending] of this.pendingPermissions) {
       if (pending.request.tabId === tabId)
         this.resolvePermission(requestId, permissionResolutions.dismiss)
@@ -2249,6 +3395,7 @@ export class BrowserService {
     this.agentReveals.delete(tabId)
     this.lastScreenshot.delete(tabId)
     this.playheads.delete(tabId)
+    this.scrollbarStyles.delete(tabId)
     this.capture.forget(tabId)
     this.inspector.forget(tabId)
     this.stage.release(tab.view)

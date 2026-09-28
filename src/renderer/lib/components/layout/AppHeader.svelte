@@ -10,24 +10,17 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
-  import {
-    Bell,
-    BotMessageSquare,
-    ChevronLeft,
-    ChevronRight,
-    FileText,
-    Globe,
-    Loader2
-  } from '@lucide/svelte'
+  import { Bell, ChevronLeft, ChevronRight, FileText, Globe, Loader2, Search } from '@lucide/svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
-  import { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
-  import AppHeaderViewSwitcher from './AppHeaderViewSwitcher.svelte'
+  import type { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
+  import AppHeaderViewActions from './AppHeaderViewActions.svelte'
   import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
   import AppHeaderCenter from './AppHeaderCenter.svelte'
   import AppHeaderThreadModals from './AppHeaderThreadModals.svelte'
@@ -38,22 +31,28 @@
 
   interface Props {
     activeView: View
-    navigate: (view: View) => void
     goBack: () => void
     goForward: () => void
+    /** Owned by the app shell so the header and the left view rail share one instance. */
+    navigation: AppHeaderNavigationController
   }
 
-  let { activeView, navigate, goBack, goForward }: Props = $props()
-
-  const navigation = new AppHeaderNavigationController({
-    getActiveView: () => activeView,
-    navigate: (view) => navigate(view)
-  })
+  let { activeView, goBack, goForward, navigation }: Props = $props()
 
   /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
 
   let onScope = $derived(activeView === 'scope')
+
+  /**
+   * The global browser is its own workspace: its centre shows the page, its
+   * quick actions (search the tabs, open one) are registered by the view itself
+   * and rendered beside the view switcher like every other view's, and its right
+   * cluster keeps only the global controls (the browser entry and the
+   * notification bell). No editor, spec, or git controls   those belong to a
+   * thread, and a browser tab is not a thread.
+   */
+  let onBrowser = $derived(activeView === 'browser')
 
   /** Chats and Assistant must feel like chat   no editor, spec, or terminal controls. */
   let chatMode = $derived(activeView === 'chats' || activeView === 'assistant')
@@ -77,24 +76,10 @@
     contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'
   )
 
-  /** The assistant badge's colour is the assistant space's own status colour,
-   *  so an assistant run never reads as a project/chat badge on the bell. */
-  let assistantBadgeColor = $derived.by((): string => {
-    switch (notificationPanelState.assistantStatus) {
-      case 'error':
-        return 'var(--color-danger)'
-      case 'attention':
-        return 'var(--color-warning)'
-      case 'missed':
-        return 'var(--color-missed)'
-      case 'spec':
-        return 'var(--color-thread-spec)'
-      case 'completed':
-        return 'var(--color-thread-done)'
-      default:
-        return 'var(--color-dimmed)'
-    }
-  })
+  /** The assistant dot's colour is the assistant space's own accent colour,
+   *  carried on its notifications, so an assistant run never reads as a
+   *  project/chat dot. Every bell dot is just a colour, no icon. */
+  let assistantBadgeColor = $derived(notificationPanelState.assistantColor ?? 'var(--color-dimmed)')
 
   // ─── Thread actions (ellipsis dropdown) ──────────────────────────────────
 
@@ -160,9 +145,9 @@
 
   /** Cmd/Ctrl+D deletes the actively opened thread through the normal confirm
    *  flow (Escape cancels inside the shared ThreadDeleteConfirm dialog).
-   *  Cmd/Ctrl+0-4 switch
-   *  primary views: 0 chats, 1 projects, 2 threads, 3 projects with scope state,
-   *  4 scope, 9 assistant. Every chord resolves from the keymap registry. */
+   *  Cmd/Ctrl view shortcuts: 0 browser, 1 projects, 2 threads, 3 projects with
+   *  scope state, 4 scope, 8 chats, 9 assistant. Every chord resolves from the
+   *  keymap registry. */
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.repeat || event.isComposing) return
     if (keymapState.matches('nav-delete-thread', event)) {
@@ -172,6 +157,7 @@
       return
     }
     const viewShortcuts: Array<[string, () => void]> = [
+      ['nav-browser', () => void navigation.navigateToView('browser')],
       ['nav-chats', () => void navigation.navigateToView('chats')],
       ['nav-projects', () => void navigation.navigateToView('projects')],
       ['nav-threads', () => void navigation.navigateToView('threads')],
@@ -230,14 +216,10 @@
      context dock rail leaves around its 32px tool buttons, so the notification
      bell stays on the dock's x axis on every platform. -->
 <header
-  class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-1"
+  class="app-header titlebar-drag relative z-40 flex h-12 items-center bg-surface pr-1"
   style={trafficLightInsetStyle({ mirrorRightInset: false })}
 >
-  <nav
-    class="titlebar-no-drag flex shrink-0 items-center gap-1"
-    aria-label="Primary navigation"
-    data-onboarding="view-switcher"
-  >
+  <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
     <!-- Global navigation: back / forward -->
     <div class="flex items-center gap-0.5">
       <button
@@ -260,20 +242,45 @@
       </button>
     </div>
 
-    <AppHeaderViewSwitcher
-      options={navigation.headerViewOptions()}
-      shownOption={navigation.shownHeaderViewOption}
-      activeIcon={navigation.activeHeaderViewIcon}
-      activeLabel={navigation.activeHeaderViewLabel}
-      onOptionHover={(id) => {
-        if (id === 'chats') navigation.preloadNavigationThreads('chats')
-        else navigation.preloadNavigationThreads('projects')
-      }}
-    />
+    <!-- Selected view's name: the rail is icon-only, so the header names the
+         view it has selected, between the nav buttons and the view's actions. -->
+    {#if navigation.activeHeaderViewLabel}
+      <span
+        class="whitespace-nowrap px-1 text-[0.6875rem] font-medium text-muted"
+        aria-live="polite"
+      >
+        {navigation.activeHeaderViewLabel}
+      </span>
+    {/if}
+
+    {#if onSettings}
+      <!-- Settings owns this slot while it is on screen: the per-view actions
+           belong to the view that was here before. -->
+      <button
+        class="flex h-7 w-7 items-center justify-center rounded-md transition-colors duration-150 {settingsUiState.searchOpen
+          ? 'bg-elevated text-foreground'
+          : 'text-muted hover:bg-elevated hover:text-foreground'}"
+        aria-label="Search settings"
+        title="Search settings"
+        onclick={() => (settingsUiState.searchOpen = true)}
+      >
+        <Search size={15} strokeWidth={1.8} />
+      </button>
+    {:else}
+      <AppHeaderViewActions />
+    {/if}
   </nav>
 
   {#if onScope}
     <AppHeaderScopeTabs />
+  {:else if onBrowser}
+    <!-- The browser's own centre, and its own chunk: the header is on screen for
+         every view, so importing this statically would put the browser's model in
+         the first-paint chunk. It is fetched the moment the browser view is the
+         one on screen, which is also when its runtime is wired. -->
+    {#await import('./AppHeaderBrowserCenter.svelte') then { default: AppHeaderBrowserCenter }}
+      <AppHeaderBrowserCenter />
+    {/await}
   {:else}
     <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} />
   {/if}
@@ -281,8 +288,9 @@
   <AppHeaderThreadModals menu={threadActionsMenu} />
 
   <div class="titlebar-no-drag ml-auto flex shrink-0 items-center gap-1">
-    <!-- Gateway dashboard   global browser entry, visible when gateway is ready -->
-    {#if hasGateway && gatewayDashboardUrl}
+    <!-- Gateway dashboard   global browser entry. Hidden in the browser view,
+         where the dashboard would open in the very surface already on screen. -->
+    {#if hasGateway && gatewayDashboardUrl && !onBrowser}
       <button
         class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
         aria-label="Open gateway dashboard"
@@ -293,13 +301,14 @@
       </button>
     {/if}
 
-    <!-- Editor preference   hidden in chat mode, scope view, and when no project is selected -->
-    {#if !chatMode && !onScope && workspaceState.activeProject}
+    <!-- Editor preference   hidden in chat mode, scope view, the browser view,
+         and when no project is selected -->
+    {#if !chatMode && !onScope && !onBrowser && workspaceState.activeProject}
       <AppHeaderEditorMenu />
     {/if}
 
     <!-- Spec studio   only for an existing document or an eligible final-response retry -->
-    {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
+    {#if !chatMode && !onScope && !onBrowser && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
       <button
         class="flex h-8 items-center gap-1.5 px-2 transition-colors duration-150 {workspaceState.specStudioOpen
           ? 'bg-elevated text-foreground'
@@ -341,7 +350,7 @@
     {/if}
 
     <!-- Git status chip   only when a thread is open in a project view -->
-    {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && gitAvailable}
+    {#if !chatMode && !onScope && !onBrowser && !onSettings && workspaceState.selectedThread && gitAvailable}
       <AppHeaderGitChip {gitAvailable} />
     {/if}
 
@@ -357,26 +366,28 @@
     >
       <Bell size={16} />
       {#if notificationPanelState.totalCount > 0 || notificationPanelState.hasAssistant}
+        <!-- One dot per waiting kind, each in the app's own status colour, so a
+             glance at the bell says what is waiting: a project message, a chat
+             message, an assistant message, a spec, a request for attention, or
+             an error. -->
         <div class="absolute -top-0.5 -left-0.5 flex items-start gap-px">
           {#if notificationPanelState.hasCompleted}
-            <StatusBadge kind="completed" title="Completed notifications" />
+            <StatusBadge color="var(--color-success)" title="Project messages" />
+          {/if}
+          {#if notificationPanelState.hasChatCompleted}
+            <StatusBadge color="var(--color-chat-success)" title="Chat messages" />
           {/if}
           {#if notificationPanelState.hasAttention}
-            <StatusBadge kind="attention" title="Notifications needing attention" />
+            <StatusBadge color="var(--color-warning)" title="Notifications needing attention" />
           {/if}
           {#if notificationPanelState.hasSpec}
-            <StatusBadge kind="spec" title="Specifications ready for review" />
+            <StatusBadge color="var(--color-thread-spec)" title="Specifications ready for review" />
           {/if}
           {#if notificationPanelState.hasError}
-            <StatusBadge kind="error" title="Error notifications" />
+            <StatusBadge color="var(--color-danger)" title="Error notifications" />
           {/if}
           {#if notificationPanelState.hasAssistant}
-            <StatusBadge
-              variant="icon"
-              icon={BotMessageSquare}
-              color={assistantBadgeColor}
-              title="Assistant activity"
-            />
+            <StatusBadge color={assistantBadgeColor} title="Assistant notifications" />
           {/if}
         </div>
       {/if}

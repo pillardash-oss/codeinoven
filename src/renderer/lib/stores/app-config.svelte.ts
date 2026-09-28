@@ -1,11 +1,17 @@
-import { DEFAULT_IN_APP_NOTIFICATION_SOUND } from '$shared/types'
+import {
+  DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_IN_APP_NOTIFICATION_SOUND
+} from '$shared/types'
 import type {
   AppConfig,
   GitPullPreference,
   InAppNotificationSoundSettings,
   MediaGenerationConfig
 } from '$shared/types'
+import { findBrowserSearchEngine, type BrowserSearchEngine } from '$shared/browser-search-engines'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
+import { publishBrowserSearchEngine } from '$lib/browser-search-context'
+import { isBrowserLoaded } from '$lib/stores/browser-access.svelte'
 
 /** Fallback used until the persisted config loads (mirrors App.svelte defaults). */
 const DEFAULT_MAX_DIFF_LINES = 100
@@ -27,8 +33,11 @@ const FONT_STACKS: Record<string, string> = {
 }
 
 let maxDiffLines = $state(DEFAULT_MAX_DIFF_LINES)
+let browserHibernationMinutes = $state(DEFAULT_BROWSER_HIBERNATION_MINUTES)
 let openLocalhostInCioBrowser = $state(true)
 let openAllLinksInCioBrowser = $state(false)
+let browserSearchEngineId = $state('')
+let browserCustomSearchEngines = $state<BrowserSearchEngine[]>([])
 let inAppNotificationSound = $state<InAppNotificationSoundSettings>(
   structuredClone(DEFAULT_IN_APP_NOTIFICATION_SOUND)
 )
@@ -61,11 +70,19 @@ export const appConfigState = {
   get maxDiffLines(): number {
     return maxDiffLines
   },
+  get browserHibernationMinutes(): number {
+    return browserHibernationMinutes
+  },
   get openLocalhostInCioBrowser(): boolean {
     return openLocalhostInCioBrowser
   },
   get openAllLinksInCioBrowser(): boolean {
     return openAllLinksInCioBrowser
+  },
+  /** The engine an address field searches with, already resolved: a removed
+   *  custom engine falls back to the shipped default instead of a dead id. */
+  get browserSearchEngine(): BrowserSearchEngine {
+    return findBrowserSearchEngine(browserSearchEngineId, browserCustomSearchEngines)
   },
   /** Which in-app alert groups may play their quieter sound. */
   get inAppNotificationSound(): InAppNotificationSoundSettings {
@@ -91,8 +108,22 @@ export const appConfigState = {
   },
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
+    browserHibernationMinutes = config.browserHibernationMinutes
     openLocalhostInCioBrowser = config.openLocalhostInCioBrowser
     openAllLinksInCioBrowser = config.openAllLinksInCioBrowser
+    browserSearchEngineId = config.browserSearchEngine
+    browserCustomSearchEngines = config.browserCustomSearchEngines ?? []
+    // Main builds the browser's native context menu, so it needs the active
+    // engine to label and run "Search <engine> for ...". It holds no config of
+    // its own, so the resolved engine is pushed whenever it changes - but the
+    // push waits for a browser to exist, because nothing about the browser
+    // belongs on a launch that never reaches one. The browser's runtime sends the
+    // value it missed the moment it comes up.
+    if (isBrowserLoaded()) {
+      publishBrowserSearchEngine(
+        findBrowserSearchEngine(browserSearchEngineId, browserCustomSearchEngines)
+      )
+    }
     inAppNotificationSound = {
       ...DEFAULT_IN_APP_NOTIFICATION_SOUND,
       ...config.inAppNotificationSound
