@@ -570,3 +570,13 @@ export function validateBounds(value: unknown): BrowserViewBounds {
 export function isSameBounds(a: BrowserViewBounds, b: BrowserViewBounds): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
 }
+
+/**
+ * Whether two viewports lay a page out at the same size. A park that keeps the
+ * page at the size it was already laid out at costs it nothing; a park that
+ * changes it re-runs layout, which is a reflow the user can see when the view
+ * comes back on screen.
+ */
+export function isSameViewport(a: BrowserViewport | undefined | null, b: BrowserViewport): boolean {
+  return a !== undefined && a !== null && a.width === b.width && a.height === b.height
+}

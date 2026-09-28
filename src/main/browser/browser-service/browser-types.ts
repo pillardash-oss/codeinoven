@@ -20,6 +20,30 @@ export interface BrowserViewport {
   height: number
 }
 
+/** A viewport the page was laid out at, and when that happened. */
+export interface BrowserViewportApplication {
+  viewport: BrowserViewport
+  at: number
+}
+
+/**
+ * Everything a park needs to know: why it is happening, and the one case where
+ * the caller's size wins over the tab's own.
+ */
+export interface ParkBrowserTabOptions {
+  /**
+   * Lay the page out at exactly this viewport instead of the tab's own. Only for
+   * a caller that must preserve the frame the user is looking at right now (the
+   * toast hold, which takes the view away for a moment and puts it back).
+   */
+  size?: BrowserViewport
+  /** Keep the tab the active one, because it is coming straight back. */
+  keepActive?: boolean
+  /** Why the tab is being parked. Carried into the dev log so a recorded frame
+   *  of the browser surface can be matched to the moment that produced it. */
+  reason: string
+}
+
 export interface BrowserTab {
   view: WebContentsView
   projectId: string
@@ -28,10 +52,21 @@ export interface BrowserTab {
   consoleEntries: BrowserConsoleEntry[]
   /** Favicon data URL from the last `page-favicon-updated`, cleared on navigation. */
   favicon: string | null
-  /** Size this tab is laid out at while parked offscreen. A displayed tab is
-   *  laid out at the on-screen surface's size instead, and keeps this value for
-   *  whenever it is parked again. */
-  viewport: BrowserViewport
+  /**
+   * The viewport an agent asked this tab to be laid out at while parked, and when
+   * it asked. Null until an agent requests one, which leaves the desktop default.
+   */
+  requestedViewport: BrowserViewportApplication | null
+  /**
+   * The frame this tab was last displayed at, and when it was displayed.
+   *
+   * Parking lays the page out at the newest of this and `requestedViewport`, so a
+   * hide never resizes the page away from the size the user was reading it at. A
+   * tab that was never displayed and never asked falls back to
+   * `DEFAULT_PARKED_VIEWPORT`, which is the deterministic desktop size an agent's
+   * offscreen tab is mounted at.
+   */
+  displayedViewport: BrowserViewportApplication | null
   /** The design folder this tab is rendering, when the design capability opened
    *  it. Non-null is what makes the tab eligible for the element inspector. */
   design: BrowserDesignTab | null

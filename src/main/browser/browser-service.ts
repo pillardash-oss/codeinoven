@@ -4,6 +4,7 @@ import {
   dialog,
   Menu,
   MenuItem,
+  screen,
   session,
   webFrameMain,
   WebContentsView,
@@ -59,7 +60,12 @@ import {
   BrowserPermissionMemory,
   type PermissionMemoryPersistence
 } from './browser-service/browser-permission-memory'
-import type { BrowserTab, PendingBrowserPermission } from './browser-service/browser-types'
+import type {
+  BrowserTab,
+  BrowserViewport,
+  ParkBrowserTabOptions,
+  PendingBrowserPermission
+} from './browser-service/browser-types'
 import { BrowserTabStage } from './browser-service/browser-stage'
 import {
   AGENT_REVEAL_GRACE_MS,
@@ -79,6 +85,7 @@ import {
   ZOOM_STEP,
   browserContextKey,
   isSameBounds,
+  isSameViewport,
   safeBasename,
   validateAttention,
   validateBounds,
@@ -101,7 +108,6 @@ import {
   validateTransportValue,
   validateViewportRequest
 } from './browser-service/browser-validation'
-import type { BrowserViewport } from './browser-service/browser-types'
 
 /**
  * Where a renderer-owned shortcut lands. The key is decided in this process,
@@ -200,6 +206,16 @@ export class BrowserService {
    *  window-server commit, and doing that sixty times a second for a frame that
    *  never moved is the difference between an instant switch and a hitch. */
   private displayedTab: { tabId: string; bounds: BrowserViewBounds } | null = null
+  /**
+   * Hides the renderer asked for, with the tick that will carry them out.
+   *
+   * A surface switch unmounts one panel and mounts the next for the same tab, so
+   * the renderer's hide and the show that follows describe one continuous view
+   * that never actually left. Parking in between is a window-server teardown and a
+   * re-parent the page feels, so a hide waits one tick for a show to cancel it. A
+   * hide with nothing behind it parks on that tick, as it always did.
+   */
+  private readonly pendingParks = new Map<string, ReturnType<typeof setImmediate>>()
   /** The dialog-context label already installed in each tab's current document.
    *  The shim is idempotent per document, so a repeat is a script evaluation
    *  per frame for no change. Cleared when a new document commits. */
@@ -291,17 +307,38 @@ export class BrowserService {
         const bounds = validateBounds(rawBounds)
         const tab = this.ensureTab(tabId, projectId, threadId)
 
+        // A show that lands in the same tick as a hide is a surface switch, not a
+        // departure: dropping the deferred park keeps the page where it is instead
+        // of parking it and re-parenting it straight back.
+        this.cancelPendingPark(tabId)
         // Leaving a tab costs nothing now: the outgoing tab keeps running in an
         // invisible stage window instead of going dead behind the app window.
-        if (this.activeTabId && this.activeTabId !== tabId) this.parkTab(this.activeTabId)
+        if (this.activeTabId && this.activeTabId !== tabId) {
+          this.parkTab(this.activeTabId, { reason: 'another tab took the view' })
+        }
         this.activeTabId = tabId
         this.activeTabBounds = bounds
+        // Remember the frame the page is on screen at. Parking lays the page out at
+        // this size from now on, so leaving a tab never resizes the page away from
+        // the size the user was reading it at.
+        tab.displayedViewport = {
+          viewport: { width: bounds.width, height: bounds.height },
+          at: Date.now()
+        }
         this.markRevealShown(tabId)
         if (this.toastVisible) {
           // A native view floats above every DOM surface, so while a toast is on
           // screen the tab stays parked at its on-screen size: the page keeps
-          // the exact viewport the user was looking at, and keeps running.
-          this.parkTab(tabId, { width: bounds.width, height: bounds.height }, true)
+          // the exact viewport the user was looking at, and keeps running. The
+          // panel re-reports the same frame while the toast is up and the view is
+          // already where it belongs, so only the first report parks it.
+          if (!this.stage.isParked(tab.view)) {
+            this.parkTab(tabId, {
+              size: { width: bounds.width, height: bounds.height },
+              keepActive: true,
+              reason: 'toast on screen'
+            })
+          }
         } else {
           this.showActiveView()
         }
@@ -323,7 +360,10 @@ export class BrowserService {
       // Leaving a tab right after an agent revealed it is the signal that the
       // agent's reveal was not welcome; it stops being counted after a while.
       this.noteDepartedReveal(tabId)
-      this.parkTab(tabId)
+      // Deferred by one tick, so a panel that unmounts because the same tab is
+      // moving to another surface (the sidebar handing the tab to the full screen
+      // browser) does not park a view that is about to be shown again.
+      this.schedulePark(tabId, 'the renderer left this surface')
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
     })
@@ -515,6 +555,8 @@ export class BrowserService {
     this.toastVisible = false
     this.activeTabBounds = null
     this.displayedTab = null
+    for (const handle of this.pendingParks.values()) clearImmediate(handle)
+    this.pendingParks.clear()
     this.injectedDialogLabels.clear()
     this.parkedOrder.length = 0
     this.agentReveals.clear()
@@ -646,7 +688,7 @@ export class BrowserService {
       tab.initialNavigationStarted = true
       // Mount the tab offscreen before anything else: the page must run whether
       // or not the user ends up looking at it.
-      this.parkTab(tabId)
+      this.parkTab(tabId, { reason: 'agent opened a tab in the background' })
       this.load(tabId, url)
       this.agentTabIds.set(contextKey, tabId)
       // An opportunistic reveal is skipped once the user has shown twice that
@@ -662,7 +704,7 @@ export class BrowserService {
       })
       return {
         ...this.utilityTabContext(tabId, tab),
-        viewport: tab.viewport,
+        viewport: this.parkedViewportFor(tab),
         attention: reveal ? 'focus' : 'background',
         relaxed,
         page: this.stateFor(tabId, tab)
@@ -677,12 +719,18 @@ export class BrowserService {
     }
     // An operation is a use: it revives a tab that was evicted from the parked
     // set, and protects it from eviction while the agent keeps working on it.
-    if (this.activeTabId !== tabId && !this.stage.isParked(tab.view)) this.parkTab(tabId)
-    else this.touchParkedTab(tabId)
+    if (this.activeTabId !== tabId && !this.stage.isParked(tab.view)) {
+      this.parkTab(tabId, { reason: 'agent operation on a tab that was not on screen' })
+    } else {
+      this.touchParkedTab(tabId)
+    }
     const utilityContext = this.utilityTabContext(tabId, tab)
     if (operation === 'viewport') {
-      const viewport = validateViewportRequest(input, tab.viewport)
-      tab.viewport = viewport
+      const viewport = validateViewportRequest(
+        input,
+        tab.requestedViewport?.viewport ?? DEFAULT_PARKED_VIEWPORT
+      )
+      tab.requestedViewport = { viewport, at: Date.now() }
       if (this.stage.isParked(tab.view)) {
         // Re-park rather than setBounds directly: the stage owns where each
         // parked view sits inside its window.
@@ -694,7 +742,7 @@ export class BrowserService {
         viewport,
         applied: 'displayed',
         detail:
-          'The user is viewing this tab, so it is laid out at the on-screen size right now. This viewport applies whenever the tab is parked offscreen.'
+          'The user is viewing this tab, so it is laid out at the on-screen size right now. This viewport applies the next time the tab is parked, unless the user displays it at a size of their own after this request.'
       }
     }
     if (operation === 'navigate') {
@@ -1406,7 +1454,8 @@ export class BrowserService {
       initialNavigationStarted: false,
       consoleEntries: [],
       favicon: null,
-      viewport: { ...DEFAULT_PARKED_VIEWPORT },
+      requestedViewport: null,
+      displayedViewport: null,
       design: null,
       composition: null,
       transport: null,
@@ -1557,7 +1606,7 @@ export class BrowserService {
         popupTab.initialNavigationStarted = true
         // Park it like every other tab: a popup the user never goes on to view
         // must still load and run.
-        this.parkTab(popupTabId)
+        this.parkTab(popupTabId, { reason: 'a popup opened in the background' })
         this.load(popupTabId, safeUrl)
         sendToRenderer(this.window.webContents, 'browser:openRequested', safeUrl, {
           projectId: tab.projectId,
@@ -2054,31 +2103,88 @@ export class BrowserService {
     this.toastVisible = false
     const parented = new Set(this.window.contentView.children)
     for (const [tabId, tab] of this.tabs) {
-      if (parented.has(tab.view)) this.parkTab(tabId)
+      if (parented.has(tab.view)) {
+        this.parkTab(tabId, { reason: 'the renderer reloaded or crashed' })
+      }
     }
   }
 
   /**
-   * Park a tab in an invisible stage window, where it keeps a real viewport and
-   * keeps producing frames no matter what the user is looking at. `size`
-   * overrides the tab's parked viewport for callers that must preserve the exact
-   * viewport the user was seeing (the toast case).
+   * The viewport a tab is laid out at while it is parked offscreen.
+   *
+   * The newest of the two records wins, because the newest one is the size
+   * something actually asked the page to be: an agent's explicit request, or the
+   * frame the user was reading the tab at. A tab that was never displayed and
+   * never asked for a viewport is mounted at `DEFAULT_PARKED_VIEWPORT`.
    */
-  private parkTab(tabId: string, size?: BrowserViewport, keepActive = false): void {
+  private parkedViewportFor(tab: BrowserTab): BrowserViewport {
+    const requested = tab.requestedViewport
+    const displayed = tab.displayedViewport
+    if (displayed && (!requested || requested.at <= displayed.at)) return displayed.viewport
+    return requested?.viewport ?? DEFAULT_PARKED_VIEWPORT
+  }
+
+  /**
+   * Carry out a hide the renderer asked for on the next tick, so a show that
+   * follows in the same turn can cancel it.
+   */
+  private schedulePark(tabId: string, reason: string): void {
+    if (this.pendingParks.has(tabId)) return
+    const handle = setImmediate(() => {
+      this.pendingParks.delete(tabId)
+      this.parkTab(tabId, { reason })
+    })
+    this.pendingParks.set(tabId, handle)
+  }
+
+  /** Drop a deferred hide, because the tab is being shown again after all. */
+  private cancelPendingPark(tabId: string): void {
+    const handle = this.pendingParks.get(tabId)
+    if (handle === undefined) return
+    clearImmediate(handle)
+    this.pendingParks.delete(tabId)
+  }
+
+  /**
+   * Park a tab in an invisible stage window, where it keeps a real viewport and
+   * keeps producing frames no matter what the user is looking at.
+   *
+   * The page is laid out at `options.size` when a caller has one to insist on
+   * (the toast case, which must preserve the frame the user is looking at), and at
+   * the tab's own parked viewport otherwise. Every park carries a reason and is
+   * logged at dev level: a recorded frame of the browser surface can then be
+   * matched to the moment that produced it.
+   */
+  private parkTab(tabId: string, options: ParkBrowserTabOptions): void {
     const tab = this.tabs.get(tabId)
     if (!tab || tab.view.webContents.isDestroyed()) return
-    const viewport = size ?? tab.viewport
+    // A deferred hide can land after the app window is gone (the app is quitting),
+    // and there is no child list left to take the view out of.
+    if (this.window.isDestroyed()) return
+    const viewport = options.size ?? this.parkedViewportFor(tab)
+    // Whether this view is the one the app window is showing: a park only re-lays
+    // the page out when it takes a view off the screen and gives it another size.
+    const wasOnScreen = this.displayedTab?.tabId === tabId
     this.window.contentView.removeChildView(tab.view)
     // The view is leaving the window, so whatever frame it was displayed at no
     // longer describes where it is.
     if (this.displayedTab?.tabId === tabId) this.displayedTab = null
     this.stage.park(tab.view, viewport)
     this.markParked(tabId)
-    if (this.activeTabId === tabId && !keepActive) {
+    if (this.activeTabId === tabId && !options.keepActive) {
       this.activeTabId = null
       this.activeTabBounds = null
     }
     this.enforceParkedCap(tabId)
+    // Dev-only, and deliberately one line per park: a recorded frame of the
+    // browser surface can then be matched against the park, the size it laid the
+    // page out at, and whether that size was a change the page had to reflow for.
+    Logger.dev('Browser view parked', {
+      tabId,
+      reason: options.reason,
+      viewport,
+      relayout: wasOnScreen && !isSameViewport(tab.displayedViewport?.viewport, viewport)
+    })
     // A stage window the window server stopped showing would silently freeze the
     // page (that is how a parked view dies), so confirm it once per park and hand
     // the tab a fresh window if it did not take. Fire and forget: parking must
@@ -2086,8 +2192,34 @@ export class BrowserService {
     void this.stage.verifyVisible(tab.view).then((visible) => {
       if (visible || !this.stage.isParked(tab.view)) return
       Logger.dev('Reparking a browser tab whose stage window stopped rendering', { tabId })
-      this.stage.restart(tab.view, this.tabs.get(tabId)?.viewport ?? viewport)
+      const current = this.tabs.get(tabId)
+      this.stage.restart(tab.view, current ? this.parkedViewportFor(current) : viewport)
     })
+  }
+
+  /**
+   * Deliver the current pointer position to a page that has just come back on
+   * screen.
+   *
+   * While a tab is parked its view sits in the stage window, so the pointer is not
+   * over the page any more and the page is told the pointer left. Chromium
+   * rebuilds hover state and the cursor shape only from an input event, so without
+   * this the page keeps what it decided back then: `cursor: pointer` never comes
+   * back, hover menus stay shut, and drag affordances stay inert until the user
+   * physically moves the mouse. One real mouse move, at the position the pointer
+   * is actually at, restores the state the user can already see they are in.
+   */
+  private primePagePointer(tab: BrowserTab, bounds: BrowserViewBounds | null): void {
+    if (bounds === null || this.window.isDestroyed()) return
+    if (tab.view.webContents.isDestroyed()) return
+    const cursor = screen.getCursorScreenPoint()
+    const content = this.window.getContentBounds()
+    const x = Math.round(cursor.x - content.x - bounds.x)
+    const y = Math.round(cursor.y - content.y - bounds.y)
+    // A pointer that is not over the page must not be reported as if it were: the
+    // page would gain a hover the user is not pointing at.
+    if (x < 0 || y < 0 || x >= bounds.width || y >= bounds.height) return
+    tab.view.webContents.sendInputEvent({ type: 'mouseMove', x, y })
   }
 
   /** Mount the current active tab in the app window at its display bounds. */
@@ -2112,15 +2244,30 @@ export class BrowserService {
       if (bounds !== null && !isSameBounds(displayed.bounds, bounds)) {
         this.displayedTab = { tabId, bounds }
         tab.view.setBounds(bounds)
+        // A size change re-lays the page out and hands it a new surface, which is
+        // worth seeing in the dev log next to a parked or re-attached view: the
+        // three together are what a recorded frame of this surface can be matched
+        // against. A position-only move re-lays nothing out.
+        if (bounds.width !== displayed.bounds.width || bounds.height !== displayed.bounds.height) {
+          Logger.dev('Browser view resized', { tabId, from: displayed.bounds, to: bounds })
+        }
       }
       return
     }
+    // A view the stage was holding is off the window, so the page has already been
+    // told the pointer left it and needs the pointer position again once it is
+    // back. Recorded before the release, which is what clears the parked state.
+    const wasParked = this.stage.isParked(tab.view)
     this.stage.release(tab.view)
     this.forgetParked(tabId)
     this.window.contentView.addChildView(tab.view)
     if (bounds !== null) {
       this.displayedTab = { tabId, bounds }
       tab.view.setBounds(bounds)
+    }
+    if (wasParked) {
+      this.primePagePointer(tab, bounds)
+      Logger.dev('Browser view re-attached', { tabId, bounds })
     }
   }
 
@@ -2219,17 +2366,22 @@ export class BrowserService {
     const tab = this.tabs.get(this.activeTabId)
     if (!tab) return
     if (visible) {
-      this.parkTab(
-        this.activeTabId,
-        this.activeTabBounds ?? { width: tab.viewport.width, height: tab.viewport.height },
-        true
-      )
+      // The on-screen frame is the whole point of this park: the toast is on screen
+      // for a moment and the page must come back at the size the user left it at.
+      this.parkTab(this.activeTabId, {
+        size: this.activeTabBounds ?? this.parkedViewportFor(tab),
+        keepActive: true,
+        reason: 'toast on screen'
+      })
       return
     }
     this.showActiveView()
   }
 
   private destroy(tabId: string): void {
+    // A hide that was waiting for its tick must not park a tab that is about to be
+    // gone: the view would be handed to the stage window only to be destroyed.
+    this.cancelPendingPark(tabId)
     const tab = this.tabs.get(tabId)
     if (!tab) return
     for (const [requestId, pending] of this.pendingPermissions) {
