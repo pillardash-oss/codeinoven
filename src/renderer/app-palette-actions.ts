@@ -10,6 +10,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  Globe,
   GraduationCap,
   Info,
   Keyboard,
@@ -88,6 +89,12 @@ export const settingsTabs: Array<{
     label: 'General',
     keywords: ['appearance', 'theme', 'preferences'],
     icon: SlidersHorizontal
+  },
+  {
+    id: 'browser',
+    label: 'Browser',
+    keywords: ['search engine', 'address bar', 'links', 'tabs', 'prototype', 'cdn'],
+    icon: Globe
   },
   {
     id: 'memory',

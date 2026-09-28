@@ -14,6 +14,7 @@ export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 export type SettingsSection =
   | 'profile'
   | 'general'
+  | 'browser'
   | 'memory'
   | 'audits'
   | 'design'
@@ -38,6 +39,7 @@ export type MainView =
   | 'threads'
   | 'settings'
   | 'settings-profile'
+  | 'settings-browser'
   | 'settings-memory'
   | 'settings-audits'
   | 'settings-design'
@@ -179,6 +181,7 @@ const MAIN_VIEWS: readonly MainView[] = [
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'profile',
   'general',
+  'browser',
   'memory',
   'audits',
   'design',

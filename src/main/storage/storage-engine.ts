@@ -49,6 +49,10 @@ import {
 } from '../../lib/assignment/worker-names'
 import type { WorkerNameSettings } from '../../lib/assignment/worker-names'
 import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '../../lib/prototypes/prototype-cdn'
+import {
+  DEFAULT_BROWSER_SEARCH_ENGINE_ID,
+  sanitizeCustomSearchEngines
+} from '../../lib/browser-search-engines'
 import { MAX_DESIGN_ASSIGNMENTS, isUsableDesignAssignment } from '../../lib/design-assignments'
 import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
 import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/image-descriptor'
@@ -88,6 +92,8 @@ const DEFAULT_CONFIG: AppConfig = {
   openLocalhostInCioBrowser: true,
   openAllLinksInCioBrowser: false,
   browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  browserSearchEngine: DEFAULT_BROWSER_SEARCH_ENGINE_ID,
+  browserCustomSearchEngines: [],
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
@@ -222,6 +228,11 @@ export class StorageEngine {
             (origin): origin is string => typeof origin === 'string'
           )
         : DEFAULT_CONFIG.prototypeCdnAllowlist,
+      browserSearchEngine:
+        typeof config?.browserSearchEngine === 'string' && config.browserSearchEngine.trim() !== ''
+          ? config.browserSearchEngine
+          : DEFAULT_CONFIG.browserSearchEngine,
+      browserCustomSearchEngines: sanitizeCustomSearchEngines(config?.browserCustomSearchEngines),
       sound: {
         ...DEFAULT_CONFIG.sound,
         ...(config?.sound ?? {}),

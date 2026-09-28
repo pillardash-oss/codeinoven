@@ -3,6 +3,7 @@ import {
   ChartColumn,
   Cloud,
   FolderTree,
+  Globe,
   HeartPulse,
   Info,
   Keyboard,
@@ -12,6 +13,7 @@ import {
   Plug,
   Puzzle,
   Router,
+  Search,
   SlidersHorizontal,
   Sparkles,
   UsersRound,
@@ -56,6 +58,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Appearance, notifications, git, threads, and power defaults.',
     keywords: ['settings', 'preferences'],
     icon: SlidersHorizontal
+  },
+  {
+    id: 'browser',
+    section: 'browser',
+    title: 'Browser',
+    description: 'Link routing, the search engine, tab hibernation, and prototype previews.',
+    keywords: ['search', 'address bar', 'duckduckgo', 'google', 'links', 'tabs', 'cdn'],
+    icon: Globe
   },
   {
     id: 'memory',
@@ -247,16 +257,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: SlidersHorizontal
   },
   {
-    id: 'general-browser',
-    section: 'general',
-    blockId: 'general-browser',
-    title: 'Browser',
-    description:
-      'Open localhost links in CIO’s browser, and approve the CDNs prototype previews may load.',
-    keywords: ['localhost', 'links', 'prototype', 'preview', 'cdn', 'fonts', 'allowlist'],
-    icon: SlidersHorizontal
-  },
-  {
     id: 'general-power',
     section: 'general',
     blockId: 'general-power',
@@ -302,6 +302,51 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Thread limits, slash command behavior, and question timeout.',
     keywords: ['limit', 'slash commands', 'timeout'],
     icon: SlidersHorizontal
+  },
+  // ── Blocks on Browser ─────────────────────────────────────────────────
+  {
+    id: 'browser-links',
+    section: 'browser',
+    blockId: 'browser-links',
+    title: 'Link routing',
+    description: 'Which links open in CIO’s browser instead of your default browser.',
+    keywords: ['localhost', 'links', 'open', 'system browser', 'workspace'],
+    icon: Globe
+  },
+  {
+    id: 'browser-search',
+    section: 'browser',
+    blockId: 'browser-search',
+    title: 'Search engine',
+    description: 'The engine typed text searches with, plus your own engines.',
+    keywords: [
+      'search',
+      'query',
+      'address bar',
+      'duckduckgo',
+      'google',
+      'custom engine',
+      'template'
+    ],
+    icon: Search
+  },
+  {
+    id: 'browser-tabs',
+    section: 'browser',
+    blockId: 'browser-tabs',
+    title: 'Tab hibernation',
+    description: 'Free a browser tab’s memory after it sits unused for a while.',
+    keywords: ['tab', 'memory', 'hibernate', 'idle'],
+    icon: Globe
+  },
+  {
+    id: 'browser-prototype-cdn',
+    section: 'browser',
+    blockId: 'browser-prototype-cdn',
+    title: 'Prototype previews',
+    description: 'Approve the external CDNs prototype previews may load.',
+    keywords: ['prototype', 'preview', 'cdn', 'fonts', 'allowlist'],
+    icon: Globe
   },
   // ── Blocks on About ──────────────────────────────────────────────────────
   {

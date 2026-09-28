@@ -2,6 +2,7 @@ import type { AgentDefaultsConfig, AuxiliaryAgentConfig, RankingJudgeConfig } fr
 import type { AgentModelSelection } from './common'
 import type { GitPullPreference, PrMergeMethod } from './git'
 import type { MediaProviderId } from '../media-generation'
+import type { BrowserSearchEngine } from '../browser-search-engines'
 
 export interface WorkflowStage {
   id: string
@@ -360,6 +361,14 @@ export interface AppConfig {
    */
   browserHibernationMinutes: number
   /**
+   * Search engine id used when typed address text is not a URL. Names a built-in
+   * engine or one of `browserCustomSearchEngines`; an unknown id falls back to
+   * the shipped default.
+   */
+  browserSearchEngine: string
+  /** User-added search engines, offered after the built-ins. */
+  browserCustomSearchEngines: BrowserSearchEngine[]
+  /**
    * Let prototype previews load fonts, styles, and scripts from the approved
    * CDNs. Off confines every prototype to assets inlined in its own folder.
    */
@@ -419,6 +428,8 @@ export type AppConfigPatch = Partial<
     | 'openLocalhostInCioBrowser'
     | 'openAllLinksInCioBrowser'
     | 'browserHibernationMinutes'
+    | 'browserSearchEngine'
+    | 'browserCustomSearchEngines'
     | 'allowPrototypeExternalCdn'
     | 'prototypeCdnAllowlist'
     | 'inAppNotificationSound'

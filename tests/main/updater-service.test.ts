@@ -91,6 +91,8 @@ function defaultConfig(): AppConfig {
     maxDiffLines: 100,
     maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
     browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+    browserSearchEngine: 'duckduckgo',
+    browserCustomSearchEngines: [],
     sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
   }
 }

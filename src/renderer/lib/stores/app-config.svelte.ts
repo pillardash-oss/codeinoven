@@ -8,6 +8,7 @@ import type {
   InAppNotificationSoundSettings,
   MediaGenerationConfig
 } from '$shared/types'
+import { findBrowserSearchEngine, type BrowserSearchEngine } from '$shared/browser-search-engines'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
 /** Fallback used until the persisted config loads (mirrors App.svelte defaults). */
@@ -33,6 +34,8 @@ let maxDiffLines = $state(DEFAULT_MAX_DIFF_LINES)
 let browserHibernationMinutes = $state(DEFAULT_BROWSER_HIBERNATION_MINUTES)
 let openLocalhostInCioBrowser = $state(true)
 let openAllLinksInCioBrowser = $state(false)
+let browserSearchEngineId = $state('')
+let browserCustomSearchEngines = $state<BrowserSearchEngine[]>([])
 let inAppNotificationSound = $state<InAppNotificationSoundSettings>(
   structuredClone(DEFAULT_IN_APP_NOTIFICATION_SOUND)
 )
@@ -74,6 +77,11 @@ export const appConfigState = {
   get openAllLinksInCioBrowser(): boolean {
     return openAllLinksInCioBrowser
   },
+  /** The engine an address field searches with, already resolved: a removed
+   *  custom engine falls back to the shipped default instead of a dead id. */
+  get browserSearchEngine(): BrowserSearchEngine {
+    return findBrowserSearchEngine(browserSearchEngineId, browserCustomSearchEngines)
+  },
   /** Which in-app alert groups may play their quieter sound. */
   get inAppNotificationSound(): InAppNotificationSoundSettings {
     return inAppNotificationSound
@@ -101,6 +109,8 @@ export const appConfigState = {
     browserHibernationMinutes = config.browserHibernationMinutes
     openLocalhostInCioBrowser = config.openLocalhostInCioBrowser
     openAllLinksInCioBrowser = config.openAllLinksInCioBrowser
+    browserSearchEngineId = config.browserSearchEngine
+    browserCustomSearchEngines = config.browserCustomSearchEngines ?? []
     inAppNotificationSound = {
       ...DEFAULT_IN_APP_NOTIFICATION_SOUND,
       ...config.inAppNotificationSound

@@ -120,6 +120,8 @@ const defaultConfig: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  browserSearchEngine: 'duckduckgo',
+  browserCustomSearchEngines: [],
   sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
 }
 
@@ -174,6 +176,10 @@ describe('validateAppConfigPatch', () => {
         imageDescriptorAskAgain: true,
         autoRetryAfterReset: true,
         resumeWorkOnRestart: false,
+        browserSearchEngine: 'google',
+        browserCustomSearchEngines: [
+          { id: 'kagi', name: 'Kagi', searchUrlTemplate: 'https://kagi.com/search?q=%s' }
+        ],
         defaultMergeMethod: 'rebase',
         maxDiffLines: 250,
         agentBehaviorPrompt: 'Custom agent behavior.',
@@ -200,6 +206,10 @@ describe('validateAppConfigPatch', () => {
       imageDescriptorAskAgain: true,
       autoRetryAfterReset: true,
       resumeWorkOnRestart: false,
+      browserSearchEngine: 'google',
+      browserCustomSearchEngines: [
+        { id: 'kagi', name: 'Kagi', searchUrlTemplate: 'https://kagi.com/search?q=%s' }
+      ],
       defaultMergeMethod: 'rebase',
       maxDiffLines: 250,
       agentBehaviorPrompt: 'Custom agent behavior.',
@@ -241,6 +251,19 @@ describe('validateAppConfigPatch', () => {
     { imageDescriptorAskAgain: 1 },
     { autoRetryAfterReset: 'yes' },
     { resumeWorkOnRestart: 'yes' },
+    { browserSearchEngine: '' },
+    { browserSearchEngine: 7 },
+    { browserCustomSearchEngines: 'kagi' },
+    {
+      browserCustomSearchEngines: [
+        { id: 'duckduckgo', name: 'Fake', searchUrlTemplate: 'https://x/?q=%s' }
+      ]
+    },
+    {
+      browserCustomSearchEngines: [
+        { id: 'kagi', name: 'Kagi', searchUrlTemplate: 'javascript:alert(1)' }
+      ]
+    },
     { resumeWorkOnRestart: 1 },
     {
       memory: {

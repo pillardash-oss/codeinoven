@@ -14,7 +14,8 @@
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { normalizeBrowserUrl } from '$shared/local-development-url'
+  import { resolveBrowserAddress } from '$shared/browser-search-engines'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
   import BrowserCommentEditor from './BrowserCommentEditor.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
@@ -308,15 +309,15 @@
   }
 
   function navigate(): void {
-    const url = normalizeBrowserUrl(address)
-    if (!url) {
-      addressError = 'Enter an http or https address'
+    const resolution = resolveBrowserAddress(address, appConfigState.browserSearchEngine)
+    if (!resolution) {
+      addressError = 'Enter a search or an address'
       return
     }
     addressError = ''
-    address = url
-    contextSidebarState.updateBrowserTab(tabId, url)
-    void invoke('browser:navigate', tabId, url).catch(() => {})
+    address = resolution.url
+    contextSidebarState.updateBrowserTab(tabId, resolution.url)
+    void invoke('browser:navigate', tabId, resolution.url).catch(() => {})
   }
 
   function applyPageState(next: BrowserPageState): void {

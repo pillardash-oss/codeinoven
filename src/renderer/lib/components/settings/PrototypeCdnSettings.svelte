@@ -70,10 +70,11 @@
   }
 </script>
 
-<div class="mt-4 border-t pt-4">
+<div id="settings-block-browser-prototype-cdn" class="rounded-xl border bg-surface p-4">
+  <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Prototype previews</h3>
   <div class="flex items-center justify-between gap-4">
     <div>
-      <p class="text-sm font-medium">Allow external CDNs in prototypes</p>
+      <p class="text-sm font-medium">Allow external CDNs</p>
       <p class="text-xs leading-relaxed text-dimmed">
         Let generated prototypes load fonts, styles, scripts, and images from approved CDNs
       </p>

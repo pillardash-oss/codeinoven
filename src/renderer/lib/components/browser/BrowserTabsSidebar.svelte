@@ -14,7 +14,8 @@
     X
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { normalizeBrowserUrl } from '$shared/local-development-url'
+  import { resolveBrowserAddress } from '$shared/browser-search-engines'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { type GlobalBrowserTab } from '$lib/stores/global-browser-types'
@@ -103,14 +104,14 @@
   }
 
   function navigate(): void {
-    const url = normalizeBrowserUrl(addressDraft)
-    if (!url) {
-      addressError = 'Enter an http or https address'
+    const resolution = resolveBrowserAddress(addressDraft, appConfigState.browserSearchEngine)
+    if (!resolution) {
+      addressError = 'Enter a search or an address'
       return
     }
     addressError = ''
     addressFocused = false
-    if (activeTab) void invoke('browser:navigate', activeTab.id, url).catch(() => {})
+    if (activeTab) void invoke('browser:navigate', activeTab.id, resolution.url).catch(() => {})
   }
 
   function startEditingAddress(input: EventTarget | null): void {

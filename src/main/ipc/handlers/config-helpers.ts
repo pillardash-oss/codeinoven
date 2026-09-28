@@ -29,6 +29,13 @@ import {
   isValidMediaModel,
   isMediaProviderId
 } from '../../../lib/media-generation'
+import {
+  MAX_BROWSER_CUSTOM_SEARCH_ENGINES,
+  MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH,
+  isBuiltInBrowserSearchEngineId,
+  normalizeBrowserSearchUrlTemplate,
+  type BrowserSearchEngine
+} from '../../../lib/browser-search-engines'
 import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
 import { validateMemoryConfig } from '../../chat/memory-service'
 import {
@@ -172,6 +179,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'maxConflictFileBytes',
   'openLocalhostInCioBrowser',
   'openAllLinksInCioBrowser',
+  'browserSearchEngine',
+  'browserCustomSearchEngines',
   'allowPrototypeExternalCdn',
   'prototypeCdnAllowlist',
   'inAppNotificationSound',
@@ -485,6 +494,44 @@ const FONT_FAMILIES = new Set([
   'fira-code'
 ])
 
+/** Validate a user-authored search engine list, rejecting the whole patch on
+ *  the first bad entry so a half-applied list can never reach the config. */
+function validateBrowserCustomSearchEngines(value: unknown): BrowserSearchEngine[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError('Custom search engines must be an array')
+  }
+  if (value.length > MAX_BROWSER_CUSTOM_SEARCH_ENGINES) {
+    throw new TypeError(
+      `At most ${MAX_BROWSER_CUSTOM_SEARCH_ENGINES} custom search engines are allowed`
+    )
+  }
+  const engines: BrowserSearchEngine[] = []
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      throw new TypeError('Each custom search engine must be an object')
+    }
+    const id = requireString(entry.id, 'Custom search engine id')
+    const name = requireString(entry.name, 'Custom search engine name').trim()
+    if (name === '' || name.length > MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH) {
+      throw new TypeError('Custom search engine name must be 1 to 48 characters')
+    }
+    if (isBuiltInBrowserSearchEngineId(id)) {
+      throw new TypeError('A built-in search engine id cannot be reused')
+    }
+    if (engines.some((engine) => engine.id === id)) {
+      throw new TypeError('Custom search engine ids must be unique')
+    }
+    const template = normalizeBrowserSearchUrlTemplate(
+      requireString(entry.searchUrlTemplate, 'Custom search engine URL')
+    )
+    if (!template) {
+      throw new TypeError('Custom search engine URL must be an http or https address')
+    }
+    engines.push({ id, name, searchUrlTemplate: template })
+  }
+  return engines
+}
+
 /** Validate the complete renderer-controlled config boundary. */
 export function validateAppConfigPatch(value: unknown): AppConfigPatch {
   if (!isRecord(value)) throw new TypeError('Config patch must be an object')
@@ -653,6 +700,23 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Open all links in CIO browser must be a boolean')
     }
     patch.openAllLinksInCioBrowser = value.openAllLinksInCioBrowser
+  }
+
+  if ('browserSearchEngine' in value) {
+    if (
+      typeof value.browserSearchEngine !== 'string' ||
+      value.browserSearchEngine.trim() === '' ||
+      value.browserSearchEngine.length > 128
+    ) {
+      throw new TypeError('Browser search engine must be a non-empty id')
+    }
+    patch.browserSearchEngine = value.browserSearchEngine
+  }
+
+  if ('browserCustomSearchEngines' in value) {
+    patch.browserCustomSearchEngines = validateBrowserCustomSearchEngines(
+      value.browserCustomSearchEngines
+    )
   }
 
   if ('allowPrototypeExternalCdn' in value) {

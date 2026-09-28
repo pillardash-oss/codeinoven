@@ -2,7 +2,8 @@
   import { Globe } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { normalizeBrowserUrl } from '$shared/local-development-url'
+  import { resolveBrowserAddress } from '$shared/browser-search-engines'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
 
   interface Props {
@@ -30,15 +31,15 @@
   let error = $state('')
 
   function submit(): void {
-    const url = normalizeBrowserUrl(value)
-    if (!url) {
-      error = 'Enter an http or https address'
+    const resolution = resolveBrowserAddress(value, appConfigState.browserSearchEngine)
+    if (!resolution) {
+      error = 'Enter a search or an address'
       return
     }
     if (tab) {
-      void invoke('browser:navigate', tab.id, url).catch(() => {})
+      void invoke('browser:navigate', tab.id, resolution.url).catch(() => {})
     } else {
-      globalBrowser.createTab(url)
+      globalBrowser.createTab(resolution.url)
     }
     onClose()
   }
