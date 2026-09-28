@@ -5,7 +5,11 @@
     /** Accessible name and tooltip text. */
     label: string
     icon: Component
-    /** Marks the item as the current destination: raised surface plus accent bar. */
+    /**
+     * Marks the item as the current destination. The rail paints the shared
+     * surface behind this item (so it can slide between items), which leaves
+     * the button itself with only the brightened label.
+     */
     active?: boolean
     disabled?: boolean
     /** Symbolic key tokens from the keymap registry, shown in the tooltip chip. */
@@ -36,7 +40,7 @@
   /** Tonal items keep their colour in every state; the rest use the neutral
    *  idle/active palette shared by the view rail and the context dock. */
   const toneClass = $derived.by((): string => {
-    if (active) return 'bg-elevated text-foreground'
+    if (active) return 'text-foreground'
     switch (tone) {
       case 'primary':
         return 'text-primary hover:bg-elevated'
@@ -51,7 +55,8 @@
 </script>
 
 <!-- One rail item: the 32px tool button shared by the view rail's views and its
-     utility controls, including the accent bar that marks the current item. -->
+     utility controls. The current-item surface is painted by the rail itself
+     (see `AppViewRail`), so this button only carries the glyph and its tone. -->
 <button
   type="button"
   class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-150 {toneClass}"
@@ -63,12 +68,6 @@
   onpointerenter={onHover}
   onclick={onSelect}
 >
-  <span
-    class="absolute right-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary transition-opacity duration-150 {active
-      ? 'opacity-100'
-      : 'opacity-0'}"
-    aria-hidden="true"
-  ></span>
   <Icon size={16} strokeWidth={1.8} class={spin ? 'animate-spin' : undefined} />
   {@render badge?.()}
 </button>

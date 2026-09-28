@@ -9,6 +9,8 @@
     type HeaderViewOptionId
   } from '$lib/components/layout/AppHeaderNavigationController.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
+  import { fly } from 'svelte/transition'
+  import { pageReveal } from '$lib/components/layout/page-reveal'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
@@ -262,6 +264,16 @@
    *  recovery snapshot so a restart made while on a Settings page or the Scope
    *  view still returns to the previous content view instead of resetting to Projects. */
   let lastContentView = $derived(rendererRecovery.lastContentView)
+
+  /** True while the workspace shell renders the view (Projects, Chats, Threads
+   *  and Assistant); the takeover pages (Scope, Settings) layer on top of it. */
+  let showsContentView = $derived(
+    activeView === 'projects' ||
+      activeView === 'projects-scope' ||
+      activeView === 'chats' ||
+      activeView === 'threads' ||
+      activeView === 'assistant'
+  )
 
   /** The view the user was on before opening Settings   the Settings back button returns here. */
   let lastViewBeforeSettings = $derived(rendererRecovery.lastViewBeforeSettings)
@@ -1394,26 +1406,20 @@
       onOptionHover={handleViewOptionHover}
     />
 
-    <main class="min-w-0 flex-1 overflow-hidden">
+    <main class="relative min-w-0 flex-1 overflow-hidden">
       <!-- One shell for all views   the workspace (and the open thread) stays
          mounted across Settings/Scope so returning never reloads the thread
-         list or reconnects the harness; it's simply hidden while away. -->
+         list or reconnects the harness. It fades out rather than going
+         `display: none`, so the swap cross-fades with the page arriving on top
+         while keeping it out of the tab order and the accessibility tree. -->
       <div
-        class={activeView === 'projects' ||
-        activeView === 'projects-scope' ||
-        activeView === 'chats' ||
-        activeView === 'threads' ||
-        activeView === 'assistant'
-          ? 'h-full'
-          : 'hidden'}
+        class="h-full transition-[opacity,visibility] duration-200 ease-out motion-reduce:transition-none {showsContentView
+          ? 'visible opacity-100'
+          : 'invisible pointer-events-none opacity-0'}"
       >
         <Workspace
           mode={lastContentView}
-          active={activeView === 'projects' ||
-            activeView === 'projects-scope' ||
-            activeView === 'chats' ||
-            activeView === 'threads' ||
-            activeView === 'assistant'}
+          active={showsContentView}
           scopeViewActive={activeView === 'scope'}
           {navigate}
           {config}
@@ -1422,26 +1428,33 @@
       </div>
       {#if activeView === 'scope'}
         {#await import('$lib/components/scope/ScopeView.svelte') then { default: ScopeView }}
-          <ScopeView {navigateToScopedThreads} />
+          <div class="absolute inset-0" transition:fly={pageReveal()}>
+            <ScopeView {navigateToScopedThreads} />
+          </div>
         {/await}
       {:else if isSettingsView(activeView)}
         <!-- Each settings section is its own dedicated page in the navigation model.
            The view stays mounted and SettingsView swaps its content on the section
            prop   a keyed remount here would flash the screen on every tab switch. -->
         {#await import('$lib/components/settings/SettingsView.svelte') then { default: SettingsView }}
-          <SettingsView
-            {config}
-            {settingsReady}
-            error={settingsError}
-            {setPreference}
-            {updateConfig}
-            section={settingsSectionForView(activeView) ?? 'general'}
-            onNavigateSection={(section) => navigate(settingsViewForSection(section))}
-            onBack={() => navigate(lastViewBeforeSettings)}
-          />
+          <div class="absolute inset-0" transition:fly={pageReveal()}>
+            <SettingsView
+              {config}
+              {settingsReady}
+              error={settingsError}
+              {setPreference}
+              {updateConfig}
+              section={settingsSectionForView(activeView) ?? 'general'}
+              onNavigateSection={(section) => navigate(settingsViewForSection(section))}
+              onBack={() => navigate(lastViewBeforeSettings)}
+            />
+          </div>
         {/await}
-      {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads' || activeView === 'assistant')}
-        <div class="flex h-full items-center justify-center">
+      {:else if !showsContentView}
+        <div
+          class="absolute inset-0 flex items-center justify-center"
+          transition:fly={pageReveal()}
+        >
           <p class="text-sm text-dimmed">Coming soon</p>
         </div>
       {/if}
