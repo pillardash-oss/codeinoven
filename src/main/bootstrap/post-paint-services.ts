@@ -156,7 +156,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { ThreadTransferService },
     { RoutineManager },
     { RoutineSchedulerService },
-    { broadcastMissedRunsChanged },
+    { broadcastMissedRunsChanged, broadcastAutoAnswersChanged, broadcastBackgroundRunsChanged },
     { SkillUpdateService },
     { SecretVault },
     { GitHubAuthService }
@@ -277,6 +277,27 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const { BackgroundRunLedger } = await import('../scheduler/background-run-ledger')
   state.backgroundRunLedger = new BackgroundRunLedger(storage)
   await state.backgroundRunLedger.load()
+  // Durable record of gates the app resolved without the user. Written the
+  // instant one settles, so the attention rail can explain what was asked,
+  // offered and chosen even after a restart.
+  const { AutoAnswerStore } = await import('../system/auto-answer-store')
+  state.autoAnswerStore = new AutoAnswerStore(storage)
+  await state.autoAnswerStore.load()
+  state.chatEngine.attachAutoAnswerRecorder((report) => {
+    const store = state.autoAnswerStore
+    if (!store) return
+    store.record({
+      id: report.id,
+      kind: report.kind,
+      outcome: report.outcome,
+      projectId: report.projectId,
+      threadId: report.threadId,
+      entries: report.entries,
+      at: report.at
+    })
+    broadcastAutoAnswersChanged(store.list())
+    state.backgroundLifecycle?.refreshAttention()
+  })
   state.routineScheduler = new RoutineSchedulerService(storage, {
     routines: routineManager,
     backgroundLedger: state.backgroundRunLedger,
@@ -349,6 +370,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   })
   state.routineScheduler.attachChangeListener(() => {
     broadcastMissedRunsChanged(state.routineScheduler?.listMissedRuns() ?? [])
+    broadcastBackgroundRunsChanged(state.routineScheduler?.listBackgroundRuns() ?? [])
     state.backgroundLifecycle?.refreshAttention()
   })
   // Background wake: the machine is held awake inside the lead window before a
@@ -377,6 +399,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // successful run once the run's turn actually completes.
   state.chatEngine.attachAssistantRunSettledRecorder((threadId, status) => {
     state.routineScheduler?.settleRun(threadId, status)
+    // A settled run's outcome now belongs in the "While you were away" list.
+    broadcastBackgroundRunsChanged(state.routineScheduler?.listBackgroundRuns() ?? [])
   })
   state.speechService = new SpeechService(
     {
@@ -604,6 +628,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     heartbeatScheduler: state.heartbeatScheduler,
     routineManager: state.routineManager ?? undefined,
     routineScheduler: state.routineScheduler ?? undefined,
+    autoAnswerStore: state.autoAnswerStore ?? undefined,
     harnessManifestService: state.harnessManifestService,
     worktreeService: scopeWorktreeService,
     threadCreation: context.threadCreation,

@@ -22,6 +22,7 @@ import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import type { RoutineSchedulerService } from '../scheduler/routine-scheduler-service'
 import type { BackgroundRunLedger } from '../scheduler/background-run-ledger'
+import type { AutoAnswerStore } from '../system/auto-answer-store'
 import type { RoutineManager } from '../../lib/engines/routine-manager'
 import type { PtyService } from '../system/pty-service'
 import type { ProviderConnectionService } from '../providers/provider-connection'
@@ -84,6 +85,8 @@ export interface BootstrapState {
   routineScheduler: RoutineSchedulerService | null
   /** Durable record of unattended (background) runs for the "while you were away" list. */
   backgroundRunLedger: BackgroundRunLedger | null
+  /** Durable record of gates the app resolved without the user (attention rail). */
+  autoAnswerStore: AutoAnswerStore | null
 
   /** Stops the instance take-over watcher registered after launch recovery. */
   stopInstanceTakeOverListener: (() => void) | null
@@ -159,6 +162,7 @@ export function createBootstrapState(): BootstrapState {
     routineManager: null,
     routineScheduler: null,
     backgroundRunLedger: null,
+    autoAnswerStore: null,
     stopInstanceTakeOverListener: null,
     foreignRuns: null,
     threadTransfer: null,

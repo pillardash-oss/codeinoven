@@ -129,6 +129,20 @@ export interface NotificationContextTab {
 }
 
 /**
+ * The rail panel that lists the gates the app resolved without the user.
+ *
+ * Unlike a notification, an auto-resolved decision is not dismissed by an
+ * action inside the panel: the record stays until the user reads it, so the
+ * tab carries no project or thread scope and the rail icon only exists while
+ * at least one record is unread.
+ */
+export interface AttentionContextTab {
+  id: string
+  kind: 'attention'
+  title: string
+}
+
+/**
  * The global browser's downloads panel.
  *
  * Downloads belong to the shared browser profile, not to a project or thread,
@@ -267,6 +281,7 @@ export type ContextSidebarTab =
   | CloudDeploymentContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
+  | AttentionContextTab
   | BrowserDownloadsContextTab
   | BrowserPopupWindowContextTab
   | MemoryContextTab
@@ -300,6 +315,11 @@ export const NOTIFICATIONS_TAB: NotificationContextTab = {
   id: 'notifications',
   kind: 'notifications',
   title: 'Notifications'
+}
+export const ATTENTION_TAB: AttentionContextTab = {
+  id: 'attention',
+  kind: 'attention',
+  title: 'Decisions made for you'
 }
 
 /** Tabs whose component/session state belongs to a project. Every other tab

@@ -98,6 +98,8 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   try {
     await state.backgroundRunLedger?.flush()
     state.backgroundRunLedger = null
+    await state.autoAnswerStore?.flush()
+    state.autoAnswerStore = null
   } catch (error) {
     Logger.error('Background-run ledger flush failed during shutdown:', error)
   }

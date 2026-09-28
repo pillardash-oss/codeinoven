@@ -6,6 +6,7 @@ import {
   nextRunAt,
   previousDueAt,
   scheduleIsActive,
+  type BackgroundRun,
   type BackgroundRunReason,
   type MissedRun,
   type Routine,
@@ -136,6 +137,15 @@ export class RoutineSchedulerService {
 
   listMissedRuns(): MissedRun[] {
     return this.missed.list()
+  }
+
+  /**
+   * The durable ledger of unattended runs, newest first. Read straight from the
+   * ledger so the "While you were away" surface can still show a run whose own
+   * thread has since been evicted or deleted.
+   */
+  listBackgroundRuns(): BackgroundRun[] {
+    return this.deps.backgroundLedger?.list() ?? []
   }
 
   dismissMissedRun(id: string): void {

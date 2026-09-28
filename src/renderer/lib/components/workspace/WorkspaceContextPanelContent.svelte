@@ -319,6 +319,10 @@
           {#await import('../threads/ThreadNotePanel.svelte') then { default: ThreadNotePanel }}
             <ThreadNotePanel tab={activeContextTab} />
           {/await}
+        {:else if activeContextTab.kind === 'attention'}
+          {#await import('../notifications/AttentionPanel.svelte') then { default: AttentionPanel }}
+            <AttentionPanel />
+          {/await}
         {:else}
           {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
             <SubagentSessionView tab={activeContextTab} {onOpenSubagent} />

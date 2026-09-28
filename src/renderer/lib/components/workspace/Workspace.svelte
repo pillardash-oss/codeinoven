@@ -21,7 +21,8 @@
     Info,
     MessageCircleDashed,
     SquareTerminal,
-    StickyNote
+    StickyNote,
+    TriangleAlert
   } from '@lucide/svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
@@ -54,6 +55,7 @@
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { attentionState } from '$lib/stores/attention.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
@@ -622,7 +624,8 @@
     'actions',
     'browser',
     'thread-note',
-    'temporary-chat'
+    'temporary-chat',
+    'attention'
   ])
 
   /** Whether the right sidebar's active panel would otherwise flush into the
@@ -1134,6 +1137,25 @@
       })
     }
 
+    // Auto-resolved gates sit at the very bottom of the rail: they are the
+    // app's own record of what it decided while the user was away, not a
+    // workspace tool. The whole group disappears once every record is read.
+    const autoAnswerTools: ContextDockItem[] =
+      attentionState.unreadCount > 0
+        ? [
+            {
+              id: 'attention',
+              label: 'Decisions made for you',
+              icon: TriangleAlert,
+              tone: 'warning',
+              countBadge: String(attentionState.unreadCount),
+              active: dockKindActive('attention'),
+              onSelect: () =>
+                toggleDockPanel('attention', () => contextSidebarState.openAttention())
+            }
+          ]
+        : []
+
     return [
       history,
       assistantTools,
@@ -1142,7 +1164,8 @@
       temporaryChats,
       coordination,
       threadNote,
-      subagents
+      subagents,
+      autoAnswerTools
     ]
   })
 
@@ -2459,7 +2482,10 @@
       // so routine/missed-run reads can never occupy the startup frame or race
       // the project and thread hydration for the main process. Idempotent: a
       // second call is a no-op, and re-scheduling replaces the pending task.
-      scheduleDeferredWork('assistant:hydrate', () => assistantRoutines.initialize())
+      scheduleDeferredWork('assistant:hydrate', () => {
+        assistantRoutines.initialize()
+        attentionState.initialize()
+      })
     }
   }
 

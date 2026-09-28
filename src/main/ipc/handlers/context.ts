@@ -51,6 +51,7 @@ import type { ModelRankingSnapshotRepo } from '../../database/repositories/model
 import type { NoteRepo } from '../../database/repositories/note-repo'
 import type { RoutineManager } from '../../../lib/engines/routine-manager'
 import type { RoutineSchedulerService } from '../../scheduler/routine-scheduler-service'
+import type { AutoAnswerStore } from '../../system/auto-answer-store'
 import type { PrivilegedIpcValidator } from '../ipc-validation'
 import type { AttachmentStorageScope } from '../../../lib/types'
 
@@ -70,6 +71,8 @@ export interface RegisterIpcHandlersOptions {
   heartbeatScheduler?: HeartbeatSchedulerService
   /** Assistant View's routine scheduler (app-open-only firing, missed-run records). */
   routineScheduler?: RoutineSchedulerService
+  /** Durable record of gates the app resolved without the user (attention rail). */
+  autoAnswerStore?: AutoAnswerStore
   /** Shared assistant routine manager; defaults to a database-backed instance. */
   routineManager?: RoutineManager
   /** Confirmed-override layer on the declarative harness behavior manifests. */
@@ -179,6 +182,7 @@ export interface IpcHandlerContext {
   noteRepo: NoteRepo
   routineManager: RoutineManager
   routineScheduler: RoutineSchedulerService | undefined
+  autoAnswerStore: AutoAnswerStore | undefined
   privilegedIpc: PrivilegedIpcValidator
   /** Register a privileged channel whose sender frame must be trusted. */
   privileged: <TArgs extends unknown[]>(

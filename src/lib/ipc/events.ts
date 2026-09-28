@@ -75,6 +75,14 @@ export const IPC_EVENT_CONTRACT = {
   'routine:checkpointChanged': [] as unknown as [routineId: string],
   /** The set of pending missed scheduled runs changed. */
   'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
+  /** The durable record of unattended runs changed (a run started or settled). */
+  'assistant:backgroundRunsChanged': [] as unknown as [runs: import('../types').BackgroundRun[]],
+  /**
+   * The set of gates the app resolved without the user changed: one settled, or
+   * the user dismissed one or all. Drives the amber attention rail item and its
+   * panel.
+   */
+  'assistant:autoAnswersChanged': [] as unknown as [items: import('../types').AutoAnswerItem[]],
   /** The off-app audible alert for a notification, dispatched by the main
    *  process to a live renderer while the app is in the background. The in-app
    *  alert for a focused toast is played by the renderer itself, at the moment

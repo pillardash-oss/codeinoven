@@ -244,6 +244,7 @@ import type {
   AgentQuestionResolution,
   AgentProviderIssue,
   AgentProviderIssueKind,
+  AgentQuestion,
   AgentSessionStatus,
   AgentSubagentActivity,
   AgentToolCatalog,
@@ -264,6 +265,7 @@ import type {
   AssignmentToolResult,
   AssignmentTaskReport,
   AssignmentTaskReview,
+  AutoAnswerEntry,
   AuditGenerationRequest,
   AuditReport,
   AuditReportContent,
@@ -453,6 +455,7 @@ import type {
   FallbackRankingJudgeRoute,
   ChildSessionInfo,
   CoordinatorHandoffQueue,
+  AutoAnswerReport,
   HeldSteer,
   ImageDescriptorUserDecision,
   PendingImageDescriptorDecision,
@@ -1192,6 +1195,13 @@ export class ChatEngine {
    * outcomes are not tracked.
    */
   private assistantRunSettled: ((threadId: string, status: ThreadStatus) => void) | null = null
+  /**
+   * Receives one report per gate the engine resolves without the user: a
+   * question whose timer answered it, a secret card whose deadline closed it,
+   * or an image-descriptor decision that timed out. Attached by the bootstrap,
+   * which owns the durable attention store; absent means nothing is recorded.
+   */
+  private autoAnswerRecorder: ((report: AutoAnswerReport) => void) | null = null
   /** Coalesces live-activity repairs of a task's persisted working status. */
   private workingStatusReconciliations = new Map<string, Promise<void>>()
 
@@ -10850,6 +10860,23 @@ export class ChatEngine {
         resolve,
         resumeStatus,
         timer: setTimeout(() => {
+          // The card is about to resolve itself as ignored, so record what the
+          // user was offered and what the app chose on their behalf.
+          this.reportAutoAnswer({
+            id: requestForCard.id,
+            kind: 'image-descriptor',
+            outcome: 'ignored',
+            projectId: request.projectId,
+            threadId: request.threadId,
+            entries: [
+              {
+                prompt: requestForCard.error,
+                options: ['Retry', 'Pick new image', 'Ignore'],
+                picked: 'Ignore'
+              }
+            ],
+            at: Date.now()
+          })
           // Never leave the card behind when this decision auto-resolves: a
           // card whose request is gone is a card the user cannot dismiss.
           this.settleImageDescriptorDecision(pending)
@@ -20880,6 +20907,15 @@ export class ChatEngine {
   private expireSecretQuestion(pending: PendingQuestionInfo): void {
     if (this.pendingQuestions.get(pending.request.requestId) !== pending) return
     pending.timer = undefined
+    this.reportAutoAnswer({
+      id: pending.request.requestId,
+      kind: 'secret',
+      outcome: 'expired',
+      projectId: pending.request.projectId,
+      threadId: pending.request.threadId,
+      entries: this.autoAnswerEntries(pending.request.questions, undefined),
+      at: Date.now()
+    })
     this.finalizePendingQuestion(pending.request.requestId, 'dismissed')
   }
 
@@ -20973,6 +21009,17 @@ export class ChatEngine {
 
       const answers = pending.request.answers.map((answer) => [...answer])
       pending.request.expiresAt = undefined
+      // The timer is answering for the user, so record exactly what was asked,
+      // what was offered and what was chosen before the reply travels.
+      this.reportAutoAnswer({
+        id: pending.request.requestId,
+        kind: 'question',
+        outcome: 'auto-answered',
+        projectId: pending.request.projectId,
+        threadId: pending.request.threadId,
+        entries: this.autoAnswerEntries(pending.request.questions, answers),
+        at: Date.now()
+      })
       void this.resolvePendingQuestion(pending, 'timed_out', answers, () =>
         driver.replyToQuestion(
           pending.projectPath,
@@ -22683,6 +22730,52 @@ export class ChatEngine {
     recorder: ((threadId: string, status: ThreadStatus) => void) | null
   ): void {
     this.assistantRunSettled = recorder
+  }
+
+  /**
+   * Wire the auto-answer recorder. Fired the moment the engine settles a gate
+   * on the user's behalf   a question's timer picking the recommended option, a
+   * secret card expiring unanswered, or an image-descriptor decision timing out   so
+   * the app can record what was asked, offered and chosen and surface it on the
+   * attention rail.
+   */
+  attachAutoAnswerRecorder(recorder: ((report: AutoAnswerReport) => void) | null): void {
+    this.autoAnswerRecorder = recorder
+  }
+
+  /** Report an auto-resolved gate, never letting a recording failure affect the
+   *  resolution itself. */
+  private reportAutoAnswer(report: AutoAnswerReport): void {
+    try {
+      this.autoAnswerRecorder?.(report)
+    } catch (error) {
+      Logger.error('Auto-answer recording failed:', error)
+    }
+  }
+
+  /**
+   * Build the attention entries for one request: each question's prompt, its
+   * offered option labels, and what the engine chose (null when it could not
+   * choose). Falls back to the rich-option labels when the plain option list
+   * was not supplied.
+   */
+  private autoAnswerEntries(
+    questions: AgentQuestion[],
+    answers: string[][] | undefined
+  ): AutoAnswerEntry[] {
+    return questions.map((question, index) => {
+      const options =
+        question.options && question.options.length > 0
+          ? [...question.options]
+          : (question.richOptions?.map((option) => option.label) ?? [])
+      const picked = answers?.[index]?.find((value) => value.length > 0) ?? null
+      return {
+        prompt: question.prompt,
+        ...(question.header ? { header: question.header } : {}),
+        options,
+        picked
+      }
+    })
   }
 
   /**

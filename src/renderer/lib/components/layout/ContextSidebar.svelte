@@ -24,6 +24,7 @@
     Plus,
     SquareTerminal,
     StickyNote,
+    TriangleAlert,
     X
   } from '@lucide/svelte'
   import {
@@ -125,6 +126,7 @@
     'cloud-deployment',
     'debugger',
     'notifications',
+    'attention',
     'downloads',
     'git',
     'actions',
@@ -312,6 +314,8 @@
       <MessageCircleDashed size={12} class="shrink-0 text-info" />
     {:else if tab.kind === 'notifications'}
       <Bell size={12} class="shrink-0" />
+    {:else if tab.kind === 'attention'}
+      <TriangleAlert size={12} class="shrink-0 text-warning" />
     {:else if tab.kind === 'memory'}
       <BrainCircuit size={12} class="shrink-0" />
     {:else if tab.kind === 'git'}

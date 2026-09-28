@@ -223,11 +223,14 @@ the app's clock for Assistant View.
   double-count or double-badge one miss.
 - **Unattended-run ledger.** Every dispatch the scheduler makes on its own  
   a scheduled fire, a catch-up run, and a run that failed while handing off to
-  the engine   is recorded in `BackgroundRunLedger`
+  the engine is recorded in `BackgroundRunLedger`
   (`src/main/scheduler/background-run-ledger.ts`), a bounded (`MAX_ENTRIES`),
   versioned `scheduler/background-runs.json`. Each entry carries its own
   snapshot of the run, so deleting the run thread later cannot erase the fact
-  that it happened. A user's own "Run now" is deliberately not recorded.
+  that it happened. A user's own "Run now" is deliberately not recorded. The
+  ledger feeds the **While you were away** section of the notification panel's
+  Assistants tab and the **Run history** section of a routine's (or task's)
+  how-to panel.
 - **Dismiss vs Run Now.** `assistant:dismissMissedRun` acknowledges a record
   without running it; `assistant:runMissedRunNow` creates a fresh run thread,
   dispatches the run on it, settles the record on success, and returns the run so
@@ -235,8 +238,8 @@ the app's clock for Assistant View.
 
 ## Background mode (menu bar)
 
-Background mode keeps the backend running after the window is closed   or after
-Cmd+Q   so a routine still fires on time. It is on by default
+Background mode keeps the backend running after the window is closed or after
+Cmd+Q so a routine still fires on time. It is on by default
 (`backgroundMode: 'scheduled'`) and can be turned off in **General → Threads**.
 
 - **Closed means closed.** Parking destroys the window and its renderer process;
@@ -256,8 +259,11 @@ Cmd+Q   so a routine still fires on time. It is on by default
   and restored when a window opens. The icon's attention state is computed in
   main from SQLite (a thread parked on approval, or an unread failed assistant
   run), never from a renderer, because there is no renderer.
-- **Gates.** A question with a timer answers itself through `questionTimeoutMs`
-  as it always has. A permission or secret gate has no timer, so it parks
+- **Gates.** A question with a timer answers itself with its recommended option
+  through `questionTimeoutMs`; a secret card runs its own absolute timer and
+  closes unanswered; a destructive scope confirmation denies itself at its
+  `expiresAt`. Every one of those is recorded so the app never decides silently
+  (see **Auto-resolved gates**). A permission gate has no timer, so it parks
   durably and flips the icon; nothing proceeds until the user answers.
 - **Sleep.** A machine that is asleep cannot run work. Inside
   `backgroundWakeLeadMs` before a due run the app holds
@@ -301,7 +307,39 @@ default:
   Assistants tab exposes no sub-filter buttons; with nothing to show it renders
   only a neutral empty state. Each entry states why the fire was not run
   (`missedRunReasonText` in `assistant-view.ts`), so the copy never claims the
-  app was closed when the machine simply slept through the window.
+  app was closed when the machine simply slept through the window;
+- the **While you were away** section of the same Assistants tab, which lists the
+  recent unattended runs straight from the ledger (outcome, why it ran, when it
+  settled, any persisted failure, and how many gates it answered for you), and a
+  routine profile's **Run history** list in the how-to panel. A run whose thread
+  was later deleted still shows, as non-clickable evidence.
+
+## Auto-resolved gates (attention rail)
+
+Some cards settle without the user: a question whose timer answers it, a secret
+card that expires, an image-descriptor decision that times out, and a destructive
+scope confirmation that denies itself. Each is recorded in `AutoAnswerStore`
+(`src/main/system/auto-answer-store.ts`) as one `AutoAnswerItem` carrying the
+prompt, every option that was offered, what was chosen, and when. The store is
+written the instant the gate settles (idempotent by request id) and is kept
+independently of the transcript, so a decision stays auditable even if its thread
+is later deleted.
+
+The records surface on a dedicated right-rail attention panel:
+
+- a new amber triangle-exclamation item sits at the bottom of the context dock
+  rail, present only while at least one record is unread;
+- the panel lists each record with its kind, the resolved thread title, relative
+  and absolute time, the options, and the chosen one highlighted, with a button
+  to open the thread and a per-item dismiss, plus **Dismiss all** for the unread
+  set.
+
+`assistant:listAutoAnswers`, `assistant:dismissAutoAnswer`, and
+`assistant:dismissAllAutoAnswers` back the panel, and
+`assistant:autoAnswersChanged` pushes the fresh list to every window. Permission
+gates are deliberately not recorded here: they have no timer and park until
+answered, and an approval that merely expires on a late reply is already in
+`permission-events.jsonl`.
 
 ### Assistant notifications
 
