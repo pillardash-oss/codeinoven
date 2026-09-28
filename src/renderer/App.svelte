@@ -1406,7 +1406,11 @@
       onOptionHover={handleViewOptionHover}
     />
 
-    <main class="relative min-w-0 flex-1 overflow-hidden">
+    <!-- `overflow-clip`, not `overflow-hidden`: the arriving view slides up on
+         its reveal transition, and a scroll container here would let that
+         offset scroll the shell before it clamps back. Clip keeps this frame
+         fixed. -->
+    <main class="relative min-w-0 flex-1 overflow-clip">
       <!-- One shell for all views   the workspace (and the open thread) stays
          mounted across Settings/Scope so returning never reloads the thread
          list or reconnects the harness. It fades out rather than going

@@ -3788,8 +3788,14 @@
     />
   {/if}
 
-  <!-- Main Content -->
-  <section class="flex min-w-0 flex-1 overflow-hidden">
+  <!-- Main Content. `overflow-clip`, not `overflow-hidden`: hidden is still a
+       scroll container, and a panel sliding in on `fly` translates past this
+       box, which grows the scrollable area. A focused control inside the
+       arriving panel (the terminal is the one that focuses itself) then
+       scrolls the whole shell down and the scroll clamps back as the slide
+       settles, so the thread visibly dropped and rose. Clip makes this box
+       never scrollable, so nothing can move it. -->
+  <section class="flex min-w-0 flex-1 overflow-clip">
     <div
       class="grid h-full min-h-0 min-w-0 flex-1"
       style:grid-template-columns={contextPanelColumns}
