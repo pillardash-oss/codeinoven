@@ -23,8 +23,11 @@
   let wash = $derived(`color-mix(in srgb, ${color} 16%, var(--color-raised))`)
 </script>
 
+<!-- `min-w-0` is what lets the badge give up room: without it the badge keeps its
+     min-content width, so a tight row pushes it out of its own box and over
+     whatever follows (the composer shoe's project icon, for one). -->
 <code
-  class="flex items-center gap-1 rounded-md bg-raised font-mono font-normal text-foreground {size ===
+  class="flex min-w-0 items-center gap-1 rounded-md bg-raised font-mono font-normal text-foreground {size ===
   'xs'
     ? 'px-1.5 py-0.5 text-[0.625rem]'
     : 'px-2.5 py-1 text-xs'}"

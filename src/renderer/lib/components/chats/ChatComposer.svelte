@@ -1971,15 +1971,19 @@
 </div>
 
 <!-- Scope shoe   floats underneath the composer as its own inset bar,
-     centered at 80% of the composer width; project mode only. It slides up
-     behind the composer (z below it) so the shoe's top edge is tucked under
-     the composer's bottom border   only the lower half shows, like a shoe.
+     sized to the status row it holds, centered under the composer; project mode
+     only. It slides up behind the composer (z below it) so the shoe's top edge
+     is tucked under the composer's bottom border   only the lower half shows,
+     like a shoe.
      No z-index on the wrapper: the composer (z-10) paints over the card, but
-     the shoe's dropdown (z-40 inside) still opens above the composer. -->
+     the shoe's dropdown (z-40 inside) still opens above the composer.
+     The wrapper is the shoe's own inline-size query container: the composer
+     cannot query a sibling, and the card must stay free of containment so it
+     can size itself to its content. -->
 {#if scopeShoe}
-  <div class="composer-shoe relative -mt-4 flex w-full justify-center px-6 pt-3 pb-2">
+  <div class="composer-shoe relative -mt-4 flex w-full justify-center px-4 pt-3 pb-2 @container">
     <div
-      class="composer-shoe-card flex w-[80%] min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md @container"
+      class="composer-shoe-card flex min-w-0 items-center justify-center border bg-surface px-2 pt-2.5 pb-1 shadow-md"
     >
       <ComposerShoe
         bind:this={scopeShoeComponent}
@@ -2084,11 +2088,25 @@
     }
   }
 
-  /* Shoe stays at 80% width; expands up to 95% as the conversation screen
-     shrinks (e.g. a very wide right sidebar), so its content keeps fitting. */
-  @container (max-width: 640px) {
+  /* The shoe sizes to the status row it holds: never narrower than its 80%
+     resting share of the composer, never wider than the room the composer
+     leaves it. A long scope, project, or branch therefore widens the shoe
+     instead of squeezing the row   which used to push the scope badge out of
+     its own box and under the project icon. `.composer-shoe` is the query
+     container (see its `@container` class), so these rules and the shoe's own
+     truncation stages measure the composer, minus that wrapper's own inline
+     padding. */
+  .composer-shoe-card {
+    width: max-content;
+    min-width: 80%;
+    max-width: 100%;
+  }
+
+  /* Tight composer: the shoe trims its own inline padding before the status row
+     has to ellipsize, so the row keeps the room it needs. */
+  @container (max-width: 630px) {
     .composer-shoe-card {
-      width: 95%;
+      padding-inline: 0.375rem;
     }
   }
 </style>
