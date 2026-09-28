@@ -39,9 +39,14 @@
    *
    * It reads like a thread row: what the page is, whether it is still loading,
    * and whether it wants the user (audio or a live capture). The row's own
-   * controls sit in an absolutely positioned cluster so they are never nested
-   * inside the row's activation button, which is invalid markup and would also
-   * make the mute toggle fire the row.
+   * controls sit in a cluster beside the activation button, never inside it,
+   * which is invalid markup and would also make the mute toggle fire the row.
+   * The cluster takes its place in the row's flow instead of floating over the
+   * label, so a standing status icon (a pinned pin, the hibernation moon) can
+   * never print on top of the tab's name, and revealing the close button on
+   * hover shifts nothing. Because the cluster now owns the row's right edge, the
+   * hover and active pill is painted by the row itself rather than by the
+   * activation button, so the highlight still spans the full width.
    *
    * The row is also the strip's drag handle and drop target: dragging it onto a
    * group header files it under that group, and dropping it beside another tab
@@ -115,15 +120,15 @@
 <ContextMenu.Root>
   <ContextMenu.Trigger class="contents">
     <div
-      class="group relative flex items-center rounded-md transition-colors {dropTarget
+      class="group flex items-center rounded-md transition-colors {dropTarget
         ? 'bg-info/10'
-        : ''}"
+        : active
+          ? 'bg-elevated'
+          : 'hover:bg-elevated'}"
     >
       <button
         type="button"
-        class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left transition-colors {active
-          ? 'bg-elevated'
-          : 'hover:bg-elevated'}"
+        class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left"
         aria-current={active}
         title={tab.url || label}
         draggable="true"
@@ -169,11 +174,11 @@
         </span>
       </button>
 
-      <div class="pointer-events-none absolute right-1 flex items-center gap-0.5">
+      <div class="flex shrink-0 items-center gap-0.5 pr-1">
         {#if tab.pinned}
           <span
             role="img"
-            class="pointer-events-none flex h-6 w-6 items-center justify-center text-accent"
+            class="flex h-6 w-6 items-center justify-center text-accent"
             title="Pinned tab"
             aria-label="Pinned tab"
           >
@@ -183,7 +188,7 @@
         {#if threadNotesState.has(tab.id)}
           <span
             role="img"
-            class="pointer-events-none flex h-6 w-6 items-center justify-center text-dimmed"
+            class="flex h-6 w-6 items-center justify-center text-dimmed"
             title="This tab has a note"
             aria-label="Tab has a note"
           >
@@ -193,7 +198,7 @@
         {#if runtime.capturing}
           <span
             role="img"
-            class="pointer-events-none flex h-6 w-6 items-center justify-center text-accent"
+            class="flex h-6 w-6 items-center justify-center text-accent"
             title={BROWSER_TAB_CAPTURE_LABEL}
             aria-label={BROWSER_TAB_CAPTURE_LABEL}
           >
@@ -203,7 +208,7 @@
         {#if runtime.audible || runtime.muted}
           <button
             type="button"
-            class="pointer-events-auto flex h-6 w-6 items-center justify-center rounded-md text-accent transition-colors hover:bg-overlay"
+            class="flex h-6 w-6 items-center justify-center rounded-md text-accent transition-colors hover:bg-overlay"
             aria-pressed={runtime.muted}
             title={browserTabMuteLabel(runtime.muted)}
             aria-label={browserTabMuteLabel(runtime.muted)}
@@ -221,7 +226,7 @@
         {:else if tab.hibernated}
           <span
             role="img"
-            class="pointer-events-none flex h-6 w-6 items-center justify-center text-dimmed"
+            class="flex h-6 w-6 items-center justify-center text-dimmed"
             title="Hibernated to save memory. Open the tab to reload it."
             aria-label="Hibernated tab"
           >
@@ -230,7 +235,7 @@
         {/if}
         <button
           type="button"
-          class="pointer-events-auto flex h-6 w-6 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
+          class="flex h-6 w-6 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
           aria-label={`Close ${label}`}
           title={`Close ${label}`}
           onclick={closeTab}
