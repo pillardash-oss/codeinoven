@@ -600,6 +600,32 @@
   }
 
   /**
+   * Panels that paint the app background instead of the sidebar's own surface.
+   * The sidebar shell is `bg-surface`, so a panel that sets `bg-app` bleeds
+   * straight into the conversation behind it and the two regions read as one.
+   * A subtle left border keeps them apart. Panels that keep the shell surface
+   * (sources, memory, notifications, the debugger, coordinators) already stand
+   * apart from the app background and need no border.
+   */
+  const APP_BACKGROUND_PANEL_KINDS: ReadonlySet<ContextSidebarTab['kind']> = new Set([
+    'files',
+    'diff',
+    'git',
+    'terminal',
+    'actions',
+    'browser',
+    'thread-note',
+    'temporary-chat'
+  ])
+
+  /** Whether the right sidebar's active panel would otherwise flush into the
+   *  conversation background, so the shell draws a subtle left border. */
+  let rightSidebarFlushes = $derived.by(() => {
+    const tab = contextSidebarState.sidebarActiveTab
+    return tab !== null && APP_BACKGROUND_PANEL_KINDS.has(tab.kind)
+  })
+
+  /**
    * The dock's toggle contract: clicking the active tool collapses the panel,
    * clicking any other tool swaps the panel content without closing it.
    */
@@ -3846,7 +3872,7 @@
           />
         {/snippet}
         <div
-          class="min-h-0 min-w-0"
+          class="min-h-0 min-w-0 {rightSidebarFlushes ? 'border-l border-border' : ''}"
           style:grid-column="2"
           style:grid-row="1"
           in:fly={{ x: contextSidebarState.width, duration: motionDuration(200), easing: cubicOut }}
