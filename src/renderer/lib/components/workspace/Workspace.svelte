@@ -3601,13 +3601,14 @@
 
   /**
    * Open whatever the Ctrl+Tab switcher landed on. A browser entry reveals the
-   * browser view and activates that tab; a thread entry takes the same path it
-   * always did, landing in the view that owns the thread's family.
+   * browser view and switches to that tab, which also hands the page the keyboard
+   * (or opens a blank tab's address spotlight); a thread entry takes the same path
+   * it always did, landing in the view that owns the thread's family.
    */
   async function openSwitcherEntry(entry: ThreadSwitcherEntry): Promise<void> {
     if (entry.kind === 'browser') {
       navigate('browser')
-      globalBrowser.activate(entry.tab.id)
+      globalBrowser.switchTo(entry.tab.id)
       return
     }
     await openThreadFromSwitcher(entry.thread)

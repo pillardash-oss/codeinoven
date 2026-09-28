@@ -37,6 +37,7 @@ import {
   MAX_GLOBAL_BROWSER_TABS,
   browserTabLabel,
   browserTabTitleForUrl,
+  isBlankBrowserAddress,
   isSameBrowserLoadError,
   isTabIdlePastWindow,
   type BrowserGroupAppearance,
@@ -207,7 +208,7 @@ export class GlobalBrowserState {
   /** Whether a browser tab with this address is already open. A blank address
    *  never matches, so "new tab" always makes a new one. */
   findTabByUrl(url: string): GlobalBrowserTab | null {
-    if (url === '') return null
+    if (isBlankBrowserAddress(url)) return null
     return this.tabs.find((tab) => tab.url === url) ?? null
   }
 
@@ -224,6 +225,33 @@ export class GlobalBrowserState {
     tab.lastUsedAt = Date.now()
     if (tab.hibernated) tab.hibernated = false
     this.persist()
+  }
+
+  /**
+   * Land on a tab the user picked, and hand its surface the keyboard.
+   *
+   * A tab's page is a native `WebContentsView` above the DOM, so landing on a tab
+   * left DOM focus in the app chrome and the page took no keystroke until the
+   * user clicked it. The switch is the moment the user chose the tab, so the page
+   * takes the keyboard. A blank tab has no page to type into: its address
+   * spotlight   the field where the search or the address is typed   is what a
+   * new tab is, so that opens focused instead.
+   *
+   * Only a user switch goes through here. An agent reveal activates a tab through
+   * `activate` alone, because pulling the keyboard out of a field the user is
+   * typing in is not a reveal's job.
+   */
+  switchTo(tabId: string): void {
+    this.activate(tabId)
+    const tab = this.activeTab
+    if (!tab || tab.id !== tabId) return
+    if (isBlankBrowserAddress(tab.url)) {
+      this.openAddressSpotlight()
+      return
+    }
+    // Silent on failure: the tab can be destroyed between the switch and the
+    // call, and a keyboard handover that did not land must not surface an error.
+    void invoke('browser:focusPage', tab.id).catch(() => {})
   }
 
   /** Mark the workspace as opened, so the first activation can reveal a tab. */

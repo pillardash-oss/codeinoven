@@ -135,7 +135,7 @@
         ondragover={onDragOver}
         ondragleave={() => (dropTarget = false)}
         ondrop={onDrop}
-        onclick={() => globalBrowser.activate(tab.id)}
+        onclick={() => globalBrowser.switchTo(tab.id)}
         onauxclick={(event: MouseEvent) => {
           if (event.button === 1) closeTab(event)
         }}

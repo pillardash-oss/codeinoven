@@ -218,6 +218,15 @@ export class BrowserService {
    * so the panel reports it and the window-level interception routes to this tab.
    */
   private focusedChromeTabId: string | null = null
+  /**
+   * The tab whose page should take the keyboard the moment it is on screen.
+   *
+   * A page can only be handed the keyboard while it is actually displayed, but a
+   * user switch asks the instant the user picks the tab, which can be before the
+   * show carrying that page lands. Holding the intent here is what keeps the
+   * switch focused instead of losing the race to the page's own mount.
+   */
+  private pendingPageFocusTabId: string | null = null
   /** Last known content bounds of the active tab's native view (window-content
    *  coordinates). The permission popup anchors itself to this area so it
    *  never collides with toasts at the window edge. */
@@ -474,6 +483,9 @@ export class BrowserService {
       }
       const tabId = validateTabId(rawTabId)
       this.focusedChromeTabId = this.tabs.has(tabId) ? tabId : null
+    })
+    ipcMain.handle('browser:focusPage', (_event, rawTabId) => {
+      this.focusPage(validateTabId(rawTabId))
     })
     ipcMain.handle('browser:setShortcutBindings', (_event, rawBindings) => {
       this.shortcutBindings = validateBrowserShortcutBindings(rawBindings)
@@ -2601,6 +2613,10 @@ export class BrowserService {
     // A deferred hide can land after the app window is gone (the app is quitting),
     // and there is no child list left to take the view out of.
     if (this.window.isDestroyed()) return
+    // A switch waiting for this tab to be shown is spent: the user has left it, so
+    // the page must not take the keyboard the next time it appears for another
+    // reason (an agent reveal, a restored surface).
+    if (this.pendingPageFocusTabId === tabId) this.pendingPageFocusTabId = null
     const viewport = options.size ?? this.parkedViewportFor(tab)
     // Whether this view is the one the app window is showing: a park only re-lays
     // the page out when it takes a view off the screen and gives it another size.
@@ -2692,6 +2708,9 @@ export class BrowserService {
           Logger.dev('Browser view resized', { tabId, from: displayed.bounds, to: bounds })
         }
       }
+      // The page is already on screen, which is the one moment a held switch can
+      // be honoured without waiting for another show.
+      this.takePendingPageFocus(tabId)
       return
     }
     // A view the stage was holding is off the window, so the page has already been
@@ -2709,6 +2728,45 @@ export class BrowserService {
       this.primePagePointer(tab, bounds)
       Logger.dev('Browser view re-attached', { tabId, bounds })
     }
+    // A page that just landed is on screen now, so a switch that was waiting for
+    // it takes the keyboard here.
+    this.takePendingPageFocus(tabId)
+  }
+
+  /**
+   * Give a tab's page the keyboard, or remember that it wants it.
+   *
+   * The page is a native view above the DOM, so DOM focus in the app chrome never
+   * lands on it and a tab switch has to hand it over deliberately. A page that is
+   * not the one on screen yet   a show still in flight, a toast holding the view
+   * off, a tab main has not even heard of   keeps the intent until it is shown.
+   */
+  private focusPage(tabId: string): void {
+    const tab = this.tabs.get(tabId)
+    if (tab && !tab.view.webContents.isDestroyed() && this.isPageOnScreen(tabId)) {
+      this.pendingPageFocusTabId = null
+      tab.view.webContents.focus()
+      return
+    }
+    this.pendingPageFocusTabId = tabId
+  }
+
+  /** Whether a tab's page is the native view the window is currently showing. */
+  private isPageOnScreen(tabId: string): boolean {
+    if (this.toastVisible || this.activeTabId !== tabId) return false
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return false
+    return this.displayedTab?.tabId === tabId && !this.stage.isParked(tab.view)
+  }
+
+  /** Focus the page a switch asked for, now that it is the one on screen. The
+   *  intent is spent either way it resolves, so a stale one cannot fire later. */
+  private takePendingPageFocus(tabId: string): void {
+    if (this.pendingPageFocusTabId !== tabId) return
+    this.pendingPageFocusTabId = null
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return
+    tab.view.webContents.focus()
   }
 
   private markParked(tabId: string): void {

@@ -85,6 +85,16 @@ export const invokeBrowserContract = {
    * chords when the user is typing an address.
    */
   'browser:setChromeFocus': {} as Contract<[tabId: string | null], void>,
+  /**
+   * Hand a tab's page the keyboard.
+   *
+   * A page is a native `WebContentsView` above the DOM, so DOM focus in the app
+   * chrome never reaches it and a tab switch has to hand the keyboard over
+   * deliberately. When the tab is already on screen main focuses it now; a tab
+   * whose show is still in flight has the intent held until it is shown, which is
+   * what keeps a switch raced against the page's own mount focused.
+   */
+  'browser:focusPage': {} as Contract<[tabId: string], void>,
   /** Toggle the web page's native DevTools. Returns whether it is now open. */
   'browser:toggleDevTools': {} as Contract<[tabId: string], boolean>,
   /**

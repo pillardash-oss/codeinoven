@@ -120,13 +120,24 @@ export function isSameBrowserLoadError(
 }
 
 /**
+ * Whether a tab has no committed address yet, which is what a fresh tab is.
+ *
+ * Nothing loads for a blank tab, and its address spotlight   the field where the
+ * user types a search or an address   is the only way in, so every surface that
+ * asks "is there a page here?" asks it through this one predicate.
+ */
+export function isBlankBrowserAddress(url: string): boolean {
+  return url === ''
+}
+
+/**
  * The tab title a fresh tab shows before the page reports its own.
  *
  * Derived from the address so a restored strip reads usefully without a live
  * page, and an address-less tab reads as a new tab.
  */
 export function browserTabTitleForUrl(url: string): string {
-  if (url === '') return 'New Tab'
+  if (isBlankBrowserAddress(url)) return 'New Tab'
   try {
     const parsed = new URL(url)
     return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname
