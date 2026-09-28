@@ -39,6 +39,10 @@
   function revealFromButton(event: MouseEvent): void {
     event.stopPropagation()
     if (revealUrl) void revealAttachmentFile(revealUrl)
+    // The reveal lands behind this overlay (the file tree, or the OS file
+    // manager), so the lightbox closes itself: staying open hides the result
+    // and reads as a button that did nothing.
+    onClose()
   }
 
   function mediaError(event: Event): void {

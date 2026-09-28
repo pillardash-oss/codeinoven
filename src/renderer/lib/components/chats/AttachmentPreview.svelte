@@ -154,7 +154,13 @@
 
   function revealFromButton(event: MouseEvent): void {
     event.stopPropagation()
+    // The reveal lands behind this full screen surface (the file tree, or the
+    // OS file manager), so the preview closes itself: staying open hides the
+    // result and reads as a button that did nothing. Closing still routes
+    // through requestClose, so an editable attachment with a live draft asks
+    // before the edits are dropped.
     void revealAttachmentFile(attachment.url)
+    requestClose()
   }
 
   async function saveText(): Promise<void> {
@@ -246,7 +252,7 @@
           class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={`Reveal path of ${filename}`}
           title="Reveal path"
-          onclick={() => void revealAttachmentFile(attachment.url)}
+          onclick={revealFromButton}
         >
           <FolderOpen size={14} />
         </button>
