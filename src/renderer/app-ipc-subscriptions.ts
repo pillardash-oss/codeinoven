@@ -106,8 +106,16 @@ function showAgentNotification(
     '--success-bg: color-mix(in srgb, var(--color-chat-success) 12%, var(--color-surface));' +
     ' --success-border: var(--color-chat-success);' +
     ' --success-text: var(--color-chat-success);'
+  // The assistant surface carries its own accent colour (the assistant space's
+  // colour, on every assistant payload), so a completed run brands its toast
+  // with that colour instead of reading as a generic success. The branded toast
+  // stylesheet derives its border, wash, title and icon from `--status`, so
+  // overriding it here recolours the whole card.
+  const assistantToastStyle = `--status: ${payload.projectColor ?? 'var(--color-dimmed)'};`
 
-  if (payload.kind === 'completed') {
+  if (payload.source === 'assistant' && payload.kind === 'completed') {
+    toast.success(payload.title, { ...options, style: assistantToastStyle })
+  } else if (payload.kind === 'completed') {
     toast.success(payload.title, options)
   } else if (payload.kind === 'chat-completed') {
     toast.success(payload.title, { ...options, style: chatResponseToastStyle })

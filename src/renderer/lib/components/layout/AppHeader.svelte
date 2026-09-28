@@ -14,16 +14,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
-  import {
-    Bell,
-    BotMessageSquare,
-    ChevronLeft,
-    ChevronRight,
-    FileText,
-    Globe,
-    Loader2,
-    Search
-  } from '@lucide/svelte'
+  import { Bell, ChevronLeft, ChevronRight, FileText, Globe, Loader2, Search } from '@lucide/svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
@@ -75,24 +66,11 @@
     contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'
   )
 
-  /** The assistant badge's colour is the assistant space's own status colour,
-   *  so an assistant run never reads as a project/chat badge on the bell. */
-  let assistantBadgeColor = $derived.by((): string => {
-    switch (notificationPanelState.assistantStatus) {
-      case 'error':
-        return 'var(--color-danger)'
-      case 'attention':
-        return 'var(--color-warning)'
-      case 'missed':
-        return 'var(--color-missed)'
-      case 'spec':
-        return 'var(--color-thread-spec)'
-      case 'completed':
-        return 'var(--color-thread-done)'
-      default:
-        return 'var(--color-dimmed)'
-    }
-  })
+  /** The assistant badge's colour is the assistant space's own accent colour,
+   *  carried on its notifications, so an assistant run never reads as a
+   *  project/chat badge. Like every other notification badge it is just a
+   *  colour: no icon. */
+  let assistantBadgeColor = $derived(notificationPanelState.assistantColor ?? 'var(--color-dimmed)')
 
   // ─── Thread actions (ellipsis dropdown) ──────────────────────────────────
 
@@ -382,12 +360,7 @@
             <StatusBadge kind="error" title="Error notifications" />
           {/if}
           {#if notificationPanelState.hasAssistant}
-            <StatusBadge
-              variant="icon"
-              icon={BotMessageSquare}
-              color={assistantBadgeColor}
-              title="Assistant activity"
-            />
+            <StatusBadge color={assistantBadgeColor} title="Assistant notifications" />
           {/if}
         </div>
       {/if}

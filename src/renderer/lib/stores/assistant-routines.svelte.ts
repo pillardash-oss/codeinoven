@@ -4,6 +4,7 @@ import {
   nextRunAt,
   type CreateRoutineInput,
   type MissedRun,
+  type Project,
   type Routine,
   type RoutineDeletionResult,
   type RoutineSchedule,
@@ -33,6 +34,13 @@ function mapsEqual(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string
 class AssistantRoutinesState {
   routines: Routine[] = $state([])
   missedRuns: MissedRun[] = $state([])
+  /**
+   * The hidden assistant space's accent colour. Assistant notifications brand
+   * themselves with it (the bell badge, the panel entry dot and the toast), so
+   * the renderer needs it even when only a missed run is pending and no
+   * notification payload is carrying the colour.
+   */
+  spaceColor: string | null = $state(null)
   /** Custom icon data URLs for routines that store one, keyed by routine id. */
   iconUrls: SvelteMap<string, string> = $state(new SvelteMap())
   /**
@@ -137,9 +145,12 @@ class AssistantRoutinesState {
     this.missedRuns = await invoke('assistant:listMissedRuns')
   }
 
-  /** Ensure the hidden assistant-space container exists. */
-  ensureSpace(): Promise<{ id: string }> {
-    return invoke('routine:ensureSpace')
+  /** Ensure the hidden assistant-space container exists, and keep its accent
+   *  colour so assistant notification surfaces can brand themselves with it. */
+  async ensureSpace(): Promise<Project> {
+    const project = await invoke('routine:ensureSpace')
+    this.spaceColor = project.color ?? null
+    return project
   }
 
   routineForTask(task: Thread | null | undefined): Routine | null {

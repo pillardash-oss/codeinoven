@@ -117,28 +117,26 @@ class NotificationPanelState {
   }
 
   /**
-   * The most urgent status the assistant space carries right now, or `null`
-   * when it has nothing to show. It drives the header bell's assistant badge:
-   * one badge whose colour is the assistant's own status colour, so an
-   * assistant run never reads as a project thread badge.
+   * The assistant space's own accent colour, carried on every assistant
+   * notification (the payload's `projectColor`), so the bell badge, the panel
+   * entry and the toast brand themselves as assistant instead of reading as a
+   * project or chat. Falls back to the space's stored colour when only a missed
+   * run is pending and no notification payload carries it.
    */
-  get assistantStatus(): 'error' | 'attention' | 'missed' | 'spec' | 'completed' | null {
-    const notices = this.assistantNotifications
-    if (notices.some((n) => n.kind === 'error')) return 'error'
-    if (notices.some((n) => n.kind === 'attention')) return 'attention'
-    if (assistantRoutines.missedRuns.length > 0) return 'missed'
-    if (notices.some((n) => n.kind === 'spec')) return 'spec'
-    if (notices.length > 0) return 'completed'
-    return null
+  get assistantColor(): string | null {
+    return (
+      this.assistantNotifications.findLast((n) => n.projectColor)?.projectColor ??
+      assistantRoutines.spaceColor
+    )
   }
 
-  /** True when the header bell must show its assistant status badge. */
+  /** True when the header bell must show its assistant badge. */
   get hasAssistant(): boolean {
-    return this.assistantStatus !== null
+    return this.assistantNotifications.length > 0 || assistantRoutines.missedRuns.length > 0
   }
 
   // Assistant notices are represented by the single assistant badge (see
-  // `assistantStatus`), so they never double up as a project/chat kind badge.
+  // `hasAssistant`), so they never double up as a project/chat kind badge.
   get hasCompleted(): boolean {
     return this._notifications.some((n) => n.kind === 'completed' && !this.isAssistant(n))
   }

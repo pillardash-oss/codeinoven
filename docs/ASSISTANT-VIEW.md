@@ -255,15 +255,31 @@ Every assistant run notifies as its own entry on the **Assistants** tab. The
 main process tags a run thread's notification with `source: 'assistant'`
 (`notificationSource` in `src/main/notifications/notification-service.ts`), so
 the panel routes it to the Assistants tab instead of Projects and the card names
-its own status (done, needs attention, spec ready, error). The header bell shows
-one **assistant** badge whose colour is the assistant space's most urgent status
-(error > attention > missed > spec > done), so an assistant run never reads as a
-project or chat badge. The badge is a bot icon rather than a plain status dot to
-keep it distinct from the project/chat kind dots.
+its own status (done, needs attention, spec ready, error).
 
-The renderer state lives in `assistantRoutines`
-(`src/renderer/lib/stores/assistant-routines.svelte.ts`), fed by the
-`routine:changed` and `assistant:missedRunsChanged` events.
+The assistant is a surface with its own accent colour, the colour stored on the
+hidden assistant space project (the payload's `projectColor`, `#ec4899` by
+default). Every assistant notification surface uses that colour and **never an
+icon**, keeping the notification badge contract (just the colour of what it
+represents):
+
+- the **header bell** shows one assistant badge: a plain colour dot in the
+  assistant accent colour, drawn whenever an assistant notice or a pending
+  missed run exists (`assistantColor` in
+  `src/renderer/lib/stores/notification-panel.svelte.ts`);
+- the **panel entry** carries the same accent dot beside the `Assistant` name,
+  exactly like a project entry's project-colour dot, with the run's status
+  colour on the card's left border and leading badge;
+- the **toast** for a completed run brands itself with the accent colour (via
+  `--status`) instead of the generic success green, mirroring how a chat
+  response toast uses its own colour.
+
+The renderer learns the accent colour two ways: each notification payload
+carries it, and `assistantRoutines.spaceColor`
+(`src/renderer/lib/stores/assistant-routines.svelte.ts`) holds it from
+`routine:ensureSpace`, so the bell can badge a missed run before any notice has
+arrived. The renderer state is fed by the `routine:changed` and
+`assistant:missedRunsChanged` events.
 
 ## Assistant sidebar
 

@@ -376,9 +376,6 @@
         {#if n.source === 'chat'}
           <MessageSquare size={10} class="shrink-0" />
           <span>Chat</span>
-        {:else if n.source === 'assistant'}
-          <Bot size={10} class="shrink-0" />
-          <span class="truncate">{n.projectName || 'Assistant'}</span>
         {:else}
           <span
             class="h-1.5 w-1.5 shrink-0 rounded-full"
