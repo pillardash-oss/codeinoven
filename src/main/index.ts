@@ -412,6 +412,19 @@ function createWindow(): BrowserWindow {
     }
   })
 
+  // On macOS, Logitech Options can map the mouse's side buttons to native
+  // swipe gestures instead of renderer mouse events. Electron exposes those
+  // gestures on the window; a left swipe goes back and a right swipe goes
+  // forward through the app's navigation history.
+  window.on('swipe', (_event, direction) => {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    if (direction === 'left') {
+      sendToRenderer(window.webContents, 'window:historyBack')
+    } else if (direction === 'right') {
+      sendToRenderer(window.webContents, 'window:historyForward')
+    }
+  })
+
   // Renderer freeze/crash diagnostics. On a slow machine (e.g. M1) the renderer
   // can seize up or be torn down in ways that never surface as a JS exception
   // the OS shows "not responding" while nothing lands in the log. These
