@@ -2613,10 +2613,13 @@ export class BrowserService {
     // A deferred hide can land after the app window is gone (the app is quitting),
     // and there is no child list left to take the view out of.
     if (this.window.isDestroyed()) return
-    // A switch waiting for this tab to be shown is spent: the user has left it, so
-    // the page must not take the keyboard the next time it appears for another
-    // reason (an agent reveal, a restored surface).
-    if (this.pendingPageFocusTabId === tabId) this.pendingPageFocusTabId = null
+    // A switch waiting for this tab is spent only when the park is a real
+    // departure. A keep-active park (a toast holding the view off) leaves the tab
+    // as the one on screen, so the switch has to survive until the page comes back
+    // and `showActiveView` can honour it.
+    if (!options.keepActive && this.pendingPageFocusTabId === tabId) {
+      this.pendingPageFocusTabId = null
+    }
     const viewport = options.size ?? this.parkedViewportFor(tab)
     // Whether this view is the one the app window is showing: a park only re-lays
     // the page out when it takes a view off the screen and gives it another size.
