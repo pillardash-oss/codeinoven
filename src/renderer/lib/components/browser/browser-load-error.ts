@@ -77,6 +77,13 @@ export function browserLoadErrorDetail(error: BrowserLoadError): string {
 
 function httpErrorCopy(code: number, statusText: string, host: string): BrowserLoadErrorCopy {
   const label = statusText ? `${code} ${statusText}` : `${code}`
+  if (code === 400) {
+    return {
+      icon: FileWarning,
+      title: 'Bad request',
+      description: `${host ? `${host} rejected` : 'The server rejected'} the browser's request (${label}). Reload to try again.`
+    }
+  }
   if (code === 401) {
     return {
       icon: ShieldAlert,
@@ -124,6 +131,13 @@ function httpErrorCopy(code: number, statusText: string, host: string): BrowserL
       icon: ServerCrash,
       title: 'Service unavailable',
       description: `${host ? `${host} is` : 'The server is'} temporarily unavailable (${label}). Reload in a moment.`
+    }
+  }
+  if (code === 501) {
+    return {
+      icon: ServerCrash,
+      title: 'Not implemented',
+      description: `${host ? `${host} does` : 'The server does'} not support this request (${label}).`
     }
   }
   if (code >= 500) {

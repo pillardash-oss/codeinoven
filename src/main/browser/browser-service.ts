@@ -2072,10 +2072,10 @@ export class BrowserService {
       this.setTabLoadError(tabId, failure)
       return
     }
-    void this.documentIsBlank(tab.view.webContents).then((blank) => {
+    void this.documentHasNothingToShow(tab.view.webContents).then((nothingVisible) => {
       const current = this.tabs.get(tabId)
       if (!current || current.navigationFailure !== failure) return
-      this.setTabLoadError(tabId, blank ? failure : null)
+      this.setTabLoadError(tabId, nothingVisible ? failure : null)
     })
   }
 
@@ -2099,18 +2099,33 @@ export class BrowserService {
   }
 
   /**
-   * Whether the loaded document has nothing to show.
+   * Whether the loaded document shows the user anything at all.
+   *
+   * The catch-all rule for an HTTP error status: the app stands in only when the
+   * server's own answer has nothing to look at, and never covers a page that did
+   * render. Empty is judged by what is on screen, not by markup: an error body
+   * with a container but no text, image, control or drawn media is still a blank
+   * frame to the user, while any visible text or rendered element is the site's
+   * own page and is left alone.
    *
    * Read in the page's own world: the main process cannot see page markup, and
-   * the question is exactly the user's   is there a page here, or only a blank
-   * frame. Any failure to answer is read as "not blank", so a real page is never
-   * masked by a probe that could not run.
+   * `innerText` already excludes hidden text. Any failure to answer is read as
+   * "has content", so a real page is never masked by a probe that could not run.
    */
-  private async documentIsBlank(contents: WebContents): Promise<boolean> {
+  private async documentHasNothingToShow(contents: WebContents): Promise<boolean> {
     if (contents.isDestroyed()) return false
     try {
       const result: unknown = await contents.executeJavaScript(
-        '(function () { var body = document.body; if (!body) return true; if (body.childElementCount > 0) return false; return (body.textContent || "").trim().length === 0 })()'
+        '(function () {' +
+          ' var body = document.body; if (!body) return true;' +
+          ' if ((body.innerText || "").trim().length > 0) return false;' +
+          ' var nodes = body.querySelectorAll("img, svg, canvas, video, audio, iframe, embed, object, input, button, select, textarea, [style*=background], [style*=Background]");' +
+          ' for (var i = 0; i < nodes.length; i++) {' +
+          '  var rect = nodes[i].getBoundingClientRect();' +
+          '  if (rect.width > 1 && rect.height > 1) return false;' +
+          ' }' +
+          ' return true;' +
+          '})()'
       )
       return result === true
     } catch {
