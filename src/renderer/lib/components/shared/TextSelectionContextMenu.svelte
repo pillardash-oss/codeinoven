@@ -5,7 +5,7 @@
     Copy,
     Eraser,
     ExternalLink,
-    Globe2,
+    GlobeCode,
     Link,
     Scissors,
     TextSelect
@@ -464,7 +464,7 @@
             title="Open in the CIO browser tab for this project"
             onclick={() => openLinkInCioBrowser(target!.linkHref!)}
           >
-            <Globe2 class="size-3.5 shrink-0 text-text-muted" />
+            <GlobeCode class="size-3.5 shrink-0 text-text-muted" />
             Open in CIO Browser
           </button>
         {/if}

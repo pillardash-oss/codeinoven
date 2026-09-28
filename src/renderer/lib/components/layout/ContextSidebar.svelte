@@ -12,7 +12,7 @@
     MonitorCog,
     Files,
     GitBranch,
-    Globe2,
+    GlobeCode,
     Hammer,
     Info,
     Maximize2,
@@ -292,7 +292,7 @@
           aria-hidden="true"
         />
       {:else}
-        <Globe2 size={12} class="shrink-0" />
+        <GlobeCode size={12} class="shrink-0" />
       {/if}
     {:else if tab.kind === 'debugger'}
       <Bug size={12} class="shrink-0 text-accent" />

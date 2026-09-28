@@ -15,7 +15,7 @@
     FileDiff,
     MonitorCog,
     FolderTree,
-    Globe2,
+    GlobeCode,
     Hammer,
     History,
     Info,
@@ -1103,7 +1103,7 @@
       threadNote.push({
         id: 'browser',
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
-        icon: Globe2,
+        icon: GlobeCode,
         active: dockKindActive('browser'),
         countBadge:
           browser.activeDownloadCount > 0 ? String(browser.activeDownloadCount) : undefined,

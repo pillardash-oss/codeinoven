@@ -1,16 +1,16 @@
-import { type Component } from 'svelte'
+import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
+import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
 import { invoke } from '$lib/ipc.svelte'
+import { keymapState } from '$lib/keymap/keymap-state.svelte'
+import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
-import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
-import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
-import { keymapState } from '$lib/keymap/keymap-state.svelte'
-import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
-import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
+import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
 import { type Project, type Thread } from '$shared/types'
+import { FolderKanban, Globe, Kanban, Microscope, Timeline } from '@lucide/svelte'
+import { type Component } from 'svelte'
 import { SvelteSet } from 'svelte/reactivity'
-import { FolderKanban, Globe2, Kanban, SquareDashedKanban, Timeline } from '@lucide/svelte'
 
 export type HeaderViewOptionId =
   'projects' | 'threads' | 'scoped-threads' | 'scope-board' | 'chats' | 'assistant' | 'browser'
@@ -243,7 +243,7 @@ export class AppHeaderNavigationController {
       {
         id: 'scoped-threads',
         label: 'Scoped',
-        icon: SquareDashedKanban,
+        icon: Microscope,
         keys: keymapState.keysFor('nav-projects-with-scope'),
         select: () => void this.toggleScopedThreads()
       },
@@ -271,7 +271,7 @@ export class AppHeaderNavigationController {
       {
         id: 'browser',
         label: 'Browser',
-        icon: Globe2,
+        icon: Globe,
         keys: keymapState.keysFor('nav-browser'),
         select: () => void this.onPrimaryNavClick('browser')
       }
