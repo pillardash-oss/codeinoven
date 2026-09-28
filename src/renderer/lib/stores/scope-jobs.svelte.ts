@@ -20,12 +20,13 @@ import { workspaceState } from '$lib/stores/workspace.svelte'
 import { APP_SLUG } from '$shared/brand'
 import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
 import type {
+  ScopeMergeMode,
   ScopeWorktreeCreateInput,
   ScopeWorktreeProgress,
   ScopeWorktreeProgressEvent
 } from '$shared/types'
 
-export type ScopeJobKind = 'create' | 'adopt' | 'agent' | 'remove'
+export type ScopeJobKind = 'create' | 'adopt' | 'agent' | 'remove' | 'merge'
 export type ScopeJobStatus = 'running' | 'succeeded' | 'failed'
 /** Who started a worktree run: the user in this window, or an agent turn. */
 export type ScopeJobOrigin = 'user' | 'agent'
@@ -52,8 +53,15 @@ export const SCOPE_REMOVAL_STAGES = ['threads', 'worktree', 'scope'] as const
 
 export type ScopeRemovalStage = (typeof SCOPE_REMOVAL_STAGES)[number]
 
+/**
+ * The one step a merge goes through. The merge service performs the integration
+ * and its post-merge disposition in a single call, so the run reports it as one
+ * line instead of claiming steps it cannot observe.
+ */
+export type ScopeMergeStage = 'merge'
+
 /** Every step a job can sit on. The checklist compares steps by id, never by index. */
-export type ScopeJobStepId = ScopeWorktreeStage | ScopeRemovalStage
+export type ScopeJobStepId = ScopeWorktreeStage | ScopeRemovalStage | ScopeMergeStage
 
 /** One checklist line: a stable id plus the sentence it renders. */
 export interface ScopeJobStep {
@@ -127,6 +135,10 @@ export interface ScopeJob {
   setupCommandCount: number
   /** What the run produced, shown once the scope is usable. */
   result: { branch: string; directoryName: string } | null
+  /** Conflicted paths when a merge landed in conflict; empty for every other run. */
+  conflictFiles: string[]
+  /** Merge runs only: the disposition and the target's name, for the panel copy. */
+  merge: { mode: ScopeMergeMode; targetLabel: string } | null
   minimized: boolean
   startedAt: number
   finishedAt: number | null
@@ -156,6 +168,30 @@ export interface ScopeRemoveJobInput {
 export interface ScopeRemoveJobOptions {
   /** Handoff once the scope is gone (point the scoped sidebar away from it). */
   onRemoved?: (bucketId: string) => void
+}
+
+/**
+ * One confirmed merge, handed to the dock. The dialog resolved the mode and the
+ * target; the run mints its own fresh preflight token, merges, and only then
+ * lets main apply the disposition.
+ */
+export interface ScopeMergeJobInput {
+  /** The managed-worktree scope being merged (the source). */
+  bucketId: string
+  /** Source scope display name, for the panel heading and outcome note. */
+  title: string
+  /** Scope the source branch is merged into. */
+  mergeTargetBucketId: string
+  /** Merge target display name, so the heading names where the work went. */
+  targetLabel: string
+  mode: ScopeMergeMode
+}
+
+export interface ScopeMergeJobOptions {
+  /** Handoff once the merge landed (re-dock a sidebar pointed at the old scope). */
+  onMerged?: (bucketId: string) => void
+  /** Handoff when the merge conflicted, so the Git panel can take over. */
+  onConflicted?: (mergeTargetBucketId: string) => void
 }
 
 /** The step a job is sitting on, or the step it failed on. */
@@ -195,10 +231,27 @@ function removalSteps(isolated: boolean, deleteThreads: boolean): readonly Scope
   return steps
 }
 
+/** The one step a merge goes through, phrased for its post-merge disposition. */
+function mergeSteps(input: ScopeMergeJobInput): readonly ScopeJobStep[] {
+  const label =
+    input.mode === 'merge-keep'
+      ? `Merge into ${input.targetLabel}, keeping this scope`
+      : input.mode === 'merge-move-to-default'
+        ? `Merge into ${input.targetLabel}, then remove the worktree and move the threads`
+        : `Merge into ${input.targetLabel}, then remove the scope, worktree and branch`
+  return [{ id: 'merge', label }]
+}
+
 class ScopeJobStore {
   jobs = $state<ScopeJob[]>([])
   /** True once the app-lifetime progress listener is attached. */
   #listening = false
+  /**
+   * Re-run closures for jobs a panel can retry, keyed by job id. Kept off the
+   * reactive state on purpose: a closure never renders, and only a merge is
+   * retryable (a create would mint a second bucket, so it stays a menu action).
+   */
+  private readonly runners = new Map<string, () => Promise<void>>()
 
   /**
    * Listen for worktree progress from app start, not from the first local job:
@@ -293,6 +346,52 @@ class ScopeJobStore {
     )
   }
 
+  /**
+   * Merge a managed scope into another scope, as a dock job. The confirmation
+   * stays the dialog the user just answered; the merge itself leaves as a run
+   * the user can background, because a trade between checkouts is not instant
+   * and the window must never be held on it. Only a `{ merged: true }` answer
+   * from main counts as success   a conflict is a failed run that needs the user.
+   */
+  merge(projectId: string, input: ScopeMergeJobInput, options: ScopeMergeJobOptions = {}): string {
+    const job = this.#push({
+      projectId,
+      scopeBucketId: input.bucketId,
+      kind: 'merge',
+      title: input.title,
+      isolated: true,
+      steps: mergeSteps(input),
+      setupCommandCount: 0,
+      merge: { mode: input.mode, targetLabel: input.targetLabel }
+    })
+    const run = () => this.#runMerge(job.id, projectId, input, options)
+    this.runners.set(job.id, run)
+    void run()
+    return job.id
+  }
+
+  /**
+   * Re-run a failed merge after its checkout was repaired, so the user never has
+   * to reopen the scope menu to finish what they confirmed. The run mints a new
+   * preflight token itself, so a consumed one is never reused.
+   */
+  retry(id: string): void {
+    const job = this.jobs.find((candidate) => candidate.id === id)
+    const run = this.runners.get(id)
+    if (!job || job.status === 'running' || !run) return
+    this.#patch(id, {
+      status: 'running',
+      error: null,
+      conflictFiles: [],
+      failedStepId: null,
+      activeStepId: job.steps[0]?.id ?? null,
+      stage: null,
+      finishedAt: null,
+      minimized: false
+    })
+    void run()
+  }
+
   minimize(id: string): void {
     this.#patch(id, { minimized: true })
   }
@@ -305,6 +404,7 @@ class ScopeJobStore {
   close(id: string): void {
     const job = this.jobs.find((candidate) => candidate.id === id)
     if (!job || job.status === 'running') return
+    this.runners.delete(id)
     this.jobs = this.jobs.filter((candidate) => candidate.id !== id)
   }
 
@@ -462,6 +562,62 @@ class ScopeJobStore {
     }
   }
 
+  /**
+   * Merge the scope's branch into its target and apply the chosen disposition.
+   * The token is minted inside the run rather than reusing the dialog's
+   * display-only preflight, so it is fresh at the moment of confirmation. Main
+   * performs the integration and only then the cleanup, so a conflict leaves the
+   * scope, its threads, its checkout and its branch exactly as they were.
+   */
+  async #runMerge(
+    id: string,
+    projectId: string,
+    input: ScopeMergeJobInput,
+    options: ScopeMergeJobOptions
+  ): Promise<void> {
+    try {
+      const preflight = await scopeState.mergeToScopePreflight(
+        projectId,
+        input.bucketId,
+        input.mergeTargetBucketId,
+        input.mode
+      )
+      const outcome = await scopeState.confirmScopeMerge(
+        projectId,
+        input.bucketId,
+        input.mergeTargetBucketId,
+        input.mode,
+        preflight.confirmationId
+      )
+      await scopeState.loadBoard(projectId)
+      if (!outcome.merged) {
+        // A conflict is not an exception: the merge is left in-progress in the
+        // target and nothing was deleted, so the run settles as failed with the
+        // paths to resolve instead of an error string.
+        this.#patch(id, {
+          status: 'failed',
+          error: null,
+          conflictFiles: [...outcome.conflicted],
+          finishedAt: Date.now()
+        })
+        try {
+          options.onConflicted?.(input.mergeTargetBucketId)
+        } catch {
+          // The merge is already reported; a failed handoff only loses the shortcut.
+        }
+        return
+      }
+      this.#finish(id, 'succeeded')
+      try {
+        options.onMerged?.(input.bucketId)
+      } catch {
+        // The merge landed; a failed handoff only leaves the sidebar stale.
+      }
+    } catch (cause) {
+      this.#fail(id, cause, 'The merge could not be completed.')
+    }
+  }
+
   #push(input: {
     projectId: string
     scopeBucketId: string | null
@@ -471,6 +627,7 @@ class ScopeJobStore {
     isolated: boolean
     steps: readonly ScopeJobStep[]
     setupCommandCount: number
+    merge?: { mode: ScopeMergeMode; targetLabel: string }
     minimized?: boolean
   }): ScopeJob {
     const job: ScopeJob = {
@@ -491,6 +648,8 @@ class ScopeJobStore {
       error: null,
       setupCommandCount: input.setupCommandCount,
       result: null,
+      conflictFiles: [],
+      merge: input.merge ?? null,
       minimized: input.minimized ?? false,
       startedAt: Date.now(),
       finishedAt: null
@@ -516,6 +675,19 @@ class ScopeJobStore {
       error: cause instanceof Error ? cause.message : fallback,
       finishedAt: Date.now()
     })
+    // A failed scope mutation is often a checkout the app can no longer verify,
+    // so re-read that scope's health now. The panel then renders the cause, the
+    // fix and the Repair action from a fresh verdict instead of a stale one.
+    void this.#revalidateAfterFailure(job)
+  }
+
+  async #revalidateAfterFailure(job: ScopeJob): Promise<void> {
+    if (!job.scopeBucketId) return
+    try {
+      await scopeState.revalidateWorktreeHealth(job.projectId, job.scopeBucketId, { force: true })
+    } catch {
+      // Health keeps its previous cached value; the next interaction retries.
+    }
   }
 
   #patch(id: string, patch: Partial<ScopeJob>): void {
@@ -527,8 +699,10 @@ class ScopeJobStore {
       (job) =>
         job.status === 'running' &&
         job.projectId === event.projectId &&
-        // A removal never streams worktree stages, so it must never absorb them.
-        job.kind !== 'remove'
+        // A removal never streams worktree stages, and neither does a merge, so
+        // neither may absorb stages a create or adopt in the same project sent.
+        job.kind !== 'remove' &&
+        job.kind !== 'merge'
     )
     // Exact bucket match first: the worktree service serialises one job per
     // project, so a queued sibling job must never steal the live stages.

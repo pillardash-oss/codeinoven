@@ -1,12 +1,13 @@
 <script lang="ts">
   import { RefreshCw } from '@lucide/svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import ScopeHealthNotice from './ScopeHealthNotice.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
     type ScopeMergeMode,
-    type ScopeMergePreflight,
-    type ScopeMergeOutcome
+    type ScopeMergePreflight
   } from '$shared/types'
 
   interface Props {
@@ -15,20 +16,19 @@
     /** The managed-worktree scope being merged (source). */
     sourceBucketId: string
     onClose: () => void
-    onDone?: () => void
+    /** Called once the merge actually landed, so the owner can re-dock the sidebar. */
+    onMerged?: () => void
     /** Called when the merge lands in conflict so the UI can open the Git panel. */
     onConflicts?: (sourceProjectId: string, targetScopeBucketId: string) => void
   }
 
-  let { open, projectId, sourceBucketId, onClose, onDone, onConflicts }: Props = $props()
+  let { open, projectId, sourceBucketId, onClose, onMerged, onConflicts }: Props = $props()
 
   let mode = $state<ScopeMergeMode>('merge-delete')
   let mergeTargetBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
   let preflight = $state<ScopeMergePreflight | null>(null)
-  let working = $state(false)
   let refreshing = $state(false)
   let error = $state<string | null>(null)
-  let conflicted = $state(false)
 
   /** True when `preflight` matches the currently selected mode and target. */
   const preflightMatches = $derived(
@@ -40,9 +40,7 @@
   function close(): void {
     preflight = null
     error = null
-    working = false
     refreshing = false
-    conflicted = false
     onClose()
   }
 
@@ -65,7 +63,6 @@
       )
       if (seq !== preflightSeq) return
       preflight = next
-      conflicted = false
     } catch (cause) {
       if (seq !== preflightSeq) return
       error = cause instanceof Error ? cause.message : 'The merge preflight could not be run.'
@@ -76,33 +73,42 @@
     }
   }
 
-  async function confirm(): Promise<void> {
-    if (!preflightMatches || !preflight) return
-    working = true
-    error = null
-    try {
-      const outcome: ScopeMergeOutcome = await scopeState.confirmScopeMerge(
-        projectId,
-        sourceBucketId,
-        mergeTargetBucketId,
-        mode,
-        preflight.confirmationId
-      )
-      if (!outcome.merged && outcome.conflicted.length > 0) {
-        conflicted = true
-        onConflicts?.(projectId, mergeTargetBucketId)
-        onDone?.()
-        close()
-        return
+  /**
+   * Hand the confirmed merge to the worktree dock and close this dialog.
+   *
+   * The run leaves as a background job (`scopeJobs.merge`), so a slow trade
+   * between checkouts never holds the window, and a conflict or a refusal is
+   * answered in the docked panel instead of in a dialog the user has to dismiss
+   * before they can keep working. Every value the run needs is captured before
+   * the dialog closes, because the parent clears its target on close and these
+   * props are live getters into it.
+   */
+  function confirm(): void {
+    if (!preflightMatches) return
+    // Capture the handlers and every value the run needs BEFORE the dialog
+    // closes: the parent clears its target on close, so these props are live
+    // getters that go null once the dialog is gone, while the job outlives it.
+    const targetBucketId = mergeTargetBucketId
+    const selectedMode = mode
+    const title = sourceBucket?.name ?? 'This scope'
+    const target = targetLabel(targetBucketId)
+    const merged = onMerged
+    const conflicts = onConflicts
+    scopeJobs.merge(
+      projectId,
+      {
+        bucketId: sourceBucketId,
+        title,
+        mergeTargetBucketId: targetBucketId,
+        targetLabel: target,
+        mode: selectedMode
+      },
+      {
+        onMerged: () => merged?.(),
+        onConflicted: () => conflicts?.(projectId, targetBucketId)
       }
-      await scopeState.loadBoard(projectId)
-      onDone?.()
-      close()
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'The merge could not be completed.'
-    } finally {
-      working = false
-    }
+    )
+    close()
   }
 
   function selectMode(value: ScopeMergeMode): void {
@@ -124,9 +130,7 @@
     mergeTargetBucketId = DEFAULT_SCOPE_BUCKET_ID
     preflight = null
     error = null
-    working = false
     refreshing = false
-    conflicted = false
     void loadPreflight()
   })
   const sourceBucket = $derived(
@@ -204,9 +208,19 @@
   confirmLabel={mode === 'merge-keep' ? 'Merge' : 'Merge & close'}
   variant={mode === 'merge-keep' ? 'primary' : 'danger'}
   disabled={!preflightMatches}
-  busy={working}
 >
   <div class="space-y-5">
+    <!--
+      An unhealthy source is the one reason this merge cannot start, so the
+      dialog states the cause, the fix and the Repair action instead of only
+      naming a menu the user would have to go find.
+    -->
+    <ScopeHealthNotice
+      {projectId}
+      scopeBucketId={sourceBucketId}
+      name={sourceBucket?.name}
+      onRepaired={() => void loadPreflight()}
+    />
     <div>
       <p class="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">Target Scope</p>
       <select
@@ -308,13 +322,6 @@
             <li class="truncate">{file}</li>
           {/each}
         </ul>
-      </div>
-    {/if}
-
-    {#if conflicted}
-      <div class="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
-        The merge hit conflicts and nothing was deleted. Resolve them in the Git panel, then rerun
-        this action once your work is committed.
       </div>
     {/if}
 

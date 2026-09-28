@@ -21,9 +21,10 @@ import { getScopeRootPath } from '../../lib/utils'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { runGit, runGitChecked } from './scope-worktree-process'
-import type {
-  ManagedWorktreeInspector,
-  WorktreeRegistration
+import {
+  ScopeRootUnavailableError,
+  type ManagedWorktreeInspector,
+  type WorktreeRegistration
 } from '../workspaces/scope-root-resolver'
 import { Logger } from '../system/logger'
 import { ScopeWorktreeHealthInspector } from './scope-worktree/scope-worktree-health'
@@ -919,6 +920,13 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     return this.enqueue(target.projectId, async () => {
       const descriptor = this.requireManaged(target)
       assertDistinctMergeTarget(target, mergeTarget)
+      // Fail closed before describing a merge the app cannot verify. A source
+      // checkout that is not healthy is never merged from, so the cleanup that
+      // follows a landed merge can never run against a directory that is gone.
+      const sourceHealth = await this.health(target)
+      if (sourceHealth.category !== 'healthy') {
+        throw new ScopeRootUnavailableError(sourceHealth)
+      }
       const sourcePath = getScopeRootPath(target.projectId, descriptor.directoryName)
       const project = await this.projects.getProject(target.projectId)
       const repoPath = project?.path
@@ -990,6 +998,16 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const project = await this.projects.getProject(target.projectId)
       const repoPath = project?.path ?? snapshot.sourcePath
       const targetRoot = await resolveMergeTargetRoot(this.scopes, mergeTarget, repoPath)
+
+      // Re-verify the source immediately before the merge. The preflight already
+      // gated on health, but a token lives for minutes and the checkout can be
+      // removed in the meantime; merging (and then deleting) must never begin
+      // against a checkout the app can no longer verify. Nothing has been
+      // touched yet, so refusing here leaves the scope exactly as it is.
+      const sourceHealth = await this.health(target)
+      if (sourceHealth.category !== 'healthy') {
+        throw new ScopeRootUnavailableError(sourceHealth)
+      }
 
       // Re-check the destination is not mid-mutation before running the merge so
       // a stale token cannot collide with a worktree the user since touched.

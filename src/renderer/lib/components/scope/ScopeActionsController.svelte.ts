@@ -178,6 +178,17 @@ export class ScopeActionsController {
   }
 
   /**
+   * The merge landed and its dialog is gone. A merge that deleted the source
+   * scope must never leave the scoped-threads sidebar pointing at a bucket that
+   * no longer exists, so the sidebar falls back to Default (a `merge-keep` run
+   * leaves the sidebar where it was).
+   */
+  finishMergedScope(bucket: ScopeBucket): void {
+    this.mergeTarget = null
+    this.redockIfScoped(bucket)
+  }
+
+  /**
    * Open this scope's managed checkout in the OS file manager. Health is the
    * authority for where the checkout is (it reports `expectedPath`, and the
    * actual path when Git disagrees), and the reveal itself runs through the
