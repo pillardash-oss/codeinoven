@@ -8,6 +8,7 @@ import type {
   BrowserPermissionPromptContext,
   BrowserShortcutBindings,
   BrowserSiteDataScope,
+  BrowserScrollbarTheme,
   BrowserTransportCommand,
   BrowserViewBounds
 } from './browser'
@@ -66,6 +67,10 @@ export const invokeBrowserContract = {
    * loads or is patched. A failure is ignored until the handlers are live.
    */
   'browser:setSearchEngine': {} as Contract<[engine: BrowserSearchEngine], void>,
+  /** The app's scrollbar colours, applied to every browser tab so a default
+   *  page scrollbar is drawn on brand. A user-origin stylesheet yields to a
+   *  site's own scrollbar styling. */
+  'browser:setScrollbarTheme': {} as Contract<[theme: BrowserScrollbarTheme], void>,
   /**
    * Report which tab's toolbar (address bar, buttons) holds DOM focus, or null
    * when none does. A key pressed in a native page view never reaches the

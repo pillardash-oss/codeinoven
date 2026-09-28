@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
+  import { cubicOut } from 'svelte/easing'
+  import { fly } from 'svelte/transition'
   import { Bot, Globe, Plus, StickyNote } from '@lucide/svelte'
   import { subscribe } from '$lib/ipc.svelte'
   import type { BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { motionDuration } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -144,9 +147,17 @@
 <div class="flex h-full min-h-0" data-region="browser-view">
   <!-- The sidebar is the browser's chrome (address, history, downloads) as well
        as its tab strip, so it is present with no tab open too: that is where the
-       first address is typed. -->
+       first address is typed. It slides in from the left edge and back out the
+       same way the workspace sidebar does, so folding it reads as one motion
+       instead of a jump. -->
   {#if globalBrowser.sidebarVisible}
-    <BrowserTabsSidebar onOpenAddress={() => globalBrowser.openAddressSpotlight()} />
+    <div
+      class="flex h-full min-h-0 shrink-0"
+      in:fly={{ x: '-100%', duration: motionDuration(200), easing: cubicOut }}
+      out:fly={{ x: '-100%', duration: motionDuration(160), easing: cubicOut }}
+    >
+      <BrowserTabsSidebar onOpenAddress={() => globalBrowser.openAddressSpotlight()} />
+    </div>
   {/if}
 
   {#if activeTab}
@@ -176,7 +187,13 @@
   {/if}
 
   {#if globalBrowser.contextSidebarShown}
-    <BrowserContextSidebar onClose={() => globalBrowser.toggleContextSidebar()} />
+    <div
+      class="flex h-full min-h-0 shrink-0"
+      in:fly={{ x: '100%', duration: motionDuration(200), easing: cubicOut }}
+      out:fly={{ x: '100%', duration: motionDuration(160), easing: cubicOut }}
+    >
+      <BrowserContextSidebar onClose={() => globalBrowser.toggleContextSidebar()} />
+    </div>
   {/if}
 
   <ContextDock groups={dockGroups} />

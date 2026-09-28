@@ -37,6 +37,7 @@ import type {
   BrowserPermissionRequest,
   BrowserShortcutAction,
   BrowserShortcutBindings,
+  BrowserScrollbarTheme,
   BrowserTransportCommand,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
@@ -113,6 +114,7 @@ import {
   validatePermissionDecision,
   validatePermissionRequestId,
   validateProjectId,
+  validateScrollbarTheme,
   validateSiteDataScopes,
   validateSiteMenuPoint,
   validateTabId,
@@ -259,6 +261,12 @@ export class BrowserService {
    * first report lands.
    */
   private contextMenuSearchEngine: BrowserSearchEngine = BUILT_IN_BROWSER_SEARCH_ENGINES[0]
+  /** The app's default-scrollbar colours, applied to every tab's page. Null
+   *  until the renderer pushes them once at boot. */
+  private scrollbarTheme: BrowserScrollbarTheme | null = null
+  /** The user-origin stylesheet inserted per tab, so a theme swap can replace
+   *  the previous one instead of stacking. */
+  private scrollbarStyles = new Map<string, string>()
   private consoleSequence = 0
 
   constructor(
@@ -464,6 +472,9 @@ export class BrowserService {
     ipcMain.handle('browser:setSearchEngine', (_event, rawEngine) => {
       this.contextMenuSearchEngine = validateBrowserSearchEngine(rawEngine)
     })
+    ipcMain.handle('browser:setScrollbarTheme', (_event, rawTheme) => {
+      this.setScrollbarTheme(validateScrollbarTheme(rawTheme))
+    })
     ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) =>
       this.toggleTabDevTools(this.requireTab(validateTabId(rawTabId)))
     )
@@ -652,6 +663,50 @@ export class BrowserService {
    */
   setSearchEngine(engine: BrowserSearchEngine): void {
     this.contextMenuSearchEngine = engine
+  }
+
+  /**
+   * Set the app's scrollbar colours and apply them to every open tab.
+   *
+   * Called once with the renderer's first push and again whenever the app theme
+   * changes, so a default page scrollbar stays on brand without the renderer
+   * having to know which tabs exist. A user-origin stylesheet is what keeps a
+   * site's own scrollbar styling in charge where it exists.
+   */
+  setScrollbarTheme(theme: BrowserScrollbarTheme): void {
+    this.scrollbarTheme = theme
+    for (const [tabId, tab] of this.tabs) this.applyScrollbarTheme(tabId, tab.view.webContents)
+  }
+
+  /** Build the user-origin stylesheet a page's default scrollbar is drawn with. */
+  private scrollbarThemeCss(theme: BrowserScrollbarTheme): string {
+    return (
+      '::-webkit-scrollbar{width:6px;height:6px}' +
+      '::-webkit-scrollbar-track{background:transparent}' +
+      `::-webkit-scrollbar-thumb{background:${theme.thumb};border-radius:3px}` +
+      `::-webkit-scrollbar-thumb:hover{background:${theme.thumbHover}}`
+    )
+  }
+
+  /**
+   * Install the current colours into one tab's document. Re-run on every
+   * `dom-ready`, because a navigation replaces the stylesheet with the document.
+   * The insert is user-origin on purpose: author styles win the cascade, so a
+   * site that styles its own scrollbar keeps it.
+   */
+  private applyScrollbarTheme(tabId: string, contents: WebContents): void {
+    const theme = this.scrollbarTheme
+    if (!theme || contents.isDestroyed()) return
+    const previous = this.scrollbarStyles.get(tabId)
+    this.scrollbarStyles.delete(tabId)
+    contents
+      .insertCSS(this.scrollbarThemeCss(theme), { cssOrigin: 'user' })
+      .then((key) => {
+        if (contents.isDestroyed()) return
+        this.scrollbarStyles.set(tabId, key)
+        if (previous) void contents.removeInsertedCSS(previous).catch(() => {})
+      })
+      .catch(() => {})
   }
   /**
    * Decide, from the origin a tab is showing, what the app knows about its folder.
@@ -1540,6 +1595,9 @@ export class BrowserService {
     view.webContents.on('dom-ready', () => {
       this.capture.reset(tabId)
       this.watchCaptureMainFrame(tabId, view.webContents)
+      // The document that just arrived drops the last one's stylesheet, so the
+      // app's scrollbar colours are installed again here.
+      this.applyScrollbarTheme(tabId, view.webContents)
       publish()
     })
     view.webContents.on('did-finish-load', () => {
@@ -2732,6 +2790,7 @@ export class BrowserService {
     this.agentReveals.delete(tabId)
     this.lastScreenshot.delete(tabId)
     this.playheads.delete(tabId)
+    this.scrollbarStyles.delete(tabId)
     this.capture.forget(tabId)
     this.inspector.forget(tabId)
     this.stage.release(tab.view)

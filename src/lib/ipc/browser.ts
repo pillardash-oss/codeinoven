@@ -229,6 +229,23 @@ export interface BrowserInspectorTheme {
 }
 
 /**
+ * The app's scrollbar colours, pushed to every browser tab so a page's own
+ * scrollbar is drawn in the application's palette instead of the platform
+ * default.
+ *
+ * It is installed as a *user-origin* stylesheet, which is the whole point: author
+ * styles outrank user styles in the cascade, so a site that styles its own
+ * `::-webkit-scrollbar` (or `scrollbar-color`) keeps it, and only the default
+ * scrollbar is brought on brand.
+ */
+export interface BrowserScrollbarTheme {
+  /** The thumb, matching the app's own `::-webkit-scrollbar-thumb`. */
+  thumb: string
+  /** The thumb on hover, matching the app's own hover rule. */
+  thumbHover: string
+}
+
+/**
  * What the injected inspector reports back to the app.
  *
  * `pick` is a fresh element selection, `open` is the user clicking an existing

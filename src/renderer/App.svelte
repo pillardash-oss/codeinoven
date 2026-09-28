@@ -40,8 +40,10 @@
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { schemeState } from '$lib/stores/scheme.svelte'
+  import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
@@ -286,6 +288,9 @@
   function applyTheme(): void {
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
     schemeState.sync(effectiveTheme)
+    // A browser tab's page is a native view, so its default scrollbar cannot be
+    // reached by the stylesheet: hand the app's colours to main instead.
+    publishBrowserScrollbarTheme()
   }
 
   /** Welcome screen (and other surfaces) can request the getting-started tour. */
@@ -1629,6 +1634,7 @@
   {#if (activeView === 'scope' || activeView === 'browser' || isSettingsView(activeView)) && contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'}
     <div
       class="fixed bottom-0 right-0 top-12 z-40 w-[480px] border-l border-border bg-surface shadow-xl"
+      {@attach trackBrowserOcclusion}
     >
       {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
         <NotificationPanel />

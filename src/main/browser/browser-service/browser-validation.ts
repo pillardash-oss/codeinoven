@@ -8,6 +8,7 @@ import type {
   BrowserInspectorMarker,
   BrowserInspectorTheme,
   BrowserPermissionDecision,
+  BrowserScrollbarTheme,
   BrowserShortcutAction,
   BrowserShortcutBindings,
   BrowserShortcutChord,
@@ -211,6 +212,39 @@ export function validateInspectorTheme(value: unknown): BrowserInspectorTheme {
       raw.length > MAX_INSPECTOR_THEME_VALUE_LENGTH
     ) {
       throw new TypeError(`Inspector theme token "${key}" is invalid`)
+    }
+    theme[key] = raw
+  }
+  return theme
+}
+
+/** The two colours the page's default scrollbar is drawn with. */
+const SCROLLBAR_THEME_KEYS = [
+  'thumb',
+  'thumbHover'
+] as const satisfies readonly (keyof BrowserScrollbarTheme)[]
+
+/**
+ * Validate the app scrollbar colours pushed for every browser tab's page.
+ *
+ * The values become a user-origin stylesheet, so each one is bounded and checked
+ * against the characters that could end the rule it is placed in.
+ */
+export function validateScrollbarTheme(value: unknown): BrowserScrollbarTheme {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('Scrollbar theme must be an object')
+  }
+  const record = value as Record<string, unknown>
+  const theme = {} as BrowserScrollbarTheme
+  for (const key of SCROLLBAR_THEME_KEYS) {
+    const raw = record[key]
+    if (
+      typeof raw !== 'string' ||
+      raw.length === 0 ||
+      raw.length > MAX_INSPECTOR_THEME_VALUE_LENGTH ||
+      /[;{}]|<\//u.test(raw)
+    ) {
+      throw new TypeError(`Scrollbar theme token "${key}" is invalid`)
     }
     theme[key] = raw
   }
