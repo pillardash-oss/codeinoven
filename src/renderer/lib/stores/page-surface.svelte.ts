@@ -22,7 +22,9 @@ import { isOverlayOpen } from '../overlay-close.svelte'
 import { isSettingsView, rendererRecovery } from './renderer-recovery.svelte'
 
 const workspaceCovered = $derived(
-  rendererRecovery.activeView === 'scope' || isSettingsView(rendererRecovery.activeView)
+  rendererRecovery.activeView === 'scope' ||
+    rendererRecovery.activeView === 'browser' ||
+    isSettingsView(rendererRecovery.activeView)
 )
 
 /** True while a full-page surface (a Settings page or the Scope view) covers the workspace shell. */

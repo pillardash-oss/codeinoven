@@ -1,4 +1,7 @@
-import { DEFAULT_IN_APP_NOTIFICATION_SOUND } from '$shared/types'
+import {
+  DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_IN_APP_NOTIFICATION_SOUND
+} from '$shared/types'
 import type {
   AppConfig,
   GitPullPreference,
@@ -27,6 +30,7 @@ const FONT_STACKS: Record<string, string> = {
 }
 
 let maxDiffLines = $state(DEFAULT_MAX_DIFF_LINES)
+let browserHibernationMinutes = $state(DEFAULT_BROWSER_HIBERNATION_MINUTES)
 let openLocalhostInCioBrowser = $state(true)
 let openAllLinksInCioBrowser = $state(false)
 let inAppNotificationSound = $state<InAppNotificationSoundSettings>(
@@ -61,6 +65,9 @@ export const appConfigState = {
   get maxDiffLines(): number {
     return maxDiffLines
   },
+  get browserHibernationMinutes(): number {
+    return browserHibernationMinutes
+  },
   get openLocalhostInCioBrowser(): boolean {
     return openLocalhostInCioBrowser
   },
@@ -91,6 +98,7 @@ export const appConfigState = {
   },
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
+    browserHibernationMinutes = config.browserHibernationMinutes
     openLocalhostInCioBrowser = config.openLocalhostInCioBrowser
     openAllLinksInCioBrowser = config.openAllLinksInCioBrowser
     inAppNotificationSound = {

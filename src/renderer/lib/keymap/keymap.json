@@ -35,9 +35,16 @@
         },
         {
           "id": "nav-chats",
-          "keys": ["mod", "0"],
+          "keys": ["mod", "8"],
           "label": "Chats view",
           "description": "Opens the Chats view.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-browser",
+          "keys": ["mod", "0"],
+          "label": "Browser view",
+          "description": "Opens the global browser workspace with its tab strip in the left sidebar. While the browser page itself has focus the same chord resets page zoom, which mirrors a browser.",
           "scenario": "Anywhere in the app."
         },
         {

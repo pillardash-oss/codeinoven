@@ -31,7 +31,12 @@ import {
 } from '../../../lib/media-generation'
 import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
 import { validateMemoryConfig } from '../../chat/memory-service'
-import { MAX_MAX_CONFLICT_FILE_BYTES, MIN_MAX_CONFLICT_FILE_BYTES } from '../../../lib/types'
+import {
+  MAX_BROWSER_HIBERNATION_MINUTES,
+  MAX_MAX_CONFLICT_FILE_BYTES,
+  MIN_BROWSER_HIBERNATION_MINUTES,
+  MIN_MAX_CONFLICT_FILE_BYTES
+} from '../../../lib/types'
 import { validateBoundedString, validateEntityId, validateMergeMethod } from '../ipc-validation'
 import { isRecord, requireString } from './shared'
 import type {
@@ -598,6 +603,18 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Max diff lines must be an integer between 10 and 5000')
     }
     patch.maxDiffLines = value.maxDiffLines
+  }
+
+  if ('browserHibernationMinutes' in value) {
+    if (
+      typeof value.browserHibernationMinutes !== 'number' ||
+      !Number.isInteger(value.browserHibernationMinutes) ||
+      value.browserHibernationMinutes < MIN_BROWSER_HIBERNATION_MINUTES ||
+      value.browserHibernationMinutes > MAX_BROWSER_HIBERNATION_MINUTES
+    ) {
+      throw new TypeError('Browser hibernation minutes must be a whole number between 5 and 120')
+    }
+    patch.browserHibernationMinutes = value.browserHibernationMinutes
   }
 
   if ('maxConflictFileBytes' in value) {

@@ -17,7 +17,9 @@
   import { APP_NAME, APP_SLUG, GITHUB_URL, ORG_SLUG, WEBSITE_URL, X_URL } from '$shared/brand'
   import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import {
+    MAX_BROWSER_HIBERNATION_MINUTES,
     MAX_MAX_CONFLICT_FILE_BYTES,
+    MIN_BROWSER_HIBERNATION_MINUTES,
     MIN_MAX_CONFLICT_FILE_BYTES,
     type AppConfig,
     type AppConfigPatch,
@@ -363,6 +365,23 @@
     }
 
     void updateConfig({ maxDiffLines: value })
+  }
+
+  function saveBrowserHibernationMinutes(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const value = Number(input.value)
+    if (
+      !Number.isInteger(value) ||
+      value < MIN_BROWSER_HIBERNATION_MINUTES ||
+      value > MAX_BROWSER_HIBERNATION_MINUTES
+    ) {
+      input.value = String(config.browserHibernationMinutes)
+      return
+    }
+
+    void updateConfig({ browserHibernationMinutes: value })
   }
 
   /** The conflicted-file limit is stored in bytes and shown in MiB, which is
@@ -829,6 +848,31 @@
                   aria-label="Toggle opening all other links in CIO's browser"
                   disabled={!settingsReady}
                 />
+              </div>
+            </div>
+            <div class="mt-4 border-t pt-4">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Hibernate inactive tabs</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Free the memory of a browser tab that has not been used for this long; it
+                    reloads when you come back to it
+                  </p>
+                </div>
+                <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+                  <input
+                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    type="number"
+                    min={MIN_BROWSER_HIBERNATION_MINUTES}
+                    max={MAX_BROWSER_HIBERNATION_MINUTES}
+                    step="1"
+                    value={config.browserHibernationMinutes}
+                    disabled={!settingsReady}
+                    aria-label="Minutes before an inactive browser tab hibernates"
+                    onchange={saveBrowserHibernationMinutes}
+                  />
+                  minutes
+                </label>
               </div>
             </div>
             <PrototypeCdnSettings {config} {settingsReady} {updateConfig} />

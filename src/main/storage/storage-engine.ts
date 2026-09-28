@@ -13,7 +13,11 @@ import {
   resolveWithinRoot
 } from '../../lib/utils'
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
-import { DEFAULT_MAX_CONFLICT_FILE_BYTES, DEFAULT_IN_APP_NOTIFICATION_SOUND } from '../../lib/types'
+import {
+  DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_MAX_CONFLICT_FILE_BYTES,
+  DEFAULT_IN_APP_NOTIFICATION_SOUND
+} from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { DEFAULT_WORK_ROOTS, workRootsFromConfig } from '../../lib/design/work-roots'
 import {
@@ -83,6 +87,7 @@ const DEFAULT_CONFIG: AppConfig = {
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
   openAllLinksInCioBrowser: false,
+  browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },

@@ -1,3 +1,20 @@
+/**
+ * The reserved ownership context of the global (personal) browser workspace.
+ *
+ * Every browser tab is keyed by a `(projectId, threadId)` pair in the main
+ * process, and the session partition is derived from `projectId`. The global
+ * browser deliberately rides the same machinery with one reserved pair, which
+ * gives it a single durable profile (`persist:codeinoven-browser:browser-global`)
+ * shared by every global tab, isolated from every project's browser and from
+ * the agent-controlled project sessions.
+ *
+ * The pair never names a real project or thread: main resolves the dialog and
+ * permission labels to null for it, which is what keeps `BrowserService`
+ * unchanged for a project-less tab.
+ */
+export const GLOBAL_BROWSER_PROJECT_ID = 'browser-global'
+export const GLOBAL_BROWSER_THREAD_ID = 'browser-global'
+
 /** Native browser content rectangle in BrowserWindow density-independent pixels. */
 export interface BrowserViewBounds {
   x: number

@@ -14,9 +14,11 @@
  *   - `fullscreen` the full screen browser is on screen
  *
  * A full screen claim outranks the sidebar, because that overlay is the only
- * surface on screen while it is up. The effective claim is published to main
- * only when it changes, so focus moving between controls inside one surface is
- * not a message per keystroke.
+ * surface on screen while it is up. The global browser workspace is its own
+ * view, so its claim is the strongest of the three: it is a top-level surface
+ * rather than something docked inside another view. The effective claim is
+ * published to main only when it changes, so focus moving between controls
+ * inside one surface is not a message per keystroke.
  */
 
 import { invoke } from '$lib/ipc.svelte'
@@ -25,7 +27,8 @@ import type { BrowserSurface } from './browser-visibility.svelte'
 class BrowserKeyboardFocus {
   private readonly claims: Record<BrowserSurface, string | null> = {
     sidebar: null,
-    fullscreen: null
+    fullscreen: null,
+    workspace: null
   }
   /** The tab main was last told about, so a repeated claim is not re-sent. */
   private published: string | null = null
@@ -43,7 +46,7 @@ class BrowserKeyboardFocus {
   }
 
   private publish(): void {
-    const effective = this.claims.fullscreen ?? this.claims.sidebar
+    const effective = this.claims.workspace ?? this.claims.fullscreen ?? this.claims.sidebar
     if (this.published === effective) return
     this.published = effective
     // A failure is silent: the feature handlers are not registered until after

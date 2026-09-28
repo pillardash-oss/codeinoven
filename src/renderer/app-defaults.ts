@@ -3,6 +3,7 @@ import { DEFAULT_WORK_ROOTS } from '$shared/design/work-roots'
 import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '$shared/prototypes/prototype-cdn'
 import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
 import {
+  DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_MAX_CONFLICT_FILE_BYTES,
   DEFAULT_IN_APP_NOTIFICATION_SOUND,
   type AppConfig
@@ -43,6 +44,7 @@ export const defaultConfig: AppConfig = {
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
   openAllLinksInCioBrowser: false,
+  browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },

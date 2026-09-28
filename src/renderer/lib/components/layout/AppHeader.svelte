@@ -11,10 +11,11 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
-  import { Bell, ChevronLeft, ChevronRight, FileText, Globe, Loader2, Search } from '@lucide/svelte'
+  import { Bell, ChevronLeft, ChevronRight, FileText, Globe, Globe2, Loader2, Search } from '@lucide/svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
@@ -23,6 +24,7 @@
   import AppHeaderViewActions from './AppHeaderViewActions.svelte'
   import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
   import AppHeaderCenter from './AppHeaderCenter.svelte'
+  import AppHeaderBrowserCenter from './AppHeaderBrowserCenter.svelte'
   import AppHeaderThreadModals from './AppHeaderThreadModals.svelte'
   import AppHeaderEditorMenu from './AppHeaderEditorMenu.svelte'
   import AppHeaderGitChip from './AppHeaderGitChip.svelte'
@@ -43,6 +45,14 @@
   let onSettings = $derived(isSettingsView(activeView))
 
   let onScope = $derived(activeView === 'scope')
+
+  /**
+   * The global browser is its own workspace: its centre shows the page, and its
+   * right cluster keeps only the global controls (the browser entry and the
+   * notification bell). No editor, spec, or git controls   those belong to a
+   * thread, and a browser tab is not a thread.
+   */
+  let onBrowser = $derived(activeView === 'browser')
 
   /** Chats and Assistant must feel like chat   no editor, spec, or terminal controls. */
   let chatMode = $derived(activeView === 'chats' || activeView === 'assistant')
@@ -135,9 +145,9 @@
 
   /** Cmd/Ctrl+D deletes the actively opened thread through the normal confirm
    *  flow (Escape cancels inside the shared ThreadDeleteConfirm dialog).
-   *  Cmd/Ctrl+0-4 switch
-   *  primary views: 0 chats, 1 projects, 2 threads, 3 projects with scope state,
-   *  4 scope, 9 assistant. Every chord resolves from the keymap registry. */
+   *  Cmd/Ctrl view shortcuts: 0 browser, 1 projects, 2 threads, 3 projects with
+   *  scope state, 4 scope, 8 chats, 9 assistant. Every chord resolves from the
+   *  keymap registry. */
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.repeat || event.isComposing) return
     if (keymapState.matches('nav-delete-thread', event)) {
@@ -147,6 +157,7 @@
       return
     }
     const viewShortcuts: Array<[string, () => void]> = [
+      ['nav-browser', () => void navigation.navigateToView('browser')],
       ['nav-chats', () => void navigation.navigateToView('chats')],
       ['nav-projects', () => void navigation.navigateToView('projects')],
       ['nav-threads', () => void navigation.navigateToView('threads')],
@@ -262,6 +273,8 @@
 
   {#if onScope}
     <AppHeaderScopeTabs />
+  {:else if onBrowser}
+    <AppHeaderBrowserCenter />
   {:else}
     <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} />
   {/if}
@@ -269,8 +282,9 @@
   <AppHeaderThreadModals menu={threadActionsMenu} />
 
   <div class="titlebar-no-drag ml-auto flex shrink-0 items-center gap-1">
-    <!-- Gateway dashboard   global browser entry, visible when gateway is ready -->
-    {#if hasGateway && gatewayDashboardUrl}
+    <!-- Gateway dashboard   global browser entry. Hidden in the browser view,
+         where the dashboard would open in the very surface already on screen. -->
+    {#if hasGateway && gatewayDashboardUrl && !onBrowser}
       <button
         class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
         aria-label="Open gateway dashboard"
@@ -281,13 +295,32 @@
       </button>
     {/if}
 
-    <!-- Editor preference   hidden in chat mode, scope view, and when no project is selected -->
-    {#if !chatMode && !onScope && workspaceState.activeProject}
+    <!-- Global browser   always present, before the editor menu. Selecting it
+         while the browser is already open folds its sidebar instead, which is
+         how the user gets an uninterrupted page. -->
+    <button
+      class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {onBrowser
+        ? 'bg-elevated text-foreground'
+        : 'text-muted hover:bg-elevated hover:text-foreground'}"
+      aria-label={onBrowser ? 'Toggle the browser sidebar' : 'Open the global browser'}
+      title={onBrowser ? 'Toggle the browser sidebar' : 'Open the global browser'}
+      aria-pressed={onBrowser}
+      onclick={() => {
+        if (onBrowser) globalBrowser.toggleSidebar()
+        else void navigation.navigateToView('browser')
+      }}
+    >
+      <Globe2 size={16} />
+    </button>
+
+    <!-- Editor preference   hidden in chat mode, scope view, the browser view,
+         and when no project is selected -->
+    {#if !chatMode && !onScope && !onBrowser && workspaceState.activeProject}
       <AppHeaderEditorMenu />
     {/if}
 
     <!-- Spec studio   only for an existing document or an eligible final-response retry -->
-    {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
+    {#if !chatMode && !onScope && !onBrowser && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
       <button
         class="flex h-8 items-center gap-1.5 px-2 transition-colors duration-150 {workspaceState.specStudioOpen
           ? 'bg-elevated text-foreground'
@@ -329,7 +362,7 @@
     {/if}
 
     <!-- Git status chip   only when a thread is open in a project view -->
-    {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && gitAvailable}
+    {#if !chatMode && !onScope && !onBrowser && !onSettings && workspaceState.selectedThread && gitAvailable}
       <AppHeaderGitChip {gitAvailable} />
     {/if}
 

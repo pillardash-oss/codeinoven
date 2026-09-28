@@ -33,7 +33,7 @@ import type { BrowserViewBounds } from '$shared/ipc-contract'
 import { contextSidebarState } from './context-sidebar.svelte'
 
 /** The places the browser can display native content. */
-export type BrowserSurface = 'sidebar' | 'fullscreen'
+export type BrowserSurface = 'sidebar' | 'fullscreen' | 'workspace'
 
 /**
  * A reason a DOM surface publishes while it is on screen and the native view
@@ -148,11 +148,13 @@ class BrowserVisibilityState {
 
   /**
    * The surface that currently owns the native view. Only one view can be on
-   * screen at a time, so a fullscreen surface outranks the sidebar, and the
-   * sidebar owns it only while it is actually displaying the tab that claimed
-   * it. Other tabs are not detached any more, they run parked offscreen.
+   * screen at a time, so a full-window surface outranks the sidebar: the
+   * global browser workspace, then the full screen dialog, then the sidebar,
+   * which owns it only while it is actually displaying the tab that claimed it.
+   * Other tabs are not detached any more, they run parked offscreen.
    */
   private get owningSurface(): BrowserSurface | null {
+    if (this.claims.has('workspace')) return 'workspace'
     if (this.claims.has('fullscreen')) return 'fullscreen'
     const tabId = this.claims.get('sidebar')
     if (tabId === undefined) return null

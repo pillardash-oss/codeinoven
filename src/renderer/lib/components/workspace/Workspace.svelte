@@ -56,6 +56,7 @@
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
@@ -1796,6 +1797,9 @@
 
   $effect(() => {
     return subscribe('browser:openRequested', (url, context) => {
+      // A tab opened by the global browser belongs to the global strip, which
+      // adopts it in its own store; the workspace sidebar must not mirror it.
+      if (context?.projectId === GLOBAL_BROWSER_PROJECT_ID) return
       if (context) {
         contextSidebarState.openBrowserForContext(
           url,

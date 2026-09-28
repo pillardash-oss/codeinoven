@@ -39,6 +39,7 @@
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { schemeState } from '$lib/stores/scheme.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -1220,6 +1221,16 @@
       return
     }
     if (keymapState.matches('nav-toggle-left-sidebar', e)) {
+      // The browser view's sidebar is its browser chrome and tab strip, so the
+      // chord folds that instead of the workspace rail. (While the browser owns
+      // the keyboard this chord belongs to Save page, which is why the browser
+      // entry in the header also toggles it.)
+      if (activeView === 'browser') {
+        e.preventDefault()
+        if (e.repeat) return
+        globalBrowser.toggleSidebar()
+        return
+      }
       // On the plain workspace (no studio, no conflict being resolved, no dirty
       // file tab, no edited file opened from the OS) the Cmd/Ctrl+S save chord
       // is otherwise unused, so it folds/unfolds the left sidebar. Anywhere a
@@ -1300,6 +1311,12 @@
       // the user is currently in when there is one, routine-less otherwise.
       if (activeView === 'assistant') {
         workspaceState.requestAssistantTask()
+        return
+      }
+
+      // The browser view owns it for a new tab, which is what a browser does.
+      if (activeView === 'browser') {
+        globalBrowser.openNewTabAddress()
         return
       }
 
@@ -1454,6 +1471,12 @@
             />
           </div>
         {/await}
+      {:else if activeView === 'browser'}
+        <!-- The global browser is its own workspace   the app header above it is
+             the only shared chrome. -->
+        {#await import('$lib/components/browser/BrowserView.svelte') then { default: BrowserView }}
+          <BrowserView />
+        {/await}
       {:else if !showsContentView}
         <div
           class="absolute inset-0 flex items-center justify-center"
@@ -1589,7 +1612,7 @@
     {/await}
   {/if}
 
-  {#if (activeView === 'scope' || isSettingsView(activeView)) && contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'}
+  {#if (activeView === 'scope' || activeView === 'browser' || isSettingsView(activeView)) && contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'}
     <div
       class="fixed bottom-0 right-0 top-12 z-40 w-[480px] border-l border-border bg-surface shadow-xl"
     >

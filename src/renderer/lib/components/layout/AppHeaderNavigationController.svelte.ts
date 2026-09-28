@@ -118,11 +118,16 @@ export class AppHeaderNavigationController {
   }
 
   /** Navigate to a primary view without any sidebar toggling   used by the
-   *  Cmd/Ctrl+0-4 view shortcuts so they always land on the requested view. */
+   *  Cmd/Ctrl+0-9 view shortcuts so they always land on the requested view. */
   async navigateToView(
-    view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant'
+    view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant' | 'browser'
   ): Promise<void> {
     const activeView = this.getActiveView()
+    if (view === 'browser') {
+      // The browser is its own workspace with no scope state to reconcile.
+      this.navigate('browser')
+      return
+    }
     if (view === 'chats') this.preloadNavigationThreads('chats')
     else if (view === 'projects') this.preloadNavigationThreads('projects')
     if (view === 'threads') {

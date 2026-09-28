@@ -263,6 +263,11 @@ export interface MediaGenerationConfig {
   providerId: MediaProviderId | null
 }
 
+/** Bounds for `AppConfig.browserHibernationMinutes`. */
+export const MIN_BROWSER_HIBERNATION_MINUTES = 5
+export const MAX_BROWSER_HIBERNATION_MINUTES = 120
+export const DEFAULT_BROWSER_HIBERNATION_MINUTES = 30
+
 export interface AppConfig {
   theme: ThemePreference
   /** Font family id used across the app UI. */
@@ -350,6 +355,11 @@ export interface AppConfig {
    */
   openAllLinksInCioBrowser: boolean
   /**
+   * Minutes a global-browser tab may sit idle before it hibernates. Bounded to
+   * `MIN/MAX_BROWSER_HIBERNATION_MINUTES`.
+   */
+  browserHibernationMinutes: number
+  /**
    * Let prototype previews load fonts, styles, and scripts from the approved
    * CDNs. Off confines every prototype to assets inlined in its own folder.
    */
@@ -408,6 +418,7 @@ export type AppConfigPatch = Partial<
     | 'maxConflictFileBytes'
     | 'openLocalhostInCioBrowser'
     | 'openAllLinksInCioBrowser'
+    | 'browserHibernationMinutes'
     | 'allowPrototypeExternalCdn'
     | 'prototypeCdnAllowlist'
     | 'inAppNotificationSound'

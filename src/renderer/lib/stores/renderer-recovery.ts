@@ -33,6 +33,7 @@ export type MainView =
   | 'projects-scope'
   | 'chats'
   | 'assistant'
+  | 'browser'
   | 'scope'
   | 'threads'
   | 'settings'
@@ -159,6 +160,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'projects-scope',
   'chats',
   'assistant',
+  'browser',
   'scope',
   'threads',
   'settings',
@@ -349,6 +351,7 @@ function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
     value === 'projects-scope' ||
     value === 'chats' ||
     value === 'assistant' ||
+    value === 'browser' ||
     value === 'scope' ||
     value === 'threads'
   ) {
