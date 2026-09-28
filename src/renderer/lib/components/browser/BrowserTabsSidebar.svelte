@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {
     ArrowLeft,
@@ -13,7 +14,7 @@
     Settings2,
     X
   } from '@lucide/svelte'
-  import { invoke } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
@@ -23,6 +24,12 @@
   import BrowserTabRow from './BrowserTabRow.svelte'
   import BrowserGroupModal from './BrowserGroupModal.svelte'
   import { browserGroupAccent, browserGroupIconUrl } from './browser-group-appearance'
+  import {
+    browserSiteHost,
+    openBrowserDownloadsMenu,
+    openBrowserPageMenu,
+    openBrowserSiteMenu
+  } from './browser-chrome-menus'
 
   interface Props {
     /** Summon the address spotlight, which is how Cmd/Ctrl+L also opens it. */
@@ -55,6 +62,13 @@
   const runtime = $derived(activeTab ? globalBrowser.runtimeFor(activeTab.id) : null)
   const secure = $derived(Boolean(activeTab?.url.startsWith('https:')))
   const activeDownloadCount = $derived(browserDownloads.activeCount(GLOBAL_BROWSER_PROJECT_ID))
+  /** Expanded state of the padlock while its native site menu is up. The menu
+   *  itself is an OS popup above the page view, so this only tracks the button. */
+  let siteMenuOpen = $state(false)
+
+  // The native site menu reports its own dismissal, which is the only signal the
+  // button has to drop its expanded state.
+  onMount(() => subscribe('browser:siteMenuClosed', () => (siteMenuOpen = false)))
 
   /** Null while the address mirrors the page; a string once the user types, so a
    *  page that navigates mid-edit never steals the caret's line. The draft is
@@ -134,13 +148,39 @@
   function openDownloadsMenu(event: MouseEvent): void {
     const button = event.currentTarget
     if (!(button instanceof HTMLElement)) return
-    const rect = button.getBoundingClientRect()
-    void invoke(
-      'browser:downloadsMenu',
-      GLOBAL_BROWSER_PROJECT_ID,
-      Math.max(0, Math.round(rect.left)),
-      Math.max(0, Math.round(rect.bottom + 4))
-    ).catch(() => {})
+    openBrowserDownloadsMenu(GLOBAL_BROWSER_PROJECT_ID, button)
+  }
+
+  /** Left click reloads, or aborts the in-flight navigation while loading. */
+  function reloadActiveTab(): void {
+    const tab = activeTab
+    if (!tab) return
+    void invoke(runtime?.loading ? 'browser:stop' : 'browser:reload', tab.id).catch(() => {})
+  }
+
+  /** Right click offers the soft/hard reload choice, exactly as the project
+   *  sidebar's reload button and the page area do. */
+  function onReloadContextMenu(event: MouseEvent): void {
+    event.preventDefault()
+    const tab = activeTab
+    if (!tab) return
+    const button = event.currentTarget
+    if (!(button instanceof HTMLElement)) return
+    openBrowserPageMenu(tab.id, button)
+  }
+
+  /** Open the native site-settings menu (clear cookies, site data, cache and
+   *  remembered permissions) under the padlock. */
+  function openSiteMenu(event: MouseEvent): void {
+    const tab = activeTab
+    if (!tab) return
+    const button = event.currentTarget
+    if (!(button instanceof HTMLElement)) return
+    const host = browserSiteHost(tab.url)
+    siteMenuOpen = true
+    void openBrowserSiteMenu(GLOBAL_BROWSER_PROJECT_ID, host, button).then((opened) => {
+      if (!opened) siteMenuOpen = false
+    })
   }
 
   /** The group a dragged tab is hovering, so its header can highlight as a drop
@@ -199,11 +239,8 @@
         aria-label={runtime?.loading ? 'Stop loading' : 'Reload page'}
         title={runtime?.loading ? 'Stop loading' : 'Reload page'}
         disabled={!activeTab}
-        onclick={() =>
-          activeTab &&
-          void invoke(runtime?.loading ? 'browser:stop' : 'browser:reload', activeTab.id).catch(
-            () => {}
-          )}
+        onclick={reloadActiveTab}
+        oncontextmenu={onReloadContextMenu}
       >
         {#if runtime?.loading}
           <X size={15} />
@@ -213,11 +250,24 @@
       </button>
       <div class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-elevated px-2">
         {#if activeTab?.url}
-          {#if secure}
-            <Lock size={12} class="shrink-0 text-success" />
-          {:else}
-            <LockOpen size={12} class="shrink-0 text-dimmed" />
-          {/if}
+          <button
+            type="button"
+            class={[
+              'flex h-5 w-5 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay',
+              secure ? 'text-success' : 'text-dimmed'
+            ]}
+            title={secure ? 'Site settings' : 'Connection is not secure'}
+            aria-label={secure ? 'Site settings' : 'Connection is not secure'}
+            aria-haspopup="menu"
+            aria-expanded={siteMenuOpen}
+            onclick={openSiteMenu}
+          >
+            {#if secure}
+              <Lock size={12} />
+            {:else}
+              <LockOpen size={12} />
+            {/if}
+          </button>
         {:else}
           <Globe size={12} class="shrink-0 text-dimmed" />
         {/if}

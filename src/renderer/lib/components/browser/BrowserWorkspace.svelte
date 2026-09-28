@@ -7,6 +7,7 @@
   import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
+  import { openBrowserPageMenuAt } from './browser-chrome-menus'
 
   interface Props {
     tab: GlobalBrowserTab
@@ -157,11 +158,18 @@
   })
 </script>
 
-<div class="relative min-h-0 min-w-0 flex-1 bg-surface" data-region="browser-workspace">
+<div class="relative min-h-0 min-w-0 flex-1 bg-app" data-region="browser-workspace">
   <div
     {@attach attachContentElement}
     {@attach pageVisible && !loadError && manageNativeView}
     class="absolute inset-0"
+    oncontextmenu={(event) => {
+      // The page itself renders in a native view above this host, so a click it
+      // does not take (the load-error card, a blank frame) lands here. Main
+      // builds the same page-level menu the page's own right-click does.
+      event.preventDefault()
+      openBrowserPageMenuAt(tabId, event.clientX, event.clientY)
+    }}
   >
     {#if loadError}
       <BrowserLoadErrorView

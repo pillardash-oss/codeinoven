@@ -24,6 +24,13 @@
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { browserInspector } from '$lib/stores/browser-inspector.svelte'
+  import {
+    browserSiteHost,
+    openBrowserDownloadsMenu,
+    openBrowserPageMenu,
+    openBrowserPageMenuAt,
+    openBrowserSiteMenu
+  } from './browser-chrome-menus'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import type {
@@ -138,13 +145,7 @@
   function openDownloadsMenu(event: MouseEvent): void {
     const button = event.currentTarget
     if (!(button instanceof HTMLElement)) return
-    const rect = button.getBoundingClientRect()
-    void invoke(
-      'browser:downloadsMenu',
-      tabProjectId,
-      Math.max(0, Math.round(rect.left)),
-      Math.max(0, Math.round(rect.bottom + 4))
-    ).catch(() => {})
+    openBrowserDownloadsMenu(tabProjectId, button)
   }
 
   /** Left click reloads, or aborts the in-flight navigation while loading. */
@@ -157,22 +158,10 @@
     event.preventDefault()
     const button = event.currentTarget
     if (!(button instanceof HTMLElement)) return
-    const rect = button.getBoundingClientRect()
-    void invoke(
-      'browser:pageMenu',
-      tabId,
-      Math.max(0, Math.round(rect.left)),
-      Math.max(0, Math.round(rect.bottom + 4))
-    ).catch(() => {})
+    openBrowserPageMenu(tabId, button)
   }
 
-  let siteHost = $derived.by(() => {
-    try {
-      return new URL(pageState.url).host
-    } catch {
-      return ''
-    }
-  })
+  let siteHost = $derived(browserSiteHost(pageState.url))
 
   /** Open the native site-settings menu anchored at the lock button. The main
    *  process builds an OS context menu (with native destructive-action
@@ -181,16 +170,9 @@
   function openSiteMenu(event: MouseEvent): void {
     const button = event.currentTarget
     if (!(button instanceof HTMLElement)) return
-    const rect = button.getBoundingClientRect()
     siteMenuOpen = true
-    void invoke(
-      'browser:siteMenu',
-      tabProjectId,
-      siteHost,
-      Math.max(0, Math.round(rect.left)),
-      Math.max(0, Math.round(rect.bottom + 4))
-    ).catch(() => {
-      siteMenuOpen = false
+    void openBrowserSiteMenu(tabProjectId, siteHost, button).then((opened) => {
+      if (!opened) siteMenuOpen = false
     })
   }
 
@@ -634,12 +616,7 @@
       // does not take (the load-error card, a blank frame) lands here. Main
       // builds the same page-level menu the page's own right-click does.
       event.preventDefault()
-      void invoke(
-        'browser:pageMenu',
-        tabId,
-        Math.max(0, Math.round(event.clientX)),
-        Math.max(0, Math.round(event.clientY))
-      ).catch(() => {})
+      openBrowserPageMenuAt(tabId, event.clientX, event.clientY)
     }}
   >
     {#if pageState.loadError}
