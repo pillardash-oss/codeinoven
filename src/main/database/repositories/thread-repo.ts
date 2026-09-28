@@ -1,6 +1,7 @@
 import type { Database } from '../database'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import {
+  GLOBAL_BROWSER_PROJECT_ID,
   sanitizeThreadSettings,
   type AgentRateLimitWindow,
   type AgentTokenUsage,
@@ -655,7 +656,11 @@ export class ThreadRepo {
   }
 
   listByProject(projectId: string, options: ThreadListOptions = {}): Thread[] {
-    const { where, params, limit } = buildListClauses(['project_id = ?'], [projectId], options)
+    const { where, params, limit } = buildListClauses(
+      ['project_id = ?', 'project_id != ?'],
+      [projectId, GLOBAL_BROWSER_PROJECT_ID],
+      options
+    )
     const rows = this.db.all<ThreadRow>(
       `SELECT * FROM threads ${where}
        ${buildOrderBy(options)}${limit}`,
@@ -670,7 +675,11 @@ export class ThreadRepo {
     projectId: string,
     options: ThreadListOptions = {}
   ): Promise<Thread[]> {
-    const { where, params, limit } = buildListClauses(['project_id = ?'], [projectId], options)
+    const { where, params, limit } = buildListClauses(
+      ['project_id = ?', 'project_id != ?'],
+      [projectId, GLOBAL_BROWSER_PROJECT_ID],
+      options
+    )
     const result = await this.db.queryViaWorker(
       `SELECT * FROM threads ${where}
        ${buildOrderBy(options)}${limit}`,
@@ -741,7 +750,11 @@ export class ThreadRepo {
   }
 
   listAll(options: ThreadListOptions = {}): Thread[] {
-    const { where, params, limit } = buildListClauses([], [], options)
+    const { where, params, limit } = buildListClauses(
+      ['project_id != ?'],
+      [GLOBAL_BROWSER_PROJECT_ID],
+      options
+    )
     const rows = this.db.all<ThreadRow>(
       `SELECT * FROM threads ${where}
        ${buildOrderBy(options)}${limit}`,
@@ -752,7 +765,11 @@ export class ThreadRepo {
 
   /** Load every thread on the database worker so unbounded hydration does not block Electron. */
   async listAllViaWorker(options: ThreadListOptions = {}, hydrateUsage = true): Promise<Thread[]> {
-    const { where, params, limit } = buildListClauses([], [], options)
+    const { where, params, limit } = buildListClauses(
+      ['project_id != ?'],
+      [GLOBAL_BROWSER_PROJECT_ID],
+      options
+    )
     const result = await this.db.queryViaWorker(
       `SELECT * FROM threads ${where}
        ${buildOrderBy(options)}${limit}`,
@@ -807,6 +824,7 @@ export class ThreadRepo {
          ) AS rn
          FROM threads
          WHERE archived = 0
+           AND project_id != ?
            AND (
              pinned = 1
              OR (
@@ -817,7 +835,7 @@ export class ThreadRepo {
            )
        ) WHERE rn <= ${quotaExpr} OR read = 0 OR drafting = 1 OR pinned = 1
        ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC`,
-      [],
+      [GLOBAL_BROWSER_PROJECT_ID],
       0
     )
     if (!result.ok) return this.listAll({ includeArchived: false })
@@ -1003,7 +1021,11 @@ export class ThreadRepo {
    * Message matches surface user messages and the agent's final output
    * from conversation-scoped records.
    */
-  search(query: string, options: ThreadSearchOptions = {}, useSearchMeta = false): ThreadSearchResult[] {
+  search(
+    query: string,
+    options: ThreadSearchOptions = {},
+    useSearchMeta = false
+  ): ThreadSearchResult[] {
     const raw = query.trim()
     if (!raw) return []
     const built = buildThreadSearchSql(raw, options, useSearchMeta)
@@ -1060,9 +1082,10 @@ export function buildThreadSearchSql(
   const title = {
     sql: `SELECT t.* FROM threads t
       WHERE (? IS NULL OR t.project_id = ?)
+        AND t.project_id != ?
         AND (t.title LIKE ? ESCAPE '\\' OR t.id = ?)
       ORDER BY t.last_activity DESC`,
-    params: [projectId, projectId, `%${escapeLike(trimmed)}%`, trimmed]
+    params: [projectId, projectId, GLOBAL_BROWSER_PROJECT_ID, `%${escapeLike(trimmed)}%`, trimmed]
   }
   const ftsQuery = toFtsQuery(trimmed)
   const messageLimit = threadSearchMessageLimit(limit)
@@ -1082,13 +1105,14 @@ export function buildThreadSearchSql(
             AND m.session_id IS NULL
             AND m.visibility = 'conversation'
             AND (? IS NULL OR st.project_id = ?)
+            AND st.project_id != ?
           ORDER BY bm25(agent_messages_fts), m.created_at DESC
           LIMIT ?
         ) meta
         JOIN agent_messages am ON am.rowid = meta.msg_rowid
         JOIN threads t ON t.id = meta.msg_thread_id
         ORDER BY meta.fts_rank, meta.created_at DESC`,
-          params: [ftsQuery, projectId, projectId, messageLimit]
+          params: [ftsQuery, projectId, projectId, GLOBAL_BROWSER_PROJECT_ID, messageLimit]
         }
       : {
           sql: `SELECT t.*, am.role AS match_role, substr(am.search_text, 1, 2000) AS snippet_text,
@@ -1100,8 +1124,9 @@ export function buildThreadSearchSql(
           AND am.session_id IS NULL
           AND am.visibility = 'conversation'
           AND (? IS NULL OR t.project_id = ?)
+          AND t.project_id != ?
         ORDER BY bm25(agent_messages_fts), am.created_at DESC`,
-          params: [ftsQuery, projectId, projectId]
+          params: [ftsQuery, projectId, projectId, GLOBAL_BROWSER_PROJECT_ID]
         }
     : null
   return { title, fts, limit }

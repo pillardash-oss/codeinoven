@@ -13,10 +13,11 @@
  * labels to null. It does name a reserved hidden project and one hidden parent
  * thread (see `ProjectManager.ensureGlobalBrowserSpace` and
  * `ThreadManager.ensureGlobalBrowserThread`), which is what lets a per-tab agent
- * conversation resolve its scope through the ordinary chat pipeline.
+ * conversation resolve its scope through the ordinary chat pipeline. Because
+ * that container is a scope anchor rather than a conversation, every thread
+ * listing and search excludes its threads.
  */
-export const GLOBAL_BROWSER_PROJECT_ID = 'browser-global'
-export const GLOBAL_BROWSER_THREAD_ID = 'browser-global'
+export { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '../types/project'
 
 /**
  * The shape of one global browser tab's id. A tab's note is keyed by this same

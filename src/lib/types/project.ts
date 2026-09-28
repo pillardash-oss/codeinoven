@@ -9,6 +9,21 @@ export const INBOX_PROJECT_ID = 'inbox'
 export const ASSISTANT_SPACE_ID = 'assistant'
 
 /**
+ * Fixed id of the hidden container that owns the global (personal) browser
+ * workspace.
+ *
+ * It is the one hidden container with no content-view family: its tabs are web
+ * pages rather than conversations, and its single thread exists only so a
+ * per-tab agent side chat can resolve its scope. Every thread listing and
+ * search therefore excludes this container's threads, so that scope-anchor row
+ * can never surface as a user thread.
+ */
+export const GLOBAL_BROWSER_PROJECT_ID = 'browser-global'
+
+/** Fixed id of the global browser's single scope-anchor thread. */
+export const GLOBAL_BROWSER_THREAD_ID = 'browser-global'
+
+/**
  * Fixed hidden containers that hold many independent conversations under one
  * project id. Every per-conversation surface keys off the open thread's
  * conversation scope inside them: a standalone chat owns its own file mount and
