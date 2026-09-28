@@ -107,6 +107,16 @@ class ProjectFilesWorkspace {
     return state
   }
 
+  /** Whether the file at `path` has unsaved edits in the project's file state.
+   *  A pure read that never creates state, so surfaces outside the files panel
+   *  (a sidebar tab strip) can ask safely. False when the project was never
+   *  prepared or the file has no editable session. */
+  isDirty(projectId: string, path: string | null): boolean {
+    if (!path) return false
+    const session = this.projects[projectId]?.sessions[path]
+    return session ? session.draft !== session.source.content : false
+  }
+
   setLastTurnOnly(projectId: string, value: boolean): void {
     this.explorer.setLastTurnOnly(projectId, value)
   }

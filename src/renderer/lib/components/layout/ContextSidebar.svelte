@@ -35,6 +35,7 @@
     browserTabIndicatorSlotClass
   } from '$lib/stores/browser-tab-status'
   import { faviconState } from '$lib/stores/favicons.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import BrowserTabIndicator from '$lib/components/browser/BrowserTabIndicator.svelte'
@@ -156,6 +157,20 @@
   let dropTargetId = $state<string | null>(null)
   let dropPosition = $state<'before' | 'after' | null>(null)
   let stripScroller = $state<HTMLDivElement>()
+
+  /** File tabs with unsaved edits, so the strip can flag the file that needs
+   *  save attention the same way the explorer tree already does. Reads the
+   *  files workspace per tab; nothing is flagged when state is not prepared. */
+  let dirtyFileTabIds = $derived(
+    new Set(
+      tabs
+        .filter((tab) => tab.kind === 'files' && tab.path !== null)
+        .filter((tab) =>
+          tab.kind === 'files' ? projectFilesWorkspace.isDirty(tab.projectId, tab.path) : false
+        )
+        .map((tab) => tab.id)
+    )
+  )
 
   // Keep the active tab visible in the strip: whenever the strip mounts or the
   // active tab changes (a link opened a new browser tab, a tab was selected,
@@ -374,6 +389,14 @@
                     {:else if agentRuns.isBusy(tab.projectId, tab.temporaryChatId)}
                       <StatusBadge stage="working" animated title="Working" />
                     {/if}
+                  {/if}
+                  {#if dirtyFileTabIds.has(tab.id)}
+                    <span
+                      class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                      role="status"
+                      aria-label="Unsaved changes"
+                      title="Unsaved changes"
+                    ></span>
                   {/if}
                 </button>
                 <button
