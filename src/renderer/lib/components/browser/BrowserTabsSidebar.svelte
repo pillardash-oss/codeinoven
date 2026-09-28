@@ -111,7 +111,10 @@
     }
     addressError = ''
     addressFocused = false
+    // With a tab on screen the address drives it. With none it is the way in, so
+    // it opens the first tab instead of doing nothing.
     if (activeTab) void invoke('browser:navigate', activeTab.id, resolution.url).catch(() => {})
+    else globalBrowser.createTab(resolution.url)
   }
 
   function startEditingAddress(input: EventTarget | null): void {
@@ -218,7 +221,6 @@
           aria-label="Address"
           aria-invalid={addressError !== ''}
           value={address}
-          disabled={!activeTab}
           onfocus={(event: FocusEvent) => startEditingAddress(event.currentTarget)}
           onblur={() => (addressFocused = false)}
           oninput={(event: Event) => {

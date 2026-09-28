@@ -53,8 +53,10 @@ export class GlobalBrowserState {
   activeTabId: string | null = $state(null)
   /** True once the browser view has been opened at least once this session. */
   opened = $state(false)
-  /** Whether the left sidebar (browser chrome and tab strip) is shown. Hiding
-   *  it is how the user gets an uninterrupted page. */
+  /** Whether the left sidebar (browser chrome and tab strip) is shown. It is the
+   *  browser's chrome as well as the tab strip, so it stays up with no tab open:
+   *  the address field there is how a first tab gets made. Hiding it is how the
+   *  user gets an uninterrupted page. */
   sidebarVisible = $state(true)
   /** Whether the right rail (per-tab notes) is shown. It is a tab-scoped
    *  context rail, so it is independent of the strip's own visibility. Closed by
@@ -117,12 +119,6 @@ export class GlobalBrowserState {
   get activeTab(): GlobalBrowserTab | null {
     if (!this.activeTabId) return null
     return this.tabs.find((tab) => tab.id === this.activeTabId) ?? null
-  }
-
-  /** Whether the left strip is on screen. It is the tab holder, so with no tab at
-   *  all there is nothing for it to hold and it stays closed. */
-  get sidebarShown(): boolean {
-    return this.sidebarVisible && this.tabs.length > 0
   }
 
   /** Whether the right rail is on screen. It is the notes rail of one tab, so it

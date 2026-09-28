@@ -135,7 +135,10 @@
 </script>
 
 <div class="flex h-full min-h-0" data-region="browser-view">
-  {#if globalBrowser.sidebarShown}
+  <!-- The sidebar is the browser's chrome (address, history, downloads) as well
+       as its tab strip, so it is present with no tab open too: that is where the
+       first address is typed. -->
+  {#if globalBrowser.sidebarVisible}
     <BrowserTabsSidebar onOpenAddress={() => globalBrowser.openAddressSpotlight()} />
   {/if}
 
