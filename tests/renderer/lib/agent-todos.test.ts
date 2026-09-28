@@ -38,14 +38,32 @@ describe('latestAgentTodo', () => {
     expect(activeAgentTodoIndex(items, false)).toBe(-1)
   })
 
-  it('prefers an explicit in-progress task over the pending fallback', () => {
+  it('prefers an explicit in-progress task over the pending fallback while the turn runs', () => {
     const items = [
       { id: 'first', label: 'Inspect the driver', status: 'pending' as const },
       { id: 'second', label: 'Apply the fix', status: 'in_progress' as const }
     ]
 
     expect(activeAgentTodoIndex(items, true)).toBe(1)
-    expect(activeAgentTodoIndex(items, false)).toBe(1)
+  })
+
+  it('stops presenting any task as active once the turn ends', () => {
+    // Real case: a completed thread whose harness published one list and
+    // abandoned it on its second step. The card read "Working on 2 of 6" with a
+    // spinner on that step forever, because an explicit in_progress item stayed
+    // active after the run stopped.
+    const items = [
+      { id: 'diagnose', label: 'Diagnose the failure', status: 'completed' as const },
+      { id: 'plan', label: 'Write the plan', status: 'in_progress' as const },
+      { id: 'implement', label: 'Apply the fix', status: 'pending' as const },
+      { id: 'verify', label: 'Run the checks', status: 'pending' as const },
+      { id: 'commit', label: 'Commit the fix', status: 'pending' as const },
+      { id: 'report', label: 'Report the outcome', status: 'pending' as const }
+    ]
+
+    const activeIndex = activeAgentTodoIndex(items, false)
+    expect(activeIndex).toBe(-1)
+    expect(agentTodoProgressLabel(items.length, 1, activeIndex)).toBe('1/6 done')
   })
 
   it('omits redundant completion copy while a task is active', () => {

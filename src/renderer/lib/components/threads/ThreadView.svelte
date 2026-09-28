@@ -1248,6 +1248,18 @@
       }
     }
   })
+  /**
+   * The task card's run is over: nothing is live for this thread, no other
+   * instance owns it, and the provider is not parked waiting on the user or on a
+   * retry. A task list still unfinished in this state was abandoned by the
+   * agent, and the card has to say so instead of presenting it as live work.
+   */
+  let todoRunStopped = $derived(
+    !busy &&
+      !foreignRunActive &&
+      visibleProviderStatus?.state !== 'waiting' &&
+      thread.status !== 'working-paused'
+  )
   /** True while the visible provider card is the proactive sign-in card. */
   const proactiveAuthVisible = $derived(
     proactiveAuthIssue !== null &&
@@ -12847,6 +12859,7 @@
                     items={visibleTodo.items}
                     signature={visibleTodo.signature}
                     {busy}
+                    stopped={todoRunStopped}
                     onClose={() => dismissedTodo.dismiss(thread.id, visibleTodo.signature)}
                   />
                 {/if}

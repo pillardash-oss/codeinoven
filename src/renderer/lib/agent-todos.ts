@@ -23,15 +23,21 @@ export interface AgentTodoSnapshot {
 /**
  * Resolve the task that should be presented as active.
  *
- * Harnesses do not always publish an `in_progress` transition before starting
- * work. While the turn is live, fall back to the first pending item so the task
- * card still reflects observed agent activity. An explicit provider status
- * always wins.
+ * Only a running turn has an active task. Harnesses do not always publish an
+ * `in_progress` transition before starting work, so while the turn is live fall
+ * back to the first pending item so the card still reflects observed agent
+ * activity.
+ *
+ * A stopped turn has no active task at all, not even one a harness published as
+ * `in_progress` and then abandoned: the card renders that index as live work (a
+ * spinner and "Working on N of M"), which left finished threads advertising a
+ * task the agent had already walked away from.
  */
 export function activeAgentTodoIndex(items: AgentTodoItem[], busy: boolean): number {
+  if (!busy) return -1
   const explicitIndex = items.findIndex((item) => item.status === 'in_progress')
   if (explicitIndex >= 0) return explicitIndex
-  return busy ? items.findIndex((item) => item.status === 'pending') : -1
+  return items.findIndex((item) => item.status === 'pending')
 }
 
 export function agentTodoProgressLabel(
