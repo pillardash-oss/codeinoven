@@ -128,6 +128,29 @@ class ContextSidebarState {
     return this.tabContexts.temporaryChatTab(tabId)
   }
 
+  /** Create a global browser tab's agent side chat in its reserved context
+   *  without focusing the workspace rail; the browser rail owns that panel. */
+  ensureBrowserAgentChat(
+    projectId: string,
+    threadId: string,
+    temporaryChatId: string,
+    settings: ThreadSettings,
+    initialContext: string
+  ): TemporaryChatContextTab {
+    return this.tabContexts.ensureBrowserAgentChat(
+      projectId,
+      threadId,
+      temporaryChatId,
+      settings,
+      initialContext
+    )
+  }
+
+  /** Drop a browser tab's agent chat when its browser tab closes. */
+  removeBrowserAgentChat(projectId: string, threadId: string, temporaryChatId: string): void {
+    this.tabContexts.removeTemporaryChat(projectId, threadId, temporaryChatId)
+  }
+
   get activeTabId(): string | null {
     return this.sidebarActiveTabId
   }

@@ -406,10 +406,12 @@ import {
   presentProviderError
 } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
+import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc/browser'
 import { GenerationClock, generatedTokens } from '../../lib/usage-rate'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
   ASSISTANT_CWD_DIR,
+  BROWSER_CWD_DIR,
   CHATS_CWD_DIR,
   PROJECT_DATA_DIRECTORY,
   assistantThreadWorkspaceDirectory,
@@ -9360,6 +9362,9 @@ export class ChatEngine {
       ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
       : createMessageId()
     this.markProjectActive(projectId)
+    // A global-browser tab has no project folder; make sure its reserved scope
+    // exists before the ownership and working-directory lookups below need it.
+    await this.ensureGlobalBrowserScope(projectId)
     if (!Array.isArray(attachments)) {
       throw new TypeError('Temporary chat attachments must be an array')
     }
@@ -10009,6 +10014,9 @@ export class ChatEngine {
     kind: 'completed' | 'error',
     errorDetail?: string
   ): Promise<void> {
+    // A global-browser agent sidebar is on screen beside the page it answers
+    // about, so it never needs an out-of-view notification.
+    if (projectId === GLOBAL_BROWSER_PROJECT_ID) return
     try {
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread) return
@@ -20684,8 +20692,26 @@ export class ChatEngine {
       await this.storage.ensureDirectory(ASSISTANT_CWD_DIR)
       projectPath = this.storage.resolve(ASSISTANT_CWD_DIR)
     }
+    // The global browser is hidden too, and its tabs are web pages rather than
+    // files: a per-tab agent session runs in a neutral app-storage directory so
+    // it never touches a real project folder.
+    if (!projectPath && project.hidden && project.id === GLOBAL_BROWSER_PROJECT_ID) {
+      await this.storage.ensureDirectory(BROWSER_CWD_DIR)
+      projectPath = this.storage.resolve(BROWSER_CWD_DIR)
+    }
     if (!projectPath) throw new Error(`Project has no working directory: ${projectId}`)
     return projectPath
+  }
+
+  /**
+   * Ensure the reserved global-browser scope (its hidden project and its single
+   * hidden parent thread) exists before a per-tab agent session resolves scope
+   * against it. Idempotent, so it is safe on every first send.
+   */
+  private async ensureGlobalBrowserScope(projectId: string): Promise<void> {
+    if (projectId !== GLOBAL_BROWSER_PROJECT_ID) return
+    await this.projectManager.ensureGlobalBrowserSpace()
+    await this.threadManager.ensureGlobalBrowserThread()
   }
 
   /**
@@ -21093,9 +21119,14 @@ export class ChatEngine {
     pending.timeoutMs = timeoutMs
     pending.request.expiresAt = pending.request.createdAt + timeoutMs
     this.schedulePendingQuestion(pending)
-    await this.threadManager.setStatus(session.projectId, session.threadId, 'awaiting_approval', {
-      read: false
-    })
+    // A temporary side chat (including a global browser's agent sidebar) owns no
+    // status of its own: its parent thread must not be marked as awaiting input
+    // for a question the side chat asked.
+    if (!session.ephemeral) {
+      await this.threadManager.setStatus(session.projectId, session.threadId, 'awaiting_approval', {
+        read: false
+      })
+    }
     this.broadcast(event)
   }
 
@@ -21564,9 +21595,13 @@ export class ChatEngine {
       const pending = this.pendingPermissions.get(event.requestId)
       if (pending) {
         this.pendingPermissions.delete(event.requestId)
-        void this.threadManager
-          .setStatus(pending.session.projectId, pending.session.threadId, pending.resumeStatus)
-          .catch((error) => Logger.error('Permission resolution status update failed:', error))
+        // An ephemeral side chat has no thread status to restore; only a real
+        // thread turn resumes through this path.
+        if (!pending.session.ephemeral) {
+          void this.threadManager
+            .setStatus(pending.session.projectId, pending.session.threadId, pending.resumeStatus)
+            .catch((error) => Logger.error('Permission resolution status update failed:', error))
+        }
       }
     }
     if (event.type === 'question.asked') {

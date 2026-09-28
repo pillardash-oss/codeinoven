@@ -8,9 +8,12 @@
  * shared by every global tab, isolated from every project's browser and from
  * the agent-controlled project sessions.
  *
- * The pair never names a real project or thread: main resolves the dialog and
- * permission labels to null for it, which is what keeps `BrowserService`
- * unchanged for a project-less tab.
+ * The pair names no user-visible project or thread, so `BrowserService` treats
+ * a global tab as project-less and main resolves its dialog and permission
+ * labels to null. It does name a reserved hidden project and one hidden parent
+ * thread (see `ProjectManager.ensureGlobalBrowserSpace` and
+ * `ThreadManager.ensureGlobalBrowserThread`), which is what lets a per-tab agent
+ * conversation resolve its scope through the ordinary chat pipeline.
  */
 export const GLOBAL_BROWSER_PROJECT_ID = 'browser-global'
 export const GLOBAL_BROWSER_THREAD_ID = 'browser-global'

@@ -25,6 +25,11 @@ export const CHATS_CWD_DIR = 'chats-cwd'
  *  real project folder either. */
 export const ASSISTANT_CWD_DIR = 'assistant-cwd'
 
+/** App-storage root directory used as the neutral working directory for the
+ *  global browser's per-tab agent sessions, so a conversation about a web page
+ *  never runs against a real project folder. */
+export const BROWSER_CWD_DIR = 'browser-cwd'
+
 /** Legacy inbox-chat generated-image root kept readable for older threads. */
 export const LEGACY_CHAT_ARTIFACTS_DIRECTORY = 'chat-artifacts'
 

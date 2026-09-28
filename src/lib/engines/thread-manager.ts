@@ -2,6 +2,7 @@ import { rm } from 'fs/promises'
 import { generateId } from '../utils'
 import { threadOwnedDirectories } from '../thread-storage-paths'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
+import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '../ipc/browser'
 import { broadcastThreadDraftUpdated } from '../../main/chat/thread-events'
 import { trackDraftWrite } from '../../main/chat/draft-commit-gate'
 import { validateEntityId } from '../../main/ipc/ipc-validation'
@@ -237,6 +238,28 @@ export class ThreadManager {
     const { thread, finalize } = this.prepareCreateThread(input)
     await finalize()
     return thread
+  }
+
+  /**
+   * Ensure the global browser's single hidden thread exists.
+   *
+   * A per-tab agent conversation is a temporary side chat, and every side chat
+   * resolves its project scope against a parent thread. The global browser owns
+   * one such parent for all of its tabs, so this reserved row is what lets a
+   * tab's agent sidebar start a harness session without a real project folder.
+   * It is hidden behind the hidden browser project, so it never appears in any
+   * thread list. Idempotent: the row is created once and then only read.
+   */
+  async ensureGlobalBrowserThread(): Promise<Thread> {
+    const existing = await this.getThread(GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID)
+    if (existing) return existing
+    return this.createThread({
+      id: GLOBAL_BROWSER_THREAD_ID,
+      projectId: GLOBAL_BROWSER_PROJECT_ID,
+      providerId: '',
+      title: 'Browser',
+      workingDirectory: ''
+    })
   }
 
   /**

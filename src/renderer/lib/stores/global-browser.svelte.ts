@@ -19,7 +19,8 @@ import type { BrowserOpenRequestContext, BrowserPageState } from '$shared/ipc-co
 import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '$shared/ipc-contract'
 import { appConfigState } from './app-config.svelte'
 import { reportError } from './app-errors.svelte'
-import { contextSidebarState } from './context-sidebar.svelte'
+import { contextSidebarState, type TemporaryChatContextTab } from './context-sidebar.svelte'
+import { defaultSettingsFor } from './thread-settings.svelte'
 import { threadNotesState } from './thread-notes.svelte'
 import {
   loadGlobalBrowserSnapshot,
@@ -58,11 +59,14 @@ export class GlobalBrowserState {
    *  the address field there is how a first tab gets made. Hiding it is how the
    *  user gets an uninterrupted page. */
   sidebarVisible = $state(true)
-  /** Whether the right rail (per-tab notes) is shown. It is a tab-scoped
-   *  context rail, so it is independent of the strip's own visibility. Closed by
-   *  default: it is the note of one tab, so it belongs to that tab's visit and
-   *  never opens on its own. */
+  /** Whether the right rail is shown. It is a tab-scoped context rail, so it is
+   *  independent of the strip's own visibility. Closed by default: both of its
+   *  panels belong to one tab's visit and never open on their own. */
   contextSidebarVisible = $state(false)
+  /** Which tool of the rail is on screen. The rail hosts the active tab's note
+   *  and its agent conversation; exactly one is shown at a time, the way the
+   *  context dock picks one tool in every other view. */
+  contextSidebarTool = $state<'note' | 'agent'>('note')
   /** Whether the address spotlight is up. It lives here rather than in a surface
    *  because it is summoned from anywhere in the browser view (Cmd/Ctrl+L) and
    *  from a freshly opened tab, which has no surface of its own yet. */
@@ -85,6 +89,11 @@ export class GlobalBrowserState {
   tabSearchFocusRequest = $state(0)
 
   private readonly runtime = new SvelteMap<string, GlobalBrowserRuntime>()
+  /** The agent side chat bound to each browser tab, keyed by browser tab id.
+   *  Session-scoped on purpose: a tab's conversation is an ephemeral side chat
+   *  and its backend session does not outlive the app, so a restart starts fresh
+   *  rather than pointing at a session that is gone. */
+  private readonly agentChatIds = new SvelteMap<string, string>()
   private sweepTimer: number | null = null
 
   constructor(snapshot: GlobalBrowserSnapshot = loadGlobalBrowserSnapshot()) {
@@ -180,12 +189,92 @@ export class GlobalBrowserState {
     this.sidebarVisible = !this.sidebarVisible
   }
 
+  /** The notes chord and the notes dock item both land here: it reveals the
+   *  note tool, or hides the rail when the note tool is already the one shown. */
   toggleContextSidebar(): void {
     // The rail belongs to a tab: with nothing open there is no note to show, so
     // the chord does nothing rather than opening an empty panel.
     if (!this.activeTab) return
-    this.contextSidebarVisible = !this.contextSidebarVisible
-    if (this.contextSidebarVisible) this.dockActiveTabNote()
+    if (this.contextSidebarTool === 'note' && this.contextSidebarVisible) {
+      this.contextSidebarVisible = false
+      return
+    }
+    this.showNoteSidebar()
+  }
+
+  /** Reveal the rail on the active tab's note. */
+  showNoteSidebar(): void {
+    if (!this.activeTab) return
+    this.contextSidebarTool = 'note'
+    this.contextSidebarVisible = true
+    this.dockActiveTabNote()
+  }
+
+  /** Reveal the rail on the active tab's agent conversation, creating it on the
+   *  first open. The chat is the app's own temporary side chat, so it binds to a
+   *  browser tab the way a side chat binds to a thread. */
+  showAgentSidebar(): void {
+    const tab = this.activeTab
+    if (!tab) return
+    this.ensureAgentChat(tab)
+    this.contextSidebarTool = 'agent'
+    this.contextSidebarVisible = true
+  }
+
+  toggleAgentSidebar(): void {
+    if (this.contextSidebarTool === 'agent' && this.contextSidebarVisible) {
+      this.closeAgentSidebar()
+      return
+    }
+    this.showAgentSidebar()
+  }
+
+  closeAgentSidebar(): void {
+    if (this.contextSidebarTool === 'agent') this.contextSidebarVisible = false
+  }
+
+  /** Whether the rail is currently showing the active tab's agent chat. */
+  get agentSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'agent'
+  }
+
+  /** The agent side chat bound to a browser tab, or null before its first open. */
+  agentChatTabFor(tabId: string): TemporaryChatContextTab | null {
+    const chatId = this.agentChatIds.get(tabId)
+    if (!chatId) return null
+    return contextSidebarState.temporaryChatTab(`temporary-chat:${chatId}`)
+  }
+
+  /** The harness a browser tab's agent chat runs on, for the strip row's second
+   *  line. Null while the tab has no agent chat. */
+  agentHarnessFor(tabId: string): string | null {
+    return this.agentChatTabFor(tabId)?.settings.harnessId ?? null
+  }
+
+  /**
+   * Create (or return) the side chat bound to one browser tab.
+   *
+   * A browser tab has no thread of its own, so the chat resolves its scope
+   * against the browser's reserved parent thread and carries the page identity
+   * as hidden context, which is what lets the agent answer about the page on
+   * screen. An expired chat is replaced rather than reused.
+   */
+  ensureAgentChat(tab: GlobalBrowserTab): TemporaryChatContextTab {
+    const existingId = this.agentChatIds.get(tab.id)
+    if (existingId) {
+      const existing = contextSidebarState.temporaryChatTab(`temporary-chat:${existingId}`)
+      if (existing && !existing.expired) return existing
+    }
+    const temporaryChatId = crypto.randomUUID()
+    const chat = contextSidebarState.ensureBrowserAgentChat(
+      GLOBAL_BROWSER_PROJECT_ID,
+      GLOBAL_BROWSER_THREAD_ID,
+      temporaryChatId,
+      defaultSettingsFor('chat'),
+      browserAgentPageContext(tab)
+    )
+    this.agentChatIds.set(tab.id, temporaryChatId)
+    return chat
   }
 
   /**
@@ -198,6 +287,11 @@ export class GlobalBrowserState {
   private setActiveTab(tabId: string | null): void {
     this.activeTabId = tabId
     this.dockActiveTabNote()
+    // The rail follows the active tab: while the agent tool is shown, the new
+    // tab's own conversation must be the one on screen.
+    if (this.contextSidebarTool === 'agent' && this.contextSidebarVisible && this.activeTab) {
+      this.ensureAgentChat(this.activeTab)
+    }
   }
 
   private dockActiveTabNote(): void {
@@ -358,6 +452,24 @@ export class GlobalBrowserState {
     if (threadNotesState.has(tabId)) {
       void invoke('note:delete', GLOBAL_BROWSER_PROJECT_ID, tabId).catch(() => {})
     }
+    // The tab's agent chat is the same kind of subject-scoped state: closing the
+    // tab closes its side chat and releases the backend session.
+    this.closeAgentChatFor(tabId)
+  }
+
+  /** Tear down one browser tab's agent chat: close its harness session and drop
+   *  its tab from the browser's reserved context. */
+  private closeAgentChatFor(tabId: string): void {
+    const chatId = this.agentChatIds.get(tabId)
+    if (!chatId) return
+    const chatTab = contextSidebarState.temporaryChatTab(`temporary-chat:${chatId}`)
+    if (chatTab) contextSidebarState.expireTemporaryChat(chatTab)
+    contextSidebarState.removeBrowserAgentChat(
+      GLOBAL_BROWSER_PROJECT_ID,
+      GLOBAL_BROWSER_THREAD_ID,
+      chatId
+    )
+    this.agentChatIds.delete(tabId)
   }
 
   moveToGroup(tabId: string, groupId: string | null): void {
@@ -578,3 +690,13 @@ export const GLOBAL_BROWSER_CONTEXT = {
   projectId: GLOBAL_BROWSER_PROJECT_ID,
   threadId: GLOBAL_BROWSER_THREAD_ID
 } as const
+
+/** The hidden page identity handed to a browser tab's agent as context, so a
+ *  question with no page named still knows which page it is about. */
+function browserAgentPageContext(tab: GlobalBrowserTab): string {
+  const lines = ['The user is asking about a web page they have open in the built-in browser.']
+  const title = tab.title.trim()
+  if (title) lines.push(`Page title: ${title}`)
+  if (tab.url) lines.push(`Page URL: ${tab.url}`)
+  return lines.join('\n')
+}

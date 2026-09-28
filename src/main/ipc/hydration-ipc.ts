@@ -35,6 +35,13 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   // usable frame behind it. Idempotent: it upserts only when the row is absent.
   void projectManager.ensureAssistantSpace()
   const threadManager = new ThreadManager(database)
+  // The global browser's per-tab agent sidebar is a side chat whose scope
+  // resolves against this reserved hidden project and its single thread, so
+  // both must exist before the browser view can discover capabilities for a
+  // tab. Idempotent, and the thread is created only after its project row.
+  void projectManager
+    .ensureGlobalBrowserSpace()
+    .then(() => threadManager.ensureGlobalBrowserThread())
   const noteRepo = new NoteRepo(database)
   const branchDeps: ThreadBranchDeps = {
     resolver: new RepositoryService(),

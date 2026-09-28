@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    Bot,
     FolderInput,
     FolderMinus,
     FolderPlus,
@@ -16,6 +17,7 @@
   import { ContextMenu } from 'bits-ui'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { harnessName } from '$lib/components/shared/model-picker-helpers'
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
   import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
 
@@ -44,6 +46,12 @@
 
   const runtime = $derived(globalBrowser.runtimeFor(tab.id))
   const active = $derived(globalBrowser.activeTabId === tab.id)
+  /** While this tab's agent sidebar is open the row grows a second line naming
+   *  the harness the conversation runs on, so the strip says which agent is
+   *  answering without opening the panel. */
+  const agentHarness = $derived(
+    globalBrowser.agentSidebarShown && active ? globalBrowser.agentHarnessFor(tab.id) : null
+  )
   const groups = $derived(globalBrowser.groups)
   const group = $derived(tab.groupId ? globalBrowser.groupById(tab.groupId) : null)
   /** True while a drag is over this row and would reorder here. */
@@ -131,12 +139,20 @@
             <Globe size={12} class="text-dimmed" />
           {/if}
         </span>
-        <span
-          class="min-w-0 flex-1 truncate text-xs {tab.hibernated
-            ? 'text-dimmed'
-            : 'text-foreground'} {active ? 'font-medium' : ''}"
-        >
-          {tab.title}
+        <span class="flex min-w-0 flex-1 flex-col">
+          <span
+            class="truncate text-xs {tab.hibernated ? 'text-dimmed' : 'text-foreground'} {active
+              ? 'font-medium'
+              : ''}"
+          >
+            {tab.title}
+          </span>
+          {#if agentHarness}
+            <span class="flex items-center gap-1 text-[0.625rem] leading-tight text-dimmed">
+              <Bot size={10} class="shrink-0" />
+              <span class="truncate">{harnessName(agentHarness)}</span>
+            </span>
+          {/if}
         </span>
       </button>
 
