@@ -11,6 +11,7 @@
   import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
   import { posixBasename } from '$shared/paths'
   import { showToastWarning } from '$lib/stores/app-errors.svelte'
+  import { ipcErrorMessage } from '$lib/ipc-errors'
   import { invoke } from '$lib/ipc.svelte'
   import { modelKey } from '$lib/model-keys'
   import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
@@ -30,6 +31,7 @@
   import ChatComposerPermissionPicker from './ChatComposerPermissionPicker.svelte'
   import ChatComposerPlusMenu from './ChatComposerPlusMenu.svelte'
   import { installComposerDropListeners, type ComposerDropRegion } from './chat-composer-drop'
+  import { readComposerDrop } from './chat-composer-drop-source'
   import { handleComposerKeydown, type ComposerKeydownContext } from './chat-composer-keydown'
   import { handleComposerPaste, type ComposerPasteContext } from './chat-composer-paste'
   import { createComposerSlashActions, isSlashRoutedAction } from './chat-composer-slash.svelte'
@@ -1510,21 +1512,54 @@
     focusComposerAtSavedCaret()
   }
 
-  async function handleDropFiles(dt: DataTransfer | null): Promise<void> {
+  /**
+   * Attach whatever a conversation drop carried.
+   *
+   * A drop out of a web page hands over a link and no file (Chromium keeps the
+   * files to itself across documents), so a drop that brought no files is read as
+   * the media links it named and those are fetched into attachment storage.
+   */
+  async function handleDropData(dt: DataTransfer | null): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
     if (selectedHarnessLacksAttachments) {
       attachmentBlockedNotice = true
       return
     }
     if (!dt) return
-    const files = dt.files
-    if (!files || files.length === 0) return
-    for (const file of Array.from(files)) {
+    const { files, urls } = readComposerDrop(dt)
+    if (files.length > 0) {
+      for (const file of files) {
+        try {
+          const filePath = await window.api.registerFileSelection(file, attachmentStorage)
+          if (filePath) await addFileAttachment(filePath, file)
+        } catch {
+          // Not a local file (e.g., an image dragged from a web page); its link
+          // reading is handled above.
+        }
+      }
+      return
+    }
+    if (urls.length === 0) {
+      // The drag looked attachable but named nothing this chat can take (an
+      // inline `data:` image, say). Say so instead of swallowing the gesture.
+      showToastWarning('Nothing in that drag can be attached.')
+      return
+    }
+    await attachRemoteMedia(urls)
+  }
+
+  /** Fetch the links one drop named and attach each file that comes back. */
+  async function attachRemoteMedia(urls: readonly string[]): Promise<void> {
+    if (!attachmentStorage) {
+      showToastWarning('This chat has nowhere to store an attachment.')
+      return
+    }
+    for (const url of urls) {
       try {
-        const filePath = await window.api.registerFileSelection(file, attachmentStorage)
-        if (filePath) await addFileAttachment(filePath, file)
-      } catch {
-        // Not a local file (e.g., an image dragged from a web page); skip it.
+        const filePath = await invoke('attachment:retainRemote', attachmentStorage, url)
+        await addFileAttachment(filePath)
+      } catch (error) {
+        showToastWarning(ipcErrorMessage(error, 'That link could not be attached.'))
       }
     }
   }
@@ -1544,7 +1579,7 @@
       setDragging: (dragging) => (isDragging = dragging),
       setDropRegion: (region) => (dropRegion = region),
       setAttachmentBlockedNotice: (blocked) => (attachmentBlockedNotice = blocked),
-      handleDropFiles
+      handleDropData
     })
   )
 
@@ -1627,7 +1662,7 @@
 <ChatComposerDropZone
   region={isDragging ? dropRegion : null}
   onAnchorChange={handleDropAnchorChange}
-  onDropFiles={handleDropFiles}
+  onDropData={handleDropData}
   onClearDropState={clearDropState}
 />
 
