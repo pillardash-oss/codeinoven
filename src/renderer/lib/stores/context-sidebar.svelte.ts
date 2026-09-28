@@ -22,6 +22,7 @@ import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } 
 export type {
   ActionsContextTab,
   BrowserContextTab,
+  BrowserDownloadsContextTab,
   CloudDeploymentContextTab,
   ContextSidebarTab,
   CoordinatorContextTab,

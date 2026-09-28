@@ -4,7 +4,6 @@
   import {
     ArrowLeft,
     ArrowRight,
-    Download,
     Globe,
     Lock,
     LockOpen,
@@ -23,17 +22,11 @@
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
-  import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import BrowserTabRow from './BrowserTabRow.svelte'
   import BrowserGroupModal from './BrowserGroupModal.svelte'
   import BrowserTabModal from './BrowserTabModal.svelte'
   import { browserGroupAccent, browserGroupIconUrl } from './browser-group-appearance'
-  import {
-    browserSiteHost,
-    openBrowserDownloadsMenu,
-    openBrowserPageMenu,
-    openBrowserSiteMenu
-  } from './browser-chrome-menus'
+  import { browserSiteHost, openBrowserPageMenu, openBrowserSiteMenu } from './browser-chrome-menus'
 
   interface Props {
     /** Summon the address spotlight, which is how Cmd/Ctrl+L also opens it. */
@@ -67,7 +60,6 @@
   const activeTab = $derived(globalBrowser.activeTab)
   const runtime = $derived(activeTab ? globalBrowser.runtimeFor(activeTab.id) : null)
   const secure = $derived(Boolean(activeTab?.url.startsWith('https:')))
-  const activeDownloadCount = $derived(browserDownloads.activeCount(GLOBAL_BROWSER_PROJECT_ID))
   /** Expanded state of the padlock while its native site menu is up. The menu
    *  itself is an OS popup above the page view, so this only tracks the button. */
   let siteMenuOpen = $state(false)
@@ -160,12 +152,6 @@
     input.select()
   }
 
-  function openDownloadsMenu(event: MouseEvent): void {
-    const button = event.currentTarget
-    if (!(button instanceof HTMLElement)) return
-    openBrowserDownloadsMenu(GLOBAL_BROWSER_PROJECT_ID, button)
-  }
-
   /** Left click reloads, or aborts the in-flight navigation while loading. */
   function reloadActiveTab(): void {
     const tab = activeTab
@@ -220,30 +206,38 @@
 </script>
 
 {#snippet chrome()}
-  <!-- Fixed chrome: the address, history and downloads stay at the top left
-       while the tab strip scrolls beneath them. -->
+  <!-- Fixed chrome: the address and history stay at the top left while the tab
+       strip scrolls beneath them. Downloads live in the right rail, so the
+       address bar keeps the room between the history buttons and the edge. -->
   <div class="shrink-0 border-b px-2 py-2">
     <div class="mb-1.5 flex items-center gap-1">
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-        aria-label="Go back in page history"
-        title="Go back"
-        disabled={!runtime?.canGoBack}
-        onclick={() => activeTab && void invoke('browser:goBack', activeTab.id).catch(() => {})}
-      >
-        <ArrowLeft size={15} />
-      </button>
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-        aria-label="Go forward in page history"
-        title="Go forward"
-        disabled={!runtime?.canGoForward}
-        onclick={() => activeTab && void invoke('browser:goForward', activeTab.id).catch(() => {})}
-      >
-        <ArrowRight size={15} />
-      </button>
+      <!-- Only the navigation a page can actually take is shown: back when there
+           is history behind, forward when there is history ahead, neither when
+           the tab has no page yet, so the address bar never pays for a control
+           that cannot do anything. -->
+      {#if runtime?.canGoBack}
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Go back in page history"
+          title="Go back"
+          onclick={() => activeTab && void invoke('browser:goBack', activeTab.id).catch(() => {})}
+        >
+          <ArrowLeft size={15} />
+        </button>
+      {/if}
+      {#if runtime?.canGoForward}
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Go forward in page history"
+          title="Go forward"
+          onclick={() =>
+            activeTab && void invoke('browser:goForward', activeTab.id).catch(() => {})}
+        >
+          <ArrowRight size={15} />
+        </button>
+      {/if}
       <button
         type="button"
         class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
@@ -302,22 +296,6 @@
           }}
         />
       </div>
-      <button
-        type="button"
-        class="relative flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label="Open browser downloads"
-        title="Downloads"
-        onclick={openDownloadsMenu}
-      >
-        <Download size={14} />
-        {#if activeDownloadCount > 0}
-          <span
-            class="absolute -top-0.5 -right-0.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-accent px-0.5 text-[0.5rem] font-semibold text-on-accent"
-          >
-            {activeDownloadCount}
-          </span>
-        {/if}
-      </button>
     </div>
   </div>
 

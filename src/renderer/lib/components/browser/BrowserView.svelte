@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import { cubicOut } from 'svelte/easing'
-  import { Bot, Globe, Plus, StickyNote } from '@lucide/svelte'
+  import { Bot, Download, Globe, Plus, StickyNote } from '@lucide/svelte'
   import { subscribe } from '$lib/ipc.svelte'
-  import type { BrowserPanelShortcutAction } from '$shared/ipc-contract'
+  import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { motionDuration, slideWidth } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
@@ -31,38 +32,52 @@
   let addressSpotlightOpen = $derived(globalBrowser.addressSpotlightOpen)
   const activeTab = $derived(globalBrowser.activeTab)
 
+  /** How many of the profile's downloads are still running, for the rail badge. */
+  const activeDownloadCount = $derived(browserDownloads.activeCount(GLOBAL_BROWSER_PROJECT_ID))
+
   /**
    * The browser view's tools for the context rail.
    *
    * The rail is constant, exactly as it is in every other view: the window's
-   * right edge always carries the context tools. This view has two, and both
-   * belong to the tab on screen: its note and its agent conversation. Each item
-   * leads to its own panel and has something to show only while a tab is open.
+   * right edge always carries the context tools. The note and the agent
+   * conversation belong to the tab on screen, so they only exist while a tab is
+   * open. Downloads belong to the shared profile, not a tab, so that tool is
+   * always present: it is what keeps the rail here with the strip empty.
    */
   const dockGroups = $derived.by((): ContextDockItem[][] => {
     const tab = activeTab
     const hasNote = tab ? threadNotesState.has(tab.id) : false
     const hasAgent = tab ? globalBrowser.agentChatTabFor(tab.id) !== null : false
-    return [
-      [
-        {
-          id: 'note',
-          label: !tab ? 'Notes' : hasNote ? 'Note available' : 'Add note',
-          icon: StickyNote,
-          active: globalBrowser.contextSidebarShown && !globalBrowser.agentSidebarShown,
-          tone: hasNote ? 'warning' : undefined,
-          onSelect: () => globalBrowser.toggleContextSidebar()
-        },
-        {
-          id: 'agent',
-          label: !tab ? 'Agent' : hasAgent ? 'Agent conversation' : 'Ask the agent',
-          icon: Bot,
-          active: globalBrowser.agentSidebarShown,
-          tone: 'info' as const,
-          onSelect: () => globalBrowser.toggleAgentSidebar()
-        }
-      ]
+    const tabTools: ContextDockItem[] = tab
+      ? [
+          {
+            id: 'note',
+            label: hasNote ? 'Note available' : 'Add note',
+            icon: StickyNote,
+            active: globalBrowser.noteSidebarShown,
+            tone: hasNote ? 'warning' : undefined,
+            onSelect: () => globalBrowser.toggleContextSidebar()
+          },
+          {
+            id: 'agent',
+            label: hasAgent ? 'Agent conversation' : 'Ask the agent',
+            icon: Bot,
+            active: globalBrowser.agentSidebarShown,
+            onSelect: () => globalBrowser.toggleAgentSidebar()
+          }
+        ]
+      : []
+    const profileTools: ContextDockItem[] = [
+      {
+        id: 'downloads',
+        label: activeDownloadCount > 0 ? `Downloads (${activeDownloadCount} active)` : 'Downloads',
+        icon: Download,
+        active: globalBrowser.downloadsSidebarShown,
+        countBadge: activeDownloadCount > 0 ? String(activeDownloadCount) : undefined,
+        onSelect: () => globalBrowser.toggleDownloadsSidebar()
+      }
     ]
+    return [tabTools, profileTools].filter((group) => group.length > 0)
   })
 
   /**
@@ -176,7 +191,7 @@
     </div>
   {/if}
 
-  {#if globalBrowser.contextSidebarShown}
+  {#if globalBrowser.contextSidebarShown || globalBrowser.notificationsShown}
     <!-- The rail is the same left-sidebar motion on the other edge: its width is
          what animates, so the page beside it is released frame by frame rather
          than jumping to its final frame and watching the panel slide across. -->

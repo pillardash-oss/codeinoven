@@ -128,6 +128,19 @@ export interface NotificationContextTab {
   title: string
 }
 
+/**
+ * The global browser's downloads panel.
+ *
+ * Downloads belong to the shared browser profile, not to a project or thread,
+ * so the tab carries no scope and is the one browser rail tool that can be
+ * docked with no tab on screen.
+ */
+export interface BrowserDownloadsContextTab {
+  id: string
+  kind: 'downloads'
+  title: string
+}
+
 export type MemorySection = 'active' | 'proposed'
 
 export interface MemoryContextTab {
@@ -233,6 +246,7 @@ export type ContextSidebarTab =
   | CloudDeploymentContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
+  | BrowserDownloadsContextTab
   | MemoryContextTab
   | CoordinatorContextTab
   | AssistantHowToContextTab

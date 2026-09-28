@@ -1,6 +1,10 @@
 <script lang="ts">
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import {
+    contextSidebarState,
+    type BrowserDownloadsContextTab,
+    type ContextSidebarTab
+  } from '$lib/stores/context-sidebar.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 
@@ -14,12 +18,15 @@
    * The browser view's right rail.
    *
    * It is the application's own right sidebar, the same `ContextSidebar` shell
-   * every workspace thread docks its panels into. Two tools belong to a browser
-   * tab, and neither re-implements a feature that already exists:
+   * every workspace thread docks its panels into, and it hosts the same tools
+   * the rest of the app uses, so none is re-implemented here:
    *
-   * - its note, which is the same note a thread has (only the subject differs),
-   * - its agent conversation, which is the app's own temporary side chat bound to
-   *   the tab instead of to a workspace thread.
+   * - notifications, the app's own panel the header bell opens,
+   * - the active tab's note, the same note a thread has (only the subject
+   *   differs),
+   * - the active tab's agent conversation, the app's own temporary side chat
+   *   bound to the tab instead of to a workspace thread,
+   * - the profile's downloads, which need no tab and keep the rail present.
    *
    * Exactly one is on screen at a time, chosen by the context dock rail, exactly
    * as the workspace picks one tool from its own dock.
@@ -34,30 +41,78 @@
     activeTab ? contextSidebarState.noteTabFor(GLOBAL_BROWSER_PROJECT_ID, activeTab.id) : null
   )
   const agentTab = $derived(activeTab ? globalBrowser.agentChatTabFor(activeTab.id) : null)
-
-  const tabs = $derived(
-    [noteTab, agentTab].filter((tab): tab is NonNullable<typeof tab> => tab !== null)
+  /**
+   * The downloads panel. It belongs to the shared browser profile, not to a tab,
+   * so it is a constant here and is the rail tool that survives with no tab.
+   */
+  const downloadsTab: BrowserDownloadsContextTab = {
+    id: 'browser-downloads',
+    kind: 'downloads',
+    title: 'Downloads'
+  }
+  /**
+   * The notifications panel is the app's own panel, opened by the header bell,
+   * so the rail reads the shared flag instead of keeping a second one. Reading
+   * it is what makes notification, note and agent the one right sidebar.
+   */
+  const notificationsTab = $derived(
+    contextSidebarState.sidebarActiveTab?.kind === 'notifications'
+      ? contextSidebarState.sidebarActiveTab
+      : null
   )
+
+  const tabs = $derived([
+    ...(noteTab ? [noteTab] : []),
+    ...(agentTab ? [agentTab] : []),
+    downloadsTab,
+    ...(notificationsTab ? [notificationsTab] : [])
+  ] satisfies ContextSidebarTab[])
   const activeTabId = $derived(
-    globalBrowser.agentSidebarShown ? (agentTab?.id ?? null) : (noteTab?.id ?? null)
+    notificationsTab?.id ??
+      (globalBrowser.agentSidebarShown
+        ? (agentTab?.id ?? null)
+        : globalBrowser.downloadsSidebarShown
+          ? downloadsTab.id
+          : (noteTab?.id ?? null))
   )
 
-  /** Switching tools from the strip keeps the rail on the chosen panel; closing
-   *  a panel is the tab's close button, so a browser tab's agent chat closes the
-   *  rail rather than dropping the conversation (closing the browser tab does). */
+  /** Switching tools keeps the rail on the chosen panel; closing a panel hides
+   *  it, so a browser tab's agent chat closes the rail rather than dropping the
+   *  conversation (closing the browser tab does). */
   function selectTool(tabId: string): void {
+    if (notificationsTab && tabId === notificationsTab.id) return
+    if (tabId === downloadsTab.id) {
+      globalBrowser.showDownloadsSidebar()
+      return
+    }
     if (agentTab && tabId === agentTab.id) globalBrowser.showAgentSidebar()
     else globalBrowser.showNoteSidebar()
   }
 
   function closeTab(tabId: string): void {
+    if (notificationsTab && tabId === notificationsTab.id) {
+      contextSidebarState.toggleNotifications()
+      return
+    }
+    if (tabId === downloadsTab.id) {
+      globalBrowser.closeDownloadsSidebar()
+      return
+    }
     if (agentTab && tabId === agentTab.id) globalBrowser.closeAgentSidebar()
     else onClose()
   }
 </script>
 
 {#snippet railContent()}
-  {#if globalBrowser.agentSidebarShown && agentTab}
+  {#if notificationsTab}
+    {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
+      <NotificationPanel />
+    {/await}
+  {:else if globalBrowser.downloadsSidebarShown}
+    {#await import('./BrowserDownloadsPanel.svelte') then { default: BrowserDownloadsPanel }}
+      <BrowserDownloadsPanel />
+    {/await}
+  {:else if globalBrowser.agentSidebarShown && agentTab}
     <!-- Keyed by chat id so switching browser tabs swaps the whole conversation,
          including the controller, which resolves its tab once at mount. -->
     {#key agentTab.id}

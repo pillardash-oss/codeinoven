@@ -118,6 +118,7 @@
     'cloud-deployment',
     'debugger',
     'notifications',
+    'downloads',
     'git',
     'actions',
     'thread-note',

@@ -1631,7 +1631,11 @@
     {/await}
   {/if}
 
-  {#if (activeView === 'scope' || activeView === 'browser' || isSettingsView(activeView)) && contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'}
+  <!-- Scope and Settings render notifications as a floating panel because they
+       have no shared right sidebar of their own. The Browser view does: its rail
+       hosts the notifications panel beside its note, agent and downloads tools,
+       so it must not also get this second, invented rail. -->
+  {#if (activeView === 'scope' || isSettingsView(activeView)) && contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'}
     <div
       class="fixed bottom-0 right-0 top-12 z-40 w-[480px] border-l border-border bg-surface shadow-xl"
       {@attach trackBrowserOcclusion}
