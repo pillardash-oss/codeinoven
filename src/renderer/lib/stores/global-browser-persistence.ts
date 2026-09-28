@@ -1,217 +1,134 @@
 /**
- * Persistence for the global browser workspace.
+ * Durable storage for the global browser's tab list.
  *
- * Only the tab list, its groups, and which tab was last active are stored. Live
- * page state (loading, audio, capture, favicon freshness) describes a running
- * page and is deliberately never written: after a restart the pages are gone
- * and every restored tab is hibernated until the user visits it.
+ * The list is stored by the main process (see `browser:loadTabs` /
+ * `browser:saveTabs`), because renderer `localStorage` is scoped to the renderer
+ * origin and turns into an empty, process-local storage whenever another app
+ * instance already holds the profile's storage database. A browser session on
+ * that storage read no tabs, saved none, and the next launch had nothing to
+ * restore, with no error raised anywhere.
  *
- * Every field is validated on read, because this is untrusted storage that any
- * renderer script could have written. A snapshot that fails validation is
- * dropped rather than partially trusted.
+ * This module is the one place that knows how a runtime tab maps onto the stored
+ * shape. It also owns the one-time migration of the old `localStorage` key, so a
+ * profile that predates the durable file keeps the tabs it already had.
  */
 
 import { APP_SLUG } from '$shared/brand'
-import { isBrowserTabId } from '$shared/ipc-contract'
 import {
-  MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH,
-  MAX_BROWSER_GROUP_DESCRIPTION_LENGTH,
-  MAX_BROWSER_GROUP_ICON_TYPE_LENGTH,
-  MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH,
-  MAX_BROWSER_GROUP_NAME_LENGTH,
-  MAX_BROWSER_TAB_TITLE_LENGTH,
-  MAX_GLOBAL_BROWSER_GROUPS,
-  MAX_GLOBAL_BROWSER_TABS,
-  type BrowserAppearance,
-  type GlobalBrowserGroup,
-  type GlobalBrowserTab
-} from './global-browser-types'
+  parseGlobalBrowserTabsSnapshot,
+  type GlobalBrowserTabsSnapshot,
+  type PersistedBrowserGroup,
+  type PersistedBrowserTab
+} from '$shared/browser/global-browser-tabs'
+import { invoke } from '$lib/ipc.svelte'
+import type { GlobalBrowserGroup, GlobalBrowserTab } from './global-browser-types'
 
-const GLOBAL_BROWSER_STORAGE_KEY = `${APP_SLUG}.global-browser.v1`
-const GROUP_ID_PATTERN = /^group:[a-zA-Z0-9:_-]{1,240}$/u
+/** The renderer `localStorage` key the list used to live in. It is read once, to
+ *  migrate a profile that predates the durable file, and then cleared. */
+const LEGACY_STORAGE_KEY = `${APP_SLUG}.global-browser.v1`
 
-const COLOR_PATTERN = /^#[0-9a-fA-F]{3,8}$/u
-
-export interface GlobalBrowserSnapshot {
-  tabs: GlobalBrowserTab[]
-  groups: GlobalBrowserGroup[]
-  activeTabId: string | null
-}
-
-/** A bounded optional string, so untrusted storage cannot smuggle a huge value
- *  past a field that only ever holds a short one. */
-function parseOptionalString(value: unknown, maxLength: number): string | null {
-  return typeof value === 'string' && value.length <= maxLength ? value : null
-}
-
-/** The appearance payload a tab or group persisted, validated field by field. */
-function parseAppearance(record: Record<string, unknown>): BrowserAppearance {
-  const color = record['color']
-  const imagePath = parseOptionalString(record['imagePath'], MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH)
+/** One tab in its stored shape: the live page state (favicon freshness, audio,
+ *  capture, loading) describes a running page and is deliberately never stored. */
+export function persistedTabFromRuntime(tab: GlobalBrowserTab): PersistedBrowserTab {
   return {
-    color: typeof color === 'string' && COLOR_PATTERN.test(color) ? color : null,
-    iconType: parseOptionalString(record['iconType'], MAX_BROWSER_GROUP_ICON_TYPE_LENGTH),
-    customSvg: parseOptionalString(record['customSvg'], MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH),
-    imagePath: imagePath && imagePath !== '' ? imagePath : null
+    id: tab.id,
+    title: tab.title,
+    customTitle: tab.customTitle,
+    url: tab.url,
+    groupId: tab.groupId,
+    createdAt: tab.createdAt,
+    lastUsedAt: tab.lastUsedAt,
+    hibernated: tab.hibernated,
+    pinned: tab.pinned,
+    pinnedAt: tab.pinnedAt,
+    color: tab.color,
+    iconType: tab.iconType,
+    customSvg: tab.customSvg,
+    imagePath: tab.imagePath
   }
 }
 
-function emptySnapshot(): GlobalBrowserSnapshot {
-  return { tabs: [], groups: [], activeTabId: null }
+export function persistedGroupFromRuntime(group: GlobalBrowserGroup): PersistedBrowserGroup {
+  return {
+    id: group.id,
+    name: group.name,
+    description: group.description,
+    pinned: group.pinned,
+    color: group.color,
+    iconType: group.iconType,
+    customSvg: group.customSvg,
+    imagePath: group.imagePath
+  }
 }
 
-function parseUrl(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  if (value === '') return ''
+/**
+ * One stored tab as the strip reads it.
+ *
+ * A restored tab is never live: no page survives a restart, so the tab starts
+ * hibernated and reloads from its stored address the moment the user visits it.
+ * The favicon is dropped with the page it belonged to.
+ */
+export function runtimeTabFromPersisted(tab: PersistedBrowserTab): GlobalBrowserTab {
+  return { ...tab, favicon: null, hibernated: true }
+}
+
+export function runtimeGroupFromPersisted(group: PersistedBrowserGroup): GlobalBrowserGroup {
+  return { ...group }
+}
+
+/** The stored shape of a whole strip. */
+export function globalBrowserTabsSnapshot(
+  tabs: readonly GlobalBrowserTab[],
+  groups: readonly GlobalBrowserGroup[],
+  activeTabId: string | null
+): GlobalBrowserTabsSnapshot {
+  return {
+    tabs: tabs.map(persistedTabFromRuntime),
+    groups: groups.map(persistedGroupFromRuntime),
+    activeTabId
+  }
+}
+
+/** The stored tab list, or null when this profile has never stored one. A failed
+ *  call is reported to the caller rather than swallowed, because a silent failure
+ *  here is what used to lose the list. */
+export async function loadStoredGlobalBrowserTabs(): Promise<GlobalBrowserTabsSnapshot | null> {
+  return await invoke('browser:loadTabs')
+}
+
+export async function saveStoredGlobalBrowserTabs(
+  snapshot: GlobalBrowserTabsSnapshot
+): Promise<void> {
+  await invoke('browser:saveTabs', snapshot)
+}
+
+/**
+ * The tab list left behind by a renderer that stored it in `localStorage`.
+ *
+ * Read once when the durable file does not exist yet, so an upgrade keeps the
+ * tabs the user had open. It is parsed with the same repair rules as the durable
+ * file, so an old payload cannot drop a tab on the way in.
+ */
+export function loadLegacyGlobalBrowserTabs(): GlobalBrowserTabsSnapshot | null {
+  if (typeof window === 'undefined') return null
   try {
-    const parsed = new URL(value)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
-    if (parsed.username !== '' || parsed.password !== '') return null
-    return parsed.href
+    const raw = window.localStorage.getItem(LEGACY_STORAGE_KEY)
+    if (!raw) return null
+    const snapshot = parseGlobalBrowserTabsSnapshot(JSON.parse(raw))
+    return snapshot.tabs.length > 0 || snapshot.groups.length > 0 ? snapshot : null
   } catch {
     return null
   }
 }
 
-function parseGroups(value: unknown): GlobalBrowserGroup[] {
-  if (!Array.isArray(value)) return []
-  const groups: GlobalBrowserGroup[] = []
-  for (const entry of value) {
-    if (groups.length >= MAX_GLOBAL_BROWSER_GROUPS) break
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
-    const record = entry as Record<string, unknown>
-    const id = record['id']
-    const name = record['name']
-    const description = record['description']
-    if (
-      typeof id !== 'string' ||
-      !GROUP_ID_PATTERN.test(id) ||
-      groups.some((candidate) => candidate.id === id) ||
-      typeof name !== 'string' ||
-      name.trim() === '' ||
-      name.length > MAX_BROWSER_GROUP_NAME_LENGTH ||
-      (description !== undefined &&
-        (typeof description !== 'string' ||
-          description.length > MAX_BROWSER_GROUP_DESCRIPTION_LENGTH))
-    ) {
-      continue
-    }
-    groups.push({
-      id,
-      name: name.trim(),
-      description: typeof description === 'string' ? description : '',
-      pinned: record['pinned'] === true,
-      ...parseAppearance(record)
-    })
-  }
-  return groups
-}
-
-function parseTabs(value: unknown, groups: readonly GlobalBrowserGroup[]): GlobalBrowserTab[] {
-  if (!Array.isArray(value)) return []
-  const groupIds = new Set(groups.map((group) => group.id))
-  const tabs: GlobalBrowserTab[] = []
-  for (const entry of value) {
-    if (tabs.length >= MAX_GLOBAL_BROWSER_TABS) break
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
-    const record = entry as Record<string, unknown>
-    const id = record['id']
-    const title = record['title']
-    const customTitle = record['customTitle']
-    const url = parseUrl(record['url'])
-    const groupId = record['groupId']
-    const createdAt = record['createdAt']
-    const lastUsedAt = record['lastUsedAt']
-    const hibernated = record['hibernated']
-    const pinnedAt = record['pinnedAt']
-    if (
-      typeof id !== 'string' ||
-      !isBrowserTabId(id) ||
-      tabs.some((candidate) => candidate.id === id) ||
-      typeof title !== 'string' ||
-      title.length > 300 ||
-      (customTitle !== undefined &&
-        customTitle !== null &&
-        (typeof customTitle !== 'string' || customTitle.length > MAX_BROWSER_TAB_TITLE_LENGTH)) ||
-      url === null ||
-      (groupId !== null && (typeof groupId !== 'string' || !groupIds.has(groupId))) ||
-      typeof createdAt !== 'number' ||
-      !Number.isSafeInteger(createdAt) ||
-      typeof lastUsedAt !== 'number' ||
-      !Number.isSafeInteger(lastUsedAt) ||
-      typeof hibernated !== 'boolean' ||
-      (pinnedAt !== undefined && pinnedAt !== null && typeof pinnedAt !== 'number')
-    ) {
-      continue
-    }
-    tabs.push({
-      id,
-      title,
-      customTitle: typeof customTitle === 'string' ? customTitle : null,
-      url,
-      favicon: null,
-      groupId,
-      createdAt,
-      lastUsedAt,
-      // A restored page is never live: the snapshot's own flag is validated but
-      // never trusted, because no page survives a restart.
-      hibernated: true,
-      pinned: record['pinned'] === true,
-      pinnedAt: typeof pinnedAt === 'number' ? pinnedAt : null,
-      ...parseAppearance(record)
-    })
-  }
-  return tabs
-}
-
-/** The persisted snapshot, or an empty one when nothing valid was stored. */
-export function loadGlobalBrowserSnapshot(): GlobalBrowserSnapshot {
-  if (typeof window === 'undefined') return emptySnapshot()
-  try {
-    const raw = window.localStorage.getItem(GLOBAL_BROWSER_STORAGE_KEY)
-    if (!raw) return emptySnapshot()
-    const parsed: unknown = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return emptySnapshot()
-    const record = parsed as Record<string, unknown>
-    const groups = parseGroups(record['groups'])
-    const tabs = parseTabs(record['tabs'], groups)
-    const activeId = record['activeTabId']
-    const activeTabId =
-      typeof activeId === 'string' && tabs.some((tab) => tab.id === activeId) ? activeId : null
-    return { tabs, groups, activeTabId }
-  } catch {
-    return emptySnapshot()
-  }
-}
-
-export function persistGlobalBrowserSnapshot(snapshot: GlobalBrowserSnapshot): void {
+/** Drop the migrated key, so a later launch reads the durable file and never the
+ *  stale copy it replaced. */
+export function clearLegacyGlobalBrowserTabs(): void {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(
-      GLOBAL_BROWSER_STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        groups: snapshot.groups,
-        tabs: snapshot.tabs.map((tab) => ({
-          id: tab.id,
-          title: tab.title,
-          customTitle: tab.customTitle,
-          url: tab.url,
-          groupId: tab.groupId,
-          createdAt: tab.createdAt,
-          lastUsedAt: tab.lastUsedAt,
-          hibernated: tab.hibernated,
-          pinned: tab.pinned,
-          pinnedAt: tab.pinnedAt,
-          color: tab.color,
-          iconType: tab.iconType,
-          customSvg: tab.customSvg,
-          imagePath: tab.imagePath
-        })),
-        activeTabId: snapshot.activeTabId
-      })
-    )
+    window.localStorage.removeItem(LEGACY_STORAGE_KEY)
   } catch {
-    // Browser restoration is best-effort; blocked storage must not break the view.
+    // A storage that refuses the removal is still read first next launch, where
+    // the durable file wins; losing this cleanup costs nothing.
   }
 }

@@ -9,6 +9,7 @@ import { Logger } from './system/logger'
 import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
 import { StorageEngine } from './storage/storage-engine'
+import { registerGlobalBrowserIpcHandlers } from './ipc/global-browser-ipc'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
 import { registerFilePreviewScheme } from './editor/file-preview-protocol'
 import { WindowStateService } from './system/window-state'
@@ -535,6 +536,10 @@ void app
     // its document evaluates. Register that bounded surface before navigation;
     // the feature graph remains dynamically imported after first paint.
     registerHydrationIpcHandlers(storage, database)
+    // The global browser's tab list is durable app state, not browser runtime:
+    // the renderer hydrates it while its document evaluates, so it is registered
+    // here with the other pre-navigation handlers.
+    registerGlobalBrowserIpcHandlers()
 
     // The trusted top-level renderer may capture microphone audio for local
     // dictation. Camera, subframes, foreign documents, and every unrelated

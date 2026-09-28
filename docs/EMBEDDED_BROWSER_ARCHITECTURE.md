@@ -33,6 +33,15 @@ material way, and the difference is deliberate.
   below). A project's browser and every page an agent drives keep the older behaviour,
   where an opened window is a tab, because those surfaces have no rail to show a popup
   in and an agent's pages must stay addressable.
+- **The global browser's tab list is durable app state, owned by main.** It lives in an
+  atomically written JSON file under the config root
+  (`state/global-browser-tabs.json`, written by
+  `src/main/browser/global-browser-tabs-store.ts`) and crosses the IPC contract as
+  `browser:loadTabs` / `browser:saveTabs`. It deliberately does **not** live in the
+  renderer's `localStorage`: that storage is scoped to the renderer origin and silently
+  degrades to an empty, process-local storage whenever another app instance already
+  holds the profile's storage database, so a second instance read no tabs, saved none,
+  and the next launch restored nothing without a single error being raised.
 
 Treat the rest of this document as the target-state design; the points above describe the
 shipped behavior.

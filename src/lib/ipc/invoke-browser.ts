@@ -16,8 +16,18 @@ import type {
 } from './browser'
 import type { Contract } from './contract-helpers'
 import type { BrowserSearchEngine } from '../browser-search-engines'
+import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
 
 export const invokeBrowserContract = {
+  /**
+   * The global browser's durable tab list, or null before it has ever been
+   * stored. It lives in the config directory rather than the renderer's
+   * `localStorage` because that storage is scoped to the renderer origin and is
+   * silently in-memory whenever another app instance holds the profile, which
+   * lost every open tab on the next launch.
+   */
+  'browser:loadTabs': {} as Contract<[], GlobalBrowserTabsSnapshot | null>,
+  'browser:saveTabs': {} as Contract<[snapshot: GlobalBrowserTabsSnapshot], void>,
   'browser:show': {} as Contract<
     [
       tabId: string,

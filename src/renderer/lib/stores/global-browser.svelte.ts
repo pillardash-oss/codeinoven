@@ -20,6 +20,7 @@ import type {
   BrowserPageState,
   BrowserPopupWindow
 } from '$shared/ipc-contract'
+import type { GlobalBrowserTabsSnapshot } from '$shared/browser/global-browser-tabs'
 import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '$shared/ipc-contract'
 import { appConfigState } from './app-config.svelte'
 import { reportError } from './app-errors.svelte'
@@ -30,9 +31,13 @@ import { defaultSettingsFor } from './thread-settings.svelte'
 import { threadNotesState } from './thread-notes.svelte'
 import { recentVisits } from './recent-visits.svelte'
 import {
-  loadGlobalBrowserSnapshot,
-  persistGlobalBrowserSnapshot,
-  type GlobalBrowserSnapshot
+  clearLegacyGlobalBrowserTabs,
+  globalBrowserTabsSnapshot,
+  loadLegacyGlobalBrowserTabs,
+  loadStoredGlobalBrowserTabs,
+  runtimeGroupFromPersisted,
+  runtimeTabFromPersisted,
+  saveStoredGlobalBrowserTabs
 } from './global-browser-persistence'
 import {
   IDLE_GLOBAL_BROWSER_RUNTIME,
@@ -55,6 +60,12 @@ import {
  *  the promise "a tab idle for the configured window hibernates", and it costs
  *  nothing between sweeps. */
 const HIBERNATION_SWEEP_INTERVAL_MS = 60_000
+
+/** How long a change waits before it is written, so a burst of tab edits (a
+ *  drag, a page reporting its title) becomes one write instead of many. Short
+ *  enough that a quit moments after a change loses nothing: the quit path flushes
+ *  the pending write outright. */
+const TAB_SAVE_COALESCE_MS = 250
 
 export class GlobalBrowserState {
   tabs: GlobalBrowserTab[] = $state([])
@@ -98,6 +109,9 @@ export class GlobalBrowserState {
    *  caret without the header reaching into another surface. */
   tabSearchFocusRequest = $state(0)
 
+  /** True once the stored tab list has been read. Nothing is written before then,
+   *  so a store that has not seen the stored list can never overwrite it. */
+  hydrated = $state(false)
   private readonly runtime = new SvelteMap<string, GlobalBrowserRuntime>()
   /** The agent side chat bound to each browser tab, keyed by browser tab id.
    *  Session-scoped on purpose: a tab's conversation is an ephemeral side chat
@@ -109,11 +123,14 @@ export class GlobalBrowserState {
    *  whose popup is gone is forgotten. */
   private readonly seenPopupWindowIds = new SvelteSet<string>()
   private sweepTimer: number | null = null
+  /** The coalesced write still waiting to leave, or null. */
+  private saveTimer: number | null = null
+  /** Whether this session changed the strip. A change that lands while the stored
+   *  list is still arriving belongs to the user, so it is kept and stored rather
+   *  than replaced by what was read. */
+  private mutatedSinceBoot = false
 
-  constructor(snapshot: GlobalBrowserSnapshot = loadGlobalBrowserSnapshot()) {
-    this.tabs = snapshot.tabs
-    this.groups = snapshot.groups
-    this.activeTabId = snapshot.activeTabId
+  constructor() {
     // One app-lifetime subscription keeps every tab's runtime state current,
     // including tabs with no surface mounted: a background tab that starts
     // playing audio must still light up its indicator in the strip.
@@ -128,19 +145,100 @@ export class GlobalBrowserState {
     // and the other direction of the same rule closes the panel when the last one
     // ends.
     subscribe('browser:popupWindows', (popups) => this.applyPopupWindows(popups))
+    // The app is quitting, so the coalesced write is the last chance the stored
+    // list has to carry what the user just did. The shutdown pipeline keeps the
+    // renderer alive for it, which is what makes this write land.
+    subscribe('window:beforeQuit', () => this.flushPendingSave())
     if (typeof window !== 'undefined') {
       this.sweepTimer = window.setInterval(
         () => this.sweepIdleTabs(),
         HIBERNATION_SWEEP_INTERVAL_MS
       )
     }
+    void this.hydrate()
   }
 
-  /** Release the sweep timer. The store lives for the renderer's lifetime, so
-   *  this exists for tests and a deliberate teardown rather than normal use. */
+  /** Release the sweep timer and the pending write. The store lives for the
+   *  renderer's lifetime, so this exists for tests and a deliberate teardown
+   *  rather than normal use. */
   dispose(): void {
     if (this.sweepTimer !== null) window.clearInterval(this.sweepTimer)
     this.sweepTimer = null
+    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer)
+    this.saveTimer = null
+  }
+
+  /**
+   * Read the stored tab list and put it on screen.
+   *
+   * The list is durable app state owned by the main process, so it arrives
+   * asynchronously and lands before the user can reach the strip: the store is
+   * built while the renderer document evaluates, and nothing is written until
+   * this completes, which is what stops an unread store from overwriting the
+   * stored tabs with an empty list.
+   *
+   * A profile that predates the durable file keeps the tabs it had: its old
+   * renderer storage is read once, adopted, and then stored, before that copy is
+   * cleared. A change made while the read was still in flight is the user's own,
+   * so what is on screen is merged with the stored tabs instead of being replaced
+   * by them.
+   */
+  private async hydrate(): Promise<void> {
+    let stored: GlobalBrowserTabsSnapshot | null = null
+    try {
+      stored = await loadStoredGlobalBrowserTabs()
+    } catch (error) {
+      reportError(error, 'The saved browser tabs could not be read.')
+    }
+    // A profile that predates the durable file still carries its list in the old
+    // renderer storage. It is read whenever the durable file has nothing to
+    // offer, so an upgrade keeps the tabs the user had even if another instance
+    // wrote an empty file first.
+    const legacy = !stored || stored.tabs.length === 0 ? loadLegacyGlobalBrowserTabs() : null
+    const restored = legacy ?? stored
+    if (restored) {
+      if (this.mutatedSinceBoot) {
+        this.mergeStoredSnapshot(restored)
+        this.persist()
+      } else {
+        this.adoptSnapshot(restored)
+      }
+    }
+    this.hydrated = true
+    try {
+      // Nothing to write when the durable file already holds the whole list.
+      if (!stored || legacy) await saveStoredGlobalBrowserTabs(this.snapshot())
+      if (legacy) clearLegacyGlobalBrowserTabs()
+    } catch (error) {
+      reportError(error, 'The browser tabs could not be saved.')
+    }
+  }
+
+  private adoptSnapshot(snapshot: GlobalBrowserTabsSnapshot): void {
+    this.tabs = snapshot.tabs.map(runtimeTabFromPersisted)
+    this.groups = snapshot.groups.map(runtimeGroupFromPersisted)
+    this.activeTabId = snapshot.activeTabId
+  }
+
+  /** Fold a stored list into the strip a change left on screen, skipping the tabs
+   *  and folds it already holds so nothing is duplicated. */
+  private mergeStoredSnapshot(snapshot: GlobalBrowserTabsSnapshot): void {
+    // Two bounded arrays rather than sets: the strip holds at most 100 tabs, and
+    // this runs once, at the only moment the two lists can coexist.
+    const knownIds = this.tabs.map((tab) => tab.id)
+    const knownUrls = this.tabs.map((tab) => tab.url).filter((url) => url !== '')
+    for (const persisted of snapshot.tabs) {
+      if (knownIds.includes(persisted.id)) continue
+      const tab = runtimeTabFromPersisted(persisted)
+      if (tab.url !== '' && knownUrls.includes(tab.url)) continue
+      knownIds.push(tab.id)
+      knownUrls.push(tab.url)
+      this.tabs = [...this.tabs, tab]
+    }
+    for (const persisted of snapshot.groups) {
+      if (this.groups.some((group) => group.id === persisted.id)) continue
+      this.groups = [...this.groups, runtimeGroupFromPersisted(persisted)]
+    }
   }
 
   /**
@@ -945,6 +1043,7 @@ export class GlobalBrowserState {
    */
   sweepIdleTabs(now: number = Date.now()): void {
     const windowMs = this.hibernationWindowMs
+    let changed = false
     for (const tab of this.tabs) {
       if (tab.id === this.activeTabId) continue
       if (tab.url === '') continue
@@ -953,10 +1052,13 @@ export class GlobalBrowserState {
       if (runtime.capturing) continue
       if (!isTabIdlePastWindow(tab, now, windowMs)) continue
       tab.hibernated = true
+      changed = true
       this.runtime.delete(tab.id)
       void invoke('browser:destroy', tab.id).catch(() => {})
     }
-    this.persist()
+    // A sweep that released nothing leaves the stored list untouched, so the
+    // minute-long clock never rewrites the file for its own sake.
+    if (changed) this.persist()
   }
 
   /** Close the oldest idle tabs when the strip is at its cap. A pinned tab is
@@ -977,12 +1079,42 @@ export class GlobalBrowserState {
     }
   }
 
+  /** The strip in its stored shape. */
+  private snapshot(): GlobalBrowserTabsSnapshot {
+    return globalBrowserTabsSnapshot(this.tabs, this.groups, this.activeTabId)
+  }
+
+  /**
+   * Queue a write of the current strip.
+   *
+   * Nothing is written before the stored list has been read, so a store that has
+   * never seen it cannot erase it. Changes coalesce into one write, and the quit
+   * path flushes whatever is still pending.
+   */
   private persist(): void {
-    persistGlobalBrowserSnapshot({
-      tabs: this.tabs,
-      groups: this.groups,
-      activeTabId: this.activeTabId
-    })
+    this.mutatedSinceBoot = true
+    if (!this.hydrated) return
+    if (this.saveTimer !== null) return
+    this.saveTimer = window.setTimeout(() => {
+      this.saveTimer = null
+      void this.saveStoredTabs()
+    }, TAB_SAVE_COALESCE_MS)
+  }
+
+  private async saveStoredTabs(): Promise<void> {
+    try {
+      await saveStoredGlobalBrowserTabs(this.snapshot())
+    } catch (error) {
+      reportError(error, 'The browser tabs could not be saved.')
+    }
+  }
+
+  /** Write the coalesced change now, for a quit that is about to end the process. */
+  private flushPendingSave(): void {
+    if (this.saveTimer === null) return
+    window.clearTimeout(this.saveTimer)
+    this.saveTimer = null
+    void this.saveStoredTabs()
   }
 }
 

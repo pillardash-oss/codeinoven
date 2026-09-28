@@ -9,6 +9,23 @@
  */
 
 import type { BrowserLoadError } from '$shared/ipc-contract'
+import type { BrowserAppearance } from '$shared/browser/global-browser-tabs'
+
+// The stored shape's bounds and its shared appearance vocabulary live beside the
+// stored record itself (`$shared/browser/global-browser-tabs`), because the main
+// process validates the same payload. They are re-exported here so every browser
+// surface keeps importing one module for the model's limits.
+export {
+  MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH,
+  MAX_BROWSER_GROUP_DESCRIPTION_LENGTH,
+  MAX_BROWSER_GROUP_ICON_TYPE_LENGTH,
+  MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH,
+  MAX_BROWSER_GROUP_NAME_LENGTH,
+  MAX_BROWSER_TAB_TITLE_LENGTH,
+  MAX_GLOBAL_BROWSER_GROUPS,
+  MAX_GLOBAL_BROWSER_TABS
+} from '$shared/browser/global-browser-tabs'
+export type { BrowserAppearance } from '$shared/browser/global-browser-tabs'
 
 /** Live runtime state of one global tab, keyed by tab id. */
 export interface GlobalBrowserRuntime {
@@ -33,23 +50,6 @@ export const IDLE_GLOBAL_BROWSER_RUNTIME: GlobalBrowserRuntime = Object.freeze({
   canGoBack: false,
   canGoForward: false
 })
-
-/**
- * The appearance vocabulary a browser tab and a browser group share, copied
- * from the project/routine model: a hex colour, a `PROJECT_SVG_ICONS` key, a
- * sanitized custom SVG, and a picked image file. One shape means one editor and
- * one icon resolver for every browser surface that carries an identity.
- */
-export interface BrowserAppearance {
-  /** A `PROJECT_COLORS` hex, or a custom hex, or null for no colour. */
-  color: string | null
-  /** A `PROJECT_SVG_ICONS` key, or null. */
-  iconType: string | null
-  /** A sanitized pasted SVG, or null. */
-  customSvg: string | null
-  /** Absolute path of a picked image file, read to a data URL for display. */
-  imagePath: string | null
-}
 
 export interface GlobalBrowserGroup extends BrowserAppearance {
   id: string
@@ -95,18 +95,6 @@ export interface GlobalBrowserTab extends BrowserAppearance {
   /** When the tab was pinned, so the pinned block keeps a stable order. */
   pinnedAt: number | null
 }
-
-/** Group names, tab titles and descriptions are bounded the way thread titles are. */
-export const MAX_BROWSER_GROUP_NAME_LENGTH = 60
-export const MAX_BROWSER_GROUP_DESCRIPTION_LENGTH = 240
-export const MAX_BROWSER_TAB_TITLE_LENGTH = 120
-export const MAX_GLOBAL_BROWSER_TABS = 100
-export const MAX_GLOBAL_BROWSER_GROUPS = 40
-/** Bounds for the appearance payload a group may persist. The SVG ceiling
- *  matches `sanitizeCustomSvg`, so a stored value can only be one it accepted. */
-export const MAX_BROWSER_GROUP_ICON_TYPE_LENGTH = 64
-export const MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH = 16_384
-export const MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH = 2_048
 
 /** Whether two load errors describe the same failure. Main sends a fresh object
  *  with every state report, so identity would report a change on every publish. */
