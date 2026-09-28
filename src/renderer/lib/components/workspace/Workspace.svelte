@@ -1822,7 +1822,7 @@
         workspaceState.selectedThread?.projectId === projectId &&
         workspaceState.selectedThread.id === threadId
       ) {
-        void workspaceState.refreshSourceProcessCount(projectId, threadId)
+        void workspaceState.refreshSourceProcessCount(projectId, threadId, { force: true })
       }
     })
   })

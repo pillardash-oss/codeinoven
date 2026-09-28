@@ -11,6 +11,16 @@ import { broadcastAgentProcessesChanged } from '../chat/thread-events'
 const execFileAsync = promisify(execFile)
 const PROCESS_EXIT_GRACE_MS = 1_500
 const PORT_SCAN_TIMEOUT_MS = 2_000
+/**
+ * Minimum gap between two process snapshots.
+ *
+ * One snapshot is two process spawns (`ps` for the table, `ps -E` for the
+ * ownership probe) plus parsing, and several surfaces ask for the same answer in
+ * the same instant: the open thread's badge, the sources panel, and the task
+ * manager. A scan starting within this window of the previous one reuses its
+ * result. Callers that must observe a change they just made force it.
+ */
+const SCAN_MIN_INTERVAL_MS = 1_500
 /** Maximum pids per batched `ps -E` ownership probe. */
 const OWNERSHIP_PROBE_CHUNK = 64
 /** Key under which app-wide roots (e.g. the shared opencode server) are tracked. */
@@ -183,6 +193,7 @@ export class AgentProcessService implements AgentProcessObserver {
   private readonly roots = new Map<string, Map<number, HarnessRoot>>()
   private readonly tracked = new Map<string, Map<number, TrackedProcess>>()
   private scanInFlight: Promise<void> | null = null
+  private lastScanAt = 0
   private journal: OwnedProcessJournal | null = null
   private lastSnapshot: ProcessSnapshotEntry[] = []
 
@@ -244,7 +255,7 @@ export class AgentProcessService implements AgentProcessObserver {
       throw new Error(`Process ${pid} is not owned by this thread`)
     }
     await this.killTree(pid, false)
-    await this.scan()
+    await this.scan({ force: true })
   }
 
   /**
@@ -255,7 +266,7 @@ export class AgentProcessService implements AgentProcessObserver {
   async killProcessGlobal(pid: number, force: boolean): Promise<void> {
     if (!this.ownsProcess(pid)) throw new Error(`Process ${pid} is not owned by this app`)
     await this.killTree(pid, force)
-    await this.scan()
+    await this.scan({ force: true })
   }
 
   /**
@@ -691,8 +702,10 @@ export class AgentProcessService implements AgentProcessObserver {
     return false
   }
 
-  private async scan(): Promise<void> {
+  private async scan(options: { force?: boolean } = {}): Promise<void> {
     if (this.scanInFlight) return this.scanInFlight
+    if (!options.force && Date.now() - this.lastScanAt < SCAN_MIN_INTERVAL_MS) return
+    this.lastScanAt = Date.now()
     const request = this.performScan()
     this.scanInFlight = request
     try {
