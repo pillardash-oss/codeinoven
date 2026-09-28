@@ -50,8 +50,8 @@
 
 <!-- A foldable tree node: one header row with the fold control, an optional
 icon, the label and its aggregates, then an indented child wrapper with a guide
-rule. Shared by the app root, every owner group, and the Services branch so the
-task manager tree has one node contract instead of three. -->
+rule. Shared by every top-level branch (the app-owned node and each owner node)
+so the task manager tree has one node contract instead of several. -->
 <div class="w-full {className}">
   <div class="flex items-center gap-3 px-5 py-2">
     <button
