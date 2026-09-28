@@ -16,6 +16,7 @@ import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
+import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { workRootsFromConfig } from '../../lib/design/work-roots'
 import { setWorkRoots } from '../design/work-roots-state'
@@ -356,6 +357,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // granted in this or an earlier run.
     await service.hydratePermissionMemory()
     service.register()
+    // The browser's native context menu is built here, not in the renderer, so it
+    // needs the address bar's search engine for its "Search <engine> for ..."
+    // item. The config is read once at boot; the renderer pushes later changes.
+    void storage
+      .getConfig()
+      .then((config) =>
+        service.setSearchEngine(
+          findBrowserSearchEngine(config.browserSearchEngine, config.browserCustomSearchEngines)
+        )
+      )
+      .catch(() => {})
     state.chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
       service.executeUtility(operation, input, browserContext)
     )

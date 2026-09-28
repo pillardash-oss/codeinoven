@@ -12,6 +12,7 @@ import type {
   BrowserViewBounds
 } from './browser'
 import type { Contract } from './contract-helpers'
+import type { BrowserSearchEngine } from '../browser-search-engines'
 
 export const invokeBrowserContract = {
   'browser:show': {} as Contract<
@@ -58,6 +59,13 @@ export const invokeBrowserContract = {
    * application menu can and holds no keymap of its own.
    */
   'browser:setShortcutBindings': {} as Contract<[bindings: BrowserShortcutBindings], void>,
+  /**
+   * Report the address bar's active search engine. Main builds the browser's
+   * native context menu and its "Search <engine> for ..." item, and holds no
+   * config of its own, so the resolved engine is pushed whenever the config
+   * loads or is patched. A failure is ignored until the handlers are live.
+   */
+  'browser:setSearchEngine': {} as Contract<[engine: BrowserSearchEngine], void>,
   /**
    * Report which tab's toolbar (address bar, buttons) holds DOM focus, or null
    * when none does. A key pressed in a native page view never reaches the

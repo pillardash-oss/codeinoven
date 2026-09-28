@@ -10,6 +10,7 @@ import type {
 } from '$shared/types'
 import { findBrowserSearchEngine, type BrowserSearchEngine } from '$shared/browser-search-engines'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
+import { publishBrowserSearchEngine } from '$lib/browser-search-context'
 
 /** Fallback used until the persisted config loads (mirrors App.svelte defaults). */
 const DEFAULT_MAX_DIFF_LINES = 100
@@ -111,6 +112,12 @@ export const appConfigState = {
     openAllLinksInCioBrowser = config.openAllLinksInCioBrowser
     browserSearchEngineId = config.browserSearchEngine
     browserCustomSearchEngines = config.browserCustomSearchEngines ?? []
+    // Main builds the browser's native context menu, so it needs the active
+    // engine to label and run "Search <engine> for ...". It holds no config of
+    // its own, so the resolved engine is pushed on every sync.
+    publishBrowserSearchEngine(
+      findBrowserSearchEngine(browserSearchEngineId, browserCustomSearchEngines)
+    )
     inAppNotificationSound = {
       ...DEFAULT_IN_APP_NOTIFICATION_SOUND,
       ...config.inAppNotificationSound

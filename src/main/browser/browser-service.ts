@@ -1,9 +1,9 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   Menu,
-  MenuItem,
   screen,
   session,
   webFrameMain,
@@ -19,6 +19,11 @@ import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Project, Thread } from '../../lib/types'
 import { isPreviewOriginUrl, originOf } from '../../lib/local-development-url'
+import {
+  BUILT_IN_BROWSER_SEARCH_ENGINES,
+  buildBrowserSearchUrl,
+  type BrowserSearchEngine
+} from '../../lib/browser-search-engines'
 import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../lib/image-payload'
 import type {
   BrowserCompositionPlayback,
@@ -46,6 +51,12 @@ import { BrowserCaptureObserver } from './browser-service/browser-capture'
 import { BrowserInspector } from './browser-service/browser-inspector'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
 import { dialogContextScript } from './browser-service/browser-dialog-context'
+import {
+  buildBrowserContextMenuItems,
+  buildBrowserPageMenuItems,
+  type BrowserContextMenuActions,
+  type BrowserContextMenuContext
+} from './browser-service/browser-context-menu'
 import { matchBrowserShortcut } from './browser-service/browser-shortcuts'
 import {
   permissionCheckKey,
@@ -91,6 +102,7 @@ import {
   validateAttention,
   validateBounds,
   validateBoundedHost,
+  validateBrowserSearchEngine,
   validateBrowserShortcutBindings,
   validateBrowserUrl,
   validateDownloadId,
@@ -240,6 +252,13 @@ export class BrowserService {
    *  WebContentsView floats above every DOM surface, so while this is set the
    *  active browser view stays detached and the DOM toast composites normally. */
   private toastVisible = false
+  /**
+   * The address bar's active search engine, reported by the renderer (which
+   * owns the config) so the native context menu can label and run its
+   * "Search <engine> for ..." item. Defaults to the shipped engine until the
+   * first report lands.
+   */
+  private contextMenuSearchEngine: BrowserSearchEngine = BUILT_IN_BROWSER_SEARCH_ENGINES[0]
   private consoleSequence = 0
 
   constructor(
@@ -442,6 +461,9 @@ export class BrowserService {
     ipcMain.handle('browser:setShortcutBindings', (_event, rawBindings) => {
       this.shortcutBindings = validateBrowserShortcutBindings(rawBindings)
     })
+    ipcMain.handle('browser:setSearchEngine', (_event, rawEngine) => {
+      this.contextMenuSearchEngine = validateBrowserSearchEngine(rawEngine)
+    })
     ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) =>
       this.toggleTabDevTools(this.requireTab(validateTabId(rawTabId)))
     )
@@ -621,7 +643,16 @@ export class BrowserService {
   setTabMarkRecogniser(recogniser: TabMarkRecogniser | null): void {
     this.tabMarkRecogniser = recogniser
   }
-
+  /**
+   * Set the search engine the context menu's web search uses.
+   *
+   * Called once with the boot config and again whenever the renderer reports a
+   * config change, because the browser's native context menu is built here and
+   * this process holds the config rather than the service.
+   */
+  setSearchEngine(engine: BrowserSearchEngine): void {
+    this.contextMenuSearchEngine = engine
+  }
   /**
    * Decide, from the origin a tab is showing, what the app knows about its folder.
    *
@@ -1494,6 +1525,12 @@ export class BrowserService {
       event.preventDefault()
       this.runBrowserShortcut(tabId, action)
     })
+    // The page itself never sees the application's DOM menus, so this is where
+    // the browser's own right-click menu is produced: link, image, media,
+    // selection, editing and page actions, decided from the point clicked.
+    view.webContents.on('context-menu', (_event, params) => {
+      this.showTabContextMenu(tabId, params)
+    })
     // Audio the page emits is a tab-level fact the strip renders, so the state
     // event follows it the same way it follows a title or favicon change.
     view.webContents.on('audio-state-changed', publish)
@@ -1663,20 +1700,7 @@ export class BrowserService {
     })
     view.webContents.setWindowOpenHandler(({ url }) => {
       try {
-        const safeUrl = validateBrowserUrl(url)
-        const popupTabId = `browser:${crypto.randomUUID()}`
-        const popupTab = this.ensureTab(popupTabId, tab.projectId, tab.threadId)
-        popupTab.initialNavigationStarted = true
-        // Park it like every other tab: a popup the user never goes on to view
-        // must still load and run.
-        this.parkTab(popupTabId, { reason: 'a popup opened in the background' })
-        this.load(popupTabId, safeUrl)
-        sendToRenderer(this.window.webContents, 'browser:openRequested', safeUrl, {
-          projectId: tab.projectId,
-          threadId: tab.threadId,
-          requestedTabId: popupTabId,
-          reveal: true
-        })
+        this.openNewTabFor(tab, validateBrowserUrl(url), 'a popup opened in the background')
       } catch (error) {
         Logger.error('Browser popup rejected unsafe URL:', error)
       }
@@ -1691,10 +1715,22 @@ export class BrowserService {
     return tab
   }
 
+  /**
+   * Whether a tab is showing a `view-source:` document.
+   *
+   * Chromium renders one as static text and never runs page scripts in it, and
+   * `executeJavaScript` against such a document never settles. The document
+   * shims that would otherwise be injected into it are therefore skipped, which
+   * keeps every injection point from parking on a promise that cannot resolve.
+   */
+  private isViewSourceDocument(contents: WebContents): boolean {
+    return contents.isDestroyed() || contents.getURL().startsWith('view-source:')
+  }
+
   /** Install the capture observer into a tab's main frame. Called again after
    *  every navigation, because an observer lives in one document's world. */
   private watchCaptureMainFrame(tabId: string, contents: WebContents): void {
-    if (contents.isDestroyed()) return
+    if (this.isViewSourceDocument(contents)) return
     this.capture.watch(tabId, contents.mainFrame)
   }
 
@@ -1974,7 +2010,7 @@ export class BrowserService {
     if (!label) return
     const script = dialogContextScript(label)
     const contents = tab.view.webContents
-    if (contents.isDestroyed()) return
+    if (this.isViewSourceDocument(contents)) return
     if (frame) {
       this.runDialogScript(frame, script)
       return
@@ -2031,38 +2067,190 @@ export class BrowserService {
     })
   }
 
-  /** Open the native page context menu. The OS popup composites above the
-   *  WebContentsView, so the page never has to detach for the menu. */
+  /** Open the page-level context menu anchored at a point (the toolbar's page
+   *  menu and the host's fallback for a click the native view did not take). The
+   *  right-click menu is this same page section plus the point-specific ones. */
   private showPageMenu(tabId: string, x: number, y: number): void {
     if (this.window.isDestroyed()) return
-    const contents = this.requireTab(tabId).view.webContents
-    const menu = new Menu()
-    menu.append(
-      new MenuItem({
-        label: 'Reload (keeps cache)',
-        click: () => {
-          if (!contents.isDestroyed()) contents.reload()
-        }
-      })
-    )
-    menu.append(
-      new MenuItem({
-        label: 'Hard reload (ignores cache)',
-        click: () => {
-          if (!contents.isDestroyed()) contents.reloadIgnoringCache()
-        }
-      })
+    const tab = this.requireTab(tabId)
+    const menu = Menu.buildFromTemplate(
+      buildBrowserPageMenuItems(this.contextMenuContext(tab), this.contextMenuActions(tab))
     )
     menu.popup({ window: this.window, x, y })
+  }
+
+  /**
+   * Open the full right-click menu for one point in a tab's page.
+   *
+   * The OS popup composites above the native view, so the page never detaches
+   * for the menu. The reported point is in the view's own coordinates, so it is
+   * translated into the window's content space the popup expects; when the
+   * tab's on-screen frame is not known the popup falls back to the pointer.
+   */
+  private showTabContextMenu(tabId: string, params: Electron.ContextMenuParams): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || this.window.isDestroyed() || tab.view.webContents.isDestroyed()) return
+    const menu = Menu.buildFromTemplate(
+      buildBrowserContextMenuItems(
+        params,
+        this.contextMenuContext(tab),
+        this.contextMenuActions(tab)
+      )
+    )
+    const frame = this.activeTabId === tabId ? this.activeTabBounds : null
+    if (frame) menu.popup({ window: this.window, x: frame.x + params.x, y: frame.y + params.y })
+    else menu.popup({ window: this.window })
+  }
+
+  /** Live facts the context menu needs about a tab. */
+  private contextMenuContext(tab: BrowserTab): BrowserContextMenuContext {
+    const contents = tab.view.webContents
+    return {
+      canGoBack: contents.navigationHistory.canGoBack(),
+      canGoForward: contents.navigationHistory.canGoForward(),
+      searchEngineName: this.contextMenuSearchEngine.name
+    }
+  }
+
+  /**
+   * The actions a tab's context menu can run.
+   *
+   * Every action re-checks that its tab is alive when it fires, because the menu
+   * can outlive the page it was opened over. A link or media URL the browser's
+   * navigation policy refuses is dropped with a log rather than opened.
+   */
+  private contextMenuActions(tab: BrowserTab): BrowserContextMenuActions {
+    const contents = tab.view.webContents
+    const live = (): WebContents | null =>
+      contents.isDestroyed() || this.window.isDestroyed() ? null : contents
+    const openInNewTab = (url: string): void => {
+      try {
+        this.openNewTabFor(tab, validateBrowserUrl(url), 'a context-menu link')
+      } catch (error: unknown) {
+        Logger.error('Browser context menu refused a link:', error)
+      }
+    }
+    const saveAs = (url: string): void => {
+      try {
+        live()?.downloadURL(validateBrowserUrl(url))
+      } catch (error: unknown) {
+        Logger.error('Browser context menu refused a download:', error)
+      }
+    }
+    return {
+      goBack: () => {
+        const current = live()
+        if (current?.navigationHistory.canGoBack()) current.navigationHistory.goBack()
+      },
+      goForward: () => {
+        const current = live()
+        if (current?.navigationHistory.canGoForward()) current.navigationHistory.goForward()
+      },
+      reload: () => live()?.reload(),
+      hardReload: () => live()?.reloadIgnoringCache(),
+      savePage: () => void this.saveTabPage(tab),
+      print: () => live()?.print({}),
+      viewSource: () => this.openViewSourceInNewTab(tab),
+      copyPageAddress: () => {
+        const current = live()
+        if (current) clipboard.writeText(current.getURL())
+      },
+      inspectElement: (x, y) => live()?.inspectElement(x, y),
+      selectAll: () => live()?.selectAll(),
+      openLinkInNewTab: openInNewTab,
+      saveLinkAs: saveAs,
+      openMediaInNewTab: openInNewTab,
+      saveMediaAs: saveAs,
+      copyImage: (x, y) => live()?.copyImageAt(x, y),
+      copyAddress: (url) => clipboard.writeText(url),
+      copyText: (text) => clipboard.writeText(text),
+      searchFor: (text) => this.searchSelectionInNewTab(tab, text),
+      undo: () => live()?.undo(),
+      redo: () => live()?.redo(),
+      cut: () => live()?.cut(),
+      copy: () => live()?.copy(),
+      paste: () => live()?.paste(),
+      pasteAndMatchStyle: () => live()?.pasteAndMatchStyle(),
+      deleteSelection: () => live()?.delete(),
+      replaceMisspelling: (word) => live()?.replaceMisspelling(word)
+    }
+  }
+
+  /**
+   * Create a tab in the same project and thread as `source`, load it, and ask
+   * the renderer to show it.
+   *
+   * Shared by the links and popups a page opens and by the context-menu actions
+   * that open an address in a new tab, so every new tab is parked, loaded and
+   * announced the same way.
+   */
+  private openNewTabFor(source: BrowserTab, url: string, reason: string): void {
+    const tabId = `browser:${crypto.randomUUID()}`
+    const tab = this.ensureTab(tabId, source.projectId, source.threadId)
+    tab.initialNavigationStarted = true
+    this.parkTab(tabId, { reason })
+    this.load(tabId, url)
+    sendToRenderer(this.window.webContents, 'browser:openRequested', url, {
+      projectId: source.projectId,
+      threadId: source.threadId,
+      requestedTabId: tabId,
+      reveal: true
+    })
+  }
+
+  /**
+   * Open the current document's source in a new tab.
+   *
+   * Chromium renders `view-source:` itself, but the browser's navigation
+   * validation accepts http and https only, so this is a main-initiated load the
+   * page's own navigation rules never see. The displayed address keeps the
+   * `view-source:` prefix, exactly as a normal browser shows it.
+   */
+  private openViewSourceInNewTab(tab: BrowserTab): void {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) return
+    const current = contents.getURL()
+    const inner = current.startsWith('view-source:')
+      ? current.slice('view-source:'.length)
+      : current
+    let target: string
+    try {
+      target = `view-source:${validateBrowserUrl(inner)}`
+    } catch {
+      return
+    }
+    const tabId = `browser:${crypto.randomUUID()}`
+    const sourceTab = this.ensureTab(tabId, tab.projectId, tab.threadId)
+    sourceTab.initialNavigationStarted = true
+    this.parkTab(tabId, { reason: 'the user opened a page source' })
+    this.navigateTo(tabId, target)
+    sendToRenderer(this.window.webContents, 'browser:openRequested', target, {
+      projectId: tab.projectId,
+      threadId: tab.threadId,
+      requestedTabId: tabId,
+      reveal: true
+    })
+  }
+
+  /** Run the context-menu web search in a new tab, using the reported engine. */
+  private searchSelectionInNewTab(tab: BrowserTab, query: string): void {
+    const url = buildBrowserSearchUrl(this.contextMenuSearchEngine, query)
+    if (!url) return
+    try {
+      this.openNewTabFor(tab, validateBrowserUrl(url), 'a context-menu web search')
+    } catch (error: unknown) {
+      Logger.error('Browser context menu could not run a search:', error)
+    }
   }
 
   /**
    * Settle the error state of the tab once a navigation has finished.
    *
    * A network failure and a crash are already final; an HTTP error status is
-   * only an error when the document it served is empty, so that one case is
-   * read from the page before it is published. Identity is re-checked after
-   * the read, because the user can navigate again while it is in flight.
+   * only this app's error to show when the page it served has nothing visible in
+   * it, so that one case is read from the page before it is published. Identity is
+   * re-checked after the read, because the user can navigate again while it is in
+   * flight.
    */
   private resolveLoadOutcome(tabId: string): void {
     const tab = this.tabs.get(tabId)
@@ -2113,7 +2301,9 @@ export class BrowserService {
    * "has content", so a real page is never masked by a probe that could not run.
    */
   private async documentHasNothingToShow(contents: WebContents): Promise<boolean> {
-    if (contents.isDestroyed()) return false
+    // A `view-source:` document never runs scripts, so the probe could not
+    // settle on it; it is treated as having content, which it plainly does.
+    if (this.isViewSourceDocument(contents)) return false
     try {
       const result: unknown = await contents.executeJavaScript(
         '(function () {' +

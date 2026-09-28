@@ -16,6 +16,12 @@ import type {
   BrowserViewBounds
 } from '../../../lib/ipc-contract'
 import { BROWSER_SHORTCUT_ACTIONS, isBrowserTabId } from '../../../lib/ipc-contract'
+import {
+  buildBrowserSearchUrl,
+  MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH,
+  MAX_BROWSER_SEARCH_URL_TEMPLATE_LENGTH,
+  type BrowserSearchEngine
+} from '../../../lib/browser-search-engines'
 import type { BrowserViewport } from './browser-types'
 
 export const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
@@ -25,6 +31,8 @@ export const MAX_TRACKED_DOWNLOADS = 50
 export const DOWNLOAD_EVENT_INTERVAL_MS = 150
 export const PERMISSION_TIMEOUT_MS = 60_000
 const PROJECT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,240}$/u
+/** Ceiling on a search engine id chosen in the settings page and reported here. */
+const MAX_SEARCH_ENGINE_ID_LENGTH = 128
 const PERMISSION_REQUEST_ID_PATTERN = /^[a-f0-9-]{36}$/u
 const DOWNLOAD_ID_PATTERN = /^[a-f0-9-]{36}$/u
 /** Character cap for the "<project> - <thread>" context line shown above
@@ -482,6 +490,48 @@ export function validateBrowserUrl(value: unknown): string {
     throw new TypeError('Browser URL must not contain credentials')
   }
   return parsed.href
+}
+
+/**
+ * Validate the search engine the renderer reports for the browser's native
+ * context menu.
+ *
+ * Main builds the "Search <engine> for ..." item and the URL it opens, and it
+ * holds no config of its own, so the resolved engine arrives over IPC. The
+ * template must be able to produce a navigable http(s) URL, which is the same
+ * contract the browser's own navigation validation enforces; anything else is
+ * refused rather than turned into a dead menu item.
+ */
+export function validateBrowserSearchEngine(value: unknown): BrowserSearchEngine {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new TypeError('Browser search engine must be an object')
+  }
+  const record = value as Record<string, unknown>
+  const id = record['id']
+  const name = record['name']
+  const template = record['searchUrlTemplate']
+  if (typeof id !== 'string' || id.length === 0 || id.length > MAX_SEARCH_ENGINE_ID_LENGTH) {
+    throw new TypeError('Browser search engine needs a bounded id')
+  }
+  if (
+    typeof name !== 'string' ||
+    name.trim().length === 0 ||
+    name.length > MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH
+  ) {
+    throw new TypeError('Browser search engine needs a bounded name')
+  }
+  if (
+    typeof template !== 'string' ||
+    template.length === 0 ||
+    template.length > MAX_BROWSER_SEARCH_URL_TEMPLATE_LENGTH
+  ) {
+    throw new TypeError('Browser search engine needs a bounded URL template')
+  }
+  const engine: BrowserSearchEngine = { id, name, searchUrlTemplate: template }
+  if (buildBrowserSearchUrl(engine, 'query') === null) {
+    throw new TypeError('Browser search engine template cannot produce an http or https URL')
+  }
+  return engine
 }
 
 function validatedViewportSide(value: unknown, label: string): number {

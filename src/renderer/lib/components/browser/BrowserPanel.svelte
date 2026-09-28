@@ -630,8 +630,9 @@
       ? undefined
       : `Browser content for ${pageState.title || address}`}
     oncontextmenu={(event) => {
-      // The page itself never sees DOM context menus (it is a native view),
-      // so the host offers the browser-level menu: soft and hard reload.
+      // The page itself renders in a native view above this host, so a click it
+      // does not take (the load-error card, a blank frame) lands here. Main
+      // builds the same page-level menu the page's own right-click does.
       event.preventDefault()
       void invoke(
         'browser:pageMenu',
