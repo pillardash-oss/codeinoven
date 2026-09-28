@@ -66,10 +66,9 @@
     contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'
   )
 
-  /** The assistant badge's colour is the assistant space's own accent colour,
+  /** The assistant dot's colour is the assistant space's own accent colour,
    *  carried on its notifications, so an assistant run never reads as a
-   *  project/chat badge. Like every other notification badge it is just a
-   *  colour: no icon. */
+   *  project/chat dot. Every bell dot is just a colour, no icon. */
   let assistantBadgeColor = $derived(notificationPanelState.assistantColor ?? 'var(--color-dimmed)')
 
   // ─── Thread actions (ellipsis dropdown) ──────────────────────────────────
@@ -346,18 +345,25 @@
     >
       <Bell size={16} />
       {#if notificationPanelState.totalCount > 0 || notificationPanelState.hasAssistant}
+        <!-- One dot per waiting kind, each in the app's own status colour, so a
+             glance at the bell says what is waiting: a project message, a chat
+             message, an assistant message, a spec, a request for attention, or
+             an error. -->
         <div class="absolute -top-0.5 -left-0.5 flex items-start gap-px">
           {#if notificationPanelState.hasCompleted}
-            <StatusBadge kind="completed" title="Completed notifications" />
+            <StatusBadge color="var(--color-success)" title="Project messages" />
+          {/if}
+          {#if notificationPanelState.hasChatCompleted}
+            <StatusBadge color="var(--color-chat-success)" title="Chat messages" />
           {/if}
           {#if notificationPanelState.hasAttention}
-            <StatusBadge kind="attention" title="Notifications needing attention" />
+            <StatusBadge color="var(--color-warning)" title="Notifications needing attention" />
           {/if}
           {#if notificationPanelState.hasSpec}
-            <StatusBadge kind="spec" title="Specifications ready for review" />
+            <StatusBadge color="var(--color-thread-spec)" title="Specifications ready for review" />
           {/if}
           {#if notificationPanelState.hasError}
-            <StatusBadge kind="error" title="Error notifications" />
+            <StatusBadge color="var(--color-danger)" title="Error notifications" />
           {/if}
           {#if notificationPanelState.hasAssistant}
             <StatusBadge color={assistantBadgeColor} title="Assistant notifications" />

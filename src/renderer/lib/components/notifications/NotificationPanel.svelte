@@ -264,19 +264,10 @@
     }
   }
 
-  function kindAccent(kind: InAppNotification['kind']): string {
-    switch (kind) {
-      case 'completed':
-        return 'border-l-success/40'
-      case 'chat-completed':
-        return 'border-l-chat-success/50'
-      case 'attention':
-        return 'border-l-warning/40'
-      case 'spec':
-        return 'border-l-thread-spec/40'
-      case 'error':
-        return 'border-l-danger/40'
-    }
+  /** The card's left border: the entry's canonical accent at a light wash, so
+   *  the border and the leading dot always agree on what the notification is. */
+  function accentBorder(n: InAppNotification): string {
+    return `color-mix(in srgb, ${notificationPanelState.accentColor(n)} 40%, transparent)`
   }
 
   function kindLabel(kind: InAppNotification['kind']): string {
@@ -346,9 +337,10 @@
 {#snippet notificationCard(n: InAppNotification)}
   {@const active = busyId === n.id}
   <div
-    class="group flex cursor-pointer items-start gap-2 border-l-2 bg-surface px-3 py-2.5 transition-colors hover:bg-elevated {kindAccent(
-      n.kind
-    )} {active ? 'opacity-60 pointer-events-none' : ''}"
+    class="group flex cursor-pointer items-start gap-2 border-l-2 bg-surface px-3 py-2.5 transition-colors hover:bg-elevated {active
+      ? 'opacity-60 pointer-events-none'
+      : ''}"
+    style="border-left-color: {accentBorder(n)}"
     role="button"
     tabindex="0"
     aria-label={`${kindLabel(n.kind)}: ${n.title}. Click to navigate to thread`}
@@ -365,7 +357,7 @@
     }}
   >
     <div class="flex w-2 shrink-0 pt-1">
-      <StatusBadge kind={n.kind} title={kindLabel(n.kind)} />
+      <StatusBadge color={notificationPanelState.accentColor(n)} title={kindLabel(n.kind)} />
     </div>
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-2">

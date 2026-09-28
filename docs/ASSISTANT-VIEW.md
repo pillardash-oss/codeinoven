@@ -261,25 +261,38 @@ The assistant is a surface with its own accent colour, the colour stored on the
 hidden assistant space project (the payload's `projectColor`, `#ec4899` by
 default). Every assistant notification surface uses that colour and **never an
 icon**, keeping the notification badge contract (just the colour of what it
-represents):
+represents).
 
-- the **header bell** shows one assistant badge: a plain colour dot in the
-  assistant accent colour, drawn whenever an assistant notice or a pending
-  missed run exists (`assistantColor` in
-  `src/renderer/lib/stores/notification-panel.svelte.ts`);
-- the **panel entry** carries the same accent dot beside the `Assistant` name,
-  exactly like a project entry's project-colour dot, with the run's status
-  colour on the card's left border and leading badge;
-- the **toast** for a completed run brands itself with the accent colour (via
-  `--status`) instead of the generic success green, mirroring how a chat
-  response toast uses its own colour.
+The header bell draws one plain colour dot per waiting kind, each in the exact
+status colour the app uses for the same meaning everywhere else
+(`NOTIFICATION_KIND_COLORS` in
+`src/renderer/lib/stores/notification-panel.svelte.ts`), so a glance at the bell
+says what is waiting without opening the panel:
+
+- a **project message** (a completed project thread), the success green its
+  entry carries;
+- a **chat message** (a completed chat turn), the chat teal;
+- an **assistant message** (a completed run, or a pending missed run), the
+  assistant accent colour (`assistantColor`), the assistant's own identity
+  across the app;
+- a **spec ready**, the spec purple;
+- a **request for attention**, the warning amber;
+- an **error**, the danger red. A failed run reads as an error even inside the
+  assistant space, so a failure is never hidden behind the assistant colour.
+
+The **panel entry** wears the same colour on its leading dot and its card's left
+border (`accentColor`, shared by the bell and the panel). An assistant entry
+therefore reads as assistant, a chat entry as chat, and a project entry as its
+kind, exactly like the project-colour dot beside a project entry's name.
 
 The renderer learns the accent colour two ways: each notification payload
 carries it, and `assistantRoutines.spaceColor`
 (`src/renderer/lib/stores/assistant-routines.svelte.ts`) holds it from
 `routine:ensureSpace`, so the bell can badge a missed run before any notice has
 arrived. The renderer state is fed by the `routine:changed` and
-`assistant:missedRunsChanged` events.
+`assistant:missedRunsChanged` events. The **toast** for a completed run brands
+itself with the same accent colour (via `--status`) instead of the generic
+success green, mirroring how a chat response toast uses its own colour.
 
 ## Assistant sidebar
 
