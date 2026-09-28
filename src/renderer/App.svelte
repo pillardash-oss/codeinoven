@@ -1339,23 +1339,32 @@
 
   navigationHistoryState.init(rendererRecovery.activeView, rendererRecovery.selectedThread)
 
-  /**
-   * Timestamp of the last mouse side-button navigation. Windows/Linux deliver
-   * a side press both as an app command (forwarded over IPC) and   through
-   * Chromium   as a renderer mouse event; macOS only delivers the raw event.
-   * A short dedupe window keeps one physical press from navigating twice.
-   */
-  let lastMouseHistoryNavAt = 0
+  /** Windows/Linux may report both an app command and a renderer mouse event.
+   *  macOS can report a raw mouse event or a native swipe. Collapse duplicate
+   *  same-direction reports from one physical press. */
+  let lastMouseHistoryNavigation: { direction: 'back' | 'forward'; at: number } | null = null
 
-  /** Mouse back/forward buttons (button 3 = back, 4 = forward)   macOS path. */
+  /** Route a mouse history button to the focused browser page first, then the
+   *  app's location history when focus is elsewhere. */
+  async function handleMouseHistoryNavigation(direction: 'back' | 'forward'): Promise<void> {
+    const now = Date.now()
+    const previous = lastMouseHistoryNavigation
+    if (previous && previous.direction === direction && now - previous.at < 150) return
+    lastMouseHistoryNavigation = { direction, at: now }
+
+    const handledByBrowser = await invoke('browser:mouseHistoryNavigation', direction).catch(
+      () => false
+    )
+    if (handledByBrowser) return
+    if (direction === 'back') void goBack()
+    else void goForward()
+  }
+
+  /** Mouse back/forward buttons (button 3 = back, 4 = forward). */
   function onMouseHistoryButton(e: MouseEvent): void {
     if (e.button !== 3 && e.button !== 4) return
-    const now = Date.now()
-    if (now - lastMouseHistoryNavAt < 150) return
-    lastMouseHistoryNavAt = now
     e.preventDefault()
-    if (e.button === 3) void goBack()
-    else void goForward()
+    void handleMouseHistoryNavigation(e.button === 3 ? 'back' : 'forward')
   }
 
   onMount(() => {
@@ -1381,8 +1390,8 @@
       settleCloseConfirmationThread,
       handleCloseShortcut,
       handleNewTerminalShortcut,
-      goBack,
-      goForward,
+      goBack: () => handleMouseHistoryNavigation('back'),
+      goForward: () => handleMouseHistoryNavigation('forward'),
       handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps)
     })
     const unsubscribeShutdown = installShutdownSubscription()

@@ -70,6 +70,8 @@ export const invokeBrowserContract = {
   >,
   'browser:goBack': {} as Contract<[tabId: string], void>,
   'browser:goForward': {} as Contract<[tabId: string], void>,
+  /** Route a mouse history button to the focused browser page when one owns focus. */
+  'browser:mouseHistoryNavigation': {} as Contract<[direction: 'back' | 'forward'], boolean>,
   'browser:reload': {} as Contract<[tabId: string], void>,
   /**
    * Run one playback action on a composition tab and answer with the state it

@@ -125,10 +125,11 @@ export const IPC_EVENT_CONTRACT = {
   /**
    * Emitted when the user presses the mouse's back side button. Windows and
    * Linux surface it as the `browser-backward` app command in the main process;
-   * the main process forwards it here so the renderer can walk its own
-   * in-app navigation history (the window has no native browser history).
-   * On macOS the renderer instead sees a raw `mousedown`/`auxclick` with
-   * button 3: handled directly in App.svelte.
+   * the main process forwards it here so the renderer can route it to the
+   * focused browser page's native history, or the app's history when the
+   * browser does not own focus.
+   * On macOS the renderer may see a raw `mousedown`/`auxclick` with button 3;
+   * App.svelte sends it through the same focus-aware routing.
    */
   'window:historyBack': [] as [],
   /** Emitted when the user presses the mouse's forward side button. */

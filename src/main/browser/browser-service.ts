@@ -551,6 +551,12 @@ export class BrowserService {
         tab.view.webContents.navigationHistory.goForward()
       }
     })
+    ipcMain.handle('browser:mouseHistoryNavigation', (_event, rawDirection) => {
+      if (rawDirection !== 'back' && rawDirection !== 'forward') {
+        throw new TypeError('Browser mouse history direction must be back or forward')
+      }
+      return this.navigateFocusedHistory(rawDirection)
+    })
     ipcMain.handle('browser:reload', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.reload()
     })
@@ -1639,6 +1645,25 @@ export class BrowserService {
     if (!action) return false
     event.preventDefault()
     this.runBrowserShortcut(tabId, action)
+    return true
+  }
+
+  /** Route a mouse history button to the browser only when its active page or
+   *  toolbar owns focus. The caller falls back to app navigation when this
+   *  returns false. A focused browser consumes the input even at a history end. */
+  private navigateFocusedHistory(direction: 'back' | 'forward'): boolean {
+    const tabId = this.activeTabId
+    if (!tabId) return false
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return false
+
+    const isFocusedToolbar = tabId === this.focusedChromeTabId
+    const isFocusedPage = tab.view.webContents.isFocused()
+    if (!isFocusedToolbar && !isFocusedPage) return false
+
+    const history = tab.view.webContents.navigationHistory
+    if (direction === 'back' && history.canGoBack()) history.goBack()
+    if (direction === 'forward' && history.canGoForward()) history.goForward()
     return true
   }
 
