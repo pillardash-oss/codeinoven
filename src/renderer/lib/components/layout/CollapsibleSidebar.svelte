@@ -4,7 +4,9 @@
   import type { Snippet } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
-  import { motionDuration } from '$lib/motion'
+  import { motionDuration, slideWidth } from '$lib/motion'
+  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
+  import SidebarResizeHandle from '$lib/components/layout/SidebarResizeHandle.svelte'
 
   interface Props {
     /** Sidebar header title, e.g. "Projects" or "Chats". */
@@ -22,6 +24,23 @@
     titleSnippet?: Snippet
     /** Hide the generic title/action row when the child supplies contextual navigation. */
     hideHeader?: boolean
+    /**
+     * Content pinned above the scroller, for a sidebar whose own chrome must
+     * stay in view while its body scrolls (the browser's address and history).
+     * Rendered between the header and the scrollable body in both docked and
+     * floating states.
+     */
+    chrome?: Snippet
+    /** Accessible name for the sidebar element. */
+    label?: string
+    /** `data-region` value, which is how probes and tests find this sidebar. */
+    region?: string
+    /**
+     * Whether the onboarding tour's anchor points at this sidebar. Only the
+     * workspace sidebar is the anchor, so every other sidebar opts out instead
+     * of publishing a second element for the same selector.
+     */
+    onboardingAnchor?: boolean
     /** Full-width footer slot at the bottom of the sidebar (e.g. settings button). */
     footer?: Snippet
     /** Binds the sidebar's scrollable content element so the owner can keep
@@ -50,6 +69,10 @@
     titlePrefix,
     titleSnippet,
     hideHeader = false,
+    chrome = undefined,
+    label = undefined,
+    region = undefined,
+    onboardingAnchor = true,
     footer,
     scroller = $bindable(null),
     fileDrop = undefined,
@@ -67,24 +90,6 @@
     return () => {
       if (scroller === element) scroller = null
     }
-  }
-
-  function startResize(e: PointerEvent): void {
-    e.preventDefault()
-    resizing = true
-    const startX = e.clientX
-    const startWidth = sidebarState.width
-    const onMove = (ev: PointerEvent): void => {
-      sidebarState.width = sidebarState.clampWidth(startWidth + (ev.clientX - startX))
-    }
-    const onUp = (): void => {
-      resizing = false
-      sidebarState.persist()
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', onUp)
-    }
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', onUp)
   }
 
   function onEdgeEnter(): void {
@@ -110,11 +115,13 @@
   <!-- Docked sidebar: occupies layout, resizable -->
   <aside
     class="relative flex h-full shrink-0 flex-col bg-surface"
-    data-onboarding="project-sidebar"
+    data-onboarding={onboardingAnchor ? 'project-sidebar' : undefined}
+    data-region={region}
+    aria-label={label}
     style="width: {sidebarState.width}px"
     class:select-none={resizing}
-    in:fly={{ x: -sidebarState.width, duration: motionDuration(200), easing: cubicOut }}
-    out:fly={{ x: -sidebarState.width, duration: motionDuration(160), easing: cubicOut }}
+    in:slideWidth={{ duration: motionDuration(200), easing: cubicOut }}
+    out:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
   >
     {#if !hideHeader}
       <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
@@ -130,6 +137,10 @@
         </div>
         {@render header?.()}
       </div>
+    {/if}
+
+    {#if chrome}
+      {@render chrome()}
     {/if}
 
     <div
@@ -155,14 +166,14 @@
     {/if}
 
     <!-- Resize handle -->
-    <div
-      class="absolute inset-y-0 right-0 w-1 cursor-col-resize transition-colors hover:bg-primary/20 {resizing
-        ? 'bg-primary/30'
-        : ''}"
-      role="separator"
-      aria-orientation="vertical"
-      onpointerdown={startResize}
-    ></div>
+    <SidebarResizeHandle
+      side="right"
+      width={sidebarState.width}
+      label="Resize sidebar"
+      onResize={(width) => (sidebarState.width = sidebarState.clampWidth(width))}
+      onResizeEnd={() => sidebarState.persist()}
+      bind:resizing
+    />
   </aside>
 {:else}
   <!-- Edge hover zone -->
@@ -176,11 +187,14 @@
   {#if sidebarState.hoverOpen}
     <aside
       class="fixed top-12 bottom-0 left-0 z-50 flex flex-col bg-surface shadow-2xl"
-      data-onboarding="project-sidebar"
+      data-onboarding={onboardingAnchor ? 'project-sidebar' : undefined}
+      data-region={region}
+      aria-label={label}
       style="width: {sidebarState.width}px"
       transition:fly={{ x: -sidebarState.width, duration: 180 }}
       onmouseenter={onOverlayEnter}
       onmouseleave={onOverlayLeave}
+      {@attach trackBrowserOcclusion}
     >
       {#if !hideHeader}
         <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
@@ -196,6 +210,10 @@
           </div>
           {@render header?.()}
         </div>
+      {/if}
+
+      {#if chrome}
+        {@render chrome()}
       {/if}
 
       <div

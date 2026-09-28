@@ -2,7 +2,6 @@ import { type Component } from 'svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
-import { globalBrowser } from '$lib/stores/global-browser.svelte'
 import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
 import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
@@ -197,14 +196,13 @@ export class AppHeaderNavigationController {
       await this.navigateToView(this.lastViewBeforeScope)
       return
     }
-    // Selecting the view already open from the dropdown toggles the left
+    // Selecting the view already open from the dropdown toggles the shared left
     // sidebar (scoped threads → projects must simply close the board (the
     // caller clears it) without hiding the sidebar). The browser's left sidebar
     // is its tab strip, so re-selecting Browser folds that instead of the
     // thread sidebar, which is how the user gets an uninterrupted page.
     if (view === activeView) {
-      if (view === 'browser') globalBrowser.toggleSidebar()
-      else sidebarState.toggle()
+      sidebarState.toggle()
       return
     }
     await this.navigateToView(view)

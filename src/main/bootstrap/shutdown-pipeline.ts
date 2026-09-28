@@ -19,6 +19,7 @@ import { Logger } from '../system/logger'
 import type { WindowStateService } from '../system/window-state'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import type { BootstrapState } from './bootstrap-state'
+import { flushSessionStorage } from './quit-lifecycle'
 
 export interface ShutdownContext {
   state: BootstrapState
@@ -180,6 +181,11 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   instanceRegistry.stop()
+
+  // A clean quit must commit the renderer's pending localStorage writes too, so
+  // the flush runs after the beforeQuit grace period gave the renderer a last
+  // chance to write. The will-quit handler flushes again as a final guard.
+  flushSessionStorage()
 
   app.quit()
 }

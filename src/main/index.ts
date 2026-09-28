@@ -33,7 +33,11 @@ import { createBootstrapState } from './bootstrap/bootstrap-state'
 import { configureLinuxElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
 import { createSplashWindow, closeSplash } from './bootstrap/splash-window'
 import { isCloseShortcut, isNewTerminalShortcut } from './bootstrap/keyboard-shortcuts'
-import { armQuitFailsafe, requestCloseConfirmation } from './bootstrap/quit-lifecycle'
+import {
+  armQuitFailsafe,
+  flushSessionStorage,
+  requestCloseConfirmation
+} from './bootstrap/quit-lifecycle'
 import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap/open-with'
 import { bootPostPaintServices } from './bootstrap/post-paint-services'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
@@ -673,11 +677,15 @@ app.on('before-quit', (event) => {
   // never lingers in the Dock with a stale icon after the user chose to close.
   state.shutdownFailsafe = setTimeout(() => {
     Logger.error('Shutdown pipeline timed out   forcing exit')
+    flushSessionStorage()
     app.exit(0)
   }, 15_000)
 })
 
 app.on('will-quit', () => {
-  // Final synchronous cleanup   the app has committed to terminating.
+  // Final synchronous cleanup   the app has committed to terminating. Commit
+  // any pending renderer storage here as the last line of defense against a
+  // force-exit losing the session's localStorage writes.
+  flushSessionStorage()
   setNotificationService(null)
 })

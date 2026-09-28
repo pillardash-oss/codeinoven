@@ -1234,14 +1234,14 @@
       return
     }
     if (keymapState.matches('nav-toggle-left-sidebar', e)) {
-      // The browser view's sidebar is its browser chrome and tab strip, so the
-      // chord folds that instead of the workspace rail. (While the browser owns
-      // the keyboard this chord belongs to Save page, which is why the browser
-      // entry in the header also toggles it.)
+      // The browser view's left sidebar is the app's own sidebar (its chrome and
+      // tab strip), so the chord folds it the same way it folds the workspace
+      // one. (While the browser owns the keyboard this chord belongs to Save
+      // page, which is why the browser entry in the header also toggles it.)
       if (activeView === 'browser') {
         e.preventDefault()
         if (e.repeat) return
-        globalBrowser.toggleSidebar()
+        sidebarState.toggle()
         return
       }
       // On the plain workspace (no studio, no conflict being resolved, no dirty

@@ -1,13 +1,12 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import { cubicOut } from 'svelte/easing'
-  import { fly } from 'svelte/transition'
   import { Bot, Globe, Plus, StickyNote } from '@lucide/svelte'
   import { subscribe } from '$lib/ipc.svelte'
   import type { BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { motionDuration } from '$lib/motion'
+  import { motionDuration, slideWidth } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -147,25 +146,16 @@
 <div class="flex h-full min-h-0" data-region="browser-view">
   <!-- The sidebar is the browser's chrome (address, history, downloads) as well
        as its tab strip, so it is present with no tab open too: that is where the
-       first address is typed. It slides in from the left edge and back out the
-       same way the workspace sidebar does, so folding it reads as one motion
-       instead of a jump. -->
-  {#if globalBrowser.sidebarVisible}
-    <div
-      class="flex h-full min-h-0 shrink-0"
-      in:fly={{ x: '-100%', duration: motionDuration(200), easing: cubicOut }}
-      out:fly={{ x: '-100%', duration: motionDuration(160), easing: cubicOut }}
-    >
-      <BrowserTabsSidebar onOpenAddress={() => globalBrowser.openAddressSpotlight()} />
-    </div>
-  {/if}
+       first address is typed. It is the app's own left sidebar, so it docks,
+       resizes, folds and slides exactly like the workspace one. -->
+  <BrowserTabsSidebar onOpenAddress={() => globalBrowser.openAddressSpotlight()} />
 
   {#if activeTab}
     {#key activeTab.id}
       <BrowserWorkspace tab={activeTab} />
     {/key}
   {:else}
-    <div class="flex h-full min-h-0 min-w-0 flex-1 items-center justify-center bg-surface">
+    <div class="flex h-full min-h-0 min-w-0 flex-1 items-center justify-center bg-app">
       <div class="flex flex-col items-center gap-3 px-8 text-center">
         <Globe size={26} class="text-dimmed" />
         <p class="max-w-sm text-sm leading-relaxed text-muted">
@@ -187,10 +177,13 @@
   {/if}
 
   {#if globalBrowser.contextSidebarShown}
+    <!-- The rail is the same left-sidebar motion on the other edge: its width is
+         what animates, so the page beside it is released frame by frame rather
+         than jumping to its final frame and watching the panel slide across. -->
     <div
       class="flex h-full min-h-0 shrink-0"
-      in:fly={{ x: '100%', duration: motionDuration(200), easing: cubicOut }}
-      out:fly={{ x: '100%', duration: motionDuration(160), easing: cubicOut }}
+      in:slideWidth={{ duration: motionDuration(200), easing: cubicOut }}
+      out:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
     >
       <BrowserContextSidebar onClose={() => globalBrowser.toggleContextSidebar()} />
     </div>

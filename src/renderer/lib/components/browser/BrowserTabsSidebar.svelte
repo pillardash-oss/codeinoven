@@ -8,6 +8,8 @@
     Globe,
     Lock,
     LockOpen,
+    Pin,
+    PinOff,
     Plus,
     RotateCw,
     Search,
@@ -19,10 +21,12 @@
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { type GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
+  import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import BrowserTabRow from './BrowserTabRow.svelte'
   import BrowserGroupModal from './BrowserGroupModal.svelte'
+  import BrowserTabModal from './BrowserTabModal.svelte'
   import { browserGroupAccent, browserGroupIconUrl } from './browser-group-appearance'
   import {
     browserSiteHost,
@@ -57,6 +61,8 @@
   /** The group whose editor is open; `undefined` means closed and null means
    *  "create a new group", so the two states can never be confused. */
   let editorGroupId = $state<string | null | undefined>(undefined)
+  /** The tab whose editor is open, or null while it is closed. */
+  let editorTabId = $state<string | null>(null)
 
   const activeTab = $derived(globalBrowser.activeTab)
   const runtime = $derived(activeTab ? globalBrowser.runtimeFor(activeTab.id) : null)
@@ -78,18 +84,25 @@
   let addressFocused = $state(false)
   let addressError = $state('')
 
-  const groups = $derived(globalBrowser.groups)
+  const groups = $derived(globalBrowser.orderedGroups)
 
-  // A group's icon is a file on disk, so its bytes are read once and cached;
-  // this keeps the strip's icon current without every row reading the file.
+  // A group's or a tab's icon is a file on disk, so its bytes are read once and
+  // cached; this keeps the strip's icons current without every row reading a
+  // file itself.
   $effect(() => {
     for (const group of globalBrowser.groups) {
       if (group.imagePath && !globalBrowser.groupIconUrls.has(group.id)) {
         void globalBrowser.ensureGroupIconLoaded(group.id)
       }
     }
+    for (const tab of globalBrowser.tabs) {
+      if (tab.imagePath && !globalBrowser.tabIconUrls.has(tab.id)) {
+        void globalBrowser.ensureTabIconLoaded(tab.id)
+      }
+    }
   })
   const ungrouped = $derived(globalBrowser.tabsInGroup(null))
+  const pinned = $derived(globalBrowser.pinnedTabs.filter(matches))
   const totalTabs = $derived(globalBrowser.tabs.length)
   const query = $derived(globalBrowser.tabSearchQuery)
   const searchGroupId = $derived(globalBrowser.tabSearchGroupId)
@@ -99,7 +112,9 @@
   function matches(tab: GlobalBrowserTab): boolean {
     const needle = query.trim().toLowerCase()
     if (needle === '') return true
-    return tab.title.toLowerCase().includes(needle) || tab.url.toLowerCase().includes(needle)
+    return (
+      browserTabLabel(tab).toLowerCase().includes(needle) || tab.url.toLowerCase().includes(needle)
+    )
   }
 
   function tabsFor(groupId: string | null): GlobalBrowserTab[] {
@@ -204,11 +219,7 @@
   }
 </script>
 
-<aside
-  class="flex h-full w-80 shrink-0 flex-col border-r bg-surface"
-  data-region="browser-sidebar"
-  aria-label="Browser tabs"
->
+{#snippet chrome()}
   <!-- Fixed chrome: the address, history and downloads stay at the top left
        while the tab strip scrolls beneath them. -->
   <div class="shrink-0 border-b px-2 py-2">
@@ -348,133 +359,191 @@
       </div>
     {/key}
   {/if}
+{/snippet}
 
-  <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-    {#if totalTabs === 0}
-      <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
-        <Globe size={22} class="text-dimmed" />
-        <p class="text-xs leading-relaxed text-dimmed">
-          No tabs are open. Pages here run in their own profile, separate from the browsers your
-          agents use.
-        </p>
-        <button
-          type="button"
-          class="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-          title="Open a new browser tab"
-          onclick={() => newTab()}
+<CollapsibleSidebar
+  title="Browser"
+  hideHeader
+  onboardingAnchor={false}
+  label="Browser tabs"
+  region="browser-sidebar"
+  {chrome}
+>
+  {#if totalTabs === 0}
+    <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
+      <Globe size={22} class="text-dimmed" />
+      <p class="text-xs leading-relaxed text-dimmed">
+        No tabs are open. Pages here run in their own profile, separate from the browsers your
+        agents use.
+      </p>
+      <button
+        type="button"
+        class="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+        title="Open a new browser tab"
+        onclick={() => newTab()}
+      >
+        New tab
+      </button>
+    </div>
+  {:else}
+    {#if searchGroupId === null && pinned.length > 0}
+      <div class="mb-1">
+        <p
+          class="flex items-center gap-1 px-2 pt-1 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
         >
-          New tab
-        </button>
+          <Pin size={10} aria-hidden="true" />
+          Pinned
+        </p>
+        <div class="ml-2 border-l pl-1.5">
+          {#each pinned as tab (tab.id)}
+            <BrowserTabRow
+              {tab}
+              onEditTab={(id) => (editorTabId = id)}
+              onOpenGroupEditor={(id) => (editorGroupId = id)}
+            />
+          {/each}
+        </div>
       </div>
-    {:else}
-      {#each groups as group (group.id)}
-        {@const accent = browserGroupAccent(group)}
-        {@const hasAppearance = Boolean(
-          group.color || group.iconType || group.customSvg || group.imagePath
-        )}
-        {@const iconUrl = hasAppearance
-          ? browserGroupIconUrl(group, globalBrowser.groupIconUrl(group.id))
-          : null}
-        {#if searchGroupId === null || searchGroupId === group.id}
-          {#if searchGroupId !== null || tabsFor(group.id).length > 0}
-            <div class="mb-1">
-              <div
-                class="flex items-center gap-1 rounded-lg px-1.5 py-1 transition-colors {groupDropTargetId ===
-                group.id
-                  ? 'ring-1 ring-info'
-                  : ''}"
-                style="background-color: {accent}1a"
-                role="group"
-                aria-label={`${group.name}, drop a tab here to move it into this group`}
-                ondragover={(event: DragEvent) => onGroupDragOver(event, group.id)}
-                ondragleave={() => (groupDropTargetId = null)}
-                ondrop={(event: DragEvent) => onGroupDrop(event, group.id)}
-              >
-                <button
-                  type="button"
-                  class="flex min-w-0 flex-1 items-center gap-2 px-1 py-0.5 text-left"
-                  title={`Search only inside ${group.name}`}
-                  aria-label={`Filter the tab strip to ${group.name}`}
-                  onclick={() => scopeSearch(group.id)}
-                >
-                  {#if iconUrl}
-                    <img
-                      src={iconUrl}
-                      alt=""
-                      class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
-                      draggable="false"
-                    />
-                  {:else}
-                    <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {accent}"
-                    ></span>
-                  {/if}
-                  <span class="truncate text-[0.6875rem] font-semibold" style="color: {accent}">
-                    {group.name}
-                  </span>
-                  <span class="shrink-0 text-[0.625rem] text-dimmed">
-                    {tabsFor(group.id).length}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                  aria-label={`New tab in ${group.name}`}
-                  title={`New tab in ${group.name}`}
-                  onclick={() => newTab(group.id)}
-                >
-                  <Plus size={13} />
-                </button>
-                <button
-                  type="button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                  aria-label={`Search in ${group.name}`}
-                  title={`Search in ${group.name}`}
-                  onclick={() => scopeSearch(group.id)}
-                >
-                  <Search size={12} />
-                </button>
-                <button
-                  type="button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                  aria-label={`Edit ${group.name}`}
-                  title={`Edit ${group.name}`}
-                  onclick={() => (editorGroupId = group.id)}
-                >
-                  <Settings2 size={12} />
-                </button>
-              </div>
-              <div class="mt-0.5 ml-2 border-l pl-1.5">
-                {#each tabsFor(group.id) as tab (tab.id)}
-                  <BrowserTabRow {tab} onOpenGroupEditor={(id) => (editorGroupId = id)} />
-                {/each}
-                {#if tabsFor(group.id).length === 0}
-                  <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">No tabs match</p>
-                {/if}
-              </div>
-            </div>
-          {/if}
-        {/if}
-      {/each}
+    {/if}
 
-      {#if searchGroupId === null}
-        {#if groups.length > 0 && ungrouped.length > 0}
-          <p
-            class="px-2 pt-2 pb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
-          >
-            Ungrouped
-          </p>
-        {/if}
-        {#each tabsFor(null) as tab (tab.id)}
-          <BrowserTabRow {tab} onOpenGroupEditor={(id) => (editorGroupId = id)} />
-        {/each}
-        {#if query !== '' && ungrouped.length > 0 && tabsFor(null).length === 0}
-          <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">No ungrouped tabs match</p>
+    {#each groups as group (group.id)}
+      {@const accent = browserGroupAccent(group)}
+      {@const hasAppearance = Boolean(
+        group.color || group.iconType || group.customSvg || group.imagePath
+      )}
+      {@const iconUrl = hasAppearance
+        ? browserGroupIconUrl(group, globalBrowser.groupIconUrl(group.id))
+        : null}
+      {#if searchGroupId === null || searchGroupId === group.id}
+        {#if searchGroupId !== null || group.pinned || tabsFor(group.id).length > 0}
+          <div class="mb-1">
+            <div
+              class="flex items-center gap-1 rounded-lg px-1.5 py-1 transition-colors {groupDropTargetId ===
+              group.id
+                ? 'ring-1 ring-info'
+                : ''}"
+              style="background-color: {accent}1a"
+              role="group"
+              aria-label={`${group.name}, drop a tab here to move it into this group`}
+              ondragover={(event: DragEvent) => onGroupDragOver(event, group.id)}
+              ondragleave={() => (groupDropTargetId = null)}
+              ondrop={(event: DragEvent) => onGroupDrop(event, group.id)}
+            >
+              <button
+                type="button"
+                class="flex min-w-0 flex-1 items-center gap-2 px-1 py-0.5 text-left"
+                title={group.description
+                  ? `${group.name}: ${group.description}`
+                  : `Search only inside ${group.name}`}
+                aria-label={`Filter the tab strip to ${group.name}`}
+                onclick={() => scopeSearch(group.id)}
+              >
+                {#if iconUrl}
+                  <img
+                    src={iconUrl}
+                    alt=""
+                    class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+                    draggable="false"
+                  />
+                {:else}
+                  <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {accent}"
+                  ></span>
+                {/if}
+                <span class="truncate text-[0.6875rem] font-semibold" style="color: {accent}">
+                  {group.name}
+                </span>
+                {#if group.pinned}
+                  <Pin size={10} class="shrink-0" style="color: {accent}" aria-hidden="true" />
+                {/if}
+                <span class="shrink-0 text-[0.625rem] text-dimmed">
+                  {tabsFor(group.id).length}
+                </span>
+              </button>
+              <button
+                type="button"
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                aria-label={`New tab in ${group.name}`}
+                title={`New tab in ${group.name}`}
+                onclick={() => newTab(group.id)}
+              >
+                <Plus size={13} />
+              </button>
+              <button
+                type="button"
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                aria-label={`Search in ${group.name}`}
+                title={`Search in ${group.name}`}
+                onclick={() => scopeSearch(group.id)}
+              >
+                <Search size={12} />
+              </button>
+              <button
+                type="button"
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay hover:text-foreground {group.pinned
+                  ? 'text-accent'
+                  : 'text-muted'}"
+                aria-label={group.pinned ? `Unpin ${group.name}` : `Pin ${group.name}`}
+                aria-pressed={group.pinned}
+                title={group.pinned ? `Unpin ${group.name}` : `Pin ${group.name}`}
+                onclick={() => globalBrowser.toggleGroupPin(group.id)}
+              >
+                {#if group.pinned}
+                  <Pin size={12} />
+                {:else}
+                  <PinOff size={12} />
+                {/if}
+              </button>
+              <button
+                type="button"
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                aria-label={`Edit ${group.name}`}
+                title={`Edit ${group.name}`}
+                onclick={() => (editorGroupId = group.id)}
+              >
+                <Settings2 size={12} />
+              </button>
+            </div>
+            <div class="mt-0.5 ml-2 border-l pl-1.5">
+              {#each tabsFor(group.id) as tab (tab.id)}
+                <BrowserTabRow
+                  {tab}
+                  onEditTab={(id) => (editorTabId = id)}
+                  onOpenGroupEditor={(id) => (editorGroupId = id)}
+                />
+              {/each}
+              {#if tabsFor(group.id).length === 0}
+                <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">No tabs match</p>
+              {/if}
+            </div>
+          </div>
         {/if}
       {/if}
+    {/each}
+
+    {#if searchGroupId === null}
+      {#if groups.length > 0 && ungrouped.length > 0}
+        <p class="px-2 pt-2 pb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+          Ungrouped
+        </p>
+      {/if}
+      {#each tabsFor(null) as tab (tab.id)}
+        <BrowserTabRow
+          {tab}
+          onEditTab={(id) => (editorTabId = id)}
+          onOpenGroupEditor={(id) => (editorGroupId = id)}
+        />
+      {/each}
+      {#if query !== '' && ungrouped.length > 0 && tabsFor(null).length === 0}
+        <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">No ungrouped tabs match</p>
+      {/if}
     {/if}
-  </div>
-</aside>
+  {/if}
+</CollapsibleSidebar>
 
 {#if editorGroupId !== undefined}
   <BrowserGroupModal groupId={editorGroupId} onClose={() => (editorGroupId = undefined)} />
+{/if}
+
+{#if editorTabId !== null}
+  <BrowserTabModal tabId={editorTabId} onClose={() => (editorTabId = null)} />
 {/if}

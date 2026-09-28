@@ -20,6 +20,7 @@ import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '$shared/ipc
 import { appConfigState } from './app-config.svelte'
 import { reportError } from './app-errors.svelte'
 import { contextSidebarState, type TemporaryChatContextTab } from './context-sidebar.svelte'
+import { sidebarState } from './sidebar.svelte'
 import { defaultSettingsFor } from './thread-settings.svelte'
 import { threadNotesState } from './thread-notes.svelte'
 import {
@@ -30,8 +31,10 @@ import {
 import {
   IDLE_GLOBAL_BROWSER_RUNTIME,
   MAX_BROWSER_GROUP_NAME_LENGTH,
+  MAX_BROWSER_TAB_TITLE_LENGTH,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
+  browserTabLabel,
   browserTabTitleForUrl,
   isSameBrowserLoadError,
   isTabIdlePastWindow,
@@ -52,22 +55,21 @@ export class GlobalBrowserState {
   /** Data URLs for groups with a picked image icon, keyed by group id. Loaded
    *  lazily, because a stored icon is a file path on disk and not inline bytes. */
   groupIconUrls: SvelteMap<string, string> = $state(new SvelteMap())
+  /** Data URLs for tabs with a picked image icon, keyed by tab id. */
+  tabIconUrls: SvelteMap<string, string> = $state(new SvelteMap())
   activeTabId: string | null = $state(null)
   /** True once the browser view has been opened at least once this session. */
   opened = $state(false)
-  /** Whether the left sidebar (browser chrome and tab strip) is shown. It is the
-   *  browser's chrome as well as the tab strip, so it stays up with no tab open:
-   *  the address field there is how a first tab gets made. Hiding it is how the
-   *  user gets an uninterrupted page. */
-  sidebarVisible = $state(true)
   /** Whether the right rail is shown. It is a tab-scoped context rail, so it is
    *  independent of the strip's own visibility. Closed by default: both of its
    *  panels belong to one tab's visit and never open on their own. */
   contextSidebarVisible = $state(false)
   /** Which tool of the rail is on screen. The rail hosts the active tab's note
-   *  and its agent conversation; exactly one is shown at a time, the way the
-   *  context dock picks one tool in every other view. */
-  contextSidebarTool = $state<'note' | 'agent'>('note')
+   *  and its agent conversation, plus the browser's own downloads; exactly one
+   *  is shown at a time, the way the context dock picks one tool in every other
+   *  view. Downloads belong to the shared profile rather than a tab, so that tool
+   *  is the one entry that can stay open with no tab. */
+  contextSidebarTool = $state<'note' | 'agent' | 'downloads'>('note')
   /** Whether the address spotlight is up. It lives here rather than in a surface
    *  because it is summoned from anywhere in the browser view (Cmd/Ctrl+L) and
    *  from a freshly opened tab, which has no surface of its own yet. */
@@ -131,15 +133,58 @@ export class GlobalBrowserState {
     return this.tabs.find((tab) => tab.id === this.activeTabId) ?? null
   }
 
-  /** Whether the right rail is on screen. It is the notes rail of one tab, so it
-   *  exists only while a tab is open; with no tab it is closed and unreachable. */
-  get contextSidebarShown(): boolean {
-    return this.contextSidebarVisible && this.activeTab !== null
+  /** Whether the shared notifications panel is the tool on the rail. The
+   *  notification bell owns that flag in the context-sidebar store, so the rail
+   *  reads it instead of keeping a second copy: notification, note and agent are
+   *  tools of the one right sidebar, exactly as in every other view. */
+  get notificationsShown(): boolean {
+    return contextSidebarState.sidebarActiveTab?.kind === 'notifications'
   }
 
-  /** Tabs of one group, in strip order. A null group means the ungrouped rest. */
+  /**
+   * Whether the right rail is on screen for one of the browser's own tools.
+   *
+   * The note and agent tools belong to the tab on screen, so they exist only
+   * while a tab is open. Downloads belong to the shared browser profile and are
+   * reachable with no tab, which is what keeps the rail present here the way it
+   * is in every other view. Notifications are a separate tool and never claim
+   * this flag, so the two can never both read as active.
+   */
+  get contextSidebarShown(): boolean {
+    if (this.notificationsShown) return false
+    if (!this.contextSidebarVisible) return false
+    if (this.contextSidebarTool === 'downloads') return true
+    return this.activeTab !== null
+  }
+
+  /** Whether the rail is currently showing the browser's downloads. */
+  get downloadsSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'downloads'
+  }
+
+  /** Whether the rail is currently showing the active tab's note. */
+  get noteSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'note'
+  }
+
+  /** Tabs of one group, in strip order. A null group means the ungrouped rest.
+   *  Pinned tabs are excluded: they always render in the pinned block above. */
   tabsInGroup(groupId: string | null): GlobalBrowserTab[] {
-    return this.tabs.filter((tab) => tab.groupId === groupId)
+    return this.tabs.filter((tab) => tab.groupId === groupId && !tab.pinned)
+  }
+
+  /** Pinned tabs in pin order, shown in their own block at the top of the strip.
+   *  A pinned tab keeps its place regardless of which group it belongs to. */
+  get pinnedTabs(): GlobalBrowserTab[] {
+    return this.tabs
+      .filter((tab) => tab.pinned)
+      .sort((a, b) => (a.pinnedAt ?? 0) - (b.pinnedAt ?? 0))
+  }
+
+  /** Groups in strip order with pinned folds first, so a pinned group rises the
+   *  way a pinned project does. */
+  get orderedGroups(): GlobalBrowserGroup[] {
+    return [...this.groups].sort((a, b) => Number(b.pinned) - Number(a.pinned))
   }
 
   groupById(groupId: string): GlobalBrowserGroup | null {
@@ -186,10 +231,6 @@ export class GlobalBrowserState {
     this.dockActiveTabNote()
   }
 
-  toggleSidebar(): void {
-    this.sidebarVisible = !this.sidebarVisible
-  }
-
   /** The notes chord and the notes dock item both land here: it reveals the
    *  note tool, or hides the rail when the note tool is already the one shown. */
   toggleContextSidebar(): void {
@@ -206,9 +247,41 @@ export class GlobalBrowserState {
   /** Reveal the rail on the active tab's note. */
   showNoteSidebar(): void {
     if (!this.activeTab) return
+    this.dismissNotifications()
     this.contextSidebarTool = 'note'
     this.contextSidebarVisible = true
     this.dockActiveTabNote()
+  }
+
+  /** Reveal the rail on the browser's downloads. Downloads are the one browser
+   *  tool that needs no tab, so this is also how the rail stays present with the
+   *  strip empty. */
+  showDownloadsSidebar(): void {
+    this.dismissNotifications()
+    this.contextSidebarTool = 'downloads'
+    this.contextSidebarVisible = true
+  }
+
+  toggleDownloadsSidebar(): void {
+    if (this.contextSidebarTool === 'downloads' && this.contextSidebarVisible) {
+      this.closeDownloadsSidebar()
+      return
+    }
+    this.showDownloadsSidebar()
+  }
+
+  closeDownloadsSidebar(): void {
+    if (this.contextSidebarTool === 'downloads') this.contextSidebarVisible = false
+  }
+
+  /**
+   * Drop the notifications tool when another rail tool takes over. The
+   * notifications flag lives in the context-sidebar store (the header bell owns
+   * it), so the rail can only ask it to close, and only while it is the tool on
+   * screen.
+   */
+  private dismissNotifications(): void {
+    if (this.notificationsShown) contextSidebarState.toggleNotifications()
   }
 
   /** Reveal the rail on the active tab's agent conversation, creating it on the
@@ -217,6 +290,7 @@ export class GlobalBrowserState {
   showAgentSidebar(): void {
     const tab = this.activeTab
     if (!tab) return
+    this.dismissNotifications()
     this.ensureAgentChat(tab)
     this.contextSidebarTool = 'agent'
     this.contextSidebarVisible = true
@@ -299,7 +373,7 @@ export class GlobalBrowserState {
     if (!this.contextSidebarVisible) return
     const tab = this.activeTab
     if (!tab) return
-    contextSidebarState.ensureNoteTab(GLOBAL_BROWSER_PROJECT_ID, tab.id, tab.title)
+    contextSidebarState.ensureNoteTab(GLOBAL_BROWSER_PROJECT_ID, tab.id, browserTabLabel(tab))
   }
 
   beginDrag(tabId: string): void {
@@ -334,7 +408,9 @@ export class GlobalBrowserState {
     this.tabSearchQuery = ''
     this.tabSearchOpen = true
     this.tabSearchFocusRequest += 1
-    this.sidebarVisible = true
+    // The field lives in the left sidebar, so revealing the search also docks
+    // that sidebar: a folded strip has no field for the search to sit in.
+    sidebarState.redock()
   }
 
   closeTabSearch(): void {
@@ -384,13 +460,20 @@ export class GlobalBrowserState {
       {
         id: tabId,
         title: browserTabTitleForUrl(url),
+        customTitle: null,
         url,
         favicon: null,
         // A popup belongs beside the page that opened it.
         groupId: this.activeTab?.groupId ?? null,
         createdAt: now,
         lastUsedAt: now,
-        hibernated: false
+        hibernated: false,
+        pinned: false,
+        pinnedAt: null,
+        color: null,
+        iconType: null,
+        customSvg: null,
+        imagePath: null
       }
     ]
     if (context.reveal) this.activate(tabId)
@@ -416,12 +499,19 @@ export class GlobalBrowserState {
     const tab: GlobalBrowserTab = {
       id: `browser:${crypto.randomUUID()}`,
       title: browserTabTitleForUrl(url),
+      customTitle: null,
       url,
       favicon: null,
       groupId: this.groups.some((group) => group.id === groupId) ? groupId : null,
       createdAt: now,
       lastUsedAt: now,
-      hibernated: false
+      hibernated: false,
+      pinned: false,
+      pinnedAt: null,
+      color: null,
+      iconType: null,
+      customSvg: null,
+      imagePath: null
     }
     this.tabs = [...this.tabs, tab]
     this.setActiveTab(tab.id)
@@ -441,9 +531,10 @@ export class GlobalBrowserState {
       this.setActiveTab(neighbour?.id ?? null)
       if (neighbour) neighbour.lastUsedAt = Date.now()
     }
-    if (this.tabs.length === 0) {
-      // With no tab left the notes rail has no subject, so it returns to its
-      // closed default instead of lingering for the next tab to inherit.
+    if (this.tabs.length === 0 && this.contextSidebarTool !== 'downloads') {
+      // With no tab left the note and agent tools have no subject, so the rail
+      // returns to its closed default instead of lingering for the next tab.
+      // Downloads need no tab, so they stay open.
       this.contextSidebarVisible = false
     }
     this.persist()
@@ -498,9 +589,76 @@ export class GlobalBrowserState {
     this.persist()
   }
 
+  // ─── Tab identity and pinning ─────────────────────────────────────────────
+
+  /**
+   * Edit a tab's own identity: a custom label and the appearance it shares with
+   * a project (colour, icon, pasted SVG, picked image). A blank title clears the
+   * override, so the strip returns to the page's live title.
+   */
+  updateTab(id: string, patch: Partial<Omit<GlobalBrowserTab, 'id'>>): void {
+    const tab = this.tabs.find((candidate) => candidate.id === id)
+    if (!tab) return
+    let imageChanged = false
+    if (patch.customTitle !== undefined) {
+      const title = patch.customTitle?.trim().slice(0, MAX_BROWSER_TAB_TITLE_LENGTH) ?? ''
+      tab.customTitle = title === '' ? null : title
+    }
+    if (patch.color !== undefined) tab.color = patch.color
+    if (patch.iconType !== undefined) tab.iconType = patch.iconType
+    if (patch.customSvg !== undefined) tab.customSvg = patch.customSvg
+    if (patch.imagePath !== undefined) {
+      tab.imagePath = patch.imagePath
+      imageChanged = true
+    }
+    this.persist()
+    // The rail's note is titled with the tab's label, so a rename follows.
+    this.dockActiveTabNote()
+    if (imageChanged) {
+      this.tabIconUrls.delete(id)
+      void this.ensureTabIconLoaded(id)
+    }
+  }
+
+  /** Pin a tab to the top of the strip, or unpin it. Pin order is preserved so
+   *  the pinned block does not reshuffle on every toggle. */
+  toggleTabPin(tabId: string): void {
+    const tab = this.tabs.find((candidate) => candidate.id === tabId)
+    if (!tab) return
+    tab.pinned = !tab.pinned
+    tab.pinnedAt = tab.pinned ? Date.now() : null
+    this.persist()
+  }
+
+  /** The loaded data URL for a tab's picked image icon, when there is one. */
+  tabIconUrl(tabId: string): string | null {
+    return this.tabIconUrls.get(tabId) ?? null
+  }
+
+  /** Read a tab's picked image icon into a data URL, once. Best-effort: a
+   *  missing file leaves the tab on its favicon or colour/SVG icon. */
+  async ensureTabIconLoaded(tabId: string): Promise<void> {
+    const tab = this.tabs.find((candidate) => candidate.id === tabId)
+    if (!tab?.imagePath) {
+      this.tabIconUrls.delete(tabId)
+      return
+    }
+    if (this.tabIconUrls.has(tabId)) return
+    try {
+      const url = await invoke('file:readAsDataUrl', tab.imagePath)
+      if (url) this.tabIconUrls.set(tabId, url)
+    } catch {
+      // Icon loading is best-effort; the resolver's fallback remains.
+    }
+  }
+
   // ─── Groups ───────────────────────────────────────────────────────────────
 
-  createGroup(name: string, appearance: Partial<BrowserGroupAppearance> = {}): string {
+  createGroup(
+    name: string,
+    appearance: Partial<BrowserGroupAppearance> = {},
+    description = ''
+  ): string {
     const id = `group:${crypto.randomUUID()}`
     if (this.groups.length >= MAX_GLOBAL_BROWSER_GROUPS) return id
     this.groups = [
@@ -508,6 +666,8 @@ export class GlobalBrowserState {
       {
         id,
         name: name.trim().slice(0, MAX_BROWSER_GROUP_NAME_LENGTH) || 'New group',
+        description: description.trim(),
+        pinned: false,
         color: appearance.color ?? null,
         iconType: appearance.iconType ?? null,
         customSvg: appearance.customSvg ?? null,
@@ -546,6 +706,8 @@ export class GlobalBrowserState {
     if (patch.iconType !== undefined) group.iconType = patch.iconType
     if (patch.customSvg !== undefined) group.customSvg = patch.customSvg
     if (patch.imagePath !== undefined) group.imagePath = patch.imagePath
+    if (patch.description !== undefined) group.description = patch.description.trim()
+    if (patch.pinned !== undefined) group.pinned = patch.pinned
     this.persist()
     // A new or cleared image must not keep showing the previous one's bytes.
     if (patch.imagePath !== undefined) {
@@ -563,6 +725,14 @@ export class GlobalBrowserState {
     for (const tab of this.tabs) {
       if (tab.groupId === id) tab.groupId = null
     }
+    this.persist()
+  }
+
+  /** Pin a fold to the top of the strip, or unpin it. */
+  toggleGroupPin(groupId: string): void {
+    const group = this.groupById(groupId)
+    if (!group) return
+    group.pinned = !group.pinned
     this.persist()
   }
 
@@ -664,12 +834,17 @@ export class GlobalBrowserState {
     this.persist()
   }
 
-  /** Close the oldest idle tabs when the strip is at its cap. */
+  /** Close the oldest idle tabs when the strip is at its cap. A pinned tab is
+   *  spared the way a pinned thread survives cleanup, so the cap only ever hits
+   *  unpinned tabs unless nothing else is left. */
   private enforceTabCap(): void {
     if (this.tabs.length < MAX_GLOBAL_BROWSER_TABS) return
-    const victim = [...this.tabs]
-      .filter((tab) => tab.id !== this.activeTabId)
-      .sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0]
+    const closable = this.tabs.filter((tab) => tab.id !== this.activeTabId && !tab.pinned)
+    const victim =
+      [...closable].sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0] ??
+      [...this.tabs]
+        .filter((tab) => tab.id !== this.activeTabId)
+        .sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0]
     if (victim) this.close(victim.id)
     if (this.tabs.length >= MAX_GLOBAL_BROWSER_TABS) {
       // Nothing left that may be closed without touching the active tab.
@@ -698,7 +873,7 @@ export const GLOBAL_BROWSER_CONTEXT = {
  *  question with no page named still knows which page it is about. */
 function browserAgentPageContext(tab: GlobalBrowserTab): string {
   const lines = ['The user is asking about a web page they have open in the built-in browser.']
-  const title = tab.title.trim()
+  const title = browserTabLabel(tab).trim()
   if (title) lines.push(`Page title: ${title}`)
   if (tab.url) lines.push(`Page URL: ${tab.url}`)
   return lines.join('\n')

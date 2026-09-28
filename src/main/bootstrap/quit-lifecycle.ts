@@ -7,7 +7,7 @@
  * close so the subsequent close/quit passes straight through.
  */
 
-import { app } from 'electron'
+import { app, session } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { CloseConfirmationProject } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
@@ -25,6 +25,21 @@ export interface QuitLifecycleState {
 }
 
 /**
+ * Commit the default session's pending storage (renderer localStorage and
+ * friends) to disk. Chromium only writes it on a graceful shutdown, so every
+ * path that can force-exit must flush first or the renderer's last UI-state
+ * writes are lost across a restart. Best-effort: a flush failure must never
+ * block or crash quit.
+ */
+export function flushSessionStorage(): void {
+  try {
+    session.defaultSession.flushStorageData()
+  } catch (error) {
+    Logger.error('Session storage flush failed during quit:', error)
+  }
+}
+
+/**
  * Hard failsafe for the quit lifecycle. The close-confirmation flow round-trips
  * through the renderer, so a wedged renderer could otherwise hold quit hostage
  * indefinitely. This timer guarantees the process converges on exit: if the
@@ -36,6 +51,7 @@ export function armQuitFailsafe(state: QuitLifecycleState): void {
   if (state.shutdownFailsafe) clearTimeout(state.shutdownFailsafe)
   state.shutdownFailsafe = setTimeout(() => {
     Logger.error('Quit failsafe fired   forcing exit')
+    flushSessionStorage()
     app.exit(0)
   }, 15_000)
 }

@@ -1290,9 +1290,38 @@
 
   let contextPanelColumns = $derived(
     sidebarTrackReserved
-      ? `minmax(360px, 1fr) minmax(0, min(${contextSidebarState.width}px, calc(100% - 360px)))`
+      ? 'minmax(360px, 1fr) max(0px, min(calc(100% - 360px), var(--context-rail-width)))'
       : 'minmax(0, 1fr)'
   )
+
+  /**
+   * The rail's animated track width, in the registered property the column
+   * above reads. It is a length at every moment, so the track grows and shrinks
+   * frame by frame and the thread beside it follows, the same motion the left
+   * sidebar gets from `slideWidth`.
+   */
+  let railTrackWidth = $derived(
+    sidebarVisible ? `${Math.round(contextSidebarState.width)}px` : '0px'
+  )
+  /**
+   * True while the user drags the rail's edge. A drag has to track the pointer
+   * exactly, so the track's transition is switched off for its duration instead
+   * of easing behind every pointer move.
+   */
+  let railDragging = $state(false)
+  let railDragTimer: ReturnType<typeof setTimeout> | undefined
+  let railTrackDuration = $derived(
+    railDragging ? '0ms' : `${motionDuration(sidebarVisible ? 200 : PANEL_EXIT_MS)}ms`
+  )
+
+  /** Move the rail: a drag writes the width straight through, everything else
+   *  is the open/close transition above. */
+  function handleRailWidthChange(width: number): void {
+    railDragging = true
+    clearTimeout(railDragTimer)
+    railDragTimer = setTimeout(() => (railDragging = false), motionDuration(160))
+    contextSidebarState.setWidth(width)
+  }
   // A folded dock leaves no restore strip behind: the context dock's terminal
   // icon is always on screen and is the way back, so hiding the terminal really
   // does give the full height back to the thread.
@@ -3830,6 +3859,10 @@
       class="grid h-full min-h-0 min-w-0 flex-1"
       style:grid-template-columns={contextPanelColumns}
       style:grid-template-rows={contextPanelRows}
+      style:--context-rail-width={railTrackWidth}
+      style:transition-property="--context-rail-width"
+      style:transition-timing-function="cubic-bezier(0.215, 0.61, 0.355, 1)"
+      style:transition-duration={railTrackDuration}
     >
       <WorkspaceConversationPane
         {mode}
@@ -3854,7 +3887,7 @@
         }}
       />
 
-      {#if sidebarVisible}
+      {#if sidebarTrackReserved}
         {#snippet contextSidebarContent()}
           <WorkspaceContextPanelContent
             {gitPanelProjectId}
@@ -3898,7 +3931,7 @@
             onFullscreenTab={openTabFullscreen}
             onMoveTab={(id, targetId, position) =>
               contextSidebarState.reorder(id, targetId, position)}
-            onWidthChange={(width) => contextSidebarState.setWidth(width)}
+            onWidthChange={(width) => handleRailWidthChange(width)}
             onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}

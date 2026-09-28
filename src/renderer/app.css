@@ -1,6 +1,17 @@
 @import 'tailwindcss';
 @import '@fontsource-variable/jetbrains-mono';
 
+/* The workspace context rail animates its own grid track, so the thread beside
+   it is widened frame by frame rather than jumping to its final width while the
+   panel slides in. `grid-template-columns` cannot transition between a one-track
+   and a two-track list, but a registered custom property can, and the track
+   recomputes from it every frame. */
+@property --context-rail-width {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
 /* ─── CodeInOven Design Tokens ───────────────────────────────────────────── */
 /* Obsidian #081825 | Ivory #F7F6F2 | Auric #D4AF37 */
 
