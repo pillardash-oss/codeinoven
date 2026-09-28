@@ -1482,9 +1482,14 @@
         {/await}
       {:else if activeView === 'browser'}
         <!-- The global browser is its own workspace   the app header above it is
-             the only shared chrome. -->
+             the only shared chrome. It is pinned to the stage instead of left in
+             normal flow, because the workspace shell behind it stays mounted as a
+             full-height sibling: in flow the browser sits below the fold and only
+             enters view once focus scrolls the stage. -->
         {#await import('$lib/components/browser/BrowserView.svelte') then { default: BrowserView }}
-          <BrowserView />
+          <div class="absolute inset-0">
+            <BrowserView />
+          </div>
         {/await}
       {:else if !showsContentView}
         <div
