@@ -471,20 +471,25 @@
     >
       <ArrowRight size={14} />
     </button>
-    <button
-      type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
-      title={pageState.loading ? 'Stop loading' : 'Reload page'}
-      onclick={onReloadButton}
-      oncontextmenu={onReloadContextMenu}
-    >
-      {#if pageState.loading}
-        <X size={14} />
-      {:else}
-        <RotateCw size={13} />
-      {/if}
-    </button>
+    <!-- Reload is shown only when there is a page to act on: an empty tab has
+         nothing to reload, and the button becomes the stop affordance while a
+         load is in flight. -->
+    {#if pageState.loading || pageState.url !== ''}
+      <button
+        type="button"
+        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
+        title={pageState.loading ? 'Stop loading' : 'Reload page'}
+        onclick={onReloadButton}
+        oncontextmenu={onReloadContextMenu}
+      >
+        {#if pageState.loading}
+          <X size={14} />
+        {:else}
+          <RotateCw size={13} />
+        {/if}
+      </button>
+    {/if}
     <div class="relative min-w-0 flex-1">
       <span class="sr-only">Browser address</span>
       {#if pageState.url !== ''}

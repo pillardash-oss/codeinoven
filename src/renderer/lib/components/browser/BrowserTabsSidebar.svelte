@@ -238,21 +238,26 @@
           <ArrowRight size={15} />
         </button>
       {/if}
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-        aria-label={runtime?.loading ? 'Stop loading' : 'Reload page'}
-        title={runtime?.loading ? 'Stop loading' : 'Reload page'}
-        disabled={!activeTab}
-        onclick={reloadActiveTab}
-        oncontextmenu={onReloadContextMenu}
-      >
-        {#if runtime?.loading}
-          <X size={15} />
-        {:else}
-          <RotateCw size={14} />
-        {/if}
-      </button>
+      <!-- Reload is shown only when there is a page to act on: an empty tab has
+           nothing to reload, and the button is the stop affordance while a load
+           is in flight, so it takes the address bar's room only when it can do
+           something, just as back and forward do. -->
+      {#if activeTab && (runtime?.loading || activeTab.url)}
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={runtime?.loading ? 'Stop loading' : 'Reload page'}
+          title={runtime?.loading ? 'Stop loading' : 'Reload page'}
+          onclick={reloadActiveTab}
+          oncontextmenu={onReloadContextMenu}
+        >
+          {#if runtime?.loading}
+            <X size={15} />
+          {:else}
+            <RotateCw size={14} />
+          {/if}
+        </button>
+      {/if}
       <div class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-elevated px-2">
         {#if activeTab?.url}
           <button
