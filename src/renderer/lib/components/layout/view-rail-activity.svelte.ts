@@ -154,16 +154,19 @@ export class ViewRailActivity {
  * carries the family's full breakdown. Returns null when the family is quiet.
  *
  * The project family spans four views (Projects, Threads, Scoped threads, Scope
- * Board), so its badge rides only the selected project view, never all four at
- * once. Chats and Assistant each have a single view and keep their badge there.
+ * Board), so its badge rides only one of them at a time: the option the caller
+ * resolved as `projectBadgeOption`, which is the live project view when one is
+ * shown, or the last project view the user was on when a non-project view (the
+ * Browser) is on screen. Chats and Assistant each have a single view and keep
+ * their badge there.
  */
 export function viewBadgeFor(
   optionId: HeaderViewOptionId,
-  shownOption: HeaderViewOptionId | null,
+  projectBadgeOption: HeaderViewOptionId | null,
   counts: ViewActivityCounts
 ): ViewBadge | null {
   const family = viewOptionFamily(optionId)
-  if (family === 'projects' && optionId !== shownOption) return null
+  if (family === 'projects' && optionId !== projectBadgeOption) return null
   const activity = counts[family]
   const icon = FAMILY_ICONS[family]
   if (activity.working > 0) {

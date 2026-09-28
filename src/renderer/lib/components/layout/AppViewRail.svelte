@@ -12,6 +12,9 @@
     options: HeaderViewOption[]
     /** The option the rail currently reflects, or null on takeover views. */
     shownOption: HeaderViewOptionId | null
+    /** The option that carries the project family's activity badge   the live
+     *  project view, or the last one the user was on when the Browser is shown. */
+    projectBadgeOption: HeaderViewOptionId | null
     /** The view the shell shows, so the utility group can mark Settings. */
     activeView: MainView
     navigate: (view: MainView) => void
@@ -19,7 +22,8 @@
     onOptionHover: (id: HeaderViewOptionId) => void
   }
 
-  let { options, shownOption, activeView, navigate, onOptionHover }: Props = $props()
+  let { options, shownOption, projectBadgeOption, activeView, navigate, onOptionHover }: Props =
+    $props()
 
   const activity = new ViewRailActivity()
 
@@ -53,7 +57,7 @@
 
   <div class="flex flex-col items-center gap-0.5" data-onboarding="view-switcher">
     {#each options as option (option.id)}
-      {@const activityBadge = viewBadgeFor(option.id, shownOption, activity.counts)}
+      {@const activityBadge = viewBadgeFor(option.id, projectBadgeOption, activity.counts)}
       <AppRailButton
         label={option.label}
         icon={option.icon}

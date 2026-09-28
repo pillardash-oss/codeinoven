@@ -1426,6 +1426,7 @@
     <AppViewRail
       options={navigation.headerViewOptions()}
       shownOption={navigation.shownHeaderViewOption}
+      projectBadgeOption={navigation.projectBadgeOption}
       {activeView}
       {navigate}
       onOptionHover={handleViewOptionHover}
