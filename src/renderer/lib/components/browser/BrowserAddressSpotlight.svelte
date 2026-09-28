@@ -29,6 +29,11 @@
 
   let value = $state(initialValue)
   let error = $state('')
+  /** The one field, focused and selected the moment the panel is up. Bound here
+   *  rather than left to the shared "first text field" rule so the address is
+   *  selected too, which is what Cmd/Ctrl+L promises: the key hands over the
+   *  address to replace, not just a caret at one end of it. */
+  let addressInput = $state<HTMLInputElement | null>(null)
 
   function submit(): void {
     const resolution = resolveBrowserAddress(value, appConfigState.browserSearchEngine)
@@ -60,10 +65,17 @@
   chrome={false}
   {onClose}
   contentClass="p-1.5"
+  claimInitialFocus={() => {
+    if (!addressInput) return false
+    addressInput.focus()
+    addressInput.select()
+    return true
+  }}
 >
   <div class="flex items-center gap-2 rounded-lg bg-elevated px-3">
     <Globe size={15} class="shrink-0 text-dimmed" />
     <input
+      bind:this={addressInput}
       type="text"
       class="h-10 min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-dimmed"
       placeholder="Search or enter an address"

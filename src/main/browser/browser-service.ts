@@ -1450,9 +1450,21 @@ export class BrowserService {
     }
   }
 
-  /** Ask the renderer to act on the tab strip, which only the renderer owns. */
+  /**
+   * Ask the renderer to act on the tab strip, which only the renderer owns.
+   *
+   * When the key came from the page, this process still holds the OS keyboard
+   * through the page's own `WebContentsView`, so the renderer can move its
+   * `document.activeElement` into the address field but not take the user's
+   * typing with it. A shortcut whose whole point is a DOM field therefore hands
+   * the window's web contents the focus first: `focus-address` and `new-tab`
+   * both open a field the renderer immediately focuses. The tab-strip actions
+   * that do not involve a field (`close-tab`, `toggle-notes`) deliberately do
+   * not, because the page must keep the keyboard after them.
+   */
   private requestPanelShortcut(tabId: string, action: BrowserPanelShortcutAction): void {
     if (this.window.webContents.isDestroyed()) return
+    if (action === 'focus-address' || action === 'new-tab') this.window.webContents.focus()
     sendToRenderer(this.window.webContents, 'browser:panelShortcut', tabId, action)
   }
 
