@@ -22305,7 +22305,7 @@ export class ChatEngine {
     const size = await this.storage.rawSize(streamPath)
     if (size === null) {
       this.turnStreamCache.delete(streamPath)
-      return pageTurnStreamParts([], [], query)
+      return pageTurnStreamParts([], [], query, null)
     }
 
     const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
@@ -22336,7 +22336,7 @@ export class ChatEngine {
       const tail = await this.storage.readRawTail(streamPath, entry.consumedBytes)
       if (!tail) {
         this.turnStreamCache.delete(streamPath)
-        return pageTurnStreamParts([], [], query)
+        return pageTurnStreamParts([], [], query, turnStartTs ?? null)
       }
       for (const line of tail.content.split('\n')) {
         const trimmed = line.trim()
@@ -22382,7 +22382,7 @@ export class ChatEngine {
       entry.folded = folded
       entry.foldKey = foldKey
     }
-    return pageTurnStreamParts(folded, entry.events, query)
+    return pageTurnStreamParts(folded, entry.events, query, turnStartTs ?? null)
   }
 
   /**

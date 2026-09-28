@@ -183,7 +183,7 @@
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
   import { browserInspector } from '$lib/stores/browser-inspector.svelte'
-  import { isTodoToolPart, latestAgentTodo } from '$lib/agent-todos'
+  import { isTodoToolPart, latestAgentTodo, todoSnapshotMatchesTurn } from '$lib/agent-todos'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
@@ -264,6 +264,8 @@
     PendingAgentQuestionRequest,
     ImageDescriptorErrorRequest,
     ImageDescriptorReplyAction,
+    TurnStreamPartsChange,
+    TurnStreamPartsPage,
     AttachmentStorageScope,
     UserMessagePresentation,
     UserMessageSummary,
@@ -1006,6 +1008,9 @@
    *  trace, so they ride beside the trace window and keep the task card correct
    *  no matter which page of the trace is mounted. */
   let streamTodoParts = $state<AgentPart[]>([])
+  /** Start time of the turn `streamTodoParts` was folded for. Null when the log
+   *  had no prompt to bound against (or nothing has been read yet). */
+  let streamTodoTurnStart = $state<number | null>(null)
   /** Stream events the durable log has consumed for this fold: the live poll's
    *  change cursor. `null` until a read lands, so the first poll falls back to
    *  a window read. */
@@ -1022,7 +1027,15 @@
     streamParts = []
     streamHasOlder = false
     streamTodoParts = []
+    streamTodoTurnStart = null
     streamCursor = null
+  }
+
+  /** Adopt a durable read's task-list snapshot together with the turn it was
+   *  folded for, so the card can reject it once the transcript moves on. */
+  function applyTodoSnapshot(page: TurnStreamPartsPage | TurnStreamPartsChange): void {
+    streamTodoParts = page.todoParts
+    streamTodoTurnStart = page.turnStartTs
   }
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
@@ -1105,9 +1118,21 @@
    * the task card so a trailing provider snapshot cannot rewind the visible
    * task state. Task-list parts never render in the trace, so they are carried
    * beside its window instead of inside it.
+   *
+   * The snapshot only counts while it still describes the turn the transcript
+   * is on. It is refreshed only while this view watches a live turn or crosses
+   * a boundary it observed, so once the transcript advanced to a newer prompt
+   * the previous turn's snapshot is dropped: it is appended after the messages
+   * and a task-list snapshot replaces the whole task map, so otherwise it would
+   * overrule the fresher message state and leave a stale list, and a stale
+   * highlight, on screen.
    */
+  let todoSnapshotIsCurrent = $derived.by(() => {
+    if (streamTodoParts.length === 0) return false
+    return todoSnapshotMatchesTurn(streamTodoTurnStart, turnAnchorCreatedAt())
+  })
   let todoMessages = $derived.by(() => {
-    if (streamTodoParts.length === 0) return messages
+    if (!todoSnapshotIsCurrent) return messages
     const streamMessage: AgentMessage = {
       id: `${thread.id}:todo-stream`,
       role: 'assistant',
@@ -4226,6 +4251,26 @@
     return undefined
   }
 
+  /**
+   * Creation time of the newest prompt that opened a turn. Activity-only user
+   * messages (compaction notices, sub-agent envelopes) ride mid-turn, so they
+   * never move the boundary   the same rule the main process folds by.
+   */
+  function turnAnchorCreatedAt(): number | null {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index]
+      if (!message || message.role !== 'user') continue
+      if (
+        message.parts.length > 0 &&
+        message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
+      ) {
+        continue
+      }
+      return message.createdAt || null
+    }
+    return null
+  }
+
   function beginLocalTurn(userMessageId: string): void {
     restoredBusy = false
     clearStreamParts()
@@ -4535,7 +4580,7 @@
           if (page.kind !== 'window') return
           streamParts = mergeWorkingParts(streamParts, page.parts)
           streamHasOlder = page.hasOlder
-          streamTodoParts = page.todoParts
+          applyTodoSnapshot(page)
           streamCursor = page.cursor
           if (
             providerStatus === null &&
@@ -10644,12 +10689,12 @@
         // No cursor yet (a mount read that has not landed): adopt the window.
         streamParts = mergeWorkingParts(streamParts, page.parts)
         streamHasOlder = page.hasOlder
-        streamTodoParts = page.todoParts
+        applyTodoSnapshot(page)
         streamCursor = page.cursor
         return
       }
       streamCursor = page.cursor
-      streamTodoParts = page.todoParts
+      applyTodoSnapshot(page)
       // A fold that shrank under us belongs to another turn (a steered
       // continuation, or a log rewritten after the fact): remount the newest
       // page instead of keeping entries that no longer belong here.
@@ -10681,7 +10726,7 @@
       if (!alive || page.kind !== 'window') return
       streamParts = mergeWorkingParts(streamParts, page.parts)
       streamHasOlder = page.hasOlder
-      streamTodoParts = page.todoParts
+      applyTodoSnapshot(page)
       streamCursor = page.cursor
     } catch {
       // Best-effort: the message cache still carries the checkoffs, and the
@@ -10697,7 +10742,7 @@
     if (!alive || generation !== streamPartsLoadGeneration || page.kind !== 'window') return
     streamParts = page.parts
     streamHasOlder = page.hasOlder
-    streamTodoParts = page.todoParts
+    applyTodoSnapshot(page)
     streamCursor = page.cursor
   }
 
@@ -10737,6 +10782,29 @@
       clearInterval(poll)
       streamPartsLoadGeneration += 1
     }
+  })
+
+  // The transcript can advance to a new turn without this view ever observing
+  // the boundary (a queued message, an auto-retry, a routine, or another app
+  // instance running the turn). The live poll above only runs while this view
+  // believes the thread is busy, so re-read the durable snapshot the moment the
+  // transcript's turn anchor actually changes. The guard that feeds the task
+  // card then decides whether the snapshot still applies, which is what keeps a
+  // second instance and an unwatched thread from showing the previous turn's
+  // list. The first anchor this view sees is left to the mount read, which owns
+  // the initial snapshot.
+  let todoAnchorLastRead: number | null = null
+  $effect(() => {
+    const anchor = turnAnchorCreatedAt()
+    if (anchor === null) return
+    if (todoAnchorLastRead === null) {
+      todoAnchorLastRead = anchor
+      return
+    }
+    if (anchor === todoAnchorLastRead) return
+    todoAnchorLastRead = anchor
+    if (!active || appQuitState.quitting) return
+    void refreshStreamTailAfterTurn()
   })
 
   // Leaving this thread (another thread, another top-level view) paginates its

@@ -44,6 +44,28 @@ export function agentTodoProgressLabel(
   return `${completedCount}/${itemCount} done`
 }
 
+/**
+ * Whether a durable task-list snapshot still describes the turn the transcript
+ * is on.
+ *
+ * The snapshot is refreshed only while a view watches a live turn or crosses a
+ * boundary it observed, so it can lag the transcript. Because the snapshot is
+ * fed to the card as a synthetic trailing message and a task-list snapshot
+ * replaces the whole task map, a snapshot from an older turn would otherwise
+ * overrule the fresher message state and leave a stale list and a stale
+ * highlight on screen after the agent moved on. A transcript that has advanced
+ * past the snapshot's turn (`transcriptTurnStart > snapshotTurnStart`) must
+ * therefore ignore it. Either timestamp being unknown (no prompt yet on either
+ * side) cannot prove staleness, so the snapshot is trusted.
+ */
+export function todoSnapshotMatchesTurn(
+  snapshotTurnStart: number | null,
+  transcriptTurnStart: number | null
+): boolean {
+  if (snapshotTurnStart === null || transcriptTurnStart === null) return true
+  return transcriptTurnStart <= snapshotTurnStart
+}
+
 type ToolPart = Extract<AgentPart, { type: 'tool' }>
 
 export function isTodoToolPart(part: AgentPart): part is ToolPart {
@@ -97,12 +119,12 @@ function applyTodoPart(tasks: Map<string, AgentTodoItem>, part: ToolPart): void 
     return
   }
   if (tool.endsWith('tasklist')) {
-    const items = part.state.output ? parseTodoItems({}, part.state.output) : []
-    if (items.length > 0) replaceTasks(tasks, items)
+    const items = part.state.output ? parseTodoItems({}, part.state.output) : null
+    if (items) replaceTasks(tasks, items)
     return
   }
   const items = parseTodoItems(part.state.input, part.state.output)
-  if (items.length > 0) replaceTasks(tasks, items)
+  if (items) replaceTasks(tasks, items)
 }
 
 function applyTaskCreate(tasks: Map<string, AgentTodoItem>, part: ToolPart): void {
@@ -151,10 +173,21 @@ function replaceTasks(tasks: Map<string, AgentTodoItem>, items: AgentTodoItem[])
   for (const item of items) tasks.set(item.id, item)
 }
 
-function parseTodoItems(input: Record<string, unknown>, output?: string): AgentTodoItem[] {
+/**
+ * Normalize a todo payload into items, or null when the payload carries no task
+ * list at all.
+ *
+ * The distinction matters: a whole-list tool that publishes an explicitly empty
+ * list is clearing its tasks, so the card has to drop them. Treating "no list in
+ * this payload" the same as "an empty list" would clear the state on every
+ * snapshot that does not restate the tasks (a mid-stream argument update, a
+ * tool result envelope), and treating both as "no change" leaves the card stuck
+ * on a list the agent already cleared.
+ */
+function parseTodoItems(input: Record<string, unknown>, output?: string): AgentTodoItem[] | null {
   const source =
     findTodoArray(input) ?? (output ? findTodoArray(parseRecord(output) ?? {}) : undefined)
-  if (!source) return []
+  if (!source) return null
 
   return source.flatMap((value, index) => {
     if (typeof value === 'string' && value.trim()) {
