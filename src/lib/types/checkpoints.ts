@@ -22,6 +22,18 @@ export interface ChangeSnapshot {
 
 export type TurnCheckpointStatus = 'active' | 'completed' | 'failed' | 'interrupted' | 'rolled_back'
 
+/**
+ * Why an interrupted turn stopped short of a terminal answer.
+ *
+ * - `app-closed`: the process exited on purpose (tray Quit, a confirmed force
+ *   close, a deliberate park-then-quit) and killed the harness mid-turn.
+ * - `crash`: the process died without a chance to clean up (crash, power loss,
+ *   an OS kill), so the harness never reported completion.
+ *
+ * Absent on turns interrupted before this was recorded.
+ */
+export type TurnCheckpointStopReason = 'app-closed' | 'crash'
+
 export interface TurnCheckpointChangeSummary {
   path: string
   kind: 'created' | 'modified' | 'deleted'
@@ -48,6 +60,7 @@ export interface TurnCheckpointSummary {
   rolledBackAt?: number
   rolledBackPaths?: string[]
   failure?: string
+  stopReason?: TurnCheckpointStopReason
   gitHead?: string | null
 }
 

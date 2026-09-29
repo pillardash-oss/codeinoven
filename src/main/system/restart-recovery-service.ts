@@ -40,6 +40,13 @@ export interface RestartRecoveryOptions {
    * this pass (a plain restart with no sibling).
    */
   claimTurn?: (projectId: string, threadId: string, ownerPid: number) => Promise<boolean>
+  /**
+   * Whether the process that recorded an in-flight turn shut down on purpose,
+   * from the durable clean-shutdown marker. A deliberately stopped turn is
+   * settled as a clean app-closed stop (plain wording) instead of the crash
+   * failure; every other orphan keeps the crash wording.
+   */
+  isDeliberateStop?: (ownerPid: number | null) => boolean
 }
 
 export interface RestartRecoveryFailure {
@@ -53,6 +60,8 @@ export interface RestartRecoveryResult {
   inspected: number
   /** Threads whose interrupted turns should be re-run on restart. */
   recovered: Thread[]
+  /** The subset of {@link recovered} stopped by a deliberate app close. */
+  stopped: Thread[]
   /** Threads whose turns demonstrably completed before the stop   not resumed. */
   completed: Thread[]
   failures: RestartRecoveryFailure[]
@@ -92,6 +101,7 @@ export class RestartRecoveryService {
     const allThreads = await this.threads.listAllViaWorker()
     const activeTurnOwners = await this.activeTurnOwners()
     const recovered: Thread[] = []
+    const stopped: Thread[] = []
     const completed: Thread[] = []
     const failures: RestartRecoveryFailure[] = []
 
@@ -140,20 +150,27 @@ export class RestartRecoveryService {
         continue
       }
 
+      const deliberateStop = options.isDeliberateStop?.(ownerPid ?? null) === true
       try {
-        await this.checkpoints.markActiveInterrupted(thread.projectId, thread.id)
+        if (deliberateStop) {
+          await this.checkpoints.markActiveStopped(thread.projectId, thread.id)
+        } else {
+          await this.checkpoints.markActiveInterrupted(thread.projectId, thread.id)
+        }
       } catch (error) {
         failures.push(this.failure(thread, 'checkpoint', error))
       }
 
       try {
         this.threads.setStatus(thread.id, 'interrupted', Date.now())
-        recovered.push({
+        const settled: Thread = {
           ...thread,
           status: 'interrupted' as ThreadStatus,
           updatedAt: Date.now(),
           lastActivity: Date.now()
-        })
+        }
+        recovered.push(settled)
+        if (deliberateStop) stopped.push(settled)
       } catch (error) {
         failures.push(this.failure(thread, 'thread', error))
       }
@@ -162,6 +179,7 @@ export class RestartRecoveryService {
     return {
       inspected: allThreads.length,
       recovered,
+      stopped,
       completed,
       failures
     }

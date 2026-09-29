@@ -83,13 +83,22 @@ export async function reconcileInterruptedWork(
 
   const { RestartRecoveryService } = await import('../system/restart-recovery-service')
   const service = new RestartRecoveryService(database)
+  // The durable marker a deliberate shutdown left behind turns an orphaned turn
+  // into a clean app-closed stop instead of a crash failure. A launch consumes
+  // it once it has been read, so a later crash cannot inherit a stale verdict.
+  const cleanShutdown = state.cleanShutdownStore
   const recovery = await service.recover({
     scope: adoptOnlyOrphans ? 'take-over' : 'restart',
     isRunOwnerAlive: (pid) => instanceRegistry.isRunOwnerAlive(pid),
     // Two instances can reconcile the same orphan at the same moment, and only
     // one of them may resume its harness session. The claim decides which.
-    claimTurn: (projectId, threadId, ownerPid) => service.claimTurn(projectId, threadId, ownerPid)
+    claimTurn: (projectId, threadId, ownerPid) => service.claimTurn(projectId, threadId, ownerPid),
+    isDeliberateStop: (ownerPid) => cleanShutdown?.isDeliberateStop(ownerPid) ?? false
   })
+
+  if (reason === 'launch') {
+    await cleanShutdown?.consume()
+  }
 
   reportRecovered(recovery)
 
@@ -188,6 +197,15 @@ function reportRecovered(recovery: RestartRecoveryResult): void {
     for (const thread of recovery.completed) {
       broadcastThreadUpdate(thread)
     }
+  }
+  if (recovery.stopped.length > 0) {
+    Logger.info('Settled deliberately stopped threads after a clean app close', {
+      inspected: recovery.inspected,
+      stopped: recovery.stopped.map((thread) => ({
+        projectId: thread.projectId,
+        threadId: thread.id
+      }))
+    })
   }
   if (recovery.failures.length > 0) {
     Logger.error('Restart recovery completed with failures', recovery.failures)

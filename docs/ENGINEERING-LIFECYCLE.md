@@ -135,6 +135,31 @@ Desktop preview registration is reconstructed from validated feature-scoped mani
 - Unsupported symlink or junction environment: preserve the canonical artifact and report the preview as unavailable; do not copy over another preview.
 - Cancellation after artifact creation: confirm cancellation; generated artifacts remain available and `started_at` remains set.
 
+### A deliberate close is not a crash
+
+When a turn is still in flight and the process stops, the next launch settles its
+turn checkpoint and shows a line on the file-changes card. Two cases are
+possible and must not be conflated:
+
+- **Abrupt death** (crash, power loss, an OS kill): nothing cleaned up, so the
+  checkpoint is marked `interrupted` with `stopReason: 'crash'` and the wording
+  "CodeInOven stopped before the harness reported completion". This is the only
+  case that blames the harness, because only here did the harness actually fail
+  to report.
+- **Deliberate close** (the menu bar Quit item, or a confirmed force close):
+  `runShutdownPipeline` writes a durable clean-shutdown marker
+  (`src/main/system/clean-shutdown-store.ts`) before it kills the harness, and
+  the next launch consumes it. An orphaned turn whose recorded `owner_pid`
+  matches the marker is settled by `CheckpointManager.markActiveStopped` as
+  `stopReason: 'app-closed'` with the plain wording "CodeInOven closed before
+  this turn finished", rendered in a neutral style rather than as an error.
+
+In background mode a window close is a park, not a close: the chat engine and
+its in-flight turns keep running, so parking never settles a turn at all. The
+marker is only written on a real shutdown, and it is cleared the moment a launch
+has read it, so a later crash with no marker can never inherit a stale "clean"
+verdict from an earlier deliberate quit.
+
 ### Stop outranks every auto-resume
 
 A deliberate Stop (the composer stop button, a child stop, or the steer

@@ -23,6 +23,7 @@ import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-se
 import type { RoutineSchedulerService } from '../scheduler/routine-scheduler-service'
 import type { BackgroundRunLedger } from '../scheduler/background-run-ledger'
 import type { AutoAnswerStore } from '../system/auto-answer-store'
+import type { CleanShutdownStore } from '../system/clean-shutdown-store'
 import type { RoutineManager } from '../../lib/engines/routine-manager'
 import type { PtyService } from '../system/pty-service'
 import type { ProviderConnectionService } from '../providers/provider-connection'
@@ -87,6 +88,11 @@ export interface BootstrapState {
   backgroundRunLedger: BackgroundRunLedger | null
   /** Durable record of gates the app resolved without the user (attention rail). */
   autoAnswerStore: AutoAnswerStore | null
+  /**
+   * Proof the previous process exited on purpose, so a turn left in flight is
+   * settled as a clean app-closed stop rather than a crash failure.
+   */
+  cleanShutdownStore: CleanShutdownStore | null
 
   /** Stops the instance take-over watcher registered after launch recovery. */
   stopInstanceTakeOverListener: (() => void) | null
@@ -163,6 +169,7 @@ export function createBootstrapState(): BootstrapState {
     routineScheduler: null,
     backgroundRunLedger: null,
     autoAnswerStore: null,
+    cleanShutdownStore: null,
     stopInstanceTakeOverListener: null,
     foreignRuns: null,
     threadTransfer: null,

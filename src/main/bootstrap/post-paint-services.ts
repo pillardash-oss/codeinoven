@@ -283,6 +283,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const { AutoAnswerStore } = await import('../system/auto-answer-store')
   state.autoAnswerStore = new AutoAnswerStore(storage)
   await state.autoAnswerStore.load()
+  // Proof a previous process shut down on purpose, so an orphaned turn is
+  // settled as a clean app-closed stop rather than a crash failure. Loaded
+  // before launch recovery reads it.
+  const { CleanShutdownStore } = await import('../system/clean-shutdown-store')
+  state.cleanShutdownStore = new CleanShutdownStore(storage)
+  await state.cleanShutdownStore.load()
   state.chatEngine.attachAutoAnswerRecorder((report) => {
     const store = state.autoAnswerStore
     if (!store) return

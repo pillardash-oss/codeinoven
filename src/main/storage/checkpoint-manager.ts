@@ -6,6 +6,7 @@ import type {
   TurnCheckpointChangeSummary,
   TurnCheckpointFileDiff,
   TurnCheckpointStatus,
+  TurnCheckpointStopReason,
   TurnCheckpointSummary
 } from '../../lib/types'
 import type { Database } from '../database/database'
@@ -41,6 +42,13 @@ import {
 
 export { MAX_CHECKPOINT_FAILURE_LENGTH }
 
+/**
+ * The plain wording for a turn stopped by a deliberate app close. Kept distinct
+ * from the crash text below so a card never blames the harness for an exit the
+ * user asked for.
+ */
+const APP_CLOSED_TURN_MESSAGE = `${APP_NAME} closed before this turn finished.`
+
 export interface TurnCheckpoint {
   id: string
   projectId: string
@@ -59,6 +67,8 @@ export interface TurnCheckpoint {
   rolledBackAt?: number
   rolledBackPaths?: string[]
   failure?: string
+  /** Why an interrupted turn stopped short of a terminal answer. */
+  stopReason?: TurnCheckpointStopReason
 }
 
 /**
@@ -202,7 +212,8 @@ export class CheckpointManager {
     status: Extract<TurnCheckpointStatus, 'completed' | 'failed' | 'interrupted'>,
     failure?: string,
     changedPaths?: ReadonlySet<string>,
-    options: TurnCompletionOptions = {}
+    options: TurnCompletionOptions = {},
+    stopReason?: TurnCheckpointStopReason
   ): Promise<TurnCheckpoint> {
     return this.withBlobLock(projectId, async () => {
       const checkpoint = await this.get(projectId, threadId, turnId)
@@ -246,6 +257,7 @@ export class CheckpointManager {
         changeFilterApplied: changedPaths !== undefined || changes.length !== allChanges.length,
         lineStats: lineStats.stats,
         completedAt: Date.now(),
+        ...(stopReason ? { stopReason } : {}),
         ...(completionFailure ? { failure: completionFailure } : {})
       }
       await this.save(updated)
@@ -399,14 +411,67 @@ export class CheckpointManager {
         checkpoint.id,
         checkpoint.before.projectRoot,
         'interrupted',
-        interruption
+        interruption,
+        undefined,
+        {},
+        'crash'
       )
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       const updated: TurnCheckpoint = {
         ...checkpoint,
         status: 'interrupted',
+        stopReason: 'crash',
         failure: boundCheckpointFailure(`${interruption} Change capture failed: ${detail}`)
+      }
+      await this.save(updated)
+      await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
+        projectId,
+        threadId
+      ])
+      return updated
+    }
+  }
+
+  /**
+   * Finalize the active turn as a clean stop after a deliberate app close.
+   *
+   * The harness was still working when the user quit, so the turn has no
+   * terminal answer. Distinct from `markActiveInterrupted`: the same on-disk
+   * diff is kept, but the wording is plain and `stopReason` is `app-closed`, so a
+   * file-changes card reports an expected stop rather than a crash the user
+   * never had.
+   */
+  async markActiveStopped(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
+    const active = this.db.get<{ turn_id: string | null }>(
+      'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',
+      projectId,
+      threadId
+    )
+    if (!active?.turn_id) return null
+    const checkpoint = await this.get(projectId, threadId, active.turn_id)
+    if (!checkpoint || checkpoint.status !== 'active') return checkpoint
+    try {
+      return await this.completeTurn(
+        projectId,
+        threadId,
+        checkpoint.id,
+        checkpoint.before.projectRoot,
+        'interrupted',
+        APP_CLOSED_TURN_MESSAGE,
+        undefined,
+        {},
+        'app-closed'
+      )
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const updated: TurnCheckpoint = {
+        ...checkpoint,
+        status: 'interrupted',
+        stopReason: 'app-closed',
+        failure: boundCheckpointFailure(
+          `${APP_CLOSED_TURN_MESSAGE} Change capture failed: ${detail}`
+        )
       }
       await this.save(updated)
       await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
@@ -579,6 +644,7 @@ export class CheckpointManager {
           : {}),
         ...(checkpoint.lineStats?.[change.path]?.truncated ? { lineCountsTruncated: true } : {})
       })),
+      ...(checkpoint.stopReason ? { stopReason: checkpoint.stopReason } : {}),
       createdAt: checkpoint.createdAt,
       completedAt: checkpoint.completedAt,
       rolledBackAt: checkpoint.rolledBackAt,

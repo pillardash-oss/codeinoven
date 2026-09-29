@@ -29,6 +29,16 @@ export interface ShutdownContext {
 
 export async function runShutdownPipeline(context: ShutdownContext): Promise<void> {
   const { state, database } = context
+  // This is the single deliberate-shutdown funnel (tray Quit, a confirmed force
+  // close, Cmd+Q with background mode off). Record that the exit is on purpose
+  // before the harness is killed, so the next launch settles any turn left in
+  // flight as a clean app-closed stop instead of a crash failure. A crash or a
+  // power loss never reaches here, so its orphans keep the crash wording.
+  try {
+    await state.cleanShutdownStore?.record()
+  } catch (error) {
+    Logger.error('Clean-shutdown marker write failed during shutdown:', error)
+  }
   // Give the renderer a moment to process window:beforeQuit.
   await new Promise<void>((resolve) => setTimeout(resolve, 500))
 
