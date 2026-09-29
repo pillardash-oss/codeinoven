@@ -26,7 +26,10 @@ import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import type { Thread, ThreadSettings } from '$shared/types'
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
-import { MAX_BROWSER_TAB_TITLE_LENGTH } from '$shared/browser/global-browser-tabs'
+import {
+  MAX_BROWSER_TAB_TITLE_LENGTH,
+  browserAssistantThreadId
+} from '$shared/browser/global-browser-tabs'
 import { agentRuns } from './agent-runs.svelte'
 import { conversationAttention } from './conversation-attention.svelte'
 import { threadMessages } from './thread-messages.svelte'
@@ -92,7 +95,8 @@ class BrowserAssistantState {
     const inFlight = this.pending.get(input.browserTabId)
     if (inFlight) return inFlight
     const resolving = this.#resolveChat(input).finally(() => {
-      if (this.pending.get(input.browserTabId) === resolving) this.pending.delete(input.browserTabId)
+      if (this.pending.get(input.browserTabId) === resolving)
+        this.pending.delete(input.browserTabId)
     })
     this.pending.set(input.browserTabId, resolving)
     return resolving
@@ -114,6 +118,10 @@ class BrowserAssistantState {
       if (existing && !existing.archived) return this.register(input.browserTabId, existing)
     }
     const created = await invoke('thread:create', {
+      // The thread id is the tab's own, in a form a path can hold: the tab's
+      // workspace is `browser-cwd/<thread id>`, so a conversation recreated for
+      // this tab lands in the same directory its files were staged in.
+      id: browserAssistantThreadId(input.browserTabId),
       projectId: GLOBAL_BROWSER_PROJECT_ID,
       providerId: input.settings.harnessId ?? '',
       title: boundedTitle(input.title),

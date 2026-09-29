@@ -26,9 +26,9 @@ export const LEGACY_CHATS_ARTIFACTS_DIRECTORY = 'chats-artifacts'
  *  real project folder either. */
 export const ASSISTANT_CWD_DIR = 'assistant-cwd'
 
-/** App-storage root directory used as the neutral working directory for the
- *  global browser's per-tab agent sessions, so a conversation about a web page
- *  never runs against a real project folder. */
+/** App-storage root directory holding one workspace per browser tab's agent
+ *  chat, so a conversation about a web page never runs against a real project
+ *  folder and never shares a directory with another tab. */
 export const BROWSER_CWD_DIR = 'browser-cwd'
 
 /** Legacy inbox-chat generated-image root kept readable for older threads. */
@@ -60,6 +60,14 @@ export function assistantThreadWorkspaceDirectory(
   routineId?: string | null
 ): string {
   return assistantRoutineWorkspaceDirectory(routineId ?? threadId)
+}
+
+/** Storage-root-relative workspace directory of one browser tab's agent chat:
+ *  the directory its session runs in and the tab's own scratch root. The tab's
+ *  conversation thread is named after the tab, so this is `browser-cwd/<tab id>`
+ *  and one tab never reads or writes another tab's files. */
+export function browserThreadWorkspaceDirectory(threadId: string): string {
+  return join(BROWSER_CWD_DIR, threadId)
 }
 
 const PROJECT_GITIGNORE_BLOCK = `# ${APP_NAME} agent scratch space (context, reports, temp work)\n.cio/\n`

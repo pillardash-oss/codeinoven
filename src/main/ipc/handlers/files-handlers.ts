@@ -2,8 +2,9 @@ import { extname, join } from 'path'
 import { mkdir, rename, rm, writeFile } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
 import { retainTemporaryAttachment } from '../../editor/temporary-attachment-retention'
+import { adoptDraftAttachments } from '../../editor/draft-attachment-adoption'
 import { retainRemoteMediaAttachment } from '../../editor/remote-media-attachment'
-import { validateBoundedString } from '../ipc-validation'
+import { validateBoundedString, validateEntityId } from '../ipc-validation'
 import { validateAttachmentStorageScope } from './shared'
 import type { IpcHandlerContext } from './context'
 
@@ -79,5 +80,19 @@ export function registerFilesHandlers(ctx: IpcHandlerContext): void {
     const saved = await retainRemoteMediaAttachment({ source, directory })
     await privilegedIpc.registerUserSelectedFile(saved.path)
     return saved.path
+  })
+
+  /**
+   * Move everything the welcome composer staged before its chat existed into
+   * that chat's own scratch path, and answer the moves so the composer can
+   * repoint the attachment chips at the files' new homes.
+   */
+  privileged('attachment:adoptDraft', async (_event, rawThreadId: unknown) => {
+    const threadId = validateEntityId(rawThreadId, 'Thread ID')
+    const moves = await adoptDraftAttachments(threadId)
+    for (const move of moves) {
+      await privilegedIpc.registerUserSelectedFile(move.to)
+    }
+    return moves
   })
 }

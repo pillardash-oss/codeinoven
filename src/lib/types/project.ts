@@ -2,6 +2,17 @@
 export const INBOX_PROJECT_ID = 'inbox'
 
 /**
+ * The transient scope the welcome ("Start a new chat") composer stages into
+ * while the chat it will become does not exist yet.
+ *
+ * It is not a thread and nothing lives there: as soon as the chat exists, main
+ * moves everything staged here into that chat's own workspace
+ * (`chats-cwd/<threadId>/.cio/tmp`) and the composer repoints its attachment
+ * chips at the moved files. Nothing may keep writing here after the hand-off.
+ */
+export const DRAFT_CHAT_THREAD_ID = 'new-chat'
+
+/**
  * Fixed id of the hidden container that holds assistant-space threads (routine
  * tasks). Like the inbox it is a hidden project, so assistant threads never
  * leak into the Projects or Chats lists.
@@ -13,10 +24,12 @@ export const ASSISTANT_SPACE_ID = 'assistant'
  * workspace.
  *
  * It is the one hidden container with no content-view family: its tabs are web
- * pages rather than conversations, and its single thread exists only so a
- * per-tab agent side chat can resolve its scope. Every thread listing and
- * search therefore excludes this container's threads, so that scope-anchor row
- * can never surface as a user thread.
+ * pages rather than conversations, and its threads exist only so a per-tab agent
+ * side chat can resolve its scope. Each tab's conversation thread is named after
+ * its tab, and its workspace is `browser-cwd/<thread id>` in app storage, so one
+ * tab never shares a directory with another. Every thread listing and search
+ * therefore excludes this container's threads, so those rows can never surface
+ * as user threads.
  */
 export const GLOBAL_BROWSER_PROJECT_ID = 'browser-global'
 

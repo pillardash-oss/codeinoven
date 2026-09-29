@@ -293,6 +293,8 @@ export function registerIpcHandlers(
           join(getConfigRoot(), 'chats-cwd'),
           // The assistant workspace, one directory per routine.
           join(getConfigRoot(), 'assistant-cwd'),
+          // The browser workspace: one directory per tab's agent chat.
+          join(getConfigRoot(), 'browser-cwd'),
           ...projects.flatMap((project) => [
             join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments'),
             join(getConfigRoot(), 'projects', project.id, 'threads')

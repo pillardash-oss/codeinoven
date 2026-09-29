@@ -4,9 +4,15 @@ import {
   ASSISTANT_CWD_DIR,
   PROJECT_DATA_DIRECTORY,
   assistantThreadWorkspaceDirectory,
+  browserThreadWorkspaceDirectory,
   chatThreadWorkspaceDirectory
 } from './project-artifacts'
-import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID, type Project } from './types'
+import {
+  ASSISTANT_SPACE_ID,
+  GLOBAL_BROWSER_PROJECT_ID,
+  INBOX_PROJECT_ID,
+  type Project
+} from './types'
 
 /**
  * Single source of truth for where a thread's on-disk artifacts live.
@@ -15,24 +21,38 @@ import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID, type Project } from './types'
  * everything a thread owns on disk when it (or its project) is deleted. Add new
  * thread-scoped disk locations here so both stay in sync automatically instead
  * of drifting across call sites.
+ *
+ * One rule per conversation kind:
+ *
+ * - a thread inside a local project works in the project's own checkout, so its
+ *   scratch is that repo's `.cio/tmp`;
+ * - a standalone chat owns `chats-cwd/<threadId>` in app storage;
+ * - an assistant task shares `assistant-cwd/<routineId>` with its routine;
+ * - a browser tab's agent chat owns `browser-cwd/<threadId>`, where the thread id
+ *   is the tab's own id, so one tab owns one directory;
+ * - anything else that is not local (a remote project) keeps the generic
+ *   app-storage area.
  */
 
+/** The project a thread belongs to, as far as its storage paths care. */
+type ScratchProject = Pick<Project, 'source' | 'path'> | null
+
 /**
- * Scratch pad (`.cio/tmp`) of a conversation that has no project folder of its
- * own, resolved to the directory its session actually runs in so one
- * conversation owns one directory instead of staging its files in a root every
- * other conversation shares.
- *
- * An inbox chat owns `chats-cwd/<threadId>`; an assistant task shares
- * `assistant-cwd/<routineId>` with the other tasks of its routine, the same way
- * the tasks of one project share that project; anything else folder-less keeps
- * the generic `projects/<projectId>/threads/<threadId>` area.
+ * Scratch pad (`.cio/tmp`) of one conversation, resolved to the directory its
+ * session actually runs in so one conversation owns one directory instead of
+ * staging its files in a root every other conversation shares.
  */
-export function threadScratchDirectory(scope: {
-  projectId: string
-  threadId: string
-  routineId?: string | null
-}): string {
+export function threadScratchDirectory(
+  project: ScratchProject,
+  scope: { projectId: string; threadId: string; routineId?: string | null }
+): string {
+  // A project thread works inside the repo, so its scratch is the repo's own
+  // `.cio/tmp`: the same directory the agent is told to write to, inside the
+  // checkout the user can see, and gone with the project rather than hidden in
+  // app storage.
+  if (project?.source === 'local' && project.path) {
+    return join(project.path, PROJECT_DATA_DIRECTORY, 'tmp')
+  }
   if (scope.projectId === INBOX_PROJECT_ID) {
     return join(
       getConfigRoot(),
@@ -49,6 +69,14 @@ export function threadScratchDirectory(scope: {
       'tmp'
     )
   }
+  if (scope.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+    return join(
+      getConfigRoot(),
+      browserThreadWorkspaceDirectory(scope.threadId),
+      PROJECT_DATA_DIRECTORY,
+      'tmp'
+    )
+  }
   return join(getConfigRoot(), 'projects', scope.projectId, 'threads', scope.threadId, 'tmp')
 }
 
@@ -61,14 +89,14 @@ export function threadScratchDirectory(scope: {
  * routine's workspace is shared by every task in it, an assistant task keeps a
  * folder of its own inside the routine's. */
 export function threadAttachmentDirectory(
-  project: Pick<Project, 'source' | 'path'> | null,
+  project: ScratchProject,
   scope: { projectId: string; threadId: string },
   routineId?: string | null
 ): string {
   if (project?.source === 'local' && project.path) {
     return join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments', scope.threadId)
   }
-  const scratchDirectory = threadScratchDirectory({ ...scope, routineId })
+  const scratchDirectory = threadScratchDirectory(project, { ...scope, routineId })
   return scope.projectId === ASSISTANT_SPACE_ID
     ? join(scratchDirectory, 'attachments', scope.threadId)
     : join(scratchDirectory, 'attachments')
@@ -76,13 +104,13 @@ export function threadAttachmentDirectory(
 
 /**
  * Every directory this thread could have written to, app-owned config-root
- * data only (never a location inside a local project's own working tree  
- * that belongs to the user, not app scratch space). Callers should remove
- * these with `{ recursive: true, force: true }` since most will not exist
- * for any given thread.
+ * data only (never a location inside a local project's own working tree, which
+ * belongs to the user, not app scratch space). Callers should remove these with
+ * `{ recursive: true, force: true }` since most will not exist for any given
+ * thread.
  */
 export function threadOwnedDirectories(
-  project: Pick<Project, 'source' | 'path'> | null,
+  project: ScratchProject,
   projectId: string,
   threadId: string,
   routineId?: string | null
@@ -92,6 +120,11 @@ export function threadOwnedDirectories(
     // A chat owns one workspace: its session directory, the mount root of its
     // file tree, its attachments and exports, and its generated artifacts.
     dirs.push(join(getConfigRoot(), chatThreadWorkspaceDirectory(threadId)))
+  }
+  if (projectId === GLOBAL_BROWSER_PROJECT_ID) {
+    // A browser tab's conversation owns one workspace too, and it dies with the
+    // tab that opened it, so the whole directory goes.
+    dirs.push(join(getConfigRoot(), browserThreadWorkspaceDirectory(threadId)))
   }
   if (projectId === ASSISTANT_SPACE_ID) {
     // The routine's workspace holds every task's scratch, so only this task's

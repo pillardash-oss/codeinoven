@@ -139,6 +139,20 @@ function browserTabId(value: unknown): string {
   return isBrowserTabId(value) ? value : `browser:${crypto.randomUUID()}`
 }
 
+/**
+ * The agent-chat thread id one browser tab owns.
+ *
+ * A tab's conversation is a real thread in the hidden browser project, and its
+ * workspace is `browser-cwd/<thread id>`, so the id is derived from the tab id
+ * rather than minted at random: the tab and its conversation then name one
+ * directory, and a conversation recreated for the same tab lands in the same
+ * place. A tab id carries a colon, which is not a legal path segment on Windows,
+ * so every character outside the safe id set is replaced.
+ */
+export function browserAssistantThreadId(tabId: string): string {
+  return tabId.replace(/[^A-Za-z0-9._-]/gu, '-')
+}
+
 /** A stored assistant thread id, or null when the field is absent or unusable.
  *  A repaired field here costs one conversation: the tab simply asks the agent
  *  again and gets a fresh thread, so this never fabricates an id. */

@@ -95,6 +95,8 @@
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
+  import { toPosixPath } from '$shared/paths'
   import { toast } from 'svelte-sonner'
   import { logRendererError } from '$lib/system/renderer-logger'
   import {
@@ -120,6 +122,7 @@
     coordinatorHasActiveDelegates,
     activeThreadRowId,
     INBOX_PROJECT_ID,
+    DRAFT_CHAT_THREAD_ID,
     ASSISTANT_SPACE_ID,
     ASSISTANT_SETUP_TITLE,
     DEFAULT_THREAD_TITLE,
@@ -3383,10 +3386,15 @@
     // Publish the hand-off before awaiting the thread: when a draft hand-off is
     // already creating it, ThreadView mounts for that same thread and picks the
     // message up, instead of a second thread being created here.
+    let staged = files
     chatDraft.message = msg
-    chatDraft.attachments = files
+    chatDraft.attachments = staged
     try {
       const { thread, inbox } = await ensureWelcomeChatThread()
+      // The chat exists, so everything the composer staged before it did is
+      // moved into that chat's own scratch path before the message goes.
+      staged = await adoptDraftAttachments(thread.id, staged)
+      chatDraft.attachments = staged
       // Seed the empty conversation so the composer renders on the first frame
       // and the hand-off message is sent without a loading flash.
       threadMessages.seedEmpty(INBOX_PROJECT_ID, thread.id)
@@ -3397,9 +3405,43 @@
       chatDraft.attachments = []
       // The thread was never created, so the message cannot appear anywhere.
       // Put it back in the composer so the user doesn't lose their first message.
-      rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', msg, files)
+      rendererRecovery.setDraft(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID, msg, staged)
       chatsComposerRestoreKey += 1
       reportError(error, 'The chat could not be started.')
+    }
+  }
+
+  /**
+   * Move everything the welcome composer staged before its chat existed into
+   * that chat's own scratch path, and answer the composer's attachment list
+   * repointed at the moved files.
+   *
+   * The composer has no thread while the draft is only a draft, so it stages
+   * into a transient scope; the chat's scratch path is the one place its files
+   * belong, so the hand-off moves them there rather than leaving them in a
+   * directory no conversation owns. Best-effort: a failure leaves the files
+   * where they are, where they stay readable and deletable.
+   */
+  async function adoptDraftAttachments(
+    threadId: string,
+    files: PromptAttachment[]
+  ): Promise<PromptAttachment[]> {
+    try {
+      // Run even with no chip attached: a file the user dropped and then
+      // removed from the composer is still staged, and it belongs to this chat
+      // rather than to a scope no conversation owns.
+      const moves = await invoke('attachment:adoptDraft', threadId)
+      if (moves.length === 0) return files
+      // Both sides of the lookup are compared in POSIX form: a Windows move
+      // answers with `\` separators while the chip's URL decodes to `/`.
+      const targets = new Map(moves.map((move) => [toPosixPath(move.from), move.to]))
+      return files.map((file) => {
+        const target = targets.get(toPosixPath(fileUrlToPath(file.url)))
+        return target ? { ...file, url: pathToFileUrl(target) } : file
+      })
+    } catch (error) {
+      reportError(error, 'The draft files could not be moved into the new chat.')
+      return files
     }
   }
 
@@ -3412,8 +3454,8 @@
    * sent: the draft stays a draft, and the next New chat starts another one.
    */
   async function startChatDraft(): Promise<void> {
-    const draft = rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')
-    const attachments = rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+    const draft = rendererRecovery.draftFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
+    const attachments = rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
     if (!draft.trim() && attachments.length === 0) return
 
     try {
@@ -3421,15 +3463,21 @@
       // The thread is seeded empty so its conversation renders the composer on
       // the first frame   the welcome composer never flashes a loading state.
       threadMessages.seedEmpty(INBOX_PROJECT_ID, thread.id)
-      // Re-read: the composer is authoritative and may have taken more
-      // keystrokes (or been cleared by a send) while the thread was created.
+      // The chat exists, so its own scratch path now owns what the composer
+      // staged before it did. Re-read: the composer is authoritative and may
+      // have taken more keystrokes (or been cleared by a send) while the thread
+      // was created.
+      const adopted = await adoptDraftAttachments(
+        thread.id,
+        rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
+      )
       rendererRecovery.setDraft(
         INBOX_PROJECT_ID,
         thread.id,
-        rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
-        rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+        rendererRecovery.draftFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID),
+        adopted
       )
-      rendererRecovery.clearDraft(INBOX_PROJECT_ID, 'new-chat')
+      rendererRecovery.clearDraft(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
       upsertThreadInList(thread)
       workspaceState.openThread(thread, inbox)
     } catch (error) {

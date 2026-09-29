@@ -27,6 +27,7 @@
   import { routineHowToComplete } from '$shared/types'
   import {
     INBOX_PROJECT_ID,
+    DRAFT_CHAT_THREAD_ID,
     type AgentHarnessUsage,
     type Project,
     type Thread
@@ -192,8 +193,8 @@
    */
   function startChatDraft(): void {
     if (startingChatDraft) return
-    const draft = rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')
-    const files = rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+    const draft = rendererRecovery.draftFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
+    const files = rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
     if (!draft.trim() && files.length === 0) return
     startingChatDraft = true
     void onStartChatDraft().finally(() => {
@@ -312,7 +313,7 @@
             attachmentStorage={{
               kind: 'chat',
               projectId: INBOX_PROJECT_ID,
-              threadId: 'new-chat'
+              threadId: DRAFT_CHAT_THREAD_ID
             }}
             harnessId={chatComposerSettings.harnessId}
             favoriteModels={rendererRecovery.chatFavoriteModels}
@@ -334,17 +335,20 @@
               })}
             onImageDescriptorAskAgainChange={(value) =>
               void updateConfig?.({ imageDescriptorAskAgain: value })}
-            initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
+            initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)}
             onValueChange={(value) => {
-              rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)
+              rendererRecovery.setDraft(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID, value)
               startChatDraft()
             }}
-            initialAttachments={rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')}
+            initialAttachments={rendererRecovery.attachmentsFor(
+              INBOX_PROJECT_ID,
+              DRAFT_CHAT_THREAD_ID
+            )}
             onAttachmentsChange={(files) => {
               rendererRecovery.setDraft(
                 INBOX_PROJECT_ID,
-                'new-chat',
-                rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
+                DRAFT_CHAT_THREAD_ID,
+                rendererRecovery.draftFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID),
                 files
               )
               startChatDraft()

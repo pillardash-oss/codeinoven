@@ -418,6 +418,7 @@ import {
   CHATS_CWD_DIR,
   PROJECT_DATA_DIRECTORY,
   assistantThreadWorkspaceDirectory,
+  browserThreadWorkspaceDirectory,
   chatThreadWorkspaceDirectory,
   ensureFeatureSlug,
   featureArtifactDirectory,
@@ -20698,6 +20699,17 @@ export class ChatEngine {
       return this.storage.resolve(chatDirectory)
     }
 
+    // A browser tab's agent chat owns `browser-cwd/<threadId>/`, and the tab's
+    // conversation thread is named after the tab, so one tab owns one directory
+    // for the life of its conversation. Resolving to the shared `browser-cwd`
+    // root instead puts every tab's scratch in one directory, where one tab's
+    // files are visible to the next.
+    if (projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      const browserDirectory = browserThreadWorkspaceDirectory(threadId)
+      await this.storage.ensureDirectory(browserDirectory)
+      return this.storage.resolve(browserDirectory)
+    }
+
     // The scope resolver is authoritative for threads in a scope; a stale
     // persisted directory never wins, and unhealthy managed scopes fail
     // closed instead of silently operating on the project root.
@@ -20737,8 +20749,10 @@ export class ChatEngine {
       projectPath = this.storage.resolve(ASSISTANT_CWD_DIR)
     }
     // The global browser is hidden too, and its tabs are web pages rather than
-    // files: a per-tab agent session runs in a neutral app-storage directory so
-    // it never touches a real project folder.
+    // files: the container's own root is a neutral app-storage directory, and
+    // each tab's agent session narrows it to `browser-cwd/<threadId>` through
+    // `resolveThreadPath` so a conversation never runs against a real project
+    // folder.
     if (!projectPath && project.hidden && project.id === GLOBAL_BROWSER_PROJECT_ID) {
       await this.storage.ensureDirectory(BROWSER_CWD_DIR)
       projectPath = this.storage.resolve(BROWSER_CWD_DIR)
@@ -23462,8 +23476,9 @@ export class ChatEngine {
   /**
    * The file-access scope for a permission request in a chat session.
    *
-   * Every session gets the thread's own `chats-cwd/<threadId>` workspace
-   * directory as a pre-authorized scratch path: non-destructive, path-scoped
+   * A conversation that owns an app-storage workspace (a standalone chat's
+   * `chats-cwd/<threadId>`, a browser tab's `browser-cwd/<threadId>`) gets that
+   * workspace as a pre-authorized scratch path: non-destructive, path-scoped
    * file operations inside it never prompt, regardless of permission level or
    * File System mode.
    *
@@ -23485,14 +23500,18 @@ export class ChatEngine {
     restrictToAllowed: boolean
   }> {
     const isChat = info.projectId === INBOX_PROJECT_ID
-    // Assistant tasks are routine-scoped rather than project- or chat-scoped:
-    // their workspace is the routine's own `assistant-cwd/<routineId>/` root
-    // (`info.projectPath`), so they never fall back to a chat workspace
-    // directory for pre-authorized writes.
+    // A chat and a browser tab's agent chat each own an app-storage workspace,
+    // and the directory their session runs in is that workspace, so it is
+    // pre-authorized scratch. An assistant task deliberately gets none: it is
+    // routine-scoped, so its workspace is the routine's own
+    // `assistant-cwd/<routineId>/` root and must never fall back to a chat
+    // workspace directory for pre-authorized writes.
     const isAssistant = info.projectId === ASSISTANT_SPACE_ID
     const scratchPaths = isAssistant
       ? []
-      : [this.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
+      : info.projectId === GLOBAL_BROWSER_PROJECT_ID
+        ? [info.projectPath]
+        : [this.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
     if (!isChat) {
       const skillPaths = this.temporaryChatForSession(info.sessionId)
         ? chatSkillPaths(info.driverId)
