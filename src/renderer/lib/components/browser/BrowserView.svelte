@@ -111,12 +111,14 @@
       // Boxes belong to the profile, like downloads and bookmarks, so the tool is
       // reachable with no tab open. That is also what makes it the first browser
       // tool a user needs: a box is made before a tab is opened inside it.
+      //
+      // No badge and no count on the label: a rail indicator reads as a
+      // notification, and how many boxes exist is not one.
       {
         id: 'boxes',
-        label: globalBrowser.boxes.length > 0 ? `Boxes (${globalBrowser.boxes.length})` : 'Boxes',
+        label: 'Boxes',
         icon: Boxes,
         active: globalBrowser.boxesSidebarShown,
-        countBadge: globalBrowser.boxes.length > 0 ? String(globalBrowser.boxes.length) : undefined,
         onSelect: () => globalBrowser.toggleBoxesSidebar()
       },
       // Extensions belong to the profile like boxes and downloads do, and they are
