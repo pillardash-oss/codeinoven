@@ -179,6 +179,30 @@ describe('bundled Pi harness', () => {
   )
 
   it(
+    'resolves the codemode sandbox from the rewritten chunk that loads it',
+    async () => {
+      // codemode resolves `quickjs-wasi/quickjs.wasm` through `createRequire`
+      // inside a nested chunk, so its rewrite is relative-path arithmetic that a
+      // build-time existence check cannot verify. Resolve it the way the script
+      // does, from that chunk's own location.
+      const chunksDirectory = join(harnessDirectory, 'dist/bundle/chunks')
+      const rewrittenSpecifier = /["'](\.[^"']*vendor\/quickjs-wasi\/quickjs\.wasm)["']/u
+      const chunkNames = (await readdir(chunksDirectory)).filter((name) => name.endsWith('.js'))
+      let resolvedWasm: string | undefined
+      for (const name of chunkNames) {
+        const source = await readFile(join(chunksDirectory, name), 'utf8')
+        const match = rewrittenSpecifier.exec(source)
+        if (!match?.[1]) continue
+        resolvedWasm = createRequire(join(chunksDirectory, name)).resolve(match[1])
+        break
+      }
+      expect(resolvedWasm).toBeDefined()
+      expect(existsSync(resolvedWasm as string)).toBe(true)
+    },
+    TEST_TIMEOUT_MS
+  )
+
+  it(
     'boots and loads a TypeScript extension with no node_modules above the harness',
     () => {
       const boot = bootHarness(electronBinaryPath, harnessDirectory, probeExtensionPath)

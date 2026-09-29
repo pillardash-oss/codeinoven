@@ -1015,21 +1015,28 @@ export class ProviderAccountOrchestrator {
         : fileBackedAuth
     }
     this.oauthSessions.set(loginId, session)
-    void runPiLogin(providerId, {
-      signal: controller.signal,
-      onEvent: (event) => this.broadcastOAuthEvent(loginId, { kind: 'event', event }),
-      prompt: (prompt) =>
-        new Promise<string>((resolve, reject) => {
-          const promptId = `${loginId}-p-${crypto.randomUUID()}`
-          session.pendingPrompt = resolve
-          this.broadcastOAuthEvent(loginId, { kind: 'prompt', promptId, prompt })
-          controller.signal.addEventListener(
-            'abort',
-            () => reject(new Error('Sign-in was cancelled.')),
-            { once: true }
-          )
-        })
-    })
+    void runPiLogin(
+      providerId,
+      {
+        signal: controller.signal,
+        onEvent: (event) => this.broadcastOAuthEvent(loginId, { kind: 'event', event }),
+        prompt: (prompt) =>
+          new Promise<string>((resolve, reject) => {
+            const promptId = `${loginId}-p-${crypto.randomUUID()}`
+            session.pendingPrompt = resolve
+            this.broadcastOAuthEvent(loginId, { kind: 'prompt', promptId, prompt })
+            controller.signal.addEventListener(
+              'abort',
+              () => reject(new Error('Sign-in was cancelled.')),
+              { once: true }
+            )
+          })
+      },
+      // The account's own Pi agent directory names this host: flows that
+      // register it (OpenAI's ChatGPT sign-in) then see one stable device per
+      // account instead of a new one on every sign-in.
+      { hostSeed: piAgentDir ?? 'pi-default' }
+    )
       .then(async (credential) => {
         if (credential.type === 'oauth') {
           await session.authStore.setOAuthCredential(providerId, credential)

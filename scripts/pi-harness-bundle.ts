@@ -135,7 +135,9 @@ export const PI_HARNESS_REQUIRED_RUNTIME_FILES: readonly string[] = [
   'vendor/pi-ai/dist/index.js',
   'vendor/pi-ai/dist/providers/all.js',
   'vendor/@silvia-odwyer/photon-node/photon_rs.js',
-  'vendor/@silvia-odwyer/photon-node/photon_rs_bg.wasm'
+  'vendor/@silvia-odwyer/photon-node/photon_rs_bg.wasm',
+  'vendor/quickjs-wasi/quickjs.wasm',
+  'vendor/quickjs-wasi/dist/index.js'
 ]
 
 const DECLARATION_FILE_PATTERN = /\.d\.(?:ts|mts|cts)$/u
@@ -266,13 +268,17 @@ export function defaultBundledPiHarnessDirectory(): string {
  * `@earendil-works/chord` (RPC protocol, incl. /context, /bundler, /node
  * subpath exports), `typebox` (schema validation, imported via /schema,
  * /format, /guard, /system subpaths), `jiti` (loads the app-owned `.ts`
- * extensions) and `@silvia-odwyer/photon-node` (pi lazily `import()`s it to
- * decode and downsize an image under the provider's inline limit). Without the
- * first three the packaged app fails with
+ * extensions), `@silvia-odwyer/photon-node` (pi lazily `import()`s it to
+ * decode and downsize an image under the provider's inline limit), and
+ * `quickjs-wasi` (the codemode sandbox: pi resolves the package for the
+ * QuickJS host and `quickjs-wasi/quickjs.wasm` for the sandbox binary).
+ * Without the first three the packaged app fails with
  * `ERR_MODULE_NOT_FOUND: Cannot find package '@earendil-works/chord'` or
  * `Cannot find module 'jiti'`, and every Pi session dies at boot. Without
  * photon every Pi session boots but no image ever reaches the model: see the
- * copy site in `buildBundledPiHarness`.
+ * copy site in `buildBundledPiHarness`. Without quickjs-wasi every session
+ * boots and only a codemode script fails, because pi resolves the wasm at
+ * script time.
  */
 export const PI_HARNESS_VENDORED_IMPORTS: Record<string, string> = {
   '@earendil-works/chord': '@earendil-works/chord/dist/index.js',
@@ -294,7 +300,11 @@ export const PI_HARNESS_VENDORED_IMPORTS: Record<string, string> = {
   jiti: 'jiti/lib/jiti.cjs',
   'jiti/static': 'jiti/lib/jiti-static.mjs',
   // photon is CJS; `processImage` reaches it through a dynamic `import()`.
-  '@silvia-odwyer/photon-node': '@silvia-odwyer/photon-node/photon_rs.js'
+  '@silvia-odwyer/photon-node': '@silvia-odwyer/photon-node/photon_rs.js',
+  // codemode's worker resolves the sandbox binary through `createRequire`, so
+  // the specifier is rewritten to the vendored file exactly like an import.
+  'quickjs-wasi': 'quickjs-wasi/dist/index.js',
+  'quickjs-wasi/quickjs.wasm': 'quickjs-wasi/quickjs.wasm'
 }
 
 export const PI_HARNESS_VENDORED_SPECIFIERS: string[] = Object.keys(PI_HARNESS_VENDORED_IMPORTS)
@@ -313,7 +323,8 @@ export const PI_HARNESS_VENDORED_PACKAGES: string[] = [
   '@earendil-works/chord',
   'typebox',
   'jiti',
-  '@silvia-odwyer/photon-node'
+  '@silvia-odwyer/photon-node',
+  'quickjs-wasi'
 ]
 
 export interface BundledPiHarnessBuild {
@@ -533,6 +544,18 @@ export async function buildBundledPiHarness(directory: string): Promise<BundledP
     projectRoot
   ])
   await cp(photonPackageDirectory, join(directory, 'vendor/@silvia-odwyer/photon-node'), {
+    recursive: true,
+    filter: excludeBuildTimeBin
+  })
+  // quickjs-wasi is codemode's sandbox: the worker resolves the package for the
+  // QuickJS host and `quickjs-wasi/quickjs.wasm` for the sandbox binary at
+  // script time, so a missing vendored copy costs every codemode script, and
+  // its own `dist/` uses relative imports that need the whole package layout.
+  const quickJsPackageDirectory = installedPackageDirectory('quickjs-wasi', [
+    piPackageDirectory,
+    projectRoot
+  ])
+  await cp(quickJsPackageDirectory, join(directory, 'vendor/quickjs-wasi'), {
     recursive: true,
     filter: excludeBuildTimeBin
   })
