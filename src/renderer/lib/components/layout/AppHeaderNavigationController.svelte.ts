@@ -66,8 +66,9 @@ export class AppHeaderNavigationController {
 
   /** The project-family view (Projects, Threads, Scoped threads, Scope Board)
    *  the user last had selected. The project family's activity badge rides this
-   *  option while a view that owns no project threads   the Browser   is on
-   *  screen, so the badge never lands on the browser tab. */
+   *  option while a view that owns threads of another family   Chat and
+   *  Assistant   or no threads at all   the Browser   is on screen, so the badge
+   *  never lands on a rail item that cannot show project threads. */
   lastProjectViewOption: HeaderViewOptionId = $state('projects')
 
   constructor(options: AppHeaderNavigationOptions) {
@@ -88,7 +89,7 @@ export class AppHeaderNavigationController {
     })
 
     // Remember every project view the user selects so the badge has a home to
-    // return to once the Browser (which is not a project view) takes over.
+    // return to once a view that is not a project view takes over.
     $effect(() => {
       const shown = this.shownHeaderViewOption
       if (shown && PROJECT_FAMILY_VIEW_OPTIONS.includes(shown)) {
@@ -319,13 +320,18 @@ export class AppHeaderNavigationController {
 
   /** The rail option that carries the project family's activity badge: the live
    *  project view when one is shown, otherwise the last project view the user
-   *  was on. Null on takeover pages (Settings and friends), which carry no
-   *  badge at all. Declared after `shownHeaderViewOption` because a class field
-   *  initializer cannot read a later field. */
+   *  was on. Chat, Assistant and Browser are on screen with a family of their
+   *  own (or none at all), so they never take the project badge   without this
+   *  fallback a working project thread would have no rail item to report on and
+   *  the activity would vanish from the rail entirely. Null on takeover pages
+   *  (Settings and friends), which carry no badge at all. Declared after
+   *  `shownHeaderViewOption` because a class field initializer cannot read a
+   *  later field. */
   projectBadgeOption = $derived<HeaderViewOptionId | null>(
-    this.shownHeaderViewOption === 'browser'
-      ? this.lastProjectViewOption
-      : this.shownHeaderViewOption
+    this.shownHeaderViewOption === null ||
+      PROJECT_FAMILY_VIEW_OPTIONS.includes(this.shownHeaderViewOption)
+      ? this.shownHeaderViewOption
+      : this.lastProjectViewOption
   )
 
   /** Name of the view the rail has selected, shown in the app header between

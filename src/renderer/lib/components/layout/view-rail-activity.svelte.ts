@@ -156,9 +156,9 @@ export class ViewRailActivity {
  * The project family spans four views (Projects, Threads, Scoped threads, Scope
  * Board), so its badge rides only one of them at a time: the option the caller
  * resolved as `projectBadgeOption`, which is the live project view when one is
- * shown, or the last project view the user was on when a non-project view (the
- * Browser) is on screen. Chats and Assistant each have a single view and keep
- * their badge there.
+ * shown, or the last project view the user was on when a view that owns another
+ * family (Chat, Assistant) or no threads at all (the Browser) is on screen.
+ * Chats and Assistant each have a single view and keep their badge there.
  */
 export function viewBadgeFor(
   optionId: HeaderViewOptionId,
