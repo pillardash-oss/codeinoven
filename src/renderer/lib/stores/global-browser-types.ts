@@ -16,12 +16,14 @@ import type { BrowserAppearance } from '$shared/browser/global-browser-tabs'
 // process validates the same payload. They are re-exported here so every browser
 // surface keeps importing one module for the model's limits.
 export {
+  MAX_BROWSER_BOX_NAME_LENGTH,
   MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH,
   MAX_BROWSER_GROUP_DESCRIPTION_LENGTH,
   MAX_BROWSER_GROUP_ICON_TYPE_LENGTH,
   MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH,
   MAX_BROWSER_GROUP_NAME_LENGTH,
   MAX_BROWSER_TAB_TITLE_LENGTH,
+  MAX_GLOBAL_BROWSER_BOXES,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS
 } from '$shared/browser/global-browser-tabs'
@@ -61,6 +63,27 @@ export interface GlobalBrowserGroup extends BrowserAppearance {
 }
 
 /**
+ * One browser box: a named container for cookies and site data.
+ *
+ * A box is a storage identity, not a window and not a process. Tabs that name
+ * the same box share one Chromium session and therefore one set of logins;
+ * tabs in different boxes are as separate as two different browsers, which is
+ * the whole point. It wears the same appearance vocabulary as a group so the
+ * strip's resolvers, the appearance editor and the icon cache are reused rather
+ * than reinvented.
+ */
+export interface GlobalBrowserBox extends BrowserAppearance {
+  id: string
+  name: string
+}
+
+/**
+ * The appearance fields a box carries, named once so the store's create and
+ * update signatures cannot drift from the modal that fills them in.
+ */
+export type BrowserBoxAppearance = BrowserAppearance
+
+/**
  * The appearance fields a group carries, named once so the store's create and
  * update signatures cannot drift from the modal that fills them in.
  */
@@ -86,6 +109,15 @@ export interface GlobalBrowserTab extends BrowserAppearance {
   url: string
   favicon: string | null
   groupId: string | null
+  /**
+   * The box this tab runs against, or null for the browser's own default jar.
+   *
+   * A tab cannot change jars in place, because cookies do not migrate between
+   * partitions, so this is fixed when the tab is created and carried to the main
+   * process on every `browser:show` and `browser:navigate`. "Reopen in box" is
+   * the only honest way to move a page, and it is a close plus an open.
+   */
+  boxId: string | null
   createdAt: number
   /** Last moment the tab was shown to the user; the hibernation clock reads it. */
   lastUsedAt: number

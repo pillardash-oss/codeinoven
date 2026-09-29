@@ -40,14 +40,17 @@ import {
   globalBrowserTabsSnapshot,
   loadLegacyGlobalBrowserTabs,
   loadStoredGlobalBrowserTabs,
+  runtimeBoxFromPersisted,
   runtimeGroupFromPersisted,
   runtimeTabFromPersisted,
   saveStoredGlobalBrowserTabs
 } from './global-browser-persistence'
 import {
   IDLE_GLOBAL_BROWSER_RUNTIME,
+  MAX_BROWSER_BOX_NAME_LENGTH,
   MAX_BROWSER_GROUP_NAME_LENGTH,
   MAX_BROWSER_TAB_TITLE_LENGTH,
+  MAX_GLOBAL_BROWSER_BOXES,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
   browserTabLabel,
@@ -55,7 +58,9 @@ import {
   isBlankBrowserAddress,
   isSameBrowserLoadError,
   isTabIdlePastWindow,
+  type BrowserBoxAppearance,
   type BrowserGroupAppearance,
+  type GlobalBrowserBox,
   type GlobalBrowserGroup,
   type GlobalBrowserRuntime,
   type GlobalBrowserTab
@@ -75,9 +80,15 @@ const TAB_SAVE_COALESCE_MS = 250
 export class GlobalBrowserState {
   tabs: GlobalBrowserTab[] = $state([])
   groups: GlobalBrowserGroup[] = $state([])
+  /** The profile's boxes: named cookie jars sharing the browser's one set of
+   *  extensions. A box owns no tab; the tabs that name it do, and a box nobody
+   *  uses is a row here and a profile directory on disk, nothing more. */
+  boxes: GlobalBrowserBox[] = $state([])
   /** Data URLs for groups with a picked image icon, keyed by group id. Loaded
    *  lazily, because a stored icon is a file path on disk and not inline bytes. */
   groupIconUrls: SvelteMap<string, string> = $state(new SvelteMap())
+  /** Data URLs for boxes with a picked image icon, keyed by box id. */
+  boxIconUrls: SvelteMap<string, string> = $state(new SvelteMap())
   /** Data URLs for tabs with a picked image icon, keyed by tab id. */
   tabIconUrls: SvelteMap<string, string> = $state(new SvelteMap())
   activeTabId: string | null = $state(null)
@@ -93,9 +104,9 @@ export class GlobalBrowserState {
    *  tool in every other view. Downloads, history and bookmarks belong to the
    *  shared browser library rather than a tab, so those tools are the entries that
    *  can stay open with no tab. */
-  contextSidebarTool = $state<'note' | 'agent' | 'downloads' | 'popups' | 'history' | 'bookmarks'>(
-    'note'
-  )
+  contextSidebarTool = $state<
+    'note' | 'agent' | 'downloads' | 'popups' | 'history' | 'bookmarks' | 'boxes'
+  >('note')
   /** Whether the address spotlight is up. It lives here rather than in a surface
    *  because it is summoned from anywhere in the browser view (Cmd/Ctrl+L) and
    *  from a freshly opened tab, which has no surface of its own yet. */
@@ -270,7 +281,12 @@ export class GlobalBrowserState {
   private adoptSnapshot(snapshot: GlobalBrowserTabsSnapshot): void {
     this.tabs = snapshot.tabs.map(runtimeTabFromPersisted)
     this.groups = snapshot.groups.map(runtimeGroupFromPersisted)
-    this.activeTabId = snapshot.activeTabId
+    this.boxes = (snapshot.boxes ?? []).map(runtimeBoxFromPersisted)
+    // Through `setActiveTab`, not a direct assignment: the restored tab is the one
+    // the browser view is about to show, and it has to count as a visit for the
+    // Ctrl+Tab switcher exactly as an activation does. `markOpened` runs before
+    // this read lands, so it cannot cover the cold case on its own.
+    this.setActiveTab(snapshot.activeTabId)
   }
 
   /** Fold a stored list into the strip a change left on screen, skipping the tabs
@@ -291,6 +307,10 @@ export class GlobalBrowserState {
     for (const persisted of snapshot.groups) {
       if (this.groups.some((group) => group.id === persisted.id)) continue
       this.groups = [...this.groups, runtimeGroupFromPersisted(persisted)]
+    }
+    for (const persisted of snapshot.boxes ?? []) {
+      if (this.boxes.some((box) => box.id === persisted.id)) continue
+      this.boxes = [...this.boxes, runtimeBoxFromPersisted(persisted)]
     }
   }
 
@@ -370,12 +390,14 @@ export class GlobalBrowserState {
   }
 
   /** Whether the tool on the rail is one of the browser library tools, which are
-   *  the entries that can stay open with no tab on screen. */
+   *  the entries that can stay open with no tab on screen. A box is a property of
+   *  the profile rather than of a page, so it belongs in the same set. */
   private get railToolNeedsNoTab(): boolean {
     return (
       this.contextSidebarTool === 'downloads' ||
       this.contextSidebarTool === 'history' ||
-      this.contextSidebarTool === 'bookmarks'
+      this.contextSidebarTool === 'bookmarks' ||
+      this.contextSidebarTool === 'boxes'
     )
   }
 
@@ -424,6 +446,16 @@ export class GlobalBrowserState {
     return this.groupIconUrls.get(groupId) ?? null
   }
 
+  /** One box by id, or null once it has been deleted. */
+  boxById(boxId: string): GlobalBrowserBox | null {
+    return this.boxes.find((box) => box.id === boxId) ?? null
+  }
+
+  /** The loaded data URL for a box's picked image icon, when there is one. */
+  boxIconUrl(boxId: string): string | null {
+    return this.boxIconUrls.get(boxId) ?? null
+  }
+
   /** Live runtime of one tab, or the shared idle value while main has reported
    *  nothing for it. */
   runtimeFor(tabId: string): GlobalBrowserRuntime {
@@ -431,10 +463,15 @@ export class GlobalBrowserState {
   }
 
   /** Whether a browser tab with this address is already open. A blank address
-   *  never matches, so "new tab" always makes a new one. */
-  findTabByUrl(url: string): GlobalBrowserTab | null {
+   *  never matches, so "new tab" always makes a new one. When a box is named the
+   *  match is scoped to it: the same address in two jars is two different sessions
+   *  and must stay two tabs. */
+  findTabByUrl(url: string, boxId?: string | null): GlobalBrowserTab | null {
     if (isBlankBrowserAddress(url)) return null
-    return this.tabs.find((tab) => tab.url === url) ?? null
+    return (
+      this.tabs.find((tab) => tab.url === url && (boxId === undefined || tab.boxId === boxId)) ??
+      null
+    )
   }
 
   /** One tab by id, or null once it has been closed. */
@@ -484,10 +521,19 @@ export class GlobalBrowserState {
     void invoke('browser:focusPage', tab.id).catch(() => {})
   }
 
-  /** Mark the workspace as opened, so the first activation can reveal a tab. */
+  /**
+   * Mark the workspace as opened, so the first activation can reveal a tab.
+   *
+   * Opening the browser view is using the tab it shows, so that tab is counted as
+   * a visit here rather than only when it is activated. Without this the tab the
+   * user is looking at carries a stale (or absent) visit key, and the Ctrl+Tab
+   * switcher either leaves it out or cycles from somewhere else: a blank tab
+   * looked right only because creating it went through `setActiveTab`.
+   */
   markOpened(): void {
     this.opened = true
     this.dockActiveTabNote()
+    if (this.activeTabId) recentVisits.recordBrowserTab(this.activeTabId)
   }
 
   /** The notes chord and the notes dock item both land here: it reveals the
@@ -584,6 +630,36 @@ export class GlobalBrowserState {
   /** Whether the rail is currently showing the saved pages. */
   get bookmarksSidebarShown(): boolean {
     return this.contextSidebarShown && this.contextSidebarTool === 'bookmarks'
+  }
+
+  /**
+   * Reveal the rail on the profile's boxes.
+   *
+   * Boxes belong to the browser rather than to a tab, like downloads do, so the
+   * panel is reachable with the strip empty. That is also what makes it the tool
+   * a user opens first, before any tab exists in a box.
+   */
+  showBoxesSidebar(): void {
+    this.dismissNotifications()
+    this.contextSidebarTool = 'boxes'
+    this.contextSidebarVisible = true
+  }
+
+  toggleBoxesSidebar(): void {
+    if (this.contextSidebarTool === 'boxes' && this.contextSidebarVisible) {
+      this.closeBoxesSidebar()
+      return
+    }
+    this.showBoxesSidebar()
+  }
+
+  closeBoxesSidebar(): void {
+    if (this.contextSidebarTool === 'boxes') this.contextSidebarVisible = false
+  }
+
+  /** Whether the rail is currently showing the profile's boxes. */
+  get boxesSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'boxes'
   }
 
   /**
@@ -732,9 +808,10 @@ export class GlobalBrowserState {
   }
 
   /** Open a blank tab and put the caret in the address field, which is what a
-   *  new tab is for. */
-  openNewTabAddress(groupId: string | null = null): void {
-    this.createTab('', groupId)
+   *  new tab is for. A box is named here, so the empty strip's new-tab menu can
+   *  start a tab directly inside one. */
+  openNewTabAddress(groupId: string | null = null, boxId: string | null = null): void {
+    this.createTab('', groupId, boxId)
     this.addressSpotlightOpen = true
   }
 
@@ -804,6 +881,11 @@ export class GlobalBrowserState {
         favicon: null,
         // A popup belongs beside the page that opened it.
         groupId: this.activeTab?.groupId ?? null,
+        // Main creates the tab in the opener's jar and hands back the box it
+        // used, so the row and the session agree from the first show. Main is the
+        // only side that knows the true owner when a background tab opens the
+        // popup, so its answer is trusted over the active tab's box.
+        boxId: context.boxId ?? null,
         createdAt: now,
         lastUsedAt: now,
         hibernated: false,
@@ -822,14 +904,17 @@ export class GlobalBrowserState {
 
   // ─── Tabs ─────────────────────────────────────────────────────────────────
 
-  /** Open an address: focus the tab already showing it, otherwise create one. */
-  open(url: string, groupId: string | null = null): string {
-    const existing = this.findTabByUrl(url)
+  /** Open an address: focus the tab already showing it, otherwise create one.
+   *  A named box scopes the match, so the same address in another jar opens its
+   *  own tab rather than stealing the one already logged in elsewhere; with no
+   *  box named, an open copy of the address is focused wherever it lives. */
+  open(url: string, groupId: string | null = null, boxId: string | null = null): string {
+    const existing = this.findTabByUrl(url, boxId ?? undefined)
     if (existing) {
       this.activate(existing.id)
       return existing.id
     }
-    return this.createTab(url, groupId)
+    return this.createTab(url, groupId, boxId)
   }
 
   /**
@@ -848,18 +933,36 @@ export class GlobalBrowserState {
       return
     }
     // Silent on failure: the tab can be destroyed between the click and the call.
+    // The tab's own box rides along, so an existing tab is ensured in the jar it
+    // already lives in rather than the default one.
     void invoke(
       'browser:navigate',
       tab.id,
       GLOBAL_BROWSER_CONTEXT.projectId,
       GLOBAL_BROWSER_CONTEXT.threadId,
-      url
+      url,
+      tab.boxId
     ).catch(() => {})
   }
 
-  /** Create a tab for an address (blank allowed) and make it active. */
-  createTab(url: string, groupId: string | null = null): string {
+  /**
+   * Create a tab for an address (blank allowed) and make it active.
+   *
+   * `boxId` names the jar the tab runs in, or null for the default one. `anchor`
+   * places the new row before or after an existing tab and, when no group or box
+   * is named, inherits both from that tab, which keeps "new tab here" a one-click
+   * gesture that lands beside the page it came from.
+   */
+  createTab(
+    url: string,
+    groupId: string | null = null,
+    boxId: string | null = null,
+    anchor: { tabId: string; position: 'before' | 'after' } | null = null
+  ): string {
     this.enforceTabCap()
+    const anchorTab = anchor ? this.tabById(anchor.tabId) : null
+    const targetGroupId = groupId ?? anchorTab?.groupId ?? null
+    const targetBoxId = boxId ?? anchorTab?.boxId ?? null
     const now = Date.now()
     const tab: GlobalBrowserTab = {
       id: `browser:${crypto.randomUUID()}`,
@@ -867,7 +970,8 @@ export class GlobalBrowserState {
       customTitle: null,
       url,
       favicon: null,
-      groupId: this.groups.some((group) => group.id === groupId) ? groupId : null,
+      groupId: this.groups.some((group) => group.id === targetGroupId) ? targetGroupId : null,
+      boxId: this.boxes.some((box) => box.id === targetBoxId) ? targetBoxId : null,
       createdAt: now,
       lastUsedAt: now,
       hibernated: false,
@@ -879,10 +983,35 @@ export class GlobalBrowserState {
       customSvg: null,
       imagePath: null
     }
-    this.tabs = [...this.tabs, tab]
+    if (anchorTab) {
+      const index = this.tabs.findIndex((candidate) => candidate.id === anchorTab.id)
+      const at = anchor?.position === 'before' ? index : index + 1
+      const ordered = [...this.tabs]
+      ordered.splice(at, 0, tab)
+      this.tabs = ordered
+    } else {
+      this.tabs = [...this.tabs, tab]
+    }
     this.setActiveTab(tab.id)
     this.persist()
     return tab.id
+  }
+
+  /**
+   * Reopen a tab in another box.
+   *
+   * Cookies do not migrate between jars, so a tab cannot change boxes in place:
+   * this closes the tab and opens its address in the target box, which is the only
+   * honest move and why the menu item says "Reopen" rather than "Move". Returns
+   * the new tab id, or null when the source tab is gone or already in the box.
+   */
+  reopenInBox(tabId: string, boxId: string | null): string | null {
+    const tab = this.tabById(tabId)
+    if (!tab || tab.boxId === boxId) return null
+    const url = tab.url
+    const groupId = tab.groupId
+    this.close(tabId)
+    return this.createTab(url, groupId, boxId)
   }
 
   /** Close a tab and land on its neighbour in the strip. */
@@ -1108,7 +1237,106 @@ export class GlobalBrowserState {
     this.persist()
   }
 
-  // ─── Page state ───────────────────────────────────────────────────────────
+  // ─── Boxes ────────────────────────────────────────────────────────────────
+
+  /** Create a box and return its id. The cap is enforced the way the group cap
+   *  is: at the limit the call is a no-op that returns an unusable id, so a caller
+   *  cannot keep making partitions without bound. */
+  createBox(name: string, appearance: Partial<BrowserBoxAppearance> = {}): string {
+    const id = `box:${crypto.randomUUID()}`
+    if (this.boxes.length >= MAX_GLOBAL_BROWSER_BOXES) return id
+    this.boxes = [
+      ...this.boxes,
+      {
+        id,
+        name: name.trim().slice(0, MAX_BROWSER_BOX_NAME_LENGTH) || 'New box',
+        color: appearance.color ?? null,
+        iconType: appearance.iconType ?? null,
+        customSvg: appearance.customSvg ?? null,
+        imagePath: appearance.imagePath ?? null
+      }
+    ]
+    this.persist()
+    return id
+  }
+
+  /** Read a box's picked image icon into a data URL, once. Best-effort: a missing
+   *  or unreadable file leaves the box on its colour/SVG icon. */
+  async ensureBoxIconLoaded(boxId: string): Promise<void> {
+    const box = this.boxById(boxId)
+    if (!box?.imagePath) {
+      this.boxIconUrls.delete(boxId)
+      return
+    }
+    if (this.boxIconUrls.has(boxId)) return
+    try {
+      const url = await invoke('file:readAsDataUrl', box.imagePath)
+      if (url) this.boxIconUrls.set(boxId, url)
+    } catch {
+      // Icon loading is best-effort; the resolver's fallback remains.
+    }
+  }
+
+  updateBox(id: string, patch: Partial<Omit<GlobalBrowserBox, 'id'>>): void {
+    const box = this.boxById(id)
+    if (!box) return
+    if (patch.name !== undefined) {
+      const name = patch.name.trim().slice(0, MAX_BROWSER_BOX_NAME_LENGTH)
+      if (name) box.name = name
+    }
+    if (patch.color !== undefined) box.color = patch.color
+    if (patch.iconType !== undefined) box.iconType = patch.iconType
+    if (patch.customSvg !== undefined) box.customSvg = patch.customSvg
+    if (patch.imagePath !== undefined) box.imagePath = patch.imagePath
+    this.persist()
+    if (patch.imagePath !== undefined) {
+      this.boxIconUrls.delete(id)
+      void this.ensureBoxIconLoaded(id)
+    }
+  }
+
+  /** How many tabs currently run in a box. */
+  tabCountInBox(boxId: string): number {
+    return this.tabs.filter((tab) => tab.boxId === boxId).length
+  }
+
+  /** The box the tab on screen runs in, or null when it is in the default jar.
+   *  This is what the rail's active-box chip reads. */
+  get activeBox(): GlobalBrowserBox | null {
+    const boxId = this.activeTab?.boxId ?? null
+    return boxId ? this.boxById(boxId) : null
+  }
+
+  /**
+   * Remove a box.
+   *
+   * Its tabs close with it: a tab cannot change jars, so keeping them open while
+   * the jar goes away would leave rows claiming a session nothing owns. The
+   * caller erases the box's cookies separately, because that is the destructive
+   * choice and belongs behind its own confirmation.
+   */
+  deleteBox(id: string): void {
+    if (!this.boxes.some((box) => box.id === id)) return
+    for (const tab of this.tabs.filter((candidate) => candidate.boxId === id)) {
+      this.close(tab.id)
+    }
+    this.boxes = this.boxes.filter((box) => box.id !== id)
+    this.boxIconUrls.delete(id)
+    this.persist()
+  }
+
+  /** Erase a box's cookies, site data and cache in the main process. Best-effort
+   *  with a report, because the user asked for the data to be gone and a silent
+   *  failure would leave them believing it is. */
+  async clearBoxData(boxId: string): Promise<void> {
+    try {
+      await invoke('browser:clearBoxData', GLOBAL_BROWSER_CONTEXT.projectId, boxId)
+    } catch (error) {
+      reportError(error, 'The box\u2019s cookies and site data could not be cleared.')
+    }
+  }
+
+  // ─── Page state ───────────────────────────────────────────────────────
 
   /** Apply a live page snapshot: the navigation identity onto the tab, and the
    *  loading/audio/capture state onto the map the strip and header read. */
@@ -1232,7 +1460,7 @@ export class GlobalBrowserState {
 
   /** The strip in its stored shape. */
   private snapshot(): GlobalBrowserTabsSnapshot {
-    return globalBrowserTabsSnapshot(this.tabs, this.groups, this.activeTabId)
+    return globalBrowserTabsSnapshot(this.tabs, this.groups, this.boxes, this.activeTabId)
   }
 
   /**

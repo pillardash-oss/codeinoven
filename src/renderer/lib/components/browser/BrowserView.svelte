@@ -3,11 +3,11 @@
   import {
     AppWindow,
     Bookmark,
+    Boxes,
     Clock,
     Download,
     Globe,
     MessagesCircle,
-    Plus,
     StickyNote
   } from '@lucide/svelte'
   import { subscribe } from '$lib/ipc.svelte'
@@ -21,9 +21,9 @@
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { motionDuration } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
-  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import BrowserTabSearchButton from './BrowserTabSearchButton.svelte'
+  import BrowserNewTabButton from './BrowserNewTabButton.svelte'
   import BrowserTabsSidebar from './BrowserTabsSidebar.svelte'
   import BrowserWorkspace from './BrowserWorkspace.svelte'
   import BrowserContextSidebar from './BrowserContextSidebar.svelte'
@@ -103,6 +103,17 @@
         countBadge: bookmarkCount > 0 ? String(bookmarkCount) : undefined,
         onSelect: () => globalBrowser.toggleBookmarksSidebar()
       },
+      // Boxes belong to the profile, like downloads and bookmarks, so the tool is
+      // reachable with no tab open. That is also what makes it the first browser
+      // tool a user needs: a box is made before a tab is opened inside it.
+      {
+        id: 'boxes',
+        label: globalBrowser.boxes.length > 0 ? `Boxes (${globalBrowser.boxes.length})` : 'Boxes',
+        icon: Boxes,
+        active: globalBrowser.boxesSidebarShown,
+        countBadge: globalBrowser.boxes.length > 0 ? String(globalBrowser.boxes.length) : undefined,
+        onSelect: () => globalBrowser.toggleBoxesSidebar()
+      },
       ...(popupWindows.length > 0
         ? [
             {
@@ -159,11 +170,7 @@
       },
       {
         id: 'new-tab',
-        icon: Plus,
-        ariaLabel: 'New browser tab',
-        title: 'New tab',
-        shortcut: keymapState.keysFor('browser-new-tab'),
-        run: () => globalBrowser.openNewTabAddress()
+        component: BrowserNewTabButton as unknown as ViewActionItem['component']
       }
     ])
   })

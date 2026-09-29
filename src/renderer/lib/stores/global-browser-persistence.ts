@@ -17,11 +17,12 @@ import { APP_SLUG } from '$shared/brand'
 import {
   parseGlobalBrowserTabsSnapshot,
   type GlobalBrowserTabsSnapshot,
+  type PersistedBrowserBox,
   type PersistedBrowserGroup,
   type PersistedBrowserTab
 } from '$shared/browser/global-browser-tabs'
 import { invoke } from '$lib/ipc.svelte'
-import type { GlobalBrowserGroup, GlobalBrowserTab } from './global-browser-types'
+import type { GlobalBrowserBox, GlobalBrowserGroup, GlobalBrowserTab } from './global-browser-types'
 
 /** The renderer `localStorage` key the list used to live in. It is read once, to
  *  migrate a profile that predates the durable file, and then cleared. */
@@ -36,6 +37,7 @@ export function persistedTabFromRuntime(tab: GlobalBrowserTab): PersistedBrowser
     customTitle: tab.customTitle,
     url: tab.url,
     groupId: tab.groupId,
+    boxId: tab.boxId,
     createdAt: tab.createdAt,
     lastUsedAt: tab.lastUsedAt,
     hibernated: tab.hibernated,
@@ -62,6 +64,19 @@ export function persistedGroupFromRuntime(group: GlobalBrowserGroup): PersistedB
   }
 }
 
+/** One box in its stored shape. A box carries nothing but its identity and its
+ *  appearance; the tabs that name it are stored on the tab. */
+export function persistedBoxFromRuntime(box: GlobalBrowserBox): PersistedBrowserBox {
+  return {
+    id: box.id,
+    name: box.name,
+    color: box.color,
+    iconType: box.iconType,
+    customSvg: box.customSvg,
+    imagePath: box.imagePath
+  }
+}
+
 /**
  * One stored tab as the strip reads it.
  *
@@ -77,15 +92,21 @@ export function runtimeGroupFromPersisted(group: PersistedBrowserGroup): GlobalB
   return { ...group }
 }
 
+export function runtimeBoxFromPersisted(box: PersistedBrowserBox): GlobalBrowserBox {
+  return { ...box }
+}
+
 /** The stored shape of a whole strip. */
 export function globalBrowserTabsSnapshot(
   tabs: readonly GlobalBrowserTab[],
   groups: readonly GlobalBrowserGroup[],
+  boxes: readonly GlobalBrowserBox[],
   activeTabId: string | null
 ): GlobalBrowserTabsSnapshot {
   return {
     tabs: tabs.map(persistedTabFromRuntime),
     groups: groups.map(persistedGroupFromRuntime),
+    boxes: boxes.map(persistedBoxFromRuntime),
     activeTabId
   }
 }
@@ -116,7 +137,11 @@ export function loadLegacyGlobalBrowserTabs(): GlobalBrowserTabsSnapshot | null 
     const raw = window.localStorage.getItem(LEGACY_STORAGE_KEY)
     if (!raw) return null
     const snapshot = parseGlobalBrowserTabsSnapshot(JSON.parse(raw))
-    return snapshot.tabs.length > 0 || snapshot.groups.length > 0 ? snapshot : null
+    return snapshot.tabs.length > 0 ||
+      snapshot.groups.length > 0 ||
+      (snapshot.boxes?.length ?? 0) > 0
+      ? snapshot
+      : null
   } catch {
     return null
   }

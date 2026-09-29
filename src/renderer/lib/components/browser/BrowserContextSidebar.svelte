@@ -8,6 +8,7 @@
     contextSidebarState,
     type BrowserAgentContextTab,
     type BrowserBookmarksContextTab,
+    type BrowserBoxesContextTab,
     type BrowserDownloadsContextTab,
     type BrowserHistoryContextTab,
     type ContextSidebarTab
@@ -94,6 +95,14 @@
     kind: 'bookmarks',
     title: 'Bookmarks'
   }
+  /** The boxes panel. A box belongs to the profile rather than to a page, so like
+   *  the downloads and history it survives with no tab, which is exactly when a
+   *  user makes their first box. */
+  const boxesTab: BrowserBoxesContextTab = {
+    id: 'browser-boxes',
+    kind: 'boxes',
+    title: 'Boxes'
+  }
   /**
    * The popup windows the active page opened, one tab per window.
    *
@@ -123,6 +132,7 @@
     ...popupTabs,
     historyTab,
     bookmarksTab,
+    boxesTab,
     downloadsTab,
     ...(noteTab ? [noteTab] : []),
     ...(agentTab ? [agentTab] : []),
@@ -136,11 +146,13 @@
           ? (activePopup?.id ?? null)
           : globalBrowser.downloadsSidebarShown
             ? downloadsTab.id
-            : globalBrowser.historySidebarShown
-              ? historyTab.id
-              : globalBrowser.bookmarksSidebarShown
-                ? bookmarksTab.id
-                : (noteTab?.id ?? null))
+            : globalBrowser.boxesSidebarShown
+              ? boxesTab.id
+              : globalBrowser.historySidebarShown
+                ? historyTab.id
+                : globalBrowser.bookmarksSidebarShown
+                  ? bookmarksTab.id
+                  : (noteTab?.id ?? null))
   )
 
   /** Whether the tool on screen is a popup window, for the two callbacks that
@@ -171,6 +183,10 @@
       globalBrowser.showBookmarksSidebar()
       return
     }
+    if (tabId === boxesTab.id) {
+      globalBrowser.showBoxesSidebar()
+      return
+    }
     if (agentTab && tabId === agentTab.id) globalBrowser.showAgentSidebar()
     else globalBrowser.showNoteSidebar()
   }
@@ -194,6 +210,10 @@
     }
     if (tabId === bookmarksTab.id) {
       globalBrowser.closeBookmarksSidebar()
+      return
+    }
+    if (tabId === boxesTab.id) {
+      globalBrowser.closeBoxesSidebar()
       return
     }
     if (agentTab && tabId === agentTab.id) closing = agentTab
@@ -286,6 +306,10 @@
   {:else if globalBrowser.bookmarksSidebarShown}
     {#await import('./BrowserBookmarksPanel.svelte') then { default: BrowserBookmarksPanel }}
       <BrowserBookmarksPanel />
+    {/await}
+  {:else if globalBrowser.boxesSidebarShown}
+    {#await import('./BrowserBoxesPanel.svelte') then { default: BrowserBoxesPanel }}
+      <BrowserBoxesPanel />
     {/await}
   {:else if globalBrowser.agentSidebarShown}
     {#if agentChat}

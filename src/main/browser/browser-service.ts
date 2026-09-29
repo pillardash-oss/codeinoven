@@ -873,6 +873,12 @@ export class BrowserService {
     replaceHandler('browser:clearData', async (_event, rawProjectId) => {
       await this.siteData.clearProjectData(validateProjectId(rawProjectId))
     })
+    replaceHandler('browser:clearBoxData', async (_event, rawProjectId, rawBoxId) => {
+      const projectId = validateProjectId(rawProjectId)
+      const boxId = validateOptionalBoxId(rawBoxId)
+      if (!boxId) throw new TypeError('Browser box ID is required')
+      await this.clearBoxData(projectId, boxId)
+    })
     replaceHandler('browser:clearSiteData', (_event, rawProjectId, rawScopes) => {
       const projectId = validateProjectId(rawProjectId)
       const scopes = validateSiteDataScopes(rawScopes)
@@ -1191,7 +1197,8 @@ export class BrowserService {
         projectId,
         threadId,
         requestedTabId: tabId,
-        reveal
+        reveal,
+        boxId: tab.boxId
       })
       return {
         ...this.utilityTabContext(tabId, tab),
@@ -1498,7 +1505,8 @@ export class BrowserService {
         projectId: tab.projectId,
         threadId: tab.threadId,
         requestedTabId: tabId,
-        reveal: true
+        reveal: true,
+        boxId: tab.boxId
       }
     )
   }
@@ -2555,6 +2563,34 @@ export class BrowserService {
     this.capture.watch(tabId, contents.mainFrame)
   }
 
+  /**
+   * Erase one box's cookies, site data and cache, and forget the permission
+   * decisions it remembered.
+   *
+   * This is the destructive half of deleting a box. The partition *is* the box,
+   * so clearing it is what "delete and erase" means, and the ledgers go with it:
+   * leaving them behind would let a recreated box inherit decisions for a site
+   * the user removed. The session object itself is kept, because a box the user
+   * recreates will resolve to this same partition string, and a session already
+   * configured is cheaper than one rebuilt on the next tab.
+   */
+  async clearBoxData(projectId: string, boxId: string): Promise<void> {
+    const partition = browserPartitionFor(projectId, boxId)
+    const browserSession = session.fromPartition(partition)
+    await browserSession.clearStorageData()
+    await browserSession.clearCache()
+    await browserSession.closeAllConnections()
+    await this.permissionMemory.forget(partition, this.permissionLedgers())
+    // The box's own tabs reload so the cleared state takes effect now rather
+    // than at the next navigation: an in-memory session would otherwise keep
+    // answering as the account whose cookies were just erased.
+    for (const tab of this.tabs.values()) {
+      if (tab.projectId !== projectId || tab.boxId !== boxId) continue
+      if (!tab.initialNavigationStarted || tab.view.webContents.isDestroyed()) continue
+      tab.view.webContents.reload()
+    }
+  }
+
   private sessionForProject(projectId: string, boxId: string | null = null): Session {
     const partition = browserPartitionFor(projectId, boxId)
     const browserSession = session.fromPartition(partition)
@@ -3061,7 +3097,8 @@ export class BrowserService {
       projectId: owner.projectId,
       threadId: owner.threadId,
       requestedTabId: tabId,
-      reveal: true
+      reveal: true,
+      boxId: owner.boxId
     })
   }
 
@@ -3100,7 +3137,8 @@ export class BrowserService {
       projectId: page.owner.projectId,
       threadId: page.owner.threadId,
       requestedTabId: tabId,
-      reveal: true
+      reveal: true,
+      boxId: page.owner.boxId
     })
   }
 

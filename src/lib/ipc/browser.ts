@@ -388,6 +388,12 @@ export interface BrowserOpenRequestContext {
   threadId: string
   requestedTabId?: string
   reveal: boolean
+  /**
+   * The box the created or revealed tab runs in, or null/absent for the
+   * context's own jar. Main resolves it from the owning tab, so the renderer's
+   * row and the session agree about which jar the page lives in.
+   */
+  boxId?: string | null
 }
 
 /** What the permission popup displays for one pending request. Main resolves

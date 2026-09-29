@@ -34,6 +34,7 @@ function makeTab(id: string, lastUsedAt = 0): GlobalBrowserTab {
     url: `https://example.test/${id}`,
     favicon: null,
     groupId: null,
+    boxId: null,
     createdAt: lastUsedAt,
     lastUsedAt,
     hibernated: false,

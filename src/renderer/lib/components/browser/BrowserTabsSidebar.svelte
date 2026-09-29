@@ -23,6 +23,7 @@
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import BrowserTabRow from './BrowserTabRow.svelte'
+  import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'
   import BrowserGroupModal from './BrowserGroupModal.svelte'
   import BrowserTabModal from './BrowserTabModal.svelte'
   import { browserGroupAccent, browserGroupIconUrl } from './browser-group-appearance'
@@ -103,9 +104,17 @@
   function matches(tab: GlobalBrowserTab): boolean {
     const needle = query.trim().toLowerCase()
     if (needle === '') return true
-    return (
-      browserTabLabel(tab).toLowerCase().includes(needle) || tab.url.toLowerCase().includes(needle)
-    )
+    if (
+      browserTabLabel(tab).toLowerCase().includes(needle) ||
+      tab.url.toLowerCase().includes(needle)
+    ) {
+      return true
+    }
+    // The box a tab runs in is part of what the user is searching for, so a
+    // query for "work" finds every page in the work box and not only the pages
+    // whose own title or address happens to contain the word.
+    const box = tab.boxId ? globalBrowser.boxById(tab.boxId) : null
+    return box ? box.name.toLowerCase().includes(needle) : false
   }
 
   function tabsFor(groupId: string | null): GlobalBrowserTab[] {
@@ -351,14 +360,18 @@
         No tabs are open. Pages here run in their own profile, separate from the browsers your
         agents use.
       </p>
-      <button
-        type="button"
-        class="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        title="Open a new browser tab"
-        onclick={() => newTab()}
-      >
-        New tab
-      </button>
+      <BrowserNewTabMenu>
+        {#snippet trigger()}
+          <button
+            type="button"
+            class="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            title="Open a new browser tab"
+            onclick={() => newTab()}
+          >
+            New tab
+          </button>
+        {/snippet}
+      </BrowserNewTabMenu>
     </div>
   {:else}
     {#if searchGroupId === null && pinned.length > 0}
@@ -434,15 +447,19 @@
                   {tabsFor(group.id).length}
                 </span>
               </button>
-              <button
-                type="button"
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                aria-label={`New tab in ${group.name}`}
-                title={`New tab in ${group.name}`}
-                onclick={() => newTab(group.id)}
-              >
-                <Plus size={13} />
-              </button>
+              <BrowserNewTabMenu groupId={group.id} anchorTabId={activeTab?.id ?? null}>
+                {#snippet trigger()}
+                  <button
+                    type="button"
+                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                    aria-label={`New tab in ${group.name}`}
+                    title={`New tab in ${group.name}`}
+                    onclick={() => newTab(group.id)}
+                  >
+                    <Plus size={13} />
+                  </button>
+                {/snippet}
+              </BrowserNewTabMenu>
               <button
                 type="button"
                 class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"

@@ -100,7 +100,10 @@
         GLOBAL_BROWSER_CONTEXT.projectId,
         GLOBAL_BROWSER_CONTEXT.threadId,
         tab.url,
-        bounds
+        bounds,
+        // The tab's jar, so main builds (or reattaches) this page in the box it
+        // was created in rather than the context's default partition.
+        tab.boxId
       )
       // The store's answer can change while that call is in flight: another
       // surface may claim the view, or an overlay may appear. Only one native

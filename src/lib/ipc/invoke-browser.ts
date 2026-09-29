@@ -262,6 +262,9 @@ export const invokeBrowserContract = {
     void
   >,
   'browser:clearData': {} as Contract<[projectId: string], void>,
+  /** Erase one box's cookies, site data and cache, and forget the permission
+   *  decisions it remembered. This is the destructive half of deleting a box. */
+  'browser:clearBoxData': {} as Contract<[projectId: string, boxId: string], void>,
   'browser:clearSiteData': {} as Contract<
     [projectId: string, scopes: BrowserSiteDataScope[]],
     void

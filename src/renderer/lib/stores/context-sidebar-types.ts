@@ -207,6 +207,20 @@ export interface BrowserBookmarksContextTab {
 }
 
 /**
+ * The global browser's boxes panel.
+ *
+ * A box is a property of the profile rather than of a page, so like downloads,
+ * history and bookmarks this panel carries no scope and stays docked with no tab
+ * on screen. It is also the one browser panel that is useful before any tab
+ * exists, which is exactly when a user makes their first box.
+ */
+export interface BrowserBoxesContextTab {
+  id: string
+  kind: 'boxes'
+  title: string
+}
+
+/**
  * One popup window on the browser's right rail.
  *
  * A popup window is a page's own `window.open` with a window in it: a sign-in, a
@@ -336,6 +350,7 @@ export type ContextSidebarTab =
   | BrowserDownloadsContextTab
   | BrowserHistoryContextTab
   | BrowserBookmarksContextTab
+  | BrowserBoxesContextTab
   | BrowserPopupWindowContextTab
   | MemoryContextTab
   | CoordinatorContextTab

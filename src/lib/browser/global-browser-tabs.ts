@@ -32,6 +32,10 @@ export const MAX_BROWSER_TAB_TITLE_LENGTH = 120
 export const MAX_BROWSER_TAB_PAGE_TITLE_LENGTH = 300
 export const MAX_GLOBAL_BROWSER_TABS = 100
 export const MAX_GLOBAL_BROWSER_GROUPS = 40
+/** Bounds for the box list. A box is a durable cookie jar, so the cap keeps a
+ *  runaway store from creating partitions without limit. */
+export const MAX_GLOBAL_BROWSER_BOXES = 20
+export const MAX_BROWSER_BOX_NAME_LENGTH = 60
 /** Bounds for the appearance payload a group or tab may persist. The SVG ceiling
  *  matches `sanitizeCustomSvg`, so a stored value can only be one it accepted. */
 export const MAX_BROWSER_GROUP_ICON_TYPE_LENGTH = 64
@@ -42,6 +46,10 @@ export const MAX_BROWSER_TAB_URL_LENGTH = 2_048
 export const MAX_BROWSER_ASSISTANT_THREAD_ID_LENGTH = 64
 
 const GROUP_ID_PATTERN = /^group:[a-zA-Z0-9:_-]{1,240}$/u
+/** The shape a box id must have to become part of a session partition. The main
+ *  process validates the same string before it reaches `session.fromPartition`,
+ *  so the two cannot disagree about what a legal box id is. */
+const BOX_ID_PATTERN = /^box:[a-zA-Z0-9:_-]{1,240}$/u
 const COLOR_PATTERN = /^#[0-9a-fA-F]{3,8}$/u
 /** The character class every generated id uses; anything else is not an id. */
 const ENTITY_ID_PATTERN = /^[a-zA-Z0-9:_-]+$/u
@@ -71,6 +79,17 @@ export interface PersistedBrowserGroup extends BrowserAppearance {
   pinned: boolean
 }
 
+/**
+ * One browser box as it is stored: a named container for cookies and site data,
+ * wearing the same appearance vocabulary as a group. It owns no tabs and no
+ * pages; the tabs that name it are what give it life, and a box nobody uses is
+ * nothing but a row in this file and a profile directory on disk.
+ */
+export interface PersistedBrowserBox extends BrowserAppearance {
+  id: string
+  name: string
+}
+
 /** One tab as it is stored. The live page state (loading, audio, favicon
  *  freshness) describes a running page and is deliberately absent. */
 export interface PersistedBrowserTab extends BrowserAppearance {
@@ -79,6 +98,10 @@ export interface PersistedBrowserTab extends BrowserAppearance {
   customTitle: string | null
   url: string
   groupId: string | null
+  /** The box whose cookies and site data this tab runs against, or null for the
+   *  context's own default jar. A tab never changes jars in place: switching
+   *  means closing and reopening, so this is settled when the tab is made. */
+  boxId: string | null
   createdAt: number
   lastUsedAt: number
   hibernated: boolean
@@ -94,15 +117,18 @@ export interface PersistedBrowserTab extends BrowserAppearance {
   assistantThreadId: string | null
 }
 
-/** The durable tab list: the tabs, their folds, and which tab was on screen. */
+/** The durable tab list: the tabs, their folds, their boxes, and which tab was
+ *  on screen. `boxes` is optional so a payload written before boxes existed
+ *  still parses, with the missing list read as “no boxes”. */
 export interface GlobalBrowserTabsSnapshot {
   tabs: PersistedBrowserTab[]
   groups: PersistedBrowserGroup[]
+  boxes?: PersistedBrowserBox[]
   activeTabId: string | null
 }
 
 function emptySnapshot(): GlobalBrowserTabsSnapshot {
-  return { tabs: [], groups: [], activeTabId: null }
+  return { tabs: [], groups: [], boxes: [], activeTabId: null }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -198,6 +224,32 @@ function parseAddress(value: unknown): string {
   }
 }
 
+function parseBoxes(value: unknown): PersistedBrowserBox[] {
+  if (!Array.isArray(value)) return []
+  const boxes: PersistedBrowserBox[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (boxes.length >= MAX_GLOBAL_BROWSER_BOXES) break
+    if (!isRecord(entry)) continue
+    const storedId = entry['id']
+    if (typeof storedId !== 'string' || !BOX_ID_PATTERN.test(storedId) || seen.has(storedId)) {
+      // A box id keys a session partition, so a repaired id would silently point
+      // at a different jar. A box whose id cannot be trusted is dropped instead,
+      // because its tabs then fall back to the default jar rather than reading
+      // someone else's storage.
+      continue
+    }
+    seen.add(storedId)
+    const name = boundedString(entry['name'], MAX_BROWSER_BOX_NAME_LENGTH).trim()
+    boxes.push({
+      id: storedId,
+      name: name === '' ? 'Box' : name,
+      ...parseAppearance(entry)
+    })
+  }
+  return boxes
+}
+
 function parseGroups(value: unknown): PersistedBrowserGroup[] {
   if (!Array.isArray(value)) return []
   const groups: PersistedBrowserGroup[] = []
@@ -228,10 +280,12 @@ function parseGroups(value: unknown): PersistedBrowserGroup[] {
  */
 function parseTabs(
   value: unknown,
-  groups: readonly PersistedBrowserGroup[]
+  groups: readonly PersistedBrowserGroup[],
+  boxes: readonly PersistedBrowserBox[]
 ): PersistedBrowserTab[] {
   if (!Array.isArray(value)) return []
   const groupIds = new Set(groups.map((group) => group.id))
+  const boxIds = new Set(boxes.map((box) => box.id))
   const tabs: PersistedBrowserTab[] = []
   const seen = new Set<string>()
   const now = Date.now()
@@ -244,6 +298,7 @@ function parseTabs(
     const createdAt = safeInteger(entry['createdAt'], now)
     const customTitle = boundedOptionalString(entry['customTitle'], MAX_BROWSER_TAB_TITLE_LENGTH)
     const storedGroupId = entry['groupId']
+    const storedBoxId = entry['boxId']
     const pinned = entry['pinned'] === true
     tabs.push({
       id,
@@ -252,6 +307,7 @@ function parseTabs(
       url: parseAddress(entry['url']),
       groupId:
         typeof storedGroupId === 'string' && groupIds.has(storedGroupId) ? storedGroupId : null,
+      boxId: typeof storedBoxId === 'string' && boxIds.has(storedBoxId) ? storedBoxId : null,
       createdAt,
       lastUsedAt: safeInteger(entry['lastUsedAt'], createdAt),
       hibernated: entry['hibernated'] === true,
@@ -272,12 +328,14 @@ function parseTabs(
  */
 export function parseGlobalBrowserTabsSnapshot(value: unknown): GlobalBrowserTabsSnapshot {
   if (!isRecord(value)) return emptySnapshot()
+  const boxes = parseBoxes(value['boxes'])
   const groups = parseGroups(value['groups'])
-  const tabs = parseTabs(value['tabs'], groups)
+  const tabs = parseTabs(value['tabs'], groups, boxes)
   const activeTabId = value['activeTabId']
   return {
     tabs,
     groups,
+    boxes,
     activeTabId:
       typeof activeTabId === 'string' && tabs.some((tab) => tab.id === activeTabId)
         ? activeTabId
@@ -298,6 +356,7 @@ export function globalBrowserTabsSnapshotPayload(
     updatedAt: new Date().toISOString(),
     groups: snapshot.groups,
     tabs: snapshot.tabs,
+    boxes: snapshot.boxes ?? [],
     activeTabId: snapshot.activeTabId
   }
 }

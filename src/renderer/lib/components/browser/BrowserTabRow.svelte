@@ -1,5 +1,9 @@
 <script lang="ts">
   import {
+    ArrowDown,
+    ArrowUp,
+    Boxes,
+    ChevronRight,
     FolderInput,
     FolderMinus,
     FolderPlus,
@@ -16,6 +20,7 @@
     X
   } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { harnessName } from '$lib/components/shared/model-picker-helpers'
@@ -24,6 +29,12 @@
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserTabAccent, browserTabIconUrl } from './browser-tab-appearance'
+  import {
+    browserAppearanceAccent,
+    browserAppearanceHasIcon,
+    browserAppearanceIconUrl
+  } from './browser-group-appearance'
+  import BrowserTabPlacementItems from './BrowserTabPlacementItems.svelte'
 
   interface Props {
     tab: GlobalBrowserTab
@@ -86,8 +97,27 @@
   })
   const groups = $derived(globalBrowser.groups)
   const group = $derived(tab.groupId ? globalBrowser.groupById(tab.groupId) : null)
+  /** The box this tab runs in, or null in the default jar. Drives the row's box
+   *  badge and the menu's reopen targets. */
+  const box = $derived(tab.boxId ? globalBrowser.boxById(tab.boxId) : null)
+  const boxAccent = $derived(box ? browserAppearanceAccent(box) : null)
+  const boxIcon = $derived(
+    box && browserAppearanceHasIcon(box)
+      ? browserAppearanceIconUrl(box, globalBrowser.boxIconUrl(box.id))
+      : null
+  )
   /** True while a drag is over this row and would reorder here. */
   let dropTarget = $state(false)
+  /** The box a pending "reopen in box" targets: undefined while none is pending,
+   *  null for the default jar. */
+  let reopenTarget = $state<string | null | undefined>(undefined)
+  const reopenTargetLabel = $derived(
+    reopenTarget === undefined
+      ? ''
+      : reopenTarget === null
+        ? 'no box'
+        : (globalBrowser.boxById(reopenTarget)?.name ?? 'that box')
+  )
 
   const itemClass =
     'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
@@ -105,6 +135,32 @@
     const id = globalBrowser.createGroup('New group')
     globalBrowser.moveToGroup(tab.id, id)
     onOpenGroupEditor(id)
+  }
+
+  /** Open a blank tab beside this one, inheriting its group and box, and take the
+   *  caret: the address field is what a new tab is for. */
+  function newSibling(position: 'before' | 'after'): void {
+    globalBrowser.createTab('', tab.groupId, tab.boxId, { tabId: tab.id, position })
+    globalBrowser.openAddressSpotlight()
+  }
+
+  /** Open a blank tab from the placement submenus, defaulting each unnamed side to
+   *  this tab's own group and box. */
+  function newPlaced(choice: { boxId?: string | null; groupId?: string | null }): void {
+    globalBrowser.createTab('', choice.groupId ?? tab.groupId, choice.boxId ?? tab.boxId, {
+      tabId: tab.id,
+      position: 'after'
+    })
+    globalBrowser.openAddressSpotlight()
+  }
+
+  /** Close this tab and open its page in the chosen box. Confirmed first: a tab
+   *  cannot change jars in place, so this really is a close plus an open. */
+  function confirmReopen(): void {
+    const target = reopenTarget
+    reopenTarget = undefined
+    if (target === undefined) return
+    globalBrowser.reopenInBox(tab.id, target)
   }
 
   function onDragStart(event: DragEvent): void {
@@ -200,6 +256,20 @@
       </button>
 
       <div class="flex shrink-0 items-center gap-0.5 pr-1">
+        {#if box}
+          <span
+            role="img"
+            class="flex h-6 w-6 items-center justify-center"
+            title={`In box: ${box.name}`}
+            aria-label={`In box ${box.name}`}
+          >
+            {#if boxIcon}
+              <img src={boxIcon} alt="" class="h-3 w-3 rounded-sm object-contain" />
+            {:else}
+              <span class="h-2.5 w-2.5 rounded-full" style="background-color: {boxAccent}"></span>
+            {/if}
+          </span>
+        {/if}
         {#if tab.pinned}
           <span
             role="img"
@@ -297,6 +367,16 @@
         {/if}
       </ContextMenu.Item>
       <ContextMenu.Separator class="my-1 h-px bg-border" />
+      <ContextMenu.Item class={itemClass} onSelect={() => newSibling('before')}>
+        <ArrowUp size={13} class="shrink-0 text-muted" />
+        New tab before this tab
+      </ContextMenu.Item>
+      <ContextMenu.Item class={itemClass} onSelect={() => newSibling('after')}>
+        <ArrowDown size={13} class="shrink-0 text-muted" />
+        New tab after this tab
+      </ContextMenu.Item>
+      <BrowserTabPlacementItems onCreate={newPlaced} />
+      <ContextMenu.Separator class="my-1 h-px bg-border" />
       <ContextMenu.Item class={itemClass} onSelect={createGroupFromTab}>
         <FolderPlus size={13} class="shrink-0 text-muted" />
         New tab group
@@ -329,6 +409,40 @@
       {/if}
 
       <ContextMenu.Separator class="my-1 h-px bg-border" />
+      {#if globalBrowser.boxes.length > 0 || tab.boxId}
+        <ContextMenu.Sub>
+          <ContextMenu.SubTrigger class={itemClass}>
+            <Boxes size={13} class="shrink-0 text-muted" />
+            Reopen in box
+            <ChevronRight size={13} class="ml-auto text-muted" />
+          </ContextMenu.SubTrigger>
+          <ContextMenu.Portal>
+            <ContextMenu.SubContent
+              avoidCollisions
+              collisionPadding={12}
+              updatePositionStrategy="always"
+              class="z-50 max-h-[calc(100vh-1.5rem)] min-w-44 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+            >
+              {#if tab.boxId}
+                <ContextMenu.Item class={itemClass} onSelect={() => (reopenTarget = null)}>
+                  <Globe size={13} class="shrink-0 text-muted" />
+                  No box
+                </ContextMenu.Item>
+              {/if}
+              {#each globalBrowser.boxes.filter((candidate) => candidate.id !== tab.boxId) as candidate (candidate.id)}
+                <ContextMenu.Item class={itemClass} onSelect={() => (reopenTarget = candidate.id)}>
+                  <span
+                    class="h-2 w-2 shrink-0 rounded-full"
+                    style="background-color: {browserAppearanceAccent(candidate)}"
+                  ></span>
+                  <span class="truncate">{candidate.name}</span>
+                </ContextMenu.Item>
+              {/each}
+            </ContextMenu.SubContent>
+          </ContextMenu.Portal>
+        </ContextMenu.Sub>
+      {/if}
+      <ContextMenu.Separator class="my-1 h-px bg-border" />
       <ContextMenu.Item
         class="{itemClass} text-danger data-[highlighted]:bg-danger/10"
         onSelect={() => globalBrowser.close(tab.id)}
@@ -339,3 +453,20 @@
     </ContextMenu.Content>
   </ContextMenu.Portal>
 </ContextMenu.Root>
+
+{#if reopenTarget !== undefined}
+  <ConfirmDialog
+    open
+    variant="danger"
+    title="Reopen in another box?"
+    confirmLabel="Close and reopen"
+    onCancel={() => (reopenTarget = undefined)}
+    onConfirm={confirmReopen}
+  >
+    <p>
+      This tab closes and its address opens again in {reopenTargetLabel}. Cookies stay in their own
+      boxes, so the page opens signed out unless that box is already signed in, and the tab's back
+      and forward history is not carried over.
+    </p>
+  </ConfirmDialog>
+{/if}

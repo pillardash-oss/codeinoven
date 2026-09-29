@@ -26,6 +26,7 @@ export type {
   AttentionContextTab,
   BrowserAgentContextTab,
   BrowserBookmarksContextTab,
+  BrowserBoxesContextTab,
   BrowserContextTab,
   BrowserDownloadsContextTab,
   BrowserHistoryContextTab,
