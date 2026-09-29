@@ -28,6 +28,7 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'app:parkWindow',
   'app:instanceRole',
   'app:openInstanceOwner',
+  'app:transferInstanceControl',
   'app:rendererReady',
   'app:waitForFeatures',
   'config:get',

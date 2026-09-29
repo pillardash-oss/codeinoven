@@ -109,6 +109,7 @@ export class BackgroundLifecycleService {
     // has a place to park to. A secondary instance never shows one.
     this.syncTray()
     this.unsubscribers.push(instanceRegistry.onLiveInstanceSetChanged(() => this.evaluateRole()))
+    this.unsubscribers.push(instanceRegistry.onOwnershipChanged(() => this.evaluateRole()))
     this.startActivationWatcher()
     this.broadcastRole()
   }
@@ -220,6 +221,18 @@ export class BackgroundLifecycleService {
       Logger.error('Could not ask the running instance to open', error)
       return false
     }
+  }
+
+  /**
+   * Make this instance the owner of scheduled work, at the user's request. A
+   * secondary's "Make this the main instance" action asks for it, which is the
+   * escape hatch when the elected owner is a stale window, or a crashed process
+   * still in the registry, and the user wants the schedule where they are
+   * working. The previous owner steps down through the same ownership
+   * notification and shows the secondary notice instead.
+   */
+  takeOverControl(): boolean {
+    return instanceRegistry.transferOwnership(process.pid)
   }
 
   /** Tear the window down for background mode: hibernate, persist, destroy. */

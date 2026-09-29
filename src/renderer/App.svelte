@@ -1483,14 +1483,6 @@
 <div class="flex h-screen flex-col bg-app">
   <AppHeader {activeView} {goBack} {goForward} {navigation} />
 
-  {#if instanceRole?.role === 'secondary'}
-    <InstanceRoleNotice
-      ownerPid={instanceRole.ownerPid}
-      onOpenOwner={() => void invoke('app:openInstanceOwner')}
-      onQuit={() => void invoke('app:confirmClose')}
-    />
-  {/if}
-
   <div class="flex min-h-0 flex-1">
     <AppViewRail
       options={navigation.headerViewOptions()}
@@ -1570,6 +1562,18 @@
       {/if}
     </main>
   </div>
+
+  <!-- The instance-role notice sits at the very bottom as a status bar: it is a
+       standing condition, so it reads as chrome rather than as content above
+       the workspace. It moves here so it never pushes the workspace down. -->
+  {#if instanceRole?.role === 'secondary'}
+    <InstanceRoleNotice
+      ownerPid={instanceRole.ownerPid}
+      onOpenOwner={() => void invoke('app:openInstanceOwner')}
+      onTakeOver={() => void invoke('app:transferInstanceControl')}
+      onQuit={() => void invoke('app:confirmClose')}
+    />
+  {/if}
   {#if spotlightScreenId}
     {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
       <CommandPalette {...spotlightPalette} />

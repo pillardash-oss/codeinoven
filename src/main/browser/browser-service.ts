@@ -212,7 +212,9 @@ function popupPageOwner(record: BrowserPopupWindowRecord): BrowserPageOwner {
  * hook must answer with that exact object: any other one is reported as
  * unconnected and the popup never opens.
  */
-function popupWindowContents(options: Electron.BrowserWindowConstructorOptions): WebContents | null {
+function popupWindowContents(
+  options: Electron.BrowserWindowConstructorOptions
+): WebContents | null {
   const candidate: unknown = Reflect.get(options, 'webContents')
   return isWebContents(candidate) ? candidate : null
 }
@@ -229,6 +231,19 @@ function isWebContents(value: unknown): value is WebContents {
     typeof Reflect.get(value, 'isDestroyed') === 'function' &&
     typeof Reflect.get(value, 'loadURL') === 'function'
   )
+}
+
+/**
+ * Rebind a browser IPC channel.
+ *
+ * Reopening a window after a close-to-background rebuilds the browser service,
+ * but the IPC handlers survive the old service's disposal, and Electron throws
+ * when a channel is handled twice. Removing before registering makes the attach
+ * safe to run once per window instead of once per process.
+ */
+function replaceHandler(channel: string, listener: Parameters<typeof ipcMain.handle>[1]): void {
+  ipcMain.removeHandler(channel)
+  ipcMain.handle(channel, listener)
 }
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
@@ -335,7 +350,10 @@ export class BrowserService {
    * after the decision that produced it. The arrival time is kept so a cancelled
    * park can report how long the answer it acted on lasted.
    */
-  private readonly pendingParks = new Map<string, { handle: ReturnType<typeof setTimeout>; at: number }>()
+  private readonly pendingParks = new Map<
+    string,
+    { handle: ReturnType<typeof setTimeout>; at: number }
+  >()
   /** The dialog-context label already installed in each tab's current document.
    *  The shim is idempotent per document, so a repeat is a script evaluation
    *  per frame for no change. Cleared when a new document commits. */
@@ -448,7 +466,7 @@ export class BrowserService {
 
   register(): void {
     this.guardAgainstStrandedView()
-    ipcMain.handle(
+    replaceHandler(
       'browser:show',
       (_event, rawTabId, rawProjectId, rawThreadId, rawInitialUrl, rawBounds) => {
         const tabId = validateTabId(rawTabId)
@@ -507,7 +525,7 @@ export class BrowserService {
       }
     )
 
-    ipcMain.handle('browser:hide', (_event, rawTabId) => {
+    replaceHandler('browser:hide', (_event, rawTabId) => {
       const tabId = validateTabId(rawTabId)
       // Leaving a tab right after an agent revealed it is the signal that the
       // agent's reveal was not welcome; it stops being counted after a while.
@@ -519,25 +537,25 @@ export class BrowserService {
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
     })
-    ipcMain.handle('browser:showPopupWindow', (_event, rawPopupId, rawBounds) => {
+    replaceHandler('browser:showPopupWindow', (_event, rawPopupId, rawBounds) => {
       this.popupWindows.show(validatePopupWindowId(rawPopupId), validateBounds(rawBounds))
     })
-    ipcMain.handle('browser:hidePopupWindow', (_event, rawPopupId) => {
+    replaceHandler('browser:hidePopupWindow', (_event, rawPopupId) => {
       this.popupWindows.hide(validatePopupWindowId(rawPopupId))
     })
-    ipcMain.handle('browser:focusPopupWindow', (_event, rawPopupId) => {
+    replaceHandler('browser:focusPopupWindow', (_event, rawPopupId) => {
       this.popupWindows.focus(validatePopupWindowId(rawPopupId))
     })
-    ipcMain.handle('browser:closePopupWindow', (_event, rawPopupId) => {
+    replaceHandler('browser:closePopupWindow', (_event, rawPopupId) => {
       this.popupWindows.close(validatePopupWindowId(rawPopupId), 'the user closed it')
     })
-    ipcMain.handle('browser:getPopupWindows', (_event, rawProjectId) =>
+    replaceHandler('browser:getPopupWindows', (_event, rawProjectId) =>
       this.popupWindows.list(validateProjectId(rawProjectId))
     )
-    ipcMain.handle('browser:setToastVisible', (_event, rawVisible) => {
+    replaceHandler('browser:setToastVisible', (_event, rawVisible) => {
       this.setToastVisible(rawVisible === true)
     })
-    ipcMain.handle('browser:navigate', (_event, rawTabId, rawProjectId, rawThreadId, rawUrl) => {
+    replaceHandler('browser:navigate', (_event, rawTabId, rawProjectId, rawThreadId, rawUrl) => {
       const tabId = validateTabId(rawTabId)
       const projectId = validateProjectId(rawProjectId)
       const threadId = validateThreadId(rawThreadId)
@@ -552,42 +570,42 @@ export class BrowserService {
       tab.initialNavigationStarted = true
       this.load(tabId, url)
     })
-    ipcMain.handle('browser:goBack', (_event, rawTabId) => {
+    replaceHandler('browser:goBack', (_event, rawTabId) => {
       const tab = this.requireTab(validateTabId(rawTabId))
       if (tab.view.webContents.navigationHistory.canGoBack()) {
         tab.view.webContents.navigationHistory.goBack()
       }
     })
-    ipcMain.handle('browser:goForward', (_event, rawTabId) => {
+    replaceHandler('browser:goForward', (_event, rawTabId) => {
       const tab = this.requireTab(validateTabId(rawTabId))
       if (tab.view.webContents.navigationHistory.canGoForward()) {
         tab.view.webContents.navigationHistory.goForward()
       }
     })
-    ipcMain.handle('browser:mouseHistoryNavigation', (_event, rawDirection) => {
+    replaceHandler('browser:mouseHistoryNavigation', (_event, rawDirection) => {
       if (rawDirection !== 'back' && rawDirection !== 'forward') {
         throw new TypeError('Browser mouse history direction must be back or forward')
       }
       return this.navigateFocusedHistory(rawDirection)
     })
-    ipcMain.handle('browser:reload', (_event, rawTabId) => {
+    replaceHandler('browser:reload', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.reload()
     })
-    ipcMain.handle('browser:transport', async (_event, rawTabId, rawCommand, rawValue) => {
+    replaceHandler('browser:transport', async (_event, rawTabId, rawCommand, rawValue) => {
       const tabId = validateTabId(rawTabId)
       const command = validateTransportCommand(rawCommand)
       return this.transport(tabId, command, validateTransportValue(command, rawValue))
     })
-    ipcMain.handle('browser:transportState', (_event, rawTabId) =>
+    replaceHandler('browser:transportState', (_event, rawTabId) =>
       this.transportState(validateTabId(rawTabId))
     )
-    ipcMain.handle('browser:reloadIgnoringCache', (_event, rawTabId) => {
+    replaceHandler('browser:reloadIgnoringCache', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.reloadIgnoringCache()
     })
-    ipcMain.handle('browser:stop', (_event, rawTabId) => {
+    replaceHandler('browser:stop', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.stop()
     })
-    ipcMain.handle('browser:setMuted', (_event, rawTabId, rawMuted) => {
+    replaceHandler('browser:setMuted', (_event, rawTabId, rawMuted) => {
       const tabId = validateTabId(rawTabId)
       const tab = this.requireTab(tabId)
       if (typeof rawMuted !== 'boolean') {
@@ -599,32 +617,32 @@ export class BrowserService {
       // silently unmuted through its own audio controls.
       this.publishState(tabId)
     })
-    ipcMain.handle('browser:setChromeFocus', (_event, rawTabId) => {
+    replaceHandler('browser:setChromeFocus', (_event, rawTabId) => {
       // Kept as reported, including a tab this process has not created yet: the
       // claim is matched against the tab list when a key is consumed (see
       // `focusedChromeTabId`), because the surface reports it as it mounts, before
       // the show that creates the page.
       this.focusedChromeTabId = rawTabId === null ? null : validateTabId(rawTabId)
     })
-    ipcMain.handle('browser:focusPage', (_event, rawTabId) => {
+    replaceHandler('browser:focusPage', (_event, rawTabId) => {
       this.focusPage(validateTabId(rawTabId))
     })
-    ipcMain.handle('browser:setShortcutBindings', (_event, rawBindings) => {
+    replaceHandler('browser:setShortcutBindings', (_event, rawBindings) => {
       this.shortcutBindings = validateBrowserShortcutBindings(rawBindings)
     })
-    ipcMain.handle('browser:setSwitcherBindings', (_event, rawBindings) => {
+    replaceHandler('browser:setSwitcherBindings', (_event, rawBindings) => {
       this.switcherBindings = validateBrowserSwitcherBindings(rawBindings)
     })
-    ipcMain.handle('browser:setSearchEngine', (_event, rawEngine) => {
+    replaceHandler('browser:setSearchEngine', (_event, rawEngine) => {
       this.contextMenuSearchEngine = validateBrowserSearchEngine(rawEngine)
     })
-    ipcMain.handle('browser:setScrollbarTheme', (_event, rawTheme) => {
+    replaceHandler('browser:setScrollbarTheme', (_event, rawTheme) => {
       this.setScrollbarTheme(validateScrollbarTheme(rawTheme))
     })
-    ipcMain.handle('browser:toggleDevTools', (_event, rawTabId) =>
+    replaceHandler('browser:toggleDevTools', (_event, rawTabId) =>
       this.toggleDevTools(this.requireTab(validateTabId(rawTabId)).view.webContents)
     )
-    ipcMain.handle('browser:inspectSetArmed', (_event, rawTabId, rawArmed, rawTheme) => {
+    replaceHandler('browser:inspectSetArmed', (_event, rawTabId, rawArmed, rawTheme) => {
       const tabId = validateTabId(rawTabId)
       const tab = this.requireTab(tabId)
       if (typeof rawArmed !== 'boolean') {
@@ -640,12 +658,12 @@ export class BrowserService {
         rawTheme === undefined ? null : validateInspectorTheme(rawTheme)
       )
     })
-    ipcMain.handle('browser:inspectTheme', (_event, rawTabId, rawTheme) => {
+    replaceHandler('browser:inspectTheme', (_event, rawTabId, rawTheme) => {
       const tabId = validateTabId(rawTabId)
       this.requireTab(tabId)
       this.inspector.syncTheme(tabId, validateInspectorTheme(rawTheme))
     })
-    ipcMain.handle('browser:inspectFocus', (_event, rawTabId, rawReferenceId, rawScroll) => {
+    replaceHandler('browser:inspectFocus', (_event, rawTabId, rawReferenceId, rawScroll) => {
       const tabId = validateTabId(rawTabId)
       const tab = this.requireTab(tabId)
       if (typeof rawScroll !== 'boolean') {
@@ -658,22 +676,22 @@ export class BrowserService {
         rawScroll
       )
     })
-    ipcMain.handle('browser:inspectMarkers', (_event, rawTabId, rawMarkers) => {
+    replaceHandler('browser:inspectMarkers', (_event, rawTabId, rawMarkers) => {
       const tabId = validateTabId(rawTabId)
       this.requireTab(tabId)
       this.inspector.syncMarkers(tabId, validateInspectorMarkers(rawMarkers))
     })
-    ipcMain.handle('browser:clearData', async (_event, rawProjectId) => {
+    replaceHandler('browser:clearData', async (_event, rawProjectId) => {
       await this.siteData.clearProjectData(validateProjectId(rawProjectId))
     })
-    ipcMain.handle('browser:clearSiteData', (_event, rawProjectId, rawScopes) => {
+    replaceHandler('browser:clearSiteData', (_event, rawProjectId, rawScopes) => {
       const projectId = validateProjectId(rawProjectId)
       const scopes = validateSiteDataScopes(rawScopes)
       void this.siteData.clearSiteData(projectId, scopes).catch((error: unknown) => {
         Logger.error('Browser site data could not be cleared:', error)
       })
     })
-    ipcMain.handle('browser:siteMenu', (_event, rawProjectId, rawHost, rawX, rawY) => {
+    replaceHandler('browser:siteMenu', (_event, rawProjectId, rawHost, rawX, rawY) => {
       const projectId = validateProjectId(rawProjectId)
       const host = validateBoundedHost(rawHost)
       const x = validateSiteMenuPoint(rawX, 'x coordinate')
@@ -682,63 +700,63 @@ export class BrowserService {
       // so the renderer's call resolves immediately.
       setImmediate(() => this.siteData.showSiteMenu(projectId, host, x, y))
     })
-    ipcMain.handle('browser:pageMenu', (_event, rawTabId, rawX, rawY) => {
+    replaceHandler('browser:pageMenu', (_event, rawTabId, rawX, rawY) => {
       const tabId = validateTabId(rawTabId)
       const x = validateSiteMenuPoint(rawX, 'x coordinate')
       const y = validateSiteMenuPoint(rawY, 'y coordinate')
       this.requireTab(tabId)
       setImmediate(() => this.showPageMenu(tabId, x, y))
     })
-    ipcMain.handle('browser:downloadsMenu', (_event, rawProjectId, rawX, rawY) => {
+    replaceHandler('browser:downloadsMenu', (_event, rawProjectId, rawX, rawY) => {
       const projectId = validateProjectId(rawProjectId)
       const x = validateSiteMenuPoint(rawX, 'x coordinate')
       const y = validateSiteMenuPoint(rawY, 'y coordinate')
       setImmediate(() => this.downloadTracker.showMenu(projectId, x, y))
     })
-    ipcMain.handle('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
+    replaceHandler('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
       const decision = validatePermissionDecision(rawDecision)
       this.resolvePermission(requestId, permissionResolutions[decision])
     })
-    ipcMain.handle('browser:popupReady', () => {
+    replaceHandler('browser:popupReady', () => {
       // Pull model: the popup document requests the prompt on display once its
       // listener is bound. Invoke replies bypass the push-side load-state
       // guards that repeatedly dropped the first prompt (blank first popup).
       return this.promptWindow.currentContext()
     })
-    ipcMain.handle('browser:destroy', (_event, rawTabId) => {
+    replaceHandler('browser:destroy', (_event, rawTabId) => {
       this.destroy(validateTabId(rawTabId))
     })
-    ipcMain.handle('browser:destroyThread', (_event, rawProjectId, rawThreadId) => {
+    replaceHandler('browser:destroyThread', (_event, rawProjectId, rawThreadId) => {
       const projectId = validateProjectId(rawProjectId)
       const threadId = validateThreadId(rawThreadId)
       for (const [tabId, tab] of this.tabs) {
         if (tab.projectId === projectId && tab.threadId === threadId) this.destroy(tabId)
       }
     })
-    ipcMain.handle('browser:destroyProject', (_event, rawProjectId) => {
+    replaceHandler('browser:destroyProject', (_event, rawProjectId) => {
       const projectId = validateProjectId(rawProjectId)
       for (const [tabId, tab] of this.tabs) {
         if (tab.projectId === projectId) this.destroy(tabId)
       }
     })
-    ipcMain.handle('browser:getDownloads', (_event, rawProjectId) => {
+    replaceHandler('browser:getDownloads', (_event, rawProjectId) => {
       const projectId = validateProjectId(rawProjectId)
       return this.downloadTracker.list(projectId)
     })
-    ipcMain.handle('browser:cancelDownload', (_event, rawDownloadId) => {
+    replaceHandler('browser:cancelDownload', (_event, rawDownloadId) => {
       this.downloadTracker.cancel(validateDownloadId(rawDownloadId))
     })
-    ipcMain.handle('browser:pauseDownload', (_event, rawDownloadId) => {
+    replaceHandler('browser:pauseDownload', (_event, rawDownloadId) => {
       this.downloadTracker.pause(validateDownloadId(rawDownloadId))
     })
-    ipcMain.handle('browser:resumeDownload', (_event, rawDownloadId) => {
+    replaceHandler('browser:resumeDownload', (_event, rawDownloadId) => {
       this.downloadTracker.resume(validateDownloadId(rawDownloadId))
     })
-    ipcMain.handle('browser:openDownload', (_event, rawDownloadId) => {
+    replaceHandler('browser:openDownload', (_event, rawDownloadId) => {
       this.downloadTracker.open(validateDownloadId(rawDownloadId))
     })
-    ipcMain.handle('browser:revealDownload', (_event, rawDownloadId) => {
+    replaceHandler('browser:revealDownload', (_event, rawDownloadId) => {
       return this.downloadTracker.reveal(validateDownloadId(rawDownloadId))
     })
   }
@@ -2616,7 +2634,10 @@ export class BrowserService {
     const tab = this.requireTab(tabId)
     const page = menuPageFor(tabId, tab)
     const menu = Menu.buildFromTemplate(
-      buildBrowserPageMenuItems(this.contextMenuContext(page.contents), this.contextMenuActions(page))
+      buildBrowserPageMenuItems(
+        this.contextMenuContext(page.contents),
+        this.contextMenuActions(page)
+      )
     )
     menu.popup({ window: this.window, x, y })
   }
@@ -3211,8 +3232,15 @@ export class BrowserService {
       this.displayedTab = { tabId, bounds }
       tab.view.setBounds(bounds)
     }
+    // A page that has just landed needs the pointer delivered again. Chromium
+    // rebuilds hover and the cursor shape only from an input event, and the page
+    // may have been told the pointer left while it was off screen: that is true
+    // of a park, and equally of a view the parked cap evicted or one being
+    // attached for the first time under a resting pointer. So this runs on every
+    // attach, not only a stage re-attach, or `cursor: pointer` never comes back
+    // until the user physically moves the mouse.
+    this.primePagePointer(tab, bounds)
     if (wasParked) {
-      this.primePagePointer(tab, bounds)
       Logger.dev('Browser view re-attached', { tabId, bounds })
     }
     // A page that just landed is on screen now, so a switch that was waiting for
@@ -3232,10 +3260,24 @@ export class BrowserService {
     const tab = this.tabs.get(tabId)
     if (tab && !tab.view.webContents.isDestroyed() && this.isPageOnScreen(tabId)) {
       this.pendingPageFocusTabId = null
-      tab.view.webContents.focus()
+      this.focusPageView(tabId, tab)
       return
     }
     this.pendingPageFocusTabId = tabId
+  }
+
+  /**
+   * Hand a page the keyboard and re-deliver the pointer to it.
+   *
+   * Focus alone is not enough: moving focus away from the page and back leaves
+   * the cursor whatever the app chrome set, and Chromium rebuilds hover and the
+   * cursor shape only from an input event. So a focus handover is followed by the
+   * same prime a re-attach uses, which is what makes `cursor: pointer` come back
+   * the moment a switch lands on the tab rather than at the next mouse move.
+   */
+  private focusPageView(tabId: string, tab: BrowserTab): void {
+    tab.view.webContents.focus()
+    this.primePagePointer(tab, this.activeTabId === tabId ? this.activeTabBounds : null)
   }
 
   /** Whether a tab's page is the native view the window is currently showing. */
@@ -3253,7 +3295,7 @@ export class BrowserService {
     this.pendingPageFocusTabId = null
     const tab = this.tabs.get(tabId)
     if (!tab || tab.view.webContents.isDestroyed()) return
-    tab.view.webContents.focus()
+    this.focusPageView(tabId, tab)
   }
 
   private markParked(tabId: string): void {

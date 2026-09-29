@@ -146,6 +146,12 @@ ipcMain.handle(
   () => state.backgroundLifecycle?.requestOwnerActivation() ?? false
 )
 
+/** A secondary takes over ownership of scheduled work from the current owner. */
+ipcMain.handle(
+  'app:transferInstanceControl',
+  () => state.backgroundLifecycle?.takeOverControl() ?? false
+)
+
 /** Track when a terminal in the renderer holds focus (Windows shortcut routing). */
 ipcMain.on('terminal:focusState', (_event, focused: unknown) => {
   state.terminalFocused = focused === true

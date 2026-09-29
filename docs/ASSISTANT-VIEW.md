@@ -251,8 +251,19 @@ Cmd+Q so a routine still fires on time. It is on by default
   the longest-running live process owns the scheduled work
   (`instanceRegistry.isIncumbentInstance()`); the routine, retry, and heartbeat
   schedulers are all gated on it. A secondary instance keeps a fully usable
-  window, shows a standing **Running in another instance** notice, and quits on
-  close rather than parking.
+  window, shows a standing **Running in another instance** status bar at the
+  bottom of the app, and quits on close rather than parking.
+- **Ownership can be transferred.** The secondary's bottom bar offers **Make this
+  the main instance**, which writes an owner override
+  (`instances/owner.json`) naming this pid (`instanceRegistry.transferOwnership`).
+  The previous owner steps down through the same ownership notification: it
+  destroys its menu bar icon, its schedulers stop firing, and its own bar now
+  reads **Running in another instance**. The new owner creates the icon and runs
+  the missed-slot catch-up. This is the escape hatch when the elected owner is a
+  stale window, or a crashed process still in the registry, and the user wants
+  the schedule in the instance they are actually working in. The override is
+  honoured only while its target is live; when that process dies the election
+  resumes on the next heartbeat, so a transfer can never strand scheduling.
 - **Menu bar, not Dock.** The tray carries exactly two items, **Open CodeInOven**
   and **Quit CodeInOven**; the icon is the monochrome mark, or the mark with an
   exclamation when attention is needed. While windowless the Dock icon is hidden

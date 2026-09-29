@@ -101,8 +101,8 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
   { file: 'src/lib/engines/spec-engine.ts', maxSites: 2, reason: ENGINE_READ },
   {
     file: 'src/main/storage/checkpoint-manager.ts',
-    maxSites: 6,
-    reason: 'turn-checkpoint bookkeeping read'
+    maxSites: 7,
+    reason: 'turn-checkpoint bookkeeping reads, including the active-turn owner probe'
   },
   {
     file: 'src/main/system/workflow-ownership-service.ts',
