@@ -90,6 +90,12 @@
   /** Whether the drawer is actually on screen, which is when the field may claim
    *  it is expanded and point the screen reader at a highlighted row. */
   const drawerVisible = $derived(drawerOpen && suggestions.length > 0)
+  /**
+   * The field's horizontal padding: the padlock's slot on the left whenever there
+   * is an address, and a wider right inset while a load is in flight so the
+   * address stops short of the load indicator instead of running under it.
+   */
+  const fieldPadding = $derived(`${url === '' ? 'pl-2' : 'pl-8'} ${loading ? 'pr-8' : 'pr-2'}`)
   const activeOptionId = $derived(
     drawerVisible && highlight >= 0 ? `${listId}-option-${highlight}` : undefined
   )
@@ -194,7 +200,7 @@
     role="combobox"
     class={[
       'h-7 w-full rounded-lg border border-border bg-elevated text-xs text-foreground outline-none transition-colors placeholder:text-dimmed',
-      url === '' ? 'px-2' : 'pr-2 pl-8'
+      fieldPadding
     ]}
     placeholder="Search or enter an address"
     aria-label="Search or enter an address"
@@ -209,11 +215,22 @@
     onkeydown={onKeydown}
     onblur={close}
   />
+  <!--
+    The load indicator is filled, not just drawn: it sits over the end of the
+    field, so a transparent one lets the address show through the gaps in the
+    spinner and the two read as one smudged line. The fill is the field's own
+    background, inset by the border, so it covers the address without covering
+    the field's edge.
+  -->
   {#if loading}
-    <LoaderCircle
-      size={13}
-      class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 animate-spin text-primary"
-    />
+    <span
+      role="img"
+      class="pointer-events-none absolute inset-y-px right-px flex w-7 items-center justify-center rounded-r-md bg-elevated"
+      title="Loading page"
+      aria-label="Loading page"
+    >
+      <LoaderCircle size={13} class="animate-spin text-primary" />
+    </span>
   {/if}
   {#if drawerVisible}
     <div
