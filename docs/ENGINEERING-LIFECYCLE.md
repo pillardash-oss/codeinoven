@@ -128,6 +128,16 @@ A missing production preview origin is a deployment-readiness failure; the relat
 
 Desktop preview registration is reconstructed from validated feature-scoped manifests after restart. The preview origin serves the canonical prototype files to the desktop's own browser surface.
 
+## External assets in previews
+
+A prototype served by the app's own preview server carries a content security policy that denies every external origin, so a prototype can load a web font or a chart library only from an approved CDN. Settings, Browser holds both the switch (`allowPrototypeExternalCdn`, on by default) and the origins a user added (`prototypeCdnAllowlist`). `src/lib/prototypes/prototype-cdn.ts` owns the app's origins, the HTTPS origin validation, the merge, the header and the paragraph the prototype turn is told, so the hosts the browser will load and the hosts the model is told about cannot disagree.
+
+The list is a host allowlist, and nothing more than that. It says nothing about the code a host serves, approved origins are reachable from `connect-src` as well as from the asset directives, and the policy keeps `'unsafe-inline'` and `'unsafe-eval'` because running the prototype's own script is the feature. Read it as the answer to "which assets will load, and where may this page send a request", not as a security boundary.
+
+Enforcement follows the serving origin. The app stamps the header on responses from its own loopback preview server (`src/main/prototypes/prototype-preview-service.ts`). A build configured with `CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` never starts that server, and the deployment serving the files sets its own policy, so there the list is what the model is told rather than a limit the app applies.
+
+The design preview is a different surface. `cio:design` and the file tree's "Open in browser" serve a folder through the directory preview server, which sets no content security policy at all (`src/main/preview/directory-preview-server.ts`), so a design may load any host today. A design that is meant to be promoted into the prototype phase should still stay inside the approved origins.
+
 ## Recovery
 
 - Generation failure: keep the lifecycle selected, fix the provider or validation failure, and retry from the persisted stage.
@@ -171,7 +181,7 @@ launch and never re-tracked), and the launch repair scan. The next real user
 prompt clears the latch, which re-arms all automatic resumes.
 
 The assignment's own status is deliberately untouched by Stop, so the Auto
-Pilot chain and the manual resume controls keep working; only the *automatic*
+Pilot chain and the manual resume controls keep working; only the _automatic_
 paths honour the latch. With auto-retry off in General settings, a recorded
 usage-reset wait backs the visible "Waiting to retry" card but never fires
 automatically.

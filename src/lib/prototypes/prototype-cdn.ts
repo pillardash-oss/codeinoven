@@ -5,9 +5,32 @@
  * Policy that denies cross-origin reach, so a design that links a web font or a
  * chart library cannot load it. This module is the single place that decides
  * which external hosts a prototype may reach: the origins the app ships, the
- * ones a user added in General settings, and the merged result that both the
+ * ones a user added in Settings, Browser, and the merged result that both the
  * preview server's header and the prototype turn instruction are built from, so
  * the model is told exactly the hosts that will actually load.
+ *
+ * Read that as an asset-loading contract with a coarse host bound, and not as an
+ * isolation boundary. Three limits belong wherever the list is read:
+ *
+ * - It approves hosts, not code. The shipped list is mostly services that will
+ *   serve any JavaScript a path names, and the preview policy keeps
+ *   `'unsafe-inline'` and `'unsafe-eval'` on `script-src` because running the
+ *   page's own script is the feature. An approved origin can therefore serve
+ *   anything, and a page needs no origin at all to run its inline script.
+ * - An approved origin joins `connect-src` as well as the asset directives, so a
+ *   user who adds an internal API host as though it were a CDN has granted
+ *   fetch and beacon reach to it, not only asset loading.
+ * - Enforcement follows whichever origin serves the pages. The header below is
+ *   stamped by the app's own loopback preview server, and a build configured
+ *   with `CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` never starts that server
+ *   (`src/main/bootstrap/post-paint-services.ts`). There the list is what the
+ *   model is told, while the deployment serving the files sets its own policy.
+ *
+ * The design preview is a separate surface with a different posture: it serves
+ * through the directory preview server, which sets no content security policy at
+ * all (`src/main/preview/directory-preview-server.ts`), so a design may load any
+ * host today. A design meant to be promoted into the prototype phase should
+ * therefore stay inside these origins anyway.
  */
 
 /**
@@ -15,6 +38,10 @@
  * templates behind the prototype phase actually reference: the two Google Fonts
  * origins (the stylesheet and the font files it points at), the three package
  * CDNs, and Tailwind's browser build.
+ *
+ * The three package CDNs serve whatever JavaScript a path names, which is the
+ * clearest statement of what this list decides: which hosts a prototype may
+ * reach, and nothing about the code it finds there.
  */
 export const APP_PROTOTYPE_CDN_ORIGINS: readonly string[] = [
   'https://fonts.googleapis.com',
@@ -127,6 +154,10 @@ export function prototypeCdnPolicyFromConfig(config: PrototypeCdnConfig): Protot
  * assets. Two directives deliberately never see them: `frame-src` stays `'self'`
  * because the allowlist approves assets to fetch, not documents to embed, and
  * `default-src` stays `'self'` so an unlisted directive cannot inherit reach.
+ *
+ * None of these directives is a code-integrity control. The approved origins
+ * widen where a page may fetch from, while `'unsafe-inline'` and `'unsafe-eval'`
+ * let the page run its own script whether or not an origin is approved.
  */
 export function prototypePreviewCsp(policy: PrototypeCdnPolicy): string {
   const approved = prototypeCdnOrigins(policy)
