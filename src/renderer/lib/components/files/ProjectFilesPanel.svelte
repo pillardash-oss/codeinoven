@@ -390,7 +390,9 @@
   }
 
   function closeFullscreen(): void {
-    fullscreenOpen = false
+    // The store is the whole transition: the editor's `open` is derived from it,
+    // so there is no local mirror to keep in step. Assigning that derived as
+    // well only overrides it  the store write is what closes the surface.
     projectFilesWorkspace.setFullscreenActive(projectId, false)
   }
 

@@ -1276,11 +1276,25 @@
   // a stray gap opens up where its column used to be. Reserving the track
   // until the outro actually finishes keeps the panel inside its cell for
   // the whole animation.
+  //
+  // A region can also have to stay mounted because a panel inside it owns a
+  // surface that covers the whole window: the full screen file editor renders
+  // its modal from the files panel. Hiding the sidebar, or any other reason
+  // `sidebarVisible` goes false while the files panel is still the region's
+  // active panel, used to unmount that panel and take the editor with it. The
+  // workspace showed behind the surface for a moment and the surface came
+  // straight back, because the request that had opened it was never cleared, so
+  // remounting the panel re-opened a window the user never closed. The pin is
+  // scoped to the panel that actually hosts the surface, so a region with no
+  // files panel (a thread that was left, a panel that was closed outright)
+  // still goes away exactly as it did before.
   const PANEL_EXIT_MS = 160
   let sidebarTrackReserved = $state(false)
   let sidebarWasVisible = false
   $effect(() => {
-    if (sidebarVisible) {
+    const hostsFullscreenEditor =
+      contextSidebarState.sidebarActiveTab?.kind === 'files' && projectFilesWorkspace.fullscreenOpen
+    if (sidebarVisible || hostsFullscreenEditor) {
       sidebarWasVisible = true
       sidebarTrackReserved = true
       return

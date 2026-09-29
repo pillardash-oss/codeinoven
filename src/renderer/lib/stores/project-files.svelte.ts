@@ -117,6 +117,17 @@ class ProjectFilesWorkspace {
     return session ? session.draft !== session.source.content : false
   }
 
+  /** Whether the full screen file viewer is open.
+   *
+   * The viewer's modal is rendered from the files panel inside the right
+   * sidebar, so that panel has to stay mounted for as long as this holds: what
+   * unmounts the panel takes the modal with it, and removing the surface leaves
+   * the window showing whatever is behind it until the panel returns. A pure
+   * read that never creates state, so the shell can ask on every layout pass. */
+  get fullscreenOpen(): boolean {
+    return Object.values(this.projects).some((state) => state.fullscreenActive)
+  }
+
   setLastTurnOnly(projectId: string, value: boolean): void {
     this.explorer.setLastTurnOnly(projectId, value)
   }
