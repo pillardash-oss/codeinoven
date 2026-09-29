@@ -38,9 +38,13 @@ export const MAX_BROWSER_GROUP_ICON_TYPE_LENGTH = 64
 export const MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH = 16_384
 export const MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH = 2_048
 export const MAX_BROWSER_TAB_URL_LENGTH = 2_048
+/** A thread id is a generated UUID, so the bound is generous but still finite. */
+export const MAX_BROWSER_ASSISTANT_THREAD_ID_LENGTH = 64
 
 const GROUP_ID_PATTERN = /^group:[a-zA-Z0-9:_-]{1,240}$/u
 const COLOR_PATTERN = /^#[0-9a-fA-F]{3,8}$/u
+/** The character class every generated id uses; anything else is not an id. */
+const ENTITY_ID_PATTERN = /^[a-zA-Z0-9:_-]+$/u
 
 /**
  * The appearance vocabulary a browser tab and a browser group share, copied
@@ -80,6 +84,14 @@ export interface PersistedBrowserTab extends BrowserAppearance {
   hibernated: boolean
   pinned: boolean
   pinnedAt: number | null
+  /**
+   * The assistant conversation bound to this tab: a real thread in the reserved
+   * hidden browser project, or null while the tab has never asked the agent
+   * anything. It is stored on the tab because that is the lifetime the user
+   * agreed to: the conversation lives exactly as long as the tab that owns it,
+   * and a restart restores both.
+   */
+  assistantThreadId: string | null
 }
 
 /** The durable tab list: the tabs, their folds, and which tab was on screen. */
@@ -125,6 +137,15 @@ function optionalInteger(value: unknown): number | null {
  *  is a last resort, never a routine path. */
 function browserTabId(value: unknown): string {
   return isBrowserTabId(value) ? value : `browser:${crypto.randomUUID()}`
+}
+
+/** A stored assistant thread id, or null when the field is absent or unusable.
+ *  A repaired field here costs one conversation: the tab simply asks the agent
+ *  again and gets a fresh thread, so this never fabricates an id. */
+function assistantThreadId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  if (value === '' || value.length > MAX_BROWSER_ASSISTANT_THREAD_ID_LENGTH) return null
+  return ENTITY_ID_PATTERN.test(value) ? value : null
 }
 
 function groupId(value: unknown): string {
@@ -222,6 +243,7 @@ function parseTabs(
       hibernated: entry['hibernated'] === true,
       pinned,
       pinnedAt: pinned ? (optionalInteger(entry['pinnedAt']) ?? createdAt) : null,
+      assistantThreadId: assistantThreadId(entry['assistantThreadId']),
       ...parseAppearance(entry)
     })
   }

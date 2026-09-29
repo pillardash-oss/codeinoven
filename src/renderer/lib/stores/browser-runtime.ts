@@ -21,6 +21,7 @@
 import { publishBrowserSearchEngine } from '$lib/browser-search-context'
 import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
 import { appConfigState } from './app-config.svelte'
+import { browserAssistant } from './browser-assistant.svelte'
 import { browserBookmarks } from './browser-bookmarks.svelte'
 import { browserDownloads } from './browser-downloads.svelte'
 import { browserHistory } from './browser-history.svelte'
@@ -51,6 +52,11 @@ export function startBrowserRuntime(): void {
   // for them.
   browserHistory.start()
   browserBookmarks.start()
+  // A browser tab's assistant conversation is a real chat thread, and this store
+  // is what mirrors the links between them. It subscribes only from here, so a
+  // launch that never opens the browser pays nothing for the conversations it
+  // will never show.
+  browserAssistant.start()
   contextSidebarState.startBrowserTabs()
   // Two pushes to main describe the browser's chrome rather than its state, and
   // both are skipped while no browser exists (see `publishBrowserScrollbarTheme`

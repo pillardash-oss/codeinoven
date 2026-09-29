@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
-  import { DropdownMenu } from 'bits-ui'
+  import { ContextMenu, DropdownMenu } from 'bits-ui'
   import {
     Bell,
     Bot,
@@ -18,6 +18,7 @@
     Info,
     Maximize2,
     MessageCircleDashed,
+    MessagesCircle,
     Network,
     PanelBottom,
     PanelRight,
@@ -52,6 +53,12 @@
     content: Snippet
     onSelect: (id: string) => void
     onClose: (id: string) => void
+    /** A right-click menu for one strip tab, rendered by the rail that owns the
+     *  tabs: only that rail knows what its own tabs can do (a browser tab's
+     *  agent conversation can be renamed and closed; a terminal cannot). The
+     *  shell only decides where the menu is anchored, so every rail keeps one
+     *  strip implementation. */
+    tabMenu?: Snippet<[ContextSidebarTab]>
     onFullscreenTab?: (id: string) => void
     /** Callback for drag-to-reorder; position is relative to the target tab.
      *  Only tabbed kinds render a strip, so this only reorders those. */
@@ -89,7 +96,8 @@
     onTerminalDockToggle,
     onNewTerminal,
     onNewBrowser,
-    onCloseAllPopupWindows
+    onCloseAllPopupWindows,
+    tabMenu
   }: Props = $props()
 
   let resizing = $state(false)
@@ -108,6 +116,7 @@
     'terminal',
     'browser',
     'temporary-chat',
+    'browser-agent',
     'subagent',
     'popup-window'
   ])
@@ -135,6 +144,25 @@
     'coordinator',
     'assistant-how-to'
   ])
+
+  /**
+   * The conversation a tab's status badge reports on, or null for a tab that
+   * hosts none. A strip row shows whether that conversation is working or wants
+   * the user, and the two tabbed conversation kinds address it differently (a
+   * side chat by its own chat id, a browser assistant by its thread id), so the
+   * rule lives in one place instead of in the row.
+   */
+  function badgeConversation(
+    tab: ContextSidebarTab
+  ): { projectId: string; conversationId: string } | null {
+    if (tab.kind === 'temporary-chat') {
+      return { projectId: tab.projectId, conversationId: tab.temporaryChatId }
+    }
+    if (tab.kind === 'browser-agent') {
+      return { projectId: tab.projectId, conversationId: tab.threadId }
+    }
+    return null
+  }
 
   /** Files are headerless like the other single-panel tools right up until a
    *  second file is open   then a real tab strip is the only way back to the
@@ -313,6 +341,10 @@
       <Info size={12} class="shrink-0" />
     {:else if tab.kind === 'temporary-chat'}
       <MessageCircleDashed size={12} class="shrink-0 text-info" />
+    {:else if tab.kind === 'browser-agent'}
+      <!-- The assistant conversation of a browser tab wears the Chats view's own
+           mark, and no tone: it is a conversation, not a status. -->
+      <MessagesCircle size={12} class="shrink-0" />
     {:else if tab.kind === 'notifications'}
       <Bell size={12} class="shrink-0" />
     {:else if tab.kind === 'attention'}
@@ -340,113 +372,131 @@
     {/if}
   {/snippet}
 
+  {#snippet stripRowBody(tab: ContextSidebarTab)}
+    {@const runtime = contextSidebarState.browserRuntime(tab.id)}
+    {@const indicators = browserTabIndicators(runtime)}
+    {@const conversation = badgeConversation(tab)}
+    <div
+      class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {activeTabId ===
+      tab.id
+        ? 'bg-app text-foreground'
+        : 'text-muted hover:bg-elevated hover:text-foreground'} {onMoveTab
+        ? 'cursor-grab active:cursor-grabbing'
+        : ''}"
+      draggable={onMoveTab ? 'true' : 'false'}
+      role="listitem"
+      ondragstart={(e: DragEvent) => handleDragStart(e, tab)}
+      ondragend={handleDragEnd}
+      ondragover={(e: DragEvent) => handleDragOver(e, tab)}
+      ondrop={(e: DragEvent) => handleDrop(e, tab)}
+      ondragleave={() => {
+        if (dropTargetId === tab.id) {
+          dropTargetId = null
+          dropPosition = null
+        }
+      }}
+    >
+      <div
+        class="pointer-events-none absolute left-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
+          tab.id && dropPosition === 'before'
+          ? 'bg-primary opacity-100'
+          : 'opacity-0'}"
+      ></div>
+      <div
+        class="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
+          tab.id && dropPosition === 'after'
+          ? 'bg-primary opacity-100'
+          : 'opacity-0'}"
+      ></div>
+      <button
+        type="button"
+        class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
+        aria-current={activeTabId === tab.id ? 'page' : undefined}
+        data-active-tab={activeTabId === tab.id ? 'true' : undefined}
+        title={tab.title}
+        onclick={() => onSelect(tab.id)}
+      >
+        {#if indicators.length > 0}
+          <!-- The slot keeps a favicon's exact width for one indicator
+               and widens for the two-indicator case, so the row painted
+               over it can never reach the title. -->
+          <span
+            class="shrink-0 {browserTabIndicatorSlotClass(indicators.length)}"
+            aria-hidden="true"
+          ></span>
+        {:else}
+          {@render tabIcon(tab)}
+        {/if}
+        <span
+          class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' && tab.preview
+            ? 'italic'
+            : ''}">{tab.title}</span
+        >
+        {#if conversation}
+          {#if conversationAttention.hasAttention(conversation.projectId, conversation.conversationId)}
+            <StatusBadge kind="attention" animated title="Needs attention" />
+          {:else if agentRuns.isBusy(conversation.projectId, conversation.conversationId)}
+            <StatusBadge stage="working" animated title="Working" />
+          {/if}
+        {/if}
+        {#if dirtyFileTabIds.has(tab.id)}
+          <span
+            class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+            role="status"
+            aria-label="Unsaved changes"
+            title="Unsaved changes"
+          ></span>
+        {/if}
+      </button>
+      <button
+        type="button"
+        class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        aria-label={`Close ${tab.title}`}
+        title={`Close ${tab.title}`}
+        onclick={() => onClose(tab.id)}
+      >
+        <X size={11} />
+      </button>
+      {#if indicators.length > 0}
+        <!-- Painted over the tab's own icon slot. A sibling of the
+             select button, because a button cannot nest a button. -->
+        <div class="absolute left-2.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
+          <!-- Loaded on demand: the browser indicator is a dynamic
+               import so the sidebar does not carry the browser's
+               status module into the first-paint chunk. An indicator
+               only ever appears on a tab that is playing or
+               capturing, so the browser is open and it is warm. -->
+          {#await import('$lib/components/browser/BrowserTabIndicator.svelte') then { default: BrowserTabIndicator }}
+            <BrowserTabIndicator tabId={tab.id} />
+          {/await}
+        </div>
+      {/if}
+    </div>
+  {/snippet}
+
+  {#snippet stripRow(tab: ContextSidebarTab)}
+    {#if tabMenu}
+      <!-- The rail that owns this tab supplies its menu, so the right-click
+           behaviour of a tab belongs beside the tab's meaning. The trigger
+           carries no box of its own (`contents`), so the row keeps its layout. -->
+      <ContextMenu.Root>
+        <ContextMenu.Trigger class="contents">
+          {@render stripRowBody(tab)}
+        </ContextMenu.Trigger>
+        {@render tabMenu(tab)}
+      </ContextMenu.Root>
+    {:else}
+      {@render stripRowBody(tab)}
+    {/if}
+  {/snippet}
+
   {#if !headerless}
     <div class="flex h-10 shrink-0 items-center border-b border-border">
       {#if tabbedMode}
         <div class="min-w-0 flex-1 overflow-x-auto" bind:this={stripScroller}>
           <div class="flex h-10 min-w-max items-stretch">
             {#each stripTabs as tab (tab.id)}
-              {@const runtime = contextSidebarState.browserRuntime(tab.id)}
-              {@const indicators = browserTabIndicators(runtime)}
-              <div
-                class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {activeTabId ===
-                tab.id
-                  ? 'bg-app text-foreground'
-                  : 'text-muted hover:bg-elevated hover:text-foreground'} {onMoveTab
-                  ? 'cursor-grab active:cursor-grabbing'
-                  : ''}"
-                draggable={onMoveTab ? 'true' : 'false'}
-                role="listitem"
-                ondragstart={(e: DragEvent) => handleDragStart(e, tab)}
-                ondragend={handleDragEnd}
-                ondragover={(e: DragEvent) => handleDragOver(e, tab)}
-                ondrop={(e: DragEvent) => handleDrop(e, tab)}
-                ondragleave={() => {
-                  if (dropTargetId === tab.id) {
-                    dropTargetId = null
-                    dropPosition = null
-                  }
-                }}
-              >
-                <div
-                  class="pointer-events-none absolute left-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
-                    tab.id && dropPosition === 'before'
-                    ? 'bg-primary opacity-100'
-                    : 'opacity-0'}"
-                ></div>
-                <div
-                  class="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
-                    tab.id && dropPosition === 'after'
-                    ? 'bg-primary opacity-100'
-                    : 'opacity-0'}"
-                ></div>
-                <button
-                  type="button"
-                  class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
-                  aria-current={activeTabId === tab.id ? 'page' : undefined}
-                  data-active-tab={activeTabId === tab.id ? 'true' : undefined}
-                  title={tab.title}
-                  onclick={() => onSelect(tab.id)}
-                >
-                  {#if indicators.length > 0}
-                    <!-- The slot keeps a favicon's exact width for one indicator
-                         and widens for the two-indicator case, so the row painted
-                         over it can never reach the title. -->
-                    <span
-                      class="shrink-0 {browserTabIndicatorSlotClass(indicators.length)}"
-                      aria-hidden="true"
-                    ></span>
-                  {:else}
-                    {@render tabIcon(tab)}
-                  {/if}
-                  <span
-                    class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' &&
-                    tab.preview
-                      ? 'italic'
-                      : ''}">{tab.title}</span
-                  >
-                  {#if tab.kind === 'temporary-chat'}
-                    {#if conversationAttention.hasAttention(tab.projectId, tab.temporaryChatId)}
-                      <StatusBadge kind="attention" animated title="Needs attention" />
-                    {:else if agentRuns.isBusy(tab.projectId, tab.temporaryChatId)}
-                      <StatusBadge stage="working" animated title="Working" />
-                    {/if}
-                  {/if}
-                  {#if dirtyFileTabIds.has(tab.id)}
-                    <span
-                      class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
-                      role="status"
-                      aria-label="Unsaved changes"
-                      title="Unsaved changes"
-                    ></span>
-                  {/if}
-                </button>
-                <button
-                  type="button"
-                  class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                  aria-label={`Close ${tab.title}`}
-                  title={`Close ${tab.title}`}
-                  onclick={() => onClose(tab.id)}
-                >
-                  <X size={11} />
-                </button>
-                {#if indicators.length > 0}
-                  <!-- Painted over the tab's own icon slot. A sibling of the
-                       select button, because a button cannot nest a button. -->
-                  <div
-                    class="absolute left-2.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5"
-                  >
-                    <!-- Loaded on demand: the browser indicator is a dynamic
-                         import so the sidebar does not carry the browser's
-                         status module into the first-paint chunk. An indicator
-                         only ever appears on a tab that is playing or
-                         capturing, so the browser is open and it is warm. -->
-                    {#await import('$lib/components/browser/BrowserTabIndicator.svelte') then { default: BrowserTabIndicator }}
-                      <BrowserTabIndicator tabId={tab.id} />
-                    {/await}
-                  </div>
-                {/if}
-              </div>
+              {@render stripRow(tab)}
             {/each}
           </div>
         </div>

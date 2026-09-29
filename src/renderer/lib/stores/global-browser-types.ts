@@ -94,6 +94,14 @@ export interface GlobalBrowserTab extends BrowserAppearance {
   pinned: boolean
   /** When the tab was pinned, so the pinned block keeps a stable order. */
   pinnedAt: number | null
+  /**
+   * The assistant conversation bound to this tab (a real thread in the reserved
+   * hidden browser project), or null while the tab has never asked the agent
+   * anything. The link is focused on the tab because the conversation's lifetime
+   * is the tab's: it is kept until the tab or the conversation is closed, and a
+   * restart restores both.
+   */
+  assistantThreadId: string | null
 }
 
 /** Whether two load errors describe the same failure. Main sends a fresh object

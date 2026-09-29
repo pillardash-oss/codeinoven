@@ -890,61 +890,6 @@ export class SidebarTabContexts {
     this.scheduleTemporaryChatExpiry(tab)
   }
 
-  /**
-   * Materialize a global browser tab's agent chat without focusing anything.
-   *
-   * A browser tab's agent sidebar is the app's own temporary side chat under the
-   * browser's reserved context, so it is created through the same tab shape and
-   * streamed through the same pipeline as every other side chat. The browser
-   * rail owns the panel and decides what is on screen, so this only creates the
-   * tab   it must never flip the workspace rail's focus, which
-   * `openTemporaryChat` does. Idempotent: an existing live chat is returned
-   * unchanged.
-   */
-  ensureBrowserAgentChat(
-    projectId: string,
-    threadId: string,
-    temporaryChatId: string,
-    settings: ThreadSettings,
-    initialContext: string
-  ): TemporaryChatContextTab {
-    const context = this.ensureContext(projectId, threadId)
-    const id = `temporary-chat:${temporaryChatId}`
-    const existing = context.tabs.find((candidate) => candidate.id === id)
-    if (existing?.kind === 'temporary-chat') return existing
-    const tab: TemporaryChatContextTab = {
-      id,
-      kind: 'temporary-chat',
-      title: 'Agent',
-      projectId,
-      threadId,
-      temporaryChatId,
-      sessionId: null,
-      mode: 'quick',
-      selections: [],
-      initialContext,
-      settings: { ...settings, permissionLevel: 'auto_review' },
-      selectionAttached: false,
-      autoPromptSent: false,
-      autoPromptMessageId: null,
-      sessionStarted: false,
-      expired: false,
-      expiresAt: Date.now() + TEMPORARY_CHAT_INACTIVITY_MS
-    }
-    context.tabs = [...context.tabs, tab]
-    this.scheduleTemporaryChatExpiry(tab)
-    return tab
-  }
-
-  /** Drop a browser tab's agent chat from its reserved context when the browser
-   *  tab closes. The caller is responsible for closing the remote session. */
-  removeTemporaryChat(projectId: string, threadId: string, temporaryChatId: string): void {
-    this.clearTemporaryChatExpiry(temporaryChatId)
-    const context = this.contextFor(projectId, threadId)
-    if (!context) return
-    context.tabs = context.tabs.filter((tab) => tab.id !== `temporary-chat:${temporaryChatId}`)
-  }
-
   openPrimaryTerminal(projectId: string, threadId: string): void {
     const context = this.ensureProjectContext(projectId)
     const existing = context.tabs.find(

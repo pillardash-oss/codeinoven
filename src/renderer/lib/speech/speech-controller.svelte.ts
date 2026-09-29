@@ -278,6 +278,14 @@ class SpeechController {
         return scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
       }
     }
+    // A browser tab's assistant chat is a real thread the workspace is not
+    // showing, and its rail tab is the surface the recording belongs to: a
+    // recording started there answers Escape like any other conversation's.
+    if (sidebarTab?.kind === 'browser-agent') {
+      if (sidebarTab.threadId === scope.threadId) {
+        return scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
+      }
+    }
     const viewed = workspaceState.selectedThread
     if (!viewed || viewed.id !== scope.threadId) return false
     if (scope.kind === 'project') return viewed.projectId === scope.projectId
@@ -583,10 +591,7 @@ class SpeechController {
           // the native worker, but a failure with the worker present is the real
           // reason a recording is lost or sounds different, so it is recorded
           // instead of being swallowed.
-          logRendererError(
-            'Native voice capture did not start; using the browser recorder.',
-            cause
-          )
+          logRendererError('Native voice capture did not start; using the browser recorder.', cause)
           return null
         }
       )

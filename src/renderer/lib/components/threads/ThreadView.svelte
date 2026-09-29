@@ -4188,6 +4188,10 @@
       // Remounting into a side chat that is already blocked on a permission
       // request rehydrates its card; the parent thread is never asked for it.
       void refreshPendingPermissions()
+      // Same for a question the agent asked: a controller-driven conversation can
+      // be a durable thread (a browser tab's assistant chat), and a question has
+      // no other surface, so its queue is rehydrated here too.
+      void refreshPendingQuestions()
 
       return () => {
         alive = false
@@ -5004,8 +5008,29 @@
   }
 
   function handleAgentEvent(event: AgentEvent): void {
-    // Controller-driven conversations handle their own live events.
-    if (controller) return
+    // A controller-driven conversation is still a real conversation when it is
+    // durable (a browser tab's assistant chat is a thread of its own), so the
+    // events that carry a human gate have to reach it: a question the agent asked
+    // has no other surface, and a card the user never sees leaves the panel
+    // blocked until the question times out. Everything else this view handles is
+    // either published by the primary conversation surface, which a panel must
+    // never touch, or owned by the controller's own store.
+    if (controller) {
+      if (event.type === 'question.asked' || event.type === 'question.updated') {
+        // No session filter: a panel can mount before it has learned its session
+        // id, and reconciling asks main for this conversation's own queue, so an
+        // event belonging to another conversation costs one read and nothing else.
+        void refreshPendingQuestions()
+        return
+      }
+      if (event.type === 'question.resolved') {
+        resolvedQuestionRequestIds.add(event.requestId)
+        pendingQuestionRequests = pendingQuestionRequests.filter(
+          (request) => request.requestId !== event.requestId
+        )
+      }
+      return
+    }
 
     if (
       event.type === 'spec.trace' &&

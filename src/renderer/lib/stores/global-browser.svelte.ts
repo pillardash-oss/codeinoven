@@ -24,8 +24,13 @@ import type { GlobalBrowserTabsSnapshot } from '$shared/browser/global-browser-t
 import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '$shared/ipc-contract'
 import { appConfigState } from './app-config.svelte'
 import { reportError } from './app-errors.svelte'
+import {
+  browserAssistant,
+  BROWSER_ASSISTANT_DEFAULT_TITLE,
+  type BrowserAssistantChat
+} from './browser-assistant.svelte'
 import { browserPopupWindows } from './browser-popup-windows.svelte'
-import { contextSidebarState, type TemporaryChatContextTab } from './context-sidebar.svelte'
+import { contextSidebarState } from './context-sidebar.svelte'
 import { sidebarState } from './sidebar.svelte'
 import { defaultSettingsFor } from './thread-settings.svelte'
 import { threadNotesState } from './thread-notes.svelte'
@@ -119,11 +124,6 @@ export class GlobalBrowserState {
    *  against the list can wait for it instead of racing it. */
   private hydration: Promise<void> | null = null
   private readonly runtime = new SvelteMap<string, GlobalBrowserRuntime>()
-  /** The agent side chat bound to each browser tab, keyed by browser tab id.
-   *  Session-scoped on purpose: a tab's conversation is an ephemeral side chat
-   *  and its backend session does not outlive the app, so a restart starts fresh
-   *  rather than pointing at a session that is gone. */
-  private readonly agentChatIds = new SvelteMap<string, string>()
   /** Popup windows this renderer has already reported on, so only the arrival of
    *  a new one brings the rail's popup panel up. Bounded by the live list: an id
    *  whose popup is gone is forgotten. */
@@ -437,6 +437,11 @@ export class GlobalBrowserState {
     return this.tabs.find((tab) => tab.url === url) ?? null
   }
 
+  /** One tab by id, or null once it has been closed. */
+  tabById(tabId: string): GlobalBrowserTab | null {
+    return this.tabs.find((tab) => tab.id === tabId) ?? null
+  }
+
   // ─── The active tab ───────────────────────────────────────────────────────
 
   /**
@@ -620,15 +625,16 @@ export class GlobalBrowserState {
   }
 
   /** Reveal the rail on the active tab's agent conversation, creating it on the
-   *  first open. The chat is the app's own temporary side chat, so it binds to a
-   *  browser tab the way a side chat binds to a thread. */
+   *  first open. A tab's conversation is a real chat thread of the reserved
+   *  browser project, so it is created once and then kept until the user closes
+   *  it (or closes the tab it belongs to). */
   showAgentSidebar(): void {
     const tab = this.activeTab
     if (!tab) return
     this.dismissNotifications()
-    this.ensureAgentChat(tab)
     this.contextSidebarTool = 'agent'
     this.contextSidebarVisible = true
+    void this.ensureAssistantChat(tab)
   }
 
   toggleAgentSidebar(): void {
@@ -648,43 +654,37 @@ export class GlobalBrowserState {
     return this.contextSidebarShown && this.contextSidebarTool === 'agent'
   }
 
-  /** The agent side chat bound to a browser tab, or null before its first open. */
-  agentChatTabFor(tabId: string): TemporaryChatContextTab | null {
-    const chatId = this.agentChatIds.get(tabId)
-    if (!chatId) return null
-    return contextSidebarState.temporaryChatTab(`temporary-chat:${chatId}`)
-  }
-
-  /** The harness a browser tab's agent chat runs on, for the strip row's second
-   *  line. Null while the tab has no agent chat. */
-  agentHarnessFor(tabId: string): string | null {
-    return this.agentChatTabFor(tabId)?.settings.harnessId ?? null
+  /** The agent conversation bound to a browser tab, or null before its first
+   *  open (or while the row behind its durable link is still being resolved). */
+  agentChatFor(tabId: string): BrowserAssistantChat | null {
+    return browserAssistant.chatForTab(tabId)
   }
 
   /**
-   * Create (or return) the side chat bound to one browser tab.
+   * Resolve (creating on the very first open) the assistant conversation bound to
+   * one browser tab, and hand main the page it answers about.
    *
-   * A browser tab has no thread of its own, so the chat resolves its scope
-   * against the browser's reserved parent thread and carries the page identity
-   * as hidden context, which is what lets the agent answer about the page on
-   * screen. An expired chat is replaced rather than reused.
+   * The conversation and the tab point at each other: the thread id is written
+   * into the tab's durable row, so a restart restores the link, and main is told
+   * which browser tab the thread is looking at, which is what lets the agent's
+   * browser capability read the page the user is on rather than a page of its own.
    */
-  ensureAgentChat(tab: GlobalBrowserTab): TemporaryChatContextTab {
-    const existingId = this.agentChatIds.get(tab.id)
-    if (existingId) {
-      const existing = contextSidebarState.temporaryChatTab(`temporary-chat:${existingId}`)
-      if (existing && !existing.expired) return existing
+  private async ensureAssistantChat(tab: GlobalBrowserTab): Promise<void> {
+    try {
+      const chat = await browserAssistant.ensureChat({
+        browserTabId: tab.id,
+        existingThreadId: tab.assistantThreadId,
+        title: browserAssistantChatTitle(tab),
+        settings: defaultSettingsFor('chat')
+      })
+      if (tab.assistantThreadId !== chat.threadId) {
+        tab.assistantThreadId = chat.threadId
+        this.persist()
+      }
+      void invoke('browser:bindAssistantPage', chat.threadId, tab.id).catch(() => {})
+    } catch (error) {
+      reportError(error, 'The assistant conversation could not be started.')
     }
-    const temporaryChatId = crypto.randomUUID()
-    const chat = contextSidebarState.ensureBrowserAgentChat(
-      GLOBAL_BROWSER_PROJECT_ID,
-      GLOBAL_BROWSER_THREAD_ID,
-      temporaryChatId,
-      defaultSettingsFor('chat'),
-      browserAgentPageContext(tab)
-    )
-    this.agentChatIds.set(tab.id, temporaryChatId)
-    return chat
   }
 
   /**
@@ -702,12 +702,9 @@ export class GlobalBrowserState {
     this.activeTabId = tabId
     this.dockActiveTabNote()
     // The rail follows the active tab: while the agent tool is shown, the new
-    // tab's own conversation must be the one on screen, and the popup panel, which
-    // belongs to the tab whose page opened the windows, closes when that tab has
-    // none.
-    if (this.contextSidebarTool === 'agent' && this.contextSidebarVisible && this.activeTab) {
-      this.ensureAgentChat(this.activeTab)
-    }
+    // tab's own conversation must be the one on screen. A tab the user has never
+    // asked the agent about shows its start state instead of being given a
+    // conversation nobody asked for; the rail's own action creates it.
     if (this.contextSidebarTool === 'popups') this.closePopupsWithNoWindows()
   }
 
@@ -812,6 +809,7 @@ export class GlobalBrowserState {
         hibernated: false,
         pinned: false,
         pinnedAt: null,
+        assistantThreadId: null,
         color: null,
         iconType: null,
         customSvg: null,
@@ -875,6 +873,7 @@ export class GlobalBrowserState {
       hibernated: false,
       pinned: false,
       pinnedAt: null,
+      assistantThreadId: null,
       color: null,
       iconType: null,
       customSvg: null,
@@ -890,6 +889,7 @@ export class GlobalBrowserState {
   close(tabId: string): void {
     const index = this.tabs.findIndex((tab) => tab.id === tabId)
     if (index < 0) return
+    const closedThreadId = this.tabs[index]?.assistantThreadId ?? null
     const remaining = this.tabs.filter((tab) => tab.id !== tabId)
     this.tabs = remaining
     this.runtime.delete(tabId)
@@ -911,24 +911,26 @@ export class GlobalBrowserState {
     if (threadNotesState.has(tabId)) {
       void invoke('note:delete', GLOBAL_BROWSER_PROJECT_ID, tabId).catch(() => {})
     }
-    // The tab's agent chat is the same kind of subject-scoped state: closing the
-    // tab closes its side chat and releases the backend session.
-    this.closeAgentChatFor(tabId)
+    // The tab's agent conversation is the same kind of subject-scoped state:
+    // closing the tab closes the conversation it owns, because the conversation
+    // exists for that page and is unreachable without it.
+    this.closeAssistantChatFor(tabId, closedThreadId)
   }
 
-  /** Tear down one browser tab's agent chat: close its harness session and drop
-   *  its tab from the browser's reserved context. */
-  private closeAgentChatFor(tabId: string): void {
-    const chatId = this.agentChatIds.get(tabId)
-    if (!chatId) return
-    const chatTab = contextSidebarState.temporaryChatTab(`temporary-chat:${chatId}`)
-    if (chatTab) contextSidebarState.expireTemporaryChat(chatTab)
-    contextSidebarState.removeBrowserAgentChat(
-      GLOBAL_BROWSER_PROJECT_ID,
-      GLOBAL_BROWSER_THREAD_ID,
-      chatId
-    )
-    this.agentChatIds.delete(tabId)
+  /**
+   * Tear down one browser tab's agent conversation: the thread that holds its
+   * transcript is deleted with the tab that owned it.
+   *
+   * The link is read from the store first and from the tab's own durable field
+   * second, so a conversation this session never opened (a tab restored from a
+   * previous launch) is still cleaned up instead of being left behind as a
+   * thread nothing can reach.
+   */
+  private closeAssistantChatFor(tabId: string, linkedThreadId: string | null): void {
+    const threadId = browserAssistant.releaseTab(tabId) ?? linkedThreadId
+    if (!threadId) return
+    void invoke('thread:delete', GLOBAL_BROWSER_PROJECT_ID, threadId).catch(() => {})
+    void invoke('browser:unbindAssistantPage', threadId).catch(() => {})
   }
 
   moveToGroup(tabId: string, groupId: string | null): void {
@@ -1271,11 +1273,29 @@ export const GLOBAL_BROWSER_CONTEXT = {
 } as const
 
 /** The hidden page identity handed to a browser tab's agent as context, so a
- *  question with no page named still knows which page it is about. */
-function browserAgentPageContext(tab: GlobalBrowserTab): string {
+ *  question with no page named still knows which page it is about.
+ *
+ * It rides every turn of the conversation, not only the first: a lasting chat
+ * outlives the page it started on, and the tab may have navigated many times by
+ * the time the user asks something. The text also names the page the agent's own
+ * browser capability is pointed at, which is what makes an answer about "this
+ * page" a reading of the page that is actually on screen. */
+export function browserAgentPageContext(tab: GlobalBrowserTab): string {
   const lines = ['The user is asking about a web page they have open in the built-in browser.']
   const title = browserTabLabel(tab).trim()
   if (title) lines.push(`Page title: ${title}`)
   if (tab.url) lines.push(`Page URL: ${tab.url}`)
+  lines.push(
+    'The page is attached to this conversation: the in-app browser capability (`cio:browser`) reads this very page, so `snapshot`, `screenshot` and `console` answer about what the user is looking at. Opening or driving a page of your own uses the same capability and never moves the user\u2019s page.'
+  )
   return lines.join('\n')
+}
+
+/** The title a browser tab's conversation starts on, before the model names it
+ *  from the user's first question. The page's own label is what the user would
+ *  call that conversation, and the first turn replaces it with the generated
+ *  title. */
+function browserAssistantChatTitle(tab: GlobalBrowserTab): string {
+  const label = browserTabLabel(tab).trim()
+  return label === '' ? BROWSER_ASSISTANT_DEFAULT_TITLE : label
 }

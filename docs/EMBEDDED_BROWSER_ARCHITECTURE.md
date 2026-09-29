@@ -42,6 +42,32 @@ material way, and the difference is deliberate.
   degrades to an empty, process-local storage whenever another app instance already
   holds the profile's storage database, so a second instance read no tabs, saved none,
   and the next launch restored nothing without a single error being raised.
+- **A browser tab's agent conversation is a real chat thread, not a side chat.** It
+  lives in the reserved hidden `browser-global` project, one thread per tab, linked by
+  `PersistedBrowserTab.assistantThreadId`, so its transcript, title, harness session and
+  model persist exactly as any other thread's do. It is created when the user first
+  opens the agent on that tab and deleted when the conversation (or the tab that owns
+  it) is closed, and the rail shows it through the ordinary conversation surface with a
+  controller that keeps it a panel rather than the primary conversation.
+  - Every thread list filters that container out at the repository boundary, and the
+    renderer refuses its `thread:updated` broadcasts too
+    (`src/renderer/lib/stores/scope-threads.svelte.ts`), so a browser chat can never
+    surface as a phantom row in the thread timeline or the switcher.
+  - Its turns do not notify: the answer is delivered beside the page it is about, which
+    is the rule the side chat it replaced already followed.
+- **The page a tab is on is attached to its assistant conversation for reading.** The
+  app records the pair when the rail resolves the conversation
+  (`browser:bindAssistantPage`), and main points the agent's browser capability
+  (`cio:browser`) at the user's tab whenever that conversation owns no page of its own:
+  `snapshot`, `screenshot` and `console` read the page the user is looking at and report
+  `page: "user"`. Everything that changes a page (open, navigate, click, type, reload,
+  viewport) still needs a page the agent opened itself, so an answer can never move the
+  page the user is reading.
+- **A link in the browser view belongs to that browser.** The link context menu offers
+  the default browser, a new tab of the app-wide browser and the tab already on screen
+  there, and the thread browser's item (which targets a project thread's tab) is not
+  offered; a plain click routed into the in-app browser follows the same rule
+  (`src/renderer/lib/open-in-browser.ts`).
 
 Treat the rest of this document as the target-state design; the points above describe the
 shipped behavior.

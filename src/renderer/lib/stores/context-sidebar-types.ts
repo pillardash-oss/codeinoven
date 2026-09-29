@@ -91,6 +91,28 @@ export interface BrowserContextTab {
   favicon?: string
 }
 
+/**
+ * A browser tab's agent conversation, on the browser's right rail.
+ *
+ * The conversation is a real chat thread of the reserved hidden browser project,
+ * so the tab is a view of that thread rather than a conversation of its own: the
+ * title is the thread's title, the panel renders the thread's own transcript and
+ * settings, and closing the tab deletes the thread. The browser tab it answers
+ * about is carried here because the rail only ever shows the conversation of the
+ * tab on screen.
+ */
+export interface BrowserAgentContextTab {
+  id: string
+  kind: 'browser-agent'
+  title: string
+  /** The reserved browser project the conversation's thread lives in. */
+  projectId: string
+  /** The conversation thread itself. */
+  threadId: string
+  /** The browser tab whose page the conversation answers about. */
+  browserTabId: string
+}
+
 export interface ThreadNoteContextTab {
   id: string
   kind: 'thread-note'
@@ -317,6 +339,7 @@ export type ContextSidebarTab =
   | CoordinatorContextTab
   | AssistantHowToContextTab
   | BrowserContextTab
+  | BrowserAgentContextTab
 
 export interface ThreadSidebarContext {
   projectId: string

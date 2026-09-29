@@ -1,6 +1,15 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { AppWindow, Bot, Bookmark, Clock, Download, Globe, Plus, StickyNote } from '@lucide/svelte'
+  import {
+    AppWindow,
+    Bookmark,
+    Clock,
+    Download,
+    Globe,
+    MessagesCircle,
+    Plus,
+    StickyNote
+  } from '@lucide/svelte'
   import { subscribe } from '$lib/ipc.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
@@ -59,7 +68,7 @@
   const dockGroups = $derived.by((): ContextDockItem[][] => {
     const tab = activeTab
     const hasNote = tab ? threadNotesState.has(tab.id) : false
-    const hasAgent = tab ? globalBrowser.agentChatTabFor(tab.id) !== null : false
+    const hasAgent = tab ? globalBrowser.agentChatFor(tab.id) !== null : false
     /** The popup windows this tab's page opened. A popup that ends leaves the list
      *  and takes the rail's panel with it when it was the last, so the tool is only
      *  offered while there is a window for it to show. */
@@ -122,7 +131,9 @@
           {
             id: 'agent',
             label: hasAgent ? 'Agent conversation' : 'Ask the agent',
-            icon: Bot,
+            // The conversation wears the Chats view's mark: it is a chat, not a
+            // status, so it takes no tone either.
+            icon: MessagesCircle,
             active: globalBrowser.agentSidebarShown,
             onSelect: () => globalBrowser.toggleAgentSidebar()
           }

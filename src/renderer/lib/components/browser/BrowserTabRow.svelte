@@ -1,6 +1,5 @@
 <script lang="ts">
   import {
-    Bot,
     FolderInput,
     FolderMinus,
     FolderPlus,
@@ -20,6 +19,8 @@
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { harnessName } from '$lib/components/shared/model-picker-helpers'
+  import ModelPickerVendorIcons from '$lib/components/shared/ModelPickerVendorIcons.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserTabAccent, browserTabIconUrl } from './browser-tab-appearance'
@@ -62,11 +63,27 @@
   const customIconUrl = $derived(browserTabIconUrl(tab, globalBrowser.tabIconUrl(tab.id)))
   const accent = $derived(browserTabAccent(tab))
   /** While this tab's agent sidebar is open the row grows a second line naming
-   *  the harness the conversation runs on, so the strip says which agent is
-   *  answering without opening the panel. */
-  const agentHarness = $derived(
-    globalBrowser.agentSidebarShown && active ? globalBrowser.agentHarnessFor(tab.id) : null
+   *  the model the conversation runs on, so the strip says which agent is
+   *  answering without opening the panel. It is drawn as the harness mark beside
+   *  the model provider's mark, exactly as every model control in the app draws
+   *  it: the conversation is a conversation like any other, and its identity is
+   *  the pair that runs it. */
+  const agentChat = $derived(
+    globalBrowser.agentSidebarShown && active ? globalBrowser.agentChatFor(tab.id) : null
   )
+  const agentModel = $derived.by(() => {
+    const thread = agentChat?.thread
+    const harnessId = thread?.settings?.harnessId
+    if (!thread || !harnessId) return null
+    const providerId = thread.settings?.providerId ?? ''
+    // The provider's display name is what the vendor mark falls back to, so it is
+    // resolved from the catalog the model pickers read; an id-only provider (a
+    // custom base-URL one) still resolves, because the mark is picked by id first.
+    const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
+    const providerName =
+      providers.find((provider) => provider.id === providerId)?.name ?? providerId
+    return { harnessId, providerId, providerName }
+  })
   const groups = $derived(globalBrowser.groups)
   const group = $derived(tab.groupId ? globalBrowser.groupById(tab.groupId) : null)
   /** True while a drag is over this row and would reorder here. */
@@ -165,10 +182,18 @@
           >
             {label}
           </span>
-          {#if agentHarness}
-            <span class="flex items-center gap-1 text-[0.625rem] leading-tight text-dimmed">
-              <Bot size={10} class="shrink-0" />
-              <span class="truncate">{harnessName(agentHarness)}</span>
+          {#if agentModel}
+            <span
+              role="img"
+              class="flex items-center gap-0.5"
+              title={`${harnessName(agentModel.harnessId)} \u00b7 ${agentModel.providerName || 'No provider'}`}
+              aria-label={`Agent conversation on ${harnessName(agentModel.harnessId)}${agentModel.providerName ? ` with ${agentModel.providerName}` : ''}`}
+            >
+              <ModelPickerVendorIcons
+                harnessId={agentModel.harnessId}
+                providerId={agentModel.providerId}
+                providerName={agentModel.providerName}
+              />
             </span>
           {/if}
         </span>
