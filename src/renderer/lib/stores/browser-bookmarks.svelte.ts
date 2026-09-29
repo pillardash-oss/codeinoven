@@ -4,8 +4,8 @@
  * Bookmarks belong to the person, not to a project or a profile, so one list
  * serves every browser surface the app shows: the star beside any address, the
  * spotlight, and the rail's bookmarks panel. They are durable app state owned by
- * the main process (`browser:loadBookmarks` / `browser:saveBookmarks`), the same
- * contract the browsing history follows and for the same reason.
+ * the main process (`browser:loadBookmarks` / `browser:saveBookmarks`), the durable
+ * contract the global browser's history keeps as well.
  *
  * Nothing here evicts: a bookmark is an intent, so the list only ever shrinks
  * because the user said so. The stored file is bounded by the parser instead.

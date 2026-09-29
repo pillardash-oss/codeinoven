@@ -184,9 +184,10 @@ export interface BrowserDownloadsContextTab {
 /**
  * The global browser's browsing history panel.
  *
- * History belongs to the person rather than to a project, a thread or a tab, so
- * the tab carries no scope and is one of the browser rail tools that can be
- * docked with no tab on screen.
+ * History is scoped to the browser that made each visit, so this panel lists the
+ * global browser's own and none of a thread browser's. Inside that browser it
+ * belongs to the profile rather than to a tab, so the tab carries no scope and is
+ * one of the rail tools that can be docked with no tab on screen.
  */
 export interface BrowserHistoryContextTab {
   id: string
@@ -195,8 +196,9 @@ export interface BrowserHistoryContextTab {
 }
 
 /**
- * The global browser's bookmarks panel. Saved pages belong to the person, exactly
- * as the history does, so the tab carries no scope either.
+ * The global browser's bookmarks panel. A saved page belongs to the person rather
+ * than to the browser that saved it, unlike the history, so the tab carries no
+ * scope either.
  */
 export interface BrowserBookmarksContextTab {
   id: string

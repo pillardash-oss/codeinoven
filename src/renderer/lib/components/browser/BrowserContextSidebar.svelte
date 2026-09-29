@@ -81,7 +81,7 @@
     kind: 'downloads',
     title: 'Downloads'
   }
-  /** The browsing history panel. It belongs to the person, not to a tab, so like
+  /** The browsing history panel. It lists the global browser's own visits, so like
    *  the downloads it survives with no tab on screen. */
   const historyTab: BrowserHistoryContextTab = {
     id: 'browser-history',

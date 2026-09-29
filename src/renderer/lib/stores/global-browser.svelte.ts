@@ -536,7 +536,7 @@ export class GlobalBrowserState {
   /**
    * Reveal the rail on the browsing history.
    *
-   * History belongs to the person rather than to a tab, like downloads do, so this
+   * History belongs to the browser rather than to a tab, like downloads do, so this
    * is one of the tools that keeps the rail present with no tab on screen.
    */
   showHistorySidebar(): void {
