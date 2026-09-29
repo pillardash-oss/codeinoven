@@ -83,11 +83,14 @@ export class GlobalBrowserState {
    *  panels belong to one tab's visit and never open on their own. */
   contextSidebarVisible = $state(false)
   /** Which tool of the rail is on screen. The rail hosts the active tab's note
-   *  and its agent conversation, plus the browser's own downloads; exactly one
-   *  is shown at a time, the way the context dock picks one tool in every other
-   *  view. Downloads belong to the shared profile rather than a tab, so that tool
-   *  is the one entry that can stay open with no tab. */
-  contextSidebarTool = $state<'note' | 'agent' | 'downloads' | 'popups'>('note')
+   *  and its agent conversation, plus the browser's own downloads, history and
+   *  bookmarks; exactly one is shown at a time, the way the context dock picks one
+   *  tool in every other view. Downloads, history and bookmarks belong to the
+   *  shared browser library rather than a tab, so those tools are the entries that
+   *  can stay open with no tab. */
+  contextSidebarTool = $state<'note' | 'agent' | 'downloads' | 'popups' | 'history' | 'bookmarks'>(
+    'note'
+  )
   /** Whether the address spotlight is up. It lives here rather than in a surface
    *  because it is summoned from anywhere in the browser view (Cmd/Ctrl+L) and
    *  from a freshly opened tab, which has no surface of its own yet. */
@@ -359,8 +362,21 @@ export class GlobalBrowserState {
   get contextSidebarShown(): boolean {
     if (this.notificationsShown) return false
     if (!this.contextSidebarVisible) return false
-    if (this.contextSidebarTool === 'downloads') return true
+    // The browser library tools (downloads, history, bookmarks) belong to the
+    // person rather than to a tab, so they are what keeps the rail present with
+    // the strip empty; every other tool needs a tab to have a subject.
+    if (this.railToolNeedsNoTab) return true
     return this.activeTab !== null
+  }
+
+  /** Whether the tool on the rail is one of the browser library tools, which are
+   *  the entries that can stay open with no tab on screen. */
+  private get railToolNeedsNoTab(): boolean {
+    return (
+      this.contextSidebarTool === 'downloads' ||
+      this.contextSidebarTool === 'history' ||
+      this.contextSidebarTool === 'bookmarks'
+    )
   }
 
   /** Whether the rail is currently showing the browser's popup windows. */
@@ -510,6 +526,59 @@ export class GlobalBrowserState {
 
   closeDownloadsSidebar(): void {
     if (this.contextSidebarTool === 'downloads') this.contextSidebarVisible = false
+  }
+
+  /**
+   * Reveal the rail on the browsing history.
+   *
+   * History belongs to the person rather than to a tab, like downloads do, so this
+   * is one of the tools that keeps the rail present with no tab on screen.
+   */
+  showHistorySidebar(): void {
+    this.dismissNotifications()
+    this.contextSidebarTool = 'history'
+    this.contextSidebarVisible = true
+  }
+
+  toggleHistorySidebar(): void {
+    if (this.contextSidebarTool === 'history' && this.contextSidebarVisible) {
+      this.closeHistorySidebar()
+      return
+    }
+    this.showHistorySidebar()
+  }
+
+  closeHistorySidebar(): void {
+    if (this.contextSidebarTool === 'history') this.contextSidebarVisible = false
+  }
+
+  /** Whether the rail is currently showing the browsing history. */
+  get historySidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'history'
+  }
+
+  /** Reveal the rail on the saved pages. */
+  showBookmarksSidebar(): void {
+    this.dismissNotifications()
+    this.contextSidebarTool = 'bookmarks'
+    this.contextSidebarVisible = true
+  }
+
+  toggleBookmarksSidebar(): void {
+    if (this.contextSidebarTool === 'bookmarks' && this.contextSidebarVisible) {
+      this.closeBookmarksSidebar()
+      return
+    }
+    this.showBookmarksSidebar()
+  }
+
+  closeBookmarksSidebar(): void {
+    if (this.contextSidebarTool === 'bookmarks') this.contextSidebarVisible = false
+  }
+
+  /** Whether the rail is currently showing the saved pages. */
+  get bookmarksSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'bookmarks'
   }
 
   /**
@@ -765,6 +834,31 @@ export class GlobalBrowserState {
     return this.createTab(url, groupId)
   }
 
+  /**
+   * Open an address in the tab on screen, or start the browser with a first tab when
+   * there is none.
+   *
+   * This is what the address spotlight, a history row and a bookmark all do: unlike
+   * {@link open}, which is how a link arriving from a thread finds the tab already
+   * showing it, these are the user saying "take me there now", so the page on screen
+   * is the one that moves.
+   */
+  openInActiveTab(url: string): void {
+    const tab = this.activeTab
+    if (!tab) {
+      this.createTab(url)
+      return
+    }
+    // Silent on failure: the tab can be destroyed between the click and the call.
+    void invoke(
+      'browser:navigate',
+      tab.id,
+      GLOBAL_BROWSER_CONTEXT.projectId,
+      GLOBAL_BROWSER_CONTEXT.threadId,
+      url
+    ).catch(() => {})
+  }
+
   /** Create a tab for an address (blank allowed) and make it active. */
   createTab(url: string, groupId: string | null = null): string {
     this.enforceTabCap()
@@ -804,10 +898,10 @@ export class GlobalBrowserState {
       this.setActiveTab(neighbour?.id ?? null)
       if (neighbour) neighbour.lastUsedAt = Date.now()
     }
-    if (this.tabs.length === 0 && this.contextSidebarTool !== 'downloads') {
+    if (this.tabs.length === 0 && !this.railToolNeedsNoTab) {
       // With no tab left the note and agent tools have no subject, so the rail
       // returns to its closed default instead of lingering for the next tab.
-      // Downloads need no tab, so they stay open.
+      // The library tools need no tab, so they stay open.
       this.contextSidebarVisible = false
     }
     this.persist()

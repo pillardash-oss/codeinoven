@@ -127,6 +127,8 @@
     'notifications',
     'attention',
     'downloads',
+    'history',
+    'bookmarks',
     'git',
     'actions',
     'thread-note',

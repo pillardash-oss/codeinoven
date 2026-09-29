@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { AppWindow, Bot, Download, Globe, Plus, StickyNote } from '@lucide/svelte'
+  import { AppWindow, Bot, Bookmark, Clock, Download, Globe, Plus, StickyNote } from '@lucide/svelte'
   import { subscribe } from '$lib/ipc.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { motionDuration } from '$lib/motion'
@@ -40,6 +41,9 @@
   const unfinishedDownloadCount = $derived(
     browserDownloads.unfinishedCount(GLOBAL_BROWSER_PROJECT_ID)
   )
+  /** How many pages are saved, for the rail badge. A saved page is the one list
+   *  here the user built by hand, so its size is worth showing. */
+  const bookmarkCount = $derived(browserBookmarks.count)
 
   /**
    * The browser view's tools for the context rail.
@@ -71,6 +75,24 @@
         active: globalBrowser.downloadsSidebarShown,
         countBadge: unfinishedDownloadCount > 0 ? String(unfinishedDownloadCount) : undefined,
         onSelect: () => globalBrowser.toggleDownloadsSidebar()
+      },
+      // History and bookmarks belong to the person, like downloads do, so they are
+      // reachable with no tab open: the browser's whole memory is browsable even
+      // when the strip is empty.
+      {
+        id: 'history',
+        label: 'History',
+        icon: Clock,
+        active: globalBrowser.historySidebarShown,
+        onSelect: () => globalBrowser.toggleHistorySidebar()
+      },
+      {
+        id: 'bookmarks',
+        label: bookmarkCount > 0 ? `Bookmarks (${bookmarkCount})` : 'Bookmarks',
+        icon: Bookmark,
+        active: globalBrowser.bookmarksSidebarShown,
+        countBadge: bookmarkCount > 0 ? String(bookmarkCount) : undefined,
+        onSelect: () => globalBrowser.toggleBookmarksSidebar()
       },
       ...(popupWindows.length > 0
         ? [
@@ -140,6 +162,15 @@
   onDestroy(() => {
     if (viewActions.view === 'browser') viewActions.set('none', [])
   })
+
+  /**
+   * Open a resolved address from the spotlight. The store owns the rule   the tab
+   * on screen navigates, a browser with none opens its first tab   so the history
+   * and bookmark panels take the same path.
+   */
+  function openAddress(url: string): void {
+    globalBrowser.openInActiveTab(url)
+  }
 
   /**
    * The browser shortcuts main routes back to the renderer are the ones whose
@@ -233,7 +264,11 @@
 </div>
 
 {#if addressSpotlightOpen}
-  <BrowserAddressSpotlight onClose={() => globalBrowser.closeAddressSpotlight()} />
+  <BrowserAddressSpotlight
+    initialValue={activeTab?.url ?? ''}
+    onOpen={openAddress}
+    onClose={() => globalBrowser.closeAddressSpotlight()}
+  />
 {/if}
 
 <style>

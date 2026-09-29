@@ -13,13 +13,13 @@
     RotateCw,
     Search,
     Settings2,
+    Star,
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { resolveBrowserAddress } from '$shared/browser-search-engines'
-  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
-  import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import BrowserTabRow from './BrowserTabRow.svelte'
@@ -68,13 +68,13 @@
   // button has to drop its expanded state.
   onMount(() => subscribe('browser:siteMenuClosed', () => (siteMenuOpen = false)))
 
-  /** Null while the address mirrors the page; a string once the user types, so a
-   *  page that navigates mid-edit never steals the caret's line. The draft is
-   *  only consulted while the field has focus, which is what makes a tab switch
-   *  show the new tab's address without a reset effect. */
-  let addressDraft = $state('')
-  let addressFocused = $state(false)
-  let addressError = $state('')
+  /** The page on screen's address. The bar shows it rather than owning an
+   *  editable copy of it: the address the user types goes through the spotlight
+   *  (see {@link onOpenAddress}), which is where history is suggested too. */
+  const address = $derived(activeTab?.url ?? '')
+  /** Whether the page on screen is already saved, which is what the star beside
+   *  the address reads and toggles. */
+  const bookmarked = $derived(browserBookmarks.isBookmarked(address))
 
   const groups = $derived(globalBrowser.orderedGroups)
 
@@ -99,7 +99,6 @@
   const query = $derived(globalBrowser.tabSearchQuery)
   const searchGroupId = $derived(globalBrowser.tabSearchGroupId)
   const scopedGroup = $derived(searchGroupId ? globalBrowser.groupById(searchGroupId) : null)
-  const address = $derived(addressFocused ? addressDraft : (activeTab?.url ?? ''))
 
   function matches(tab: GlobalBrowserTab): boolean {
     const needle = query.trim().toLowerCase()
@@ -124,32 +123,11 @@
     globalBrowser.openTabSearch(groupId)
   }
 
-  function navigate(): void {
-    const resolution = resolveBrowserAddress(addressDraft, appConfigState.browserSearchEngine)
-    if (!resolution) {
-      addressError = 'Enter a search or an address'
-      return
-    }
-    addressError = ''
-    addressFocused = false
-    // With a tab on screen the address drives it. With none it is the way in, so
-    // it opens the first tab instead of doing nothing.
-    if (activeTab)
-      void invoke(
-        'browser:navigate',
-        activeTab.id,
-        GLOBAL_BROWSER_CONTEXT.projectId,
-        GLOBAL_BROWSER_CONTEXT.threadId,
-        resolution.url
-      ).catch(() => {})
-    else globalBrowser.createTab(resolution.url)
-  }
-
-  function startEditingAddress(input: EventTarget | null): void {
-    if (!(input instanceof HTMLInputElement)) return
-    addressFocused = true
-    addressDraft = activeTab?.url ?? ''
-    input.select()
+  /** Save the page on screen, or take it out of the list again. */
+  function toggleBookmark(): void {
+    const tab = activeTab
+    if (!tab || tab.url === '') return
+    browserBookmarks.toggle(tab.url, browserTabLabel(tab))
   }
 
   /** Left click reloads, or aborts the in-flight navigation while loading. */
@@ -207,8 +185,11 @@
 
 {#snippet chrome()}
   <!-- Fixed chrome: the address and history stay at the top left while the tab
-       strip scrolls beneath them. Downloads live in the right rail, so the
-       address bar keeps the room between the history buttons and the edge. -->
+       strip scrolls beneath them. The address is a control, not a field: clicking
+       it opens the address spotlight, where the address is replaced and the pages
+       already visited are offered underneath it. Bookmarks and downloads live in
+       the right rail, so the address bar keeps the room between the history
+       buttons and the edge. -->
   <div class="shrink-0 border-b px-2 py-2">
     <div class="mb-1.5 flex items-center gap-1">
       <!-- Only the navigation a page can actually take is shown: back when there
@@ -258,7 +239,7 @@
           {/if}
         </button>
       {/if}
-      <div class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-elevated px-2">
+      <div class="flex min-w-0 flex-1 items-center gap-1 rounded-lg bg-elevated pr-0.5 pl-1.5">
         {#if activeTab?.url}
           <button
             type="button"
@@ -281,25 +262,36 @@
         {:else}
           <Globe size={12} class="shrink-0 text-dimmed" />
         {/if}
-        <input
-          type="text"
-          class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
-          placeholder="Search or enter an address"
-          aria-label="Address"
-          aria-invalid={addressError !== ''}
-          value={address}
-          onfocus={(event: FocusEvent) => startEditingAddress(event.currentTarget)}
-          onblur={() => (addressFocused = false)}
-          oninput={(event: Event) => {
-            if (event.currentTarget instanceof HTMLInputElement)
-              addressDraft = event.currentTarget.value
-          }}
-          onkeydown={(event: KeyboardEvent) => {
-            if (event.key !== 'Enter') return
-            event.preventDefault()
-            navigate()
-          }}
-        />
+        <!-- The page's address is a control rather than a field: clicking it opens
+             the address spotlight, where the address is replaced and the pages
+             already visited are offered underneath it. The address is only read
+             here, so nothing in the strip ever mutates it. -->
+        <button
+          type="button"
+          class={[
+            'h-7 min-w-0 flex-1 truncate text-left text-xs',
+            address === '' ? 'text-dimmed' : 'text-foreground'
+          ]}
+          title="Search or enter an address"
+          aria-label="Search or enter an address"
+          onclick={onOpenAddress}
+        >
+          {address === '' ? 'Search or enter an address' : address}
+        </button>
+        <button
+          type="button"
+          class={[
+            'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay',
+            bookmarked ? 'text-warning' : 'text-dimmed hover:text-foreground'
+          ]}
+          disabled={address === ''}
+          aria-label={bookmarked ? 'Remove this page from bookmarks' : 'Bookmark this page'}
+          aria-pressed={bookmarked}
+          title={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
+          onclick={toggleBookmark}
+        >
+          <Star size={12} class={bookmarked ? 'fill-current' : ''} />
+        </button>
       </div>
     </div>
   </div>

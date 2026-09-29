@@ -2,7 +2,9 @@
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
   import {
     contextSidebarState,
+    type BrowserBookmarksContextTab,
     type BrowserDownloadsContextTab,
+    type BrowserHistoryContextTab,
     type ContextSidebarTab
   } from '$lib/stores/context-sidebar.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
@@ -52,6 +54,19 @@
     kind: 'downloads',
     title: 'Downloads'
   }
+  /** The browsing history panel. It belongs to the person, not to a tab, so like
+   *  the downloads it survives with no tab on screen. */
+  const historyTab: BrowserHistoryContextTab = {
+    id: 'browser-history',
+    kind: 'history',
+    title: 'History'
+  }
+  /** The bookmarks panel, owned by the person for the same reason. */
+  const bookmarksTab: BrowserBookmarksContextTab = {
+    id: 'browser-bookmarks',
+    kind: 'bookmarks',
+    title: 'Bookmarks'
+  }
   /**
    * The popup windows the active page opened, one tab per window.
    *
@@ -79,6 +94,8 @@
 
   const tabs = $derived([
     ...popupTabs,
+    historyTab,
+    bookmarksTab,
     downloadsTab,
     ...(noteTab ? [noteTab] : []),
     ...(agentTab ? [agentTab] : []),
@@ -92,7 +109,11 @@
           ? (activePopup?.id ?? null)
           : globalBrowser.downloadsSidebarShown
             ? downloadsTab.id
-            : (noteTab?.id ?? null))
+            : globalBrowser.historySidebarShown
+              ? historyTab.id
+              : globalBrowser.bookmarksSidebarShown
+                ? bookmarksTab.id
+                : (noteTab?.id ?? null))
   )
 
   /** Whether the tool on screen is a popup window, for the two callbacks that
@@ -115,6 +136,14 @@
       globalBrowser.showDownloadsSidebar()
       return
     }
+    if (tabId === historyTab.id) {
+      globalBrowser.showHistorySidebar()
+      return
+    }
+    if (tabId === bookmarksTab.id) {
+      globalBrowser.showBookmarksSidebar()
+      return
+    }
     if (agentTab && tabId === agentTab.id) globalBrowser.showAgentSidebar()
     else globalBrowser.showNoteSidebar()
   }
@@ -130,6 +159,14 @@
     }
     if (tabId === downloadsTab.id) {
       globalBrowser.closeDownloadsSidebar()
+      return
+    }
+    if (tabId === historyTab.id) {
+      globalBrowser.closeHistorySidebar()
+      return
+    }
+    if (tabId === bookmarksTab.id) {
+      globalBrowser.closeBookmarksSidebar()
       return
     }
     if (agentTab && tabId === agentTab.id) globalBrowser.closeAgentSidebar()
@@ -156,6 +193,14 @@
   {:else if globalBrowser.downloadsSidebarShown}
     {#await import('./BrowserDownloadsPanel.svelte') then { default: BrowserDownloadsPanel }}
       <BrowserDownloadsPanel />
+    {/await}
+  {:else if globalBrowser.historySidebarShown}
+    {#await import('./BrowserHistoryPanel.svelte') then { default: BrowserHistoryPanel }}
+      <BrowserHistoryPanel />
+    {/await}
+  {:else if globalBrowser.bookmarksSidebarShown}
+    {#await import('./BrowserBookmarksPanel.svelte') then { default: BrowserBookmarksPanel }}
+      <BrowserBookmarksPanel />
     {/await}
   {:else if globalBrowser.agentSidebarShown && agentTab}
     <!-- Keyed by chat id so switching browser tabs swaps the whole conversation,

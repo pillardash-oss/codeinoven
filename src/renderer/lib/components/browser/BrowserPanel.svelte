@@ -11,14 +11,15 @@
     RotateCw,
     SquareDashedMousePointer,
     SquareTerminal,
+    Star,
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { resolveBrowserAddress } from '$shared/browser-search-engines'
-  import { appConfigState } from '$lib/stores/app-config.svelte'
+  import BrowserAddressSpotlight from './BrowserAddressSpotlight.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
   import BrowserCommentEditor from './BrowserCommentEditor.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
+  import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
@@ -104,10 +105,14 @@
   }
 
   let contentElement = $state<HTMLDivElement>()
-  let addressInput = $state<HTMLInputElement>()
   let address = $state(initialPageState().url)
-  let addressError = $state('')
+  /** Whether the address spotlight is up for this tab, which is the only place an
+   *  address is typed: the bar itself is a control that opens it. */
+  let addressSpotlightOpen = $state(false)
   let pageState = $state<BrowserPageState>(initialPageState())
+  /** Whether the page on screen is already saved, which is what the star beside
+   *  the address reads and toggles. */
+  const bookmarked = $derived(browserBookmarks.isBookmarked(pageState.url))
   /** The panel's current on-screen content rectangle, refreshed by the same
    *  observers that align the native view. */
   let contentRect = $state<BrowserViewBounds | null>(null)
@@ -184,14 +189,13 @@
   }
 
   /**
-   * Move focus to the address bar and select what is there, which is what
-   * Cmd/Ctrl+L does in a browser. Main asks for it because the chord is claimed
-   * in the main process, where a page-focused key is visible before the
-   * application menu acts on it.
+   * Open the address spotlight for this tab, with the page on screen already
+   * selected in its field. This is what the address bar is: the gesture that used
+   * to move the caret into a field now hands the user the whole address palette,
+   * where the pages they have already visited are offered underneath it.
    */
-  function focusAddress(): void {
-    addressInput?.focus()
-    addressInput?.select()
+  function openAddressSpotlight(): void {
+    addressSpotlightOpen = true
   }
 
   /**
@@ -206,7 +210,7 @@
   $effect(() => {
     if (!panelVisible) return
     if (!browserAddressFocus.take(tabId)) return
-    focusAddress()
+    openAddressSpotlight()
   })
 
   /**
@@ -239,7 +243,7 @@
   function onPanelShortcut(eventTabId: string, action: BrowserPanelShortcutAction): void {
     if (eventTabId !== tabId || action !== 'focus-address') return
     if (!panelVisible) return
-    focusAddress()
+    openAddressSpotlight()
   }
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {
@@ -320,18 +324,17 @@
     }
   }
 
-  function navigate(): void {
-    const resolution = resolveBrowserAddress(address, appConfigState.browserSearchEngine)
-    if (!resolution) {
-      addressError = 'Enter a search or an address'
-      return
-    }
-    addressError = ''
-    address = resolution.url
-    contextSidebarState.updateBrowserTab(tabId, resolution.url)
-    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, resolution.url).catch(
-      () => {}
-    )
+  /** Open a resolved address in this tab. */
+  function navigate(url: string): void {
+    address = url
+    contextSidebarState.updateBrowserTab(tabId, url)
+    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url).catch(() => {})
+  }
+
+  /** Save the page on screen, or take it out of the list again. */
+  function toggleBookmark(): void {
+    if (pageState.url === '') return
+    browserBookmarks.toggle(pageState.url, pageState.title || address)
   }
 
   function applyPageState(next: BrowserPageState): void {
@@ -470,12 +473,8 @@
   {@attach panelVisible && !pageState.loadError && manageNativeBrowserView}
   class="flex h-full min-h-0 flex-col bg-app"
 >
-  <form
+  <div
     class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2"
-    onsubmit={(event) => {
-      event.preventDefault()
-      navigate()
-    }}
   >
     <button
       type="button"
@@ -535,16 +534,18 @@
           {/if}
         </button>
       {/if}
-      <input
-        class="h-7 w-full rounded-lg border border-border bg-elevated pl-8 pr-8 text-xs text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
-        class:border-danger={addressError !== ''}
-        bind:this={addressInput}
-        bind:value={address}
-        spellcheck="false"
-        autocomplete="url"
-        placeholder="localhost:3000"
-        aria-invalid={addressError ? 'true' : undefined}
-      />
+      <button
+        type="button"
+        class={[
+          'h-7 w-full truncate rounded-lg border border-border bg-elevated text-left text-xs outline-none transition-colors',
+          pageState.url === '' ? 'px-2 text-dimmed' : 'pr-2 pl-8 text-foreground'
+        ]}
+        title="Search or enter an address"
+        aria-label="Search or enter an address"
+        onclick={openAddressSpotlight}
+      >
+        {pageState.url === '' ? 'Search or enter an address' : pageState.url}
+      </button>
       {#if pageState.loading}
         <LoaderCircle
           size={13}
@@ -552,6 +553,20 @@
         />
       {/if}
     </div>
+    <button
+      type="button"
+      class={[
+        'flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-elevated',
+        bookmarked ? 'text-warning' : 'text-dimmed hover:text-foreground'
+      ]}
+      disabled={pageState.url === ''}
+      aria-label={bookmarked ? 'Remove this page from bookmarks' : 'Bookmark this page'}
+      aria-pressed={bookmarked}
+      title={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
+      onclick={toggleBookmark}
+    >
+      <Star size={13} class={bookmarked ? 'fill-current' : ''} />
+    </button>
     <button
       type="button"
       class="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -610,7 +625,7 @@
         {/if}
       </button>
     {/if}
-  </form>
+  </div>
   {#if pageState.composition}
     <BrowserCompositionTransport
       {tabId}
@@ -624,14 +639,6 @@
       role="status"
     >
       Hover an element and click to comment on it. Escape exits.
-    </p>
-  {/if}
-  {#if addressError}
-    <p
-      class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[0.6875rem] text-danger"
-      role="alert"
-    >
-      {addressError}
     </p>
   {/if}
   <div
@@ -674,3 +681,14 @@
     />
   {/if}
 </div>
+
+<!-- The address palette, mounted by the surface that owns the address bar so the
+     field opens over the frame the user clicked rather than in a second place. It
+     is only up while the user asked for it, so a background tab never holds one. -->
+{#if addressSpotlightOpen}
+  <BrowserAddressSpotlight
+    initialValue={pageState.url}
+    onOpen={navigate}
+    onClose={() => (addressSpotlightOpen = false)}
+  />
+{/if}

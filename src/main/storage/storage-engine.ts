@@ -15,6 +15,7 @@ import {
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
 import {
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_BROWSER_HISTORY_LIMIT,
   DEFAULT_MAX_CONFLICT_FILE_BYTES,
   DEFAULT_IN_APP_NOTIFICATION_SOUND,
   DEFAULT_BACKGROUND_WAKE_LEAD_MS,
@@ -104,6 +105,7 @@ const DEFAULT_CONFIG: AppConfig = {
   openLocalhostInCioBrowser: true,
   openAllLinksInCioBrowser: false,
   browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  browserHistoryLimit: DEFAULT_BROWSER_HISTORY_LIMIT,
   backgroundMode: 'scheduled',
   launchAtLogin: true,
   autoRunMissedAssistantRuns: true,

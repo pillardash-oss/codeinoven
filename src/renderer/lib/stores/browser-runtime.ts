@@ -21,7 +21,9 @@
 import { publishBrowserSearchEngine } from '$lib/browser-search-context'
 import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
 import { appConfigState } from './app-config.svelte'
+import { browserBookmarks } from './browser-bookmarks.svelte'
 import { browserDownloads } from './browser-downloads.svelte'
+import { browserHistory } from './browser-history.svelte'
 import { browserInspector } from './browser-inspector.svelte'
 import { browserPopupWindows } from './browser-popup-windows.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
@@ -43,6 +45,12 @@ export function startBrowserRuntime(): void {
   browserPopupWindows.start()
   browserDownloads.start()
   browserInspector.start()
+  // The history and the bookmark list are the browser's memory: one records every
+  // page a tab commits, the other is what the user saved. Both are read here, once
+  // the browser is actually wanted, so a launch that never reaches it pays nothing
+  // for them.
+  browserHistory.start()
+  browserBookmarks.start()
   contextSidebarState.startBrowserTabs()
   // Two pushes to main describe the browser's chrome rather than its state, and
   // both are skipped while no browser exists (see `publishBrowserScrollbarTheme`

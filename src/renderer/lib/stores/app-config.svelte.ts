@@ -1,5 +1,6 @@
 import {
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_BROWSER_HISTORY_LIMIT,
   DEFAULT_IN_APP_NOTIFICATION_SOUND
 } from '$shared/types'
 import type {
@@ -34,6 +35,7 @@ const FONT_STACKS: Record<string, string> = {
 
 let maxDiffLines = $state(DEFAULT_MAX_DIFF_LINES)
 let browserHibernationMinutes = $state(DEFAULT_BROWSER_HIBERNATION_MINUTES)
+let browserHistoryLimit = $state(DEFAULT_BROWSER_HISTORY_LIMIT)
 let openLocalhostInCioBrowser = $state(true)
 let openAllLinksInCioBrowser = $state(false)
 let browserSearchEngineId = $state('')
@@ -73,6 +75,11 @@ export const appConfigState = {
   get browserHibernationMinutes(): number {
     return browserHibernationMinutes
   },
+  /** How many pages the browser's history keeps; the history store evicts older
+   *  visits for newer ones past this. */
+  get browserHistoryLimit(): number {
+    return browserHistoryLimit
+  },
   get openLocalhostInCioBrowser(): boolean {
     return openLocalhostInCioBrowser
   },
@@ -109,6 +116,7 @@ export const appConfigState = {
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
     browserHibernationMinutes = config.browserHibernationMinutes
+    browserHistoryLimit = config.browserHistoryLimit
     openLocalhostInCioBrowser = config.openLocalhostInCioBrowser
     openAllLinksInCioBrowser = config.openAllLinksInCioBrowser
     browserSearchEngineId = config.browserSearchEngine

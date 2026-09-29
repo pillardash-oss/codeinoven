@@ -18,6 +18,10 @@ import type { Contract } from './contract-helpers'
 import type { BrowserSearchEngine } from '../browser-search-engines'
 import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
 import type {
+  BrowserBookmarksSnapshot,
+  BrowserHistorySnapshot
+} from '../browser/browser-library'
+import type {
   ToastOverlayInteractionReport,
   ToastOverlayRequest,
   ToastOverlayStack
@@ -33,6 +37,22 @@ export const invokeBrowserContract = {
    */
   'browser:loadTabs': {} as Contract<[], GlobalBrowserTabsSnapshot | null>,
   'browser:saveTabs': {} as Contract<[snapshot: GlobalBrowserTabsSnapshot], void>,
+  /**
+   * The browser's durable browsing history, newest first. It is app state rather
+   * than browser runtime, so it is read from the same early surface the tab list
+   * is, and it is what survives a restart.
+   */
+  'browser:loadHistory': {} as Contract<[], BrowserHistorySnapshot>,
+  'browser:saveHistory': {} as Contract<[snapshot: BrowserHistorySnapshot], void>,
+  /** Forget the whole browsing history. The clear is applied in main, so a
+   *  renderer that is closing right after it cannot re-save what it cleared. */
+  'browser:clearHistory': {} as Contract<[], void>,
+  /** The saved pages, newest first. */
+  'browser:loadBookmarks': {} as Contract<[], BrowserBookmarksSnapshot>,
+  'browser:saveBookmarks': {} as Contract<[snapshot: BrowserBookmarksSnapshot], void>,
+  /** Remove every bookmark, applied in main for the same reason as the history
+   *  clear above. */
+  'browser:clearBookmarks': {} as Contract<[], void>,
   'browser:show': {} as Contract<
     [
       tabId: string,
