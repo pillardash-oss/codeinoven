@@ -165,6 +165,35 @@ export function getConfigRoot(): string {
   return join(home, '.config', ORG_SLUG, APP_SLUG)
 }
 
+/**
+ * Environment variable that opts a launch out of background registration.
+ *
+ * Set it when starting a probe instance: a second app the agent (or a tester)
+ * starts to inspect behaviour without touching the session already running. An
+ * opted-out process creates no menu bar icon, registers no login item, never
+ * holds the machine awake for a due run, and quits when its window closes
+ * instead of parking   so a probe can never leave a second icon beside the
+ * user's app.
+ */
+export const NO_BACKGROUND_ENV = 'CODEINOVEN_NO_BACKGROUND'
+
+/**
+ * Whether this launch must stay out of background registration.
+ *
+ * This is the deliberate, per-process opt-out, honoured only where
+ * `CODEINOVEN_CONFIG_ROOT` is honoured (an unpackaged launch, or the packaged
+ * smoke harness), so a stray variable in a shipped app's environment can never
+ * strip the user's menu bar. It is never inferred from an isolated data root:
+ * probing the menu bar itself needs background mode on, so the opt-out must be
+ * asked for rather than assumed.
+ */
+export function isBackgroundRegistrationDisabled(): boolean {
+  const isPackagedSmoke = Boolean(process.env['CODEINOVEN_PACKAGED_SMOKE_OUTPUT'])
+  if (!isPackagedSmoke && !isUnpackagedElectronLaunch()) return false
+  const value = process.env[NO_BACKGROUND_ENV]?.trim().toLowerCase()
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on'
+}
+
 /** Get project storage path */
 export function getProjectPath(projectId: string): string {
   return join(getConfigRoot(), 'projects', projectId)

@@ -264,6 +264,13 @@ Cmd+Q so a routine still fires on time. It is on by default
   the schedule in the instance they are actually working in. The override is
   honoured only while its target is live; when that process dies the election
   resumes on the next heartbeat, so a transfer can never strand scheduling.
+- **A probe launch stays out.** Setting `CODEINOVEN_NO_BACKGROUND` on an
+  unpackaged launch (normally alongside a scratch `CODEINOVEN_CONFIG_ROOT`)
+  skips background registration entirely: no menu bar icon, no login item, no
+  wake hold, and a close quits the process instead of parking. It is how a
+  second instance is started to inspect behaviour without adding a second icon
+  beside the running app. The opt-out is never inferred from an isolated data
+  root, because probing the menu bar itself needs background mode on.
 - **Menu bar, not Dock.** The tray carries exactly two items, **Open CodeInOven**
   and **Quit CodeInOven**; the icon is the monochrome mark, or the mark with an
   exclamation when attention is needed. While windowless the Dock icon is hidden

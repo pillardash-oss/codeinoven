@@ -621,7 +621,12 @@ void app
     // no renderer process. Everything below still runs   the whole point is a
     // backend that keeps the schedule without a UI. A relaunch that followed a
     // menu bar update is the same: the update must not pop a window at the user.
-    const startHidden = wasOpenedAtLogin() || consumeBackgroundRelaunchMarker()
+    // The marker is consumed either way, so a stale one can never hide a later
+    // launch. A probe is never hidden: it is a window someone opened to look at
+    // behaviour, so it shows itself.
+    const relaunchRequested = consumeBackgroundRelaunchMarker()
+    const startHidden =
+      !backgroundLifecycle.backgroundOptOut && (wasOpenedAtLogin() || relaunchRequested)
     // This is the first post-ready action. Construct and show the native splash
     // immediately, then yield the main event loop until Chromium presents its
     // first frame. Synchronous SQLite/schema work cannot begin before this

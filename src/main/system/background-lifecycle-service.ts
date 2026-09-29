@@ -14,7 +14,10 @@
  *   - the Dock icon hiding while windowless and returning with a window,
  *   - the login item,
  *   - this process's role against the shared backend (`instanceRegistry`), so a
- *     second instance schedules nothing and says so instead of double-firing.
+ *     second instance schedules nothing and says so instead of double-firing,
+ *   - whether this launch registers for any of it at all: a probe sets
+ *     `CODEINOVEN_NO_BACKGROUND` and gets a plain window instead
+ *     (`isBackgroundRegistrationDisabled`).
  *
  * It is deliberately decoupled from the window and from the schedulers: the
  * composition root hands in the callbacks (`openWindow`, `destroyWindow`,
@@ -44,7 +47,7 @@ import {
 import { join } from 'node:path'
 import type { AppConfig, BackgroundMode, InstanceRole } from '../../lib/types'
 import type { UpdaterStatus } from '../../lib/ipc-contract'
-import { getConfigRoot } from '../../lib/utils'
+import { getConfigRoot, isBackgroundRegistrationDisabled } from '../../lib/utils'
 import { APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
 import { instanceRegistry } from './instance-registry'
@@ -108,6 +111,12 @@ export interface BackgroundUpdaterBridge {
 export class BackgroundLifecycleService {
   private tray: Tray | null = null
   private mode: BackgroundMode = 'off'
+  /**
+   * A probe launch runs as a plain window: no icon, no login item, no wake
+   * hold, and a close that quits. Resolved once because it is fixed for the
+   * life of the process.
+   */
+  private readonly optedOut = isBackgroundRegistrationDisabled()
   private config: AppConfig | null = null
   private attention = false
   private stopped = false
@@ -129,7 +138,8 @@ export class BackgroundLifecycleService {
     this.mode = this.config.backgroundMode
     this.applyLoginItem(this.config)
     // The menu bar icon exists whenever background mode is on, so Cmd+Q always
-    // has a place to park to. A secondary instance never shows one.
+    // has a place to park to. A secondary instance never shows one, and a probe
+    // launch never registers at all.
     this.syncTray()
     this.unsubscribers.push(instanceRegistry.onLiveInstanceSetChanged(() => this.evaluateRole()))
     this.unsubscribers.push(instanceRegistry.onOwnershipChanged(() => this.evaluateRole()))
@@ -157,8 +167,22 @@ export class BackgroundLifecycleService {
     return this.mode
   }
 
+  /**
+   * Whether this process registers as a background instance at all. A probe
+   * launch opts out, and an explicit `backgroundMode: 'off'` disables it too.
+   */
+  get backgroundEnabled(): boolean {
+    return !this.optedOut && this.mode !== 'off'
+  }
+
+  /** Whether this launch opted out of background registration entirely. */
+  get backgroundOptOut(): boolean {
+    return this.optedOut
+  }
+
   /** How long before a due run the machine is held awake, in milliseconds. */
   get wakeLeadMs(): number {
+    if (!this.backgroundEnabled) return 0
     return this.config?.backgroundWakeLeadMs ?? 0
   }
 
@@ -181,10 +205,11 @@ export class BackgroundLifecycleService {
    * quitting. Background mode on means the backend is expected to keep the
    * schedule, so the only full quit is the menu bar's Quit item (or OS logout).
    * A secondary instance parks nothing: it owns no schedule, so closing it quits
-   * that process and leaves the owner alone.
+   * that process and leaves the owner alone. A probe launch opted out of
+   * registration outright, so closing its window closes the process.
    */
   shouldPark(): boolean {
-    if (this.stopped || this.mode === 'off') return false
+    if (this.stopped || this.optedOut || this.mode === 'off') return false
     return this.currentRole().role === 'owner'
   }
 
@@ -206,7 +231,7 @@ export class BackgroundLifecycleService {
 
   /** The window is gone: menu-bar-only while background mode is on. */
   onWindowClosed(): void {
-    if (this.mode !== 'off') this.hideDock()
+    if (this.mode !== 'off' && !this.optedOut) this.hideDock()
     this.syncTray()
     this.refreshAttention()
   }
@@ -301,7 +326,7 @@ export class BackgroundLifecycleService {
 
   /** Create, destroy, or refresh the menu bar icon for the current role/mode. */
   private syncTray(): void {
-    const shouldExist = this.mode !== 'off' && this.currentRole().role === 'owner'
+    const shouldExist = !this.optedOut && this.mode !== 'off' && this.currentRole().role === 'owner'
     if (!shouldExist) {
       this.destroyTray()
       return
@@ -457,7 +482,9 @@ export class BackgroundLifecycleService {
     const wasOwner = this.tray !== null
     this.syncTray()
     this.broadcastRole()
-    if (!wasOwner && this.mode !== 'off' && this.currentRole().role === 'owner') {
+    // A launch that opted out never owned the icon, so "promotion" is not a
+    // hand-off and must not run the catch-up.
+    if (!wasOwner && this.backgroundEnabled && this.currentRole().role === 'owner') {
       this.deps.onBecameOwner()
     }
   }
@@ -475,6 +502,8 @@ export class BackgroundLifecycleService {
    * item API and is a no-op here.
    */
   private applyLoginItem(config: AppConfig): void {
+    // A probe launch must never register itself to start at login.
+    if (this.optedOut) return
     if (process.platform !== 'darwin' && process.platform !== 'win32') return
     // Never register a development launch as a login item: the dev Electron
     // binary is not the app, and a stray entry would start it at every login.

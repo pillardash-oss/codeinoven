@@ -414,8 +414,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   try {
     const backgroundConfig = await storage.getConfig()
     state.powerWakeService.setBackgroundPolicy({
-      enabled: backgroundConfig.backgroundMode !== 'off',
-      wakeLeadMs: backgroundConfig.backgroundWakeLeadMs,
+      // The lifecycle is the authority: it also knows whether this launch opted
+      // out of background work, which no config value can express.
+      enabled:
+        state.backgroundLifecycle?.backgroundEnabled ?? backgroundConfig.backgroundMode !== 'off',
+      wakeLeadMs: state.backgroundLifecycle?.wakeLeadMs ?? backgroundConfig.backgroundWakeLeadMs,
       maxHoldMs: backgroundConfig.maxBackgroundWakeHoldMs
     })
   } catch (error) {
