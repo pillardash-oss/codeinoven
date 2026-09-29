@@ -1,6 +1,6 @@
-import { BotMessageSquare, MessageSquare } from '@lucide/svelte'
-import type { Component } from 'svelte'
 import type { Thread } from '$shared/types'
+import { BotMessageSquare, MessagesCircle } from '@lucide/svelte'
+import type { Component } from 'svelte'
 import { contentThreadFamily, type ContentThreadFamily } from './content-view-threads'
 
 /**
@@ -13,7 +13,7 @@ import { contentThreadFamily, type ContentThreadFamily } from './content-view-th
  * project icon and never needs these.
  */
 export const CONTENT_FAMILY_ICONS: Record<Exclude<ContentThreadFamily, 'projects'>, Component> = {
-  chats: MessageSquare,
+  chats: MessagesCircle,
   assistant: BotMessageSquare
 }
 
