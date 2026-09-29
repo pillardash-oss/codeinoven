@@ -7,7 +7,7 @@
   import {
     TOAST_OVERLAY_INNER_TOP,
     type ToastOverlayInteraction,
-    type ToastOverlayStack,
+    type ToastOverlayRequestStack,
     type ToastOverlayToast
   } from '$shared/toast-overlay'
   import ToastStack from './ToastStack.svelte'
@@ -20,7 +20,9 @@
    * its own beyond what it is drawing. It rebuilds the cards in its own
    * svelte-sonner instance from the projected stack, and every interaction is
    * reported back rather than handled here: the handlers belong to toasts this
-   * window cannot see.
+   * window cannot see. Reporting back is also what the app renderer waits to
+   * hear before it trusts this window with the stack at all, so the confirmation
+   * below is sent once the cards are actually in the DOM.
    *
    * Cards are only re-applied when they actually changed. svelte-sonner resets a
    * card's auto-close timer on every update, so replaying the whole stack on each
@@ -56,6 +58,20 @@
 
   function report(id: number | string, interaction: ToastOverlayInteraction): void {
     void invoke('browser:toastOverlayInteract', { id, interaction }).catch(() => {})
+  }
+
+  /**
+   * Confirm that a stack is drawn, naming the revision it was published under.
+   *
+   * A card here has no handler of its own: pressing one only works while this
+   * window can reach the app renderer that owns it. This is that proof, and the
+   * app renderer holds the cards in its own toaster until it arrives, so it is
+   * sent after the draw rather than with the request.
+   */
+  function reportDrawn(stack: ToastOverlayRequestStack): void {
+    const ack = { revision: stack.revision, drawn: [...drawn.values()].map((entry) => entry.id) }
+    if (ack.drawn.length === 0) return
+    void invoke('browser:toastOverlayDrawn', ack).catch(() => {})
   }
 
   function optionsFor(entry: ToastOverlayToast): ExternalToast {
@@ -102,7 +118,7 @@
     drawn.set(keyOf(entry.id), { id: entry.id, signature: signatureOf(entry) })
   }
 
-  function applyStack(stack: ToastOverlayStack): void {
+  function applyStack(stack: ToastOverlayRequestStack): void {
     theme = stack.theme
     document.documentElement.classList.toggle('dark', stack.theme === 'dark')
     const incoming = new Set(stack.toasts.map((entry) => keyOf(entry.id)))
@@ -121,7 +137,10 @@
     }
     // A card can appear or leave under a stationary pointer, which decides
     // whether this window may keep swallowing clicks where it now sits.
-    void tick().then(() => reportPointer())
+    void tick().then(() => {
+      reportPointer()
+      reportDrawn(stack)
+    })
   }
 
   /** Whether a point is inside a card, measured rather than hit-tested: the

@@ -140,6 +140,7 @@ import {
   validateSiteMenuPoint,
   validateTabId,
   validateThreadId,
+  validateToastOverlayAck,
   validateToastOverlayInteraction,
   validateToastOverlayRequest,
   validateTransportCommand,
@@ -588,6 +589,14 @@ export class BrowserService {
       // what the user did: the app renderer owns the toast and runs its handler.
       const report = validateToastOverlayInteraction(rawReport)
       sendToRenderer(this.window.webContents, 'browser:toastOverlay:event', report)
+    })
+    replaceHandler('browser:toastOverlayDrawn', (_event, rawAck) => {
+      // The cards the overlay drew carry handlers that live in the app renderer,
+      // so this is the overlay proving it can still reach them. It is relayed
+      // rather than answered here: only the renderer that published the stack
+      // knows which revision it is waiting for.
+      const ack = validateToastOverlayAck(rawAck)
+      sendToRenderer(this.window.webContents, 'browser:toastOverlay:drawn', ack)
     })
     replaceHandler('browser:toastOverlayPointer', (_event, rawOverToast) => {
       this.toastOverlay.setPointerOverToast(rawOverToast === true)

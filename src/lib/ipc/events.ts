@@ -28,7 +28,11 @@ import type {
 } from './notifications'
 import type { UpdaterStatus } from './updater'
 import type { SkillUpdateStatus } from '../types/utility'
-import type { ToastOverlayInteractionReport, ToastOverlayStack } from '../toast-overlay'
+import type {
+  ToastOverlayAck,
+  ToastOverlayInteractionReport,
+  ToastOverlayRequestStack
+} from '../toast-overlay'
 
 export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
@@ -232,13 +236,19 @@ export const IPC_EVENT_CONTRACT = {
    * document rather than to the app renderer. The app window keeps its own copy
    * of the same state and draws nothing while the overlay is up.
    */
-  'browser:toastOverlay:stack': [] as unknown as [stack: ToastOverlayStack],
+  'browser:toastOverlay:stack': [] as unknown as [stack: ToastOverlayRequestStack],
   /**
    * One interaction with a toast the overlay drew, delivered back to the app
    * renderer, which runs the handler that toast holds (open the thread, copy the
    * details, and so on) and then drops the toast from its own state.
    */
   'browser:toastOverlay:event': [] as unknown as [report: ToastOverlayInteractionReport],
+  /**
+   * The overlay has drawn a stack, confirming that a press on one of its cards
+   * can still reach the app renderer that owns the handler. The app renderer
+   * holds the cards in its own toaster until this arrives.
+   */
+  'browser:toastOverlay:drawn': [] as unknown as [ack: ToastOverlayAck],
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
   'browser:download': [] as unknown as [download: BrowserDownload],

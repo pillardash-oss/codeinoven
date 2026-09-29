@@ -22,9 +22,10 @@ import type {
   BrowserHistorySnapshot
 } from '../browser/browser-library'
 import type {
+  ToastOverlayAck,
   ToastOverlayInteractionReport,
   ToastOverlayRequest,
-  ToastOverlayStack
+  ToastOverlayRequestStack
 } from '../toast-overlay'
 
 export const invokeBrowserContract = {
@@ -108,13 +109,23 @@ export const invokeBrowserContract = {
    * listener is bound. First delivery is a pull here because a push straight
    * after `loadURL` loses the same race the permission popup documents.
    */
-  'browser:toastOverlayReady': {} as Contract<[], ToastOverlayStack | null>,
+  'browser:toastOverlayReady': {} as Contract<[], ToastOverlayRequestStack | null>,
   /**
    * The user acted on a card the overlay drew. The overlay carries no handlers,
    * so it names the toast and the interaction and the app renderer runs the
    * handler that toast actually holds.
    */
   'browser:toastOverlayInteract': {} as Contract<[report: ToastOverlayInteractionReport], void>,
+  /**
+   * The stack the overlay was given is now on its screen.
+   *
+   * The cards carry handlers that live in the app renderer, so the overlay is
+   * only usable while that round trip works. This is the overlay's confirmation
+   * of it: it names the revision it drew, and the app renderer stops drawing its
+   * own cards only once it has heard this, taking the stack back to its own
+   * toaster when it never does.
+   */
+  'browser:toastOverlayDrawn': {} as Contract<[ack: ToastOverlayAck], void>,
   /**
    * Whether the pointer is over a card, which is what decides if the overlay
    * window swallows a click or passes it through to the page beneath it.

@@ -30,6 +30,7 @@ import {
 } from '../../../lib/browser-search-engines'
 import type { BrowserViewport } from './browser-types'
 import type {
+  ToastOverlayAck,
   ToastOverlayInteraction,
   ToastOverlayInteractionReport,
   ToastOverlayKind,
@@ -904,5 +905,45 @@ export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest
       cancel: overlayLabel(entry['cancel'])
     })
   }
-  return { toasts, theme: stack['theme'] === 'dark' ? 'dark' : 'light' }
+  return {
+    toasts,
+    theme: stack['theme'] === 'dark' ? 'dark' : 'light',
+    // The revision the overlay echoes back once these cards are drawn. A request
+    // without one is not rejected: revision 0 simply never matches what the
+    // renderer waits for, so the stack falls back rather than being trusted.
+    revision: overlayRevision(stack['revision'])
+  }
+}
+
+/** The revision a stack is stamped with, or 0 when it carries none. */
+function overlayRevision(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 0
+}
+
+/**
+ * Validate the overlay's confirmation that it drew a stack.
+ *
+ * The ids are not compared against the request here: main is a relay for this
+ * one, and the renderer that published the stack is the only place that knows
+ * what it published. A malformed acknowledgement is refused rather than passed
+ * on, so a broken overlay can never look like a healthy one.
+ */
+export function validateToastOverlayAck(value: unknown): ToastOverlayAck {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('A toast overlay acknowledgement must be an object')
+  }
+  const ack = value as Record<string, unknown>
+  const revision = ack['revision']
+  if (typeof revision !== 'number' || !Number.isInteger(revision) || revision <= 0) {
+    throw new TypeError('A toast overlay acknowledgement must name the revision it drew')
+  }
+  const rawDrawn = ack['drawn']
+  if (!Array.isArray(rawDrawn) || rawDrawn.length > MAX_OVERLAY_TOASTS) {
+    throw new TypeError('A toast overlay acknowledgement must carry the cards it drew')
+  }
+  const drawn: Array<number | string> = []
+  for (const id of rawDrawn) {
+    if (typeof id === 'number' || typeof id === 'string') drawn.push(id)
+  }
+  return { revision, drawn }
 }

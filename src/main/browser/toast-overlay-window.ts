@@ -5,7 +5,7 @@ import {
   TOAST_OVERLAY_HEIGHT,
   TOAST_OVERLAY_WIDTH,
   toastOverlayWindowBounds,
-  type ToastOverlayStack
+  type ToastOverlayRequestStack
 } from '../../lib/toast-overlay'
 import {
   loadRendererDocument,
@@ -46,7 +46,7 @@ import {
 export class ToastOverlayWindow {
   private popup: BrowserWindow | null = null
   /** The stack on display, or null while nothing is showing. */
-  private stack: ToastOverlayStack | null = null
+  private stack: ToastOverlayRequestStack | null = null
   /** True while the document has finished loading and may be sent a stack. */
   private ready = false
   /** Tracked rather than read back, because the toggle is only ever a change. */
@@ -68,7 +68,7 @@ export class ToastOverlayWindow {
    * caller's cue to fall back to parking the page rather than leaving the toast
    * behind it.
    */
-  apply(stack: ToastOverlayStack): boolean {
+  apply(stack: ToastOverlayRequestStack): boolean {
     if (stack.toasts.length === 0) {
       this.hide()
       return true
@@ -89,7 +89,7 @@ export class ToastOverlayWindow {
   }
 
   /** The stack on display, resolved to the document's own pull on first load. */
-  currentStack(): ToastOverlayStack | null {
+  currentStack(): ToastOverlayRequestStack | null {
     return this.stack
   }
 

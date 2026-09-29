@@ -107,6 +107,42 @@ export interface ToastOverlayStack {
   theme: 'light' | 'dark'
 }
 
+/**
+ * A stack on its way to the overlay, stamped with the revision it belongs to.
+ *
+ * The overlay draws cards whose handlers live in the app renderer, so a card it
+ * cannot report back about is a card with dead buttons. The revision is what the
+ * overlay echoes once the cards are drawn: hearing it is the app renderer's proof
+ * that the round trip works, and not hearing it is what takes the stack back
+ * before the user ever presses a button that would do nothing.
+ */
+export interface ToastOverlayRequestStack extends ToastOverlayStack {
+  /** Monotonic per app renderer, so an answer to an older stack is never
+   *  mistaken for an answer to the current one. */
+  revision: number
+}
+
+/**
+ * How long the app renderer waits for the overlay to confirm a stack before it
+ * stops using the overlay for the rest of the session.
+ *
+ * The wait is not there to save the card on screen: a stack the overlay never
+ * confirmed was never drawn either, so there is nothing left to rescue. It is
+ * there to stop handing the cards after it to a window that cannot answer, which
+ * is why it is generous. The first toast of a browsing session pays for creating
+ * a second renderer and loading its document, and a dev-mode module graph is
+ * slower than a built one; a warm overlay confirms in a frame, long before this.
+ */
+export const TOAST_OVERLAY_ACK_TIMEOUT_MS = 10_000
+
+/** What the overlay reports once the cards it was given are drawn. */
+export interface ToastOverlayAck {
+  /** The revision of the stack it drew. */
+  revision: number
+  /** The ids of the cards now on its screen. */
+  drawn: Array<number | string>
+}
+
 /** What the user did to a card in the overlay. The overlay never runs a handler
  *  itself: it reports the interaction and the app renderer runs the original. */
 export type ToastOverlayInteraction = 'action' | 'cancel' | 'dismiss' | 'autoclose'
@@ -122,4 +158,4 @@ export interface ToastOverlayInteractionReport {
  * `toasts` empty means the page still covers the stack's corner but nothing is
  * showing: the window is hidden and kept, so the next toast is instant.
  */
-export type ToastOverlayRequest = ToastOverlayStack | null
+export type ToastOverlayRequest = ToastOverlayRequestStack | null
