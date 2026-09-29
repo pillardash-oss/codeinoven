@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
 import { atomicWrite, getConfigRoot } from '../../../lib/utils'
 import { posixDirname } from '../../../lib/paths'
 import { Logger } from '../../system/logger'
+import { resolveAutoAnswerScope } from '../../system/auto-answer-scope'
 import { openWithService } from '../../system/open-with-service'
 import { broadcastAutoAnswersChanged } from '../../scheduler/assistant-events'
 import { sendToRenderer } from '../renderer-delivery'
@@ -170,6 +171,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
               outcome: 'expired',
               projectId: request.projectId,
               threadId: request.threadId,
+              ...resolveAutoAnswerScope(database, request.projectId, request.threadId),
               entries: [
                 {
                   prompt: request.summary,

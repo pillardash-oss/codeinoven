@@ -5,6 +5,7 @@ import type { UpdaterStatus, UpdaterChangelog } from '../../lib/ipc-contract'
 import type { ReleaseChannel } from '../../lib/download-mirror'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import { markBackgroundRelaunch } from './updater-relaunch'
 import {
   resolveUpdaterCacheLocation,
   seedUpdaterCache,
@@ -61,6 +62,13 @@ export class UpdaterService {
   /** True while a download (seed or electron-updater) is in flight. */
   private downloadInFlight = false
   /**
+   * True while a menu bar "Check for Updates" is being honoured. It makes the
+   * cycle ignore the background auto-download/auto-install preferences (a tray
+   * click is a direct request) and turns the final install into a silent one
+   * that relaunches windowless when nothing was on screen.
+   */
+  private forceUpdateInBackground = false
+  /**
    * Runs at the start of every update-check cycle (startup, periodic, explicit).
    * Skill freshness rides this cadence instead of running a timer of its own.
    */
@@ -106,6 +114,7 @@ export class UpdaterService {
     autoUpdater.on('update-not-available', () => {
       Logger.dev('Updater: no update available')
       this.pendingUpdateInfo = null
+      this.forceUpdateInBackground = false
       this.updateState({ state: 'idle' })
     })
 
@@ -129,6 +138,7 @@ export class UpdaterService {
 
     autoUpdater.on('error', (error) => {
       Logger.error('Updater error:', error.message)
+      this.forceUpdateInBackground = false
       // During a check, the rejected check promise settles the state (see
       // `settleCheckFailure`)   the event must not race it into a sticky error.
       // Idle/checking states mean the failure came from a background check, so
@@ -437,6 +447,19 @@ export class UpdaterService {
   }
 
   /**
+   * The menu bar's "Check for Updates": run the whole cycle silently and restart
+   * into it. A tray click is a direct request, so the forced flag makes this
+   * ignore the background auto-download/auto-install preferences; the final
+   * install is silent and, when nothing was on screen, relaunches windowless.
+   */
+  async updateInBackground(): Promise<UpdaterStatus> {
+    if (!this._status.canAutoUpdate) return this.status
+    this.forceUpdateInBackground = true
+    this.installApproved = true
+    return this.checkForUpdates(true)
+  }
+
+  /**
    * Explicit user approval to install. Never interrupts active sessions: the
    * install runs once every session and child process has finished.
    */
@@ -460,9 +483,13 @@ export class UpdaterService {
   }
 
   private async handleAutoDownload(): Promise<void> {
-    const config = await this.storage.getConfig()
-    if (!config.autoDownloadUpdates) return
     if (this._status.state !== 'available') return
+    // A tray-initiated update is the user's explicit request, so it is not gated
+    // by the background auto-download preference.
+    if (!this.forceUpdateInBackground) {
+      const config = await this.storage.getConfig()
+      if (!config.autoDownloadUpdates) return
+    }
     await this.downloadUpdate()
   }
 
@@ -471,8 +498,10 @@ export class UpdaterService {
       await this.installWhenIdle()
       return
     }
-    const config = await this.storage.getConfig()
-    if (!config.autoInstallUpdates) return
+    if (!this.forceUpdateInBackground) {
+      const config = await this.storage.getConfig()
+      if (!config.autoInstallUpdates) return
+    }
     await this.installWhenIdle()
   }
 
@@ -557,7 +586,13 @@ export class UpdaterService {
       .catch((error: unknown) => {
         Logger.error('Updater: failed to clear pending install', error)
       })
-    autoUpdater.quitAndInstall(false)
+    // A background update installs silently and, when nothing was on screen,
+    // leaves a marker so the relaunched app comes back in the menu bar instead
+    // of throwing a window at the user.
+    const background = this.forceUpdateInBackground
+    this.forceUpdateInBackground = false
+    if (background && BrowserWindow.getAllWindows().length === 0) markBackgroundRelaunch()
+    autoUpdater.quitAndInstall(background, background)
   }
 
   private clearDeferredInstall(): void {

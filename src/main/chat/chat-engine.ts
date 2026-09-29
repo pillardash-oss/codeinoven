@@ -10867,7 +10867,9 @@ export class ChatEngine {
             kind: 'image-descriptor',
             outcome: 'ignored',
             projectId: request.projectId,
-            threadId: request.threadId,
+            // File it on the conversation the card was shown on, which is the
+            // coordinator for a delegated worker, not the worker that ran.
+            threadId: surfaceThreadId,
             entries: [
               {
                 prompt: requestForCard.error,

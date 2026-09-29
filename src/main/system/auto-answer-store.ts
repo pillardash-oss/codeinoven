@@ -53,6 +53,8 @@ function isValidItem(value: unknown): value is AutoAnswerItem {
     OUTCOMES.has(record.outcome as AutoAnswerOutcome) &&
     typeof record.projectId === 'string' &&
     typeof record.threadId === 'string' &&
+    (record.taskId === undefined || typeof record.taskId === 'string') &&
+    (record.routineId === undefined || typeof record.routineId === 'string') &&
     typeof record.at === 'number' &&
     Array.isArray(record.entries) &&
     record.entries.every(isValidEntry) &&
@@ -105,6 +107,10 @@ export class AutoAnswerStore {
     outcome: AutoAnswerOutcome
     projectId: string
     threadId: string
+    /** Assistant task the gate ran for, when it settled on a run thread. */
+    taskId?: string
+    /** Routine owning the task, so the gate also surfaces on the routine. */
+    routineId?: string
     entries: AutoAnswerEntry[]
     at?: number
   }): AutoAnswerItem {
@@ -116,6 +122,8 @@ export class AutoAnswerStore {
       outcome: input.outcome,
       projectId: input.projectId,
       threadId: input.threadId,
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+      ...(input.routineId ? { routineId: input.routineId } : {}),
       at: input.at ?? Date.now(),
       entries: input.entries
     }

@@ -321,14 +321,17 @@
           {/await}
         {:else if activeContextTab.kind === 'attention'}
           {#await import('../notifications/AttentionPanel.svelte') then { default: AttentionPanel }}
-            <AttentionPanel />
+            <AttentionPanel
+              projectId={activeContextTab.projectId}
+              threadId={activeContextTab.threadId}
+            />
           {/await}
-        <!-- The sub-agent transcript is the only tab kind left after the branches
+        {:else if activeContextTab.kind === 'subagent'}
+          <!-- The sub-agent transcript is the only tab kind left after the branches
             above, so it is named explicitly instead of being an `{:else}`: the
             browser rail's downloads and popup-window tabs share the tab union but
             are never in this sidebar's tab list, and rendering them in
             SubagentSessionView would be wrong. -->
-        {:else if activeContextTab.kind === 'subagent'}
           {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
             <SubagentSessionView tab={activeContextTab} {onOpenSubagent} />
           {/await}

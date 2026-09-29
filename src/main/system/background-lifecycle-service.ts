@@ -29,6 +29,7 @@ import {
   nativeImage,
   Notification,
   Tray,
+  type MenuItemConstructorOptions,
   type NativeImage
 } from 'electron'
 import {
@@ -42,6 +43,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import type { AppConfig, BackgroundMode, InstanceRole } from '../../lib/types'
+import type { UpdaterStatus } from '../../lib/ipc-contract'
 import { getConfigRoot } from '../../lib/utils'
 import { APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
@@ -87,6 +89,22 @@ export interface BackgroundLifecycleDeps {
   resolveTrayIcon: (attention: boolean) => string
 }
 
+/**
+ * The updater as the menu bar sees it.
+ *
+ * Held behind a bridge, not imported, because the updater is built later than
+ * the tray: the composition root creates the menu bar icon before the feature
+ * service graph exists, then hands the updater in through {@link setUpdater}.
+ */
+export interface BackgroundUpdaterBridge {
+  /** Check, and on availability download, install, and relaunch. */
+  updateInBackground: () => Promise<void>
+  /** Current updater state, for the menu item's label. */
+  status: () => UpdaterStatus
+  /** Subscribe to updater state changes; returns the unsubscribe. */
+  onStatusChange: (callback: (status: UpdaterStatus) => void) => () => void
+}
+
 export class BackgroundLifecycleService {
   private tray: Tray | null = null
   private mode: BackgroundMode = 'off'
@@ -97,6 +115,11 @@ export class BackgroundLifecycleService {
   private activationTimer: ReturnType<typeof setInterval> | null = null
   private readonly activationDir = join(getConfigRoot(), 'instances', 'activate')
   private readonly unsubscribers: Array<() => void> = []
+  private updater: BackgroundUpdaterBridge | null = null
+  private updaterStatus: UpdaterStatus | null = null
+  private updaterUnsubscribe: (() => void) | null = null
+  /** True while a menu bar update check the user asked for is still resolving. */
+  private trayCheckRequested = false
 
   constructor(private readonly deps: BackgroundLifecycleDeps) {}
 
@@ -118,6 +141,8 @@ export class BackgroundLifecycleService {
     this.stopped = true
     for (const unsubscribe of this.unsubscribers) unsubscribe()
     this.unsubscribers.length = 0
+    this.updaterUnsubscribe?.()
+    this.updaterUnsubscribe = null
     this.activationWatcher?.close()
     this.activationWatcher = null
     if (this.activationTimer) {
@@ -140,6 +165,15 @@ export class BackgroundLifecycleService {
   /** Whether slots missed to sleep or a closed app run when the app returns. */
   get autoRunMissedRuns(): boolean {
     return this.config?.autoRunMissedAssistantRuns ?? true
+  }
+
+  /** Register the updater once the feature graph is up, and rebuild the menu. */
+  setUpdater(bridge: BackgroundUpdaterBridge): void {
+    this.updaterUnsubscribe?.()
+    this.updater = bridge
+    this.updaterStatus = bridge.status()
+    this.updaterUnsubscribe = bridge.onStatusChange((status) => this.onUpdaterStatus(status))
+    this.refreshTrayMenu()
   }
 
   /**
@@ -280,13 +314,7 @@ export class BackgroundLifecycleService {
       const image = this.loadTrayImage(this.attention)
       this.tray = new Tray(image)
       this.tray.setToolTip(this.trayTooltip())
-      this.tray.setContextMenu(
-        Menu.buildFromTemplate([
-          { label: 'Open CodeInOven', click: () => this.deps.openWindow() },
-          { type: 'separator' },
-          { label: 'Quit CodeInOven', click: () => this.deps.quitApp() }
-        ])
-      )
+      this.tray.setContextMenu(this.buildContextMenu())
       // A left click on the icon opens the app, matching every other menu bar app.
       this.tray.on('click', () => this.deps.openWindow())
     } catch (error) {
@@ -320,6 +348,105 @@ export class BackgroundLifecycleService {
     if (this.attention) return `${APP_NAME} is waiting for your approval`
     if (this.deps.hasUpcomingWork()) return `${APP_NAME} is running a scheduled task`
     return `${APP_NAME} is running in the menu bar`
+  }
+
+  /** Rebuild the menu, so a status change or a newly attached updater shows. */
+  private refreshTrayMenu(): void {
+    if (!this.tray) return
+    try {
+      this.tray.setContextMenu(this.buildContextMenu())
+    } catch (error) {
+      Logger.error('Could not update the menu bar menu', error)
+    }
+  }
+
+  private buildContextMenu(): Menu {
+    return Menu.buildFromTemplate([
+      { label: `Open ${APP_NAME}`, click: () => this.deps.openWindow() },
+      { type: 'separator' },
+      this.updateMenuItem(),
+      { type: 'separator' },
+      { label: `Quit ${APP_NAME}`, click: () => this.deps.quitApp() }
+    ])
+  }
+
+  /** The update item's label and action follow the updater's current state. */
+  private updateMenuItem(): MenuItemConstructorOptions {
+    const status = this.updaterStatus
+    if (!this.updater || status === null || !status.canAutoUpdate) {
+      return { label: 'Check for Updates', enabled: false }
+    }
+    switch (status.state) {
+      case 'checking':
+        return { label: 'Checking for Updates…', enabled: false }
+      case 'available':
+      case 'downloading':
+        return {
+          label:
+            status.downloadProgress !== undefined
+              ? `Downloading Update… ${status.downloadProgress}%`
+              : 'Downloading Update…',
+          enabled: false
+        }
+      case 'downloaded':
+      case 'waiting':
+        return { label: 'Restarting to Update…', enabled: false }
+      default:
+        return { label: 'Check for Updates', click: () => this.runTrayUpdate() }
+    }
+  }
+
+  /**
+   * The user asked for an update from the menu bar. Show the check in the menu
+   * immediately so the click has visible feedback, then let the updater drive the
+   * rest: download, then a silent install that relaunches windowless.
+   */
+  private runTrayUpdate(): void {
+    const updater = this.updater
+    if (!updater) return
+    this.trayCheckRequested = true
+    this.updaterStatus = { ...updater.status(), state: 'checking' }
+    this.refreshTrayMenu()
+    void updater.updateInBackground().catch((error) => {
+      Logger.error('Menu bar update failed', error)
+      this.trayCheckRequested = false
+      this.refreshTrayMenu()
+    })
+  }
+
+  private onUpdaterStatus(status: UpdaterStatus): void {
+    const previousState = this.updaterStatus?.state
+    this.updaterStatus = status
+    if (this.trayCheckRequested) {
+      if (status.state === 'idle' && previousState === 'checking') {
+        // `idle` right after a check means the feed had nothing newer.
+        this.trayCheckRequested = false
+        this.notifyUpdate(
+          `${APP_NAME} is up to date`,
+          `You are on the latest version (${status.currentVersion ?? 'unknown'}).`
+        )
+      } else if (status.state === 'error') {
+        this.trayCheckRequested = false
+        this.notifyUpdate(
+          'Update check failed',
+          status.errorMessage ?? 'The update could not be completed.'
+        )
+      } else if (status.state !== 'checking') {
+        // Availability, download, and install carry on in the background and the
+        // menu label tracks them, so the request needs no outcome notification.
+        this.trayCheckRequested = false
+      }
+    }
+    this.refreshTrayMenu()
+  }
+
+  private notifyUpdate(title: string, body: string): void {
+    if (!Notification.isSupported()) return
+    try {
+      new Notification({ title, body }).show()
+    } catch (error) {
+      Logger.dev('Update notification could not be shown (non-fatal):', error)
+    }
   }
 
   // --------------------------------------------------------------- role -----

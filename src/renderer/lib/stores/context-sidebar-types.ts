@@ -130,16 +130,20 @@ export interface NotificationContextTab {
 
 /**
  * The rail panel that lists the gates the app resolved without the user.
+/**
+ * The auto-resolved decision panel, keyed to the conversation it belongs to.
  *
- * Unlike a notification, an auto-resolved decision is not dismissed by an
- * action inside the panel: the record stays until the user reads it, so the
- * tab carries no project or thread scope and the rail icon only exists while
- * at least one record is unread.
+ * A decision concerns the thread it settled on, and through it the assistant
+ * task it ran for and the routine that owns that task; the tab therefore carries
+ * the thread it was opened for, exactly like the sources or memory panels, and
+ * the rail icon only exists while that scope has an undismissed record.
  */
 export interface AttentionContextTab {
   id: string
   kind: 'attention'
   title: string
+  projectId: string
+  threadId: string
 }
 
 /**
@@ -316,10 +320,17 @@ export const NOTIFICATIONS_TAB: NotificationContextTab = {
   kind: 'notifications',
   title: 'Notifications'
 }
-export const ATTENTION_TAB: AttentionContextTab = {
-  id: 'attention',
-  kind: 'attention',
-  title: 'Decisions made for you'
+export const ATTENTION_TAB_ID = 'attention'
+
+/** The decision panel for one conversation, constructed for its thread's scope. */
+export function attentionTab(projectId: string, threadId: string): AttentionContextTab {
+  return {
+    id: ATTENTION_TAB_ID,
+    kind: 'attention',
+    title: 'Decisions made for you',
+    projectId,
+    threadId
+  }
 }
 
 /** Tabs whose component/session state belongs to a project. Every other tab

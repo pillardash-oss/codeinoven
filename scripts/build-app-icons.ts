@@ -102,18 +102,42 @@ if (process.platform === 'darwin') {
 // artwork is the existing monochrome mark, recoloured to pure black. The
 // attention variant adds a bold exclamation mark beside the mark so the menu bar
 // can say "something needs you" without a second colour.
-const monoMaster = readFileSync(join(staticDir, 'icon-mono.svg'), 'utf8').replace(
+//
+// The mark's own outline is a hairline at menu bar size, noticeably lighter than
+// the system glyphs it sits beside. Rendering it with a same-colour stroke adds
+// ink at the mark's own edges, which is what brings its weight up to match. The
+// attention variant scales the mark down, so its stroke scales up by the same
+// factor to keep one visual weight across both templates.
+const monoBase = readFileSync(join(staticDir, 'icon-mono.svg'), 'utf8').replace(
   'color:#a1a1aa',
   'color:#000000'
 )
+const TRAY_STROKE_WIDTH = 16
+const TRAY_ATTENTION_SCALE = 0.78
+
+/** Thicken a template's outline with a same-colour stroke. */
+function boldenTray(svg: string, strokeWidth: number): string {
+  return svg.replace(
+    'stroke-miterlimit:2;">',
+    `stroke-miterlimit:2;stroke:#000000;stroke-width:${strokeWidth};stroke-linejoin:round;stroke-linecap:round;">`
+  )
+}
+
+const monoMaster = boldenTray(monoBase, TRAY_STROKE_WIDTH)
 // The attention variant scales the mark down and sets a bold exclamation beside
 // it, so the two shapes stay legible at menu bar size instead of overlapping.
-const attentionMaster = monoMaster
-  .replace('<g id="svg"', '<g transform="matrix(0.78,0,0,0.78,6,120)"><g id="svg"')
-  .replace(
-    '</svg>',
-    '</g><g id="attention-badge"><rect x="1044" y="170" width="132" height="430" rx="66" fill="#000000"/><circle cx="1110" cy="760" r="78" fill="#000000"/></g></svg>'
-  )
+const attentionMaster = boldenTray(
+  monoBase
+    .replace(
+      '<g id="svg"',
+      `<g transform="matrix(${TRAY_ATTENTION_SCALE},0,0,${TRAY_ATTENTION_SCALE},6,120)"><g id="svg"`
+    )
+    .replace(
+      '</svg>',
+      '</g><g id="attention-badge"><rect x="1044" y="170" width="132" height="430" rx="66" fill="#000000"/><circle cx="1110" cy="760" r="78" fill="#000000"/></g></svg>'
+    ),
+  TRAY_STROKE_WIDTH / TRAY_ATTENTION_SCALE
+)
 const trayOutputs: Array<[string, Buffer]> = [
   ['trayTemplate.png', renderPng(monoMaster, 16)],
   ['trayTemplate@2x.png', renderPng(monoMaster, 32)],

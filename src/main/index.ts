@@ -43,6 +43,7 @@ import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap
 import { bootPostPaintServices, attachWindowServices } from './bootstrap/post-paint-services'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
+import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
 import { computeAttention, hasUpcomingWork } from './system/background-work-state'
 import { handleFatalStartup } from './bootstrap/fatal-startup'
 import {
@@ -618,8 +619,9 @@ void app
     instanceRegistry.start()
     // A login launch in background mode starts windowless: no splash, no window,
     // no renderer process. Everything below still runs   the whole point is a
-    // backend that keeps the schedule without a UI.
-    const startHidden = wasOpenedAtLogin()
+    // backend that keeps the schedule without a UI. A relaunch that followed a
+    // menu bar update is the same: the update must not pop a window at the user.
+    const startHidden = wasOpenedAtLogin() || consumeBackgroundRelaunchMarker()
     // This is the first post-ready action. Construct and show the native splash
     // immediately, then yield the main event loop until Chromium presents its
     // first frame. Synchronous SQLite/schema work cannot begin before this

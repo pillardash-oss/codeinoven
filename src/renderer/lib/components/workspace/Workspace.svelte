@@ -1136,19 +1136,34 @@
 
     // Auto-resolved gates sit at the very bottom of the rail: they are the
     // app's own record of what it decided while the user was away, not a
-    // workspace tool. The whole group disappears once every record is read.
+    // workspace tool. The item is keyed to the open conversation, so it appears
+    // only on the thread a decision concerns (or on its task, or on any thread
+    // of its routine), and disappears once that scope has nothing unread.
+    const attentionScope = selectedThread
+      ? {
+          id: selectedThread.id,
+          projectId: selectedThread.projectId,
+          ...(selectedThread.routineId ? { routineId: selectedThread.routineId } : {}),
+          ...(selectedThread.assistantTaskId
+            ? { assistantTaskId: selectedThread.assistantTaskId }
+            : {})
+        }
+      : null
+    const attentionItems = attentionScope ? attentionState.unreadFor(attentionScope) : []
     const autoAnswerTools: ContextDockItem[] =
-      attentionState.unreadCount > 0
+      selectedThread && attentionItems.length > 0
         ? [
             {
               id: 'attention',
               label: 'Decisions made for you',
               icon: TriangleAlert,
               tone: 'warning',
-              countBadge: String(attentionState.unreadCount),
+              countBadge: String(attentionItems.length),
               active: dockKindActive('attention'),
               onSelect: () =>
-                toggleDockPanel('attention', () => contextSidebarState.openAttention())
+                toggleDockPanel('attention', () =>
+                  contextSidebarState.openAttention(selectedThread.projectId, selectedThread.id)
+                )
             }
           ]
         : []

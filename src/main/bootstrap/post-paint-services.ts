@@ -26,6 +26,7 @@ import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { Logger } from '../system/logger'
+import { resolveAutoAnswerScope } from '../system/auto-answer-scope'
 import {
   broadcastThreadUpdate,
   setNotificationService,
@@ -240,6 +241,16 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
   )
   state.updaterService = new UpdaterService(storage)
+  // The menu bar's "Check for Updates" drives the whole silent cycle. Wired here,
+  // where the updater is born, so the tray item is live the moment the updater is.
+  state.backgroundLifecycle?.setUpdater({
+    updateInBackground: async () => {
+      await state.updaterService?.updateInBackground()
+    },
+    status: () => state.updaterService?.status ?? { canAutoUpdate: false, state: 'idle' },
+    onStatusChange: (callback) =>
+      state.updaterService?.onStatusChange(callback) ?? (() => undefined)
+  })
   // One vault and one GitHub auth for the whole app: the skill updater reads the
   // same token the IPC layer does, so a check is authenticated exactly like an
   // install instead of running against the anonymous rate limit.
@@ -298,6 +309,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       outcome: report.outcome,
       projectId: report.projectId,
       threadId: report.threadId,
+      // File the gate under the task and routine it actually concerns, so the
+      // decision keeps surfacing after this run thread is evicted.
+      ...resolveAutoAnswerScope(database, report.projectId, report.threadId),
       entries: report.entries,
       at: report.at
     })
