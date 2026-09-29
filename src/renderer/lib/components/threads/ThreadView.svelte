@@ -158,6 +158,7 @@
     type RoutinePlanDraft
   } from '$lib/components/assistant/assistant-view'
   import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
+  import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
@@ -1532,6 +1533,24 @@
         category: 'command',
         source: applicationActionSource,
         keywords: ['quick', 'chat', 'side', 'question', 'temporary', 'read-only']
+      })
+    }
+
+    // The conversation's own browser: reveal the page it already has, or start
+    // a blank tab the user can type an address into. Offered only where a
+    // conversation owns a thread browser   a project thread, an inbox chat, an
+    // assistant task   never in a controller-driven side surface (a quick chat,
+    // the browser rail's own conversation), which is a panel beside the page it
+    // is about rather than a workspace of its own.
+    if (!hasController) {
+      actions.push({
+        id: 'command:browser',
+        title: '/browser',
+        description: "Open this thread's browser, or start a new tab to begin browsing",
+        category: 'command',
+        source: applicationActionSource,
+        keywords: ['browser', 'web', 'browse', 'tab', 'page', 'site', 'address', 'url'],
+        slashCommand: true
       })
     }
 
@@ -6548,7 +6567,39 @@
     }
   }
 
+  /**
+   * Open the conversation's browser from the composer: reveal the page it
+   * already has, or start a blank tab when it has none, handing that tab's
+   * address bar the keyboard so the user begins browsing straight away.
+   *
+   * Both halves are the gestures the user already has on the rail, composed
+   * here: the reveal is the browser toggle's own read (the conversation on
+   * screen), and the create is the strip's new-tab path, which is blank and
+   * takes the caret.
+   */
+  function openThreadBrowser(): void {
+    const existingTabId = contextSidebarState.rememberedBrowserTabId
+    if (existingTabId) {
+      contextSidebarState.focus(existingTabId)
+      return
+    }
+    const tabId = contextSidebarState.openBrowserForContext(
+      '',
+      thread.projectId,
+      thread.id,
+      undefined,
+      true
+    )
+    browserAddressFocus.request(tabId)
+  }
+
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
+    // Opening the conversation's browser is a UI action, not a harness command:
+    // it stays available while a run is in flight, exactly like the rail toggle.
+    if (commandId === 'command:browser') {
+      openThreadBrowser()
+      return
+    }
     if (busy || commandExecuting) return
     if (commandId === 'command:save-how-to') {
       await saveRoutineHowTo()
@@ -6669,10 +6720,11 @@
       return
     }
 
-    // App-owned slash commands (/cio-utility, /cio-design, /cio-video and
-    // capability skills) route through the same handler the composer's submit
-    // path uses.
+    // App-owned slash commands (/browser, /cio-utility, /cio-design, /cio-video
+    // and capability skills) route through the same handler the composer's
+    // submit path uses.
     if (
+      action.id === 'command:browser' ||
       action.id === 'command:cio-utility' ||
       action.id === 'command:cio-design' ||
       action.id === 'command:cio-video' ||
