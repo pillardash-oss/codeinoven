@@ -250,7 +250,7 @@ export const invokeAgentContract = {
       answers: string[],
       nextQuestionIndex?: number
     ],
-    PendingAgentQuestionRequest
+    PendingAgentQuestionRequest | null
   >,
   'agent:listPermissions': {} as Contract<
     [projectId: string, threadId: string],

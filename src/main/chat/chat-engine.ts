@@ -2984,6 +2984,16 @@ export class ChatEngine {
       .sort((left, right) => left.createdAt - right.createdAt)
   }
 
+  /**
+   * Persist the draft progress of one pending question card.
+   *
+   * A draft save is best-effort, so it must never surface as a failure: clicking
+   * an option, navigating between questions, the custom-answer debounce, and the
+   * card's own unmount flush all race with the request being answered, dismissed,
+   * auto-answered, or retired with its session. When the request is already gone
+   * this answers `null`, which tells the renderer to close the stale card instead
+   * of reporting an error for a card nobody can answer any more.
+   */
   async updateQuestion(
     projectId: string,
     threadId: string,
@@ -2991,12 +3001,16 @@ export class ChatEngine {
     questionIndex: number,
     answers: string[],
     nextQuestionIndex?: number
-  ): Promise<PendingAgentQuestionRequest> {
+  ): Promise<PendingAgentQuestionRequest | null> {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     requestId = validateEntityId(requestId, 'Question request ID', 256)
-    const pending = this.requirePendingQuestion(projectId, threadId, requestId)
+    const pending = this.pendingQuestionForThread(projectId, threadId, requestId)
+    if (!pending) {
+      Logger.dev(`Ignoring progress update for settled question request: ${requestId}`)
+      return null
+    }
     assertQuestionIndex(questionIndex, pending.request.questions.length)
     if (!Array.isArray(answers)) {
       throw new TypeError('Question answers must be an array')
@@ -3012,6 +3026,13 @@ export class ChatEngine {
     if (!question?.multiple && safeAnswers.length > 1) {
       throw new TypeError(`Question answer ${questionIndex + 1} allows exactly one selection`)
     }
+
+    // A resolution is already in flight (the user's own answer, a dismissal, or
+    // the inactivity timer), so the decision is captured and this late save only
+    // has to report the state the main process still holds. It must not rewrite
+    // the request: a resolution that fails is restored and its card stays up, and
+    // the card's own selection must survive that.
+    if (pending.resolving) return structuredClone(pending.request)
 
     pending.request.answers = pending.request.answers.map((answer, index) =>
       index === questionIndex ? safeAnswers : answer
@@ -20848,17 +20869,34 @@ export class ChatEngine {
 
   // ─── Event handling ───────────────────────────────────────────────────────
 
+  /**
+   * Resolve a pending question that this thread still owns, or `null` when the
+   * request has already settled. Operations that must be idempotent (a late
+   * draft save, a dismissal of a card that was auto-answered elsewhere) use this
+   * tolerant lookup, because the renderer's reply and the request's own
+   * resolution travel independently and either order is valid. A request that
+   * belongs to another project or thread is a caller bug and stays an error.
+   */
+  private pendingQuestionForThread(
+    projectId: string,
+    threadId: string,
+    requestId: string
+  ): PendingQuestionInfo | null {
+    const pending = this.pendingQuestions.get(requestId)
+    if (!pending) return null
+    if (pending.request.projectId !== projectId || pending.request.threadId !== threadId) {
+      throw new Error(`Question request does not belong to this thread: ${requestId}`)
+    }
+    return pending
+  }
+
   private requirePendingQuestion(
     projectId: string,
     threadId: string,
     requestId: string
   ): PendingQuestionInfo {
-    const pending = this.pendingQuestions.get(requestId)
-    if (
-      !pending ||
-      pending.request.projectId !== projectId ||
-      pending.request.threadId !== threadId
-    ) {
+    const pending = this.pendingQuestionForThread(projectId, threadId, requestId)
+    if (!pending) {
       throw new Error(`Question request is no longer pending: ${requestId}`)
     }
     if (pending.resolving) {

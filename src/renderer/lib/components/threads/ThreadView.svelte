@@ -10639,12 +10639,18 @@
     })
   }
 
+  /**
+   * Persist the draft progress of one question card. The main process answers
+   * `null` when the request already settled (it was answered, dismissed, timed
+   * out, or retired with its session), so a save that lost that race closes the
+   * stale card instead of reporting a failure for a card nobody can answer.
+   */
   async function handleQuestionUpdate(
     requestId: string,
     questionIndex: number,
     answers: string[],
     nextQuestionIndex?: number
-  ): Promise<PendingAgentQuestionRequest> {
+  ): Promise<PendingAgentQuestionRequest | null> {
     const updated = await invoke(
       'agent:updateQuestion',
       thread.projectId,
@@ -10654,6 +10660,13 @@
       answers,
       nextQuestionIndex
     )
+    if (!updated) {
+      resolvedQuestionRequestIds.add(requestId)
+      pendingQuestionRequests = pendingQuestionRequests.filter(
+        (request) => request.requestId !== requestId
+      )
+      return null
+    }
     pendingQuestionRequests = pendingQuestionRequests.map((request) =>
       request.requestId === requestId ? updated : request
     )
