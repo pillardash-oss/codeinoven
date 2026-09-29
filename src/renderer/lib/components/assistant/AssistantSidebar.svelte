@@ -6,6 +6,7 @@
   import PinnedSection from '$lib/components/threads/PinnedSection.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import { pinnedThreadSort } from '$lib/stores/workspace.svelte'
+  import { sortRoutines } from '$shared/routine-order'
   import {
     isAssistantSetupThread,
     isThreadWorking,
@@ -138,19 +139,12 @@
     return ids
   })
 
-  /** Pinned routines first, then manual sort order, then most recently updated. */
-  const orderedRoutines = $derived(
-    [...routines].sort((a, b) => {
-      const aPinned = a.pinned ? 1 : 0
-      const bPinned = b.pinned ? 1 : 0
-      if (aPinned !== bPinned) return bPinned - aPinned
-      if (aPinned && bPinned) return (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0)
-      const aOrder = a.sortOrder ?? Number.MAX_SAFE_INTEGER
-      const bOrder = b.sortOrder ?? Number.MAX_SAFE_INTEGER
-      if (aOrder !== bOrder) return aOrder - bOrder
-      return b.updatedAt - a.updatedAt
-    })
-  )
+  /**
+   * Pinned routines first, then the user's manual arrangement, then creation
+   * (newest first). `sortRoutines` is the same order the main process lists
+   * routines in, so dragging a row and seeing it stay put agree on one rule.
+   */
+  const orderedRoutines = $derived(sortRoutines(routines))
 
   /** Routine-less, unpinned tasks, most recently active first. */
   const standaloneTasks = $derived(

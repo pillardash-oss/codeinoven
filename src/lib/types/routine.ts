@@ -108,7 +108,11 @@ export interface Routine {
   pinned?: boolean
   /** When the routine was pinned; newest pins sort first. */
   pinnedAt?: number
-  /** Position for manual ordering; items without sortOrder fall back to updatedAt. */
+  /**
+   * A manual sidebar position, written when the user drags the routine. A
+   * routine without one keeps its creation order (newest first), and an edit
+   * never moves a routine, so the list only changes when the user changes it.
+   */
   sortOrder?: number
   createdAt: number
   updatedAt: number

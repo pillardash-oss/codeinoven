@@ -200,11 +200,15 @@ export class RoutineRepo {
     return row ? rowToRoutine(row) : null
   }
 
+  /**
+   * Every routine, in a stable storage order. Sidebar order is applied on top
+   * of this by `RoutineManager.listRoutines` through the shared comparator, so
+   * this one never has to agree with the sidebar about anything but being
+   * deterministic.
+   */
   list(): Routine[] {
     return this.db
-      .all<RoutineRow>(
-        'SELECT * FROM routines ORDER BY pinned DESC, pinned_at DESC, sort_order ASC, updated_at DESC'
-      )
+      .all<RoutineRow>('SELECT * FROM routines ORDER BY created_at DESC, id ASC')
       .map(rowToRoutine)
   }
 
