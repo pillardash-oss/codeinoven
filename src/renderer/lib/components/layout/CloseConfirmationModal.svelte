@@ -2,7 +2,16 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import StatusPill from '$lib/components/ui/StatusPill.svelte'
+  import BrowserDownloadProgress from '$lib/components/browser/BrowserDownloadProgress.svelte'
+  import {
+    browserDownloadBytes,
+    browserDownloadHost,
+    browserDownloadStateLabel,
+    browserDownloadTone
+  } from '$lib/components/browser/browser-download-format'
   import type {
+    BrowserDownload,
     CloseConfirmationPayload,
     CloseConfirmationProject,
     CloseConfirmationThread
@@ -30,6 +39,7 @@
   const VISIBLE_PROJECTS = 2
   const VISIBLE_THREADS_PER_PROJECT = 3
   const VISIBLE_FILES = 6
+  const VISIBLE_DOWNLOADS = 4
 
   let visibleProjects = $derived((payload?.projects ?? []).slice(0, VISIBLE_PROJECTS))
   let remainingProjectCount = $derived(
@@ -60,6 +70,68 @@
   let remainingFileCount = $derived(Math.max(0, (payload?.files.length ?? 0) - VISIBLE_FILES))
   let hasFiles = $derived((payload?.files.length ?? 0) > 0)
   let hasThreads = $derived((payload?.projects.length ?? 0) > 0)
+  let downloads = $derived(payload?.downloads ?? [])
+  let visibleDownloads = $derived(downloads.slice(0, VISIBLE_DOWNLOADS))
+  let remainingDownloadCount = $derived(Math.max(0, downloads.length - VISIBLE_DOWNLOADS))
+  let hasDownloads = $derived(downloads.length > 0)
+
+  /**
+   * What closing now costs the user, in the order the sections above list it.
+   * A download is the one pending thing a close does not cost anything: its
+   * bytes stay on disk and it continues later, so on its own it reads as a
+   * pause rather than a loss.
+   */
+  let closeCosts = $derived.by(() => {
+    const costs: string[] = []
+    if (hasThreads) costs.push('working threads will be interrupted')
+    if (hasFiles) costs.push('unsaved changes will be lost')
+    if (hasDownloads) {
+      costs.push(
+        costs.length === 0
+          ? 'running downloads will pause and continue next time the app opens'
+          : 'running downloads will pause'
+      )
+    }
+    return sentenceCase(costs.join(' and '))
+  })
+
+  function sentenceCase(text: string): string {
+    return text.length === 0 ? text : `${text[0].toUpperCase()}${text.slice(1)}`
+  }
+
+  /** The closing question with what it costs appended, as one string so the
+   *  spacing never depends on where the markup happens to wrap. */
+  let closeSentence = $derived(
+    closeCosts.length === 0
+      ? 'Are you sure you want to close?'
+      : `Are you sure you want to close? ${closeCosts}.`
+  )
+
+  /** Where a download came from and how far it got. The host says which source a
+   *  row belongs to when two files share a name, which is the only thing that
+   *  tells them apart. */
+  function downloadDetail(download: BrowserDownload): string {
+    const parts = [browserDownloadHost(download.url)]
+    if (download.receivedBytes > 0) {
+      parts.push(
+        download.totalBytes > 0
+          ? `${browserDownloadBytes(download.receivedBytes)} of ${browserDownloadBytes(download.totalBytes)}`
+          : browserDownloadBytes(download.receivedBytes)
+      )
+    }
+    return parts.join(' · ')
+  }
+
+  /**
+   * What closing does to the downloads above. It is the one consequence that is
+   * not a loss, so it says where they continue rather than what the user loses,
+   * and names the condition: continuing where it stopped needs a server that
+   * serves ranges.
+   */
+  let downloadsNote = $derived.by(() => {
+    const many = downloads.length > 1
+    return `Closing ${many ? 'pauses them' : 'pauses it'} and keeps the bytes already downloaded. On a server that supports resuming, ${many ? 'they continue' : 'it continues'} where ${many ? 'they left' : 'it left'} off the next time you open the app.`
+  })
 
   function visibleThreads(project: CloseConfirmationProject): CloseConfirmationThread[] {
     return project.threads.slice(0, VISIBLE_THREADS_PER_PROJECT)
@@ -141,16 +213,40 @@
         </div>
       {/if}
 
-      <p class="text-sm leading-relaxed text-muted">
-        {#if hasThreads && hasFiles}
-          Are you sure you want to close? Working threads will be interrupted and unsaved changes
-          will be lost.
-        {:else if hasThreads}
-          Are you sure you want to close? These threads will be interrupted.
-        {:else}
-          Are you sure you want to close? Unsaved changes will be lost.
-        {/if}
-      </p>
+      {#if hasDownloads}
+        <div class="space-y-2">
+          <p class="text-sm text-muted">These downloads have not finished:</p>
+          <ul class="space-y-2.5">
+            {#each visibleDownloads as download (download.id)}
+              <li class="space-y-1">
+                <div class="flex min-w-0 items-center gap-2 text-xs">
+                  <span class="min-w-0 flex-1 truncate text-foreground" title={download.fileName}>
+                    {download.fileName}
+                  </span>
+                  <span class="shrink-0 text-dimmed">{downloadDetail(download)}</span>
+                  <StatusPill tone={browserDownloadTone(download)} dot>
+                    {browserDownloadStateLabel(download)}
+                  </StatusPill>
+                </div>
+                <BrowserDownloadProgress
+                  percent={download.progress}
+                  fileName={download.fileName}
+                  class="pl-3"
+                />
+              </li>
+            {/each}
+            {#if remainingDownloadCount > 0}
+              <li class="pl-3 text-xs text-dimmed">
+                +{remainingDownloadCount} more
+                {remainingDownloadCount === 1 ? 'download' : 'downloads'}
+              </li>
+            {/if}
+          </ul>
+          <p class="text-xs leading-relaxed text-dimmed">{downloadsNote}</p>
+        </div>
+      {/if}
+
+      <p class="text-sm leading-relaxed text-muted">{closeSentence}</p>
     </div>
   {/if}
 

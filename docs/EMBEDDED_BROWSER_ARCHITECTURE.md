@@ -175,7 +175,25 @@ If cookie migration remains a hard requirement after the browser workspace prove
   space and resizes the view instead of floating over it, and each finished
   download can be revealed in the operating system's file manager.
 
-### Downloads
+- Use Chromium's natural site isolation. Track renderer crashes and unresponsive events without allowing them to crash or block the agent UI.
+- Rate-limit browser-to-app metadata events (progress, title, favicon) so page churn cannot flood main/renderer IPC.
+- Maintain a browser-specific memory budget and expose a small diagnostic snapshot: live tabs, webContents/process IDs, approximate memory, crash count, and profile disk size.
+
+Important current constraint: the main application sets `backgroundThrottling: false` (`src/main/index.ts:701-708`). Electron documents that disabling throttling on one `webContents` affects other `webContents` in the same host window. Therefore inactive browser tabs must be destroyed/frozen explicitly, or the browser must use a separately hosted window/view architecture. Do not assume hidden `WebContentsView`s will become cheap automatically.
+
+Suggested acceptance budgets, to be confirmed on target hardware:
+
+| State                        | Runtime target                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Never opened this launch     | No browser session/view/process created; no browser timers or network                                         |
+| Browser closed               | No browser renderer process; only persisted profile data and lightweight navigation state remain              |
+| One simple page active       | No measurable agent stream/terminal latency regression; app main-process event-loop p95 regression under 5 ms |
+| Dashboard stress page active | Agent output remains interactive; browser can be stopped independently within 1 second                        |
+| Browser renderer crash/hang  | Agent runs and terminal stay alive; browser surface offers reload/recreate                                    |
+
+Memory cannot have a universal fixed ceiling because websites control their own workload. Measure and publish representative baselines rather than promising zero impact.
+
+## Downloads
 
 One process-wide manager (`src/main/browser/browser-service/browser-downloads.ts`)
 owns every download a browser tab starts, and it is deliberately not window-bound:
@@ -194,6 +212,15 @@ still on screen   with the action it can honour   in the next run:
 | `interrupted` | Stopped, with bytes on disk; `resumable` when they can continue it | Resume, Start over, Remove |
 | `cancelled` | Stopped and discarded, as Chrome's own Cancel does | Start over, Remove |
 | `completed` | The file is finished | Open, Reveal, Remove |
+
+The file is shared state: more than one instance can run against one config root,
+so a write re-reads it and merges this instance's records over it by id rather
+than replacing the other instance's downloads with this one's view. A record this
+instance dropped (the user removed it from the list) rides into that merge as a
+tombstone, and the tombstone outlives a write that was already in flight when the
+removal happened. That ordering matters: the write in flight carries a snapshot
+from before the removal, and without the tombstone surviving it the merge would
+put the record back and nothing would ever take it out again.
 
 Two facts about Chromium's download stack shape the rest, both verified on
 Electron 44 and kept honest by the code that reads them:
@@ -214,23 +241,32 @@ was gone after I closed the app" was.
 
 A download whose bytes already add up to its declared total is settled as
 completed: the last byte landed and only the completion event was lost.
-- Use Chromium's natural site isolation. Track renderer crashes and unresponsive events without allowing them to crash or block the agent UI.
-- Rate-limit browser-to-app metadata events (progress, title, favicon) so page churn cannot flood main/renderer IPC.
-- Maintain a browser-specific memory budget and expose a small diagnostic snapshot: live tabs, webContents/process IDs, approximate memory, crash count, and profile disk size.
 
-Important current constraint: the main application sets `backgroundThrottling: false` (`src/main/index.ts:701-708`). Electron documents that disabling throttling on one `webContents` affects other `webContents` in the same host window. Therefore inactive browser tabs must be destroyed/frozen explicitly, or the browser must use a separately hosted window/view architecture. Do not assume hidden `WebContentsView`s will become cheap automatically.
+### What a quit does to a running download
 
-Suggested acceptance budgets, to be confirmed on target hardware:
+`BrowserDownloadManager.inFlight()` is the set a quit has to stop: every tracked
+download with a live Chromium item, including one the user paused. The
+close-confirmation prompt lists that set as its own section
+(`src/main/bootstrap/quit-lifecycle.ts`, `CloseConfirmationModal.svelte`), next to
+the working threads and the unsaved files, so a user who quits mid-download sees
+what is about to stop before answering. Main supplies that half of the payload:
+the renderer's mirror of the list only exists once the browser runtime chunk has
+loaded, so it cannot be asked for downloads the user has not opened the browser to
+see. A park keeps the backend alive and therefore keeps the download running, so
+the section stays empty there.
 
-| State                        | Runtime target                                                                                                |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Never opened this launch     | No browser session/view/process created; no browser timers or network                                         |
-| Browser closed               | No browser renderer process; only persisted profile data and lightweight navigation state remain              |
-| One simple page active       | No measurable agent stream/terminal latency regression; app main-process event-loop p95 regression under 5 ms |
-| Dashboard stress page active | Agent output remains interactive; browser can be stopped independently within 1 second                        |
-| Browser renderer crash/hang  | Agent runs and terminal stay alive; browser surface offers reload/recreate                                    |
+The prompt says what closing means rather than what it costs: the download pauses,
+its bytes stay on disk, and a server that serves ranges lets the next launch
+continue it. The section is a snapshot taken when the close was requested, and it
+never makes the app wait a second time: once the user answers, the quit pipeline
+pauses whatever is running at that moment, so a download that finished while the
+prompt was open is simply already finished, and one that started after the prompt
+is paused like any other.
 
-Memory cannot have a universal fixed ceiling because websites control their own workload. Measure and publish representative baselines rather than promising zero impact.
+The one path that cannot keep the bytes is a process that dies without running the
+shutdown pipeline: the quit failsafe's forced exit, a crash, or `SIGKILL`. Those
+downloads keep their records and are offered *Start over*, because nothing moved
+the partial file out of Chromium's reach.
 
 ## UI shape
 

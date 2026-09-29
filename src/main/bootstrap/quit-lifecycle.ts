@@ -10,6 +10,7 @@
 import { app, session } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { CloseConfirmationProject } from '../../lib/ipc-contract'
+import type { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
@@ -22,6 +23,9 @@ export interface QuitLifecycleState {
   quitCleanupStarted: boolean
   quitConfirmed: boolean
   shutdownFailsafe: ReturnType<typeof setTimeout> | null
+  /** The process-wide download owner, or null when no window ever attached the
+   *  browser. Read for the close prompt's downloads section. */
+  browserDownloads: BrowserDownloadManager | null
 }
 
 /**
@@ -127,9 +131,15 @@ export function requestCloseConfirmation(deps: CloseConfirmationDeps): void {
   // owns the unsaved-file gate, which it computes locally.
   const working =
     park || instanceRegistry.hasOtherLiveInstance() ? [] : getActiveThreadProjects(deps.database)
+  // Downloads follow the opposite rule. A park keeps the backend alive, so a
+  // download keeps running and the section stays empty; a quit stops what it
+  // holds open, whichever instance is quitting, because the manager and the
+  // Chromium sessions it downloads through belong to this process.
+  const downloads = park ? [] : (state.browserDownloads?.inFlight() ?? [])
   sendToRenderer(window.webContents, 'window:confirmClose', {
     projects: working,
     files: [],
+    downloads,
     ...(park ? { park: true } : {})
   })
 }

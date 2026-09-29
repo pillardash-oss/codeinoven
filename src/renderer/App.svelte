@@ -1007,6 +1007,9 @@
    * otherwise no longer executing/planning) it drops off the list. Once none
    * remain   and no unsaved files are pending   the close the user already
    * asked for proceeds automatically instead of waiting on a second click.
+   *
+   * A listed download deliberately does not hold that up: closing pauses it and
+   * keeps its bytes for a later resume, so it never needs an answer of its own.
    */
   function settleCloseConfirmationThread(thread: Thread): void {
     const current = closeConfirmation

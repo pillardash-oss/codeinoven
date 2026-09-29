@@ -11,6 +11,7 @@
   } from '@lucide/svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
+  import BrowserDownloadProgress from './BrowserDownloadProgress.svelte'
   import {
     browserDownloadAge,
     browserDownloadBytes,
@@ -216,24 +217,7 @@
     </div>
   </div>
   {#if showsProgress}
-    <div class={compact ? 'flex items-center gap-2' : 'mt-3 flex items-center gap-2'}>
-      <div
-        class="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-overlay"
-        role="progressbar"
-        aria-label={`Download progress for ${download.fileName}`}
-        aria-valuenow={Math.round(percent)}
-        aria-valuemin={0}
-        aria-valuemax={100}
-      >
-        <div
-          class="h-full rounded-full bg-primary transition-[width] duration-150"
-          style={`width: ${percent}%`}
-        ></div>
-      </div>
-      <span class="w-9 shrink-0 text-right text-[0.625rem] tabular-nums text-dimmed">
-        {Math.round(percent)}%
-      </span>
-    </div>
+    <BrowserDownloadProgress {percent} fileName={download.fileName} class={compact ? '' : 'mt-3'} />
   {/if}
   {#if download.error}
     <p class="mt-2 text-[0.6875rem] text-danger" role="alert">{download.error}</p>

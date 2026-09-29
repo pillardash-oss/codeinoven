@@ -161,15 +161,22 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   )
   const unsubscribeConfirmClose = subscribe('window:confirmClose', (payload) => {
     // The renderer owns the unsaved-file editor state, so it computes the
-    // pending files here. With nothing pending the close proceeds right away
-    // as a park when background mode keeps the backend alive, otherwise a quit.
+    // pending files here. Downloads arrive with the payload: main is the one
+    // download owner, and its list is already the truth. With nothing pending
+    // the close proceeds right away as a park when background mode keeps the
+    // backend alive, otherwise a quit.
     const files = [...projectFilesWorkspace.getUnsavedFiles(), ...standaloneFiles.getUnsavedFiles()]
     const park = payload.park === true
-    if (payload.projects.length === 0 && files.length === 0) {
+    if (payload.projects.length === 0 && files.length === 0 && payload.downloads.length === 0) {
       void (park ? deps.parkWindow() : deps.confirmForceClose())
       return
     }
-    deps.setCloseConfirmation({ projects: payload.projects, files, park })
+    deps.setCloseConfirmation({
+      projects: payload.projects,
+      files,
+      downloads: payload.downloads,
+      park
+    })
   })
   const unsubscribeInstanceRole = subscribe('app:instanceRole', (role) => {
     deps.setInstanceRole(role)

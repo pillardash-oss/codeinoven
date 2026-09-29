@@ -135,6 +135,11 @@ export function switcherBrowserTabs(): readonly GlobalBrowserTab[] {
  * session that only ever switches between threads still pays nothing for the
  * browser. A failed read leaves the mirror empty, which costs the switcher its
  * browser rows and nothing else.
+ *
+ * There is no retry, and none is needed: the channel is registered on main's
+ * pre-navigation surface alongside the other hydration reads, and the store
+ * behind it answers "nothing stored" rather than rejecting a file it cannot
+ * parse, so a rejection here would mean the bridge itself is gone.
  */
 export function ensureStoredBrowserTabs(): void {
   if (storedTabsRead) return

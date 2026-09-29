@@ -31,6 +31,12 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'app:transferInstanceControl',
   'app:rendererReady',
   'app:waitForFeatures',
+  // Registered with the same pre-navigation surface
+  // (`registerGlobalBrowserIpcHandlers`), and read by the Ctrl+Tab switcher and
+  // by `loadBrowser` while the browser's own modules are still unloaded. Waiting
+  // for the post-paint feature graph here would hold the browser open behind a
+  // graph that has nothing to do with its tab list.
+  'browser:loadTabs',
   'config:get',
   'project:ensureInbox',
   // Registered on the hydration surface so Assistant View's first pass resolves

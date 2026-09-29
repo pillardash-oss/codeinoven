@@ -202,7 +202,9 @@ export class BrowserDownloadStore {
    * `removedIds` are the records this instance deleted   a download the user
    * cleared from the list, or one trimmed away. They have to be removed from the
    * file as well, or a merge that only ever adds would bring them back at the
-   * next launch.
+   * next launch. A tombstone wins over both sides of the merge, including this
+   * instance's own records: a snapshot taken before the deletion still carries
+   * the record, and it must not be able to put it back.
    */
   async save(
     records: readonly PersistedBrowserDownload[],
@@ -215,6 +217,7 @@ export class BrowserDownloadStore {
       merged.set(record.id, record)
     }
     for (const record of records) {
+      if (removedIds.has(record.id)) continue
       const known = merged.get(record.id)
       if (known && known.updatedAt > record.updatedAt) continue
       merged.set(record.id, record)

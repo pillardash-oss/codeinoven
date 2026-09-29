@@ -125,8 +125,9 @@ export class BrowserDownloadManager {
   private readonly watchedPartitions = new Set<string>()
   private readonly pendingAdoptions = new Map<string, PendingAdoption>()
   /** Records this run dropped (the user removed them, or they were trimmed),
-   *  which the next write has to remove from the file too. Cleared once a write
-   *  without them has landed. */
+   *  which the next write has to remove from the file too. Each id stays here
+   *  until a write that excludes it has landed, so a removal made while a write
+   *  is in flight is never cleared by the write that missed it. */
   private readonly removedRecords = new Set<string>()
   private findTabId: ((projectId: string, contentsId: number) => string | undefined) | null
   private hydrated = false
@@ -233,6 +234,22 @@ export class BrowserDownloadManager {
       if (record.download.projectId === projectId) downloads.push({ ...record.download })
     }
     return downloads
+  }
+
+  /**
+   * Every download this manager currently holds open, across all projects: the
+   * set a quit would have to stop. A download the user paused is included,
+   * because its bytes are still Chromium's to delete and a quit still has to
+   * move them aside. Records restored from an earlier run are not: those have no
+   * live download left to stop, so closing changes nothing about them.
+   */
+  inFlight(): BrowserDownload[] {
+    const downloads: BrowserDownload[] = []
+    for (const record of this.downloads.values()) {
+      if (record.item === null || record.download.state !== 'progressing') continue
+      downloads.push({ ...record.download })
+    }
+    return downloads.sort((a, b) => a.startedAt - b.startedAt)
   }
 
   pause(downloadId: string): void {
@@ -432,6 +449,12 @@ export class BrowserDownloadManager {
         totalBytes,
         speedBytes: 0,
         paused: pausedByUser,
+        // Nothing is downloading this any more and its bytes are about to leave
+        // Chromium's reach, so from here on the record describes a stopped
+        // download, which is how the next launch reads it back anyway. It also
+        // keeps the record out of `inFlight()`: the set a quit would have to stop
+        // is empty once it has stopped them.
+        state: 'interrupted',
         // The bytes about to be moved aside are the resume point, so the offset
         // never exceeds what was written.
         progress: this.progressFor(receivedBytes, totalBytes)
@@ -846,8 +869,16 @@ export class BrowserDownloadManager {
     sendToRenderer(window.webContents, 'browser:download', { ...record.download })
   }
 
-  /** Coalesce progress into at most one write per interval. */
+  /** Coalesce progress into at most one write per interval. A request that
+   *  arrives while a write is in flight is owed a write of its own rather than
+   *  dropped: the write running now was built from the state before the request,
+   *  so without this a record the user removed during it would be put back and
+   *  never taken out again. */
   private schedulePersist(): void {
+    if (this.persisting) {
+      this.persistAgain = true
+      return
+    }
     if (this.persistTimer) return
     this.persistTimer = setTimeout(() => {
       this.persistTimer = null
@@ -861,11 +892,15 @@ export class BrowserDownloadManager {
       return
     }
     this.persisting = true
+    // The ids are read once and cleared by id, never as a whole: a removal that
+    // lands while this write is running belongs to the next write, and clearing
+    // the set wholesale here would discard it before anything wrote it out.
+    const removed = new Set(this.removedRecords)
     try {
-      await this.store.save(this.snapshot(), this.removedRecords)
+      await this.store.save(this.snapshot(), removed)
       // Only a landed write means the dropped records are really gone from the
       // file; a failed one keeps them queued for the next attempt.
-      this.removedRecords.clear()
+      for (const id of removed) this.removedRecords.delete(id)
     } catch {
       // The store logged the failure; the records are written again on the next
       // change, and a quit flushes them.
