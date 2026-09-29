@@ -122,6 +122,17 @@ All notable changes to CodeInOven are documented here. This project follows
   told what the request is for and that an actual value must never be invented or
   guessed.
 
+- **Sign in to GitHub without leaving CodeInOven.** The device-flow sign-in is a
+  dockable panel now instead of a modal, so it can get out of the way while the
+  user authorizes and keep polling from wherever they are, and it offers both
+  destinations explicitly: the operating system's browser, or the app-wide
+  CodeInOven browser. Signing in inside the app copies the code first and steps
+  the panel and its dock chip out of the DOM for as long as that browser is in
+  front, because a browser page is a native view painted above every DOM node and
+  an overlay over it would park the page it was opened from. The panel returns by
+  itself when the flow resolves, and the Git panel's account menu reloads the
+  moment the authorization lands.
+
 ### Changed
 
 - A capability installed without explicit harness targeting now applies to every harness,

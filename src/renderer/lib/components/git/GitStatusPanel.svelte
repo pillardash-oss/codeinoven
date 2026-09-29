@@ -10,6 +10,7 @@
   } from '$lib/repository-preflight-cache'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
+  import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
   import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
   import { buildCommitTree, fileDiffKey, relativeTime } from './git-status-panel-format'
@@ -262,7 +263,6 @@
   let removeCommitChangesConfirm = $state<{ hash: string; paths: string[] } | null>(null)
   /** Commit whose full record is open in the info dialog. */
   let commitInfoTarget = $state<GitCommitInfo | null>(null)
-  let showGitHubSignIn = $state(false)
   let selectedPullRequest = $state<PullRequestSummary | null>(savedView.selectedPullRequest)
   /**
    * Which pull requests the PR view lists, and where its paging stands. Both are
@@ -1556,6 +1556,10 @@
 
   onMount(() => {
     gitState.ensureProjectEvents(projectId)
+    // The sign-in panel is app-level (it keeps polling while the user authorizes
+    // in a browser), so its result reaches this panel as a report rather than as
+    // a callback on the panel's own control.
+    const unsubscribeGitHubSignIn = githubSignIn.onAuthorized(() => void loadGitHubAuth())
     const unsubscribePullRequestOpen = gitPanelView.onPullRequestOpen(
       (requestedProjectId, requestedThreadId, pullRequest) => {
         if (requestedProjectId !== projectId || requestedThreadId !== threadId) return
@@ -1577,6 +1581,7 @@
     return () => {
       unsubscribePullRequestOpen()
       unsubscribeThreadUpdates()
+      unsubscribeGitHubSignIn()
       if (findNavState.gitFindOpen) closeCommitSearch()
     }
   })
@@ -3356,7 +3361,7 @@
         <GitHubAccountMenu
           github={{ connected: githubConnected, configured: githubConfigured, user: githubUser }}
           {primaryRemote}
-          onSignIn={() => (showGitHubSignIn = true)}
+          onSignIn={() => githubSignIn.start()}
           onSignOut={() => void signOutGitHub()}
         />
       {/if}
@@ -3779,7 +3784,7 @@
               onPageChange={selectPrListPage}
               onOpen={(pr) => (selectedPullRequest = pr)}
               onFullscreen={() => openPullRequestFullscreen(null)}
-              onSignIn={() => (showGitHubSignIn = true)}
+              onSignIn={() => githubSignIn.start()}
               onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
             />
           {/if}
@@ -3791,7 +3796,7 @@
           {githubConnected}
           bind:selectedDeployment
           bind:selectedRun
-          onSignIn={() => (showGitHubSignIn = true)}
+          onSignIn={() => githubSignIn.start()}
           requestedRunId={requestedWorkflowRunId}
           onRequestedRunOpened={() => (requestedWorkflowRunId = null)}
           onAgentDiagnoseRun={startWorkflowDiagnosis}
@@ -3867,7 +3872,6 @@
     bind:completeMergeOpen
     bind:mergeTitle
     bind:mergeDescription
-    bind:showGitHubSignIn
     bind:showStashModal
     bind:stashPaths
     bind:stashMessage
@@ -3892,7 +3896,6 @@
     {performSyncMain}
     {confirmCompleteMerge}
     {openCompleteMerge}
-    {loadGitHubAuth}
     {stashChanges}
     {requestMergeOrRebase}
     {confirmPendingOperation}
@@ -4029,7 +4032,7 @@
           onSortChange={selectPrListSort}
           onPageChange={selectPrListPage}
           onOpen={(pr) => openPullRequestFullscreen(pr)}
-          onSignIn={() => (showGitHubSignIn = true)}
+          onSignIn={() => githubSignIn.start()}
           onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
         />
       {/if}

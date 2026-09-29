@@ -13,7 +13,6 @@
     GitStatus
   } from '$shared/types'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
-  import GitHubSignInModal from './GitHubSignInModal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -51,7 +50,6 @@
     completeMergeOpen: boolean
     mergeTitle: string
     mergeDescription: string
-    showGitHubSignIn: boolean
     showStashModal: boolean
     stashPaths: string[] | null
     stashMessage: string
@@ -76,7 +74,6 @@
     performSyncMain: (direction: GitSyncDirection, strategy: GitPullStrategy) => void
     confirmCompleteMerge: () => void
     openCompleteMerge: () => void
-    loadGitHubAuth: () => void
     stashChanges: () => void
     requestMergeOrRebase: (kind: 'merge' | 'rebase') => void
     confirmPendingOperation: () => void
@@ -123,7 +120,6 @@
     completeMergeOpen = $bindable(),
     mergeTitle = $bindable(),
     mergeDescription = $bindable(),
-    showGitHubSignIn = $bindable(),
     showStashModal = $bindable(),
     stashPaths = $bindable(),
     stashMessage = $bindable(),
@@ -148,7 +144,6 @@
     performSyncMain,
     confirmCompleteMerge,
     openCompleteMerge,
-    loadGitHubAuth,
     stashChanges,
     requestMergeOrRebase,
     confirmPendingOperation,
@@ -567,17 +562,6 @@
 {/if}
 
 <!-- Modals -->
-{#if showGitHubSignIn}
-  <GitHubSignInModal
-    onClose={() => (showGitHubSignIn = false)}
-    onConnected={() => {
-      // Reload the full status so the avatar/name land in the branch picker
-      // instead of leaving a stale "Sign in" button behind.
-      void loadGitHubAuth()
-    }}
-  />
-{/if}
-
 {#if showStashModal}
   <Modal
     open

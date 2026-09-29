@@ -67,6 +67,7 @@
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
+  import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -1664,6 +1665,16 @@
         onConfirm={confirmForceClose}
         onConfirmSave={confirmForceCloseSaving}
       />
+    {/await}
+  {/if}
+
+  {#if githubSignIn.open}
+    <!-- The GitHub device-flow sign-in, docked so the user can authorize in a
+         browser   including the app's own   while the panel keeps polling. It
+         floats above every view because the flow outlives the panel it was
+         opened from: the Git sidebar is behind the browser view when it lands. -->
+    {#await import('$lib/components/git/GitHubSignInDock.svelte') then { default: GitHubSignInDock }}
+      <GitHubSignInDock />
     {/await}
   {/if}
 
