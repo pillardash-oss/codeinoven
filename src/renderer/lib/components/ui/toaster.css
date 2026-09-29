@@ -9,6 +9,48 @@
  * nature, and it competes with the library's own stylesheet in the cascade:
  * hence the `!important`s. */
 
+/* ─── The overlay document keeps the desktop geometry ──────────────────────
+   svelte-sonner switches to a full-width mobile layout below 600px, and the
+   overlay window is 428px wide on purpose: one card, its offset from the right
+   edge, and the room its shadow needs, and nothing more. That puts the overlay
+   inside the library's mobile branch while the app window is not, so the same
+   stack would be 396px wide, 16px from the edge and 8px lower in the overlay
+   than in the app, and a handover between the two would visibly jump.
+
+   Scoped to the overlay's own document (`src/renderer/toast-overlay.html`) and
+   not to a width, because a narrow width is a real layout this app has: the
+   mobile client is a viewport under 600px, where the library's mobile cards are
+   the ones that belong. Nothing outside that document is affected. */
+[data-toast-overlay] [data-sonner-toaster] {
+  width: var(--width) !important;
+}
+
+[data-toast-overlay] [data-sonner-toaster][data-x-position='right'] {
+  right: var(--offset-right) !important;
+  left: auto !important;
+}
+
+[data-toast-overlay] [data-sonner-toaster][data-x-position='left'] {
+  left: var(--offset-left) !important;
+  right: auto !important;
+}
+
+[data-toast-overlay] [data-sonner-toaster][data-y-position='top'] {
+  top: var(--offset-top) !important;
+  bottom: auto !important;
+}
+
+[data-toast-overlay] [data-sonner-toaster][data-y-position='bottom'] {
+  bottom: var(--offset-bottom) !important;
+  top: auto !important;
+}
+
+[data-toast-overlay] [data-sonner-toaster] [data-sonner-toast] {
+  left: auto !important;
+  right: auto !important;
+  width: var(--width) !important;
+}
+
 [data-close-button] {
   top: 6px !important;
   right: 6px !important;

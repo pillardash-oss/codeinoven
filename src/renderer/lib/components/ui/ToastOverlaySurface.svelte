@@ -4,6 +4,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { onMount, tick } from 'svelte'
   import { SvelteMap } from 'svelte/reactivity'
+  import { logRendererDev } from '$lib/system/renderer-logger'
   import {
     TOAST_OVERLAY_INNER_TOP,
     type ToastOverlayInteraction,
@@ -67,6 +68,14 @@
   }
 
   function report(id: number | string, interaction: ToastOverlayInteraction): void {
+    // A press is logged on its way out, and only a press: whether it reached this
+    // document at all is the one fact nothing else here can answer, and a card
+    // whose button seems to do nothing is exactly the case where that matters.
+    // Dismissals and auto-closes stay silent, because they are not user
+    // intentions and there is one of them per toast either way.
+    if (interaction === 'action' || interaction === 'cancel') {
+      logRendererDev(`The toast overlay reported a ${interaction} press on card ${String(id)}`)
+    }
     void invoke('browser:toastOverlayInteract', { id, interaction }).catch(() => {})
   }
 
