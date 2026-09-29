@@ -25,3 +25,11 @@ Thumbs.db
 /src/preload/**/*.js
 /.svelte-check/
 .claude/
+
+# Mac code-signing assets supplied per build rather than committed: the WebAuthn
+# entitlements file is generated from a checked-in base plus a team identifier,
+# and a provisioning profile is a per-team portal artifact that must never be
+# committed even though it holds no private key.
+/build/entitlements.mac.webauthn.plist
+*.provisionprofile
+*.mobileprovision

@@ -13,6 +13,23 @@ import packageJson from './package.json'
 // otherwise fall back to.
 const resolvedAppVersion = process.env['CODEINOVEN_BUILD_VERSION'] || packageJson.version
 
+/**
+ * The Apple team identifier baked into the main bundle, so the runtime can name
+ * the WebAuthn keychain group the code-signing entitlement grants.
+ *
+ * The value is public: it is already in every signature this team produces and
+ * in the `keychain-access-groups` prefix of any build that carries the
+ * entitlement. It is read from the environment rather than hardcoded because
+ * both the signing job and the entitlement file derive from the same value, so a
+ * different team can build the app without editing a source file.
+ *
+ * Empty is a normal value, not a failure: an ad-hoc or unsigned local build has
+ * no team and therefore never arms the macOS platform authenticator.
+ */
+function resolveMacTeamId(): string {
+  return (process.env['CODEINOVEN_MAC_TEAM_ID'] || process.env['APPLE_TEAM_ID'] || '').trim()
+}
+
 /** Renderer dev port of the primary checkout. */
 const DEFAULT_RENDERER_PORT = 5173
 /** Deterministic port pool reserved for linked Git worktrees. */
@@ -151,7 +168,11 @@ export default defineConfig(({ mode }) => {
         // There is deliberately no production default.
         __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: JSON.stringify(
           env.MAIN_VITE_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN ?? ''
-        )
+        ),
+        // The team identifier the WebAuthn keychain group is derived from. See
+        // `resolveMacTeamId`; an empty value simply leaves the macOS platform
+        // authenticator unarmed.
+        __CODEINOVEN_MAC_TEAM_ID__: JSON.stringify(resolveMacTeamId())
       },
       build: {
         outDir: 'out/main',

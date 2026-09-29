@@ -42,6 +42,7 @@ import {
 import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap/open-with'
 import { bootPostPaintServices, attachWindowServices } from './bootstrap/post-paint-services'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
+import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
 import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
 import { computeAttention, hasUpcomingWork } from './system/background-work-state'
@@ -53,6 +54,7 @@ import {
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 declare const __CODEINOVEN_APP_VERSION__: string
+declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -715,6 +717,10 @@ void app
       validator: windowBoundaryValidator,
       getMainWindow: () => state.mainWindow
     })
+
+    // Arm the platform authenticator before any browser tab can issue a passkey
+    // request. macOS only, and only in a build that can carry the entitlement.
+    installPlatformAuthenticator()
 
     // Install the `appfile://` preview protocol before the renderer loads: the
     // packaged renderer requests preview images as soon as it hydrates, and if
