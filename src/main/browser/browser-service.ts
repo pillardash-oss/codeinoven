@@ -118,7 +118,6 @@ import {
   browserPartitionFor,
   isAllowedPopupWindowUrl,
   isSameBounds,
-  isSameViewport,
   partitionBelongsToProject,
   popupWindowViewport,
   safeBasename,
@@ -3448,9 +3447,6 @@ export class BrowserService {
       this.pendingPageFocusTabId = null
     }
     const viewport = options.size ?? this.parkedViewportFor(tab)
-    // Whether this view is the one the app window is showing: a park only re-lays
-    // the page out when it takes a view off the screen and gives it another size.
-    const wasOnScreen = this.displayedTab?.tabId === tabId
     this.window.contentView.removeChildView(tab.view)
     // The view is leaving the window, so whatever frame it was displayed at no
     // longer describes where it is.
@@ -3462,15 +3458,6 @@ export class BrowserService {
       this.activeTabBounds = null
     }
     this.enforceParkedCap(tabId)
-    // Dev-only, and deliberately one line per park: a recorded frame of the
-    // browser surface can then be matched against the park, the size it laid the
-    // page out at, and whether that size was a change the page had to reflow for.
-    Logger.dev('Browser view parked', {
-      tabId,
-      reason: options.reason,
-      viewport,
-      relayout: wasOnScreen && !isSameViewport(tab.displayedViewport?.viewport, viewport)
-    })
     // A stage window the window server stopped showing would silently freeze the
     // page (that is how a parked view dies), so confirm it once per park and hand
     // the tab a fresh window if it did not take. Fire and forget: parking must
@@ -3530,13 +3517,6 @@ export class BrowserService {
       if (bounds !== null && !isSameBounds(displayed.bounds, bounds)) {
         this.displayedTab = { tabId, bounds }
         tab.view.setBounds(bounds)
-        // A size change re-lays the page out and hands it a new surface, which is
-        // worth seeing in the dev log next to a parked or re-attached view: the
-        // three together are what a recorded frame of this surface can be matched
-        // against. A position-only move re-lays nothing out.
-        if (bounds.width !== displayed.bounds.width || bounds.height !== displayed.bounds.height) {
-          Logger.dev('Browser view resized', { tabId, from: displayed.bounds, to: bounds })
-        }
       }
       // The page is already on screen, which is the one moment a held switch can
       // be honoured without waiting for another show.
