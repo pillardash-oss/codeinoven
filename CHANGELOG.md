@@ -126,21 +126,26 @@ All notable changes to CodeInOven are documented here. This project follows
   dockable panel now instead of a modal, so it can get out of the way while the
   user authorizes and keep polling from wherever they are, and it offers both
   destinations explicitly: the operating system's browser, or the app-wide
-  CodeInOven browser. Signing in inside the app copies the code first and steps
-  the panel and its dock chip out of the DOM for as long as that browser is in
-  front, because a browser page is a native view painted above every DOM node and
-  an overlay over it would park the page it was opened from. The panel returns by
-  itself when the flow resolves, and the Git panel's account menu reloads the
-  moment the authorization lands. A sign-in the user no longer wants is
-  explicitly cancellable: **Cancel** sits at the footer's left edge while an
-  attempt is in flight, and the dock chip's dismiss control cancels the attempt
-  rather than merely hiding it, since the header withholds its close affordance
-  until the flow settles. The in-app hand-off is awaited and confirmed before the
-  panel steps aside, so a first-open in a session (which reads the browser's
-  modules and its durable tab list first) shows an **Opening…** state instead of
-  a click that silently did nothing, and a browser that does not take the page
-  within eight seconds hands it to the operating system's browser instead, with
-  the code already on the clipboard and the reason stated in a toast.
+  CodeInOven browser. Signing in inside the app docks the sign-in **into that
+  browser's own view**: a browser page is a native view painted above every DOM
+  node, so the panel cannot float over the page it opened, and it is a row of the
+  browser's page column instead, which the page shrinks around the way it already
+  does for the find bar. The code, the countdown it expires on and the attempt's
+  status stay in that row for the whole wait, with a copy control and a chevron
+  that opens the full details and both destinations in place, so nothing about a
+  sign-in in progress is more than one click away from the page it belongs to.
+  Every other view still floats the panel, and it is the same flow either way.
+  The Git panel's account menu reloads the moment the authorization lands. A
+  sign-in the user no longer wants is explicitly cancellable: **Cancel** sits at
+  the footer's left edge while an attempt is in flight, the docked row and the
+  dock chip carry the same dismiss control, and it cancels the attempt rather
+  than merely hiding it, since the header withholds its close affordance until
+  the flow settles. The in-app hand-off is awaited and confirmed before the panel
+  docks, so a first-open in a session (which reads the browser's modules and its
+  durable tab list first) shows an **Opening…** state instead of a click that
+  silently did nothing, and a browser that does not take the page within eight
+  seconds hands it to the operating system's browser instead, with the code
+  already on the clipboard and the reason stated in a toast.
 
 ### Changed
 

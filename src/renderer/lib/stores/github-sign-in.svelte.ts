@@ -6,17 +6,13 @@ import { openInGlobalCioBrowserWhenReady } from '$lib/open-in-browser'
 import { isMacPlatform } from '$lib/shortcut-display'
 import type { GitHubDeviceCode } from '$shared/types'
 import { gitState } from './git.svelte'
+import { rendererRecovery } from './renderer-recovery.svelte'
 
 /** Where the sign-in stands. Only `starting` and `waiting` are still in flight. */
 export type GitHubSignInPhase = 'starting' | 'waiting' | 'authorized' | 'expired' | 'error'
 
 /** How long the copy confirmation stays up before the copy icon comes back. */
 const COPIED_FEEDBACK_MS = 1500
-
-/** The paste chord the browser page expects, named for this platform. */
-function pasteChord(): string {
-  return isMacPlatform() ? '⌘V' : 'Ctrl+V'
-}
 
 /**
  * GitHub device-flow sign-in, owned by the app rather than by the panel that
@@ -61,12 +57,12 @@ class GitHubSignInState {
   /**
    * Whether this attempt's page was opened in the app's own browser.
    *
-   * That is what lets the panel step aside while the browser is in front: the
-   * page is a native view the compositor paints above every DOM node, so a panel
-   * or a dock chip over it would park it (`GitHubSignInDock`). It is set only
-   * once the browser really has the page, and stays true for the rest of the
-   * attempt, so the panel keeps that browser usable even if the user comes back
-   * to it later.
+   * That is what makes the sign-in a docked bar of the browser view rather than a
+   * floating panel over it: the page is a native view the compositor paints above
+   * every DOM node, so a panel or a dock chip that covers it would park it. It is
+   * set only once the browser really has the page, and stays true for the rest of
+   * the attempt, so the panel keeps that browser usable even if the user comes
+   * back to it later.
    */
   handedOffToAppBrowser = $state(false)
 
@@ -91,6 +87,43 @@ class GitHubSignInState {
    */
   get waiting(): boolean {
     return this.open && (this.phase === 'starting' || this.phase === 'waiting')
+  }
+
+  /**
+   * Whether the sign-in is docked into the app-wide browser's own view, which is
+   * where the in-app hand-off sends the user.
+   *
+   * The page steps aside for nothing: while this holds, the panel is presented as
+   * a docked bar of that browser's page column (`GitHubSignInBrowserDock`), in
+   * flow, so the page shrinks around it instead of parking. The floating panel
+   * belongs to every other view (`GitHubSignInDock`), and the two never overlap.
+   */
+  get dockedInAppBrowser(): boolean {
+    return this.open && this.handedOffToAppBrowser && rendererRecovery.activeView === 'browser'
+  }
+
+  /**
+   * Where the attempt stands, in one line, for every surface that reports it: the
+   * floating panel, its dock chip, and the browser's docked bar.
+   */
+  get statusLabel(): string {
+    switch (this.phase) {
+      case 'starting':
+        return 'Starting'
+      case 'waiting':
+        return this.copied ? 'Code copied, waiting' : 'Waiting for authorization'
+      case 'authorized':
+        return 'Signed in'
+      case 'expired':
+        return 'Code expired'
+      default:
+        return 'Sign-in failed'
+    }
+  }
+
+  /** The keys the browser page expects for a paste, named for this platform. */
+  get pasteChord(): string {
+    return isMacPlatform() ? '⌘V' : 'Ctrl+V'
   }
 
   /** The countdown as the panel shows it: "14:59", or plain seconds under a minute. */
@@ -202,14 +235,15 @@ class GitHubSignInState {
 
   /**
    * Sign in inside CodeInOven: open the verification page in the app-wide
-   * browser, and copy the code before the panel steps out of the page's way.
+   * browser, and copy the code so it is ready for that page.
    *
-   * The page is a native view the compositor paints above every DOM node, so the
-   * panel and its dock chip cannot sit over it: they are pulled off screen once
-   * the browser holds the page (see `GitHubSignInDock`). Copying the code first is
-   * what makes that possible, so a copy that fails abandons the hand-off instead
-   * of half-doing it: without the clipboard the panel is the only place the code
-   * can be read, and it would have to park the page it just opened.
+   * Once the browser holds the page the sign-in is docked into that view rather
+   * than floated over it (see `dockedInAppBrowser`), which is what keeps the code
+   * readable beside the box it has to be typed into. Copying it first is what
+   * makes the paste a single keystroke, and a copy that fails abandons the
+   * hand-off instead of half-doing it: a panel docked under that page carries the
+   * code too, but the user asked for the in-app browser, not for a copy they have
+   * to do by hand.
    *
    * The hand-off is awaited, and the panel docks only once the browser really has
    * the page: reaching the browser for the first time in a session reads its
@@ -249,7 +283,7 @@ class GitHubSignInState {
       this.minimize()
       if (!firstHandOff) return
       toast.info('Code copied', {
-        description: `Paste it into the GitHub page (${pasteChord()}) and authorize.`
+        description: `Paste it into the GitHub page (${this.pasteChord}) and authorize.`
       })
     } finally {
       // Cleared by whichever call is in flight rather than only by the attempt

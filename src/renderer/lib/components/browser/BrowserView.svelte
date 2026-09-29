@@ -14,6 +14,8 @@
   import { subscribe } from '$lib/ipc.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
+  import GitHubSignInBrowserDock from '$lib/components/git/GitHubSignInBrowserDock.svelte'
+  import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -41,6 +43,12 @@
    * publishes it while the page is the surface on screen rather than while focus
    * sits inside the view, so the browser's keys survive a press with the app
    * header, the nav sidebar or nothing at all holding the focus.
+   *
+   * It also hosts the docked sign-in bar, under the page column, when a GitHub
+   * sign-in was handed off to this browser: a page is a native view composited
+   * above the DOM, so the sign-in cannot float over the page it opened, and a row
+   * of this view is what keeps it on screen instead
+   * (`src/renderer/lib/components/git/GitHubSignInBrowserDock.svelte`).
    */
 
   let addressSpotlightOpen = $derived(globalBrowser.addressSpotlightOpen)
@@ -259,31 +267,44 @@
        resizes, folds and slides exactly like the workspace one. -->
   <BrowserTabsSidebar onOpenAddress={() => globalBrowser.openAddressSpotlight()} />
 
-  {#if activeTab}
-    {#key activeTab.id}
-      <BrowserWorkspace tab={activeTab} />
-    {/key}
-  {:else}
-    <div class="flex h-full min-h-0 min-w-0 flex-1 items-center justify-center bg-app">
-      <div class="flex flex-col items-center gap-3 px-8 text-center">
-        <Globe size={26} class="text-dimmed" />
-        <p class="max-w-sm text-sm leading-relaxed text-muted">
-          The global browser keeps its own signed-in profile, separate from the browsers your agents
-          run in.
-        </p>
-        <button
-          type="button"
-          class="rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-          title="Open a new browser tab"
-          onclick={() => {
-            globalBrowser.openNewTabAddress()
-          }}
-        >
-          New tab
-        </button>
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+    {#if activeTab}
+      {#key activeTab.id}
+        <BrowserWorkspace tab={activeTab} />
+      {/key}
+    {:else}
+      <div class="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-app">
+        <div class="flex flex-col items-center gap-3 px-8 text-center">
+          <Globe size={26} class="text-dimmed" />
+          <p class="max-w-sm text-sm leading-relaxed text-muted">
+            The global browser keeps its own signed-in profile, separate from the browsers your
+            agents run in.
+          </p>
+          <button
+            type="button"
+            class="rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            title="Open a new browser tab"
+            onclick={() => {
+              globalBrowser.openNewTabAddress()
+            }}
+          >
+            New tab
+          </button>
+        </div>
       </div>
-    </div>
-  {/if}
+    {/if}
+
+    <!--
+      The docked sign-in sits below the page column rather than over the page: the
+      page is a native view composited above every DOM node, so an overlay on it
+      would park it, and the whole point of this bar is that the code and the page
+      it belongs to are on screen together. In flow, it shortens the page frame,
+      and the frame's own observers re-place the native view above it.
+    -->
+    {#if githubSignIn.dockedInAppBrowser}
+      <GitHubSignInBrowserDock />
+    {/if}
+  </div>
 
   <!-- The rail's track. It is always in the layout, so the panel opens and closes
        by growing and shrinking this one box   the same motion the workspace rail's
