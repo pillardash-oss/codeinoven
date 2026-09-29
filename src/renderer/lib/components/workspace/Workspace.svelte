@@ -143,7 +143,8 @@
     Project,
     PromptAttachment,
     Routine,
-    Thread
+    Thread,
+    ThreadSettings
   } from '$shared/types'
 
   interface Props {
@@ -2726,13 +2727,12 @@
     if (workspaceState.selectedThread) return
     const existing = lastChatToLandOn()
     if (existing) {
-      workspaceState.openThread(
-        existing,
-        projects.find((candidate) => candidate.id === INBOX_PROJECT_ID) ?? null
-      )
+      workspaceState.openThread(existing, inboxProject())
       return
     }
-    void openEmptyChatThread()
+    // Nothing to land on: open the blank chat row the view is built around, so
+    // it never paints the thread-less welcome composer (and never loses its rail).
+    openNewChatThread()
   })
 
   /** Filter backfill: the 200-row hydration window is unfiltered, so a narrowed
@@ -3035,6 +3035,21 @@
 
   // ─── Thread actions ──────────────────────────────────────────────────────
 
+  /** A client-side id for an optimistic thread, so the row mounts before the
+   *  create round trip and keeps the same id once the server confirms it. */
+  function newOptimisticThreadId(): string {
+    const bytes = new Uint8Array(12)
+    crypto.getRandomValues(bytes)
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  }
+
+  /** The hidden inbox project when it is already loaded. Chats live in it, but a
+   *  launch that never held one does not have it yet, so the create path asks the
+   *  main process for it instead. */
+  function inboxProject(): Project | null {
+    return projects.find((candidate) => candidate.id === INBOX_PROJECT_ID) ?? null
+  }
+
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
   async function createThreadInProject(
     project: Project,
@@ -3148,11 +3163,7 @@
     // Instant mount: create optimistic thread locally so the composer
     // paints on the same tick as the click   no IPC on the critical path.
     // Git branch and persistence hydrate async via the thread:update broadcast.
-    const optimisticId = (() => {
-      const bytes = new Uint8Array(12)
-      crypto.getRandomValues(bytes)
-      return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
-    })()
+    const optimisticId = newOptimisticThreadId()
     const optimisticThread = {
       id: optimisticId,
       projectId: project.id,
@@ -3242,9 +3253,90 @@
       })
   }
 
-  /** Start a fresh standalone chat   shows the composer immediately. */
+  /**
+   * Start a fresh standalone chat. A chat is a project-less thread, so this
+   * behaves exactly like a project's New thread: the blank row goes into the
+   * Chats sidebar on the same tick as the click and opens, and its label follows
+   * what the user types through the shared draft-label path. A blank chat already
+   * sitting there is reused instead of stacking a second empty row beside it.
+   */
   function startNewChat(): void {
-    workspaceState.clearThread()
+    const existing = findEmptyNewThread(allThreads, INBOX_PROJECT_ID, undefined)
+    if (existing) {
+      threadMessages.seedEmpty(INBOX_PROJECT_ID, existing.id)
+      // The blank row is already the chat the click asked for.
+      if (workspaceState.selectedThread?.id === existing.id) {
+        workspaceState.requestFocusComposer()
+        return
+      }
+      upsertThreadInList(existing)
+      workspaceState.openThread(existing, inboxProject())
+      return
+    }
+    openNewChatThread()
+  }
+
+  /**
+   * Put a blank chat row in the Chats sidebar and open it, mirroring a project's
+   * optimistic New thread: the row mounts on the same tick and the server
+   * confirms it in the background under the same id, so nothing typed while the
+   * create round trip is in flight is lost.
+   */
+  function openNewChatThread(): void {
+    const optimisticId = newOptimisticThreadId()
+    const settings = chatEffectiveSettings(threadSettings.lastUsed)
+    const optimisticThread: Thread = {
+      id: optimisticId,
+      projectId: INBOX_PROJECT_ID,
+      providerId: 'pi',
+      title: DEFAULT_THREAD_TITLE,
+      titleSource: 'default',
+      status: 'created',
+      pinned: false,
+      archived: false,
+      read: true,
+      settings,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActivity: Date.now(),
+      workingDirectory: ''
+    }
+    upsertThreadInList(optimisticThread)
+    threadMessages.seedEmpty(INBOX_PROJECT_ID, optimisticId)
+    workspaceState.openThread(optimisticThread, inboxProject())
+    void persistNewChatThread(optimisticId, settings)
+  }
+
+  async function persistNewChatThread(
+    optimisticId: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    try {
+      // The inbox project is created on demand, so a launch that has never held
+      // a chat has to ask for it before the thread can be persisted into it.
+      const inbox = inboxProject() ?? (await invoke('project:ensureInbox'))
+      const created = await invoke('thread:create', {
+        id: optimisticId,
+        projectId: INBOX_PROJECT_ID,
+        providerId: 'pi',
+        title: DEFAULT_THREAD_TITLE,
+        workingDirectory: '',
+        settings
+      })
+      upsertThreadInList(created)
+      if (workspaceState.selectedThread?.id === optimisticId) {
+        workspaceState.openThread(created, inbox)
+      }
+    } catch (error) {
+      // Creation failed   drop the optimistic row so the view never strands on a
+      // phantom chat, and fall back to the thread-less welcome composer.
+      const index = allThreads.findIndex((candidate) => candidate.id === optimisticId)
+      if (index !== -1) allThreads.splice(index, 1)
+      if (workspaceState.selectedThread?.id === optimisticId) {
+        workspaceState.clearThread()
+      }
+      reportError(error, 'The new chat could not be created.')
+    }
   }
 
   /** Create a standalone (project-less) chat thread inside the hidden inbox. */
@@ -3305,31 +3397,6 @@
       rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', msg, files)
       chatsComposerRestoreKey += 1
       reportError(error, 'The chat could not be started.')
-    }
-  }
-
-  /** Open the empty draft chat the Chats view lands on when the family has no
-   *  thread at all, so the view's composer and right rail are both backed by a
-   *  real thread from the first frame. Shares the welcome thread's creation
-   *  promise with the composer hand-off, so a keystroke racing this cannot make
-   *  a second thread. */
-  async function openEmptyChatThread(): Promise<void> {
-    try {
-      const { thread, inbox } = await ensureWelcomeChatThread()
-      // Seeded empty so its conversation paints the composer on the first frame,
-      // and listed straight away so the draft shows in the Chats sidebar even if
-      // the user leaves before it opens.
-      threadMessages.seedEmpty(INBOX_PROJECT_ID, thread.id)
-      upsertThreadInList(thread)
-      // A thread may have landed while this was being created (a restore, a
-      // notification, or the user picking one in the sidebar): that selection
-      // wins, and this draft simply joins the list unused. Leaving Chats must
-      // not yank whatever the user is actually looking at either.
-      if (workspaceState.selectedThread) return
-      if (!active || mode !== 'chats') return
-      workspaceState.openThread(thread, inbox)
-    } catch (error) {
-      reportError(error, 'The chat could not be opened.')
     }
   }
 
