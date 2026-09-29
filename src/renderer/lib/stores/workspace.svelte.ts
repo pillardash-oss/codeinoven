@@ -128,6 +128,12 @@ class WorkspaceState {
   navigateToSettings: ((tab?: string) => void) | null = null
   navigateToContent: (() => void) | null = null
   /**
+   * Bring the top-level Browser (global browser) view on screen. Registered by
+   * App.svelte so a shared surface such as the link context menu can open a page
+   * there without owning view navigation.
+   */
+  navigateToBrowser: (() => void) | null = null
+  /**
    * Opens a thread from a notification while preserving the current view:
    * regular project view stays, scope state stays, threads view stays, and
    * chat notifications switch to the chats view.  Registered by App.svelte.

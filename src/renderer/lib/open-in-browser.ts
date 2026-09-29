@@ -1,32 +1,48 @@
 import { invoke } from '$lib/ipc.svelte'
 import { appConfigState } from '$lib/stores/app-config.svelte'
+import { withBrowser } from '$lib/stores/browser-access.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+import { workspaceState } from '$lib/stores/workspace.svelte'
 import { isLocalDevelopmentUrl } from '$shared/local-development-url'
 
 /**
- * Whether the in-app browser can take a page right now.
+ * Whether the thread browser can take a page right now.
  *
- * Every tab belongs to a project thread, so a link can only be opened inside
- * the workspace with a thread on screen. A project-less global browser is what
- * would make this answer yes from any surface; until it exists, callers hide
- * the action instead of offering one that would go nowhere.
+ * A thread-browser tab belongs to a project thread, so a link can only be
+ * opened that way with a thread on screen. The app-wide global browser is the
+ * destination that works from any surface; it is {@link openInGlobalCioBrowser},
+ * and callers that offer both (the link context menu) hide this one when it
+ * cannot work instead of offering a dead item.
  */
 export function canOpenInCioBrowser(): boolean {
   return contextSidebarState.canOpenBrowserTab
 }
 
 /**
- * Open `url` in the in-app browser tab of the project the workspace is working
- * in, and report whether it found a home for the page.
+ * Open `url` in the thread browser: the in-app browser tab of the project the
+ * workspace is working in, and report whether it found a home for the page.
  *
  * This is the explicit, user-asked-for version of the routing below: it never
  * falls back to the operating-system browser, because a caller offering both
  * (the link context menu) keeps its own item for that, and silently switching
- * browser would make the label a lie. It is also the single place a future
- * global browser plugs in, so no caller has to learn about it.
+ * browser would make the label a lie.
  */
 export function openInCioBrowser(url: string): boolean {
   return contextSidebarState.openBrowser(url) !== null
+}
+
+/**
+ * Open `url` in the app-wide global browser and bring that view on screen.
+ *
+ * Unlike {@link openInCioBrowser}, this needs no project thread: the global
+ * browser is project-less, so it can take the page from any surface. The view
+ * is revealed first because reaching it is what builds the browser's lazy
+ * store; the tab is then opened on the same store, which `withBrowser` loads
+ * (and reuses, since it is the same in-flight load).
+ */
+export function openInGlobalCioBrowser(url: string): void {
+  workspaceState.navigateToBrowser?.()
+  void withBrowser((store) => store.open(url))
 }
 
 /**

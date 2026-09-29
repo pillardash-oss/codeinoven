@@ -5,6 +5,7 @@
     Copy,
     Eraser,
     ExternalLink,
+    Globe,
     GlobeCode,
     Link,
     Scissors,
@@ -13,7 +14,11 @@
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
-  import { canOpenInCioBrowser, openInCioBrowser } from '$lib/open-in-browser'
+  import {
+    canOpenInCioBrowser,
+    openInCioBrowser,
+    openInGlobalCioBrowser
+  } from '$lib/open-in-browser'
   import { terminalEntryForHost, type TerminalHostEntry } from '$lib/terminal/host-registry'
   import { buildPasteData } from '$lib/terminal/input-compat'
   import { selectWordAt } from '$lib/terminal/word-select'
@@ -37,8 +42,9 @@
   let menuEl: HTMLDivElement | null = $state(null)
   let menuWidth = $state(0)
   let menuHeight = $state(0)
-  /** The in-app browser takes a page only while a project thread is on screen to
-   *  own the tab, so the link item is offered exactly when it can work. */
+  /** The thread browser takes a page only while a project thread is on screen to
+   *  own the tab, so the thread item is offered exactly when it can work. The
+   *  global browser needs no thread, so its item is always offered. */
   const cioBrowserAvailable = $derived(canOpenInCioBrowser())
 
   const itemClass =
@@ -311,6 +317,16 @@
     toast.error('The CIO browser has no project thread to open this link in')
   }
 
+  /**
+   * Load the link in the app-wide global browser instead of a project's tab. The
+   * menu is dismissed first for the same reason as above: the browser renders a
+   * native view composited above every DOM surface.
+   */
+  function openLinkInGlobalCioBrowser(href: string): void {
+    close()
+    openInGlobalCioBrowser(href)
+  }
+
   async function pasteIntoTerminal(t: TextMenuTarget): Promise<void> {
     const terminal = t.terminal
     if (!terminal) {
@@ -456,6 +472,16 @@
           <ExternalLink class="size-3.5 shrink-0 text-text-muted" />
           Open in Default Browser
         </button>
+        <button
+          type="button"
+          class={itemClass}
+          role="menuitem"
+          title="Open in the app-wide global browser"
+          onclick={() => openLinkInGlobalCioBrowser(target!.linkHref!)}
+        >
+          <Globe class="size-3.5 shrink-0 text-text-muted" />
+          Open in Global CIO Browser
+        </button>
         {#if cioBrowserAvailable}
           <button
             type="button"
@@ -465,7 +491,7 @@
             onclick={() => openLinkInCioBrowser(target!.linkHref!)}
           >
             <GlobeCode class="size-3.5 shrink-0 text-text-muted" />
-            Open in CIO Browser
+            Open in Thread Browser
           </button>
         {/if}
         <button

@@ -529,11 +529,13 @@
       navigate(isSettingsSection(tab) ? settingsViewForSection(tab) : 'settings')
     }
     workspaceState.navigateToContent = () => navigate(lastContentView)
+    workspaceState.navigateToBrowser = () => navigate('browser')
     workspaceState.openThreadFromNotification = (thread, project, temporaryChatId) =>
       openThreadFromNotification(thread, project, temporaryChatId)
     return () => {
       workspaceState.navigateToSettings = null
       workspaceState.navigateToContent = null
+      workspaceState.navigateToBrowser = null
       workspaceState.openThreadFromNotification = null
     }
   }
