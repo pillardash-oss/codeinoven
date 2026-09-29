@@ -183,6 +183,7 @@ export class SpeechService {
     this.eviction = new SpeechRuntimeEviction({
       isCapabilityBusy: (capability) => this.isCapabilityBusy(capability),
       isRuntimeIdle: (runtime) => this.queue.isIdle(runtime),
+      residentRuntimes: () => this.residentRuntimes(),
       disposeRuntime: (runtime) => this.disposeRuntime(runtime)
     })
     this.downloader = new SpeechArtifactDownloader(this.storage, {
@@ -492,7 +493,7 @@ export class SpeechService {
         }
       })
       this.emit({ kind: 'history', attemptId, stage: 'completed' })
-      this.touch('asr')
+      this.touch('asr', runtime)
       // Cleanup provenance may have touched cleanup model   also refresh cleanup timer if local cleanup used
       if (
         cleanupMode.kind === 'local' &&
@@ -536,7 +537,7 @@ export class SpeechService {
           },
           ac.signal
         )
-        this.touch('asr')
+        this.touch('asr', runtime)
         // The GGUF cleanup stack is deliberately NOT warmed here. This runs
         // while the user is still speaking (the renderer calls it ~2s into a
         // recording), so warming it would allocate the cleanup server's memory
@@ -550,7 +551,7 @@ export class SpeechService {
         clearTimeout(timer)
       }
     } else {
-      this.touch('asr')
+      this.touch('asr', runtime)
     }
   }
 
@@ -631,7 +632,7 @@ export class SpeechService {
         finalTranscript = (await this.runCleanup(rawTranscript, cleanupMode, { kind: 'global' }))
           .text
       }
-      this.touch('asr')
+      this.touch('asr', runtime)
       if (cleanupMode.kind === 'local') this.touch('cleanup')
       return { rawTranscript, finalTranscript }
     } catch (cause) {
@@ -1048,7 +1049,7 @@ export class SpeechService {
       await queued.result
       this.playback.assertActive(sessionId)
       const audio = await this.playback.consumeAudio(outputPath)
-      this.touch('tts')
+      this.touch('tts', runtime)
       return {
         sessionId,
         segmentIndex,
@@ -1090,8 +1091,8 @@ export class SpeechService {
     this.eviction.updateUnloadOptions(options)
   }
 
-  private touch(capability: SpeechCapability): void {
-    this.eviction.touch(capability)
+  private touch(capability: SpeechCapability, runtime?: SpeechRuntime): void {
+    this.eviction.touch(capability, runtime)
   }
 
   private clearEvict(capability: SpeechCapability): void {
@@ -1103,6 +1104,15 @@ export class SpeechService {
       if (this.queue.hasActive(runtime) || this.queue.hasPending(runtime)) return true
     }
     return false
+  }
+
+  /** Runtimes whose backend currently holds a live native worker process. */
+  private residentRuntimes(): SpeechRuntime[] {
+    const residents: SpeechRuntime[] = []
+    for (const [runtime, backend] of this.backends) {
+      if (backend.isResident()) residents.push(runtime)
+    }
+    return residents
   }
 
   /** Dispose one idle runtime's backend, keeping eviction decoupled from the registry. */
@@ -1380,7 +1390,7 @@ export class SpeechService {
           )
         }
       }).result
-      this.touch('cleanup')
+      this.touch('cleanup', resolved.runtime)
       // Normalizers legitimately return an empty string for filler-only input;
       // keep the raw transcript so dictation never loses words.
       const finalText = cleaned.trim().length > 0 ? cleaned : rawTranscript

@@ -35,6 +35,12 @@ export interface SpeechCleanupLessonContext {
 export interface SpeechBackend {
   readonly runtime: SpeechRuntime
   capabilities(): Promise<SpeechCapability[]>
+  /**
+   * Whether this runtime currently holds a live native worker process, and so
+   * occupies memory that only `dispose()` releases. The eviction service counts
+   * these to keep the resident set inside its cap.
+   */
+  isResident(): boolean
   warmup?(artifact: SpeechBackendArtifact, signal: AbortSignal): Promise<void>
   transcribe(input: SpeechTranscribeInput, signal: AbortSignal): Promise<string>
   cleanup(
