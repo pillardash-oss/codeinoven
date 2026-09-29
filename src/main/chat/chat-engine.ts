@@ -23623,6 +23623,7 @@ export class ChatEngine {
     }
 
     const commands = permissionCommands(request.metadata)
+    const unclassifiedTool = request.metadata['surface']
     const { allowedPaths, scratchPaths, restrictToAllowed } = await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
@@ -23633,7 +23634,10 @@ export class ChatEngine {
     }).evaluate({
       permission: request.permission,
       paths: request.patterns.filter((pattern) => !commands.includes(pattern)),
-      commands
+      commands,
+      ...(typeof unclassifiedTool === 'string' && unclassifiedTool.trim().length > 0
+        ? { unclassifiedTool: unclassifiedTool.trim() }
+        : {})
     })
     if (!policy.approved) {
       policy = {

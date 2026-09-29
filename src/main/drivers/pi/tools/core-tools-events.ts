@@ -63,6 +63,9 @@ export function piCoreToolsEventsSource(): string {
   // instead of duplicating them inside every user turn's text (see
   // loadCioSystemPrompt above for why).
   pi.on('before_agent_start', (event) => {
+    // Pi reports each surface's annotations here, and an MCP server can connect
+    // between turns, so the read-only set is refreshed before every turn.
+    refreshCioReadOnlyTools(pi)
     applyCioSubAgentScope()
     const extra = loadCioSystemPrompt()
     const isProjectMode = extra.includes(CIO_PROJECT_MODE_MARKER)
@@ -124,7 +127,7 @@ export function piCoreToolsEventsSource(): string {
     if (
       !hit &&
       allowedTools.length > 0 &&
-      CIO_PI_BUILTIN_TOOLS.has(event.toolName) &&
+      !isCioOwnToolName(event.toolName) &&
       !allowedTools.includes(event.toolName)
     ) {
       if (isSafeNetworkCurl(event.toolName, input)) return undefined
@@ -134,7 +137,8 @@ export function piCoreToolsEventsSource(): string {
         permission: command === undefined ? event.toolName : 'shell',
         patterns: command === undefined && path !== undefined ? [path] : [],
         tool: event.toolName,
-        ...(command === undefined ? {} : { command })
+        ...(command === undefined ? {} : { command }),
+        ...(CIO_PI_BUILTIN_TOOLS.has(event.toolName) ? {} : { surface: event.toolName })
       }
       const approved = await ctx.ui.confirm(
         'Permission needed: this chat has no file-system access   using ' + event.toolName + ' requires your approval',
@@ -154,7 +158,8 @@ export function piCoreToolsEventsSource(): string {
       permission: hit.permission,
       patterns: hit.patterns,
       tool: event.toolName,
-      ...(hit.command === undefined ? {} : { command: hit.command })
+      ...(hit.command === undefined ? {} : { command: hit.command }),
+      ...(hit.surface === undefined ? {} : { surface: hit.surface })
     }
     const approved = await ctx.ui.confirm(
       'Permission needed: ' + hit.reason,
@@ -164,7 +169,7 @@ export function piCoreToolsEventsSource(): string {
     return {
       block: true,
       reason:
-        'The user denied this action in the permission card because it is destructive (' +
+        'The user denied this action (' +
         hit.reason +
         '). Do not retry it as-is; continue the turn with a safe alternative.'
     }

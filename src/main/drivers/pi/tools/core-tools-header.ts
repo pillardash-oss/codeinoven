@@ -51,6 +51,45 @@ const CIO_PI_BUILTIN_TOOLS = new Set([
   'powershell'
 ])
 
+// Pi 0.99 grew tool surfaces this app never had to police: mcp__<server>__<tool>
+// and read_mcp_resource from Pi's built-in MCP extension, codemode, and
+// tool_search. None of them are named by the rule tables below, so a tool the
+// app cannot classify is never allowed to run silently: the gate asks, and the
+// app's permission policy decides (Auto Review asks, Full Access auto-approves).
+// Pi 0.99 also reports the annotations an MCP server declares, so a surface that
+// says it is read-only skips the card.
+const CIO_OWN_TOOL_PREFIXES = ['cio_', 'codeinoven_']
+
+/** Whether a tool is registered by CodeInOven itself rather than by pi or a
+ *  third party. Own tools carry their own confirmation behavior. */
+function isCioOwnToolName(toolName) {
+  if (typeof toolName !== 'string' || toolName.length === 0) return true
+  return CIO_OWN_TOOL_PREFIXES.some(function (prefix) {
+    return toolName.indexOf(prefix) === 0
+  })
+}
+
+// Pi 0.87 has no getAllTools() accessor, which leaves this set empty and makes
+// every unrecognized surface ask. Pi 0.99 reports the annotations its MCP
+// servers declare, and pi refreshes them before every turn.
+let cioReadOnlyTools = new Set()
+
+function refreshCioReadOnlyTools(api) {
+  const list = typeof api.getAllTools === 'function' ? api.getAllTools() : undefined
+  if (!Array.isArray(list)) return
+  const readOnly = new Set()
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue
+    if (typeof entry.name !== 'string') continue
+    const annotations = entry.annotations
+    if (!annotations || typeof annotations !== 'object') continue
+    if (annotations.readOnlyHint === true && annotations.destructiveHint !== true) {
+      readOnly.add(entry.name)
+    }
+  }
+  cioReadOnlyTools = readOnly
+}
+
 // Sub-agent tools belong to an unrestricted primary session. Any session that
 // publishes a tool allowlist (audits, read-only prompt turns, filesystem-off
 // chat, brainstorm turns) never gets them: an auditor has to run every check
@@ -295,12 +334,17 @@ function deleteTargetOutsideCwd(command, cwd) {
   return null
 }
 
-function gateHit(permission, reason, patterns, command) {
+/** One permission-card hit: the permission name, why the call is gated, the
+ *  resource patterns to scope an approval to, and the command when one exists.
+ *  The surface field marks a tool the app could not classify, which the
+ *  permission policy asks about instead of auto-approving. */
+function gateHit(permission, reason, patterns, command, surface) {
   return {
     permission,
     reason,
     patterns,
-    ...(command === undefined ? {} : { command })
+    ...(command === undefined ? {} : { command }),
+    ...(surface === undefined ? {} : { surface })
   }
 }
 
@@ -375,7 +419,19 @@ function evaluateGate(toolName, input, cwd) {
       return gateHit(toolName, 'touches a protected path (.git, .env, lock files, secrets)', [path])
     }
   }
-  return null
+  // Everything pi packages itself is handled above or is read-only inside the
+  // project. Anything else   pi's built-in MCP tools, codemode, tool_search,
+  // and whatever a later pi release adds   is a surface this app cannot vouch
+  // for, so it asks unless pi reports it as read-only.
+  if (CIO_PI_BUILTIN_TOOLS.has(toolName) || isCioOwnToolName(toolName)) return null
+  if (cioReadOnlyTools.has(toolName)) return null
+  return gateHit(
+    toolName,
+    'runs "' + toolName + '", a tool CodeInOven cannot verify as read-only',
+    [],
+    undefined,
+    toolName
+  )
 }
 
 function textResult(value) {
