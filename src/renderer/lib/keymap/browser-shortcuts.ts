@@ -39,6 +39,9 @@ const ACTION_ENTRIES: ReadonlyArray<readonly [BrowserShortcutAction, string]> = 
   ['toggleDevTools', 'browser-devtools'],
   ['closeTab', 'browser-close-tab'],
   ['newTab', 'browser-new-tab'],
+  ['find', 'browser-find'],
+  ['findNext', 'browser-find-next'],
+  ['findPrevious', 'browser-find-previous'],
   // The notes rail is this view's right sidebar, so it answers the same
   // user-visible binding every other view's right sidebar answers, and a user
   // rebind moves both at once.

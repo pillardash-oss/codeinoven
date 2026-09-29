@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { invoke } from '$lib/ipc.svelte'
-  import type { BrowserViewBounds } from '$shared/ipc-contract'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import type { BrowserPanelShortcutAction, BrowserViewBounds } from '$shared/ipc-contract'
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
   import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
+  import BrowserFindBar from './BrowserFindBar.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import { openBrowserPageMenuAt } from './browser-chrome-menus'
 
@@ -58,6 +60,30 @@
    *  native view is detached while it is set, so the error card is what the user
    *  sees where the page would be. */
   const loadError = $derived(runtime.loadError)
+  /** Whether this tab's find bar is up. It is a row of this frame, and the store
+   *  is its authority because the sidebar panel shows a tab's page too. */
+  const findOpen = $derived(browserFindState.stateFor(tabId).open)
+
+  /**
+   * Carry out a browser shortcut that belongs to this frame's tab.
+   *
+   * Main decides the key (the page is a native view, so a key pressed in it never
+   * reaches this renderer) and this surface answers it, because it is the one
+   * showing the page and therefore the one holding the find bar. The address bar
+   * and the tab strip are the sidebar's, so those actions are not answered here.
+   */
+  function onPanelShortcut(eventTabId: string, action: BrowserPanelShortcutAction): void {
+    if (eventTabId !== tabId) return
+    if (action === 'find') {
+      browserFindState.open(tabId)
+      return
+    }
+    if (action === 'find-next') {
+      browserFindState.step(tabId, 'next')
+      return
+    }
+    if (action === 'find-previous') browserFindState.step(tabId, 'previous')
+  }
 
   function contentBounds(): BrowserViewBounds | null {
     if (!contentElement) return null
@@ -191,6 +217,7 @@
     // keep the view. Publishing it also flips `pageVisible`, which is what
     // attaches the page on the first paint.
     const releaseClaim = browserVisibility.claimTab(tabId, 'workspace')
+    const unsubscribePanelShortcut = subscribe('browser:panelShortcut', onPanelShortcut)
     let destroyed = false
     const observer = new ResizeObserver(() => {
       if (!destroyed) void showAtCurrentBounds().catch(() => {})
@@ -204,16 +231,31 @@
       destroyed = true
       observer.disconnect()
       window.removeEventListener('resize', onWindowResize)
+      unsubscribePanelShortcut()
+      // The bar is gone with this frame, so its search ends with it: the page is
+      // parked rather than destroyed, and a highlight left on it would still be
+      // painted when the user comes back to this tab.
+      browserFindState.forget(tabId)
       releaseClaim()
     }
   })
 </script>
 
-<div class="relative min-h-0 min-w-0 flex-1 bg-app" data-region="browser-workspace">
+<div class="relative flex min-h-0 min-w-0 flex-1 flex-col bg-app" data-region="browser-workspace">
+  {#if findOpen}
+    <!-- The bar is a row of this frame rather than an overlay: the page is a native
+         view composited above the DOM, so a row above it shrinks the content rect
+         and the observers place the page under the bar. -->
+    <div class="flex shrink-0 justify-center px-2 py-1.5">
+      <div class="w-full max-w-xl">
+        <BrowserFindBar {tabId} />
+      </div>
+    </div>
+  {/if}
   <div
     {@attach attachContentElement}
     {@attach pageVisible && !loadError && manageNativeView}
-    class="absolute inset-0"
+    class="relative min-h-0 flex-1"
     role="presentation"
     oncontextmenu={(event) => {
       // The page itself renders in a native view above this host, so a click it

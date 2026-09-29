@@ -1,6 +1,8 @@
 import type {
   BrowserCompositionPlayback,
   BrowserDownload,
+  BrowserFindRequest,
+  BrowserFindStopAction,
   BrowserInspectorMarker,
   BrowserInspectorTheme,
   BrowserPageState,
@@ -230,6 +232,20 @@ export const invokeBrowserContract = {
   'browser:focusPage': {} as Contract<[tabId: string], void>,
   /** Toggle the web page's native DevTools. Returns whether it is now open. */
   'browser:toggleDevTools': {} as Contract<[tabId: string], boolean>,
+  /**
+   * Search one tab's page with Chromium's own find.
+   *
+   * A page is a native `WebContentsView`, so the app cannot read its text: this
+   * asks the page to search itself, and every match is highlighted by the engine
+   * that owns the document. The answer arrives asynchronously over
+   * `browser:findResult`, because the page reports the count and the ordinal it
+   * is on, and the bar draws nothing it has not been told.
+   */
+  'browser:findInPage': {} as Contract<[tabId: string, request: BrowserFindRequest], void>,
+  /** End one tab's find session. Closing the find bar clears the highlight; a
+   *  session left alone keeps it, which is what stepping away from the field
+   *  means. */
+  'browser:stopFindInPage': {} as Contract<[tabId: string, action: BrowserFindStopAction], void>,
   /**
    * Arm or disarm the element inspector on a design tab. Arming injects the
    * page-side inspector and starts reporting picks; disarming stops picking but

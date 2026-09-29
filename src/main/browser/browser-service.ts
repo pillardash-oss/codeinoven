@@ -31,6 +31,8 @@ import type {
   BrowserConsoleLevel,
   BrowserDesignTab,
   BrowserDevToolsState,
+  BrowserFindRequest,
+  BrowserFindStopAction,
   BrowserLoadError,
   BrowserPageState,
   BrowserPanelShortcutAction,
@@ -158,13 +160,33 @@ import {
  * strip stays the renderer's: it opens, closes and focuses its own tabs.
  */
 const PANEL_SHORTCUT_TARGETS: Readonly<
-  Record<'focusAddress' | 'closeTab' | 'newTab' | 'toggleNotes', BrowserPanelShortcutAction>
+  Record<
+    'focusAddress' | 'closeTab' | 'newTab' | 'toggleNotes' | 'find' | 'findNext' | 'findPrevious',
+    BrowserPanelShortcutAction
+  >
 > = {
   focusAddress: 'focus-address',
   closeTab: 'close-tab',
   newTab: 'new-tab',
-  toggleNotes: 'toggle-notes'
+  toggleNotes: 'toggle-notes',
+  find: 'find',
+  findNext: 'find-next',
+  findPrevious: 'find-previous'
 }
+
+/**
+ * Browser chords a popup window deliberately leaves unclaimed.
+ *
+ * Find is the chrome's own tool: its bar is a row of the surface that shows the
+ * page, and a popup's page is shown by the rail, which carries no toolbar of its
+ * own by design. Claiming the chord in a popup would swallow the key and open
+ * nothing, so it is left to the page instead.
+ */
+const POPUP_UNCLAIMED_ACTIONS: ReadonlySet<BrowserShortcutAction> = new Set<BrowserShortcutAction>([
+  'find',
+  'findNext',
+  'findPrevious'
+])
 
 import {
   faviconForCommittedUrl,
@@ -178,6 +200,12 @@ import {
   type BrowserTabMark,
   type TabMarkRecogniser
 } from './browser-service/browser-tab-mark'
+import {
+  BrowserFindSessions,
+  browserFindResultFor,
+  validateBrowserFindRequest,
+  validateBrowserFindStopAction
+} from './browser-service/browser-find'
 import {
   COMPOSITION_TRANSPORT_GLOBAL,
   compositionTransportCommandScript,
@@ -336,6 +364,14 @@ export class BrowserService {
   /** The Ctrl+Tab switcher chords, pushed by the renderer from its keymap. A key
    *  pressed in a page never reaches the renderer, so main claims these here. */
   private switcherBindings: BrowserSwitcherBindings = []
+  /**
+   * Which find request each tab's page is answering.
+   *
+   * Chromium's find hands back a request id and every report carries it, so this
+   * is what lets a report for a query the user has already moved past be dropped
+   * rather than briefly overwriting the count on screen.
+   */
+  private readonly findSessions = new BrowserFindSessions()
   /**
    * The tab whose surface holds the keyboard, or null while none does.
    *
@@ -792,6 +828,12 @@ export class BrowserService {
     })
     replaceHandler('browser:stop', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.stop()
+    })
+    replaceHandler('browser:findInPage', (_event, rawTabId, rawRequest) => {
+      this.findInPage(validateTabId(rawTabId), validateBrowserFindRequest(rawRequest))
+    })
+    replaceHandler('browser:stopFindInPage', (_event, rawTabId, rawAction) => {
+      this.stopFindInPage(validateTabId(rawTabId), validateBrowserFindStopAction(rawAction))
     })
     replaceHandler('browser:setMuted', (_event, rawTabId, rawMuted) => {
       const tabId = validateTabId(rawTabId)
@@ -1870,6 +1912,9 @@ export class BrowserService {
       case 'closeTab':
       case 'newTab':
       case 'toggleNotes':
+      case 'find':
+      case 'findNext':
+      case 'findPrevious':
         this.requestPanelShortcut(tabId, PANEL_SHORTCUT_TARGETS[action])
         return
     }
@@ -1903,14 +1948,17 @@ export class BrowserService {
    * through the page's own `WebContentsView`, so the renderer can move its
    * `document.activeElement` into the address field but not take the user's
    * typing with it. A shortcut whose whole point is a DOM field therefore hands
-   * the window's web contents the focus first: `focus-address` and `new-tab`
-   * both open a field the renderer immediately focuses. The tab-strip actions
-   * that do not involve a field (`close-tab`, `toggle-notes`) deliberately do
-   * not, because the page must keep the keyboard after them.
+   * the window's web contents the focus first: `focus-address`, `new-tab` and
+   * `find` all open a field the renderer immediately focuses. The tab-strip
+   * actions that do not involve a field (`close-tab`, `toggle-notes`, and a find
+   * step) deliberately do not, because the page must keep the keyboard after
+   * them.
    */
   private requestPanelShortcut(tabId: string, action: BrowserPanelShortcutAction): void {
     if (this.window.webContents.isDestroyed()) return
-    if (action === 'focus-address' || action === 'new-tab') this.window.webContents.focus()
+    if (action === 'focus-address' || action === 'new-tab' || action === 'find') {
+      this.window.webContents.focus()
+    }
     sendToRenderer(this.window.webContents, 'browser:panelShortcut', tabId, action)
   }
 
@@ -1972,6 +2020,68 @@ export class BrowserService {
   private stepTabZoom(contents: WebContents, step: number): void {
     const next = Math.min(MAX_ZOOM_LEVEL, Math.max(-MAX_ZOOM_LEVEL, contents.getZoomLevel() + step))
     contents.setZoomLevel(next)
+  }
+
+  /**
+   * Search a tab's page, or end its search.
+   *
+   * The search itself is Chromium's: the page is a native view, so its text is
+   * only reachable through `findInPage`, and the engine that owns the document is
+   * the one that highlights the matches and scrolls to the active one. An empty
+   * text is not a search of nothing   it is the field being cleared, which means
+   * the highlight on the page goes away, so it ends the session instead of asking
+   * Chromium for a match on "".
+   *
+   * The request id is recorded before the call resolves so that the report of a
+   * superseded query can never be taken for the current one; the report arrives
+   * on the page's own `found-in-page` event, which is wired when the tab is
+   * created.
+   */
+  private findInPage(tabId: string, request: BrowserFindRequest): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return
+    const contents = tab.view.webContents
+    if (request.text.length === 0) {
+      this.stopFindInPage(tabId, 'clearSelection')
+      return
+    }
+    const requestId = contents.findInPage(request.text, {
+      forward: request.forward,
+      findNext: request.findNext,
+      matchCase: request.matchCase
+    })
+    this.findSessions.begin(tabId, requestId, request.text)
+  }
+
+  /** End a tab's find session, which is what closing the bar does. */
+  private stopFindInPage(tabId: string, action: BrowserFindStopAction): void {
+    const tab = this.tabs.get(tabId)
+    this.findSessions.take(tabId)
+    if (!tab || tab.view.webContents.isDestroyed()) return
+    tab.view.webContents.stopFindInPage(action)
+  }
+
+  /**
+   * Forward one report from a page's own find to the bar that draws it.
+   *
+   * A report for a request that has been superseded, for a tab with no session at
+   * all (the bar was closed, or the page navigated), or one that repeats what the
+   * bar was already told is dropped: the bar is only ever told about the search it
+   * is currently showing, and only when there is something new to show.
+   */
+  private publishFindResult(
+    tabId: string,
+    requestId: number,
+    report: { matches: number; activeMatchOrdinal: number }
+  ): void {
+    const session = this.findSessions.acceptReport(tabId, requestId, report)
+    if (!session) return
+    if (this.window.isDestroyed()) return
+    sendToRenderer(
+      this.window.webContents,
+      'browser:findResult',
+      browserFindResultFor(tabId, session.text, report)
+    )
   }
 
   /**
@@ -2191,6 +2301,26 @@ export class BrowserService {
       // for an empty one.
       applyBrowserPageBackground(tab.view)
       publish()
+      // Chromium's find does not survive a document, so a session that was live
+      // across this navigation is over: the page has no matches to report and the
+      // bar must not keep showing the count of the document that just went away.
+      // The report is sent rather than left to the engine, which says nothing at
+      // all for a search that no longer exists, and it names the text that was
+      // being searched so the bar it belongs to is the one that answers it.
+      const findSession = this.findSessions.take(tabId)
+      if (findSession && !this.window.isDestroyed()) {
+        sendToRenderer(
+          this.window.webContents,
+          'browser:findResult',
+          browserFindResultFor(tabId, findSession.text, { matches: 0, activeMatchOrdinal: 0 })
+        )
+      }
+    })
+    // Every report from this page's own find: the session decides which of them
+    // the bar is waiting for, and which of those say anything new (see
+    // `BrowserFindSessions`).
+    view.webContents.on('found-in-page', (_event, result) => {
+      this.publishFindResult(tabId, result.requestId, result)
     })
     view.webContents.on('did-navigate-in-page', publish)
     view.webContents.on('page-title-updated', publish)
@@ -2442,7 +2572,10 @@ export class BrowserService {
         return
       }
       const action = matchBrowserShortcut(input, this.shortcutBindings)
-      if (!action) return
+      // A popup answers the browser's chords except the ones that need chrome it
+      // does not have (see `POPUP_UNCLAIMED_ACTIONS`): those are left to the page
+      // rather than prevented into a no-op.
+      if (!action || POPUP_UNCLAIMED_ACTIONS.has(action)) return
       event.preventDefault()
       this.runPopupWindowShortcut(record, action)
     })
@@ -3752,6 +3885,7 @@ export class BrowserService {
     this.scrollbarStyles.delete(tabId)
     this.capture.forget(tabId)
     this.inspector.forget(tabId)
+    this.findSessions.take(tabId)
     this.stage.release(tab.view)
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)

@@ -1945,6 +1945,9 @@
       // Focusing the address bar is the panel's own: it owns the input, and it
       // is the surface (sidebar or full screen) that decides whether it shows it.
       if (action === 'focus-address') return
+      // Find is the page-showing surface's too: the bar is a row of that surface,
+      // and the store it writes to is shared with it.
+      if (action === 'find' || action === 'find-next' || action === 'find-previous') return
       const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
       if (!tab || tab.kind !== 'browser') return
       if (action === 'close-tab') {

@@ -337,7 +337,10 @@ export const BROWSER_SHORTCUT_ACTIONS = [
   'toggleDevTools',
   'closeTab',
   'newTab',
-  'toggleNotes'
+  'toggleNotes',
+  'find',
+  'findNext',
+  'findPrevious'
 ] as const
 
 export type BrowserShortcutAction = (typeof BROWSER_SHORTCUT_ACTIONS)[number]
@@ -378,9 +381,62 @@ export interface BrowserSwitcherKey {
 
 /**
  * A browser action the renderer owns, because only the renderer knows the tab
- * strip: focusing the address bar, and closing or opening a tab.
+ * strip or holds the find bar: focusing the address bar, closing or opening a
+ * tab, showing the tab's notes, and find.
  */
-export type BrowserPanelShortcutAction = 'focus-address' | 'close-tab' | 'new-tab' | 'toggle-notes'
+export type BrowserPanelShortcutAction =
+  | 'focus-address'
+  | 'close-tab'
+  | 'new-tab'
+  | 'toggle-notes'
+  | 'find'
+  | 'find-next'
+  | 'find-previous'
+
+/**
+ * One find request for a tab's page.
+ *
+ * The page is a native `WebContentsView`, so the search itself is Chromium's
+ * own and the renderer can only ask for it. `findNext` asks the page to keep the
+ * session it already has and move within it, which is what makes next/previous a
+ * step rather than a fresh search; a new query sends `findNext: false` so the
+ * session restarts at the first match.
+ */
+export interface BrowserFindRequest {
+  /** The text to find. An empty text clears the page's highlight. */
+  text: string
+  /** The direction the session moves in. */
+  forward: boolean
+  /** Continue the existing session instead of starting a new one. */
+  findNext: boolean
+  /** Match the text case-sensitively. */
+  matchCase: boolean
+}
+
+/**
+ * What Chromium's find reported for a tab, as the find bar draws it.
+ *
+ * `matches` is the page's own count of every match and `activeMatchOrdinal` is
+ * the 1-based position of the one the page is scrolled to, so `0/0` is the
+ * honest reading of a page with no match rather than an assumed empty result.
+ */
+export interface BrowserFindResult {
+  tabId: string
+  /** The text this result belongs to, so a bar that has moved on can ignore it. */
+  text: string
+  matches: number
+  activeMatchOrdinal: number
+}
+
+/**
+ * How a find session ends.
+ *
+ * `clearSelection` drops the page's highlight, which is what closing the bar
+ * means; `keepSelection` leaves the highlight on screen, which is what stepping
+ * away from the field means; `activateSelection` leaves it and focuses the
+ * match, which is what a page wants when the bar closes onto its result.
+ */
+export type BrowserFindStopAction = 'clearSelection' | 'keepSelection' | 'activateSelection'
 
 /** Ownership metadata for a browser tab requested by the main process. */
 export interface BrowserOpenRequestContext {

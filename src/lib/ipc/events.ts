@@ -11,6 +11,7 @@ import type {
 import type {
   BrowserDevToolsState,
   BrowserDownload,
+  BrowserFindResult,
   BrowserInspectorEvent,
   BrowserOpenRequestContext,
   BrowserPageState,
@@ -204,10 +205,17 @@ export const IPC_EVENT_CONTRACT = {
   'browser:inspector': [] as unknown as [tabId: string, event: BrowserInspectorEvent],
   /**
    * A browser shortcut the renderer has to carry out, because it owns the tab
-   * strip: focusing the address bar of a tab, or closing or opening a tab. Main
-   * decides the key, the renderer decides what the tab strip does with it.
+   * strip or holds the find bar: focusing the address bar of a tab, closing or
+   * opening a tab, or showing and stepping its find bar. Main decides the key,
+   * the renderer decides what the tab strip or the find bar does with it.
    */
   'browser:panelShortcut': [] as unknown as [tabId: string, action: BrowserPanelShortcutAction],
+  /**
+   * What Chromium's find reported for a tab's page. The page is a native view, so
+   * this is the only place a match count can come from; the find bar draws it and
+   * nothing else.
+   */
+  'browser:findResult': [] as unknown as [result: BrowserFindResult],
   /**
    * A Ctrl+Tab switcher gesture pressed while a native page held the keyboard.
    * Main claimed the chord and handed this renderer the keyboard, so the switcher

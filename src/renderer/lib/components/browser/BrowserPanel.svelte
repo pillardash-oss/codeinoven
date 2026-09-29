@@ -14,8 +14,10 @@
   import BrowserAddressBar from './BrowserAddressBar.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
   import BrowserCommentEditor from './BrowserCommentEditor.svelte'
+  import BrowserFindBar from './BrowserFindBar.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
+  import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
@@ -145,6 +147,10 @@
   /** How many of this tab's project's downloads are unfinished: still running, or
    *  stopped with bytes on disk waiting for a resume. */
   const unfinishedDownloadCount = $derived(browserDownloads.unfinishedCount(tabProjectId))
+  /** Whether this tab's find bar is up. The bar itself is one row of this column,
+   *  and the store is its authority because the global Browser view shows a tab's
+   *  page too. */
+  const findOpen = $derived(browserFindState.stateFor(tabId).open)
 
   /** Open the native downloads menu anchored under the download button. The
    *  OS popup composites above the page view, so the panel's layout never has
@@ -229,11 +235,28 @@
    * The focus a keyboard-driven shortcut lands on. Only the instance that owns
    * the native view may take it: a full screen and a sidebar panel can both be
    * mounted for one tab, and the hidden one has no visible address bar.
+   *
+   * Find is the same shape of answer   the bar is this column's own row, so the
+   * request is honoured by the instance that is on screen and the other one leaves
+   * it alone   and its state is the shared one, so the surface that does answer
+   * opens the bar the user last left.
    */
   function onPanelShortcut(eventTabId: string, action: BrowserPanelShortcutAction): void {
-    if (eventTabId !== tabId || action !== 'focus-address') return
+    if (eventTabId !== tabId) return
     if (!panelVisible) return
-    addressBar?.focusAndSelect()
+    if (action === 'focus-address') {
+      addressBar?.focusAndSelect()
+      return
+    }
+    if (action === 'find') {
+      browserFindState.open(tabId)
+      return
+    }
+    if (action === 'find-next') {
+      browserFindState.step(tabId, 'next')
+      return
+    }
+    if (action === 'find-previous') browserFindState.step(tabId, 'previous')
   }
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {
@@ -439,6 +462,10 @@
       unsubscribeState()
       unsubscribeDevTools()
       unsubscribePanelShortcut()
+      // The bar is gone with this column, so its search ends with it: the page is
+      // parked rather than destroyed, and a highlight left on it would still be
+      // painted when the user comes back.
+      browserFindState.forget(tabId)
       // The inspection session outlives this panel on purpose: the mode, the
       // pins and the open comment belong to the tab, and the other surface (the
       // full screen dialog, or the sidebar it is returning to) keeps them. Only
@@ -457,9 +484,7 @@
   {@attach panelVisible && !pageState.loadError && manageNativeBrowserView}
   class="flex h-full min-h-0 flex-col bg-app"
 >
-  <div
-    class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2"
-  >
+  <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2">
     <button
       type="button"
       class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
@@ -569,6 +594,21 @@
       </button>
     {/if}
   </div>
+  {#if findOpen && panelVisible}
+    <!-- The bar is a row of this column rather than an overlay: the page is a
+         native view composited above the DOM, so a row above it shrinks the
+         content rect and the observers place the page under the bar.
+
+         Gated on `panelVisible` as well as on the shared open state, because a
+         full screen and a sidebar panel can both be mounted for one tab: the
+         state is one, so both would draw the bar and the one behind the other
+         surface would take the keyboard for a field nobody can see. -->
+    <div class="flex shrink-0 justify-center px-2 py-1.5">
+      <div class="w-full max-w-xl">
+        <BrowserFindBar {tabId} />
+      </div>
+    </div>
+  {/if}
   {#if pageState.composition}
     <BrowserCompositionTransport
       {tabId}
