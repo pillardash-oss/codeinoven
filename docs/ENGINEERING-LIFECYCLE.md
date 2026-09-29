@@ -164,6 +164,17 @@ possible and must not be conflated:
   `stopReason: 'app-closed'` with the plain wording "CodeInOven closed before
   this turn finished", rendered in a neutral style rather than as an error.
 
+The marker has to be current wherever it is read. A survivor instance that
+adopts a departed sibling's orphans re-reads the file first
+(`CleanShutdownStore.reload`, called from `reconcileInterruptedWork`), because
+its in-memory copy dates from its own launch and predates the sibling's quit.
+The quit failsafe, which force-exits a wedged renderer 15 seconds after a close
+was requested, writes the marker synchronously before `app.exit(0)`
+(`CleanShutdownStore.recordSync`), and `SIGHUP` is handled with `SIGTERM` and
+`SIGINT` so a development launch killed by its closing terminal is a clean stop
+too. A process killed without reaching any of these paths (a crash, `SIGKILL`,
+a power loss) keeps the crash wording, which is the point.
+
 In background mode a window close is a park, not a close: the chat engine and
 its in-flight turns keep running, so parking never settles a turn at all. The
 marker is only written on a real shutdown, and it is cleared the moment a launch
