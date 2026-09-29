@@ -29,16 +29,16 @@ export function appRendererNavigationTargets(): string[] {
     const devUrl = process.env['ELECTRON_RENDERER_URL'].replace(/\/$/u, '')
     return [
       process.env['ELECTRON_RENDERER_URL'],
-      `${devUrl}/browser-popup.html`,
+      `${devUrl}/permission-prompt.html`,
       `${devUrl}/toast-overlay.html`
     ]
   }
   const rendererRoot = join(appPath, 'out', 'renderer')
   return [
     pathToFileURL(join(rendererRoot, 'index.html')).href,
-    // The frameless browser permission popup (a first-party static document
-    // sharing the app preload) is trusted to resolve permissions and nothing else.
-    pathToFileURL(join(rendererRoot, 'browser-popup.html')).href,
+    // The frameless browser permission popup (a first-party document sharing the
+    // app preload) is trusted to resolve permissions and nothing else.
+    pathToFileURL(join(rendererRoot, 'permission-prompt.html')).href,
     // The frameless toast overlay is the app's own toaster in a window of its
     // own, so it reports interactions and asks for the stack it should draw.
     pathToFileURL(join(rendererRoot, 'toast-overlay.html')).href

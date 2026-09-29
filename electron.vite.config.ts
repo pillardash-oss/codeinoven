@@ -254,7 +254,12 @@ export default defineConfig(({ mode }) => {
             // browser's native page view. It is its own entry because it must
             // load the app's stylesheet and the toaster, and nothing else of the
             // app, so a second renderer stays cheap.
-            'toast-overlay': resolve(__dirname, 'src/renderer/toast-overlay.html')
+            'toast-overlay': resolve(__dirname, 'src/renderer/toast-overlay.html'),
+            // The browser permission prompt: one card, floating over the in-app
+            // browser's page in a transparent window of its own. It is an entry
+            // of its own because it draws the card with the app's stylesheet,
+            // and runs nothing else of the app.
+            'permission-prompt': resolve(__dirname, 'src/renderer/permission-prompt.html')
           }
         }
       }
