@@ -139,6 +139,9 @@
 
   let isNative = $derived(target?.kind === 'native')
   let nativeEntry = $derived(target?.kind === 'native' ? target.entry : null)
+  // Pi's own mcp.json has no legacy SSE transport: its validator rejects
+  // `type: "sse"`, so a Pi entry never gets the option that would write one.
+  let allowSse = $derived(!isNative || nativeEntry?.harnessId !== 'pi')
   let editingRegistry = $derived(target?.kind === 'registry' ? target.utility : null)
   let isAppOwned = $derived(target?.kind === 'registry' && target.utility?.appOwned === true)
   /** An app-owned skill may be switched off, so its editor keeps the switch. */
@@ -819,7 +822,7 @@
           {/if}
         {/if}
 
-        <UtilityEditorModalConfigFields bind:draft {isNative} />
+        <UtilityEditorModalConfigFields bind:draft {isNative} {allowSse} />
 
         {#if draft.kind === 'mcp' && !computerUseConnection}
           <McpConnectionTester

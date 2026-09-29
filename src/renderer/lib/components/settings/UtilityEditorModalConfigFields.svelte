@@ -5,9 +5,15 @@
   interface Props {
     draft: UtilityDraft
     isNative: boolean
+    /**
+     * Pi 0.99 rejects `type: "sse"` outright ("legacy SSE transport is not
+     * supported; use the streamable HTTP URL"), so its own entries must not
+     * be offered a transport saving them would break.
+     */
+    allowSse?: boolean
   }
 
-  let { draft = $bindable(), isNative }: Props = $props()
+  let { draft = $bindable(), isNative, allowSse = true }: Props = $props()
 </script>
 
 <fieldset class="space-y-3 rounded-xl border p-3">
@@ -33,7 +39,9 @@
       >
         <option value="stdio">stdio</option>
         <option value="http">HTTP</option>
-        <option value="sse">SSE</option>
+        {#if allowSse}
+          <option value="sse">SSE</option>
+        {/if}
       </select>
     </label>
     {#if draft.transport === 'stdio'}
