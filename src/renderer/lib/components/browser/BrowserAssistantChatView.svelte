@@ -80,7 +80,6 @@
     <span>What can I help you with on</span>
     {#if pageLabel !== ''}
       <span class="inline-flex max-w-full min-w-0 items-center gap-1.5">
-        <span class="text-dimmed" aria-hidden="true">“</span>
         {#if pageFavicon}
           <img
             src={pageFavicon}
@@ -93,7 +92,7 @@
           <Globe size={18} class="shrink-0 text-dimmed" aria-hidden="true" />
         {/if}
         <span class="min-w-0 truncate">{pageLabel}</span>
-        <span class="text-dimmed" aria-hidden="true">”?</span>
+        <span class="text-dimmed" aria-hidden="true">?</span>
       </span>
     {:else}
       <span>this page?</span>
