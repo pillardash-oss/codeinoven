@@ -1,4 +1,10 @@
-import type { DesignOpenResult, DesignThumbnail, ThreadDesignState, WorkRootState } from './design'
+import type {
+  DesignOpenResult,
+  DesignScreenShot,
+  DesignThumbnail,
+  ThreadDesignState,
+  WorkRootState
+} from './design'
 import type { Contract } from './contract-helpers'
 
 export const invokeDesignContract = {
@@ -25,6 +31,18 @@ export const invokeDesignContract = {
   'design:thumbnail': {} as Contract<
     [projectId: string, threadId: string, directory: string, entry: string | null, width: number],
     DesignThumbnail
+  >,
+  /**
+   * Every screen of one design folder, each with a picture of it.
+   *
+   * A design holds a page per screen, so the board shows them together rather
+   * than the one folder it has selected. The pictures are taken by the app, one
+   * screen at a time, and one that has not changed since it was last rendered is
+   * answered from what was captured then; `force` asks for all of them again.
+   */
+  'design:screens': {} as Contract<
+    [projectId: string, threadId: string, directory: string, width: number, force: boolean],
+    DesignScreenShot[]
   >,
   /**
    * The folders designs and videos are written into, and what the last change

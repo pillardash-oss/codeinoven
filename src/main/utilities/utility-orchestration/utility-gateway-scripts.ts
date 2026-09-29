@@ -203,7 +203,7 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
     generateMediaTool(roots),
     {
       name: 'preview',
-      description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab. The folder's own scripts and stylesheets run, so an HTML design renders as written, and the tab is mounted offscreen at a real viewport whether or not the user is looking at it. Aim it at the folder holding the design's entry file.`,
+      description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab. The folder's own scripts and stylesheets run, so an HTML design renders as written, and the tab is mounted offscreen at a real viewport whether or not the user is looking at it. Aim it at the folder holding the design's entry file, and name \`entry\` to turn it to one of that design's screens.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -214,7 +214,7 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
           entry: {
             type: 'string',
             description:
-              'File inside that folder to load, relative to it. Defaults to index.html when that file exists; otherwise the folder listing is shown.'
+              'File inside that folder to load, relative to it, which is how a screen of a multi-screen design is shown: "dashboard.html". Defaults to index.html when that file exists; otherwise the folder listing is shown.'
           },
           attention: {
             type: 'string',

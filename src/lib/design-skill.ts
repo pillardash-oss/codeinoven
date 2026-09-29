@@ -121,12 +121,20 @@ Write one design per folder under \`${designRoot}/<name>/\`, with \`index.html\`
 
 Do not write into \`.cio/specs/<feature>/prototypes/\`. That folder belongs to the engineering prototype phase, which finalizes and registers whatever it finds there.
 
+## One design, many screens
+
+A design is a product, not a page. A website is several pages, a dashboard is several screens, and a design system is a set of them: write one HTML file per screen in the design's folder, sharing one stylesheet, and link them from each other so the design reads as one product rather than as loose files. \`index.html\` is the entry file and belongs to the screen a visitor lands on.
+
+Keep one product in one folder. A website and its dashboard split across two folders is a defect the user sees: the coordinator board pictures the screens of the design a thread is working in, so screens written into two folders are never shown together. A genuinely separate product, a pitch deck beside a product site, is the one reason to start a second design, and a thread may hold as many as the work needs: each is its own folder, the board lists them all, and \`preview\` with that folder's \`directory\` turns the tab to it.
+
+The board reads a screen as an \`.html\` file in the design's folder or one folder below it, so \`dashboard.html\` and \`pages/pricing.html\` are both screens and a page two levels down is not one it shows. A file whose name starts with \`_\` is read as a partial (\`_nav.html\`), and a folder or file whose name starts with \`.\` is skipped, so keep fragments, scratch pages and notes under those names and they stay out of the way.
+
 ## Showing the design
 
 Invoke this capability with operation \`preview\`:
 
 - \`directory\`, project-relative, defaults to \`${designRoot}\`.
-- \`entry\`, a file inside that folder, defaults to \`index.html\` when that file exists. With no entry file the app opens its own file listing.
+- \`entry\`, a file inside that folder, defaults to \`index.html\` when that file exists. Name a screen here to show that screen: \`entry: 'dashboard.html'\` turns the preview to the dashboard, so a design of several screens is previewed a screen at a time rather than as one long page. With no entry file the app opens its own file listing.
 - \`attention\`, \`focus\` (the default) to bring the tab to the user, \`background\` to leave them where they are.
 
 The reply carries the URL, so you can also put it in your final message. The tab keeps itself current: the app watches the served folder and refreshes the preview shortly after a file changes, so an edit shows up without you re-previewing. Preview again when you move to a different folder or a different entry file.
@@ -188,5 +196,5 @@ The aim is a page someone would recognise as designed rather than generated. Wor
 
 ## Reporting the work
 
-Say what the design does and what a viewer can try, in the user's terms: the screen, the sections, the interaction states. Name the folder it lives in and the URL that shows it. If a decision was a guess, say which one and what would settle it.`
+Say what the design does and what a viewer can try, in the user's terms: the screens it now holds, the sections, the interaction states. Name the folder it lives in and the URL that shows it. If a decision was a guess, say which one and what would settle it.`
 }

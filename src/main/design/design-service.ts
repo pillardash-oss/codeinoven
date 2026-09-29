@@ -9,7 +9,10 @@ import type {
   AuthoredWorkKind,
   DesignEntry,
   DesignOpenResult,
+  DesignScreen,
+  DesignScreenShot,
   DesignThumbnail,
+  ThreadDesignCurrent,
   ThreadDesignState
 } from '../../lib/ipc/design'
 import { originOf } from '../../lib/local-development-url'
@@ -21,11 +24,13 @@ import { DesignRepo } from '../database/repositories/design-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
+import { resolveServedFolder } from '../preview/served-folder'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { Logger } from '../system/logger'
 import { openVideoPreview } from '../video/video-preview-session'
 import { readCompositionManifest } from '../video/video-manifest'
 import { listProjectWorkFolders } from './design-listing'
+import { listDesignScreens } from './design-screens'
 import { openDesignPreview } from './design-preview-session'
 import { currentWorkRoot, currentWorkRootReports, currentWorkRoots } from './work-roots-state'
 
@@ -51,6 +56,31 @@ import { currentWorkRoot, currentWorkRootReports, currentWorkRoots } from './wor
 /** Ceiling on the thumbnail width a caller may ask for. */
 const MIN_THUMBNAIL_WIDTH = 160
 const MAX_THUMBNAIL_WIDTH = 1_200
+
+/**
+ * Most screen pictures kept between sweeps.
+ *
+ * A sweep renders every screen of one design, and a picture is worth keeping only
+ * while the screen is unchanged, so the cache is keyed by each file's own stamp.
+ * The ceiling is what stops a long session across many designs from holding every
+ * picture it ever took: past it the least recently used ones are dropped and
+ * captured again if they are still on screen.
+ */
+const MAX_CACHED_SCREEN_SHOTS = 48
+
+/**
+ * Wall-clock budget for one sweep of a design's screens.
+ *
+ * Each screen is a real page load, so a design with many screens, or one page
+ * that never finishes, must not hold the caller until every screen has had its
+ * turn: past the budget the remaining screens are reported without a picture and
+ * the next sweep (or the refresh button) picks them up, because the ones already
+ * captured are answered from the cache.
+ */
+const SCREEN_SWEEP_BUDGET_MS = 25_000
+
+/** How long one screen is given to finish loading before it is pictured as it is. */
+const SCREEN_LOAD_TIMEOUT_MS = 5_000
 
 /**
  * The second a composition's board picture is taken at.
@@ -83,6 +113,35 @@ function requireId(value: unknown, label: string): string {
   return value
 }
 
+/**
+ * A screen the app has no picture of, reported by name rather than left out.
+ *
+ * A design gains a screen the moment its file is written, and the file exists
+ * before the app has rendered it: dropping the screen would make the design look
+ * smaller than it is, and the next sweep, or the refresh button, fills the
+ * picture in.
+ */
+function emptyScreenShot(screen: DesignScreen): DesignScreenShot {
+  return { entry: screen.entry, name: screen.name, dataUrl: null, width: 0, height: 0 }
+}
+
+/**
+ * What makes one picture of a screen the picture of that screen.
+ *
+ * The project and folder say which design it belongs to, the entry says which
+ * screen, the stamp says which version of the file was rendered, and the width
+ * says at what size: change any of them and the earlier picture is a picture of
+ * something else.
+ */
+function screenShotKey(
+  projectId: string,
+  directory: string,
+  screen: DesignScreen,
+  width: number
+): string {
+  return `${projectId}|${directory}|${screen.entry}|${screen.updatedAt}|${width}`
+}
+
 export interface DesignServiceOptions {
   database: Database
   previews: DirectoryPreviewService
@@ -105,6 +164,12 @@ export class DesignService {
   private readonly threads: ThreadRepo
   /** Canonical spelling of a project's path per stored spelling, filled on first use. */
   private readonly canonicalProjects = new Map<string, string>()
+  /** Picture per screen, keyed by project, folder, entry, the file's stamp and width. */
+  private readonly screenShots = new Map<string, DesignScreenShot>()
+  /** The sweep in flight per thread, so starting another one supersedes the first. */
+  private readonly screenSweeps = new Map<string, number>()
+  /** Threads whose tab a sweep is moving, and the newest sweep doing it there. */
+  private readonly sweepingThreads = new Map<string, number>()
 
   constructor(private readonly options: DesignServiceOptions) {
     this.designs = new DesignRepo(options.database)
@@ -137,6 +202,17 @@ export class DesignService {
           typeof rawWidth === 'number' ? rawWidth : 480
         )
     )
+    ipcMain.handle(
+      'design:screens',
+      async (_event, rawProjectId, rawThreadId, rawDirectory, rawWidth, rawForce) =>
+        this.screens(
+          requireId(rawProjectId, 'project id'),
+          requireId(rawThreadId, 'thread id'),
+          rawDirectory,
+          typeof rawWidth === 'number' ? rawWidth : 480,
+          rawForce === true
+        )
+    )
     // The folders authored work is written into, and what the last change moved.
     // Read rather than pushed, because both surfaces that change a root (the
     // Design settings card and the board's own save path) ask immediately after
@@ -151,6 +227,10 @@ export class DesignService {
   /** Forget a thread's authored-work record when the thread itself is gone. */
   forgetThread(threadId: string): void {
     this.designs.deleteThread(threadId)
+    // Dropping the generation is what stops a sweep still in flight for this
+    // thread: its next screen finds a generation that is no longer its own.
+    this.screenSweeps.delete(threadId)
+    this.sweepingThreads.delete(threadId)
   }
 
   /**
@@ -210,13 +290,20 @@ export class DesignService {
     if (directory === null) return NO_TAB_MARK
     const kind = authoredWorkKindOf(directory, currentWorkRoots())
     if (kind === null) return NO_TAB_MARK
-    await this.rememberShownFolder({
-      projectId,
-      threadId,
-      directory,
-      entry: entryWithinOrigin(url, origin),
-      kind
-    })
+    // A screen sweep moves the tab through every screen of one design, which is
+    // the app taking pictures rather than the agent or the user choosing a folder.
+    // The row is left alone for the sweep and written by the navigation that puts
+    // the tab back, so a gallery over a design cannot re-point the thread at
+    // whichever screen happened to be captured last.
+    if (!this.sweepingThreads.has(threadId)) {
+      await this.rememberShownFolder({
+        projectId,
+        threadId,
+        directory,
+        entry: entryWithinOrigin(url, origin),
+        kind
+      })
+    }
     if (kind === 'design') return { design: { directory, origin }, composition: null }
     // A composition with no readable manifest has no timeline, so there is nothing
     // to play: it is shown as an ordinary page rather than driven by a guess.
@@ -265,6 +352,9 @@ export class DesignService {
 
   forgetProject(projectId: string): void {
     this.designs.deleteProject(projectId)
+    for (const key of [...this.screenShots.keys()]) {
+      if (key.startsWith(`${projectId}|`)) this.screenShots.delete(key)
+    }
   }
 
   /**
@@ -406,6 +496,100 @@ export class DesignService {
   }
 
   /**
+   * Every screen of one design folder, each with a picture of it.
+   *
+   * A design is a product rather than a page, so the board shows its screens
+   * instead of one entry file. The pictures come from the same place the single
+   * thumbnail does: the thread's own tab, off screen, at a real viewport, because
+   * a capture has to come from a page the app is rendering.
+   *
+   * That the sweep moves that tab is why three things here are deliberate. It
+   * runs one screen at a time, so a design with many screens is a bounded run of
+   * loads rather than a burst. It is keyed by the thread, so a second sweep
+   * supersedes the first instead of driving the same tab alongside it. And it
+   * leaves the tab where it found it, because a board opened over a design must
+   * not change what the user is looking at.
+   */
+  async screens(
+    projectId: string,
+    threadId: string,
+    directory: unknown,
+    width: number,
+    force: boolean
+  ): Promise<DesignScreenShot[]> {
+    const project = await requireLocalProjectViaWorker(this.options.database, projectId)
+    const folder = resolveServedFolder(project.path, directory, currentWorkRoot('design'))
+    const screens = await listDesignScreens(folder.absolute)
+    const shotWidth = Math.min(
+      MAX_THUMBNAIL_WIDTH,
+      Math.max(MIN_THUMBNAIL_WIDTH, Math.round(width))
+    )
+    if (screens.length === 0 || !this.options.browser()) {
+      return screens.map(emptyScreenShot)
+    }
+    const generation = (this.screenSweeps.get(threadId) ?? 0) + 1
+    this.screenSweeps.set(threadId, generation)
+    // Read before the first navigation: this is the folder and screen the tab was
+    // on, and the only honest place to put it back.
+    const before = await this.designs.forThreadViaWorker(threadId)
+    const shots: DesignScreenShot[] = []
+    const startedAt = Date.now()
+    this.sweepingThreads.set(threadId, generation)
+    try {
+      for (const screen of screens) {
+        const cached = force
+          ? null
+          : this.cachedScreenShot(projectId, folder.display, screen, shotWidth)
+        if (cached !== null) {
+          shots.push(cached)
+          continue
+        }
+        // A newer sweep owns the tab now, so this one stops where it is rather
+        // than fighting it for the same page.
+        if (this.screenSweeps.get(threadId) !== generation) break
+        if (Date.now() - startedAt >= SCREEN_SWEEP_BUDGET_MS) {
+          shots.push(emptyScreenShot(screen))
+          continue
+        }
+        const shot = await this.captureScreen({
+          projectId,
+          threadId,
+          projectPath: project.path,
+          directory: folder.display,
+          screen,
+          width: shotWidth
+        })
+        // A newer sweep took the tab while this picture was being taken, so the page
+        // it shows may no longer be this screen. The picture is dropped rather than
+        // cached against a screen it may not be: the sweep that owns the tab fills
+        // every screen in anyway.
+        if (this.screenSweeps.get(threadId) !== generation) break
+        if (shot.dataUrl !== null) {
+          this.rememberScreenShot(projectId, folder.display, screen, shotWidth, shot)
+        }
+        shots.push(shot)
+      }
+      return shots
+    } finally {
+      // Only the newest sweep clears the mark: an older one that is still winding
+      // down must leave the suppression in place for the one that superseded it.
+      if (this.sweepingThreads.get(threadId) === generation) {
+        this.sweepingThreads.delete(threadId)
+      }
+      if (this.screenSweeps.get(threadId) === generation) {
+        await this.restoreTab({
+          projectId,
+          threadId,
+          projectPath: project.path,
+          folder: folder.display,
+          screens,
+          before
+        })
+      }
+    }
+  }
+
+  /**
    * Every folder of one project under `root`, newest first.
    *
    * The folder listing is the registry: `.cio/designs/<name>/` and
@@ -543,6 +727,118 @@ export class DesignService {
       entry: result.entry,
       url: result.url,
       tabId: result.tabId
+    }
+  }
+
+  /**
+   * Picture one screen in the thread's tab, or report it without a picture.
+   *
+   * Every step degrades rather than throwing: one screen that cannot be served, or
+   * a design whose folder is deleted while the sweep is running, is a screen
+   * without a picture, never a board that fails to load.
+   */
+  private async captureScreen(input: {
+    projectId: string
+    threadId: string
+    projectPath: string
+    directory: string
+    screen: DesignScreen
+    width: number
+  }): Promise<DesignScreenShot> {
+    try {
+      const result = await this.serveWork({
+        kind: 'design',
+        projectPath: input.projectPath,
+        projectId: input.projectId,
+        threadId: input.threadId,
+        directory: input.directory,
+        entry: input.screen.entry,
+        attention: 'background',
+        reveal: false
+      })
+      const browser = this.options.browser()
+      if (browser === null || result.tabId === null) return emptyScreenShot(input.screen)
+      await browser.waitForTabLoad(result.tabId, SCREEN_LOAD_TIMEOUT_MS)
+      const captured = await browser.captureThumbnail(result.tabId, input.width)
+      if (captured === null) return emptyScreenShot(input.screen)
+      return { entry: input.screen.entry, name: input.screen.name, ...captured }
+    } catch (error) {
+      Logger.dev('A design screen could not be pictured:', error)
+      return emptyScreenShot(input.screen)
+    }
+  }
+
+  /**
+   * Put the tab back where the sweep found it.
+   *
+   * The thread's own record is the target, whatever kind of work it holds, because
+   * that record is what the tab was showing. A thread that has no record yet is
+   * left on the design's entry file, which is what the board's own Preview button
+   * would show. Writing the record happens through this navigation rather than
+   * here: the sweep suppressed it for the duration, so this is the one write, and
+   * it is the same guarded write any other navigation makes.
+   */
+  private async restoreTab(input: {
+    projectId: string
+    threadId: string
+    projectPath: string
+    folder: string
+    screens: DesignScreen[]
+    before: ThreadDesignCurrent | null
+  }): Promise<void> {
+    const target =
+      input.before?.kind === 'design'
+        ? { directory: input.before.directory, entry: input.before.entry }
+        : { directory: input.folder, entry: input.screens[0]?.entry ?? null }
+    try {
+      await this.serveWork({
+        kind: 'design',
+        projectPath: input.projectPath,
+        projectId: input.projectId,
+        threadId: input.threadId,
+        directory: target.directory,
+        entry: target.entry,
+        attention: 'background',
+        reveal: false
+      })
+    } catch (error) {
+      Logger.dev('The tab could not be put back after picturing a design:', error)
+    }
+  }
+
+  /**
+   * A screen's picture, when the screen has not changed since it was taken.
+   *
+   * Keyed by the file's own stamp, so an edit invalidates it and nothing else has
+   * to notice the edit. A hit is re-inserted so the least recently used eviction
+   * keeps the pictures the board is showing rather than the first ones it took.
+   */
+  private cachedScreenShot(
+    projectId: string,
+    directory: string,
+    screen: DesignScreen,
+    width: number
+  ): DesignScreenShot | null {
+    const key = screenShotKey(projectId, directory, screen, width)
+    const hit = this.screenShots.get(key)
+    if (hit === undefined) return null
+    this.screenShots.delete(key)
+    this.screenShots.set(key, hit)
+    return hit
+  }
+
+  private rememberScreenShot(
+    projectId: string,
+    directory: string,
+    screen: DesignScreen,
+    width: number,
+    shot: DesignScreenShot
+  ): void {
+    this.screenShots.set(screenShotKey(projectId, directory, screen, width), shot)
+    while (this.screenShots.size > MAX_CACHED_SCREEN_SHOTS) {
+      const oldest = this.screenShots.keys().next()
+      if (oldest.done) break
+      this.screenShots.delete(oldest.value)
     }
   }
 }

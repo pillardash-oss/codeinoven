@@ -21,6 +21,7 @@
   import type {
     AuthoredWorkKind,
     DesignEntry,
+    DesignScreenShot,
     ThreadDesignState,
     WorkRootState
   } from '$shared/ipc-contract'
@@ -31,9 +32,14 @@
    *
    * A session's work is a folder of HTML, and the user's question after a restart is
    * "where did my design go?" or "where did my video go?". This panel answers it: the
-   * folder in use, a picture of it, every folder of that kind the project holds, and
-   * one button that brings its browser tab forward. A design session and a video
-   * session share the board, so the words come from the kind and nothing else does.
+   * folder in use, a picture of every screen it holds, every folder of that kind the
+   * project holds, and one button that brings its browser tab forward. A design session
+   * and a video session share the board, so the words come from the kind and nothing
+   * else does.
+   *
+   * A design is a product rather than a page, so the pictures are one per screen of the
+   * folder in use. That is what makes a website and its dashboard visible together,
+   * where a single picture of the design showed the entry file and hid the rest.
    *
    * It loads its own state rather than receiving it through props, because the work
    * outlives the turn that made it: there is no live turn to hand it anything, and a
@@ -47,15 +53,23 @@
 
   let { projectId, threadId }: Props = $props()
 
+  /**
+   * How wide a screen is pictured at.
+   *
+   * One size for every card, featured or not, so the pictures are taken once and
+   * shown at whatever size the grid gives them: a second size would be a second sweep
+   * of page loads for the same screens.
+   */
+  const SCREEN_SHOT_WIDTH = 520
+
   // Seeded from whatever the workspace already fetched, so the panel paints on
   // its first frame instead of flashing a spinner.
   // svelte-ignore state_referenced_locally
   let designState = $state<ThreadDesignState | null>(
     designCoordinatorState.stateFor(projectId, threadId)
   )
-  let thumbnail = $state('')
-  let thumbnailSize = $state<{ width: number; height: number } | null>(null)
-  let thumbnailBusy = $state(false)
+  let gallery = $state<DesignScreenShot[]>([])
+  let galleryBusy = $state(false)
   let opening = $state('')
   let error = $state('')
   /** The tab holding the work, so the board can reach its own controls. Empty
@@ -118,6 +132,21 @@
       ''
   )
 
+  /**
+   * The screen in front: the one the thread is on, or the design's first screen.
+   *
+   * A design with one screen, and a composition, are the same board with one card, so
+   * nothing below treats the two cases differently.
+   */
+  let featured = $derived(
+    gallery.find((screen) => screen.entry === selected.entry) ?? gallery[0] ?? null
+  )
+  /** Every other screen, so the grid shows the whole design and not just its entry. */
+  let rest = $derived(gallery.filter((screen) => screen !== featured))
+
+  let refreshLabel = $derived(video ? 'Refresh the composition preview' : 'Refresh the screens')
+  let screensLabel = $derived(`Screens in this design (${gallery.length})`)
+
   async function loadState(): Promise<void> {
     try {
       designState = await invoke('design:state', projectId, threadId)
@@ -172,7 +201,7 @@
       await invoke('config:update', { workRoots: nextRoots })
       const state = await loadWorkRoots()
       await loadState()
-      await loadThumbnail()
+      await loadGallery()
       rootNotice = state ? workRootMoveSummary(state, kind) : ''
       editingRoot = false
     } catch (failure) {
@@ -183,35 +212,58 @@
   }
 
   /**
-   * Capture the work for the preview.
+   * Picture the work for the board.
    *
-   * This also puts it in the thread's browser tab, off screen, which is
-   * deliberate: a picture has to come from a page the app is rendering, and the
-   * tab has to exist anyway for the Preview button to be instant. The capture is
-   * asked for on demand, never on a timer. A video composition is captured as a
-   * still at its opening, so docking the board never starts it playing or
-   * sounding; the moving composition is what Preview loads.
+   * A design is asked for every screen at once, because the board's question is what
+   * the whole design looks like and a screen at a time would be one round trip and one
+   * page load per card. Main captures them the same way it captures one: in the
+   * thread's browser tab, off screen, and it puts the tab back where it found it when
+   * the sweep is done.
+   *
+   * A composition has no screens, so its single picture keeps coming from the one
+   * thumbnail call, which is also what reports the tab the mute button drives.
    */
-  async function loadThumbnail(): Promise<void> {
-    if (selected.directory === '') return
-    thumbnailBusy = true
+  async function loadGallery(force = false): Promise<void> {
+    if (selected.directory === '') {
+      gallery = []
+      return
+    }
+    galleryBusy = true
     try {
-      const shot = await invoke(
-        'design:thumbnail',
-        projectId,
-        threadId,
-        selected.directory,
-        selected.entry,
-        560
-      )
-      thumbnail = shot.dataUrl ?? ''
-      thumbnailSize = shot.dataUrl ? { width: shot.width, height: shot.height } : null
-      tabId = shot.tabId ?? ''
-    } catch {
-      thumbnail = ''
-      thumbnailSize = null
+      if (video) {
+        const shot = await invoke(
+          'design:thumbnail',
+          projectId,
+          threadId,
+          selected.directory,
+          selected.entry,
+          SCREEN_SHOT_WIDTH
+        )
+        gallery = [
+          {
+            entry: selected.entry ?? '',
+            name: selectedName,
+            dataUrl: shot.dataUrl,
+            width: shot.width,
+            height: shot.height
+          }
+        ]
+        tabId = shot.tabId ?? ''
+      } else {
+        gallery = await invoke(
+          'design:screens',
+          projectId,
+          threadId,
+          selected.directory,
+          SCREEN_SHOT_WIDTH,
+          force
+        )
+      }
+      error = ''
+    } catch (failure) {
+      error = failure instanceof Error ? failure.message : 'The screens could not be pictured.'
     } finally {
-      thumbnailBusy = false
+      galleryBusy = false
     }
   }
 
@@ -224,7 +276,7 @@
     try {
       await invoke('design:open', projectId, threadId, directory, entry, true)
       await loadState()
-      await loadThumbnail()
+      await loadGallery()
       error = ''
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'The work could not be opened.'
@@ -234,7 +286,7 @@
   }
 
   onMount(() => {
-    void loadState().then(loadThumbnail)
+    void loadState().then(() => loadGallery())
     void loadWorkRoots()
   })
 
@@ -250,6 +302,57 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
+  {#snippet screenCard(screen: DesignScreenShot, isFeatured: boolean)}
+    {@const cardLabel = video
+      ? `Open the ${noun} in the in-app browser`
+      : `Open the ${noun} screen ${screen.name} in the in-app browser`}
+    <button
+      type="button"
+      class="group relative block overflow-hidden rounded-lg border border-border bg-elevated transition-colors hover:border-primary/60 {isFeatured
+        ? 'col-span-2'
+        : ''}"
+      title={cardLabel}
+      aria-label={cardLabel}
+      onclick={() => void openWork(selected.directory, screen.entry)}
+    >
+      {#if screen.dataUrl}
+        <img
+          src={screen.dataUrl}
+          alt={video
+            ? `Preview of the ${noun} ${selectedName}`
+            : `Preview of the ${noun} screen ${screen.name}`}
+          width={screen.width}
+          height={screen.height}
+          class="block h-auto w-full"
+        />
+      {:else}
+        <span
+          class="flex aspect-[4/3] w-full flex-col items-center justify-center gap-1.5 text-dimmed"
+        >
+          {#if galleryBusy && isFeatured}
+            <LoaderCircle size={18} class="animate-spin" />
+            <span class="text-[0.6875rem]">Capturing the {noun}…</span>
+          {:else}
+            <ImageOff size={isFeatured ? 18 : 14} />
+            <span class="px-3 text-center text-[0.6875rem]">
+              {galleryBusy ? 'Capturing…' : 'No preview of this screen yet.'}
+            </span>
+          {/if}
+        </span>
+      {/if}
+      <span
+        class="absolute inset-x-0 bottom-0 flex items-center bg-gradient-to-t from-black/55 to-transparent px-2 pt-4 pb-1.5"
+      >
+        <span class="truncate text-[0.6875rem] font-medium text-white">{screen.name}</span>
+      </span>
+      <span
+        class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
+      >
+        <span class="text-[0.6875rem] font-medium text-white">Open in the in-app browser</span>
+      </span>
+    </button>
+  {/snippet}
+
   <header class="shrink-0 border-b border-border px-3 py-2">
     <div class="flex items-center justify-between gap-2">
       <span class="flex min-w-0 items-center gap-1.5">
@@ -280,12 +383,12 @@
         <button
           type="button"
           class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-          disabled={thumbnailBusy || selected.directory === ''}
-          title={`Refresh the ${noun} preview`}
-          aria-label={`Refresh the ${noun} preview`}
-          onclick={() => void loadThumbnail()}
+          disabled={galleryBusy || selected.directory === ''}
+          title={refreshLabel}
+          aria-label={refreshLabel}
+          onclick={() => void loadGallery(true)}
         >
-          {#if thumbnailBusy}
+          {#if galleryBusy}
             <LoaderCircle size={12} class="animate-spin" />
           {:else}
             <RefreshCw size={12} />
@@ -323,45 +426,39 @@
       </p>
     {/if}
 
-    <button
-      type="button"
-      class="group relative block w-full overflow-hidden rounded-lg border border-border bg-elevated transition-colors hover:border-primary/60 disabled:cursor-default"
-      disabled={selected.directory === ''}
-      title={`Open this ${noun} in the in-app browser`}
-      aria-label={`Open this ${noun} in the in-app browser`}
-      onclick={() => void openWork(selected.directory, selected.entry)}
-    >
-      {#if thumbnail !== '' && thumbnailSize}
-        <img
-          src={thumbnail}
-          alt={`Preview of the ${noun} ${selectedName}`}
-          width={thumbnailSize.width}
-          height={thumbnailSize.height}
-          class="block h-auto w-full"
-        />
-        <span
-          class="absolute inset-0 flex items-end justify-center bg-gradient-to-t from-black/45 to-transparent p-2 opacity-0 transition-opacity group-hover:opacity-100"
-        >
-          <span class="text-[0.6875rem] font-medium text-white">Open in the in-app browser</span>
-        </span>
-      {:else}
-        <span
-          class="flex aspect-[4/3] w-full flex-col items-center justify-center gap-1.5 text-dimmed"
-        >
-          {#if thumbnailBusy}
-            <LoaderCircle size={18} class="animate-spin" />
-            <span class="text-[0.6875rem]">Capturing the {noun}…</span>
-          {:else}
-            <ImageOff size={18} />
-            <span class="px-4 text-center text-[0.6875rem]">
-              {items.length === 0
-                ? `The agent has not written a ${noun} yet. It will appear here when it does.`
-                : 'No preview captured yet.'}
-            </span>
-          {/if}
-        </span>
+    {#if gallery.length === 0}
+      <div
+        class="flex aspect-[4/3] w-full flex-col items-center justify-center gap-1.5 rounded-lg border border-border bg-elevated text-dimmed"
+      >
+        {#if galleryBusy}
+          <LoaderCircle size={18} class="animate-spin" />
+          <span class="text-[0.6875rem]">Capturing the {noun}…</span>
+        {:else}
+          <ImageOff size={18} />
+          <span class="px-4 text-center text-[0.6875rem]">
+            {items.length === 0
+              ? `The agent has not written a ${noun} yet. It will appear here when it does.`
+              : video
+                ? 'No preview captured yet.'
+                : 'This design has no HTML screens yet.'}
+          </span>
+        {/if}
+      </div>
+    {:else}
+      {#if !video}
+        <p class="px-1 pb-1 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+          {screensLabel}
+        </p>
       {/if}
-    </button>
+      <div class="grid grid-cols-2 gap-2">
+        {#if featured}
+          {@render screenCard(featured, true)}
+        {/if}
+        {#each rest as screen (screen.entry)}
+          {@render screenCard(screen, false)}
+        {/each}
+      </div>
+    {/if}
 
     <div class="mt-3">
       <p class="px-1 pb-1 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">

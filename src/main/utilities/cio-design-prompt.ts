@@ -53,7 +53,10 @@ How to run the session:
    for the end: the user is watching that tab, and seeing the design appear and
    change is the point of the session. The tab refreshes itself as you write, so
    you do not re-preview after every edit; preview again when you move to another
-   folder or another entry file.
+   screen, another folder, or another entry file. Keep the product in one design
+   folder with one HTML file per screen, linked from \`index.html\`: a website is
+   several pages and a dashboard is several screens, and the coordinator board
+   shows a picture of every screen in that folder.
 4. Check the result yourself before you describe it: screenshot it, look at a
    phone width and a desktop width, and read the console for failed requests and
    runtime errors.
@@ -75,4 +78,4 @@ How to run the session:
    say which one and what would settle it.`
 
 /** Every later turn of the same session. */
-export const CIO_DESIGN_CONTINUE_PROMPT = `This thread's design session continues: the user opened it with @cio-design, and the design capability stays active. Keep working in the same design folder, which keeps refreshing in its own preview tab as you write. Report what changed and what a viewer can now try.`
+export const CIO_DESIGN_CONTINUE_PROMPT = `This thread's design session continues: the user opened it with @cio-design, and the design capability stays active. Keep working in the design folder the product already lives in and add a screen as its own HTML file beside \`index.html\`, linked from the rest; the folder keeps refreshing in its own preview tab as you write, and the coordinator board pictures every screen it holds. Report what changed and what a viewer can now try.`
