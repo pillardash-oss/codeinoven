@@ -46,6 +46,9 @@ export interface BrowserPopupWindowRecord {
   tabId: string
   projectId: string
   threadId: string
+  /** The box the owning tab lives in. A popup keeps its opener's jar, so this is
+   *  carried rather than re-derived from the context. */
+  boxId: string | null
   view: WebContentsView
   url: string
   title: string
@@ -143,6 +146,7 @@ export class BrowserPopupWindows {
       tabId: context.owner.tabId,
       projectId: context.owner.projectId,
       threadId: context.owner.threadId,
+      boxId: context.owner.boxId,
       view: this.viewFor(contents),
       url: context.url,
       title: contents.getTitle(),
@@ -289,7 +293,8 @@ export class BrowserPopupWindows {
     const displayed = this.displayedId === null ? null : this.popups.get(this.displayedId)
     if (!displayed || !pageOf(displayed)) return
     if (suspended) this.viewHost.unmount(displayed.view, this.viewportFor(displayed))
-    else if (displayed.displayedBounds) this.viewHost.mount(displayed.view, displayed.displayedBounds)
+    else if (displayed.displayedBounds)
+      this.viewHost.mount(displayed.view, displayed.displayedBounds)
   }
 
   private viewFor(contents: WebContents): WebContentsView {

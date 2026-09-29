@@ -56,7 +56,7 @@ import {
   DOWNLOAD_EVENT_INTERVAL_MS,
   MAX_BROWSER_URL_LENGTH,
   MAX_TRACKED_DOWNLOADS,
-  browserPartitionForProject,
+  browserPartitionFor,
   safeBasename
 } from './browser-validation'
 
@@ -218,7 +218,7 @@ export class BrowserDownloadManager {
   /** Watch one project's browser session for downloads. One registration per
    *  partition, however many times the window that uses it is rebuilt. */
   watchSession(projectId: string, browserSession: Session): void {
-    const partition = browserPartitionForProject(projectId)
+    const partition = browserPartitionFor(projectId)
     if (this.watchedPartitions.has(partition)) return
     this.watchedPartitions.add(partition)
     browserSession.on('will-download', (_event, item, contents) => {
@@ -848,7 +848,7 @@ export class BrowserDownloadManager {
    *  when a tab first reaches the session: a download recovered from an earlier
    *  run can be resumed before any browser tab exists in this one. */
   private sessionFor(projectId: string): Session {
-    const browserSession = session.fromPartition(browserPartitionForProject(projectId))
+    const browserSession = session.fromPartition(browserPartitionFor(projectId))
     this.watchSession(projectId, browserSession)
     return browserSession
   }

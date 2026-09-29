@@ -96,7 +96,6 @@ import { BrowserTabStage } from './browser-service/browser-stage'
 import { applyBrowserPageBackground } from './browser-service/browser-page-background'
 import {
   AGENT_REVEAL_GRACE_MS,
-  BROWSER_PARTITION_PREFIX,
   DEFAULT_PARKED_VIEWPORT,
   FRAME_RENDER_TIMEOUT_MS,
   MAX_ABANDONED_REVEALS,
@@ -113,10 +112,11 @@ import {
   SCREENSHOT_MAX_BYTES,
   ZOOM_STEP,
   browserContextKey,
-  browserPartitionForProject,
+  browserPartitionFor,
   isAllowedPopupWindowUrl,
   isSameBounds,
   isSameViewport,
+  partitionBelongsToProject,
   popupWindowViewport,
   safeBasename,
   validateAttention,
@@ -131,6 +131,7 @@ import {
   validateInspectorReferenceId,
   validateInspectorTheme,
   validateOptionalBrowserUrl,
+  validateOptionalBoxId,
   validatePermissionDecision,
   validatePermissionRequestId,
   validatePopupWindowId,
@@ -198,13 +199,18 @@ interface BrowserMenuPage {
 function menuPageFor(tabId: string, tab: BrowserTab): BrowserMenuPage {
   return {
     contents: tab.view.webContents,
-    owner: { tabId, projectId: tab.projectId, threadId: tab.threadId }
+    owner: { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId }
   }
 }
 
 /** The owner of a popup window's page: the tab whose page opened it. */
 function popupPageOwner(record: BrowserPopupWindowRecord): BrowserPageOwner {
-  return { tabId: record.tabId, projectId: record.projectId, threadId: record.threadId }
+  return {
+    tabId: record.tabId,
+    projectId: record.projectId,
+    threadId: record.threadId,
+    boxId: record.boxId
+  }
 }
 
 /**
@@ -251,10 +257,30 @@ function replaceHandler(channel: string, listener: Parameters<typeof ipcMain.han
   ipcMain.handle(channel, listener)
 }
 
+/**
+ * The browser operations a page belonging to the user answers.
+ *
+ * A browser tab's assistant conversation answers about the page on screen, so its
+ * browser capability is attached to that tab. Only the reading operations are
+ * allowed there: they observe the page, while everything else in the capability
+ * changes it, and a page the user is reading must never be moved, clicked
+ * through or resized by an answer to their question.
+ */
+const ATTACHED_PAGE_OPERATIONS = new Set(['snapshot', 'screenshot', 'console'])
+
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
   private readonly tabs = new Map<string, BrowserTab>()
   private readonly agentTabIds = new Map<string, string>()
+  /**
+   * The browser tab each assistant conversation answers about, by thread id.
+   *
+   * A browser tab's assistant chat is a real thread of its own rather than a tab,
+   * so it owns no page: this is what lets its browser capability read the page the
+   * user is on. The renderer writes it when the rail resolves the conversation and
+   * it is dropped with the tab that carried it.
+   */
+  private readonly assistantPageTabIds = new Map<string, string>()
   private readonly configuredSessions = new Set<string>()
   private readonly permissionGrants = new Map<string, Set<string>>()
   private readonly permissionDenies = new Map<string, Set<string>>()
@@ -485,13 +511,16 @@ export class BrowserService {
     this.guardAgainstStrandedView()
     replaceHandler(
       'browser:show',
-      (_event, rawTabId, rawProjectId, rawThreadId, rawInitialUrl, rawBounds) => {
+      (_event, rawTabId, rawProjectId, rawThreadId, rawInitialUrl, rawBounds, rawBoxId) => {
         const tabId = validateTabId(rawTabId)
         const projectId = validateProjectId(rawProjectId)
         const threadId = validateThreadId(rawThreadId)
         const initialUrl = validateOptionalBrowserUrl(rawInitialUrl)
         const bounds = validateBounds(rawBounds)
-        const tab = this.ensureTab(tabId, projectId, threadId)
+        // Absent on every call that predates boxes, and on every agent-driven
+        // tab, which is what makes "no box whatsoever" the same code path.
+        const boxId = validateOptionalBoxId(rawBoxId)
+        const tab = this.ensureTab(tabId, projectId, threadId, boxId)
 
         // A show that lands inside the grace window of a hide is a surface switch
         // or a visibility answer that flapped, not a departure: dropping the
@@ -601,21 +630,25 @@ export class BrowserService {
     replaceHandler('browser:toastOverlayPointer', (_event, rawOverToast) => {
       this.toastOverlay.setPointerOverToast(rawOverToast === true)
     })
-    replaceHandler('browser:navigate', (_event, rawTabId, rawProjectId, rawThreadId, rawUrl) => {
-      const tabId = validateTabId(rawTabId)
-      const projectId = validateProjectId(rawProjectId)
-      const threadId = validateThreadId(rawThreadId)
-      const url = validateBrowserUrl(rawUrl)
-      // Main creates a tab on `browser:show`, so a tab the renderer already knows
-      // can still be unknown here: a fresh tab whose page has not been shown yet
-      // because an overlay (the address spotlight) covers its frame. Ensuring the
-      // tab makes an address load regardless of whether its page is on screen.
-      const tab = this.ensureTab(tabId, projectId, threadId)
-      // The navigation below is this tab's first, so a later show must not load
-      // the stale initial URL over it.
-      tab.initialNavigationStarted = true
-      this.load(tabId, url)
-    })
+    replaceHandler(
+      'browser:navigate',
+      (_event, rawTabId, rawProjectId, rawThreadId, rawUrl, rawBoxId) => {
+        const tabId = validateTabId(rawTabId)
+        const projectId = validateProjectId(rawProjectId)
+        const threadId = validateThreadId(rawThreadId)
+        const url = validateBrowserUrl(rawUrl)
+        const boxId = validateOptionalBoxId(rawBoxId)
+        // Main creates a tab on `browser:show`, so a tab the renderer already knows
+        // can still be unknown here: a fresh tab whose page has not been shown yet
+        // because an overlay (the address spotlight) covers its frame. Ensuring the
+        // tab makes an address load regardless of whether its page is on screen.
+        const tab = this.ensureTab(tabId, projectId, threadId, boxId)
+        // The navigation below is this tab's first, so a later show must not load
+        // the stale initial URL over it.
+        tab.initialNavigationStarted = true
+        this.load(tabId, url)
+      }
+    )
     replaceHandler('browser:goBack', (_event, rawTabId) => {
       const tab = this.requireTab(validateTabId(rawTabId))
       if (tab.view.webContents.navigationHistory.canGoBack()) {
@@ -772,6 +805,15 @@ export class BrowserService {
     })
     replaceHandler('browser:destroy', (_event, rawTabId) => {
       this.destroy(validateTabId(rawTabId))
+    })
+    replaceHandler('browser:bindAssistantPage', (_event, rawThreadId, rawTabId) => {
+      // Binding is tolerant about the tab: a restored tab that is still
+      // hibernated has no view in main yet, and the binding is only read when an
+      // operation actually needs the page (see `attachedPageTab`).
+      this.assistantPageTabIds.set(validateThreadId(rawThreadId), validateTabId(rawTabId))
+    })
+    replaceHandler('browser:unbindAssistantPage', (_event, rawThreadId) => {
+      this.assistantPageTabIds.delete(validateThreadId(rawThreadId))
     })
     replaceHandler('browser:destroyThread', (_event, rawProjectId, rawThreadId) => {
       const projectId = validateProjectId(rawProjectId)
@@ -1036,20 +1078,47 @@ export class BrowserService {
       }
     }
 
-    const tabId = this.agentTabIds.get(contextKey)
-    if (!tabId) throw new Error('Open a browser page before using this operation')
-    const tab = this.requireTab(tabId)
-    if (tab.projectId !== projectId || tab.threadId !== threadId) {
+    const target = this.utilityTarget(contextKey, threadId)
+    if (!target) {
+      // A browser assistant conversation that has a page bound but whose page is
+      // not in memory right now (a hibernated tab) is told exactly that, instead
+      // of being told to open a page it already has.
+      throw new Error(
+        this.assistantPageTabIds.has(threadId)
+          ? 'The page the user is on is not loaded right now, so it cannot be read. Open a page of your own with "open" if you need one.'
+          : 'Open a browser page before using this operation'
+      )
+    }
+    const { tabId, tab, attached } = target
+    if (!attached && (tab.projectId !== projectId || tab.threadId !== threadId)) {
       throw new Error('The current browser tab belongs to a different project or thread')
     }
-    // An operation is a use: it revives a tab that was evicted from the parked
-    // set, and protects it from eviction while the agent keeps working on it.
-    if (this.activeTabId !== tabId && !this.stage.isParked(tab.view)) {
-      this.parkTab(tabId, { reason: 'agent operation on a tab that was not on screen' })
-    } else {
-      this.touchParkedTab(tabId)
+    // The page the user is on is attached for reading only. Driving it (clicking,
+    // typing, navigating, reloading, resizing) would move the page the user is
+    // looking at out from under them, so those operations keep requiring a page
+    // the agent opened itself.
+    if (attached && !ATTACHED_PAGE_OPERATIONS.has(operation)) {
+      throw new Error(
+        `The page the user is on is attached for reading (${[...ATTACHED_PAGE_OPERATIONS].join(', ')}), so "${operation}" needs a page of your own: call "open" first.`
+      )
     }
-    const utilityContext = this.utilityTabContext(tabId, tab)
+    // An operation is a use: it revives a tab the agent owns that was evicted
+    // from the parked set, and protects it from eviction while the agent keeps
+    // working on it. A page belonging to the user is never parked, claimed or
+    // touched by that bookkeeping.
+    if (!attached) {
+      if (this.activeTabId !== tabId && !this.stage.isParked(tab.view)) {
+        this.parkTab(tabId, { reason: 'agent operation on a tab that was not on screen' })
+      } else {
+        this.touchParkedTab(tabId)
+      }
+    }
+    const utilityContext = {
+      ...this.utilityTabContext(tabId, tab),
+      // Which page the answer came from, so the agent can tell a page it opened
+      // apart from the page the user is reading.
+      page: attached ? ('user' as const) : ('agent' as const)
+    }
     if (operation === 'viewport') {
       const viewport = validateViewportRequest(
         input,
@@ -1808,16 +1877,26 @@ export class BrowserService {
     }
   }
 
-  private ensureTab(tabId: string, projectId: string, threadId: string): BrowserTab {
+  private ensureTab(
+    tabId: string,
+    projectId: string,
+    threadId: string,
+    boxId: string | null = null
+  ): BrowserTab {
     const existing = this.tabs.get(tabId)
     if (existing) {
       if (existing.projectId !== projectId || existing.threadId !== threadId) {
         throw new Error('Browser tab belongs to a different project or thread')
       }
+      if (existing.boxId !== boxId) {
+        // Cookies cannot move between jars, so a tab cannot either. Re-parenting
+        // one would leave the page reading a store its session does not have.
+        throw new Error('Browser tab belongs to a different box')
+      }
       return existing
     }
 
-    const browserSession = this.sessionForProject(projectId)
+    const browserSession = this.sessionForProject(projectId, boxId)
 
     const view = new WebContentsView({
       webPreferences: {
@@ -1836,6 +1915,7 @@ export class BrowserService {
       view,
       projectId,
       threadId,
+      boxId,
       initialNavigationStarted: false,
       consoleEntries: [],
       favicon: null,
@@ -2066,7 +2146,7 @@ export class BrowserService {
         event.preventDefault()
       }
     })
-    this.installWindowOpenPolicy(view, { tabId, projectId, threadId })
+    this.installWindowOpenPolicy(view, { tabId, projectId, threadId, boxId: tab.boxId })
     return tab
   }
   /**
@@ -2351,8 +2431,8 @@ export class BrowserService {
     this.capture.watch(tabId, contents.mainFrame)
   }
 
-  private sessionForProject(projectId: string): Session {
-    const partition = browserPartitionForProject(projectId)
+  private sessionForProject(projectId: string, boxId: string | null = null): Session {
+    const partition = browserPartitionFor(projectId, boxId)
     const browserSession = session.fromPartition(partition)
     // Downloads are tracked for the session, not for the window: the window can be
     // parked and rebuilt while a download keeps running, so the manager that owns
@@ -2406,8 +2486,8 @@ export class BrowserService {
       // handler already answered, so the remembered decision is the gate here:
       // a remembered "Don't allow" refuses silently, and a decision that
       // already covers the request grants silently instead of prompting the
-      // user for a permission they have given before.
-      const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
+      // user for a permission they have given before. The partition is this
+      // closure's, so a box answers from its own jar's decisions.
       const outcome = rememberedPermissionOutcome(
         permissionGrantKeys(request),
         this.permissionGrants.get(partition),
@@ -2425,7 +2505,7 @@ export class BrowserService {
         () => this.resolvePermission(id, permissionResolutions.dismiss),
         PERMISSION_TIMEOUT_MS
       )
-      this.pendingPermissions.set(id, { request, callback, timer })
+      this.pendingPermissions.set(id, { request, callback, timer, partition })
       // Nothing in this instance's ledgers covers the request, but the durable
       // memory is shared with every other running instance: re-read it before
       // asking, and answer from it when the decision is already there. The
@@ -2458,11 +2538,10 @@ export class BrowserService {
     // read was in flight.
     const remaining = this.pendingPermissions.get(id)
     if (!remaining) return
-    const partition = `${BROWSER_PARTITION_PREFIX}${remaining.request.projectId}`
     const outcome = rememberedPermissionOutcome(
       permissionGrantKeys(remaining.request),
-      this.permissionGrants.get(partition),
-      this.permissionDenies.get(partition)
+      this.permissionGrants.get(remaining.partition),
+      this.permissionDenies.get(remaining.partition)
     )
     if (outcome === 'grant') {
       this.resolvePermission(id, permissionSilentGrant)
@@ -2509,16 +2588,23 @@ export class BrowserService {
     }
   }
 
-  /** Forget every remembered permission grant or denial for a project. */
+  /** Forget every remembered permission grant or denial for a context, in every
+   *  jar that context has open: boxes keep their own answers, so "forget this
+   *  site's permissions" has to reach each of them rather than only the default. */
   private clearProjectPermissionMemory(projectId: string): void {
-    const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
+    const partitions = new Set<string>([browserPartitionFor(projectId)])
+    for (const partition of this.configuredSessions) {
+      if (partitionBelongsToProject(partition, projectId)) partitions.add(partition)
+    }
     // The store owns the clear so a permission read already in flight cannot
     // merge the forgotten keys back after the user asked for them to be gone.
-    void this.permissionMemory
-      .forget(partition, this.permissionLedgers())
-      .catch((error: unknown) => {
-        Logger.error('Browser permission memory could not be saved:', error)
-      })
+    void Promise.all(
+      [...partitions].map((partition) =>
+        this.permissionMemory.forget(partition, this.permissionLedgers())
+      )
+    ).catch((error: unknown) => {
+      Logger.error('Browser permission memory could not be saved:', error)
+    })
   }
 
   private resolvePermission(requestId: string, resolution: PermissionResolution): void {
@@ -2527,9 +2613,8 @@ export class BrowserService {
     clearTimeout(pending.timer)
     this.pendingPermissions.delete(requestId)
     if (resolution.rememberGrant || resolution.rememberDeny) {
-      const partition = `${BROWSER_PARTITION_PREFIX}${pending.request.projectId}`
-      const grants = this.permissionGrants.get(partition)
-      const denies = this.permissionDenies.get(partition)
+      const grants = this.permissionGrants.get(pending.partition)
+      const denies = this.permissionDenies.get(pending.partition)
       for (const key of permissionGrantKeys(pending.request)) {
         if (resolution.rememberDeny) {
           grants?.delete(key)
@@ -2842,7 +2927,9 @@ export class BrowserService {
    */
   private openNewTabFor(owner: BrowserPageOwner, url: string, reason: string): void {
     const tabId = `browser:${crypto.randomUUID()}`
-    const tab = this.ensureTab(tabId, owner.projectId, owner.threadId)
+    // A new sibling inherits the box it was opened from: a popup or a link
+    // belongs beside the page that produced it, in the same jar.
+    const tab = this.ensureTab(tabId, owner.projectId, owner.threadId, owner.boxId)
     tab.initialNavigationStarted = true
     this.parkTab(tabId, { reason })
     this.load(tabId, url)
@@ -2876,7 +2963,12 @@ export class BrowserService {
       return
     }
     const tabId = `browser:${crypto.randomUUID()}`
-    const sourceTab = this.ensureTab(tabId, page.owner.projectId, page.owner.threadId)
+    const sourceTab = this.ensureTab(
+      tabId,
+      page.owner.projectId,
+      page.owner.threadId,
+      page.owner.boxId
+    )
     sourceTab.initialNavigationStarted = true
     this.parkTab(tabId, { reason: 'the user opened a page source' })
     this.navigateTo(tabId, target)
@@ -3505,6 +3597,47 @@ export class BrowserService {
     for (const [contextKey, agentTabId] of this.agentTabIds) {
       if (agentTabId === tabId) this.agentTabIds.delete(contextKey)
     }
+    for (const [threadId, pageTabId] of this.assistantPageTabIds) {
+      if (pageTabId === tabId) this.assistantPageTabIds.delete(threadId)
+    }
+  }
+
+  /**
+   * The page tab a browser assistant conversation answers about, when the tab is
+   * live.
+   *
+   * A binding whose tab is gone (closed or never created in this process) reads
+   * as no binding rather than as an error, so an operation reports that it has no
+   * page to read instead of failing a turn over a tab the user closed.
+   */
+  private attachedPageTab(threadId: string): BrowserTab | null {
+    const tabId = this.assistantPageTabIds.get(threadId)
+    if (!tabId) return null
+    return this.tabs.get(tabId) ?? null
+  }
+
+  /**
+   * The tab one browser utility call works on.
+   *
+   * An ordinary agent tab is one the agent opened and owns (`open`), addressed by
+   * the conversation that asked for it. A browser tab's assistant conversation
+   * owns no page, so it falls back to the page bound to it: the tab the user is
+   * on. `attached` is what tells the caller the difference, because the two are
+   * not interchangeable (see {@link ATTACHED_PAGE_OPERATIONS}).
+   */
+  private utilityTarget(
+    contextKey: string,
+    threadId: string
+  ): { tabId: string; tab: BrowserTab; attached: boolean } | null {
+    const ownedTabId = this.agentTabIds.get(contextKey)
+    if (ownedTabId) {
+      const owned = this.tabs.get(ownedTabId)
+      if (owned) return { tabId: ownedTabId, tab: owned, attached: false }
+    }
+    const pageTabId = this.assistantPageTabIds.get(threadId)
+    if (!pageTabId) return null
+    const page = this.tabs.get(pageTabId)
+    return page ? { tabId: pageTabId, tab: page, attached: true } : null
   }
 
   private requiredInputString(

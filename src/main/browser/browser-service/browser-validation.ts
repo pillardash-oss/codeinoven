@@ -40,11 +40,42 @@ import type {
 
 export const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
 
-/** Session partition one project's browser runs in. The download manager has to
- *  reach the same session the browser's tabs use, so the naming lives here rather
- *  than being spelled out at each caller. */
-export function browserPartitionForProject(projectId: string): string {
-  return `${BROWSER_PARTITION_PREFIX}${projectId}`
+/** Session partition one browser context runs in, boxed or not. The download
+ *  manager has to reach the same session the browser's tabs use, so the naming
+ *  lives here rather than being spelled out at each caller. */
+export function browserPartitionFor(projectId: string, boxId: string | null = null): string {
+  return boxId === null
+    ? `${BROWSER_PARTITION_PREFIX}${projectId}`
+    : `${BROWSER_PARTITION_PREFIX}${projectId}${BROWSER_BOX_PARTITION_INFIX}${boxId}`
+}
+
+/** Separates one box's jar from the context's own jar inside a partition name. */
+export const BROWSER_BOX_PARTITION_INFIX = ':box:'
+
+/** Ceiling on a box id. The renderer's store mints these, so the shape is an id,
+ *  never a name the user typed. */
+const MAX_BOX_ID_LENGTH = 64
+const BOX_ID_PATTERN = new RegExp(`^[a-zA-Z0-9:._-]{1,${MAX_BOX_ID_LENGTH}}$`, 'u')
+
+/** A box id from the renderer, or null for the context's own jar.
+ *
+ *  Null is deliberately not a special case downstream: it is what every tab that
+ *  predates boxes already is, and it produces today's exact partition string, so
+ *  \"no box whatsoever\" is the same code path rather than a branch of its own. */
+export function validateOptionalBoxId(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value !== 'string' || !BOX_ID_PATTERN.test(value)) {
+    throw new TypeError('Browser box ID is invalid')
+  }
+  return value
+}
+
+/** Whether a partition string belongs to one context's browser, boxed or not.
+ *  Context ids can be prefixes of each other, so this is an exact match plus the
+ *  infix, never a bare prefix test. */
+export function partitionBelongsToProject(partition: string, projectId: string): boolean {
+  const own = browserPartitionFor(projectId)
+  return partition === own || partition.startsWith(`${own}${BROWSER_BOX_PARTITION_INFIX}`)
 }
 export const MAX_BROWSER_URL_LENGTH = 8192
 export const MAX_CONSOLE_ENTRIES = 500

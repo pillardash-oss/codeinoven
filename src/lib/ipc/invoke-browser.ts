@@ -17,10 +17,7 @@ import type {
 import type { Contract } from './contract-helpers'
 import type { BrowserSearchEngine } from '../browser-search-engines'
 import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
-import type {
-  BrowserBookmarksSnapshot,
-  BrowserHistorySnapshot
-} from '../browser/browser-library'
+import type { BrowserBookmarksSnapshot, BrowserHistorySnapshot } from '../browser/browser-library'
 import type {
   ToastOverlayAck,
   ToastOverlayInteractionReport,
@@ -60,10 +57,29 @@ export const invokeBrowserContract = {
       projectId: string,
       threadId: string,
       initialUrl: string,
-      bounds: BrowserViewBounds
+      bounds: BrowserViewBounds,
+      /**
+       * The box this tab belongs to, or null for the context's own jar. Optional
+       * and trailing so every existing caller keeps meaning what it meant: an
+       * absent box is today's single durable profile, not a new behaviour.
+       */
+      boxId?: string | null
     ],
     BrowserPageState
   >,
+  /**
+   * Bind a browser tab's assistant conversation to the page that tab is on.
+   *
+   * The conversation is a real chat thread rather than a tab of its own, so this
+   * is the only link between it and the page it answers about: the app records
+   * it when the rail resolves the conversation, and main uses it to attach the
+   * agent's browser capability (`cio:browser`) to the page the user is looking
+   * at. Idempotent, and it survives a navigate: the binding is to the tab, not
+   * to one address.
+   */
+  'browser:bindAssistantPage': {} as Contract<[assistantThreadId: string, tabId: string], void>,
+  /** Drop that binding, for a conversation that is being closed. */
+  'browser:unbindAssistantPage': {} as Contract<[assistantThreadId: string], void>,
   'browser:hide': {} as Contract<[tabId: string], void>,
   /**
    * Place a popup window's page over the frame the rail measured for it. The
@@ -132,7 +148,7 @@ export const invokeBrowserContract = {
    */
   'browser:toastOverlayPointer': {} as Contract<[overToast: boolean], void>,
   'browser:navigate': {} as Contract<
-    [tabId: string, projectId: string, threadId: string, url: string],
+    [tabId: string, projectId: string, threadId: string, url: string, boxId?: string | null],
     void
   >,
   'browser:goBack': {} as Contract<[tabId: string], void>,
