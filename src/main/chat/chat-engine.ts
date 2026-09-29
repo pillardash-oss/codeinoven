@@ -3,6 +3,7 @@ import { readdir, readFile, rm, stat } from 'fs/promises'
 import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, resolve } from 'path'
+import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import { createHash, randomBytes, randomInt, randomUUID } from 'crypto'
 import { createServer } from 'http'
@@ -4906,9 +4907,36 @@ export class ChatEngine {
     const projects = (await this.projectManager.listProjects()).filter(
       (project) => project.source !== 'ssh'
     )
-    return this.capabilityDiscovery.discoverAll(
-      projects.map((project) => ({ id: project.id, path: project.path }))
-    )
+    const references = projects.map((project) => ({ id: project.id, path: project.path }))
+    const [catalog, piMcp] = await Promise.all([
+      this.capabilityDiscovery.discoverAll(references),
+      this.discoverPiMcpCapabilities(references)
+    ])
+    return { mcp: [...catalog.mcp, ...piMcp], skill: catalog.skill }
+  }
+
+  /**
+   * Pi's own mcp.json servers, one file per agent directory. The legacy
+   * account keeps Pi's harness default; every managed account reads its own
+   * container through `PI_CODING_AGENT_DIR`. They are listed so the Utilities
+   * page can edit them in place, and are deliberately never re-registered in
+   * the app's own MCP bridge: Pi loads them itself, so the user's one
+   * configuration keeps working with or without CodeInOven.
+   */
+  private async discoverPiMcpCapabilities(
+    projects: Array<{ id: string; path: string }>
+  ): Promise<AgentCapabilityEntry[]> {
+    const directories = [join(homedir(), '.pi', 'agent')]
+    try {
+      for (const account of await this.accountRegistry.list('pi')) {
+        const root = this.accountRegistry.environment(account)['PI_CODING_AGENT_DIR']?.trim()
+        if (root) directories.push(root)
+      }
+    } catch {
+      // A failed account listing must not blank the catalog: the harness
+      // default directory still lists the account every user has.
+    }
+    return this.capabilityDiscovery.discoverPiMcp(directories, projects)
   }
 
   /**
