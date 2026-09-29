@@ -522,6 +522,96 @@ export interface BrowserConsoleEntry {
  *  `cancelled` one discarded them and can only be started again. */
 export type BrowserDownloadState = 'progressing' | 'interrupted' | 'completed' | 'cancelled'
 
+/** Where an installed extension's files came from. */
+export type BrowserExtensionSource = 'webstore' | 'folder'
+
+/**
+ * How the install-time compatibility preamble reached the extension's service
+ * worker.
+ *
+ * Electron compiles out several `chrome.*` namespaces and an extension's worker
+ * has no other injection point, so the preamble is written into the copy the app
+ * owns. Which shape it takes is forced by the manifest: a module worker evaluates
+ * its hoisted imports before any statement in its own body, so it needs a
+ * bootstrap module that imports the preamble first, while a classic worker gets
+ * the preamble prepended.
+ */
+export type BrowserExtensionInjection =
+  'module-bootstrap' | 'prepend-classic' | 'prepend-mv2' | 'none'
+
+/**
+ * One installed browser extension as the renderer sees it.
+ *
+ * Deliberately carries no filesystem paths: the extension store owns where the
+ * files live, and the surface only needs what it draws and what the user can
+ * change. `missingCapabilities` is populated from what the extension itself
+ * reported, so a row can say which capabilities the runtime could not give it
+ * rather than implying it is whole.
+ */
+export interface BrowserExtension {
+  /** The Chromium id, pinned at install so it is the publisher's official one and
+   *  not a hash of wherever the app happened to unpack it. */
+  id: string
+  name: string
+  version: string
+  description: string
+  source: BrowserExtensionSource
+  /** The Web Store id it was fetched by, or null for a folder install. */
+  webstoreId: string | null
+  /** A data URL of the extension's own manifest icon, or null when it declares
+   *  none. The extension supplies the bytes, so it is drawn as an image only. */
+  iconDataUrl: string | null
+  /** Whether it is loaded into any jar at all. */
+  enabled: boolean
+  /**
+   * The jars it runs in: box ids, with the empty string standing for the
+   * context's own jar (no box). A jar it is not listed in never loads it, which is
+   * the whole point of containing an extension per box: an extension costs a
+   * renderer in each jar that loads it. An empty list means installed but loaded
+   * nowhere yet, which is how every install starts.
+   */
+  boxes: string[]
+  /** The popup document the extension declares, or null when it has none. */
+  popupPath: string | null
+  /** Namespaces the runtime lacks that this extension declares or reaches for, so
+   *  the row can state what it cannot do. */
+  missingCapabilities: string[]
+  /** Anything that went wrong without being fatal: an update that could not be
+   *  re-injected, an icon that could not be read, and so on. */
+  warnings: string[]
+  /** Which preamble shape was injected, or 'none'. */
+  injected: BrowserExtensionInjection
+  /** Epoch milliseconds, for ordering the list. */
+  installedAt: number
+}
+
+/** What an install asks for. */
+export interface BrowserExtensionInstallInput {
+  source: BrowserExtensionSource
+  /** A Web Store id, a Web Store URL, or the folder to install from. */
+  value: string
+}
+
+/** One step of an install, so a fetch and an unpack that take seconds are not a
+ *  silent freeze and a failure says which step failed. */
+export interface BrowserExtensionProgress {
+  /** The Web Store id or folder name the install is for, so a progress line can be
+   *  attributed before the extension has an id. */
+  label: string
+  phase:
+    | 'resolving'
+    | 'downloading'
+    | 'unpacking'
+    | 'pinning'
+    | 'compat'
+    | 'registering'
+    | 'done'
+    | 'failed'
+  detail: string
+  receivedBytes: number
+  totalBytes: number
+}
+
 /**
  * Metadata for a download started inside the app-scoped browser. Contains no
  * cookies, headers, or page content: only what the download manager needs to

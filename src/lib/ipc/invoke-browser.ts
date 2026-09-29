@@ -1,6 +1,8 @@
 import type {
   BrowserCompositionPlayback,
   BrowserDownload,
+  BrowserExtension,
+  BrowserExtensionInstallInput,
   BrowserFindRequest,
   BrowserFindStopAction,
   BrowserInspectorMarker,
@@ -277,7 +279,29 @@ export const invokeBrowserContract = {
     [tabId: string, referenceId: string | null, scroll: boolean],
     void
   >,
+  /** Clear this context's browser data. Every jar it has goes, boxes included:
+   *  a per-box clear is a separate, narrower action. */
   'browser:clearData': {} as Contract<[projectId: string], void>,
+  /** The browser's installed extensions, whole. Short enough to publish as one
+   *  list rather than as deltas, and the rail draws every row from it. */
+  'browser:extensions': {} as Contract<[], BrowserExtension[]>,
+  /** Install an extension by Web Store id or from an unpacked folder. Resolves
+   *  once it is on disk and registered; `browser:extensionProgress` reports each
+   *  step while it runs, because a 30 MB fetch and unpack is not instant. */
+  'browser:extensionInstall': {} as Contract<
+    [input: BrowserExtensionInstallInput],
+    BrowserExtension
+  >,
+  'browser:extensionUninstall': {} as Contract<[extensionId: string], void>,
+  /** Enable or disable one extension and choose the jars it runs in. `boxes` is
+   *  the whole replacement list, never a delta, and it is always explicit: a jar
+   *  left out of it never loads the extension. */
+  'browser:extensionUpdate': {} as Contract<
+    [extensionId: string, patch: { enabled?: boolean; boxes?: string[] }],
+    BrowserExtension
+  >,
+  /** Ask the user for an unpacked extension folder. Null when they cancel. */
+  'browser:extensionPickFolder': {} as Contract<[], string | null>,
   /** Erase one box's cookies, site data and cache, and forget the permission
    *  decisions it remembered. This is the destructive half of deleting a box. */
   'browser:clearBoxData': {} as Contract<[projectId: string, boxId: string], void>,
@@ -285,9 +309,19 @@ export const invokeBrowserContract = {
     [projectId: string, scopes: BrowserSiteDataScope[]],
     void
   >,
-  /** Open the native site-settings context menu anchored at the given point
-   *  (window-content coordinates in density-independent pixels). */
-  'browser:siteMenu': {} as Contract<[projectId: string, host: string, x: number, y: number], void>,
+  /**
+   * Open the native site-settings context menu anchored at the given point
+   * (window-content coordinates in density-independent pixels).
+   *
+   * A boxed tab clears its own box, so the jar the padlock was opened from comes
+   * with it: `boxId` names the jar to clear and `boxName` is what the confirmation
+   * says, because only the renderer knows a box's name and the copy has to say
+   * which jar is about to lose its cookies.
+   */
+  'browser:siteMenu': {} as Contract<
+    [projectId: string, host: string, boxId: string | null, boxName: string, x: number, y: number],
+    void
+  >,
   /** Open the native page context menu (soft and hard reload) anchored at the
    *  given point (window-content coordinates in density-independent pixels). */
   'browser:pageMenu': {} as Contract<[tabId: string, x: number, y: number], void>,
