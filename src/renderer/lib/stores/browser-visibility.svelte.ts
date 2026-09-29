@@ -22,8 +22,9 @@
  * (`isVisible`). Both are keyed and return their own release function, so a
  * block or claim can never outlive the surface that published it.
  *
- * The third question runs the other way. A DOM surface that has to be readable
- * while the page is up   the toaster, which picks a lane no native view covers
+ * The third question runs the other way. A DOM surface that has to stay usable
+ * while the page is up   the toaster, which asks whether a page covers the
+ * corner it draws in and hands the stack to a window of its own when one does
  *   needs to know where the page actually is (`publishNativeFrame`). That
  * publication is a read for everyone else and must never reach `isCovered`,
  * which is the mechanism that hides the page in the first place.
@@ -86,8 +87,8 @@ class BrowserVisibilityState {
   private overlays = new SvelteMap<string, BrowserViewBounds>()
 
   /** On-screen rectangles of the native views themselves, published by the
-   *  surface displaying each one. Read by anything that has to stay out from
-   *  under a page (the toaster's lane picker). Deliberately not consulted by
+   *  surface displaying each one. Read by anything that has to ask whether a page
+   *  covers it (the toaster's corner check). Deliberately not consulted by
    *  `isCovered`: that is the decision to hide the page, and feeding the page's
    *  own rectangle back into it would hide it on every write. */
   private nativeFrames = new SvelteMap<string, BrowserViewBounds>()

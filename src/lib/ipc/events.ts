@@ -28,6 +28,7 @@ import type {
 } from './notifications'
 import type { UpdaterStatus } from './updater'
 import type { SkillUpdateStatus } from '../types/utility'
+import type { ToastOverlayInteractionReport, ToastOverlayStack } from '../toast-overlay'
 
 export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
@@ -226,6 +227,18 @@ export const IPC_EVENT_CONTRACT = {
     request: BrowserPermissionRequest,
     context: { queueSize: number; projectLabel: string | null }
   ],
+  /**
+   * The stack the native toast overlay should draw, delivered to the overlay
+   * document rather than to the app renderer. The app window keeps its own copy
+   * of the same state and draws nothing while the overlay is up.
+   */
+  'browser:toastOverlay:stack': [] as unknown as [stack: ToastOverlayStack],
+  /**
+   * One interaction with a toast the overlay drew, delivered back to the app
+   * renderer, which runs the handler that toast holds (open the thread, copy the
+   * details, and so on) and then drops the toast from its own state.
+   */
+  'browser:toastOverlay:event': [] as unknown as [report: ToastOverlayInteractionReport],
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
   'browser:download': [] as unknown as [download: BrowserDownload],

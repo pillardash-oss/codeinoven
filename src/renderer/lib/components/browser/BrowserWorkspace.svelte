@@ -142,10 +142,11 @@
    * Report this page's rectangle while it is really on screen.
    *
    * The visibility store owns the opposite question ("may this page be shown"),
-   * which is what hides it; this is the answer anything that has to stay out from
-   * under a page needs, and the toaster's lane picker is the only reader today. A
-   * page behind a modal, or one parked for any other reason, publishes nothing,
-   * so a toast is never moved aside for a view nobody can see.
+   * which is what hides it; this is the answer anything that has to ask whether a
+   * page covers it needs, and the toaster's corner check is the only reader
+   * today. A page behind a modal, or one parked for any other reason, publishes
+   * nothing, so the stack is never handed to the overlay for a view nobody can
+   * see.
    */
   $effect(() => {
     const frame = pageVisible && !loadError ? contentRect : null

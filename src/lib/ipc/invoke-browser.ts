@@ -17,6 +17,11 @@ import type {
 import type { Contract } from './contract-helpers'
 import type { BrowserSearchEngine } from '../browser-search-engines'
 import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
+import type {
+  ToastOverlayInteractionReport,
+  ToastOverlayRequest,
+  ToastOverlayStack
+} from '../toast-overlay'
 
 export const invokeBrowserContract = {
   /**
@@ -61,12 +66,40 @@ export const invokeBrowserContract = {
   /** The popup windows the browser is holding for one project. */
   'browser:getPopupWindows': {} as Contract<[projectId: string], BrowserPopupWindow[]>,
   /**
-   * Park the active browser page because a toast could not be placed anywhere a
-   * page does not cover. The renderer picks a lane first (renderer
-   * `stores/toast-lane.ts`), so this is the safety net rather than the normal
-   * path, and the page comes back as soon as the toast is gone.
+   * Park the active browser page because a toast could not be shown over it.
+   *
+   * `browser:setToastOverlay` is the normal path: the stack moves into a child
+   * window that composites above the page. This is the safety net for the one
+   * case that window cannot serve (it could not be created at all), and the page
+   * comes back as soon as the toast is gone.
    */
   'browser:setToastVisible': {} as Contract<[visible: boolean], void>,
+  /**
+   * Point the native toast overlay at the stack the app renderer is holding, or
+   * take it down with null because no page covers the stack's corner.
+   *
+   * Answers false only when the overlay had to be created and could not be, so
+   * the renderer can fall back to parking the page instead of leaving the toast
+   * invisible behind it.
+   */
+  'browser:setToastOverlay': {} as Contract<[request: ToastOverlayRequest], boolean>,
+  /**
+   * The stack on display, asked for by the overlay document itself once its
+   * listener is bound. First delivery is a pull here because a push straight
+   * after `loadURL` loses the same race the permission popup documents.
+   */
+  'browser:toastOverlayReady': {} as Contract<[], ToastOverlayStack | null>,
+  /**
+   * The user acted on a card the overlay drew. The overlay carries no handlers,
+   * so it names the toast and the interaction and the app renderer runs the
+   * handler that toast actually holds.
+   */
+  'browser:toastOverlayInteract': {} as Contract<[report: ToastOverlayInteractionReport], void>,
+  /**
+   * Whether the pointer is over a card, which is what decides if the overlay
+   * window swallows a click or passes it through to the page beneath it.
+   */
+  'browser:toastOverlayPointer': {} as Contract<[overToast: boolean], void>,
   'browser:navigate': {} as Contract<
     [tabId: string, projectId: string, threadId: string, url: string],
     void

@@ -59,9 +59,8 @@
 
   /**
    * Report this popup's rectangle while its page is really on screen, which is
-   * what lets anything that must stay readable (the toaster's lane picker) avoid
-   * it. A popup behind a modal, or one the rail is not showing, publishes
-   * nothing.
+   * what lets the toaster's corner check see that a page covers it. A popup
+   * behind a modal, or one the rail is not showing, publishes nothing.
    */
   $effect(() => {
     const key = nativeFrameKey

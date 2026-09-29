@@ -260,9 +260,9 @@
 
   /**
    * Report this page's rectangle while it is really on screen, which is what lets
-   * anything that must stay readable (the toaster's lane picker) avoid it. A panel
-   * the store is not showing publishes nothing, so the two instances of one tab
-   * can never both claim the same screen space.
+   * the toaster's corner check see that a page covers it. A panel the store is not
+   * showing publishes nothing, so the two instances of one tab can never both
+   * claim the same screen space.
    */
   $effect(() => {
     const frame = panelVisible && !pageState.loadError ? contentRect : null

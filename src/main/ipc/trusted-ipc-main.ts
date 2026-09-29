@@ -13,20 +13,35 @@ interface TrustedIpcMainFacade {
   removeHandler: (channel: string) => void
 }
 
-/** Exact main-renderer documents that may invoke Electron IPC. */
+/**
+ * Documents that are part of the app's own renderer build and may therefore
+ * invoke Electron IPC: the app window, and the two frameless child documents it
+ * opens over a browser page (the permission prompt and the toast overlay).
+ *
+ * Trust is by document URL, not by window: every one of these shares the app's
+ * preload and is served from the same origin, and each is loaded from this
+ * build's own output rather than from anything a user can point at.
+ */
 export function appRendererNavigationTargets(): string[] {
   const isProduction = app?.isPackaged === true || process.env['NODE_ENV'] === 'production'
   const appPath = typeof app?.getAppPath === 'function' ? app.getAppPath() : process.cwd()
   if (!isProduction && process.env['ELECTRON_RENDERER_URL']) {
     const devUrl = process.env['ELECTRON_RENDERER_URL'].replace(/\/$/u, '')
-    return [process.env['ELECTRON_RENDERER_URL'], `${devUrl}/browser-popup.html`]
+    return [
+      process.env['ELECTRON_RENDERER_URL'],
+      `${devUrl}/browser-popup.html`,
+      `${devUrl}/toast-overlay.html`
+    ]
   }
   const rendererRoot = join(appPath, 'out', 'renderer')
   return [
     pathToFileURL(join(rendererRoot, 'index.html')).href,
     // The frameless browser permission popup (a first-party static document
     // sharing the app preload) is trusted to resolve permissions and nothing else.
-    pathToFileURL(join(rendererRoot, 'browser-popup.html')).href
+    pathToFileURL(join(rendererRoot, 'browser-popup.html')).href,
+    // The frameless toast overlay is the app's own toaster in a window of its
+    // own, so it reports interactions and asks for the stack it should draw.
+    pathToFileURL(join(rendererRoot, 'toast-overlay.html')).href
   ]
 }
 

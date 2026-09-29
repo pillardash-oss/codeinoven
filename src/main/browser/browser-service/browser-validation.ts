@@ -29,6 +29,13 @@ import {
   type BrowserSearchEngine
 } from '../../../lib/browser-search-engines'
 import type { BrowserViewport } from './browser-types'
+import type {
+  ToastOverlayInteraction,
+  ToastOverlayInteractionReport,
+  ToastOverlayKind,
+  ToastOverlayRequest,
+  ToastOverlayToast
+} from '../../../lib/toast-overlay'
 
 export const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
 
@@ -782,4 +789,120 @@ export function isSameBounds(a: BrowserViewBounds, b: BrowserViewBounds): boolea
  */
 export function isSameViewport(a: BrowserViewport | undefined | null, b: BrowserViewport): boolean {
   return a !== undefined && a !== null && a.width === b.width && a.height === b.height
+}
+
+/**
+ * The most cards the overlay is ever asked to draw. svelte-sonner keeps three on
+ * screen at once, and the stack is projected whole, so this only bounds a
+ * payload that would otherwise be free to fill a whole window.
+ */
+export const MAX_OVERLAY_TOASTS = 16
+
+/** Characters kept from one projected text field. A toast is a line or two; the
+ *  ceiling is here so a pathological message cannot cross IPC whole. */
+const MAX_OVERLAY_TEXT_LENGTH = 4_000
+
+const OVERLAY_KINDS: ReadonlySet<string> = new Set([
+  'default',
+  'success',
+  'error',
+  'warning',
+  'info',
+  'loading'
+])
+
+function overlayText(value: unknown, limit = MAX_OVERLAY_TEXT_LENGTH): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined
+  return value.slice(0, limit)
+}
+
+function overlayLabel(value: unknown): { label: string } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const label = overlayText((value as Record<string, unknown>)['label'], 120)
+  return label === undefined ? undefined : { label }
+}
+
+const OVERLAY_INTERACTIONS: ReadonlySet<string> = new Set([
+  'action',
+  'cancel',
+  'dismiss',
+  'autoclose'
+])
+
+/**
+ * Validate one interaction the overlay reports for a card it drew.
+ *
+ * The overlay cannot run a handler, so this is only ever a fact about what the
+ * user did. It is checked because it arrives from a window of its own, and a
+ * report naming a toast that no longer exists must be answerable rather than
+ * trusted: the app renderer looks the toast up and drops the report when it has
+ * already gone.
+ */
+export function validateToastOverlayInteraction(value: unknown): ToastOverlayInteractionReport {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('A toast overlay interaction must be an object')
+  }
+  const report = value as Record<string, unknown>
+  const id = report['id']
+  if (typeof id !== 'number' && typeof id !== 'string') {
+    throw new TypeError('A toast overlay interaction must name the toast it belongs to')
+  }
+  const interaction = report['interaction']
+  if (typeof interaction !== 'string' || !OVERLAY_INTERACTIONS.has(interaction)) {
+    throw new TypeError('A toast overlay interaction must name a known interaction')
+  }
+  return { id, interaction: interaction as ToastOverlayInteraction }
+}
+
+/**
+ * Validate the toast stack the app renderer points the overlay at.
+ *
+ * `null` is a real request: nothing covers the toaster's corner any more, so the
+ * overlay takes itself down. Every field is optional in the projection, so a
+ * malformed card is dropped rather than rejected whole: one odd toast must never
+ * cost the renderer its stack.
+ */
+export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest {
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('The toast overlay request must be an object or null')
+  }
+  const stack = value as Record<string, unknown>
+  const rawToasts = stack['toasts']
+  if (!Array.isArray(rawToasts)) {
+    throw new TypeError('The toast overlay request must carry a toast list')
+  }
+  if (rawToasts.length > MAX_OVERLAY_TOASTS) {
+    throw new TypeError('The toast overlay request carries too many toasts')
+  }
+  const toasts: ToastOverlayToast[] = []
+  for (const raw of rawToasts) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const entry = raw as Record<string, unknown>
+    const id = entry['id']
+    if (typeof id !== 'number' && typeof id !== 'string') continue
+    const title = overlayText(entry['title'])
+    if (title === undefined) continue
+    const kind = entry['kind']
+    const duration = entry['duration']
+    toasts.push({
+      id,
+      kind:
+        typeof kind === 'string' && OVERLAY_KINDS.has(kind)
+          ? (kind as ToastOverlayKind)
+          : 'default',
+      title,
+      description: overlayText(entry['description']),
+      duration:
+        typeof duration === 'number' && Number.isFinite(duration) && duration > 0
+          ? Math.min(duration, 60_000)
+          : undefined,
+      style: overlayText(entry['style']),
+      closeButton: entry['closeButton'] === true ? true : undefined,
+      dismissible: typeof entry['dismissible'] === 'boolean' ? entry['dismissible'] : undefined,
+      action: overlayLabel(entry['action']),
+      cancel: overlayLabel(entry['cancel'])
+    })
+  }
+  return { toasts, theme: stack['theme'] === 'dark' ? 'dark' : 'light' }
 }

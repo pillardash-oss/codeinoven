@@ -227,7 +227,13 @@ export default defineConfig(({ mode }) => {
         outDir: resolve(__dirname, 'out/renderer'),
         rollupOptions: {
           input: {
-            index: resolve(__dirname, 'src/renderer/index.html')
+            index: resolve(__dirname, 'src/renderer/index.html'),
+            // The toast overlay: the app's toaster in a frameless window of its
+            // own, which is the only way a toast can be drawn above the in-app
+            // browser's native page view. It is its own entry because it must
+            // load the app's stylesheet and the toaster, and nothing else of the
+            // app, so a second renderer stays cheap.
+            'toast-overlay': resolve(__dirname, 'src/renderer/toast-overlay.html')
           }
         }
       }

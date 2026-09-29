@@ -1,8 +1,11 @@
-import { app, BrowserWindow, nativeTheme } from 'electron'
-import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { BrowserWindow } from 'electron'
 import type { BrowserPermissionRequest } from '../../lib/ipc-contract'
+import { TOAST_CARD_WIDTH, TOAST_STACK_RIGHT } from '../../lib/toast-overlay'
+import {
+  loadRendererDocument,
+  resolveAppTheme,
+  resolveChildWindowPreload
+} from './child-window-support'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 
 /** Window-content anchor for the popup, in density-independent pixels. */
@@ -24,25 +27,6 @@ export interface PromptRequestContext {
 const POPUP_WIDTH = 380
 const POPUP_HEIGHT = 240
 const POPUP_MARGIN = 8
-
-/** Resolve the app preload bundle (same lookup as the main window).
- *  `import.meta.url` is the compiled main bundle file (which lives in
- *  `out/main`), so take its directory first; the preload is one level up in
- *  `out/preload`. Passing the full file path to `join` instead silently
- *  resolved outside the bundle tree and the popup loaded with no preload. */
-function defaultPreloadPath(): string {
-  const dir = join(dirname(fileURLToPath(import.meta.url)), '../preload')
-  for (const name of ['index.mjs', 'index.js', 'index.cjs']) {
-    const candidate = join(dir, name)
-    if (existsSync(candidate)) return candidate
-  }
-  return join(dir, 'index.js')
-}
-
-/** First-paint theme hint; the popup document refines via `config:get`. */
-function defaultResolveTheme(): 'light' | 'dark' {
-  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
-}
 
 /**
  * Owns the frameless child window that shows browser permission requests.
@@ -73,8 +57,8 @@ export class PermissionPromptWindow {
 
   constructor(
     private readonly parent: BrowserWindow,
-    private readonly preloadPath: string = defaultPreloadPath(),
-    private readonly resolveTheme: () => 'light' | 'dark' = defaultResolveTheme
+    private readonly preloadPath: string = resolveChildWindowPreload(),
+    private readonly resolveTheme: () => 'light' | 'dark' = resolveAppTheme
   ) {}
 
   /** Show (or update) the prompt for `context`; kept until the prompt hides. */
@@ -171,14 +155,7 @@ export class PermissionPromptWindow {
   }
 
   private load(popup: BrowserWindow): Promise<void> {
-    const theme = this.resolveTheme()
-    if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
-      const url = new URL('browser-popup.html', `${process.env['ELECTRON_RENDERER_URL']}/`)
-      url.searchParams.set('theme', theme)
-      return popup.loadURL(url.href).catch(() => {})
-    }
-    const document = join(dirname(fileURLToPath(import.meta.url)), '../renderer/browser-popup.html')
-    return popup.loadFile(document, { query: { theme } }).catch(() => {})
+    return loadRendererDocument(popup, 'browser-popup.html', { theme: this.resolveTheme() })
   }
 
   /** Keep the prompt glued to the parent: reposition on move/resize and hide
@@ -206,17 +183,27 @@ export class PermissionPromptWindow {
     })
   }
 
-  /** Place the popup inside the parent's content area, top-right of the active
-   *  browser content when its bounds are known (clear of top-right toasts,
-   *  which render at the window edge), otherwise of the whole window. */
+  /** Place the popup inside the parent's content area, centred over the browser
+   *  content it belongs to.
+   *
+   *  It used to sit at the top right of that content, which is where the toast
+   *  stack lives: a toast is drawn by a child window of its own while a page
+   *  covers that corner (`toast-overlay-window.ts`), so a centred card on a
+   *  narrow window would sit under the stack. It now stops short of the stack's
+   *  band instead of drifting into it, and is exactly centred on every window
+   *  wide enough for the two to clear each other. */
   private position(popup: BrowserWindow): void {
     if (this.parent.isDestroyed()) return
     const content = this.parent.getContentBounds()
     const anchor = this.anchor
-    const right = anchor ? content.x + anchor.x + anchor.width : content.x + content.width
-    const top = anchor ? content.y + anchor.y : content.y
-    const x = Math.max(content.x, right - POPUP_WIDTH - POPUP_MARGIN)
-    const y = Math.max(content.y, top + POPUP_MARGIN)
+    const centre = anchor ? anchor.x + anchor.width / 2 : content.width / 2
+    const top = anchor ? anchor.y : 0
+    const stackLeft = content.x + content.width - TOAST_STACK_RIGHT - TOAST_CARD_WIDTH
+    const left = content.x + POPUP_MARGIN
+    const rightLimit = Math.max(left, stackLeft - POPUP_MARGIN - POPUP_WIDTH)
+    const centred = Math.round(content.x + centre - POPUP_WIDTH / 2)
+    const x = Math.min(Math.max(centred, left), rightLimit)
+    const y = Math.max(content.y, content.y + top + POPUP_MARGIN)
     popup.setBounds({ x, y, width: POPUP_WIDTH, height: POPUP_HEIGHT })
   }
 }

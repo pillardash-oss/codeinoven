@@ -49,6 +49,7 @@ import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
+import { ToastOverlayWindow } from './toast-overlay-window'
 import { BrowserDownloadManager } from './browser-service/browser-downloads'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
 import { BrowserInspector } from './browser-service/browser-inspector'
@@ -139,6 +140,8 @@ import {
   validateSiteMenuPoint,
   validateTabId,
   validateThreadId,
+  validateToastOverlayInteraction,
+  validateToastOverlayRequest,
   validateTransportCommand,
   validateTransportValue,
   validateViewportRequest
@@ -262,6 +265,13 @@ export class BrowserService {
   private readonly siteData: BrowserSiteDataService
   private readonly permissionMemory: BrowserPermissionMemory
   private readonly promptWindow: PermissionPromptWindow
+  /**
+   * The window that draws the toast stack while a page covers the toaster's
+   * corner. It is created on the first toast that needs it and released as soon
+   * as no page covers that corner, so a browsing session that never raises a
+   * toast never pays for a second renderer.
+   */
+  private readonly toastOverlay: ToastOverlayWindow
   private readonly projects: ProjectRepo
   private readonly threads: ThreadRepo
   /** Invisible windows that keep non-displayed tabs alive offscreen. */
@@ -324,8 +334,8 @@ export class BrowserService {
    */
   private pendingPageFocusTabId: string | null = null
   /** Last known content bounds of the active tab's native view (window-content
-   *  coordinates). The permission popup anchors itself to this area so it
-   *  never collides with toasts at the window edge. */
+   *  coordinates). The permission popup centres itself over this area, so the
+   *  prompt opens over the page it belongs to rather than over the app's chrome. */
   private activeTabBounds: BrowserViewBounds | null = null
   /** The view actually parented to the app window, and the frame it sits at, or
    *  null while the active tab's view is parked offscreen.
@@ -376,12 +386,10 @@ export class BrowserService {
    *  because a toast could not be placed anywhere a page does not cover.
    *
    *  A native WebContentsView floats above every DOM surface, so while this is set
-   *  the active view stays detached and the DOM toast composites normally. The
-   *  renderer no longer asks for this on every toast: it moves the toaster to a
-   *  lane no on-screen page occupies (renderer `stores/toast-lane.ts`) and asks
-   *  only when the measured toast still lands under one, which the header band as
-   *  the last lane should make impossible. This path is the safety net, not the
-   *  primary one. */
+   *  the active view stays detached and the DOM toast composites normally. This
+   *  is the safety net for the one case the toast overlay cannot serve (it could
+   *  not be created at all), not the primary path: the renderer normally moves
+   *  the stack into `toast-overlay-window.ts`, which draws it above the page. */
   private toastVisible = false
   /**
    * The address bar's active search engine, reported by the renderer (which
@@ -423,6 +431,7 @@ export class BrowserService {
     private readonly downloads: BrowserDownloadManager
   ) {
     this.promptWindow = new PermissionPromptWindow(window)
+    this.toastOverlay = new ToastOverlayWindow(window)
     this.stage = new BrowserTabStage(window)
     this.permissionMemory = new BrowserPermissionMemory(permissionPersistence)
     this.projects = new ProjectRepo(db)
@@ -561,6 +570,27 @@ export class BrowserService {
     )
     replaceHandler('browser:setToastVisible', (_event, rawVisible) => {
       this.setToastVisible(rawVisible === true)
+    })
+    replaceHandler('browser:setToastOverlay', (_event, rawRequest) => {
+      const request = validateToastOverlayRequest(rawRequest)
+      // Null is the renderer saying no page covers the toaster's corner any
+      // more, so the stack belongs back in the app's own DOM and the overlay
+      // window, with the renderer it holds, is released.
+      if (request === null) {
+        this.toastOverlay.release()
+        return true
+      }
+      return this.toastOverlay.apply(request)
+    })
+    replaceHandler('browser:toastOverlayReady', () => this.toastOverlay.currentStack())
+    replaceHandler('browser:toastOverlayInteract', (_event, rawReport) => {
+      // The overlay carries no handlers, so an interaction is only a fact about
+      // what the user did: the app renderer owns the toast and runs its handler.
+      const report = validateToastOverlayInteraction(rawReport)
+      sendToRenderer(this.window.webContents, 'browser:toastOverlay:event', report)
+    })
+    replaceHandler('browser:toastOverlayPointer', (_event, rawOverToast) => {
+      this.toastOverlay.setPointerOverToast(rawOverToast === true)
     })
     replaceHandler('browser:navigate', (_event, rawTabId, rawProjectId, rawThreadId, rawUrl) => {
       const tabId = validateTabId(rawTabId)
@@ -792,6 +822,7 @@ export class BrowserService {
     this.relaxedUntil.clear()
     this.stage.dispose()
     this.promptWindow.dispose()
+    this.toastOverlay.dispose()
     for (const requestId of [...this.pendingPermissions.keys()]) {
       this.resolvePermission(requestId, permissionResolutions.dismiss)
     }
