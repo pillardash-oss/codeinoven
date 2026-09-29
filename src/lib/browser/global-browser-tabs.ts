@@ -44,6 +44,36 @@ export const MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH = 2_048
 export const MAX_BROWSER_TAB_URL_LENGTH = 2_048
 /** A thread id is a generated UUID, so the bound is generous but still finite. */
 export const MAX_BROWSER_ASSISTANT_THREAD_ID_LENGTH = 64
+/**
+ * The longest page icon the app writes down for a tab, and for a saved page.
+ *
+ * A stored icon is a copy of the page's own favicon as a data URL, so its size is
+ * the file's size. Real favicons are a few kilobytes; the bound is generous for
+ * those and still keeps one copy per tab from turning every write of a tab list
+ * into a megabyte one. A page whose icon is larger is stored without one, which is
+ * a missing glyph rather than a lost tab.
+ *
+ * One bound for tabs and bookmarks on purpose: an icon a tab may hold is always an
+ * icon a bookmark may copy from it.
+ */
+export const MAX_BROWSER_FAVICON_LENGTH = 32_768
+
+/**
+ * Whether a value is an icon the app may store for a page.
+ *
+ * Only an image data URL, and only one within the bound. Both the tab list and
+ * the bookmark list repair a stored icon with this rule, so an icon either of them
+ * wrote down is always one the other is willing to write back. A remote address
+ * never qualifies: the renderer's CSP blocks remote images, and a durable icon has
+ * to survive the site being offline.
+ */
+export function isStorableBrowserFavicon(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.startsWith('data:image/') &&
+    value.length <= MAX_BROWSER_FAVICON_LENGTH
+  )
+}
 
 const GROUP_ID_PATTERN = /^group:[a-zA-Z0-9:_-]{1,240}$/u
 /** The shape a box id must have to become part of a session partition. The main
@@ -91,13 +121,24 @@ export interface PersistedBrowserBox extends BrowserAppearance {
   name: string
 }
 
-/** One tab as it is stored. The live page state (loading, audio, favicon
- *  freshness) describes a running page and is deliberately absent. */
+/** One tab as it is stored. The live page state (loading, audio, capture)
+ *  describes a running page and is deliberately absent. */
 export interface PersistedBrowserTab extends BrowserAppearance {
   id: string
   title: string
   customTitle: string | null
   url: string
+  /**
+   * The page's own icon as a data URL, as the app last had it.
+   *
+   * The icon belongs to the address rather than to the running page, so it is
+   * written down with the tab: a row restored by a restart, or left behind by a
+   * hibernation, wears the mark it wore when the tab was last open instead of
+   * falling back to a globe until something loads. The page's own icon replaces it
+   * the moment it reports one, and it is what a saved page copies when the tab is
+   * bookmarked.
+   */
+  favicon: string | null
   groupId: string | null
   /** The box whose cookies and site data this tab runs against, or null for the
    *  context's own default jar. A tab never changes jars in place: switching
@@ -311,6 +352,7 @@ function parseTabs(
       title: boundedString(entry['title'], MAX_BROWSER_TAB_PAGE_TITLE_LENGTH),
       customTitle: customTitle === null ? null : customTitle.trim() || null,
       url: parseAddress(entry['url']),
+      favicon: isStorableBrowserFavicon(entry['favicon']) ? entry['favicon'] : null,
       groupId:
         typeof storedGroupId === 'string' && groupIds.has(storedGroupId) ? storedGroupId : null,
       boxId: typeof storedBoxId === 'string' && boxIds.has(storedBoxId) ? storedBoxId : null,

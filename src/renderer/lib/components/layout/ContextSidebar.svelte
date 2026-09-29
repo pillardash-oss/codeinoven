@@ -24,6 +24,7 @@
     PanelBottom,
     PanelRight,
     Plus,
+    Puzzle,
     SquareTerminal,
     StickyNote,
     TriangleAlert,
@@ -106,8 +107,19 @@
 
   // Resolve favicons for browser tab URLs so the strip can show the site's icon
   // once available. Resolution is deduped per hostname inside the store.
-  let browserTabUrls = $derived(tabs.flatMap((tab) => (tab.kind === 'browser' ? [tab.url] : [])))
-  $effect(() => faviconState.ensureResolved(browserTabUrls))
+  let browserContextTabs = $derived(tabs.filter((tab) => tab.kind === 'browser'))
+  // The icon of a browser tab belongs to its address, so the strip asks the store
+  // to fill in the icon of any browser tab that has none, and the store writes the
+  // answer down with the tab list. The shared resolution beside it feeds the
+  // fallback the strip draws while that answer is on its way.
+  $effect(() => {
+    faviconState.ensureResolved(browserContextTabs.map((tab) => tab.url))
+    for (const tab of browserContextTabs) {
+      if (tab.url !== '' && tab.favicon === null) {
+        contextSidebarState.ensureBrowserTabFavicon(tab.id)
+      }
+    }
+  })
 
   // Every other tool opens from the context dock rail and owns the whole panel,
   // so only these kinds get a tab strip   the rest get a plain titled header.
@@ -140,6 +152,7 @@
     'history',
     'bookmarks',
     'boxes',
+    'extensions',
     'git',
     'actions',
     'thread-note',
@@ -367,6 +380,8 @@
       {/if}
     {:else if tab.kind === 'boxes'}
       <Boxes size={12} class="shrink-0" />
+    {:else if tab.kind === 'extensions'}
+      <Puzzle size={12} class="shrink-0" />
     {:else if tab.kind === 'coordinator'}
       <Network size={12} class="shrink-0 text-primary" />
     {:else if tab.kind === 'assistant-how-to'}

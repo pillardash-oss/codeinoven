@@ -20,10 +20,14 @@ import type {
   BrowserPageState,
   BrowserPopupWindow
 } from '$shared/ipc-contract'
-import type { GlobalBrowserTabsSnapshot } from '$shared/browser/global-browser-tabs'
+import {
+  isStorableBrowserFavicon,
+  type GlobalBrowserTabsSnapshot
+} from '$shared/browser/global-browser-tabs'
 import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '$shared/ipc-contract'
 import { appConfigState } from './app-config.svelte'
 import { reportError } from './app-errors.svelte'
+import { BrowserTabFavicons } from './browser-tab-favicon'
 import {
   browserAssistant,
   BROWSER_ASSISTANT_DEFAULT_TITLE,
@@ -150,6 +154,10 @@ export class GlobalBrowserState {
    *  against the list can wait for it instead of racing it. */
   private hydration: Promise<void> | null = null
   private readonly runtime = new SvelteMap<string, GlobalBrowserRuntime>()
+  /** Fills in the icon of a tab the app has no page for, from the tab's own
+   *  address. One per strip, because it owns the "asked at most once per address"
+   *  bookkeeping that keeps the lookups bounded. */
+  private readonly tabFavicons = new BrowserTabFavicons()
   /** Popup windows this renderer has already reported on, so only the arrival of
    *  a new one brings the rail's popup panel up. Bounded by the live list: an id
    *  whose popup is gone is forgotten. */
@@ -1090,6 +1098,7 @@ export class GlobalBrowserState {
     const remaining = this.tabs.filter((tab) => tab.id !== tabId)
     this.tabs = remaining
     this.runtime.delete(tabId)
+    this.tabFavicons.forget(tabId)
     if (this.activeTabId === tabId) {
       const neighbour = remaining[Math.min(index, remaining.length - 1)]
       this.setActiveTab(neighbour?.id ?? null)
@@ -1418,6 +1427,25 @@ export class GlobalBrowserState {
 
   // ─── Page state ───────────────────────────────────────────────────────
 
+  /**
+   * Give one tab the icon its address is known by, when it has none.
+   *
+   * Called for every tab the strip draws, so a tab the app has no page for (one a
+   * restart restored, one hibernated before its page announced an icon, one an
+   * agent opened and never showed) wears the site's mark instead of a globe. The
+   * answer is written down with the tab, which is what makes it durable: the read
+   * already happened when the looked-up icon lands, so the store cannot gain a
+   * write of its own unless the icon is new. One lookup per address per tab, and
+   * none at all for a tab that already holds an icon.
+   */
+  async ensureFavicon(tabId: string): Promise<void> {
+    const favicon = await this.tabFavicons.resolve(tabId, () => this.tabById(tabId))
+    const tab = this.tabById(tabId)
+    if (favicon === null || !tab || tab.favicon !== null) return
+    tab.favicon = favicon
+    this.persist()
+  }
+
   /** Apply a live page snapshot: the navigation identity onto the tab, and the
    *  loading/audio/capture state onto the map the strip and header read. */
   applyPageState(state: BrowserPageState): void {
@@ -1428,6 +1456,14 @@ export class GlobalBrowserState {
     // popup) reports an empty URL and must not erase the address on screen.
     if (state.url && tab.url !== state.url) {
       tab.url = state.url
+      // The icon is the icon of an address, so a tab that moved is not the tab
+      // the stored icon was read from: it goes with the address it came from, and
+      // the row picks up the new one from the page or from the address itself
+      // (see `ensureFavicon`).
+      if (tab.favicon !== null) {
+        tab.favicon = null
+        this.tabFavicons.forget(tab.id)
+      }
       changed = true
     }
     const title = state.title.trim()
@@ -1435,7 +1471,13 @@ export class GlobalBrowserState {
       tab.title = title
       changed = true
     }
-    if (state.favicon !== tab.favicon) {
+    // An icon the document reported is adopted. A report of none is deliberately
+    // not an erasure: Chromium announces an icon only when it differs from the one
+    // the tab already holds, so a reopened hibernated tab (whose page has no
+    // remembered icon yet) would blank its own row on the way back, and a page
+    // that reloads at the same address would lose the mark it just had. Only the
+    // address changing replaces the icon, above.
+    if (isStorableBrowserFavicon(state.favicon) && tab.favicon !== state.favicon) {
       tab.favicon = state.favicon
       changed = true
     }
@@ -1495,8 +1537,9 @@ export class GlobalBrowserState {
    *
    * The active tab, a tab playing audio, and a tab holding a capture are never
    * hibernated: those are exactly the tabs whose disappearance the user would
-   * notice. A hibernated tab keeps its title, favicon, group and address, so
-   * the strip is unchanged and the page simply reloads on the next visit.
+   * notice. A hibernated tab keeps its title, its own icon, its group and its
+   * address, and all four are written down, so the strip reads the same before and
+   * after a restart; only the page is gone, and it reloads on the next visit.
    */
   sweepIdleTabs(now: number = Date.now()): void {
     const windowMs = this.hibernationWindowMs

@@ -21,6 +21,7 @@
 import {
   MAX_BROWSER_TAB_PAGE_TITLE_LENGTH,
   MAX_BROWSER_TAB_URL_LENGTH,
+  isStorableBrowserFavicon,
   parseAppearance
 } from './global-browser-tabs'
 import { looksLikeBrowserAddress } from '../browser-search-engines'
@@ -44,16 +45,6 @@ export const MAX_BROWSER_HISTORY_RECORDS = 10_000
 /** How many bookmarks are kept. A bookmark is a user intent, so it is never
  *  evicted for a newer one: the ceiling only bounds a corrupt file. */
 export const MAX_BROWSER_BOOKMARKS = 5_000
-/**
- * The longest page icon a bookmark may store, as data URL text.
- *
- * A bookmark's default icon is a copy of the page's own favicon rather than a
- * lookup, so its size is the file's size. Real favicons are a few kilobytes; the
- * bound is generous for those and still keeps a copy per saved page from turning
- * every write of the list into a megabyte one. A page whose icon is larger is
- * saved without one, which is a missing glyph rather than a lost bookmark.
- */
-export const MAX_BROWSER_BOOKMARK_FAVICON_LENGTH = 32_768
 
 /**
  * How long a change to either library waits before it is written.
@@ -94,8 +85,10 @@ export interface BrowserBookmark {
    *
    * A copy rather than a lookup: a bookmark is durable state, so its default icon
    * is in the file instead of being reachable only while the site and the network
-   * are. It is exactly what the user asked a saved page to wear by default, and
-   * any icon they choose replaces it.
+   * are. It is exactly the icon the tab that saved the page was wearing by default,
+   * and any icon the user chooses replaces it. A stored icon follows one rule
+   * wherever the app keeps one, a tab or a saved page: see
+   * `isStorableBrowserFavicon`.
    */
   favicon: string | null
   /**
@@ -231,26 +224,11 @@ function bookmark(value: unknown): BrowserBookmark | null {
     url,
     title: title === '' ? browserLibraryHost(url) : title,
     createdAt: safeTimestamp(value['createdAt'], Date.now()),
-    favicon: isStorableBookmarkFavicon(value['favicon']) ? value['favicon'] : null,
+    favicon: isStorableBrowserFavicon(value['favicon']) ? value['favicon'] : null,
     iconType: appearance.iconType,
     customSvg: appearance.customSvg,
     imagePath: appearance.imagePath
   }
-}
-
-/**
- * Whether a value is an icon a saved page may store.
- *
- * Only an image data URL, and only one within the bound: this is the same rule
- * the store applies when it copies a page's favicon into a bookmark, so a stored
- * icon can always be one the list is willing to write back.
- */
-export function isStorableBookmarkFavicon(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    value.startsWith('data:image/') &&
-    value.length <= MAX_BROWSER_BOOKMARK_FAVICON_LENGTH
-  )
 }
 
 /**

@@ -15,6 +15,7 @@
 
 import { APP_SLUG } from '$shared/brand'
 import {
+  isStorableBrowserFavicon,
   parseGlobalBrowserTabsSnapshot,
   type GlobalBrowserTabsSnapshot,
   type PersistedBrowserBox,
@@ -28,14 +29,19 @@ import type { GlobalBrowserBox, GlobalBrowserGroup, GlobalBrowserTab } from './g
  *  migrate a profile that predates the durable file, and then cleared. */
 const LEGACY_STORAGE_KEY = `${APP_SLUG}.global-browser.v1`
 
-/** One tab in its stored shape: the live page state (favicon freshness, audio,
- *  capture, loading) describes a running page and is deliberately never stored. */
+/** One tab in its stored shape: the live page state (audio, capture, loading)
+ *  describes a running page and is deliberately never stored. The page's icon is
+ *  stored, because it belongs to the address rather than to the running page. */
 export function persistedTabFromRuntime(tab: GlobalBrowserTab): PersistedBrowserTab {
   return {
     id: tab.id,
     title: tab.title,
     customTitle: tab.customTitle,
     url: tab.url,
+    // Only an icon the file is willing to keep: a page can report one larger than
+    // a stored page icon may be, and a stored icon has to be one the parser and
+    // the bookmark list will accept back.
+    favicon: isStorableBrowserFavicon(tab.favicon) ? tab.favicon : null,
     groupId: tab.groupId,
     boxId: tab.boxId,
     createdAt: tab.createdAt,
@@ -82,10 +88,16 @@ export function persistedBoxFromRuntime(box: GlobalBrowserBox): PersistedBrowser
  *
  * A restored tab is never live: no page survives a restart, so the tab starts
  * hibernated and reloads from its stored address the moment the user visits it.
- * The favicon is dropped with the page it belonged to.
+ * Its icon is restored with it, because the icon belongs to the address rather
+ * than to the page: a restored row wears the mark it wore when the tab was last
+ * open, and the page's own icon replaces it when the reload reports one.
  */
 export function runtimeTabFromPersisted(tab: PersistedBrowserTab): GlobalBrowserTab {
-  return { ...tab, favicon: null, hibernated: true }
+  return {
+    ...tab,
+    favicon: isStorableBrowserFavicon(tab.favicon) ? tab.favicon : null,
+    hibernated: true
+  }
 }
 
 export function runtimeGroupFromPersisted(group: PersistedBrowserGroup): GlobalBrowserGroup {

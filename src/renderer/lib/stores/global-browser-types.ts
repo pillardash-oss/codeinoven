@@ -155,7 +155,19 @@ export interface GlobalBrowserTab extends BrowserAppearance {
    * on the next load while an unnamed tab keeps tracking the page.
    */
   customTitle: string | null
+  /** The address the tab is showing, normalized, or empty for a blank tab. */
   url: string
+  /**
+   * The page's own icon as a data URL, or null while the app has none for this
+   * tab.
+   *
+   * The icon belongs to the tab's address rather than to the running page, so it
+   * is written down with the tab: the row wears it while the tab is hibernated
+   * and after a restart, before any page loads. A page that reports a different
+   * icon replaces it, a tab that navigates drops it with the address it came from,
+   * and a tab that has none resolves one from its own address (see
+   * `GlobalBrowserState.ensureFavicon`).
+   */
   favicon: string | null
   groupId: string | null
   /**

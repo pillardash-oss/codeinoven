@@ -51,15 +51,16 @@
   const pageTab = $derived(pageTabId ? globalBrowser.tabById(pageTabId) : null)
   const pageUrl = $derived(pageTab?.url ?? '')
   const pageLabel = $derived(pageTab ? browserTabLabel(pageTab).trim() : '')
-  /** The page's icon: the favicon the live page reported, else the shared host
-   *  cache every other piece of browser chrome resolves through. */
+  /** The page's icon: the tab's own, which the tab list keeps written down, else
+   *  the shared host cache every other piece of browser chrome resolves through. */
   const pageFavicon = $derived(
     pageTab?.favicon ?? (pageUrl !== '' ? faviconState.faviconFor(pageUrl) : null)
   )
 
-  // A tab restored from a restart has no live page, so its favicon exists only in
-  // the host cache (or nowhere yet). Asking for it here is what puts the icon in
-  // the head start before the page loads again.
+  // The head start is drawn before any page loads, so it needs the icon of an
+  // address rather than of a document. The tab carries one itself whenever the app
+  // has seen it; this is the same question asked of the shared cache for the
+  // address, which is what covers a tab the app has no icon for yet.
   $effect(() => {
     if (pageUrl !== '') faviconState.ensureResolved([pageUrl])
   })

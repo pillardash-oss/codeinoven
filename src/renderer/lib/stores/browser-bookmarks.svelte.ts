@@ -26,14 +26,16 @@ import {
   MAX_BROWSER_BOOKMARKS,
   browserBookmarkMatches,
   browserLibraryHost,
-  isStorableBookmarkFavicon,
   normalizeBookmarkAddress,
   normalizeBrowserLibraryUrl,
   parseBrowserBookmarksSnapshot,
   type BrowserBookmark,
   type BrowserBookmarksSnapshot
 } from '$shared/browser/browser-library'
-import { MAX_BROWSER_TAB_PAGE_TITLE_LENGTH } from '$shared/browser/global-browser-tabs'
+import {
+  MAX_BROWSER_TAB_PAGE_TITLE_LENGTH,
+  isStorableBrowserFavicon
+} from '$shared/browser/global-browser-tabs'
 import { faviconState } from './favicons.svelte'
 import { reportError } from './app-errors.svelte'
 
@@ -160,7 +162,7 @@ export class BrowserBookmarkState {
       // label every surface shows in that case.
       title: trimmed === '' ? browserLibraryHost(normalized) : trimmed,
       createdAt: Date.now(),
-      favicon: isStorableBookmarkFavicon(favicon) ? favicon : null,
+      favicon: isStorableBrowserFavicon(favicon) ? favicon : null,
       iconType: null,
       customSvg: null,
       imagePath: null
@@ -285,7 +287,7 @@ export class BrowserBookmarkState {
     // page the answer belongs to.
     const url = bookmark.url
     const resolved = await faviconState.resolve(url)
-    if (!isStorableBookmarkFavicon(resolved)) return
+    if (!isStorableBrowserFavicon(resolved)) return
     const current = this.bookmarks.find((candidate) => candidate.id === id)
     if (!current || current.url !== url || current.favicon !== null) return
     this.mutatedSinceBoot = true
@@ -304,7 +306,7 @@ export class BrowserBookmarkState {
    * and only its own address, so an icon the user chose is never overwritten.
    */
   private notePageIcon(url: string, favicon: string | null): void {
-    if (!isStorableBookmarkFavicon(favicon)) return
+    if (!isStorableBrowserFavicon(favicon)) return
     const bookmark = this.find(url)
     if (!bookmark) return
     if (

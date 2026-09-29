@@ -87,8 +87,16 @@ export interface BrowserContextTab {
   projectId: string
   threadId: string
   url: string
-  /** Live page favicon (data URL) from the browser panel, if reported. */
-  favicon?: string
+  /**
+   * The page's own icon as a data URL, as the app last had it, or null while the
+   * tab has none.
+   *
+   * The icon belongs to the address rather than to the running page, so it is
+   * written down with the tab list: a strip restored by a restart wears the marks
+   * it wore when the tabs were last open, and a saved page copies the icon of the
+   * tab it was saved from.
+   */
+  favicon: string | null
 }
 
 /**

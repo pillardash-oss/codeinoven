@@ -27,9 +27,8 @@
    *
    * Before the browser's runtime has been loaded the row is built from the
    * durable tab list rather than the live store (see `switcherBrowserTabs`), and
-   * that list carries no favicon because no page survived the restart it was
-   * written for. Such a tab therefore shows its own custom icon and then the
-   * globe, which is exactly what its row in the strip shows after a restart.
+   * that list carries the icon each tab was wearing when it was written, so a row
+   * shown before the browser loads wears the same mark as its row in the strip.
    */
   const runtime = $derived(globalBrowser.runtimeFor(tab.id))
   const label = $derived(browserTabLabel(tab))

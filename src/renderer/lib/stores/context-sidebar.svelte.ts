@@ -562,6 +562,16 @@ class ContextSidebarState {
     return this.browser.openForContext(url, projectId, threadId, requestedTabId, reveal)
   }
 
+  /**
+   * Give one sidebar browser tab the icon its address is known by, when the app
+   * has no page to read one from (see `SidebarBrowserTabs.ensureFavicon`). The
+   * strip draws this for every tab it shows, and the answer is written down with
+   * the tab list.
+   */
+  ensureBrowserTabFavicon(tabId: string): void {
+    void this.browser.ensureFavicon(tabId)
+  }
+
   updateBrowserTab(tabId: string, url: string, title?: string, favicon?: string | null): void {
     this.browser.updateTab(tabId, url, title, favicon)
   }

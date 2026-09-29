@@ -93,6 +93,14 @@
         void globalBrowser.ensureTabIconLoaded(tab.id)
       }
     }
+    // A tab the app has no page for (one a restart restored, one hibernated
+    // before its page reported an icon) takes the icon its own address is known
+    // by, so the row wears the site's mark instead of a globe. The store asks at
+    // most once per address per tab and writes the answer down with the tab, so
+    // this is not a render-time lookup.
+    for (const tab of globalBrowser.tabs) {
+      if (tab.url !== '' && tab.favicon === null) void globalBrowser.ensureFavicon(tab.id)
+    }
   })
   const ungrouped = $derived(globalBrowser.tabsInGroup(null))
   const pinned = $derived(globalBrowser.pinnedTabs.filter(matches))
@@ -133,8 +141,8 @@
   }
 
   /** Save the page on screen, or take it out of the list again. The page's own
-   *  favicon goes with it: that is what a saved page wears by default, and the
-   *  tab already holds it. */
+   *  favicon goes with it: that is what a saved page wears by default, and the tab
+   *  holds one for as long as it holds its address, hibernated or not. */
   function toggleBookmark(): void {
     const tab = activeTab
     if (!tab || tab.url === '') return
