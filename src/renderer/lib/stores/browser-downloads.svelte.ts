@@ -4,6 +4,18 @@ import type { BrowserDownload } from '$shared/ipc-contract'
 import { reportError } from './app-errors.svelte'
 
 /**
+ * A project's outstanding downloads, split by whether anything is moving.
+ *
+ * `running` is transferring bytes; `stopped` is paused or interrupted and
+ * waiting on the user. A surface that only needs a total adds the two, so both
+ * kinds of count are derived from one classification.
+ */
+export interface BrowserDownloadOutstanding {
+  running: number
+  stopped: number
+}
+
+/**
  * Downloads the embedded browser started, keyed by download id in the order they
  * started. Main is the owner of every byte written; this store is the renderer's
  * mirror of what it reported, so the toolbar list, the downloads window and any
@@ -71,33 +83,42 @@ class BrowserDownloadsState {
     return downloads.reverse()
   }
 
-  /** How many of the project's downloads are still running: the number the
-   *  toolbar badge reports.
+  /**
+   * The project's outstanding downloads in one read, split by whether anything
+   * is moving: how much the browser still has in flight, and how much of it is
+   * waiting on the user.
+   *
+   * `running` is what is transferring bytes right now. A download the user
+   * paused is `progressing` in main's bookkeeping but is not moving, so it
+   * belongs to `stopped` together with the interrupted ones   the entries that
+   * need a resume, a restart or a removal. One classification, so a badge that
+   * splits the two and one that only counts them can never disagree about the
+   * same list of downloads.
    */
-  activeCount(projectId: string): number {
-    let count = 0
+  outstandingCounts(projectId: string): BrowserDownloadOutstanding {
+    let running = 0
+    let stopped = 0
     for (const download of this.downloads.values()) {
-      if (download.projectId === projectId && download.state === 'progressing') count += 1
+      if (download.projectId !== projectId) continue
+      if (download.state === 'completed' || download.state === 'cancelled') continue
+      if (download.state === 'progressing' && !download.paused) running += 1
+      else stopped += 1
     }
-    return count
+    return { running, stopped }
   }
 
   /**
    * How many of the project's downloads are not finished: the running ones plus
    * the interrupted ones the user has to resume or start over.
    *
-   * The toolbar badge uses this rather than {@link activeCount}, because a
-   * download the app stopped on its way out is exactly the entry the user would
-   * otherwise never know about   it is on screen, waiting for a decision, and a
-   * badge is what says so.
+   * A download the app stopped on its way out is exactly the entry the user
+   * would otherwise never know about   it is on screen, waiting for a decision,
+   * and a badge is what says so   which is why the count covers stopped
+   * downloads and not only the live ones.
    */
   unfinishedCount(projectId: string): number {
-    let count = 0
-    for (const download of this.downloads.values()) {
-      if (download.projectId !== projectId) continue
-      if (download.state === 'progressing' || download.state === 'interrupted') count += 1
-    }
-    return count
+    const outstanding = this.outstandingCounts(projectId)
+    return outstanding.running + outstanding.stopped
   }
 
   pause(download: BrowserDownload): void {

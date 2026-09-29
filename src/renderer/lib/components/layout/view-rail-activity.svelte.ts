@@ -1,21 +1,30 @@
 import { createSubscriber, SvelteSet } from 'svelte/reactivity'
 import type { Component } from 'svelte'
-import { BotMessageSquare, MessageSquare, Timeline } from '@lucide/svelte'
+import { BotMessageSquare, Download, MessageSquare, Timeline } from '@lucide/svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import {
+  browserDownloads,
+  type BrowserDownloadOutstanding
+} from '$lib/stores/browser-downloads.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
+import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 import { coordinatorHasActiveDelegates, isOrchestrationChildThread } from '$shared/types'
 import { threadWorkingForIndicator } from './app-header-thread-status'
 import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
 
 /**
- * Live thread activity for the primary-view rail.
+ * Live activity for the primary-view rail.
  *
  * The rail puts the view switcher on its own docked rail, so each view carries
  * only its own family's activity instead of one trigger carrying every family's
  * badges at once. Projects, Threads, Scoped threads and Scope Board are all the
  * project family and therefore share the project badge; Chats and Assistant
  * each carry their own.
+ *
+ * The Browser has no thread family behind it at all, so its badge reports what
+ * the browser itself has in flight instead: the downloads its profile has not
+ * finished ({@link ViewRailActivity.browserTransfers}).
  */
 export interface ViewFamilyActivity {
   working: number
@@ -147,6 +156,25 @@ export class ViewRailActivity {
     }
     return counts
   })
+
+  /**
+   * The Browser view's own rail activity: the global browser profile's
+   * outstanding downloads.
+   *
+   * A download is the one thing the browser keeps doing after the user leaves
+   * it. The transfer runs on while another view is on screen, and the list that
+   * shows it lives inside the view they left, so the rail's Browser item is the
+   * only surface that can say a download is still running.
+   *
+   * Counted for the global profile, which is the browser the Browser view opens
+   * and therefore the exact set its own downloads panel lists: a badge that
+   * promised more than the destination shows would be a badge the user cannot
+   * act on. The renderer mirror is read directly rather than the browser's
+   * runtime, so nothing about the browser itself joins the first-paint chunk.
+   */
+  browserTransfers: BrowserDownloadOutstanding = $derived(
+    browserDownloads.outstandingCounts(GLOBAL_BROWSER_PROJECT_ID)
+  )
 }
 /**
  * The single activity pill a rail view shows, chosen by priority: working
@@ -158,13 +186,17 @@ export class ViewRailActivity {
  * resolved as `projectBadgeOption`, which is the live project view when one is
  * shown, or the last project view the user was on when a view that owns another
  * family (Chat, Assistant) or no threads at all (the Browser) is on screen.
- * Chats and Assistant each have a single view and keep their badge there.
+ * Chats and Assistant each have a single view and keep their badge there. The
+ * Browser has no thread family to report, so its item shows the profile's
+ * downloads instead (see {@link browserTransferBadge}).
  */
 export function viewBadgeFor(
   optionId: HeaderViewOptionId,
   projectBadgeOption: HeaderViewOptionId | null,
-  counts: ViewActivityCounts
+  counts: ViewActivityCounts,
+  browserTransfers: BrowserDownloadOutstanding
 ): ViewBadge | null {
+  if (optionId === 'browser') return browserTransferBadge(browserTransfers)
   const family = viewOptionFamily(optionId)
   if (family === 'projects' && optionId !== projectBadgeOption) return null
   const activity = counts[family]
@@ -194,4 +226,34 @@ export function viewBadgeFor(
     }
   }
   return null
+}
+
+/**
+ * The Browser item's badge: the profile's outstanding downloads, in the working
+ * tone while any of them is transferring and in the attention tone once every
+ * one of them is stopped and waiting on the user.
+ *
+ * It stays up while the Browser is the view on screen, exactly as a thread
+ * family's badge does: a download outlives the visit, and the rail is what says
+ * the browser is still busy once the user looks away.
+ */
+function browserTransferBadge(transfers: BrowserDownloadOutstanding): ViewBadge | null {
+  const count = transfers.running + transfers.stopped
+  if (count === 0) return null
+  return {
+    tone: transfers.running > 0 ? 'working' : 'attention',
+    count,
+    label: browserTransferLabel(transfers),
+    icon: Download
+  }
+}
+
+/** Tooltip/aria text for the Browser badge: how much is transferring, and how
+ *  much is stopped and waiting on a resume or a restart. */
+function browserTransferLabel(transfers: BrowserDownloadOutstanding): string {
+  const count = transfers.running + transfers.stopped
+  const head = count === 1 ? '1 browser download' : `${count} browser downloads`
+  if (transfers.stopped === 0) return `${head} in progress`
+  if (transfers.running === 0) return `${head} stopped, waiting to resume or restart`
+  return `${head}: ${transfers.running} in progress, ${transfers.stopped} stopped`
 }

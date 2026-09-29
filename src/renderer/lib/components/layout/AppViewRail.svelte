@@ -46,7 +46,8 @@
   settings) that used to sit in the project sidebar footer. Each view item
   carries the activity badge of its own family, so the project family's shared
   badge rides the last project view the user was on while Chat, Assistant or
-  Browser is on screen.
+  Browser is on screen. The Browser has no thread family, so its item carries the
+  browser profile's outstanding downloads instead.
 -->
 <nav
   class="relative flex h-full w-10 shrink-0 flex-col items-center gap-0.5 bg-surface py-2"
@@ -59,7 +60,12 @@
 
   <div class="flex flex-col items-center gap-0.5" data-onboarding="view-switcher">
     {#each options as option (option.id)}
-      {@const activityBadge = viewBadgeFor(option.id, projectBadgeOption, activity.counts)}
+      {@const activityBadge = viewBadgeFor(
+        option.id,
+        projectBadgeOption,
+        activity.counts,
+        activity.browserTransfers
+      )}
       <AppRailButton
         label={option.label}
         icon={option.icon}
