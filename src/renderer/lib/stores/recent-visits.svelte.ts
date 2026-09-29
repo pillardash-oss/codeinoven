@@ -18,7 +18,10 @@ import { APP_SLUG } from '$shared/brand'
 import type { Thread } from '$shared/types'
 
 const RECENT_VISITS_KEY = `${APP_SLUG}.recent-thread-visits.v1`
-const RECENT_VISITS_LIMIT = 50
+/** How many thread visits the list keeps. */
+const THREAD_VISIT_LIMIT = 50
+/** How many browser tab visits it keeps, capped on its own. */
+const BROWSER_TAB_VISIT_LIMIT = 10
 /** Marks one entry as a browser tab. Project ids are UUIDs, so a thread key can
  *  never start with this. */
 const BROWSER_TAB_VISIT_PREFIX = 'browser-tab:'
@@ -65,6 +68,33 @@ export function browserTabIdFromVisitKey(key: string): string {
   return key.slice(BROWSER_TAB_VISIT_PREFIX.length)
 }
 
+/**
+ * Bound the visit list, capping each kind of surface on its own.
+ *
+ * One flat cap over both kinds was a real loss: opening a thread moves it to the
+ * front, so a busy thread history filled every slot and evicted the browser tab
+ * visits. The keys were the only way the Ctrl+Tab switcher could name a browser
+ * tab, so the tab the user was working in dropped out of the switcher and
+ * reaching it again took the mouse. Capping per kind keeps the interleaved
+ * recency order while making sure neither kind can evict the other.
+ */
+export function capRecentVisits(entries: readonly string[]): string[] {
+  const capped: string[] = []
+  let threads = 0
+  let tabs = 0
+  for (const entry of entries) {
+    if (isBrowserTabVisitKey(entry)) {
+      if (tabs >= BROWSER_TAB_VISIT_LIMIT) continue
+      tabs += 1
+    } else {
+      if (threads >= THREAD_VISIT_LIMIT) continue
+      threads += 1
+    }
+    capped.push(entry)
+  }
+  return capped
+}
+
 class RecentVisitsState {
   /** Every visit, newest first, threads and browser tabs interleaved. */
   private entries: string[] = $state(loadRecentVisits())
@@ -81,13 +111,6 @@ class RecentVisitsState {
     return this.entries.filter((key) => !isBrowserTabVisitKey(key))
   }
 
-  /** Only the browser tab ids, in visit order. */
-  get browserTabIds(): readonly string[] {
-    return this.entries
-      .filter((key) => isBrowserTabVisitKey(key))
-      .map((key) => browserTabIdFromVisitKey(key))
-  }
-
   /** Count a thread as visited, moving it to the front. */
   recordThread(thread: Pick<Thread, 'projectId' | 'id'>): void {
     this.record(threadVisitKey(thread))
@@ -99,10 +122,7 @@ class RecentVisitsState {
   }
 
   private record(key: string): void {
-    this.entries = [key, ...this.entries.filter((candidate) => candidate !== key)].slice(
-      0,
-      RECENT_VISITS_LIMIT
-    )
+    this.entries = capRecentVisits([key, ...this.entries.filter((candidate) => candidate !== key)])
     persistRecentVisits(this.entries)
   }
 }

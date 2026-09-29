@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
+  import { tick } from 'svelte'
   import { fly } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
   import { motionDuration } from '$lib/motion'
@@ -105,12 +105,7 @@
     threadVisitKey
   } from '$lib/stores/workspace.svelte'
   import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
-  import {
-    browserStore,
-    ensureStoredBrowserTabs,
-    loadBrowser,
-    switcherBrowserTabs
-  } from '$lib/stores/browser-access.svelte'
+  import { browserStore, loadBrowser, switcherBrowserTabs } from '$lib/stores/browser-access.svelte'
   import {
     buildThreadSwitcherEntries,
     type ThreadSwitcherEntry
@@ -1630,13 +1625,19 @@
     return [...pinned, ...unpinned]
   })
 
-  // The switcher's browser rows resolve against the durable tab list while the
-  // browser's own runtime has not been loaded (see `switcherBrowserTabs`), which
-  // is the state of any session that restored onto a thread. Nothing can be
-  // listed there unless the recent-visit list names a browser tab, so that is
-  // what decides whether the read is worth making at all.
-  onMount(() => {
-    if (recentVisits.browserTabIds.length > 0) ensureStoredBrowserTabs()
+  /**
+   * The browser tab on screen while the browser view is the surface the user is
+   * looking at, and null in every other view.
+   *
+   * The switcher both leads with this tab and starts cycling from it, so one
+   * Control+Tab out of the browser lands on the surface the user was on before
+   * it, and one Control+Tab back into the browser always reaches the tab they
+   * left instead of sending them to the mouse.
+   */
+  let currentBrowserTabId = $derived.by(() => {
+    if (active) return null
+    const browser = browserStore()
+    return browser?.opened ? browser.activeTabId : null
   })
 
   let recentSwitcherEntries = $derived.by(() =>
@@ -1646,17 +1647,15 @@
       // was last visited.
       visits: recentVisits.all,
       threads: allThreads.filter((thread) => !thread.archived),
-      tabs: switcherBrowserTabs()
+      tabs: switcherBrowserTabs(),
+      currentBrowserTabId
     })
   )
 
   /** The entry the switcher starts cycling from: the active browser tab while the
    *  browser view is on screen, otherwise the selected thread. */
   let switcherSelectedKey = $derived.by(() => {
-    const browser = browserStore()
-    if (!active && browser?.opened && browser.activeTabId) {
-      return browserTabVisitKey(browser.activeTabId)
-    }
+    if (currentBrowserTabId) return browserTabVisitKey(currentBrowserTabId)
     const thread = selectedThread
     return thread ? threadVisitKey(thread) : null
   })
