@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { Clock, Globe, Lock, LockOpen } from '@lucide/svelte'
+  import { Globe, Lock, LockOpen } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
-  import { browserLibraryHost, type BrowserHistoryEntry } from '$shared/browser/browser-library'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { browserHistory } from '$lib/stores/browser-history.svelte'
-  import { relativeTime } from '$lib/format/relative-time'
+  import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
 
   interface Props {
     /** The address the spotlight opened on, selected and ready to replace. */
@@ -19,22 +18,24 @@
   let { initialValue, onOpen, onClose }: Props = $props()
 
   /**
-   * The address spotlight.
+   * The browser view's address palette.
    *
-   * Every address bar in the app opens this instead of editing in place, and it
-   * is the app's own palette shape so the interaction feels like the rest of the
-   * workstation rather than a browser bolt-on: one field, pre-filled with the page
-   * on screen and selected, with the pages the user has already been to offered
-   * underneath.
+   * This is the global browser's address bar, which is a control that opens the
+   * app's own palette: the whole window is available to it, so the address is
+   * replaced in a palette pre-filled with the page on screen and selected, with
+   * the pages the user has already been to offered underneath.
    *
-   * The history underneath it is the *only* place history is suggested. An address
-   * bar is a control the user clicks; suggestions belong to the field they are
-   * typing in, which is this one.
+   * The thread browser does not use this. Its address bar is the field itself and
+   * brings the same history down in a drawer under it
+   * (`BrowserAddressBar.svelte`), because a panel docked in a thread's sidebar has
+   * no room for a palette and no reason for one.
    */
 
   /** How many history rows are offered. A palette is scanned, not read: the
    *  newest handful is what a person picks from. */
   const SUGGESTION_LIMIT = 7
+
+  const listId = $props.id()
 
   // The field's own text is its own from the moment the panel opens: the address
   // on screen is only the seed, and the surface mounts a fresh panel per open, so
@@ -92,10 +93,6 @@
     event.preventDefault()
     submit()
   }
-
-  function suggestionLabel(entry: BrowserHistoryEntry): string {
-    return `Open ${entry.title}`
-  }
 </script>
 
 <Modal
@@ -149,41 +146,13 @@
 
   {#if suggestions.length > 0}
     <div class="mt-1.5 border-t border-border pt-1.5">
-      <p
-        class="flex items-center gap-1.5 px-2.5 pb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
-      >
-        <Clock size={10} aria-hidden="true" />
-        History
-      </p>
-      <!-- A listbox driven by the field above: the arrows move the highlight, so
-           the rows are options rather than a second set of controls. -->
-      <div role="listbox" aria-label="Browsing history suggestions">
-        {#each suggestions as entry, index (entry.url)}
-          <button
-            type="button"
-            role="option"
-            aria-selected={index === highlight}
-            class={[
-              'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left outline-none transition-colors',
-              index === highlight ? 'bg-overlay text-foreground' : 'text-muted hover:bg-elevated'
-            ]}
-            aria-label={suggestionLabel(entry)}
-            title={entry.url}
-            onmouseenter={() => (highlight = index)}
-            onclick={() => open(entry.url)}
-          >
-            <span class="min-w-0 flex-1">
-              <span class="block truncate text-sm">{entry.title}</span>
-              <span class="block truncate text-[0.6875rem] text-dimmed">
-                {browserLibraryHost(entry.url)}
-              </span>
-            </span>
-            <span class="shrink-0 text-[0.6875rem] tabular-nums text-dimmed">
-              {relativeTime(entry.visitedAt)}
-            </span>
-          </button>
-        {/each}
-      </div>
+      <BrowserHistorySuggestions
+        {listId}
+        {suggestions}
+        {highlight}
+        onHighlight={(index) => (highlight = index)}
+        onOpen={(entry) => open(entry.url)}
+      />
     </div>
   {/if}
 </Modal>
