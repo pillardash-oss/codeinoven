@@ -20,8 +20,11 @@
 
 import {
   MAX_BROWSER_TAB_PAGE_TITLE_LENGTH,
-  MAX_BROWSER_TAB_URL_LENGTH
+  MAX_BROWSER_TAB_URL_LENGTH,
+  parseAppearance
 } from './global-browser-tabs'
+import { looksLikeBrowserAddress } from '../browser-search-engines'
+import { normalizeBrowserUrl } from '../local-development-url'
 
 /** Where the durable browsing history lives, relative to the config root. */
 export const BROWSER_HISTORY_STATE_RELATIVE_PATH = 'state/browser-history.json'
@@ -41,6 +44,16 @@ export const MAX_BROWSER_HISTORY_RECORDS = 10_000
 /** How many bookmarks are kept. A bookmark is a user intent, so it is never
  *  evicted for a newer one: the ceiling only bounds a corrupt file. */
 export const MAX_BROWSER_BOOKMARKS = 5_000
+/**
+ * The longest page icon a bookmark may store, as data URL text.
+ *
+ * A bookmark's default icon is a copy of the page's own favicon rather than a
+ * lookup, so its size is the file's size. Real favicons are a few kilobytes; the
+ * bound is generous for those and still keeps a copy per saved page from turning
+ * every write of the list into a megabyte one. A page whose icon is larger is
+ * saved without one, which is a missing glyph rather than a lost bookmark.
+ */
+export const MAX_BROWSER_BOOKMARK_FAVICON_LENGTH = 32_768
 
 /**
  * How long a change to either library waits before it is written.
@@ -74,11 +87,30 @@ export interface BrowserBookmark {
   id: string
   url: string
   title: string
-  /** Epoch milliseconds the page was saved, which is the list's order. */
+  /** Epoch milliseconds the page was saved. */
   createdAt: number
+  /**
+   * The page's own icon, as the data URL the app had when the page was saved.
+   *
+   * A copy rather than a lookup: a bookmark is durable state, so its default icon
+   * is in the file instead of being reachable only while the site and the network
+   * are. It is exactly what the user asked a saved page to wear by default, and
+   * any icon they choose replaces it.
+   */
+  favicon: string | null
+  /**
+   * The icon the user chose, in the same vocabulary a project, a routine, a tab,
+   * a group and a box use: a `PROJECT_SVG_ICONS` key, a sanitized pasted SVG, or
+   * a picked image file. All null while the page wears its own favicon. A
+   * bookmark takes the icon half of that vocabulary only: there is no accent to
+   * tint in a list of pages.
+   */
+  iconType: string | null
+  customSvg: string | null
+  imagePath: string | null
 }
 
-/** The stored bookmark list, newest first. */
+/** The stored bookmark list, in the order the user put it in. */
 export interface BrowserBookmarksSnapshot {
   bookmarks: BrowserBookmark[]
 }
@@ -193,15 +225,41 @@ function bookmark(value: unknown): BrowserBookmark | null {
   const rawId = value['id']
   const id = typeof rawId === 'string' && rawId !== '' && rawId.length <= 128 ? rawId : null
   const title = boundedString(value['title'], MAX_BROWSER_TAB_PAGE_TITLE_LENGTH).trim()
+  const appearance = parseAppearance(value)
   return {
     id: id ?? `bookmark:${crypto.randomUUID()}`,
     url,
     title: title === '' ? browserLibraryHost(url) : title,
-    createdAt: safeTimestamp(value['createdAt'], Date.now())
+    createdAt: safeTimestamp(value['createdAt'], Date.now()),
+    favicon: isStorableBookmarkFavicon(value['favicon']) ? value['favicon'] : null,
+    iconType: appearance.iconType,
+    customSvg: appearance.customSvg,
+    imagePath: appearance.imagePath
   }
 }
 
-/** A bounded, repaired view of anything that claims to be a stored bookmark list. */
+/**
+ * Whether a value is an icon a saved page may store.
+ *
+ * Only an image data URL, and only one within the bound: this is the same rule
+ * the store applies when it copies a page's favicon into a bookmark, so a stored
+ * icon can always be one the list is willing to write back.
+ */
+export function isStorableBookmarkFavicon(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.startsWith('data:image/') &&
+    value.length <= MAX_BROWSER_BOOKMARK_FAVICON_LENGTH
+  )
+}
+
+/**
+ * A bounded, repaired view of anything that claims to be a stored bookmark list.
+ *
+ * The stored order is kept: the list is the user's own, and its order is what
+ * their reordering produced. A file written before order was theirs is already
+ * newest first, so preserving it is also the shape it was written in.
+ */
 export function parseBrowserBookmarksSnapshot(value: unknown): BrowserBookmarksSnapshot {
   if (!isRecord(value) || !Array.isArray(value['bookmarks'])) return { bookmarks: [] }
   const bookmarks: BrowserBookmark[] = []
@@ -220,8 +278,20 @@ export function parseBrowserBookmarksSnapshot(value: unknown): BrowserBookmarksS
     seenIds.add(id)
     bookmarks.push({ ...parsed, id })
   }
-  bookmarks.sort((a, b) => b.createdAt - a.createdAt)
   return { bookmarks }
+}
+
+/**
+ * The address a bookmark editor's URL field produces, or null when what was typed
+ * is not a web address.
+ *
+ * Accepts exactly what an address bar accepts as a URL, so a saved page can never
+ * be re-addressed to something the browser would have searched for instead.
+ */
+export function normalizeBookmarkAddress(value: string): string | null {
+  const trimmed = value.trim()
+  if (!looksLikeBrowserAddress(trimmed)) return null
+  return normalizeBrowserLibraryUrl(normalizeBrowserUrl(trimmed))
 }
 
 /** The JSON payload for a stored library file: the records, stamped with the
@@ -254,10 +324,7 @@ export function browserBookmarksSnapshotPayload(
  * into an address bar: the site they are going back to, then the page they
  * remember, then anything else that happens to contain the text.
  */
-function libraryMatchRank(
-  record: { url: string; title: string },
-  needle: string
-): number {
+function libraryMatchRank(record: { url: string; title: string }, needle: string): number {
   const host = browserLibraryHost(record.url).toLowerCase()
   if (host.startsWith(needle)) return 0
   if (host.includes(needle)) return 1

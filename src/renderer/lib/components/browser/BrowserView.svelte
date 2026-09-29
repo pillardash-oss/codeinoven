@@ -16,7 +16,6 @@
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { motionDuration } from '$lib/motion'
@@ -50,9 +49,6 @@
   const unfinishedDownloadCount = $derived(
     browserDownloads.unfinishedCount(GLOBAL_BROWSER_PROJECT_ID)
   )
-  /** How many pages are saved, for the rail badge. A saved page is the one list
-   *  here the user built by hand, so its size is worth showing. */
-  const bookmarkCount = $derived(browserBookmarks.count)
 
   /**
    * The browser view's tools for the context rail.
@@ -85,9 +81,9 @@
         countBadge: unfinishedDownloadCount > 0 ? String(unfinishedDownloadCount) : undefined,
         onSelect: () => globalBrowser.toggleDownloadsSidebar()
       },
-      // History and bookmarks belong to the person, like downloads do, so they are
-      // reachable with no tab open: the browser's whole memory is browsable even
-      // when the strip is empty.
+      // History, bookmarks and boxes belong to the person, like downloads do, so
+      // they are reachable with no tab open: the browser's whole memory is
+      // browsable even when the strip is empty.
       {
         id: 'history',
         label: 'History',
@@ -95,12 +91,14 @@
         active: globalBrowser.historySidebarShown,
         onSelect: () => globalBrowser.toggleHistorySidebar()
       },
+      // No badge and no count on the label: a bookmark is quick access the user
+      // put there and knows about, not a queue with a backlog, so the rail states
+      // the tool and nothing else.
       {
         id: 'bookmarks',
-        label: bookmarkCount > 0 ? `Bookmarks (${bookmarkCount})` : 'Bookmarks',
+        label: 'Bookmarks',
         icon: Bookmark,
         active: globalBrowser.bookmarksSidebarShown,
-        countBadge: bookmarkCount > 0 ? String(bookmarkCount) : undefined,
         onSelect: () => globalBrowser.toggleBookmarksSidebar()
       },
       // Boxes belong to the profile, like downloads and bookmarks, so the tool is

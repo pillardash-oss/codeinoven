@@ -132,11 +132,13 @@
     globalBrowser.openTabSearch(groupId)
   }
 
-  /** Save the page on screen, or take it out of the list again. */
+  /** Save the page on screen, or take it out of the list again. The page's own
+   *  favicon goes with it: that is what a saved page wears by default, and the
+   *  tab already holds it. */
   function toggleBookmark(): void {
     const tab = activeTab
     if (!tab || tab.url === '') return
-    browserBookmarks.toggle(tab.url, browserTabLabel(tab))
+    browserBookmarks.toggle(tab.url, browserTabLabel(tab), tab.favicon)
   }
 
   /** Left click reloads, or aborts the in-flight navigation while loading. */

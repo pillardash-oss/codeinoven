@@ -350,6 +350,34 @@ The global browser's list is durable (`browser:loadHistory` /
 when its last tab closes, so a thread's browsing never reaches app storage and
 never outlives the browser that made it.
 
+### Bookmarks
+
+A bookmark is the user's own record rather than something the browser observed, so
+it is editable: its title, its address, its icon, and its place in the list. It is
+quick access to a page the user returns to, not an archive, which is what decides
+the rest.
+
+- **Its default icon is the page's own favicon, copied into the record when the page
+  was saved** (`BrowserBookmark.favicon` in `src/lib/browser/browser-library.ts`).
+  A copy and not a lookup: a saved page has to look like itself with the network
+  down, so the icon cannot be something the renderer resolves later. A page saved
+  from a surface that had no icon of its own (a history row) has its favicon asked
+  for once, through the resolver every other favicon in the app uses, and written
+  down when it answers; a page that comes back on screen with an icon the record
+  never got fills itself in from that visit. The copy is bounded, because the whole
+  list is rewritten on every change: a favicon past the bound is not stored at all,
+  which loses a glyph rather than the bookmark. An icon the user chooses (a library
+  SVG, a pasted SVG, a picked image) replaces it, in the same appearance vocabulary
+  a project, a tab, a group and a box wear, and asking for the page's own icon back
+  drops it again.
+- **The list's order is the stored order.** The parser preserves it instead of
+  sorting by `createdAt`, which is what makes a move durable. One reordering
+  primitive (`moveBefore`) serves both the panel's drag and its move commands.
+- **No indicator marks it.** The rail states the tool and nothing else: a user who
+  saved a page did so to get to it, not to be told it is there, so there is no
+  count badge and no count on the tool's label. Downloads keep theirs, because that
+  one reports work in flight.
+
 ## UI shape
 
 Browser should be an optional top-level workspace reachable from the primary sidebar/header, lazy-loaded like other major surfaces. It should not replace the project sidebar or embed permanent controls into every thread.

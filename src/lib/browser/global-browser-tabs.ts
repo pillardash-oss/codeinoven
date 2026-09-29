@@ -55,10 +55,11 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{3,8}$/u
 const ENTITY_ID_PATTERN = /^[a-zA-Z0-9:_-]+$/u
 
 /**
- * The appearance vocabulary a browser tab and a browser group share, copied
+ * The appearance vocabulary a browser tab, group, box and bookmark share, copied
  * from the project/routine model: a hex colour, a `PROJECT_SVG_ICONS` key, a
  * sanitized custom SVG, and a picked image file. One shape means one editor and
- * one icon resolver for every browser surface that carries an identity.
+ * one icon resolver for every browser surface that carries an identity. A
+ * bookmark takes the icon half of it only: it has no accent to tint.
  */
 export interface BrowserAppearance {
   /** A `PROJECT_COLORS` hex, or a custom hex, or null for no colour. */
@@ -194,7 +195,12 @@ function groupId(value: unknown): string {
     : `group:${crypto.randomUUID()}`
 }
 
-function parseAppearance(record: Record<string, unknown>): BrowserAppearance {
+/**
+ * The appearance payload a stored browser entity carries, repaired field by
+ * field. Exported because the browsing library's bookmarks store the same
+ * vocabulary: one rule decides what a stored icon may be, wherever it is worn.
+ */
+export function parseAppearance(record: Record<string, unknown>): BrowserAppearance {
   const color = record['color']
   return {
     color: typeof color === 'string' && COLOR_PATTERN.test(color) ? color : null,

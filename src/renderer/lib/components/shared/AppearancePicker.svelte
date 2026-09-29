@@ -19,7 +19,22 @@
     allowCustomSvg?: boolean
     resetPlacement?: 'picker' | 'footer'
     fallbackIconUrl?: string | null
-    onColorChange: (color: string | undefined) => void
+    /**
+     * Whether the colour swatches are offered. An entity whose icon is not its own
+     * (a saved page wears the icon of the page it points at) has no accent to
+     * choose, so its editor asks for the icon alone. Omit `onColorChange` with it:
+     * a picker with no colour control has nothing to report.
+     */
+    showColor?: boolean
+    /**
+     * The colour a chosen SVG is previewed in when no colour was picked.
+     *
+     * A caller whose entity tints its icon by its own identity passes the very
+     * colour its list will draw the icon in, so the preview is the icon that gets
+     * saved rather than one the user never sees again.
+     */
+    tint?: string
+    onColorChange?: (color: string | undefined) => void
     onIconTypeChange: (iconType: string | undefined) => void
     onCustomSvgChange?: (svg: string | undefined) => void
     onAddCustomIcon?: (svg: string) => Promise<void>
@@ -36,6 +51,8 @@
     allowCustomSvg = false,
     resetPlacement = 'picker',
     fallbackIconUrl = null,
+    showColor = true,
+    tint,
     onColorChange,
     onIconTypeChange,
     onCustomSvgChange,
@@ -44,7 +61,10 @@
     onReset
   }: Props = $props()
 
-  let previewColor = $derived(color ?? PROJECT_COLORS[0].value)
+  let previewColor = $derived(color ?? tint ?? PROJECT_COLORS[0].value)
+  /** The swatches are a control, not a preview: without a handler to report a
+   *  choice to, the control is not rendered at all. */
+  let colorPickerShown = $derived(showColor && onColorChange !== undefined)
   let hasAppearance = $derived(Boolean(color || iconType || customSvg || fallbackIconUrl))
   let pastedSvg = $state('')
   let showSvgInput = $state(false)
@@ -116,14 +136,16 @@
     </div>
   </div>
 
-  <div>
-    <span class="mb-1 block text-xs font-medium text-muted">Colour</span>
-    <ColorSwatches
-      value={color ?? null}
-      allowNone={false}
-      oncolorchange={(next) => onColorChange(next ?? undefined)}
-    />
-  </div>
+  {#if colorPickerShown}
+    <div>
+      <span class="mb-1 block text-xs font-medium text-muted">Colour</span>
+      <ColorSwatches
+        value={color ?? null}
+        allowNone={false}
+        oncolorchange={(next) => onColorChange?.(next ?? undefined)}
+      />
+    </div>
+  {/if}
 
   <div>
     <span class="mb-1 block text-xs font-medium text-muted">Icon</span>
