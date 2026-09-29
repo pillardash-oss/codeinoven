@@ -70,6 +70,28 @@ export function isPermissionToolName(value: string): boolean {
   )
 }
 
+/**
+ * Tools that run model-written code (a script or a notebook cell) and can
+ * orchestrate other tools from inside it. Every harness's script runner is
+ * listed here so the trace renders code mode the same way for all of them
+ * instead of matching one harness's name.
+ *
+ * `bash` is deliberately absent: running one shell command is not code mode.
+ */
+const CODE_MODE_TOOL_NAMES = new Set([
+  'codemode',
+  'runcode',
+  'executecode',
+  'codeinterpreter',
+  'interpreter',
+  'repl',
+  'notebook'
+])
+
+export function isCodeModeToolName(value: string): boolean {
+  return CODE_MODE_TOOL_NAMES.has(normalizeInteractionName(value))
+}
+
 export function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)

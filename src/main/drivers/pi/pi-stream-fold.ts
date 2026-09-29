@@ -5,7 +5,7 @@ import type {
   AgentToolStatus,
   SessionAgentEvent
 } from '../../../lib/types'
-import { parseRecord } from '../../../lib/agent-interactions'
+import { isCodeModeToolName, parseRecord } from '../../../lib/agent-interactions'
 import { base64Kilobytes } from '../../../lib/image-payload'
 import {
   classifyProviderIssue,
@@ -59,7 +59,8 @@ function mapPiContentBlock(
     }
   }
   if (type === 'toolCall') {
-    if (stringValue(block['name']) === CIO_SPAWN_TOOL) {
+    const name = stringValue(block['name']) ?? 'tool'
+    if (name === CIO_SPAWN_TOOL) {
       return cioSubagentPart(messageId, callID, record(block['arguments']))
     }
     return {
@@ -67,7 +68,8 @@ function mapPiContentBlock(
       id: `${messageId}:tool:${callID}`,
       messageID: messageId,
       callID,
-      tool: stringValue(block['name']) ?? 'tool',
+      tool: name,
+      ...(isCodeModeToolName(name) ? { codeMode: true } : {}),
       state: {
         status: 'pending',
         input: record(block['arguments']) ?? {}
@@ -126,9 +128,14 @@ function serializeContent(value: unknown): string | undefined {
 function toolResultSignature(
   status: AgentToolStatus,
   output: string | undefined,
-  error: string | undefined
+  error: string | undefined,
+  cost: number | undefined
 ): string {
-  return `${status}|${output?.length ?? 0}|${error?.length ?? 0}`
+  // Cost is part of the signature: `tool_execution_end` can publish a result
+  // before its usage is known, and the `turn_end` repeat carries the final
+  // (nested + classifier combined) cost. Without it here the repeat looked
+  // identical and was suppressed, silently dropping codemode's spend.
+  return `${status}|${output?.length ?? 0}|${error?.length ?? 0}|${cost ?? ''}`
 }
 
 /** Record that this turn already published a call's terminal tool result. */
@@ -137,11 +144,12 @@ function markToolResultPublished(
   callId: string,
   status: AgentToolStatus,
   output: string | undefined,
-  error: string | undefined
+  error: string | undefined,
+  cost: number | undefined
 ): void {
   const published = turnState.publishedToolResults ?? new Set<string>()
   turnState.publishedToolResults = published
-  published.add(`${callId}|${toolResultSignature(status, output, error)}`)
+  published.add(`${callId}|${toolResultSignature(status, output, error, cost)}`)
 }
 
 /** True when this turn already published exactly this terminal tool result. */
@@ -150,11 +158,12 @@ function toolResultAlreadyPublished(
   callId: string,
   status: AgentToolStatus,
   output: string | undefined,
-  error: string | undefined
+  error: string | undefined,
+  cost: number | undefined
 ): boolean {
   return (
     turnState.publishedToolResults?.has(
-      `${callId}|${toolResultSignature(status, output, error)}`
+      `${callId}|${toolResultSignature(status, output, error, cost)}`
     ) === true
   )
 }
@@ -365,14 +374,16 @@ export function mapPiRecord(
         // working trace shows the tool while it streams instead of only at
         // `message_end`. The sub-agent tool is skipped: its card is published
         // from the tool result, so announcing it here would show two cards.
-        if (stringValue(event?.['toolName']) === CIO_SPAWN_TOOL) return { events: [] }
+        const announcedTool = stringValue(event?.['toolName']) ?? 'tool'
+        if (announcedTool === CIO_SPAWN_TOOL) return { events: [] }
         return {
           events: announceStreamPart(context.sessionId, turnState, {
             type: 'tool',
             id: `${messageId}:tool:${callId}`,
             messageID: messageId,
             callID: callId,
-            tool: stringValue(event?.['toolName']) ?? 'tool',
+            tool: announcedTool,
+            ...(isCodeModeToolName(announcedTool) ? { codeMode: true } : {}),
             state: { status: 'pending', input: {} }
           })
         }
@@ -442,6 +453,9 @@ export function mapPiRecord(
         ]
       }
     }
+    // A nested call (pi marks it with parentToolCallId) is code that a script
+    // is running, whatever the inner tool is called, so it renders as code too.
+    const codeMode = Boolean(entry['parentToolCallId']) || isCodeModeToolName(toolName)
     return {
       events: [
         {
@@ -453,6 +467,7 @@ export function mapPiRecord(
             messageID: messageId,
             callID: callId,
             tool: toolName,
+            ...(codeMode ? { codeMode: true } : {}),
             state: {
               status: 'running',
               input: record(entry['args']) ?? {},
@@ -512,9 +527,14 @@ export function mapPiRecord(
       endArgs && Object.keys(endArgs).length > 0 ? endArgs : (existing?.state.input ?? {})
     const status: AgentToolStatus = failed ? 'error' : 'completed'
     const error = failed ? stringValue(result?.['error']) : undefined
+    // A nested call's usage is folded onto the calling tool's result by pi, so
+    // counting it here too would double it in the mirror. Only a top-level
+    // result carries its own cost.
+    const cost = entry['parentToolCallId'] ? undefined : mapPiCost(result?.['usage'])
+    const codeMode = Boolean(entry['parentToolCallId']) || isCodeModeToolName(toolName)
     // This is the terminal result for the call, so the `turn_end` repeat below
     // can recognize it and skip a second identical record.
-    markToolResultPublished(turnState, callId, status, output, error)
+    markToolResultPublished(turnState, callId, status, output, error, cost)
     return {
       events: [
         {
@@ -526,11 +546,13 @@ export function mapPiRecord(
             messageID: messageId,
             callID: callId,
             tool: toolName,
+            ...(codeMode ? { codeMode: true } : {}),
             state: {
               status,
               input,
               ...(output ? { output } : {}),
-              ...(failed ? { error } : {})
+              ...(failed ? { error } : {}),
+              ...(cost === undefined ? {} : { cost })
             }
           }
         }
@@ -586,11 +608,17 @@ export function mapPiRecord(
       const existing = existingToolPart
       const status: AgentToolStatus = failed ? 'error' : 'completed'
       const error = failed ? serializeContent(result?.['content']) : undefined
+      const cost = mapPiCost(result?.['usage'])
+      const existingToolName = existing?.tool ?? stringValue(result?.['toolName']) ?? 'tool'
+      const codeMode = existing?.codeMode === true || isCodeModeToolName(existingToolName)
       // `turn_end` repeats every tool result that `tool_execution_end` already
       // published, which wrote a second identical record per call to the durable
       // stream log   ~100KB for one 4K screenshot. A result no end event covered,
-      // as in a resumed transcript, is not marked and still publishes.
-      if (toolResultAlreadyPublished(turnState, callId, status, output, error)) continue
+      // as in a resumed transcript, is not marked and still publishes. A repeat
+      // whose final cost differs from the published one carries new information
+      // (pi folds a codemode call's nested and classifier usage onto its result
+      // only here), so it publishes instead of being suppressed.
+      if (toolResultAlreadyPublished(turnState, callId, status, output, error, cost)) continue
       events.push({
         type: 'message.part.updated',
         sessionId: context.sessionId,
@@ -599,12 +627,14 @@ export function mapPiRecord(
           id: existing?.id ?? `${messageId}:tool:${callId}`,
           messageID: existing?.messageID ?? messageId,
           callID: callId,
-          tool: existing?.tool ?? stringValue(result?.['toolName']) ?? 'tool',
+          tool: existingToolName,
+          ...(codeMode ? { codeMode: true } : {}),
           state: {
             status,
             input: existing?.state.input ?? {},
             ...(output ? { output } : {}),
-            ...(failed ? { error } : {})
+            ...(failed ? { error } : {}),
+            ...(cost === undefined ? {} : { cost })
           }
         }
       })

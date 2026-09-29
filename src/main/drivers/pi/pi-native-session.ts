@@ -10,6 +10,7 @@ import { parseRecord } from '../../../lib/agent-interactions'
 import { Logger } from '../../system/logger'
 import type { PersistentCliSession } from '../persistent-cli-driver'
 import { buildAssistantMessage, serializeContent } from './pi-stream-fold'
+import { mapPiCost } from './pi-usage'
 import { messageTimestamp, record, stringValue } from './pi-values'
 
 /** Pi's native session JSONL transcripts: discovery, prefill, parsing, reconciliation. */
@@ -259,13 +260,17 @@ async function parseNativePiSession(file: string, sessionId: string): Promise<Ag
         )
         const part = partIndex === -1 ? undefined : candidate.parts[partIndex]
         if (!part || part.type !== 'tool') continue
+        // pi folds a codemode call's nested and classifier usage onto this
+        // result, so a restored transcript keeps that spend on the part.
+        const cost = mapPiCost(message['usage'])
         candidate.parts[partIndex] = {
           ...part,
           state: {
             ...part.state,
             status: failed ? 'error' : 'completed',
             ...(output ? { output } : {}),
-            ...(failed && output ? { error: output } : {})
+            ...(failed && output ? { error: output } : {}),
+            ...(cost === undefined ? {} : { cost })
           }
         }
         break
