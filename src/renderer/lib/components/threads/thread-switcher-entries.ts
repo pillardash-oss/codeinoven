@@ -1,12 +1,15 @@
 /**
  * The Ctrl+Tab switcher's entry list.
  *
- * The switcher is a task switcher, not a thread list, so its entries are the
- * surfaces a user actually moves between: any thread (project, chat or
- * assistant task) and any open browser tab. They share one recency order
- * (`recent-visits.svelte`), so the pure builder here only has to resolve each
- * stored key against the live data and pad the tail with the most recently
- * active threads, which is what keeps the list useful on a cold start.
+ * The switcher is a task switcher, not a thread list. A project thread, a chat,
+ * an assistant task and a browser tab are all views, and every one of them
+ * competes for the same slots in one recency order (`recent-visits.svelte`): the
+ * surface the user used most recently is first, the one used before that is
+ * next, and a newer visit pushes an older one off the end whatever kind it is.
+ * The pure builder here resolves those stored keys against live data. It never
+ * invents a row for a surface the order does not name, with one deliberate
+ * exception: the browser tab on screen leads the list (see `currentBrowserTabId`).
+ * A browser tab the user never opened therefore cannot appear.
  */
 
 import type { Thread } from '$shared/types'
@@ -37,7 +40,8 @@ export interface ThreadSwitcherEntrySource {
   visits: readonly string[]
   /** Every thread the switcher may show (already filtered of archived ones). */
   threads: readonly Thread[]
-  /** Every open browser tab. */
+  /** Every open browser tab, used only to resolve a visit key into a row. A tab
+   *  the visit order never names is never listed. */
   tabs: readonly GlobalBrowserTab[]
   /**
    * The browser tab on screen right now, while the browser view is the surface
@@ -46,10 +50,9 @@ export interface ThreadSwitcherEntrySource {
    * The surface the user is on is the present, so it leads the list whatever the
    * recorded order says: Control release then lands on the surface they were on
    * before it, which is what makes Ctrl+Tab alternate. It is also the one entry
-   * that may not drop out for want of a visit key or for want of room, so a tab
-   * whose visit was never recorded, or was evicted from the recent list, is still
-   * listed while the user looks at it. It has to name a tab in `tabs` all the
-   * same: no row can be built from a tab the caller could not see.
+   * that may not drop out for want of a visit key, so a tab whose visit was never
+   * recorded is still listed while the user looks at it. It has to name a tab in
+   * `tabs` all the same: no row can be built from a tab the caller could not see.
    */
   currentBrowserTabId?: string | null
   limit?: number
@@ -58,17 +61,21 @@ export interface ThreadSwitcherEntrySource {
 /**
  * The floor on the list bound.
  *
- * One row cannot offer a choice, and a bound that small would leave the budgets
- * meaningless (a tab budget of zero lists no browser tab even while the user is
- * looking at one), so a caller's smaller or unusable bound is raised to this.
+ * One row cannot offer a choice, so a caller's smaller or unusable bound is
+ * raised to this.
  */
 const MIN_SWITCHER_ENTRIES = 2
 
 /**
- * Resolve the recent-visit keys into live entries, then guarantee a row for every
- * open browser tab within its share of the slots, then fill the remaining slots
- * with the most recently active threads so the switcher is never empty just
- * because nothing has been visited yet.
+ * Resolve the recent-visit keys into live entries in one recency order.
+ *
+ * Every kind competes on the same terms: the walk takes whatever the order names
+ * next, thread or browser tab, until the limit is reached. Nothing is reserved or
+ * force-added, so the list is exactly the surfaces the user has used, newest
+ * first. When the order names fewer surfaces than the list can hold, the tail is
+ * filled with the most recently active threads. That keeps the switcher useful on
+ * a cold start, and it is the only padding the builder does: padding with browser
+ * tabs is what used to fill the list with pages the user had never opened.
  */
 export function buildThreadSwitcherEntries(
   source: ThreadSwitcherEntrySource
@@ -84,45 +91,27 @@ export function buildThreadSwitcherEntries(
   const usedThreads = new Set<string>()
   const usedTabs = new Set<string>()
   const currentTabId = source.currentBrowserTabId ?? null
-  const currentKey = currentTabId ? browserTabVisitKey(currentTabId) : null
-  // The surface the user is on leads the list; everything else keeps the order it
-  // recorded (see `currentBrowserTabId` for what leading buys).
+  const currentTab = currentTabId ? (tabsById.get(currentTabId) ?? null) : null
+  const currentKey = currentTab ? browserTabVisitKey(currentTab.id) : null
+  // The surface the user is on leads the list; everything else keeps the one
+  // recency order (see `currentBrowserTabId` for what leading buys).
   const visits = currentKey
     ? [currentKey, ...source.visits.filter((visit) => visit !== currentKey)]
     : source.visits
-  // The slots are budgeted across the two kinds so neither can starve the
-  // other. Tabs come first because a tab left out of the list is a surface the
-  // user can only find again with the mouse. Threads always keep at least one
-  // slot, which is what stops a session with more open tabs than the list is
-  // long from turning the switcher into a tab strip that cannot reach a thread.
-  const tabBudget = Math.min(tabsById.size, Math.max(0, limit - 1))
-  const threadBudget = limit - tabBudget
 
   for (const visit of visits) {
+    if (entries.length >= limit) break
     if (isBrowserTabVisitKey(visit)) {
-      if (usedTabs.size >= tabBudget) continue
       const tab = tabsById.get(browserTabIdFromVisitKey(visit))
       if (!tab || usedTabs.has(tab.id)) continue
       entries.push({ kind: 'browser', tab })
       usedTabs.add(tab.id)
       continue
     }
-    if (usedThreads.size >= threadBudget) continue
     const thread = threadsByKey.get(visit)
     if (!thread || usedThreads.has(thread.id)) continue
     entries.push({ kind: 'thread', thread })
     usedThreads.add(thread.id)
-  }
-
-  // Every open tab within its budget is listed, whether or not the order names
-  // it: a visit key can be missing for a tab restored from storage, and a tab the
-  // user cannot reach from the switcher is a tab that needs the mouse. Most
-  // recently used first, which is the order the switcher is about.
-  for (const tab of [...source.tabs].sort((a, b) => b.lastUsedAt - a.lastUsedAt)) {
-    if (entries.length >= limit || usedTabs.size >= tabBudget) break
-    if (usedTabs.has(tab.id)) continue
-    entries.push({ kind: 'browser', tab })
-    usedTabs.add(tab.id)
   }
 
   if (entries.length < limit) {

@@ -1018,6 +1018,9 @@ export class GlobalBrowserState {
   close(tabId: string): void {
     const index = this.tabs.findIndex((tab) => tab.id === tabId)
     if (index < 0) return
+    // The tab can never be switched to again, so its Ctrl+Tab visit goes with it
+    // instead of holding a slot in the recency list.
+    recentVisits.forgetBrowserTab(tabId)
     const closedThreadId = this.tabs[index]?.assistantThreadId ?? null
     const remaining = this.tabs.filter((tab) => tab.id !== tabId)
     this.tabs = remaining

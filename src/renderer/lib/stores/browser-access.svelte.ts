@@ -113,11 +113,11 @@ export function withBrowser<T>(action: (store: GlobalBrowserState) => T): Promis
  * The tab list the Ctrl+Tab switcher resolves its browser rows against.
  *
  * The switching order is the recent-visit list, which the eager shell already
- * holds, but a key there only becomes a row if the tab it names still exists.
- * The live store answers that once it has read the durable list; before then - a
- * launch that restored onto a thread, a renderer that reloaded, a session that
- * has simply not opened the browser - the same durable list is what the
- * switcher needs, and it is exactly the tabs the user was using.
+ * holds, but a key there only becomes a row if the tab it names still exists. This
+ * is that lookup, not the list the switcher shows: a tab the visit order does not
+ * name is never listed, however many tabs are open. The live store answers it once
+ * it has read the durable list; before then, a launch that restored onto a thread
+ * or a renderer that reloaded, the durable list is the same lookup done early.
  */
 export function switcherBrowserTabs(): readonly GlobalBrowserTab[] {
   const live = store

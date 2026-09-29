@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   browserTabVisitKey,
   capRecentVisits,
-  isBrowserTabVisitKey,
   threadVisitKey
 } from '$lib/stores/recent-visits.svelte'
 
@@ -11,36 +10,27 @@ function threadKey(id: string): string {
 }
 
 describe('capRecentVisits', () => {
-  it('keeps a browser tab visit when a long history of threads is recorded after it', () => {
-    const tabKey = browserTabVisitKey('browser:abc')
-    // The tab was the first surface used, then sixty distinct threads were
-    // opened. The flat cap this replaced filled every slot with threads and
-    // evicted the tab key, which is what left the Ctrl+Tab switcher with no row
-    // for the tab the user was working in.
-    const entries = [tabKey, ...Array.from({ length: 60 }, (_, index) => threadKey(`t${index}`))]
+  it('keeps one bound for every kind, so newer thread visits evict an older browser tab', () => {
+    const tabKey = browserTabVisitKey('browser:old')
+    // The tab was used first, then sixty distinct threads. A per-kind budget kept
+    // the tab key forever, which is what left old browser tabs in the switcher
+    // after the user had long since moved on to threads.
+    const entries = [...Array.from({ length: 60 }, (_, index) => threadKey(`t${index}`)), tabKey]
 
     const capped = capRecentVisits(entries)
 
-    expect(capped).toContain(tabKey)
-    expect(capped.filter((key) => isBrowserTabVisitKey(key))).toEqual([tabKey])
+    expect(capped).toHaveLength(50)
+    expect(capped).not.toContain(tabKey)
   })
 
-  it('bounds each kind on its own and keeps the interleaved visit order', () => {
+  it('keeps the newest visits in order, whichever kind they are', () => {
     const entries = [
       threadKey('a'),
       browserTabVisitKey('browser:1'),
-      ...Array.from({ length: 60 }, (_, index) => threadKey(`t${index}`)),
-      ...Array.from({ length: 20 }, (_, index) => browserTabVisitKey(`browser:x${index}`))
+      threadKey('b'),
+      browserTabVisitKey('browser:2')
     ]
 
-    const capped = capRecentVisits(entries)
-
-    expect(capped.slice(0, 3)).toEqual([
-      threadKey('a'),
-      browserTabVisitKey('browser:1'),
-      threadKey('t0')
-    ])
-    expect(capped.filter((key) => isBrowserTabVisitKey(key))).toHaveLength(10)
-    expect(capped.filter((key) => !isBrowserTabVisitKey(key))).toHaveLength(50)
+    expect(capRecentVisits(entries)).toEqual(entries)
   })
 })

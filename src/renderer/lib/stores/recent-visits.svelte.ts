@@ -4,9 +4,10 @@
  *
  * A thread visit is stored as `<projectId>:<threadId>` (the key the workspace
  * has persisted since the switcher existed), and a browser tab visit as
- * `browser-tab:<tabId>`. Keeping both in one ordered list is what lets the
- * switcher interleave a project thread, a chat, an assistant task and a browser
- * tab by the moment each was last used, which is the point of the gesture:
+ * `browser-tab:<tabId>`. Both kinds live in one ordered list with one bound, so a
+ * project thread, a chat, an assistant task and a browser tab compete for the
+ * same slots: whatever was used most recently is first, and a newer visit pushes
+ * an older one off the end whatever kind it is. That is the point of the gesture,
  * quick task switching across views that share no other list.
  *
  * It is persisted in localStorage on purpose: navigation history is optional,
@@ -18,10 +19,15 @@ import { APP_SLUG } from '$shared/brand'
 import type { Thread } from '$shared/types'
 
 const RECENT_VISITS_KEY = `${APP_SLUG}.recent-thread-visits.v1`
-/** How many thread visits the list keeps. */
-const THREAD_VISIT_LIMIT = 50
-/** How many browser tab visits it keeps, capped on its own. */
-const BROWSER_TAB_VISIT_LIMIT = 10
+/**
+ * How many visits the list keeps, one bound for every kind.
+ *
+ * A separate budget per kind was a real defect: it meant an older browser tab
+ * could never be evicted by newer thread visits, so the list kept naming tabs the
+ * user had long since stopped using. One bound is what makes the list a single
+ * recency order rather than two lists interleaved.
+ */
+const RECENT_VISIT_LIMIT = 50
 /** Marks one entry as a browser tab. Project ids are UUIDs, so a thread key can
  *  never start with this. */
 const BROWSER_TAB_VISIT_PREFIX = 'browser-tab:'
@@ -69,30 +75,13 @@ export function browserTabIdFromVisitKey(key: string): string {
 }
 
 /**
- * Bound the visit list, capping each kind of surface on its own.
+ * Bound the visit list with one limit for every kind.
  *
- * One flat cap over both kinds was a real loss: opening a thread moves it to the
- * front, so a busy thread history filled every slot and evicted the browser tab
- * visits. The keys were the only way the Ctrl+Tab switcher could name a browser
- * tab, so the tab the user was working in dropped out of the switcher and
- * reaching it again took the mouse. Capping per kind keeps the interleaved
- * recency order while making sure neither kind can evict the other.
+ * The newest `RECENT_VISIT_LIMIT` visits are kept, in order, whether they are a
+ * thread or a browser tab. See the constant for why the bound is not per kind.
  */
 export function capRecentVisits(entries: readonly string[]): string[] {
-  const capped: string[] = []
-  let threads = 0
-  let tabs = 0
-  for (const entry of entries) {
-    if (isBrowserTabVisitKey(entry)) {
-      if (tabs >= BROWSER_TAB_VISIT_LIMIT) continue
-      tabs += 1
-    } else {
-      if (threads >= THREAD_VISIT_LIMIT) continue
-      threads += 1
-    }
-    capped.push(entry)
-  }
-  return capped
+  return entries.slice(0, RECENT_VISIT_LIMIT)
 }
 
 class RecentVisitsState {
@@ -119,6 +108,19 @@ class RecentVisitsState {
   /** Count a browser tab as visited, moving it to the front. */
   recordBrowserTab(tabId: string): void {
     this.record(browserTabVisitKey(tabId))
+  }
+
+  /**
+   * Drop a browser tab's visit, which is what closing the tab does.
+   *
+   * A closed tab can never be switched to again, so its key would only take a
+   * slot from a surface the user can still reach.
+   */
+  forgetBrowserTab(tabId: string): void {
+    const key = browserTabVisitKey(tabId)
+    if (!this.entries.includes(key)) return
+    this.entries = this.entries.filter((candidate) => candidate !== key)
+    persistRecentVisits(this.entries)
   }
 
   private record(key: string): void {

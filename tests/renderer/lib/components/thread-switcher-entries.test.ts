@@ -54,37 +54,63 @@ function keys(entries: readonly ThreadSwitcherEntry[]): string[] {
 }
 
 describe('buildThreadSwitcherEntries', () => {
-  it('lists an open tab the visit order never named, before the threads padding the tail', () => {
-    const threads = Array.from({ length: 20 }, (_, index) => makeThread(`t${index}`, 20 - index))
-    const tab = makeTab('browser:1', 5)
+  it('lists only the surfaces the visit order names, never a tab the user did not open', () => {
+    const thread = makeThread('t0', 10)
+    const opened = makeTab('browser:opened', 9)
+    // A tab that is open in the strip but was never used this session. It may
+    // exist, but the switcher is a recency list and must not invent a row for it.
+    const neverUsed = makeTab('browser:never', 8)
 
     const entries = buildThreadSwitcherEntries({
-      // A history that names threads only: the state the app was really in when
-      // the tab could not be reached from the switcher.
-      visits: threads.slice(0, 10).map(threadVisitKey),
-      threads,
+      visits: [browserTabVisitKey(opened.id), threadVisitKey(thread)],
+      threads: [thread],
+      tabs: [opened, neverUsed],
+      currentBrowserTabId: null
+    })
+
+    expect(keys(entries)).toEqual([browserTabVisitKey(opened.id), threadVisitKey(thread)])
+  })
+
+  it('interleaves threads and browser tabs in one recency order', () => {
+    const older = makeThread('a', 1)
+    const newer = makeThread('b', 2)
+    const tab = makeTab('browser:1', 3)
+
+    const entries = buildThreadSwitcherEntries({
+      visits: [threadVisitKey(newer), browserTabVisitKey(tab.id), threadVisitKey(older)],
+      threads: [older, newer],
       tabs: [tab],
       currentBrowserTabId: null
     })
 
-    expect(keys(entries)).toContain(browserTabVisitKey('browser:1'))
-    expect(entries).toHaveLength(10)
+    expect(keys(entries).slice(0, 3)).toEqual([
+      threadVisitKey(newer),
+      browserTabVisitKey(tab.id),
+      threadVisitKey(older)
+    ])
   })
 
-  it('lists every open tab, most recently used first, with no visit for any of them', () => {
-    const threads = Array.from({ length: 20 }, (_, index) => makeThread(`t${index}`, 20 - index))
+  it('lets newer thread visits push older browser tabs off the end of the one list', () => {
+    const tabs = [makeTab('browser:1', 100), makeTab('browser:2', 99)]
+    const threads = Array.from({ length: 10 }, (_, index) => makeThread(`t${index}`, 90 - index))
+    // Two tabs were used, then ten threads after them. There is no separate tab
+    // budget, so the ten newer threads take every slot and the old tabs fall off.
+    const visits = [
+      ...threads.map(threadVisitKey),
+      browserTabVisitKey(tabs[1].id),
+      browserTabVisitKey(tabs[0].id)
+    ]
 
     const entries = buildThreadSwitcherEntries({
-      visits: threads.map(threadVisitKey),
+      visits,
       threads,
-      tabs: [makeTab('a', 1), makeTab('b', 9), makeTab('c', 5)],
-      currentBrowserTabId: null
+      tabs,
+      currentBrowserTabId: null,
+      limit: 10
     })
 
-    const browserIds = entries
-      .filter((entry) => entry.kind === 'browser')
-      .map((entry) => entry.tab.id)
-    expect(browserIds).toEqual(['b', 'c', 'a'])
+    expect(entries).toHaveLength(10)
+    expect(entries.every((entry) => entry.kind === 'thread')).toBe(true)
   })
 
   it('leads with the tab the user is looking at and leaves the next slot for where they came from', () => {
@@ -104,67 +130,21 @@ describe('buildThreadSwitcherEntries', () => {
     ])
   })
 
-  it('keeps a thread within reach when there are more open tabs than the list is long', () => {
+  it('never pads the tail with a browser tab the order did not name', () => {
     const threads = Array.from({ length: 20 }, (_, index) => makeThread(`t${index}`, 20 - index))
-    const tabs = Array.from({ length: 12 }, (_, index) => makeTab(`browser:${index}`, 12 - index))
 
     const entries = buildThreadSwitcherEntries({
-      visits: threads.map(threadVisitKey),
+      visits: threads.slice(0, 4).map(threadVisitKey),
       threads,
-      tabs,
+      tabs: [makeTab('browser:1', 30)],
       currentBrowserTabId: null
     })
 
     expect(entries).toHaveLength(10)
-    expect(entries.filter((entry) => entry.kind === 'thread')).toHaveLength(1)
-    expect(
-      entries.filter((entry) => entry.kind === 'browser').map((entry) => entry.tab.id)
-    ).toEqual([
-      'browser:0',
-      'browser:1',
-      'browser:2',
-      'browser:3',
-      'browser:4',
-      'browser:5',
-      'browser:6',
-      'browser:7',
-      'browser:8'
-    ])
+    expect(entries.some((entry) => entry.kind === 'browser')).toBe(false)
   })
 
-  it('leads with the current tab even when it is the oldest of more tabs than slots', () => {
-    // A restored session can make the tab it restored onto the oldest one, and
-    // the surface the user is looking at may not drop out of the list.
-    const oldest = makeTab('browser:old', 1)
-    const newer = Array.from({ length: 11 }, (_, index) => makeTab(`browser:${index}`, 100 - index))
-
-    const entries = buildThreadSwitcherEntries({
-      visits: [browserTabVisitKey(oldest.id)],
-      threads: [],
-      tabs: [...newer, oldest],
-      currentBrowserTabId: oldest.id
-    })
-
-    expect(keys(entries)[0]).toBe(browserTabVisitKey(oldest.id))
-    expect(entries).toHaveLength(9)
-  })
-
-  it('keeps a recorded tab visit in its recency position, which is what makes Ctrl+Tab alternate', () => {
-    const newer = makeThread('t0', 10)
-    const older = makeThread('t1', 5)
-    const tab = makeTab('browser:1', 9)
-
-    const entries = buildThreadSwitcherEntries({
-      visits: [threadVisitKey(newer), browserTabVisitKey(tab.id)],
-      threads: [newer, older],
-      tabs: [tab],
-      currentBrowserTabId: null
-    })
-
-    expect(keys(entries).slice(0, 2)).toEqual([threadVisitKey(newer), browserTabVisitKey(tab.id)])
-  })
-
-  it('floors an unusable bound so a caller cannot starve the list of one kind', () => {
+  it('floors an unusable bound so a caller cannot starve the list', () => {
     const thread = makeThread('t0', 10)
     const tab = makeTab('browser:1', 5)
 
