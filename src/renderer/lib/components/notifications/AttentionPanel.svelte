@@ -3,6 +3,7 @@
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { formatDateTime } from '$shared/date-time-format'
@@ -49,6 +50,17 @@
 
   let unread = $derived(attentionState.unreadFor(scope))
 
+  /**
+   * The panel exists only while its scope has decisions to show. Reading the last
+   * one clears the rail icon (the rail item is keyed to the same scope), so the
+   * panel leaves with it instead of sitting on its empty state. Both dismiss
+   * actions mark their record read before they answer main, so this reflects the
+   * new list immediately.
+   */
+  function closeIfEmpty(): void {
+    if (attentionState.unreadFor(scope).length === 0) contextSidebarState.closeAttention()
+  }
+
   /** The resolved title of the thread the gate belongs to, or a plain fallback
    *  when that thread has since been deleted. */
   function threadTitle(threadId: string): string {
@@ -84,10 +96,12 @@
 
   function dismiss(item: AutoAnswerItem): void {
     void attentionState.dismiss(item.id)
+    closeIfEmpty()
   }
 
   function dismissAll(): void {
     void attentionState.dismissAll()
+    closeIfEmpty()
   }
 </script>
 

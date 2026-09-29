@@ -722,6 +722,15 @@ class ContextSidebarState {
     this.notificationsVisible = false
   }
 
+  /**
+   * Close the decision panel. Called when its scope has nothing left to show:
+   * the rail icon goes with the last unread decision, so the panel must not
+   * linger on its empty state.
+   */
+  closeAttention(): void {
+    this.attentionScope = null
+  }
+
   openTemporaryChat(
     projectId: string,
     threadId: string,
