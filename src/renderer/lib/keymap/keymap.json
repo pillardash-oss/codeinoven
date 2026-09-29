@@ -850,6 +850,19 @@
           "scenario": "A media preview is open."
         }
       ]
+    },
+    {
+      "id": "application",
+      "label": "Application",
+      "shortcuts": [
+        {
+          "id": "app-quit-direct",
+          "keys": ["mod", "shift", "q"],
+          "label": "Quit CodeInOven",
+          "description": "Quits the app for real, bypassing background mode's park to the menu bar. A turn still running settles as a deliberate close on the next launch.",
+          "scenario": "Anywhere in the app."
+        }
+      ]
     }
   ]
 }

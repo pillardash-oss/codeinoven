@@ -1210,6 +1210,15 @@
   /** Global application shortcuts. */
   function onKeydown(e: KeyboardEvent): void {
     const isMac = window.api?.windowInfo?.platform === 'darwin'
+    if (keymapState.matches('app-quit-direct', e)) {
+      // Quit for real, bypassing background mode's park to the menu bar. Main
+      // runs the shutdown pipeline, so a turn still running settles as a
+      // deliberate close on the next launch instead of a crash.
+      e.preventDefault()
+      if (e.repeat) return
+      void invoke('app:quitDirect')
+      return
+    }
     if (keymapState.matches('ui-modal-primary-action', e)) {
       // ⌘/Ctrl+Enter runs the topmost open modal's primary action. The shared
       // LIFO registry (modal-primary-action.svelte.ts) resolves which modal is

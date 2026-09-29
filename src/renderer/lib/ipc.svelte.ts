@@ -26,6 +26,7 @@ declare global {
 const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'app:confirmClose',
   'app:parkWindow',
+  'app:quitDirect',
   'app:instanceRole',
   'app:openInstanceOwner',
   'app:transferInstanceControl',

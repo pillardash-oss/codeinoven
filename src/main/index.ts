@@ -138,6 +138,11 @@ ipcMain.handle('app:parkWindow', async () => {
   await state.backgroundLifecycle?.park()
 })
 
+// Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+Q) is the menu bar's
+// Quit item without reaching for the menu bar, so it bypasses background mode
+// entirely.
+ipcMain.handle('app:quitDirect', () => quitAppDirectly())
+
 /** This process's role against the shared backend, for renderer hydration. */
 ipcMain.handle(
   'app:instanceRole',
@@ -306,10 +311,7 @@ const backgroundLifecycle = new BackgroundLifecycleService({
     const window = state.mainWindow
     if (window && !window.isDestroyed()) window.destroy()
   },
-  quitApp: () => {
-    state.quitConfirmed = true
-    app.quit()
-  },
+  quitApp: quitAppDirectly,
   persistWindowState: () => windowStateService.persistNow(state.mainWindow),
   releaseWindowServices: () => {
     // The renderer is about to die with the window; tear down everything in
@@ -343,6 +345,17 @@ const backgroundLifecycle = new BackgroundLifecycleService({
   resolveTrayIcon: (attention) => getTrayIconPath(attention)
 })
 state.backgroundLifecycle = backgroundLifecycle
+
+/**
+ * The real quit, with no park and no confirmation gate: what the menu bar's
+ * Quit item and the direct-quit shortcut both run. `quitConfirmed` is what makes
+ * the close gate and `before-quit` skip parking and go straight to the shutdown
+ * pipeline, which records the clean-shutdown marker before the harness dies.
+ */
+function quitAppDirectly(): void {
+  state.quitConfirmed = true
+  app.quit()
+}
 
 /** Create the window, or bring the existing one forward. */
 function openMainWindow(): void {
@@ -836,8 +849,9 @@ void app
   })
 
 app.on('window-all-closed', () => {
-  // Background mode keeps the backend alive in the menu bar; the only real quit
-  // is the menu bar's Quit item (or OS logout). Everything else quits as before.
+  // Background mode keeps the backend alive in the menu bar; a real quit is the
+  // menu bar's Quit item, the direct-quit shortcut, or an OS logout. Everything
+  // else quits as before.
   if (state.backgroundLifecycle?.shouldPark()) return
   // Closing the last window (traffic-light close button) fully quits the app.
   // Cmd+Q follows the same path through before-quit → shutdown pipeline →

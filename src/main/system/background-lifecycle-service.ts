@@ -222,10 +222,11 @@ export class BackgroundLifecycleService {
   /**
    * Whether closing the window (or Cmd+Q) should park to the menu bar instead of
    * quitting. Background mode on means the backend is expected to keep the
-   * schedule, so the only full quit is the menu bar's Quit item (or OS logout).
-   * A secondary instance parks nothing: it owns no schedule, so closing it quits
-   * that process and leaves the owner alone. A probe launch opted out of
-   * registration outright, so closing its window closes the process.
+   * schedule, so the full quits are the menu bar's Quit item, the direct-quit
+   * shortcut, and an OS logout. A secondary instance parks nothing: it owns no
+   * schedule, so closing it quits that process and leaves the owner alone. A
+   * probe launch opted out of registration outright, so closing its window
+   * closes the process.
    */
   shouldPark(): boolean {
     if (this.stopped || this.optedOut || this.mode === 'off') return false

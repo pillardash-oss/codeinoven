@@ -102,6 +102,12 @@ export const invokeAppContract = {
    * `app:confirmClose`, which really quits the process.
    */
   'app:parkWindow': {} as Contract<[], void>,
+  /**
+   * Quit CodeInOven for real, bypassing background mode's park: the menu bar's
+   * Quit item as a shortcut. The shutdown pipeline still runs, so a turn left in
+   * flight is settled as a deliberate close rather than a crash.
+   */
+  'app:quitDirect': {} as Contract<[], void>,
   /** This process's role against the shared backend, for hydration on mount. */
   'app:instanceRole': {} as Contract<[], InstanceRole>,
   /**

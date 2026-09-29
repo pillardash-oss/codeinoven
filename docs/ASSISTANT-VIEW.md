@@ -272,8 +272,9 @@ Cmd+Q so a routine still fires on time. It is on by default
   beside the running app. The opt-out is never inferred from an isolated data
   root, because probing the menu bar itself needs background mode on.
 - **Menu bar, not Dock.** The tray carries exactly two items, **Open CodeInOven**
-  and **Quit CodeInOven**; the icon is the monochrome mark, or the mark with a
-  bold exclamation when a thread holds a live problem. While windowless the Dock
+  and **Quit CodeInOven** (the direct quit, also bound to Cmd/Ctrl+Shift+Q through
+  the keymap); the icon is the monochrome mark, or the mark with a bold
+  exclamation when a thread holds a live problem. While windowless the Dock
   icon is hidden and restored when a window opens. The error state mirrors the
   thread's own error card, computed in main from SQLite, never from a renderer,
   because there is no renderer: a thread parked on an approval gate, a thread
