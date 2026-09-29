@@ -387,6 +387,26 @@
      *  conversation. Workspace gates this: always true in chat mode, and in
      *  project mode only for a project's sole, untouched thread. */
     allowCenteredComposer?: boolean
+    /**
+     * Replaces the centered empty state's heading when the conversation is about
+     * something more specific than "a new chat". The browser rail's conversation
+     * is the user today: it names the page the tab is on instead of greeting the
+     * user like the Chats tab. Rendered inside the shared centered block, so the
+     * snippet supplies only the heading and its own supporting line.
+     */
+    emptyStateHeading?: Snippet
+    /**
+     * Suggested prompts for the centered empty state, replacing the generic
+     * chat/project list. Each entry has to read as something the user would send,
+     * because picking one fills the composer with it.
+     */
+    promptSuggestions?: readonly string[]
+    /**
+     * The composer's placeholder once nothing more specific applies. The states
+     * that describe what is happening right now (a run in flight, a routine's
+     * how-to, a plan being prepared) all outrank it.
+     */
+    composerPlaceholder?: string
     /** Opens the scoped projects view with the sidebar focused on this thread
      *  (composer scope shoe   existing threads). */
     onOpenScopeView?: (thread: Thread) => void
@@ -413,6 +433,9 @@
     controller,
     headerSnippet,
     allowCenteredComposer = true,
+    emptyStateHeading,
+    promptSuggestions,
+    composerPlaceholder,
     onOpenScopeView,
     active = true
   }: Props = $props()
@@ -528,7 +551,9 @@
     'Brainstorm ideas with me'
   ]
 
-  const suggestedPrompts = $derived(chatMode ? chatSuggestedPrompts : projectSuggestedPrompts)
+  const suggestedPrompts = $derived(
+    promptSuggestions ?? (chatMode ? chatSuggestedPrompts : projectSuggestedPrompts)
+  )
 
   /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
    *  paint, one batch per frame. Batches mount above the viewport only, so
@@ -12521,6 +12546,10 @@
                     {/if}
                   </p>
                 </div>
+              {:else if emptyStateHeading}
+                <div class="mb-5 text-center">
+                  {@render emptyStateHeading()}
+                </div>
               {:else}
                 <div class="mb-5 text-center">
                   <h1
@@ -13025,7 +13054,7 @@
                                     ? `${delegatedActivityLabel}   message the Sr. Engineer`
                                     : busy
                                       ? `${APP_NAME} is working   type to queue a message`
-                                      : 'Send a message...'}
+                                      : (composerPlaceholder ?? 'Send a message...')}
                       disabled={specFormulating}
                       working={busy}
                       onStop={abortRun}

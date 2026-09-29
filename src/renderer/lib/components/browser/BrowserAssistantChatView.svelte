@@ -1,7 +1,11 @@
 <script lang="ts">
+  import { Globe } from '@lucide/svelte'
   import ThreadView from '../threads/ThreadView.svelte'
   import { BrowserAssistantChatController } from './BrowserAssistantChatController.svelte'
   import { browserAssistant, type BrowserAssistantChat } from '$lib/stores/browser-assistant.svelte'
+  import { faviconState } from '$lib/stores/favicons.svelte'
+  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { browserTabLabel } from '$lib/stores/global-browser-types'
 
   interface Props {
     /** The conversation thread this panel shows. */
@@ -18,6 +22,12 @@
    * publishes the header state the primary conversation owns. The rail remounts
    * this component per conversation (keyed by thread id), so the controller binds
    * once and the view always shows the thread the tab is on.
+   *
+   * What it does not share is the conversation surface's *identity*. Before the
+   * first message this conversation is about one page, not about starting a
+   * generic chat, so the empty state names the page the tab is on and offers the
+   * three questions a reader has about a page   the same composer, the same
+   * transcript, a different question being asked.
    */
   function resolveChat(): BrowserAssistantChat | null {
     return browserAssistant.chatForThread(threadId)
@@ -28,11 +38,80 @@
   const initialChat = resolveChat()
   const controller = initialChat ? new BrowserAssistantChatController(initialChat) : null
   const thread = $derived(browserAssistant.chatForThread(threadId)?.thread ?? initialChat?.thread)
+
+  /**
+   * The page this conversation belongs to, read through the tab it is bound to.
+   *
+   * A conversation belongs to its tab for life, so the tab   never a copy of its
+   * title taken when the panel opened   is what answers "which page is this
+   * about". Navigating the tab therefore moves the head start with the page, which
+   * is exactly what the next turn asks about.
+   */
+  const pageTabId = initialChat?.browserTabId ?? null
+  const pageTab = $derived(pageTabId ? globalBrowser.tabById(pageTabId) : null)
+  const pageUrl = $derived(pageTab?.url ?? '')
+  const pageLabel = $derived(pageTab ? browserTabLabel(pageTab).trim() : '')
+  /** The page's icon: the favicon the live page reported, else the shared host
+   *  cache every other piece of browser chrome resolves through. */
+  const pageFavicon = $derived(
+    pageTab?.favicon ?? (pageUrl !== '' ? faviconState.faviconFor(pageUrl) : null)
+  )
+
+  // A tab restored from a restart has no live page, so its favicon exists only in
+  // the host cache (or nowhere yet). Asking for it here is what puts the icon in
+  // the head start before the page loads again.
+  $effect(() => {
+    if (pageUrl !== '') faviconState.ensureResolved([pageUrl])
+  })
+
+  /** What a reader wants from a page they did not write, in the order they want
+   *  it: what it says, then plainly, then what it means. */
+  const pagePrompts = [
+    'Summarize this page',
+    'Explain this page in simple terms',
+    'List the key insights on this page'
+  ]
 </script>
+
+{#snippet pageEmptyStateHeading()}
+  <h1
+    class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[1.375rem] font-semibold tracking-tight text-foreground"
+  >
+    <span>What can I help you with on</span>
+    {#if pageLabel !== ''}
+      <span class="inline-flex max-w-full min-w-0 items-center gap-1.5">
+        <span class="text-dimmed" aria-hidden="true">“</span>
+        {#if pageFavicon}
+          <img
+            src={pageFavicon}
+            alt=""
+            aria-hidden="true"
+            draggable="false"
+            class="size-5 shrink-0 rounded-sm object-contain"
+          />
+        {:else}
+          <Globe size={18} class="shrink-0 text-dimmed" aria-hidden="true" />
+        {/if}
+        <span class="min-w-0 truncate">{pageLabel}</span>
+        <span class="text-dimmed" aria-hidden="true">”?</span>
+      </span>
+    {:else}
+      <span>this page?</span>
+    {/if}
+  </h1>
+  <p class="mt-1 text-[0.875rem] text-muted">The agent reads this page as it answers.</p>
+{/snippet}
 
 <div class="browser-assistant-chat bg-app flex h-full min-h-0 w-full flex-col overflow-hidden">
   {#if thread && controller}
-    <ThreadView {thread} chatMode={true} {controller} />
+    <ThreadView
+      {thread}
+      chatMode
+      {controller}
+      emptyStateHeading={pageEmptyStateHeading}
+      promptSuggestions={pagePrompts}
+      composerPlaceholder="Ask about this page..."
+    />
   {:else}
     <div class="flex flex-1 items-center justify-center px-6 text-sm text-dimmed">
       This conversation is no longer available.
