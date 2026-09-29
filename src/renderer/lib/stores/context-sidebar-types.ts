@@ -221,6 +221,20 @@ export interface BrowserBoxesContextTab {
 }
 
 /**
+ * The global browser's extensions panel.
+ *
+ * An extension belongs to the browser profile rather than to a page, exactly like
+ * a box, so this panel carries no scope and stays docked with no tab on screen.
+ * It is also the panel a user needs before a box can be given anything: installing
+ * is what puts the extension on disk to be contained.
+ */
+export interface BrowserExtensionsContextTab {
+  id: string
+  kind: 'extensions'
+  title: string
+}
+
+/**
  * One popup window on the browser's right rail.
  *
  * A popup window is a page's own `window.open` with a window in it: a sign-in, a
@@ -351,6 +365,7 @@ export type ContextSidebarTab =
   | BrowserHistoryContextTab
   | BrowserBookmarksContextTab
   | BrowserBoxesContextTab
+  | BrowserExtensionsContextTab
   | BrowserPopupWindowContextTab
   | MemoryContextTab
   | CoordinatorContextTab

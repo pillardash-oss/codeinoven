@@ -105,7 +105,7 @@ export class GlobalBrowserState {
    *  shared browser library rather than a tab, so those tools are the entries that
    *  can stay open with no tab. */
   contextSidebarTool = $state<
-    'note' | 'agent' | 'downloads' | 'popups' | 'history' | 'bookmarks' | 'boxes'
+    'note' | 'agent' | 'downloads' | 'popups' | 'history' | 'bookmarks' | 'boxes' | 'extensions'
   >('note')
   /** Whether the address spotlight is up. It lives here rather than in a surface
    *  because it is summoned from anywhere in the browser view (Cmd/Ctrl+L) and
@@ -391,13 +391,17 @@ export class GlobalBrowserState {
 
   /** Whether the tool on the rail is one of the browser library tools, which are
    *  the entries that can stay open with no tab on screen. A box is a property of
-   *  the profile rather than of a page, so it belongs in the same set. */
+   *  the profile rather than of a page, so it belongs in the same set. An
+   *  extension is managed from the same place for the same reason: it is installed
+   *  once and then loaded into the jars the user picks, with its own storage in
+   *  each, and it has no tab of its own. */
   private get railToolNeedsNoTab(): boolean {
     return (
       this.contextSidebarTool === 'downloads' ||
       this.contextSidebarTool === 'history' ||
       this.contextSidebarTool === 'bookmarks' ||
-      this.contextSidebarTool === 'boxes'
+      this.contextSidebarTool === 'boxes' ||
+      this.contextSidebarTool === 'extensions'
     )
   }
 
@@ -660,6 +664,37 @@ export class GlobalBrowserState {
   /** Whether the rail is currently showing the profile's boxes. */
   get boxesSidebarShown(): boolean {
     return this.contextSidebarShown && this.contextSidebarTool === 'boxes'
+  }
+
+  /**
+   * Reveal the rail on the profile's installed extensions.
+   *
+   * An extension belongs to the profile rather than to a page, like a box, so the
+   * panel is reachable with the strip empty. That is the order the work happens
+   * in: an extension is installed and its compatibility report read before any
+   * box exists to contain it.
+   */
+  showExtensionsSidebar(): void {
+    this.dismissNotifications()
+    this.contextSidebarTool = 'extensions'
+    this.contextSidebarVisible = true
+  }
+
+  toggleExtensionsSidebar(): void {
+    if (this.contextSidebarTool === 'extensions' && this.contextSidebarVisible) {
+      this.closeExtensionsSidebar()
+      return
+    }
+    this.showExtensionsSidebar()
+  }
+
+  closeExtensionsSidebar(): void {
+    if (this.contextSidebarTool === 'extensions') this.contextSidebarVisible = false
+  }
+
+  /** Whether the rail is currently showing the profile's installed extensions. */
+  get extensionsSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'extensions'
   }
 
   /**

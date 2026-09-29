@@ -10,6 +10,7 @@
     type BrowserBookmarksContextTab,
     type BrowserBoxesContextTab,
     type BrowserDownloadsContextTab,
+    type BrowserExtensionsContextTab,
     type BrowserHistoryContextTab,
     type ContextSidebarTab
   } from '$lib/stores/context-sidebar.svelte'
@@ -103,6 +104,14 @@
     kind: 'boxes',
     title: 'Boxes'
   }
+  /** The extensions panel. An extension belongs to the profile rather than to a
+   *  page, so like the boxes it survives with no tab, which is exactly when a user
+   *  installs their first one. */
+  const extensionsTab: BrowserExtensionsContextTab = {
+    id: 'browser-extensions',
+    kind: 'extensions',
+    title: 'Extensions'
+  }
   /**
    * The popup windows the active page opened, one tab per window.
    *
@@ -133,6 +142,7 @@
     historyTab,
     bookmarksTab,
     boxesTab,
+    extensionsTab,
     downloadsTab,
     ...(noteTab ? [noteTab] : []),
     ...(agentTab ? [agentTab] : []),
@@ -148,11 +158,13 @@
             ? downloadsTab.id
             : globalBrowser.boxesSidebarShown
               ? boxesTab.id
-              : globalBrowser.historySidebarShown
-                ? historyTab.id
-                : globalBrowser.bookmarksSidebarShown
-                  ? bookmarksTab.id
-                  : (noteTab?.id ?? null))
+              : globalBrowser.extensionsSidebarShown
+                ? extensionsTab.id
+                : globalBrowser.historySidebarShown
+                  ? historyTab.id
+                  : globalBrowser.bookmarksSidebarShown
+                    ? bookmarksTab.id
+                    : (noteTab?.id ?? null))
   )
 
   /** Whether the tool on screen is a popup window, for the two callbacks that
@@ -187,6 +199,10 @@
       globalBrowser.showBoxesSidebar()
       return
     }
+    if (tabId === extensionsTab.id) {
+      globalBrowser.showExtensionsSidebar()
+      return
+    }
     if (agentTab && tabId === agentTab.id) globalBrowser.showAgentSidebar()
     else globalBrowser.showNoteSidebar()
   }
@@ -214,6 +230,10 @@
     }
     if (tabId === boxesTab.id) {
       globalBrowser.closeBoxesSidebar()
+      return
+    }
+    if (tabId === extensionsTab.id) {
+      globalBrowser.closeExtensionsSidebar()
       return
     }
     if (agentTab && tabId === agentTab.id) closing = agentTab
@@ -310,6 +330,10 @@
   {:else if globalBrowser.boxesSidebarShown}
     {#await import('./BrowserBoxesPanel.svelte') then { default: BrowserBoxesPanel }}
       <BrowserBoxesPanel />
+    {/await}
+  {:else if globalBrowser.extensionsSidebarShown}
+    {#await import('./BrowserExtensionsPanel.svelte') then { default: BrowserExtensionsPanel }}
+      <BrowserExtensionsPanel />
     {/await}
   {:else if globalBrowser.agentSidebarShown}
     {#if agentChat}

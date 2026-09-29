@@ -8,6 +8,7 @@
     Download,
     Globe,
     MessagesCircle,
+    Puzzle,
     StickyNote
   } from '@lucide/svelte'
   import { subscribe } from '$lib/ipc.svelte'
@@ -17,6 +18,7 @@
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
+  import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { motionDuration } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -49,6 +51,11 @@
   const unfinishedDownloadCount = $derived(
     browserDownloads.unfinishedCount(GLOBAL_BROWSER_PROJECT_ID)
   )
+
+  /** How many extensions the profile has installed. The rail carries the count
+   *  because it is the number a user checks before opening the panel to find the
+   *  one that is misbehaving. */
+  const extensionCount = $derived(browserExtensions.count)
 
   /**
    * The browser view's tools for the context rail.
@@ -111,6 +118,17 @@
         active: globalBrowser.boxesSidebarShown,
         countBadge: globalBrowser.boxes.length > 0 ? String(globalBrowser.boxes.length) : undefined,
         onSelect: () => globalBrowser.toggleBoxesSidebar()
+      },
+      // Extensions belong to the profile like boxes and downloads do, and they are
+      // the tool that comes first of the three: installing an extension is what
+      // puts something on disk for a box to contain.
+      {
+        id: 'extensions',
+        label: extensionCount > 0 ? `Extensions (${extensionCount})` : 'Extensions',
+        icon: Puzzle,
+        active: globalBrowser.extensionsSidebarShown,
+        countBadge: extensionCount > 0 ? String(extensionCount) : undefined,
+        onSelect: () => globalBrowser.toggleExtensionsSidebar()
       },
       ...(popupWindows.length > 0
         ? [

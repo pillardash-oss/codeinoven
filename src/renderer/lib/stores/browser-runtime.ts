@@ -24,6 +24,7 @@ import { appConfigState } from './app-config.svelte'
 import { browserAssistant } from './browser-assistant.svelte'
 import { browserBookmarks } from './browser-bookmarks.svelte'
 import { browserDownloads } from './browser-downloads.svelte'
+import { browserExtensions } from './browser-extensions.svelte'
 import { browserHistory } from './browser-history.svelte'
 import { browserInspector } from './browser-inspector.svelte'
 import { browserPopupWindows } from './browser-popup-windows.svelte'
@@ -45,6 +46,7 @@ export function startBrowserRuntime(): void {
   globalBrowser.start()
   browserPopupWindows.start()
   browserDownloads.start()
+  browserExtensions.start()
   browserInspector.start()
   // The history and the bookmark list are the browser's memory: one records every
   // page a tab commits, the other is what the user saved. Both are read here, once

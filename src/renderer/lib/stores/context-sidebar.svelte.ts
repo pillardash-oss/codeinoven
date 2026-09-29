@@ -29,6 +29,7 @@ export type {
   BrowserBoxesContextTab,
   BrowserContextTab,
   BrowserDownloadsContextTab,
+  BrowserExtensionsContextTab,
   BrowserHistoryContextTab,
   BrowserPopupWindowContextTab,
   CloudDeploymentContextTab,
