@@ -252,6 +252,13 @@ export const IPC_EVENT_CONTRACT = {
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
   'browser:download': [] as unknown as [download: BrowserDownload],
+  /**
+   * A download the browser dropped from its own list (removed by the user, or
+   * forgotten with the project). It carries no replacement record, so without
+   * this the renderer's mirror of the list keeps a row main no longer has and
+   * nothing can make it go away short of reopening the surface.
+   */
+  'browser:downloadRemoved': [] as unknown as [downloadId: string],
   'speech:progress': [] as unknown as [progress: import('../speech/types').SpeechProgressEvent],
   /**
    * One live stage of a managed-worktree creation/adoption job. The renderer

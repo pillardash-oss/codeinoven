@@ -248,6 +248,24 @@ removal happened. That ordering matters: the write in flight carries a snapshot
 from before the removal, and without the tombstone surviving it the merge would
 put the record back and nothing would ever take it out again.
 
+A removal that reaches the file has to reach the list the user is looking at as
+well, and nothing else can carry it: a report of a download is a report *about* a
+record, so the record that was just dropped is the one no report can describe.
+The manager therefore sends `browser:downloadRemoved` wherever it drops a record
+on its own   the user removes it, its project is forgotten, or the tracked list is
+trimmed past its cap   and the renderer's mirror deletes that row on the report.
+The mirror is not written to optimistically: main is the one that decides a
+removal (it refuses one for a download still running), and a row deleted on the
+click would only come back on the next report.
+
+The same reasoning covers the moment between a request and a download. *Start
+over* and *Resume* ask Chromium for a download that takes a moment to exist, and
+the row reads as downloading while it waits, so Cancel is the obvious thing to
+reach for on a server that is not answering. The user's decision outlives the
+request: a download that arrives after they stopped it is cancelled rather than
+adopted back onto the row, and a request that never arrives leaves their stop in
+place instead of restoring the state it was asked to continue from.
+
 Two facts about Chromium's download stack shape the rest, both verified on
 Electron 44 and kept honest by the code that reads them:
 

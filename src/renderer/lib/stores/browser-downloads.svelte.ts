@@ -31,6 +31,11 @@ class BrowserDownloadsState {
     // panel is closed still has to appear, and its progress events must not race
     // the surface that opens later.
     subscribe('browser:download', (download) => this.upsert(download))
+    // Main drops a record without a replacement for it (removed from the list,
+    // forgotten with its project, or trimmed past the tracking cap). Nothing
+    // else can report that row again, so the removal itself is the only signal
+    // that takes it off the list the user is looking at.
+    subscribe('browser:downloadRemoved', (downloadId) => this.downloads.delete(downloadId))
   }
 
   /** Apply one download report from main: newest progress for a known download,
@@ -116,7 +121,13 @@ class BrowserDownloadsState {
     void invoke('browser:cancelDownload', download.id).catch(() => {})
   }
 
-  /** Drop a stopped download from the list, keeping the file it saved. */
+  /**
+   * Drop a stopped download from the list, keeping the file it saved.
+   *
+   * The row leaves the list when main answers with the removal, not on this
+   * click: main is the one that decides (it refuses a download still running),
+   * and a row deleted here would come straight back on the next report.
+   */
   remove(download: BrowserDownload): void {
     void invoke('browser:removeDownload', download.id).catch((error: unknown) => {
       reportError(error, 'The download could not be removed from the list.')

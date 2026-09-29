@@ -344,6 +344,7 @@ export class BrowserDownloadManager {
     this.downloads.delete(downloadId)
     this.removedRecords.add(downloadId)
     if (record.stagedPath.length > 0) void removeFileQuietly(record.stagedPath)
+    this.emitRemoved(downloadId)
     this.schedulePersist()
   }
 
@@ -405,6 +406,7 @@ export class BrowserDownloadManager {
       if (record.stagedPath.length > 0) void removeFileQuietly(record.stagedPath)
       this.downloads.delete(id)
       this.removedRecords.add(id)
+      this.emitRemoved(id)
       removed = true
     }
     if (removed) this.schedulePersist()
@@ -484,10 +486,20 @@ export class BrowserDownloadManager {
     const savePath = item.getSavePath()
     const resumed = savePath.length > 0 ? this.takeAdoption(`resume:${savePath}`) : null
     if (resumed) {
+      if (!this.wantsRequestedDownload(resumed.id)) {
+        item.cancel()
+        return
+      }
       this.adoptResumed(projectId, resumed.id, item)
       return
     }
     const retry = this.takeAdoption(`retry:${url}`)
+    if (retry && !this.wantsRequestedDownload(retry.id)) {
+      // The download the manager asked for arrived after the user stopped it:
+      // adopting it now would put the row back into downloading on its own.
+      item.cancel()
+      return
+    }
     if (retry) {
       const record = this.downloads.get(retry.id)
       if (record?.download.savePath) {
@@ -794,15 +806,34 @@ export class BrowserDownloadManager {
     return pending
   }
 
+  /**
+   * Whether a record still wants the download the manager asked for on its
+   * behalf.
+   *
+   * A retry or a resume is a request that takes a moment to turn into a download
+   * item, and the user can stop it in that window: the row shows a download that
+   * has no bytes moving yet, so Cancel is the obvious thing to reach for. The
+   * decision is theirs and outlives the request, so an item that arrives after it
+   * is cancelled rather than adopted back onto the row they just stopped.
+   */
+  private wantsRequestedDownload(downloadId: string): boolean {
+    const record = this.downloads.get(downloadId)
+    return record !== undefined && record.item === null && record.download.state === 'progressing'
+  }
+
   /** An asked-for download never arrived: put the record back as it was, with the
-   *  reason, instead of leaving a row that claims to be downloading. */
+   *  reason, instead of leaving a row that claims to be downloading. A stop the
+   *  user made while the request was in flight is kept: it is their decision, and
+   *  the request failing does not undo it. */
   private abandonAdoption(key: string, error: string): void {
     const pending = this.takeAdoption(key)
     if (!pending) return
     const record = this.downloads.get(pending.id)
     if (!record) return
     record.item = null
-    record.download = { ...pending.previous, error }
+    if (record.download.state === 'progressing') {
+      record.download = { ...pending.previous, error }
+    }
     this.emit(record.download.id, true)
     this.schedulePersist()
   }
@@ -867,6 +898,17 @@ export class BrowserDownloadManager {
     if (!force && now - record.lastEmittedAt < DOWNLOAD_EVENT_INTERVAL_MS) return
     record.lastEmittedAt = now
     sendToRenderer(window.webContents, 'browser:download', { ...record.download })
+  }
+
+  /**
+   * Tell the renderer a row is gone. A dropped record can never be reported
+   * again   `emit` reads the map it was just deleted from   so this is the only
+   * way the list the user is looking at learns about it.
+   */
+  private emitRemoved(downloadId: string): void {
+    const window = this.deps.window()
+    if (!window || window.isDestroyed() || window.webContents.isDestroyed()) return
+    sendToRenderer(window.webContents, 'browser:downloadRemoved', downloadId)
   }
 
   /** Coalesce progress into at most one write per interval. A request that
@@ -952,6 +994,7 @@ export class BrowserDownloadManager {
       if (!id) continue
       this.downloads.delete(id)
       this.removedRecords.add(id)
+      this.emitRemoved(id)
     }
   }
 }
