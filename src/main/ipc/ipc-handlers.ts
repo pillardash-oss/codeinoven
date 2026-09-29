@@ -283,6 +283,8 @@ export function registerIpcHandlers(
       appArtifactRoots: async () => {
         const projects = await projectManager.listProjects()
         return [
+          // Legacy per-chat root, kept readable for chats that staged
+          // attachments before they moved into their own workspace.
           join(getConfigRoot(), 'chats'),
           // Legacy per-chat image roots, kept readable for older chats.
           join(getConfigRoot(), 'chat-artifacts'),
@@ -338,7 +340,13 @@ export function registerIpcHandlers(
 
   async function attachmentStorageDirectory(scope: AttachmentStorageScope): Promise<string> {
     const project = await projectManager.getProject(scope.projectId)
-    return threadAttachmentDirectory(project ?? null, scope)
+    // An assistant task stages its attachments inside the workspace it runs in,
+    // and its routine decides that directory, so the task's row is read here.
+    const routineId =
+      scope.projectId === ASSISTANT_SPACE_ID
+        ? (await threadManager.getThread(scope.projectId, scope.threadId))?.routineId
+        : null
+    return threadAttachmentDirectory(project ?? null, scope, routineId)
   }
 
   const resolveProjectPath = async (projectId: string, scopeBucketId?: string): Promise<string> => {

@@ -882,7 +882,7 @@ export class ThreadManager {
   private async removeThreadDiskArtifacts(threads: Thread[]): Promise<void> {
     for (const thread of threads) {
       const project = await this.projectRepo.getViaWorker(thread.projectId)
-      const dirs = threadOwnedDirectories(project, thread.projectId, thread.id)
+      const dirs = threadOwnedDirectories(project, thread.projectId, thread.id, thread.routineId)
       for (const dir of dirs) {
         await rm(dir, { recursive: true, force: true }).catch(() => {})
       }

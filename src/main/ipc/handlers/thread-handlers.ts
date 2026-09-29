@@ -3,7 +3,7 @@ import { join } from 'path'
 import { Logger } from '../../system/logger'
 import { settleThreadBranch } from '../../chat/thread-branch-service'
 import { PROJECT_DATA_DIRECTORY } from '../../../lib/project-artifacts'
-import { getConfigRoot } from '../../../lib/utils'
+import { threadScratchDirectory } from '../../../lib/thread-storage-paths'
 import {
   broadcastThreadDeleted,
   broadcastThreadOperationError,
@@ -210,9 +210,19 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
 
       const project = await projectManager.getProject(safeProjectId)
       const isProject = project?.source === 'local' && Boolean(project.path)
-      const destinationDirectory = isProject
-        ? join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'transcripts')
-        : join(getConfigRoot(), 'chats', safeThreadId, 'tmp', 'transcripts')
+      // A thread with no project folder of its own writes its export inside the
+      // conversation's own workspace, which is the directory its session runs
+      // in and the root its file tree mounts: an inbox chat's
+      // `chats-cwd/<threadId>/.cio/tmp`, an assistant task's
+      // `assistant-cwd/<routineId ?? threadId>/.cio/tmp`.
+      const scratchDirectory = isProject
+        ? join(project.path, PROJECT_DATA_DIRECTORY, 'tmp')
+        : threadScratchDirectory({
+            projectId: safeProjectId,
+            threadId: safeThreadId,
+            routineId: thread.routineId
+          })
+      const destinationDirectory = join(scratchDirectory, 'transcripts')
 
       const slug =
         thread.title
