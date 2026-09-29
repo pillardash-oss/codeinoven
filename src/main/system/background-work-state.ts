@@ -39,19 +39,32 @@ export function hasUpcomingWork(state: BootstrapState, database: Database): bool
 }
 
 /**
- * The attention predicate: a thread is parked on approval, or an unattended
- * assistant run settled failed and has not been read. Computed from SQLite so
- * the icon is truthful whether the window is open, windowless, or was restarted
- * overnight.
+ * The attention predicate: does any thread currently hold a problem the user
+ * has not seen?
+ *
+ * The menu bar icon mirrors the thread's own error card, so the user learns a
+ * run broke without opening the app. Three conditions light it:
+ *
+ *   - a thread parked on an approval gate, which cannot proceed on its own;
+ *   - a thread that settled `failed`, until the user reads it;
+ *   - a thread paused on a provider issue (`working-paused`), which carries the
+ *     visible error card   a usage reset, a connection interruption, a
+ *     provider outage. It is deliberately not gated on `read`: the run is
+ *     blocked until it recovers, and the icon returns to normal when the
+ *     status does (a fired retry, a manual retry, or a new turn).
+ *
+ * Computed from SQLite, never from a renderer, so the icon is truthful whether
+ * the window is open, windowless, or was restarted overnight. The provider
+ * issue records the retry scheduler holds live on a thread that is also
+ * `working-paused`, so the durable thread status is the single source of truth.
  */
 export function computeAttention(database: Database): boolean {
   if (!database.isOpen()) return false
   try {
     const row = database.get<{ cnt: number }>(
       `SELECT COUNT(*) AS cnt FROM threads
-        WHERE read = 0
-          AND (status = 'awaiting_approval'
-               OR (status = 'failed' AND assistant_task_id IS NOT NULL))`
+        WHERE status = 'working-paused'
+           OR (read = 0 AND status IN ('awaiting_approval', 'failed'))`
     )
     return (row?.cnt ?? 0) > 0
   } catch (error) {

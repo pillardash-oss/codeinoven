@@ -29,6 +29,7 @@ import { Logger } from '../system/logger'
 import { resolveAutoAnswerScope } from '../system/auto-answer-scope'
 import {
   broadcastThreadUpdate,
+  setBackgroundAttention,
   setNotificationService,
   setPowerWakeService
 } from '../chat/thread-events'
@@ -642,7 +643,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // Keep the device awake while a scheduled auto-retry is due within the wake
   // window, so a usage-limit reset fires even when the user is away.
   state.powerWakeService.attachRetryScheduler(state.retryScheduler)
-  state.retryScheduler.attachChangeListener(() => state.powerWakeService?.onRetryScheduleChanged())
+  state.retryScheduler.attachChangeListener(() => {
+    state.powerWakeService?.onRetryScheduleChanged()
+    // A tracked provider issue (and the retry that clears it) is the durable
+    // half of the thread's error card, which the icon mirrors.
+    state.backgroundLifecycle?.requestAttentionRefresh()
+  })
   state.updaterService.setChatEngine(state.chatEngine)
   // Reap any harness processes orphaned by an unclean previous run before the
   // first session can spawn fresh servers, so leftover dev servers/ports are
@@ -851,6 +857,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     } catch (error) {
       Logger.error('Power wake startup failed (non-fatal):', error)
     }
+
+    // Every persisted thread update now re-evaluates the menu bar icon, so a
+    // thread that breaks while the window is closed flips it and a thread that
+    // recovers flips it back.
+    if (state.backgroundLifecycle) setBackgroundAttention(state.backgroundLifecycle)
 
     try {
       await state.retryScheduler?.start()

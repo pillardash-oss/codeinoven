@@ -105,14 +105,17 @@ if (process.platform === 'darwin') {
 //
 // The mark's own outline is a hairline at menu bar size, noticeably lighter than
 // the system glyphs it sits beside. Rendering it with a same-colour stroke adds
-// ink at the mark's own edges, which is what brings its weight up to match. The
-// attention variant scales the mark down, so its stroke scales up by the same
-// factor to keep one visual weight across both templates.
+// ink at the mark's own edges, which is what brings its weight up to match the
+// menu bar's own glyphs; the default stroke is tuned so the two templates read
+// as one weight beside the system clock. The attention variant scales the mark
+// down, so its stroke scales up by the same factor to keep that weight, and its
+// exclamation is drawn as a wide rounded bar over a dot so "something needs you"
+// survives at 16px instead of thinning into a speck.
 const monoBase = readFileSync(join(staticDir, 'icon-mono.svg'), 'utf8').replace(
   'color:#a1a1aa',
   'color:#000000'
 )
-const TRAY_STROKE_WIDTH = 16
+const TRAY_STROKE_WIDTH = 24
 const TRAY_ATTENTION_SCALE = 0.78
 
 /** Thicken a template's outline with a same-colour stroke. */
@@ -134,7 +137,7 @@ const attentionMaster = boldenTray(
     )
     .replace(
       '</svg>',
-      '</g><g id="attention-badge"><rect x="1044" y="170" width="132" height="430" rx="66" fill="#000000"/><circle cx="1110" cy="760" r="78" fill="#000000"/></g></svg>'
+      '</g><g id="attention-badge"><rect x="1020" y="190" width="170" height="440" rx="85" fill="#000000"/><circle cx="1105" cy="800" r="100" fill="#000000"/></g></svg>'
     ),
   TRAY_STROKE_WIDTH / TRAY_ATTENTION_SCALE
 )

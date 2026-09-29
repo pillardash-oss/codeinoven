@@ -10,7 +10,8 @@
  *
  * This service owns the decisions and the surfaces:
  *   - whether a close parks or quits (`shouldPark`),
- *   - the menu bar icon and its two states (working / attention),
+ *   - the menu bar icon and its two states (normal / error, the latter a bold
+ *     exclamation beside the mark whenever a thread holds a live problem),
  *   - the Dock icon hiding while windowless and returning with a window,
  *   - the login item,
  *   - this process's role against the shared backend (`instanceRegistry`), so a
@@ -63,6 +64,14 @@ const ACTIVATION_POLL_MS = 2_000
 
 /** Activation requests older than this are leftovers from a crashed instance. */
 const ACTIVATION_TTL_MS = 60_000
+
+/**
+ * How long thread-update bursts are coalesced before the icon is recomputed.
+ * A turn settles many thread updates in a row (status, read flag, messages),
+ * and the icon only ever needs the final state, so the predicate runs once per
+ * burst instead of once per update.
+ */
+const ATTENTION_REFRESH_DEBOUNCE_MS = 150
 
 const NOTICE_MARKER_PATH = 'background/menu-bar-notice-shown'
 
@@ -119,6 +128,8 @@ export class BackgroundLifecycleService {
   private readonly optedOut = isBackgroundRegistrationDisabled()
   private config: AppConfig | null = null
   private attention = false
+  /** Pending coalesced attention recompute, or null when none is scheduled. */
+  private attentionRefreshTimer: ReturnType<typeof setTimeout> | null = null
   private stopped = false
   private activationWatcher: FSWatcher | null = null
   private activationTimer: ReturnType<typeof setInterval> | null = null
@@ -145,10 +156,18 @@ export class BackgroundLifecycleService {
     this.unsubscribers.push(instanceRegistry.onOwnershipChanged(() => this.evaluateRole()))
     this.startActivationWatcher()
     this.broadcastRole()
+    // A launch can inherit problems from the last one: a run that failed
+    // overnight, a thread still parked on an approval gate. The icon states
+    // that from the first frame instead of waiting for the next event.
+    this.refreshAttention()
   }
 
   stop(): void {
     this.stopped = true
+    if (this.attentionRefreshTimer !== null) {
+      clearTimeout(this.attentionRefreshTimer)
+      this.attentionRefreshTimer = null
+    }
     for (const unsubscribe of this.unsubscribers) unsubscribe()
     this.unsubscribers.length = 0
     this.updaterUnsubscribe?.()
@@ -236,8 +255,20 @@ export class BackgroundLifecycleService {
     this.refreshAttention()
   }
 
-  /** Recompute the attention state and update the icon. */
+  /**
+   * Recompute the attention state and update the icon.
+   *
+   * Safe to call for every state change: the menu bar only ever shows the
+   * latest truth, so it is enough to run the predicate once however many
+   * changes landed. Callers that must be reflected immediately (a config
+   * change, a window opening) use this directly; the per-update hooks use
+   * {@link requestAttentionRefresh}.
+   */
   refreshAttention(): void {
+    if (this.attentionRefreshTimer !== null) {
+      clearTimeout(this.attentionRefreshTimer)
+      this.attentionRefreshTimer = null
+    }
     let next = false
     try {
       next = this.deps.computeAttention()
@@ -247,6 +278,19 @@ export class BackgroundLifecycleService {
     if (next === this.attention && this.tray) return
     this.attention = next
     this.updateTrayAppearance()
+  }
+
+  /**
+   * Ask for an attention recompute, coalescing a burst into one pass. Wired to
+   * every persisted thread update and to the retry scheduler, which is what
+   * makes the icon clear itself the moment the error does.
+   */
+  requestAttentionRefresh(): void {
+    if (this.stopped || this.attentionRefreshTimer !== null) return
+    this.attentionRefreshTimer = setTimeout(() => {
+      this.attentionRefreshTimer = null
+      this.refreshAttention()
+    }, ATTENTION_REFRESH_DEBOUNCE_MS)
   }
 
   /** Push this process's role to every open window. */
@@ -370,7 +414,7 @@ export class BackgroundLifecycleService {
   }
 
   private trayTooltip(): string {
-    if (this.attention) return `${APP_NAME} is waiting for your approval`
+    if (this.attention) return `${APP_NAME} has a thread that needs your attention`
     if (this.deps.hasUpcomingWork()) return `${APP_NAME} is running a scheduled task`
     return `${APP_NAME} is running in the menu bar`
   }

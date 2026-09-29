@@ -272,11 +272,17 @@ Cmd+Q so a routine still fires on time. It is on by default
   beside the running app. The opt-out is never inferred from an isolated data
   root, because probing the menu bar itself needs background mode on.
 - **Menu bar, not Dock.** The tray carries exactly two items, **Open CodeInOven**
-  and **Quit CodeInOven**; the icon is the monochrome mark, or the mark with an
-  exclamation when attention is needed. While windowless the Dock icon is hidden
-  and restored when a window opens. The icon's attention state is computed in
-  main from SQLite (a thread parked on approval, or an unread failed assistant
-  run), never from a renderer, because there is no renderer.
+  and **Quit CodeInOven**; the icon is the monochrome mark, or the mark with a
+  bold exclamation when a thread holds a live problem. While windowless the Dock
+  icon is hidden and restored when a window opens. The error state mirrors the
+  thread's own error card, computed in main from SQLite, never from a renderer,
+  because there is no renderer: a thread parked on an approval gate, a thread
+  that settled `failed` until the user reads it, or a thread paused on a
+  provider issue (`working-paused`, the persisted state behind the visible
+  provider card: a usage reset, a connection interruption, a provider outage).
+  It is re-evaluated on every persisted thread update and on every
+  retry-scheduler change, so the icon returns to normal the moment the error
+  clears, and a windowless run that breaks flips it with no window open.
 - **Gates.** A question with a timer answers itself with its recommended option
   through `questionTimeoutMs`; a secret card runs its own absolute timer and
   closes unanswered; a destructive scope confirmation denies itself at its

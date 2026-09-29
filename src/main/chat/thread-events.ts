@@ -7,8 +7,20 @@ import { instanceRegistry } from '../system/instance-registry'
 
 type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }>
 
+/**
+ * The service that owns the menu bar icon. Injected as a narrow port rather
+ * than imported, because this module is loaded by the chat engine and must not
+ * pull in the whole background lifecycle: every persisted thread update is
+ * exactly the moment the icon's error state can have changed.
+ */
+interface BackgroundAttentionPort {
+  /** Coalesced, so calling it on every thread update is cheap. */
+  requestAttentionRefresh: () => void
+}
+
 let _notificationService: NotificationService | null = null
 let _powerWakeService: PowerWakeService | null = null
+let _backgroundAttention: BackgroundAttentionPort | null = null
 
 export function setNotificationService(service: NotificationService | null): void {
   _notificationService = service
@@ -16,6 +28,10 @@ export function setNotificationService(service: NotificationService | null): voi
 
 export function setPowerWakeService(service: PowerWakeService | null): void {
   _powerWakeService = service
+}
+
+export function setBackgroundAttention(port: BackgroundAttentionPort | null): void {
+  _backgroundAttention = port
 }
 
 export function markNotificationAborting(projectId: string, threadId: string): void {
@@ -49,6 +65,9 @@ export function broadcastThreadUpdate(thread: Thread): void {
     dismissThreadNotifications(thread.projectId, thread.id)
   }
   _powerWakeService?.onThreadUpdate(thread)
+  // The menu bar mirrors the thread's error card, so every persisted status or
+  // read change is a moment its state can have changed.
+  _backgroundAttention?.requestAttentionRefresh()
   void _notificationService?.notify(thread)
 }
 
