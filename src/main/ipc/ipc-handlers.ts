@@ -284,8 +284,11 @@ export function registerIpcHandlers(
         const projects = await projectManager.listProjects()
         return [
           join(getConfigRoot(), 'chats'),
+          // Legacy per-chat image roots, kept readable for older chats.
           join(getConfigRoot(), 'chat-artifacts'),
           join(getConfigRoot(), 'chats-artifacts'),
+          // The chat workspace root: one directory per chat thread.
+          join(getConfigRoot(), 'chats-cwd'),
           // The assistant workspace, one directory per routine.
           join(getConfigRoot(), 'assistant-cwd'),
           ...projects.flatMap((project) => [

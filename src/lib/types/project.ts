@@ -24,6 +24,18 @@ export const GLOBAL_BROWSER_PROJECT_ID = 'browser-global'
 export const GLOBAL_BROWSER_THREAD_ID = 'browser-global'
 
 /**
+ * App-storage root holding one workspace directory per standalone (inbox) chat.
+ * `chats-cwd/<threadId>` is the directory a chat's session runs in, the mount
+ * root of its file tree, and the chat's own scratch and artifact directory.
+ *
+ * The name lives here, not in the main process's storage-layout module, because
+ * the renderer needs the same segment to turn a path an agent cited back into a
+ * tree-relative one, and importing that module would pull filesystem code into
+ * the renderer bundle.
+ */
+export const CHATS_CWD_DIR = 'chats-cwd'
+
+/**
  * Fixed hidden containers that hold many independent conversations under one
  * project id. Every per-conversation surface keys off the open thread's
  * conversation scope inside them: a standalone chat owns its own file mount and
@@ -58,7 +70,7 @@ export function conversationScopeId(
 
 /**
  * Whether a conversation browses its own app-owned workspace directory instead
- * of a project root: standalone chats mount `chats-artifacts/<threadId>` and
+ * of a project root: standalone chats mount `chats-cwd/<threadId>` and
  * assistant tasks mount `assistant-cwd/<routineId ?? threadId>`. Every file
  * surface keys the mount off the open thread for exactly these containers.
  */

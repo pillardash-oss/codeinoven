@@ -3,22 +3,23 @@ import { readFile } from 'fs/promises'
 import type { Database } from '../main/database/database'
 import { ThreadRepo } from '../main/database/repositories/thread-repo'
 import { ProjectRepo } from '../main/database/repositories/project-repo'
-import type { Project } from './types'
+import { CHATS_CWD_DIR, type Project } from './types'
 import { atomicWrite, ensureDir } from './utils'
 import { APP_NAME } from './brand'
 
 export const PROJECT_DATA_DIRECTORY = '.cio'
 export const PROJECT_SPECS_DIRECTORY = 'specs'
 
-/** App-storage root directory holding every chat thread's own artifact scratch
- *  directory. Sibling of `chats-cwd`; each thread gets `chats-artifacts/<threadId>/`
- *  as its private, pre-authorized read/write route. */
-export const CHATS_ARTIFACTS_DIRECTORY = 'chats-artifacts'
-
 /** App-storage root directory used as the neutral working directory for
  *  standalone (inbox) chats, so a chat session never runs against a real
- *  project folder. */
-export const CHATS_CWD_DIR = 'chats-cwd'
+ *  project folder. Each chat owns `chats-cwd/<threadId>/`: the one directory
+ *  it runs in, mounts in its file tree, and keeps its own files in. */
+export { CHATS_CWD_DIR }
+
+/** Legacy per-chat artifact root that chat generated images were written to
+ *  before each chat got its own `chats-cwd/<threadId>/` workspace. Kept
+ *  readable so a chat started earlier still shows the images it produced. */
+export const LEGACY_CHATS_ARTIFACTS_DIRECTORY = 'chats-artifacts'
 
 /** App-storage root directory used as the neutral working directory for
  *  assistant-space routine tasks, so authoring a how-to never runs against a
@@ -33,9 +34,11 @@ export const BROWSER_CWD_DIR = 'browser-cwd'
 /** Legacy inbox-chat generated-image root kept readable for older threads. */
 export const LEGACY_CHAT_ARTIFACTS_DIRECTORY = 'chat-artifacts'
 
-/** Storage-root-relative artifact directory of one chat thread. */
-export function chatThreadArtifactDirectory(threadId: string): string {
-  return join(CHATS_ARTIFACTS_DIRECTORY, threadId)
+/** Storage-root-relative workspace directory of one standalone (inbox) chat:
+ *  the session's working directory, the mount root of the chat's file tree,
+ *  and the chat's own scratch and artifact directory. */
+export function chatThreadWorkspaceDirectory(threadId: string): string {
+  return join(CHATS_CWD_DIR, threadId)
 }
 
 /**

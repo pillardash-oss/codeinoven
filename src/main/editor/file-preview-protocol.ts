@@ -198,7 +198,7 @@ function decodeSegments(pathname: string): string[] {
  *   project root through {@link ProjectFilesService#resolveForExternalEditor}
  * - `appfile://thread/<projectId>/<threadId>/<relativePath>`   resolved against
  *   the conversation's own app-owned workspace directory (a chat's
- *   `chats-artifacts/<threadId>`, an assistant task's
+ *   `chats-cwd/<threadId>`, an assistant task's
  *   `assistant-cwd/<routineId ?? threadId>`)
  * - `appfile://attachment/<projectId>/<attachmentId>?name=<label>`   an
  *   out-of-project attachment copied into CodeInOven storage

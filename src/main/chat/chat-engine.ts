@@ -412,12 +412,13 @@ import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc/browser'
 import { GenerationClock, generatedTokens } from '../../lib/usage-rate'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
+  LEGACY_CHATS_ARTIFACTS_DIRECTORY,
   ASSISTANT_CWD_DIR,
   BROWSER_CWD_DIR,
   CHATS_CWD_DIR,
   PROJECT_DATA_DIRECTORY,
   assistantThreadWorkspaceDirectory,
-  chatThreadArtifactDirectory,
+  chatThreadWorkspaceDirectory,
   ensureFeatureSlug,
   featureArtifactDirectory,
   featureSlugFromTitle,
@@ -8876,7 +8877,7 @@ export class ChatEngine {
       transportPromise
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
-    const chatArtifactRoot = this.storage.resolve(chatThreadArtifactDirectory(threadId))
+    const chatWorkspaceRoot = this.storage.resolve(chatThreadWorkspaceDirectory(threadId))
     const generatedArtifactPrompt = artifactInstruction(
       targetThread ?? {
         projectId,
@@ -8885,7 +8886,7 @@ export class ChatEngine {
         featureSlug: undefined
       },
       {
-        chatArtifactRoot,
+        chatWorkspaceRoot,
         chatFileSystemMode: isChatThread && chatFileSystemEnabled
       }
     )
@@ -8904,11 +8905,7 @@ export class ChatEngine {
     const chatSystemPrompt = isChatThread
       ? [
           await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat'),
-          chatFileSystemEnabled
-            ? ''
-            : chatFilesystemBoundaryInstruction(
-                this.storage.resolve(chatThreadArtifactDirectory(threadId))
-              )
+          chatFileSystemEnabled ? '' : chatFilesystemBoundaryInstruction(chatWorkspaceRoot)
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -12481,10 +12478,13 @@ export class ChatEngine {
     this.activeAchievementAuditorEnsures.delete(`${projectId}:${threadId}`)
     this.activeAchievementAuditRuns.delete(`${projectId}:${threadId}`)
 
-    // The thread's own artifact scratch directory (and its legacy inbox-image
-    // root) is per-thread app data; it goes away with the thread.
+    // The thread's own workspace directory (the directory its session ran in
+    // and the mount root of its file tree) is per-thread app data, as are the
+    // legacy artifact roots older chats wrote to; all of it goes away with the
+    // thread.
     for (const directory of [
-      chatThreadArtifactDirectory(threadId),
+      chatThreadWorkspaceDirectory(threadId),
+      join(LEGACY_CHATS_ARTIFACTS_DIRECTORY, threadId),
       join(LEGACY_CHAT_ARTIFACTS_DIRECTORY, threadId)
     ]) {
       void rm(this.storage.resolve(directory), { recursive: true, force: true }).catch((error) =>
@@ -20687,6 +20687,17 @@ export class ChatEngine {
       return this.storage.resolve(assistantDirectory)
     }
 
+    // A standalone (inbox) chat owns `chats-cwd/<threadId>/`: one directory per
+    // conversation, and the very same root its file tree mounts, so a file the
+    // session writes is a file the tree can show. Resolving to the shared
+    // `chats-cwd` root instead puts every chat's scratch in one directory and
+    // leaves that scratch unreachable from the tree the chat displays.
+    if (projectId === INBOX_PROJECT_ID) {
+      const chatDirectory = chatThreadWorkspaceDirectory(threadId)
+      await this.storage.ensureDirectory(chatDirectory)
+      return this.storage.resolve(chatDirectory)
+    }
+
     // The scope resolver is authoritative for threads in a scope; a stale
     // persisted directory never wins, and unhealthy managed scopes fail
     // closed instead of silently operating on the project root.
@@ -20710,6 +20721,10 @@ export class ChatEngine {
     if (!project) throw new Error(`Project not found: ${projectId}`)
 
     let projectPath = project.path
+    // A hidden inbox project has no folder of its own. Its project-level work
+    // (quota reads, grading judges, heartbeats) shares this neutral root, while
+    // each chat thread resolves to `chats-cwd/<threadId>/` through
+    // `resolveThreadPath` so conversations never share a directory.
     if (!projectPath && project.hidden && project.id === INBOX_PROJECT_ID) {
       await this.storage.ensureDirectory(CHATS_CWD_DIR)
       projectPath = this.storage.resolve(CHATS_CWD_DIR)
@@ -22897,7 +22912,8 @@ export class ChatEngine {
   /**
    * Send one disposable "ping" completion for a configured Heartbeat, pinned
    * to its exact harness/provider/model   no visible thread, no cheap-model
-   * substitution. Runs in the same inbox scratch directory as standalone chats.
+   * substitution. It owns no thread, so it runs in the shared inbox scratch
+   * root rather than in any chat's own workspace directory.
    */
   private async sendHeartbeatPing(config: HeartbeatConfig): Promise<boolean> {
     const driver = await this.driverForAccount(config.harnessId, config.accountId)
@@ -23446,7 +23462,7 @@ export class ChatEngine {
   /**
    * The file-access scope for a permission request in a chat session.
    *
-   * Every session gets the thread's own `chats-artifacts/<threadId>` artifact
+   * Every session gets the thread's own `chats-cwd/<threadId>` workspace
    * directory as a pre-authorized scratch path: non-destructive, path-scoped
    * file operations inside it never prompt, regardless of permission level or
    * File System mode.
@@ -23471,12 +23487,12 @@ export class ChatEngine {
     const isChat = info.projectId === INBOX_PROJECT_ID
     // Assistant tasks are routine-scoped rather than project- or chat-scoped:
     // their workspace is the routine's own `assistant-cwd/<routineId>/` root
-    // (`info.projectPath`), so they never fall back to a chats artifact
+    // (`info.projectPath`), so they never fall back to a chat workspace
     // directory for pre-authorized writes.
     const isAssistant = info.projectId === ASSISTANT_SPACE_ID
     const scratchPaths = isAssistant
       ? []
-      : [this.storage.resolve(chatThreadArtifactDirectory(info.threadId))]
+      : [this.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
     if (!isChat) {
       const skillPaths = this.temporaryChatForSession(info.sessionId)
         ? chatSkillPaths(info.driverId)

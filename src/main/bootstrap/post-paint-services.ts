@@ -212,7 +212,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const projectFilesService = new ProjectFilesService(
     projectManager,
     scopeRootProvider(scopeRootResolver),
-    // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
+    // Chat file trees mount on the thread's own `chats-cwd/<threadId>`
     // directory and assistant file trees on the task's
     // `assistant-cwd/<routineId ?? threadId>` workspace; both are created on
     // demand so an empty conversation still has a browsable root.

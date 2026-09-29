@@ -334,14 +334,14 @@ export const CHAT_FILESYSTEM_BOUNDARY_LINES = [
 
 export const CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION = CHAT_FILESYSTEM_BOUNDARY_LINES.join(' ')
 
-/** File-System-off chats own one carve-out: their artifact directory is part
- *  of the conversation. Reads and writes inside it are pre-authorized and are
- *  where chat outputs belong; it never opens the broader file system. */
-export function chatFilesystemBoundaryInstruction(chatArtifactRoot?: string): string {
-  if (!chatArtifactRoot) return CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION
+/** File-System-off chats own one carve-out: their own workspace directory is
+ *  part of the conversation. Reads and writes inside it are pre-authorized and
+ *  are where chat outputs belong; it never opens the broader file system. */
+export function chatFilesystemBoundaryInstruction(chatWorkspaceRoot?: string): string {
+  if (!chatWorkspaceRoot) return CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION
   return [
     CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION,
-    `One exception: the artifact directory of this chat (${chatArtifactRoot}) is part of this conversation. You may create and read files inside it freely, and outputs you create for the user belong there. This carve-out does not extend to anything outside that directory.`
+    `One exception: the workspace directory of this chat (${chatWorkspaceRoot}) is part of this conversation. You may create and read files inside it freely, and outputs you create for the user belong there. This carve-out does not extend to anything outside that directory.`
   ].join(' ')
 }
 

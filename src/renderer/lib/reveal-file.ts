@@ -9,32 +9,27 @@ import { projectFilesWorkspace, type ProjectFileView } from '$lib/stores/project
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { toast } from 'svelte-sonner'
-import { INBOX_PROJECT_ID, usesThreadWorkspaceMount } from '$shared/types'
+import { CHATS_CWD_DIR, INBOX_PROJECT_ID, usesThreadWorkspaceMount } from '$shared/types'
 import type { ProjectFileEntry } from '$shared/types'
 import { fileUrlToPath } from '$lib/mime'
 
-/** App-storage directory (sibling of chats-cwd) holding every chat thread's
- *  own artifact scratch directory. Must match the main-process constant; kept
- *  as a literal here so the renderer never imports main-process modules. */
-const CHATS_ARTIFACTS_DIRECTORY = 'chats-artifacts'
-
-/** Whether an absolute path sits inside the given inbox thread's artifact
+/** Whether an absolute path sits inside the given inbox thread's workspace
  *  directory, and the mount-relative path below that directory. */
-function chatArtifactRelativePath(threadId: string, absolutePath: string): string | null {
+function chatWorkspaceRelativePath(threadId: string, absolutePath: string): string | null {
   const normalized = normalizeCitationPath(absolutePath)
-  const marker = `/${CHATS_ARTIFACTS_DIRECTORY}/${threadId}/`
+  const marker = `/${CHATS_CWD_DIR}/${threadId}/`
   const index = normalized.indexOf(marker)
   if (index < 0) return null
   return normalized.slice(index + marker.length)
 }
 
-/** The inbox thread whose artifact directory contains this path, if any. */
-function chatArtifactThreadForPath(projectId: string, absolutePath: string): string | null {
+/** The inbox thread whose workspace directory contains this path, if any. */
+function chatWorkspaceThreadForPath(projectId: string, absolutePath: string): string | null {
   if (projectId !== INBOX_PROJECT_ID) return null
   const threadId =
     workspaceState.selectedThread?.projectId === projectId ? workspaceState.selectedThread.id : null
   if (!threadId) return null
-  return absolutePath.includes(`/${CHATS_ARTIFACTS_DIRECTORY}/${threadId}/`) ? threadId : null
+  return absolutePath.includes(`/${CHATS_CWD_DIR}/${threadId}/`) ? threadId : null
 }
 
 async function ensureProjectFilesReady(projectId: string, mountThreadId?: string): Promise<void> {
@@ -50,7 +45,7 @@ async function ensureProjectFilesReady(projectId: string, mountThreadId?: string
   if (activeThreadId !== threadId) contextSidebarState.activateThread(projectId, threadId)
   contextSidebarState.openFiles(projectId, threadId)
   // Conversations browse their own app-owned workspace directory (a chat's
-  // artifact directory, an assistant task's working directory); the mount must
+  // workspace directory, an assistant task's working directory); the mount must
   // be registered before the root listing resolves through the thread root.
   if (usesThreadWorkspaceMount(projectId)) {
     projectFilesWorkspace.setThreadMount(projectId, mountThreadId ?? (threadId || null))
@@ -91,13 +86,13 @@ async function exactEntry(projectId: string, path: string): Promise<ProjectFileE
 }
 
 export async function revealFileInAppTree(projectId: string, path: string): Promise<void> {
-  const chatThread = chatArtifactThreadForPath(projectId, path)
+  const chatThread = chatWorkspaceThreadForPath(projectId, path)
   const projectPath = chatThread ? '' : workspaceState.activeProject?.path
   if (!chatThread && !projectPath) return
 
   await ensureProjectFilesReady(projectId, chatThread ?? undefined)
   const relativePath = chatThread
-    ? (chatArtifactRelativePath(chatThread, path) ?? '')
+    ? (chatWorkspaceRelativePath(chatThread, path) ?? '')
     : relativeProjectPath(projectPath ?? '', path)
   const entry = await exactEntry(projectId, relativePath)
   if (entry) await revealEntry(projectId, entry)
@@ -183,9 +178,10 @@ export async function revealLocalFile(projectId: string | undefined, url: string
   if (!projectId || !url.startsWith('file://')) return
 
   const absolutePath = fileUrlToPath(url)
-  // A generated chat artifact lives in the thread's own directory: reveal it
-  // inside the chat's mounted tree even though no project path is active.
-  const chatThread = chatArtifactThreadForPath(projectId, absolutePath)
+  // A file a chat's own session produced lives in that thread's workspace
+  // directory: reveal it inside the chat's mounted tree even though no project
+  // path is active.
+  const chatThread = chatWorkspaceThreadForPath(projectId, absolutePath)
   if (chatThread) {
     await revealFileInAppTree(projectId, absolutePath)
     return
@@ -257,14 +253,14 @@ export async function revealCitationFile(
   citationPath: string,
   focusLine?: number
 ): Promise<void> {
-  // A chat artifact citation (absolute path inside the thread's artifact
+  // A chat workspace citation (absolute path inside the thread's own workspace
   // directory) resolves against the mounted chat tree, not a project root.
   const chatThread =
-    chatArtifactThreadForPath(projectId, citationPath) ??
+    chatWorkspaceThreadForPath(projectId, citationPath) ??
     (projectId === INBOX_PROJECT_ID && workspaceState.selectedThread?.projectId === projectId
       ? workspaceState.selectedThread.id
       : null)
-  if (chatThread && citationPath.includes(`/${CHATS_ARTIFACTS_DIRECTORY}/${chatThread}/`)) {
+  if (chatThread && citationPath.includes(`/${CHATS_CWD_DIR}/${chatThread}/`)) {
     await revealFileInAppTree(projectId, citationPath)
     return
   }

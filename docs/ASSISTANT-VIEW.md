@@ -77,7 +77,7 @@ workspace instead of a shared scratch directory:
   whether the user opens the task or one of its runs.
 - That routine directory is the session's working directory and its permission
   project root, so artifacts, generated images, and any files the agent writes
-  land under the routine. Assistant threads get no `chats-artifacts` scratch
+  land under the routine. Assistant threads get no chat workspace scratch
   path, and `assistant-cwd` is registered as an app artifact root so the
   renderer can show those files.
 - The rail's **Workspace files** panel mounts the file tree on exactly that

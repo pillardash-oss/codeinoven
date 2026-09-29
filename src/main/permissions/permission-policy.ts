@@ -55,7 +55,7 @@ export interface PermissionPolicyOptions {
    *  OFF chats so the agent can only touch files the user attached. */
   restrictToAllowed?: boolean
   /** Absolute directories pre-authorized for this session (e.g. the chat's own
-   *  `chats-artifacts/<threadId>` artifact directory). Any non-destructive,
+   *  `chats-cwd/<threadId>` workspace directory). Any non-destructive,
    *  path-scoped permission inside one of them is auto-approved in every mode,
    *  File-System-OFF chats included. Shell commands and destructive actions
    *  are never auto-approved through this carve-out. */

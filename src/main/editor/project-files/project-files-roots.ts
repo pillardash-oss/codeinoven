@@ -28,10 +28,11 @@ export interface ProjectFilesScopeRootLookup {
   resolveCompatibilityRoot(projectId: string, scopeBucketId: string): Promise<string | null>
 }
 
-/** Resolves (and creates) one chat thread's `chats-artifacts/<threadId>` root.
- *  Chat file trees mount here: the directory is app-owned per-thread scratch
- *  space, so resolution must not depend on a project record. */
-export interface ProjectFilesChatArtifactRootLookup {
+/** Resolves (and creates) one chat thread's `chats-cwd/<threadId>` root. Chat
+ *  file trees mount here: the directory is the chat's own working directory,
+ *  app-owned and per-thread, so resolution must not depend on a project
+ *  record. */
+export interface ProjectFilesChatWorkspaceRootLookup {
   resolve(threadId: string): Promise<string>
 }
 
@@ -46,7 +47,7 @@ export interface ProjectFilesAssistantRootLookup {
 /** App-owned thread workspace roots, both resolved lazily and created on
  *  demand so an empty conversation still has a browsable file tree. */
 export interface ProjectFilesThreadWorkspaceRoots {
-  chatArtifacts?: ProjectFilesChatArtifactRootLookup
+  chatWorkspace?: ProjectFilesChatWorkspaceRootLookup
   assistant?: ProjectFilesAssistantRootLookup
 }
 
@@ -68,7 +69,7 @@ export class ProjectFilesRootResolver {
       const lookup =
         projectId === ASSISTANT_SPACE_ID
           ? this.threadWorkspaces.assistant
-          : this.threadWorkspaces.chatArtifacts
+          : this.threadWorkspaces.chatWorkspace
       if (lookup) {
         const cacheKey = `${projectId}::thread:${threadId}`
         const cached = this.projectRoots.get(cacheKey)

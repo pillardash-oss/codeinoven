@@ -246,8 +246,8 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
   )
 
   /** Optional trailing thread mount on `projectFiles:*` channels: when the
-   *  caller browses a chat's own artifact directory it names the thread so the
-   *  service resolves `chats-artifacts/<threadId>` as the root. */
+   *  caller browses a chat's own workspace directory it names the thread so the
+   *  service resolves `chats-cwd/<threadId>` as the root. */
   function threadIdArg(threadId: unknown): string | undefined {
     return threadId === undefined ? undefined : validateEntityId(threadId, 'Thread ID')
   }

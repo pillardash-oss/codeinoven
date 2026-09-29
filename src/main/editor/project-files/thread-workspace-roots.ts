@@ -3,7 +3,7 @@
  *
  * A conversation that is not project file work still needs a browsable file
  * tree, and its directory lives in app storage rather than in a project folder:
- * standalone chats own `chats-artifacts/<threadId>` and assistant tasks own
+ * standalone chats own `chats-cwd/<threadId>` and assistant tasks own
  * `assistant-cwd/<routineId ?? threadId>`. Both are resolved (and created) on
  * demand so a conversation with no files yet still opens a real, empty root,
  * and both mirror the exact directory the agent runs in, so the tree never
@@ -14,13 +14,13 @@ import type { Database } from '../../database/database'
 import { ThreadRepo } from '../../database/repositories/thread-repo'
 import {
   assistantThreadWorkspaceDirectory,
-  chatThreadArtifactDirectory
+  chatThreadWorkspaceDirectory
 } from '../../../lib/project-artifacts'
 import { ensureDir } from '../../../lib/utils'
 import type { StorageEngine } from '../../storage/storage-engine'
 import type {
   ProjectFilesAssistantRootLookup,
-  ProjectFilesChatArtifactRootLookup,
+  ProjectFilesChatWorkspaceRootLookup,
   ProjectFilesThreadWorkspaceRoots
 } from './project-files-roots'
 
@@ -31,15 +31,15 @@ export function createThreadWorkspaceRoots(
 ): ProjectFilesThreadWorkspaceRoots {
   const threads = new ThreadRepo(database)
   return {
-    chatArtifacts: createChatArtifactRoots(storage),
+    chatWorkspace: createChatWorkspaceRoots(storage),
     assistant: createAssistantRoots(storage, threads)
   }
 }
 
-function createChatArtifactRoots(storage: StorageEngine): ProjectFilesChatArtifactRootLookup {
+function createChatWorkspaceRoots(storage: StorageEngine): ProjectFilesChatWorkspaceRootLookup {
   return {
     resolve: async (threadId: string) => {
-      const root = storage.resolve(chatThreadArtifactDirectory(threadId))
+      const root = storage.resolve(chatThreadWorkspaceDirectory(threadId))
       await ensureDir(root)
       return root
     }

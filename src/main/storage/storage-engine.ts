@@ -41,7 +41,6 @@ import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../.
 import type { Project } from '../../lib/types'
 import {
   ASSISTANT_CWD_DIR,
-  CHATS_ARTIFACTS_DIRECTORY,
   CHATS_CWD_DIR,
   featureArtifactDirectory,
   featureSlugFromTitle
@@ -177,7 +176,6 @@ export class StorageEngine {
     await ensureDir(this.resolve('logs'))
     await ensureDir(this.resolve(CHATS_CWD_DIR))
     await ensureDir(this.resolve(ASSISTANT_CWD_DIR))
-    await ensureDir(this.resolve(CHATS_ARTIFACTS_DIRECTORY))
     await ensureDir(this.resolve('window-state'))
     await ensureDir(this.resolve('scheduler'))
     await ensureDir(this.resolve('memory'))
