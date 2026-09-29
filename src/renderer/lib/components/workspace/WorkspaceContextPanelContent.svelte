@@ -165,14 +165,18 @@
   <!-- Cross-fades the panel body when the active tool changes. Both the
        out-going and the in-coming panel are absolutely placed in the same cell,
        so they overlap for the length of the switch instead of one blinking off
-       before the other appears. -->
+       before the other appears. Only the incoming panel rises: the outgoing one
+       is always positioned with no translate, because a transition's params are
+       re-read when the block is destroyed   by then the active tab is already
+       the new one, so a rising outgoing browser panel would slide the native
+       `WebContentsView` it reports the bounds of. -->
   <div class="relative h-full">
     {#key activePanelKey}
       <div
         class="absolute inset-0"
         data-panel-kind={activeContextTab.kind}
         in:fly={panelReveal(activePanelIsBrowser)}
-        out:fly={panelReveal(activePanelIsBrowser)}
+        out:fly={panelReveal(true)}
       >
         {#if activeContextTab.kind === 'files'}
           {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
