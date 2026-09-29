@@ -48,14 +48,21 @@ const CIO_PI_BUILTIN_TOOLS = new Set([
   'grep',
   'find',
   'ls',
-  'powershell'
+  'powershell',
+  // Pi 0.99's script runner and deferred-tool discovery are bundled surfaces,
+  // and CodeInOven itself turns codemode on for sessions whose MCP bridge has
+  // servers to orchestrate. The script host needs no card of its own: every
+  // call a script makes runs through this same gate and gets vetted one call
+  // at a time, so a card per script would ask twice for the same work.
+  'codemode',
+  'tool_search'
 ])
 
-// Pi 0.99 grew tool surfaces this app never had to police: mcp__<server>__<tool>
-// and read_mcp_resource from Pi's built-in MCP extension, codemode, and
-// tool_search. None of them are named by the rule tables below, so a tool the
-// app cannot classify is never allowed to run silently: the gate asks, and the
-// app's permission policy decides (Auto Review asks, Full Access auto-approves).
+// Pi 0.99 grew one tool surface this app never had to police:
+// mcp__<server>__<tool> and read_mcp_resource from Pi's built-in MCP extension.
+// They are not named by the rule tables below, so a tool the app cannot
+// classify is never allowed to run silently: the gate asks, and the app's
+// permission policy decides (Auto Review asks, Full Access auto-approves).
 // Pi 0.99 also reports the annotations an MCP server declares, so a surface that
 // says it is read-only skips the card.
 const CIO_OWN_TOOL_PREFIXES = ['cio_', 'codeinoven_']
@@ -420,9 +427,9 @@ function evaluateGate(toolName, input, cwd) {
     }
   }
   // Everything pi packages itself is handled above or is read-only inside the
-  // project. Anything else   pi's built-in MCP tools, codemode, tool_search,
-  // and whatever a later pi release adds   is a surface this app cannot vouch
-  // for, so it asks unless pi reports it as read-only.
+  // project. Anything else   pi's built-in MCP tools and whatever a later pi
+  // release adds   is a surface this app cannot vouch for, so it asks unless
+  // pi reports it as read-only.
   if (CIO_PI_BUILTIN_TOOLS.has(toolName) || isCioOwnToolName(toolName)) return null
   if (cioReadOnlyTools.has(toolName)) return null
   return gateHit(

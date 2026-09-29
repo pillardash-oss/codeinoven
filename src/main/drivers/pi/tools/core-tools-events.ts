@@ -98,19 +98,12 @@ export function piCoreToolsEventsSource(): string {
       }
     }
     const allowedTools = loadCioAllowedTools()
-    // A script (Pi 0.99 codemode) runs other tools through this same pipeline,
-    // and the app's own tools act on the user's behalf: a script must not be able
-    // to ask the user, spawn workers, install a utility, or run diagnostics by
-    // itself. The model can still call every one of them directly.
-    if (event.parentToolCallId && isCioOwnToolName(event.toolName)) {
-      return {
-        block: true,
-        reason:
-          'This tool cannot be called from inside a script: ' +
-          event.toolName +
-          ' is a CodeInOven tool that acts for the user, and a script has no user to ask. Call it directly instead of from a script.'
-      }
-    }
+    // A script (Pi 0.99 codemode) runs other tools through this same pipeline.
+    // App-owned tools are deliberately reachable from scripts: stringing many
+    // bridge calls into one script is the reason codemode exists, and a script
+    // reaching a user-facing tool makes the same call the model makes directly,
+    // on the same gate. Pi excludes codemode itself from its own script table,
+    // so a script can never recurse into codemode.
     // Backstop for the window between a scope change and the next agent start:
     // a scoped session must never run a sub-agent tool, even when the model
     // still saw it in an earlier request.
