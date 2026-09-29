@@ -80,10 +80,12 @@ if (app.isPackaged) {
 }
 
 /** Map OS termination signals into Electron's quit lifecycle so that every
- *  exit path (Cmd+Q, Dock menu, `kill`, system shutdown) converges into the
- *  same `before-quit` → disposal pipeline → `will-quit` sequence. */
+ *  exit path (Cmd+Q, Dock menu, `kill`, a closed terminal, system shutdown)
+ *  converges into the same `before-quit` → disposal pipeline → `will-quit`
+ *  sequence. SIGHUP matters in development: closing the terminal that runs the
+ *  dev server must not look like a crash to the next launch. */
 function registerSignalHandlers(): void {
-  const signals = ['SIGTERM', 'SIGINT'] as const
+  const signals = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const
   for (const signal of signals) {
     process.on(signal, () => {
       Logger.info(`Received ${signal}   shutting down`)

@@ -17,6 +17,7 @@ import { ThreadRepo } from '../database/repositories/thread-repo'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { instanceRegistry } from '../system/instance-registry'
 import { Logger } from '../system/logger'
+import type { CleanShutdownStore } from '../system/clean-shutdown-store'
 
 /** The subset of bootstrap state the quit gate owns and mutates. */
 export interface QuitLifecycleState {
@@ -26,6 +27,8 @@ export interface QuitLifecycleState {
   /** The process-wide download owner, or null when no window ever attached the
    *  browser. Read for the close prompt's downloads section. */
   browserDownloads: BrowserDownloadManager | null
+  /** Proof of a deliberate exit, written by the forced-exit path. */
+  cleanShutdownStore: CleanShutdownStore | null
 }
 
 /**
@@ -56,6 +59,10 @@ export function armQuitFailsafe(state: QuitLifecycleState): void {
   state.shutdownFailsafe = setTimeout(() => {
     Logger.error('Quit failsafe fired   forcing exit')
     flushSessionStorage()
+    // The user asked to close and the pipeline could not finish in time: that is
+    // still a deliberate exit, so leave the marker before the forced one, or the
+    // next launch would report every in-flight turn as a harness crash.
+    state.cleanShutdownStore?.recordSync()
     app.exit(0)
   }, 15_000)
 }

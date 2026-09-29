@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { Logger } from './logger'
 import type { StorageEngine } from '../storage/storage-engine'
 
@@ -59,6 +61,23 @@ export class CleanShutdownStore {
     this.loaded = true
   }
 
+  /**
+   * Re-read the marker from disk.
+   *
+   * A running instance judges a sibling's orphans long after it read the file
+   * at its own launch, and the marker a deliberate shutdown leaves is written at
+   * that shutdown, so the in-memory copy is stale exactly when a take-over pass
+   * needs it. A failed read keeps the previous marker rather than clearing it,
+   * because "could not read" is not evidence of a crash.
+   */
+  async reload(): Promise<void> {
+    try {
+      await this.load()
+    } catch (error) {
+      Logger.error('Clean-shutdown marker reload failed', error)
+    }
+  }
+
   isLoaded(): boolean {
     return this.loaded
   }
@@ -77,6 +96,28 @@ export class CleanShutdownStore {
     this.marker = { pid, at: Date.now() }
     this.loaded = true
     await this.persist()
+  }
+
+  /**
+   * Record the marker with a synchronous write, for the forced-exit path where
+   * the event loop never gets another turn. Deliberately not atomic: the loader
+   * validates the shape, so a torn write degrades to "no marker" instead of a
+   * wrong verdict.
+   */
+  recordSync(pid: number = process.pid): void {
+    this.marker = { pid, at: Date.now() }
+    this.loaded = true
+    try {
+      const path = this.storage.resolve(STORE_PATH)
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(
+        path,
+        JSON.stringify({ version: 1, marker: this.marker } satisfies CleanShutdownStoreFile),
+        'utf8'
+      )
+    } catch (error) {
+      Logger.error('Clean-shutdown marker sync write failed', error)
+    }
   }
 
   /** Clear the marker once a launch has consumed it. */

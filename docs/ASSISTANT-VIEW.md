@@ -298,6 +298,18 @@ Cmd+Q so a routine still fires on time. It is on by default
   message: `last_error`, `last_error_at`, and `last_outcome` are real columns
   (`src/main/database/schema.ts`), the badge and the notification panel
   rehydrate `failed` threads, and the ledger above records the dispatch.
+- **A deliberate close is never a crash.** Every exit the user asked for (the
+  tray's Quit, a confirmed close, a termination signal including a closed
+  terminal's SIGHUP, an update install, and the quit failsafe) records a durable
+  clean-shutdown marker (`CleanShutdownStore`) before the harness is killed. The
+  next launch settles any turn left in flight as `app-closed` ("CodeInOven closed
+  before this turn finished."), and a survivor instance re-reads that marker
+  before it adopts a departed sibling's orphans, so one instance quitting is
+  never reported as a harness crash in another. The crash wording ("CodeInOven
+  stopped before the harness reported completion.") is reserved for a process
+  that died without the marker: a crash, a force kill, or a power loss. Closing
+  to background interrupts nothing; the turn keeps running in main while
+  windowless.
 
 ## Missed colour token
 

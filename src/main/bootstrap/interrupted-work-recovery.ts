@@ -87,6 +87,11 @@ export async function reconcileInterruptedWork(
   // into a clean app-closed stop instead of a crash failure. A launch consumes
   // it once it has been read, so a later crash cannot inherit a stale verdict.
   const cleanShutdown = state.cleanShutdownStore
+  // A take-over pass fires the moment a sibling exits, which is long after this
+  // process read the file at its own launch, and the marker that sibling leaves
+  // is written at its shutdown. Re-read before judging whose orphans were
+  // stopped on purpose, or a deliberate close is reported as a crash.
+  await cleanShutdown?.reload()
   const recovery = await service.recover({
     scope: adoptOnlyOrphans ? 'take-over' : 'restart',
     isRunOwnerAlive: (pid) => instanceRegistry.isRunOwnerAlive(pid),
