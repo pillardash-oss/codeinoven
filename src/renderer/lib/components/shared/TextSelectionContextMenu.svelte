@@ -17,8 +17,10 @@
   import {
     canOpenInCioBrowser,
     openInCioBrowser,
+    openInGlobalBrowserTabOnScreen,
     openInGlobalCioBrowser
   } from '$lib/open-in-browser'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { terminalEntryForHost, type TerminalHostEntry } from '$lib/terminal/host-registry'
   import { buildPasteData } from '$lib/terminal/input-compat'
   import { selectWordAt } from '$lib/terminal/word-select'
@@ -46,6 +48,16 @@
    *  own the tab, so the thread item is offered exactly when it can work. The
    *  global browser needs no thread, so its item is always offered. */
   const cioBrowserAvailable = $derived(canOpenInCioBrowser())
+  /**
+   * Whether the reader is in the app-wide browser view itself.
+   *
+   * That view is where the global browser's own tab is on screen, so a link there
+   * belongs to it: the thread browser would point at a project thread's tab the
+   * reader is not using, and "open in the global browser" would name what is
+   * already in front of them. The menu answers with the two destinations that
+   * make sense there, a new tab and the tab on screen.
+   */
+  const browsingInApp = $derived(rendererRecovery.activeView === 'browser')
 
   const itemClass =
     'flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus-visible:bg-elevated disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent'
@@ -327,6 +339,17 @@
     openInGlobalCioBrowser(href)
   }
 
+  /**
+   * Load the link in the browser tab already on screen, moving the page the user
+   * is reading rather than opening a second one beside it. The menu is dismissed
+   * first for the same reason as above: the page is a native view composited over
+   * every DOM surface.
+   */
+  function openLinkInActiveBrowserTab(href: string): void {
+    close()
+    openInGlobalBrowserTabOnScreen(href)
+  }
+
   async function pasteIntoTerminal(t: TextMenuTarget): Promise<void> {
     const terminal = t.terminal
     if (!terminal) {
@@ -472,27 +495,50 @@
           <ExternalLink class="size-3.5 shrink-0 text-text-muted" />
           Open in Default Browser
         </button>
-        <button
-          type="button"
-          class={itemClass}
-          role="menuitem"
-          title="Open in the app-wide global browser"
-          onclick={() => openLinkInGlobalCioBrowser(target!.linkHref!)}
-        >
-          <Globe class="size-3.5 shrink-0 text-text-muted" />
-          Open in Global CIO Browser
-        </button>
-        {#if cioBrowserAvailable}
+        {#if browsingInApp}
           <button
             type="button"
             class={itemClass}
             role="menuitem"
-            title="Open in the CIO browser tab for this project"
-            onclick={() => openLinkInCioBrowser(target!.linkHref!)}
+            title="Open in a new tab of the app-wide browser"
+            onclick={() => openLinkInGlobalCioBrowser(target!.linkHref!)}
+          >
+            <Globe class="size-3.5 shrink-0 text-text-muted" />
+            Open in New Tab
+          </button>
+          <button
+            type="button"
+            class={itemClass}
+            role="menuitem"
+            title="Open in the browser tab already on screen"
+            onclick={() => openLinkInActiveBrowserTab(target!.linkHref!)}
           >
             <GlobeCode class="size-3.5 shrink-0 text-text-muted" />
-            Open in Thread Browser
+            Open in Current Tab
           </button>
+        {:else}
+          <button
+            type="button"
+            class={itemClass}
+            role="menuitem"
+            title="Open in the app-wide global browser"
+            onclick={() => openLinkInGlobalCioBrowser(target!.linkHref!)}
+          >
+            <Globe class="size-3.5 shrink-0 text-text-muted" />
+            Open in Global CIO Browser
+          </button>
+          {#if cioBrowserAvailable}
+            <button
+              type="button"
+              class={itemClass}
+              role="menuitem"
+              title="Open in the CIO browser tab for this project"
+              onclick={() => openLinkInCioBrowser(target!.linkHref!)}
+            >
+              <GlobeCode class="size-3.5 shrink-0 text-text-muted" />
+              Open in Thread Browser
+            </button>
+          {/if}
         {/if}
         <button
           type="button"

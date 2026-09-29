@@ -2,6 +2,7 @@ import { invoke } from '$lib/ipc.svelte'
 import { appConfigState } from '$lib/stores/app-config.svelte'
 import { withBrowser } from '$lib/stores/browser-access.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { isLocalDevelopmentUrl } from '$shared/local-development-url'
 
@@ -46,6 +47,20 @@ export function openInGlobalCioBrowser(url: string): void {
 }
 
 /**
+ * Open `url` in the tab the global browser already has on screen, revealing the
+ * app-wide browser first when it is not the view in front.
+ *
+ * This is the destination a link has when the reader is already browsing: the
+ * page in front of them moves, exactly as typing a new address into the address
+ * field would, instead of a second tab appearing beside it. When no tab exists
+ * yet the browser opens its first one.
+ */
+export function openInGlobalBrowserTabOnScreen(url: string): void {
+  workspaceState.navigateToBrowser?.()
+  void withBrowser((store) => store.openInActiveTab(url))
+}
+
+/**
  * Route a link the user activated normally (a click, an agent's suggested URL,
  * an "open the docs" control) to whichever browser belongs to it.
  *
@@ -60,6 +75,16 @@ export async function openInBrowser(url: string): Promise<void> {
   const wantsCioBrowser =
     (appConfigState.openLocalhostInCioBrowser && isLocalDevelopmentUrl(url)) ||
     appConfigState.openAllLinksInCioBrowser
-  if (wantsCioBrowser && openInCioBrowser(url)) return
+  if (wantsCioBrowser) {
+    // A link opened while the app-wide browser is the view on screen belongs to
+    // that browser: the thread browser would put the page in a project thread's
+    // tab behind a workspace the reader is not looking at, so it takes a tab
+    // beside the page they are reading instead.
+    if (rendererRecovery.activeView === 'browser') {
+      openInGlobalCioBrowser(url)
+      return
+    }
+    if (openInCioBrowser(url)) return
+  }
   await invoke('shell:openExternal', url)
 }
