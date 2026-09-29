@@ -3614,9 +3614,16 @@
    */
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
     const family = contentThreadFamily(thread)
+    // The switcher can be opened from the browser view, where Ctrl+Tab is
+    // claimed inside a page, or from Settings: the shell is mounted but not the
+    // on-screen view. A project thread then has to bring the shell forward,
+    // because `mode` already reads 'projects' and the guard below would change
+    // only a selection nobody can see, leaving the browser (or Settings) on
+    // screen. The Scope page keeps its own behavior, so it is excluded.
+    const shellHidden = !active && !scopeViewActive
     if (family === 'chats') navigate('chats')
     else if (family === 'assistant') navigate('assistant')
-    else if (mode === 'chats' || mode === 'assistant') navigate('projects')
+    else if (mode === 'chats' || mode === 'assistant' || shellHidden) navigate('projects')
     // The scope store reads its own activeProjectId / sidebarContext, not the
     // workspace selection, so a cross-project Ctrl+Tab jump must sync it
     // otherwise the scope view tabs and the scope-state sidebar stay stuck on
