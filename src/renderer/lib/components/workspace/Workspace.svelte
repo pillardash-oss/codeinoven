@@ -1106,7 +1106,7 @@
         icon: GlobeCode,
         active: dockKindActive('browser'),
         countBadge:
-          browser.activeDownloadCount > 0 ? String(browser.activeDownloadCount) : undefined,
+          browser.unfinishedDownloadCount > 0 ? String(browser.unfinishedDownloadCount) : undefined,
         menu: browser.menuOpen ? browserMenu : undefined,
         onSelect: () => {
           browser.menuOpen = false

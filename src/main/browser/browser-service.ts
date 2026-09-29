@@ -49,7 +49,7 @@ import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
-import { BrowserDownloadTracker } from './browser-service/browser-downloads'
+import { BrowserDownloadManager } from './browser-service/browser-downloads'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
 import { BrowserInspector } from './browser-service/browser-inspector'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
@@ -112,6 +112,7 @@ import {
   SCREENSHOT_MAX_BYTES,
   ZOOM_STEP,
   browserContextKey,
+  browserPartitionForProject,
   isAllowedPopupWindowUrl,
   isSameBounds,
   isSameViewport,
@@ -254,7 +255,6 @@ export class BrowserService {
   private readonly permissionGrants = new Map<string, Set<string>>()
   private readonly permissionDenies = new Map<string, Set<string>>()
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
-  private readonly downloadTracker: BrowserDownloadTracker
   private readonly capture: BrowserCaptureObserver
   /** Element inspector for design tabs. Injected page code reports picks and
    *  comments; the panel drives it through the browser IPC contract. */
@@ -419,7 +419,8 @@ export class BrowserService {
   constructor(
     private readonly window: BrowserWindow,
     db: Database,
-    permissionPersistence: PermissionMemoryPersistence
+    permissionPersistence: PermissionMemoryPersistence,
+    private readonly downloads: BrowserDownloadManager
   ) {
     this.promptWindow = new PermissionPromptWindow(window)
     this.stage = new BrowserTabStage(window)
@@ -427,12 +428,11 @@ export class BrowserService {
     this.projects = new ProjectRepo(db)
     this.threads = new ThreadRepo(db)
     this.popupWindows = new BrowserPopupWindows(this.popupWindowHost())
-    this.downloadTracker = new BrowserDownloadTracker({
-      window,
-      // A download started by a popup window is the tab's download: the row the
-      // user sees must name the tab they were reading, not a page with no strip.
-      findTabId: (projectId, contentsId) => this.tabIdForContents(projectId, contentsId)
-    })
+    // A download started by a popup window is the tab's download: the row the
+    // user sees must name the tab they were reading, not a page with no strip.
+    this.downloads.setTabResolver((projectId, contentsId) =>
+      this.tabIdForContents(projectId, contentsId)
+    )
     this.siteData = new BrowserSiteDataService({
       window,
       sessionForProject: (projectId) => this.sessionForProject(projectId),
@@ -441,7 +441,7 @@ export class BrowserService {
       },
       dismissPermissions: (projectId) => this.dismissProjectPermissions(projectId),
       clearPermissionMemory: (projectId) => this.clearProjectPermissionMemory(projectId),
-      cancelProjectDownloads: (projectId) => this.downloadTracker.cancelProject(projectId)
+      cancelProjectDownloads: (projectId) => this.downloads.cancelProject(projectId)
     })
     this.capture = new BrowserCaptureObserver({
       // A capture change is a tab-level fact the user must see, so it is
@@ -718,7 +718,7 @@ export class BrowserService {
       const projectId = validateProjectId(rawProjectId)
       const x = validateSiteMenuPoint(rawX, 'x coordinate')
       const y = validateSiteMenuPoint(rawY, 'y coordinate')
-      setImmediate(() => this.downloadTracker.showMenu(projectId, x, y))
+      setImmediate(() => this.downloads.showMenu(projectId, x, y))
     })
     replaceHandler('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
@@ -746,25 +746,32 @@ export class BrowserService {
       for (const [tabId, tab] of this.tabs) {
         if (tab.projectId === projectId) this.destroy(tabId)
       }
+      this.downloads.forgetProject(projectId)
     })
     replaceHandler('browser:getDownloads', (_event, rawProjectId) => {
       const projectId = validateProjectId(rawProjectId)
-      return this.downloadTracker.list(projectId)
+      return this.downloads.list(projectId)
     })
     replaceHandler('browser:cancelDownload', (_event, rawDownloadId) => {
-      this.downloadTracker.cancel(validateDownloadId(rawDownloadId))
+      this.downloads.cancel(validateDownloadId(rawDownloadId))
     })
     replaceHandler('browser:pauseDownload', (_event, rawDownloadId) => {
-      this.downloadTracker.pause(validateDownloadId(rawDownloadId))
+      this.downloads.pause(validateDownloadId(rawDownloadId))
     })
     replaceHandler('browser:resumeDownload', (_event, rawDownloadId) => {
-      this.downloadTracker.resume(validateDownloadId(rawDownloadId))
+      this.downloads.resume(validateDownloadId(rawDownloadId))
+    })
+    replaceHandler('browser:retryDownload', (_event, rawDownloadId) => {
+      this.downloads.retry(validateDownloadId(rawDownloadId))
+    })
+    replaceHandler('browser:removeDownload', (_event, rawDownloadId) => {
+      this.downloads.remove(validateDownloadId(rawDownloadId))
     })
     replaceHandler('browser:openDownload', (_event, rawDownloadId) => {
-      this.downloadTracker.open(validateDownloadId(rawDownloadId))
+      this.downloads.open(validateDownloadId(rawDownloadId))
     })
     replaceHandler('browser:revealDownload', (_event, rawDownloadId) => {
-      return this.downloadTracker.reveal(validateDownloadId(rawDownloadId))
+      return this.downloads.reveal(validateDownloadId(rawDownloadId))
     })
   }
 
@@ -793,11 +800,15 @@ export class BrowserService {
     }
     this.tabs.clear()
     this.agentTabIds.clear()
+    // Downloads belong to the session, not to this window: a download keeps
+    // running while the window is parked, so teardown only stops this window's
+    // tab lookup from being consulted. The manager survives and keeps the
+    // records, the live items and the bytes.
+    this.downloads.setTabResolver(null)
     this.configuredSessions.clear()
     this.permissionGrants.clear()
     this.permissionDenies.clear()
     this.playheads.clear()
-    this.downloadTracker.dispose()
     this.capture.dispose()
     this.inspector.dispose()
   }
@@ -2301,8 +2312,12 @@ export class BrowserService {
   }
 
   private sessionForProject(projectId: string): Session {
-    const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
+    const partition = browserPartitionForProject(projectId)
     const browserSession = session.fromPartition(partition)
+    // Downloads are tracked for the session, not for the window: the window can be
+    // parked and rebuilt while a download keeps running, so the manager that owns
+    // them registers here once and keeps them across that rebuild.
+    this.downloads.watchSession(projectId, browserSession)
     if (this.configuredSessions.has(partition)) return browserSession
     // Reuse the ledgers the durable memory loaded: a fresh set here would throw
     // away every decision the user already made, so a site the user allowed in
@@ -2378,9 +2393,6 @@ export class BrowserService {
       // a slow or failed read still ends in the prompt on screen instead of a
       // stranded request.
       void this.promptFromDurableMemory(id)
-    })
-    browserSession.on('will-download', (event, item, contents) => {
-      this.downloadTracker.handleDownload(projectId, item, contents.id)
     })
     this.configuredSessions.add(partition)
     return browserSession

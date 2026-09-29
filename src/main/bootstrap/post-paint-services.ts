@@ -40,6 +40,7 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
+import { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { DesignService } from '../design/design-service'
 import type { BootstrapState } from './bootstrap-state'
 
@@ -69,7 +70,18 @@ async function attachBrowserService(
     state.browserService.dispose()
     state.browserService = null
   }
-  const service = new BrowserService(window, database, storage)
+  // The download manager is deliberately *not* created per window. Downloads
+  // belong to their project's session and keep running while no window shows
+  // them, so the first attach builds it, hydrates the records an earlier run
+  // left behind, and every later window reuses the same one.
+  if (!state.browserDownloads) {
+    state.browserDownloads = new BrowserDownloadManager({
+      persistence: storage,
+      window: () => (state.mainWindow?.isDestroyed() ? null : state.mainWindow)
+    })
+  }
+  await state.browserDownloads.hydrate()
+  const service = new BrowserService(window, database, storage, state.browserDownloads)
   state.browserService = service
   // Remembered permission decisions load before the service accepts browser
   // IPC, so a site is never re-prompted for a permission the user already

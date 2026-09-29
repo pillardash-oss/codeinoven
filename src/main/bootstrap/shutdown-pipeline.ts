@@ -121,10 +121,27 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    // Before the browser's sessions are torn down, keep every running download:
+    // Chromium deletes a running download's file as its session goes away, so its
+    // bytes are paused and moved aside here, and the records that point at them
+    // are written. The next launch offers to resume them.
+    await state.browserDownloads?.prepareForQuit()
+  } catch (error) {
+    Logger.error('Browser downloads could not be kept for a later resume:', error)
+  }
+
+  try {
     state.browserService?.dispose()
     state.browserService = null
   } catch (error) {
     Logger.error('Browser service cleanup failed during shutdown:', error)
+  }
+
+  try {
+    state.browserDownloads?.dispose()
+    state.browserDownloads = null
+  } catch (error) {
+    Logger.error('Browser download cleanup failed during shutdown:', error)
   }
 
   try {

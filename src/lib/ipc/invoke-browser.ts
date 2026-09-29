@@ -44,10 +44,7 @@ export const invokeBrowserContract = {
    * popup is a native view like a tab's page is, so the rail's rectangle is
    * what puts it on screen inside the panel rather than over the window.
    */
-  'browser:showPopupWindow': {} as Contract<
-    [popupId: string, bounds: BrowserViewBounds],
-    void
-  >,
+  'browser:showPopupWindow': {} as Contract<[popupId: string, bounds: BrowserViewBounds], void>,
   /**
    * Take a popup window's page off screen. The page keeps running, laid out
    * offscreen at the size it was last displayed at, exactly as a parked tab
@@ -201,7 +198,13 @@ export const invokeBrowserContract = {
   'browser:getDownloads': {} as Contract<[projectId: string], BrowserDownload[]>,
   'browser:cancelDownload': {} as Contract<[id: string], void>,
   'browser:pauseDownload': {} as Contract<[id: string], void>,
+  /** Continue a download from the bytes it already has, whether it was paused in
+   *  this run or stopped by an earlier one. */
   'browser:resumeDownload': {} as Contract<[id: string], void>,
+  /** Start a stopped download over, from its first byte, into the same file. */
+  'browser:retryDownload': {} as Contract<[id: string], void>,
+  /** Drop a finished, interrupted or cancelled download record from the list. */
+  'browser:removeDownload': {} as Contract<[id: string], void>,
   'browser:openDownload': {} as Contract<[id: string], void>,
   'browser:revealDownload': {} as Contract<[id: string], boolean>
 }

@@ -9,7 +9,6 @@ import type {
   BrowserCompositionTab,
   BrowserConsoleEntry,
   BrowserDesignTab,
-  BrowserDownload,
   BrowserLoadError,
   BrowserPermissionRequest,
   BrowserSiteDataScope
@@ -181,9 +180,3 @@ export const SITE_MENU_ACTIONS: readonly SiteMenuAction[] = [
       'Remembered camera, microphone and other permission choices for sites visited in this browser will be forgotten.'
   }
 ]
-
-export interface BrowserDownloadRecord {
-  item: Electron.DownloadItem
-  download: BrowserDownload
-  lastEmittedAt: number
-}

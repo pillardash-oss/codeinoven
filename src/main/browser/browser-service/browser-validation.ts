@@ -31,6 +31,13 @@ import {
 import type { BrowserViewport } from './browser-types'
 
 export const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
+
+/** Session partition one project's browser runs in. The download manager has to
+ *  reach the same session the browser's tabs use, so the naming lives here rather
+ *  than being spelled out at each caller. */
+export function browserPartitionForProject(projectId: string): string {
+  return `${BROWSER_PARTITION_PREFIX}${projectId}`
+}
 export const MAX_BROWSER_URL_LENGTH = 8192
 export const MAX_CONSOLE_ENTRIES = 500
 export const MAX_TRACKED_DOWNLOADS = 50

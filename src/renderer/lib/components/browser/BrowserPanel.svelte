@@ -142,7 +142,9 @@
    *  expanded state of the anchor button. The downloads and page menus follow
    *  the same native-popup pattern. */
   let siteMenuOpen = $state(false)
-  const activeDownloadCount = $derived(browserDownloads.activeCount(tabProjectId))
+  /** How many of this tab's project's downloads are unfinished: still running, or
+   *  stopped with bytes on disk waiting for a resume. */
+  const unfinishedDownloadCount = $derived(browserDownloads.unfinishedCount(tabProjectId))
 
   /** Open the native downloads menu anchored under the download button. The
    *  OS popup composites above the page view, so the panel's layout never has
@@ -392,6 +394,10 @@
     // Claim the native view for this tab while this panel is mounted. The claim
     // is released with the component, so a destroyed panel can never keep the view.
     const releaseBrowserClaim = browserVisibility.claimTab(tabId, surface)
+    // Downloads outlive the run that started them, so the project's records are
+    // read back when the panel appears: the badge and the menu are how a download
+    // the app stopped on its way out becomes visible again rather than silent.
+    void browserDownloads.load(tabProjectId)
     const unsubscribeSiteMenu = subscribe('browser:siteMenuClosed', () => {
       siteMenuOpen = false
     })
@@ -554,11 +560,11 @@
       onclick={openDownloadsMenu}
     >
       <Download size={13} />
-      {#if activeDownloadCount > 0}
+      {#if unfinishedDownloadCount > 0}
         <span
           class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
         >
-          {activeDownloadCount}
+          {unfinishedDownloadCount}
         </span>
       {/if}
     </button>

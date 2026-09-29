@@ -33,11 +33,11 @@
   >
     <Download size={14} />
     <span>Manage downloads</span>
-    {#if browser.activeDownloadCount > 0}
+    {#if browser.unfinishedDownloadCount > 0}
       <span
         class="ml-auto rounded-full bg-elevated px-1.5 text-[0.625rem] font-semibold tabular-nums text-muted"
       >
-        {browser.activeDownloadCount}
+        {browser.unfinishedDownloadCount}
       </span>
     {/if}
   </button>

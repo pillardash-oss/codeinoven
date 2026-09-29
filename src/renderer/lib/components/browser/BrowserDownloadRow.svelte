@@ -1,8 +1,18 @@
 <script lang="ts">
-  import { CircleStop, ExternalLink, FileDown, FolderOpen, Pause, Play } from '@lucide/svelte'
+  import {
+    CircleStop,
+    ExternalLink,
+    FileDown,
+    FolderOpen,
+    Pause,
+    Play,
+    RotateCw,
+    X
+  } from '@lucide/svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import {
+    browserDownloadAge,
     browserDownloadBytes,
     browserDownloadHost,
     browserDownloadStateLabel,
@@ -20,9 +30,27 @@
   let { download, compact = false }: Props = $props()
 
   const progressing = $derived(download.state === 'progressing')
-  /** Main only knows the file's final location once the save dialog answered and
-   *  the download finished, so revealing is offered exactly then. */
-  const canReveal = $derived(download.state === 'completed' && download.savePath !== '')
+  /**
+   * Whether the row has a place worth continuing from, so its progress is shown
+   * even while it is not running: a download the app or the server stopped keeps
+   * the bytes it already has, and they are where a resume picks up.
+   */
+  const showsProgress = $derived(
+    progressing || (download.state === 'interrupted' && download.resumable)
+  )
+  /** Resume is for a download with bytes to continue from: paused in this run, or
+   *  stopped with the earlier bytes still on disk. */
+  const canResume = $derived(
+    (progressing && download.paused) || (download.state === 'interrupted' && download.resumable)
+  )
+  /** A download that is not running and not finished can be started over, into the
+   *  same file, without asking for a path again. */
+  const canRetry = $derived(download.state === 'interrupted' || download.state === 'cancelled')
+  /** Only a finished download is opened; a stopped one has no complete file yet. */
+  const canOpen = $derived(download.state === 'completed' && download.savePath !== '')
+  /** Revealing works for anything that left a file or kept bytes behind. */
+  const canReveal = $derived(download.state !== 'cancelled' && download.savePath !== '')
+  const canRemove = $derived(!progressing)
   const percent = $derived(Math.min(100, Math.max(0, download.progress)))
   const actionButton = $derived(
     `flex shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground ${
@@ -36,13 +64,21 @@
   )
   const actionIcon = $derived(compact ? 12 : 13)
   const detail = $derived.by(() => {
-    const parts = [browserDownloadHost(download.url), browserDownloadBytes(download.receivedBytes)]
-    if (progressing && download.totalBytes > 0) {
-      parts.push(`of ${browserDownloadBytes(download.totalBytes)}`)
+    const parts = [browserDownloadHost(download.url)]
+    if (download.receivedBytes > 0) {
+      parts.push(
+        showsProgress && download.totalBytes > 0
+          ? `${browserDownloadBytes(download.receivedBytes)} of ${browserDownloadBytes(download.totalBytes)}`
+          : browserDownloadBytes(download.receivedBytes)
+      )
     }
     if (progressing && download.speedBytes > 0) {
       parts.push(`${browserDownloadBytes(download.speedBytes)}/s`)
     }
+    // Downloads outlive the run that started them, so a stopped one says how old
+    // it is instead of looking like something from a moment ago.
+    const age = progressing ? '' : browserDownloadAge(download.startedAt)
+    if (age.length > 0) parts.push(age)
     return parts.join(' · ')
   })
 </script>
@@ -111,28 +147,6 @@
             <Pause size={actionIcon} />
           </button>
         {/if}
-      {/if}
-      {#if download.state === 'completed'}
-        <button
-          type="button"
-          class={actionButton}
-          aria-label={`Open ${download.fileName}`}
-          title={`Open ${download.fileName}`}
-          onclick={() => browserDownloads.open(download)}
-        >
-          <ExternalLink size={actionIcon} />
-        </button>
-        <button
-          type="button"
-          class={actionButton}
-          aria-label={`Reveal ${download.fileName} in file manager`}
-          title={`Reveal ${download.fileName} in file manager`}
-          onclick={() => browserDownloads.reveal(download)}
-        >
-          <FolderOpen size={actionIcon} />
-        </button>
-      {/if}
-      {#if progressing || download.state === 'interrupted'}
         <button
           type="button"
           class={cancelButton}
@@ -142,10 +156,66 @@
         >
           <CircleStop size={actionIcon} />
         </button>
+      {:else}
+        {#if canResume}
+          <button
+            type="button"
+            class={actionButton}
+            aria-label={`Resume ${download.fileName}`}
+            title={`Resume ${download.fileName}`}
+            onclick={() => browserDownloads.resume(download)}
+          >
+            <Play size={actionIcon} />
+          </button>
+        {/if}
+        {#if canRetry}
+          <button
+            type="button"
+            class={actionButton}
+            aria-label={`Download ${download.fileName} again from the start`}
+            title={`Start ${download.fileName} over`}
+            onclick={() => browserDownloads.retry(download)}
+          >
+            <RotateCw size={actionIcon} />
+          </button>
+        {/if}
+        {#if canOpen}
+          <button
+            type="button"
+            class={actionButton}
+            aria-label={`Open ${download.fileName}`}
+            title={`Open ${download.fileName}`}
+            onclick={() => browserDownloads.open(download)}
+          >
+            <ExternalLink size={actionIcon} />
+          </button>
+        {/if}
+        {#if canReveal}
+          <button
+            type="button"
+            class={actionButton}
+            aria-label={`Reveal ${download.fileName} in file manager`}
+            title={`Reveal ${download.fileName} in file manager`}
+            onclick={() => browserDownloads.reveal(download)}
+          >
+            <FolderOpen size={actionIcon} />
+          </button>
+        {/if}
+        {#if canRemove}
+          <button
+            type="button"
+            class={actionButton}
+            aria-label={`Remove ${download.fileName} from the downloads list`}
+            title={`Remove ${download.fileName} from the list`}
+            onclick={() => browserDownloads.remove(download)}
+          >
+            <X size={actionIcon} />
+          </button>
+        {/if}
       {/if}
     </div>
   </div>
-  {#if progressing}
+  {#if showsProgress}
     <div class={compact ? 'flex items-center gap-2' : 'mt-3 flex items-center gap-2'}>
       <div
         class="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-overlay"

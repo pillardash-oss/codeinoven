@@ -9,6 +9,7 @@
 
 import type { BrowserWindow } from 'electron'
 import type { BrowserService } from '../browser/browser-service'
+import type { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { ChatEngine } from '../chat/chat-engine'
 import type { ForeignRunService } from '../chat/foreign-run-service'
 import type { ThreadTransferService } from '../chat/thread-transfer-service'
@@ -44,6 +45,13 @@ export interface BootstrapState {
   /** Primary window; null before creation and after it closes. */
   mainWindow: BrowserWindow | null
   browserService: BrowserService | null
+  /**
+   * Every browser download this process knows about, and the durable records
+   * they come from. One instance for the whole process, because a download keeps
+   * running while the window that started it is parked or rebuilt, and because
+   * the records outlive both. Null until the post-paint graph builds it.
+   */
+  browserDownloads: BrowserDownloadManager | null
   gatewaySupervisor: GatewaySupervisorService | null
 
   // Quit lifecycle flags shared by the close gate, the signal handlers and the
@@ -140,6 +148,7 @@ export function createBootstrapState(): BootstrapState {
   return {
     mainWindow: null,
     browserService: null,
+    browserDownloads: null,
     gatewaySupervisor: null,
     quitCleanupStarted: false,
     quitConfirmed: false,

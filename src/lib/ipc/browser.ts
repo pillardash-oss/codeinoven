@@ -432,13 +432,20 @@ export interface BrowserConsoleEntry {
   timestamp: number
 }
 
-/** Lifecycle state of a download started by an app-scoped browser tab. */
+/** Lifecycle state of a download started by an app-scoped browser tab.
+ *  `interrupted` covers both a download the server cut short and one the app
+ *  itself stopped keeping (a quit, or a restart that found bytes on disk); a
+ *  `resumable` interrupted download has its bytes kept and can continue, while a
+ *  `cancelled` one discarded them and can only be started again. */
 export type BrowserDownloadState = 'progressing' | 'interrupted' | 'completed' | 'cancelled'
 
 /**
  * Metadata for a download started inside the app-scoped browser. Contains no
  * cookies, headers, or page content: only what the download manager needs to
- * render progress and offer cancel/pause/open/reveal actions.
+ * render progress and offer resume/retry/cancel/open/reveal actions.
+ *
+ * Records survive quitting and reopening the app, so this describes a download
+ * the current run never watched as well as one it is downloading right now.
  */
 export interface BrowserDownload {
   id: string
@@ -455,4 +462,14 @@ export interface BrowserDownload {
   paused: boolean
   savePath: string
   error: string
+  /**
+   * Whether the bytes already downloaded are still on disk, so `Resume`
+   * continues this download instead of starting it over. False while a download
+   * is cancelled or finished, and for an interrupted one whose partial file is
+   * gone (deleted by hand, or discarded by a crash).
+   */
+  resumable: boolean
+  /** Epoch milliseconds the download started, so a record kept from an earlier
+   *  run can say when it began rather than looking brand new. */
+  startedAt: number
 }

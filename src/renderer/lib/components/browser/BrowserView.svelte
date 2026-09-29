@@ -35,8 +35,11 @@
   let addressSpotlightOpen = $derived(globalBrowser.addressSpotlightOpen)
   const activeTab = $derived(globalBrowser.activeTab)
 
-  /** How many of the profile's downloads are still running, for the rail badge. */
-  const activeDownloadCount = $derived(browserDownloads.activeCount(GLOBAL_BROWSER_PROJECT_ID))
+  /** How many of the profile's downloads are unfinished: still running, or stopped
+   *  with bytes kept for a resume, for the rail badge. */
+  const unfinishedDownloadCount = $derived(
+    browserDownloads.unfinishedCount(GLOBAL_BROWSER_PROJECT_ID)
+  )
 
   /**
    * The browser view's tools for the context rail.
@@ -60,10 +63,13 @@
     const browserTools: ContextDockItem[] = [
       {
         id: 'downloads',
-        label: activeDownloadCount > 0 ? `Downloads (${activeDownloadCount} active)` : 'Downloads',
+        label:
+          unfinishedDownloadCount > 0
+            ? `Downloads (${unfinishedDownloadCount} unfinished)`
+            : 'Downloads',
         icon: Download,
         active: globalBrowser.downloadsSidebarShown,
-        countBadge: activeDownloadCount > 0 ? String(activeDownloadCount) : undefined,
+        countBadge: unfinishedDownloadCount > 0 ? String(unfinishedDownloadCount) : undefined,
         onSelect: () => globalBrowser.toggleDownloadsSidebar()
       },
       ...(popupWindows.length > 0
@@ -164,6 +170,10 @@
     // surfaces that read it.
     void loadBrowser()
     globalBrowser.markOpened()
+    // The profile's downloads are read back here too: a download recovered from an
+    // earlier run has to reach the rail's badge and list without the user having
+    // to open the downloads panel first.
+    void browserDownloads.load(GLOBAL_BROWSER_PROJECT_ID)
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', handlePanelShortcut)
     return () => {
       unsubscribePanelShortcut()

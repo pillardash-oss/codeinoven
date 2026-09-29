@@ -67,11 +67,30 @@ class BrowserDownloadsState {
   }
 
   /** How many of the project's downloads are still running: the number the
-   *  toolbar badge reports. Finished and failed ones are not "downloading". */
+   *  toolbar badge reports.
+   */
   activeCount(projectId: string): number {
     let count = 0
     for (const download of this.downloads.values()) {
       if (download.projectId === projectId && download.state === 'progressing') count += 1
+    }
+    return count
+  }
+
+  /**
+   * How many of the project's downloads are not finished: the running ones plus
+   * the interrupted ones the user has to resume or start over.
+   *
+   * The toolbar badge uses this rather than {@link activeCount}, because a
+   * download the app stopped on its way out is exactly the entry the user would
+   * otherwise never know about   it is on screen, waiting for a decision, and a
+   * badge is what says so.
+   */
+  unfinishedCount(projectId: string): number {
+    let count = 0
+    for (const download of this.downloads.values()) {
+      if (download.projectId !== projectId) continue
+      if (download.state === 'progressing' || download.state === 'interrupted') count += 1
     }
     return count
   }
@@ -81,11 +100,27 @@ class BrowserDownloadsState {
   }
 
   resume(download: BrowserDownload): void {
-    void invoke('browser:resumeDownload', download.id).catch(() => {})
+    void invoke('browser:resumeDownload', download.id).catch((error: unknown) => {
+      reportError(error, 'The download could not be resumed.')
+    })
+  }
+
+  /** Start a stopped download over from its first byte. */
+  retry(download: BrowserDownload): void {
+    void invoke('browser:retryDownload', download.id).catch((error: unknown) => {
+      reportError(error, 'The download could not be started again.')
+    })
   }
 
   cancel(download: BrowserDownload): void {
     void invoke('browser:cancelDownload', download.id).catch(() => {})
+  }
+
+  /** Drop a stopped download from the list, keeping the file it saved. */
+  remove(download: BrowserDownload): void {
+    void invoke('browser:removeDownload', download.id).catch((error: unknown) => {
+      reportError(error, 'The download could not be removed from the list.')
+    })
   }
 
   open(download: BrowserDownload): void {

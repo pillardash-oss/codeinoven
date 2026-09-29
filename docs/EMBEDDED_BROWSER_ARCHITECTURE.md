@@ -104,7 +104,7 @@ A page's `window.open(url, name, features)` is a popup window, not a tab: a sign
 - The rail animates the width of its own track with a plain CSS transition (`src/renderer/lib/components/browser/BrowserView.svelte`), the same motion the workspace rail's track makes. It must not go back to a Svelte `css` transition: those wait for a zero-duration dummy animation's `finish` event before the real animation starts, and a renderer whose window is not visible never sends that event, which pinned the rail at its first keyframe   `width: 0`   and left the page beside it half open until the view remounted.
 - The rail's popup panel places the popup's page by following the frame while the track opens, and re-follows it when the window becomes visible again, because a rail that opened while the window was in the background resumes its opening when the user comes back.
 - Install permission request and permission check handlers on the browser session. Default deny; prompt for the exact origin and permission; support Allow once, Always allow for this site, and Deny. Start with camera, microphone, geolocation, notifications, HID, serial, USB, MIDI, screen capture, and filesystem access denied.
-- Prevent silent downloads. A later download phase may use a native save dialog, safe filename normalization, progress UI, cancel, and an explicit “open” action. Downloads must never land in the active repository automatically.
+- Prevent silent downloads. A download always goes through the native save dialog and a safe filename, never lands in the repository by itself, and stays visible with progress and an explicit open/reveal action. See "Downloads" below for what happens when one is stopped, cancelled or left running at a quit.
 - Redact browser URLs/query strings from general logs and diagnostics. Sensitive page titles should not enter agent context or telemetry.
 
 ### Session and profile storage
@@ -169,10 +169,51 @@ If cookie migration remains a hard requirement after the browser workspace prove
   shim uses. The observer counts tracks only: it reads no stream, no media and no
   page data, and it gives page script no way to reach privileged APIs.
 - Downloads are visible in the browser toolbar, not only in a menu: the button
-  carries the active-download count and opens the list in normal layout flow.
+  carries the count of unfinished downloads (running ones plus stopped ones
+  waiting for a decision) and opens the list in normal layout flow.
   The page is a native view composited above the DOM, so the list takes layout
   space and resizes the view instead of floating over it, and each finished
   download can be revealed in the operating system's file manager.
+
+### Downloads
+
+One process-wide manager (`src/main/browser/browser-service/browser-downloads.ts`)
+owns every download a browser tab starts, and it is deliberately not window-bound:
+a window is parked to the menu bar and rebuilt on reopen, while a download
+belongs to its project's session and keeps running. The manager holds the live
+items, the durable records, and one `will-download` registration per project
+session; a parked window costs progress events and nothing else.
+
+Records persist to `browser/downloads.json` through the storage engine, with the
+same merge-on-write shape the browser permission memory uses, so a download is
+still on screen   with the action it can honour   in the next run:
+
+| State | What it means | Actions |
+| --- | --- | --- |
+| `progressing` | A live Chromium download; `paused` when the user paused it | Pause/Resume, Cancel |
+| `interrupted` | Stopped, with bytes on disk; `resumable` when they can continue it | Resume, Start over, Remove |
+| `cancelled` | Stopped and discarded, as Chrome's own Cancel does | Start over, Remove |
+| `completed` | The file is finished | Open, Reveal, Remove |
+
+Two facts about Chromium's download stack shape the rest, both verified on
+Electron 44 and kept honest by the code that reads them:
+
+- A download's partial file is written at the path the save dialog chose, and
+  Chromium deletes it when the download is cancelled or the process owning it
+exits. Pausing does not save it. A quit therefore pauses each running download,
+lets it settle, and *moves its bytes* beside the target (`.codeinoven-part`,
+renamed rather than copied) before the records are written. Without that move a
+quit leaves a record with nothing to resume from, which is what "the download
+was gone after I closed the app" was.
+- Resuming is Chromium's own resume (`session.createInterruptedDownload` plus
+  `resume()`), which sends the range request with the validator the response
+  already provided (`ETag`, else `Last-Modified`). The offset never exceeds what
+  this app wrote, so a file that was longer before the download started cannot be
+  mistaken for downloaded bytes, and a download whose total or validator
+  Chromium never learned offers *Start over* instead of an unsafe resume.
+
+A download whose bytes already add up to its declared total is settled as
+completed: the last byte landed and only the completion event was lost.
 - Use Chromium's natural site isolation. Track renderer crashes and unresponsive events without allowing them to crash or block the agent UI.
 - Rate-limit browser-to-app metadata events (progress, title, favicon) so page churn cannot flood main/renderer IPC.
 - Maintain a browser-specific memory budget and expose a small diagnostic snapshot: live tabs, webContents/process IDs, approximate memory, crash count, and profile disk size.
@@ -229,7 +270,7 @@ Exit gate: external security review of the remote-content boundary and packaged-
 
 ### Phase 2: Usability and bounded tabs (about 1 engineering week)
 
-- Small capped tab model, sleeping/serialized inactive tabs, download manager, per-origin permission settings, session restore, keyboard shortcuts, accessibility.
+- Small capped tab model, sleeping/serialized inactive tabs, download manager (delivered; see “Downloads”), per-origin permission settings, session restore, keyboard shortcuts, accessibility.
 - Performance telemetry kept local and privacy-redacted.
 
 Exit gate: documented resource budgets hold during simultaneous terminal output, one agent stream, and representative dashboards.
