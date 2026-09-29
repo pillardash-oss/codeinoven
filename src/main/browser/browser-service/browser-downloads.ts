@@ -46,6 +46,7 @@ import {
   stagePartialDownload,
   stagedDownloadPath
 } from './browser-download-files'
+import { downloadFileName } from './browser-download-name'
 import { hasResumeValidator, recoverDownloadRecord } from './browser-download-recovery'
 import {
   BrowserDownloadStore,
@@ -176,12 +177,17 @@ export class BrowserDownloadManager {
     let changed = false
     for (const { record, facts } of measured) {
       const recovered = recoverDownloadRecord(record, facts)
+      // A record written while the save dialog was still open holds Chromium's
+      // suggestion rather than the name the user chose, and its path is what
+      // says which file on disk this record is about.
+      const fileName = downloadFileName(record.fileName, record.savePath)
       if (
         recovered.state !== record.state ||
         recovered.receivedBytes !== record.receivedBytes ||
         recovered.progress !== record.progress ||
         recovered.paused !== record.paused ||
-        recovered.error !== record.error
+        recovered.error !== record.error ||
+        fileName !== record.fileName
       ) {
         changed = true
       }
@@ -190,7 +196,7 @@ export class BrowserDownloadManager {
           id: record.id,
           tabId: record.tabId,
           projectId: record.projectId,
-          fileName: record.fileName,
+          fileName,
           url: record.url,
           mimeType: record.mimeType,
           receivedBytes: recovered.receivedBytes,
@@ -446,6 +452,7 @@ export class BrowserDownloadManager {
       const totalBytes = item.getTotalBytes() || record.download.totalBytes
       record.download = {
         ...record.download,
+        fileName: downloadFileName(record.download.fileName, savePath),
         savePath,
         receivedBytes,
         totalBytes,
@@ -523,7 +530,9 @@ export class BrowserDownloadManager {
         id,
         tabId: contentsId === undefined ? '' : (this.findTabId?.(projectId, contentsId) ?? ''),
         projectId,
-        fileName: safeBasename(item.getFilename()),
+        // The suggestion until the dialog answers; every later sync takes it
+        // from the path the user actually chose (`downloadFileName`).
+        fileName: downloadFileName(safeBasename(item.getFilename()), item.getSavePath()),
         url,
         mimeType: item.getMimeType().slice(0, 256),
         receivedBytes: item.getReceivedBytes(),
@@ -567,6 +576,9 @@ export class BrowserDownloadManager {
     record.urlChain = item.getURLChain().length > 0 ? item.getURLChain() : record.urlChain
     record.download = {
       ...record.download,
+      // A resume writes back into the file the record already names, so this only
+      // corrects a record whose name came from Chromium's suggestion.
+      fileName: downloadFileName(record.download.fileName, item.getSavePath()),
       state: 'progressing',
       paused: false,
       speedBytes: 0,
@@ -593,14 +605,18 @@ export class BrowserDownloadManager {
     const item = record?.item
     if (!record || !item) return
     const state = item.getState()
+    // The save dialog answers between `will-download` and the first update, and
+    // this is where the name the user chose replaces the one Chromium suggested.
+    const savePath = item.getSavePath() || record.download.savePath
     record.download = {
       ...record.download,
+      fileName: downloadFileName(record.download.fileName, savePath),
       receivedBytes: item.getReceivedBytes(),
       totalBytes: item.getTotalBytes() || record.download.totalBytes,
       speedBytes: item.getCurrentBytesPerSecond(),
       progress: item.getPercentComplete(),
       paused: item.isPaused(),
-      savePath: item.getSavePath() || record.download.savePath,
+      savePath,
       // A download Chromium reports as interrupted is settled by its `done`
       // event; anything else here is this run still downloading it.
       state: state === 'progressing' ? 'progressing' : record.download.state
@@ -622,6 +638,13 @@ export class BrowserDownloadManager {
     const totalBytes = item.getTotalBytes() || record.download.totalBytes
     const savePath = item.getSavePath() || record.download.savePath
     record.item = null
+    // Settled downloads keep the name the user chose: the row, the native menu
+    // and the quit prompt all read this field, and a saved file is the one thing
+    // about a download that is beyond doubt.
+    record.download = {
+      ...record.download,
+      fileName: downloadFileName(record.download.fileName, savePath)
+    }
     const lastModified = item.getLastModifiedTime()
     if (lastModified.length > 0) record.lastModified = lastModified
     const eTag = item.getETag()

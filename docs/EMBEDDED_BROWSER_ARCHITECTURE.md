@@ -266,7 +266,7 @@ request: a download that arrives after they stopped it is cancelled rather than
 adopted back onto the row, and a request that never arrives leaves their stop in
 place instead of restoring the state it was asked to continue from.
 
-Two facts about Chromium's download stack shape the rest, both verified on
+Three facts about Chromium's download stack shape the rest, all verified on
 Electron 44 and kept honest by the code that reads them:
 
 - A download's partial file is written at the path the save dialog chose, and
@@ -282,6 +282,15 @@ was gone after I closed the app" was.
   this app wrote, so a file that was longer before the download started cannot be
   mistaken for downloaded bytes, and a download whose total or validator
   Chromium never learned offers *Start over* instead of an unsafe resume.
+- `DownloadItem.getFilename()` is the name Chromium *suggests* (the `download`
+  attribute, a `Content-Disposition`, or the URL's last segment) and it keeps
+answering with that suggestion after the user renames the file in the save
+dialog: the chosen name only ever appears in `getSavePath()`. The path is
+therefore the truth as soon as it exists, and
+`src/main/browser/browser-service/browser-download-name.ts` reads the record's
+name from it. A record still without a path   the dialog is open, or an older run
+wrote it before the answer   keeps the suggestion until the next launch corrects
+it from the path the record holds.
 
 A download whose bytes already add up to its declared total is settled as
 completed: the last byte landed and only the completion event was lost.
