@@ -131,7 +131,16 @@ All notable changes to CodeInOven are documented here. This project follows
   front, because a browser page is a native view painted above every DOM node and
   an overlay over it would park the page it was opened from. The panel returns by
   itself when the flow resolves, and the Git panel's account menu reloads the
-  moment the authorization lands.
+  moment the authorization lands. A sign-in the user no longer wants is
+  explicitly cancellable: **Cancel** sits at the footer's left edge while an
+  attempt is in flight, and the dock chip's dismiss control cancels the attempt
+  rather than merely hiding it, since the header withholds its close affordance
+  until the flow settles. The in-app hand-off is awaited and confirmed before the
+  panel steps aside, so a first-open in a session (which reads the browser's
+  modules and its durable tab list first) shows an **Opening…** state instead of
+  a click that silently did nothing, and a browser that does not take the page
+  within eight seconds hands it to the operating system's browser instead, with
+  the code already on the clipboard and the reason stated in a toast.
 
 ### Changed
 

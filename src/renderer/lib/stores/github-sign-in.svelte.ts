@@ -2,7 +2,7 @@ import { toast } from 'svelte-sonner'
 import { copyText } from '$lib/copy-text'
 import { invoke } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
-import { openInGlobalCioBrowser } from '$lib/open-in-browser'
+import { openInGlobalCioBrowserWhenReady } from '$lib/open-in-browser'
 import { isMacPlatform } from '$lib/shortcut-display'
 import type { GitHubDeviceCode } from '$shared/types'
 import { gitState } from './git.svelte'
@@ -52,13 +52,21 @@ class GitHubSignInState {
   /** Seconds left before GitHub expires the code, for the countdown. */
   remaining = $state(0)
   /**
+   * Whether the in-app hand-off is in flight.
+   *
+   * The browser's modules and its durable tab list are read behind that call, so
+   * it can take a moment, and the panel must not read as ready while it does.
+   */
+  handingOffToAppBrowser = $state(false)
+  /**
    * Whether this attempt's page was opened in the app's own browser.
    *
    * That is what lets the panel step aside while the browser is in front: the
    * page is a native view the compositor paints above every DOM node, so a panel
-   * or a dock chip over it would park it (`GitHubSignInDock`). It stays true for
-   * the rest of the attempt, so the panel keeps that browser usable even if the
-   * user comes back to it later.
+   * or a dock chip over it would park it (`GitHubSignInDock`). It is set only
+   * once the browser really has the page, and stays true for the rest of the
+   * attempt, so the panel keeps that browser usable even if the user comes back
+   * to it later.
    */
   handedOffToAppBrowser = $state(false)
 
@@ -74,9 +82,15 @@ class GitHubSignInState {
    */
   private attempt = 0
 
-  /** Whether the flow is still in flight, which is when only waiting is left. */
+  /**
+   * Whether the flow is still in flight, which is when only waiting is left.
+   *
+   * The panel has to be open for anyone to be waiting on anything: closing resets
+   * the phase to its initial `starting`, and with no attempt behind that, a closed
+   * panel would otherwise report a flow the user already dropped.
+   */
   get waiting(): boolean {
-    return this.phase === 'starting' || this.phase === 'waiting'
+    return this.open && (this.phase === 'starting' || this.phase === 'waiting')
   }
 
   /** The countdown as the panel shows it: "14:59", or plain seconds under a minute. */
@@ -130,6 +144,7 @@ class GitHubSignInState {
     this.stopCopyFeedback()
     this.open = false
     this.minimized = false
+    this.handingOffToAppBrowser = false
     this.handedOffToAppBrowser = false
     this.phase = 'starting'
     this.device = null
@@ -190,29 +205,60 @@ class GitHubSignInState {
    * browser, and copy the code before the panel steps out of the page's way.
    *
    * The page is a native view the compositor paints above every DOM node, so the
-   * panel and its dock chip cannot sit over it: they are pulled off screen while
-   * that browser is in front (see `GitHubSignInDock`). Copying the code first is
+   * panel and its dock chip cannot sit over it: they are pulled off screen once
+   * the browser holds the page (see `GitHubSignInDock`). Copying the code first is
    * what makes that possible, so a copy that fails abandons the hand-off instead
    * of half-doing it: without the clipboard the panel is the only place the code
    * can be read, and it would have to park the page it just opened.
+   *
+   * The hand-off is awaited, and the panel docks only once the browser really has
+   * the page: reaching the browser for the first time in a session reads its
+   * modules and its durable tab list first, and a click that quietly did nothing
+   * for the length of that read is what a user reported as "it just opened the
+   * browser view". A browser that does not take the page now hands it to the
+   * operating system instead, with the code already on the clipboard, so the
+   * attempt always ends at a page the user can paste into.
    */
   async openInCioBrowser(): Promise<void> {
     const uri = this.device?.verificationUri
-    if (!uri) return
+    if (!uri || this.handingOffToAppBrowser) return
+    const attempt = this.attempt
     const firstHandOff = !this.handedOffToAppBrowser
-    if (!(await this.copyCode())) {
-      toast.error('The code could not be copied', {
-        description: 'Select it in the panel and copy it by hand, then open the browser again.'
+    this.handingOffToAppBrowser = true
+    try {
+      if (!(await this.copyCode())) {
+        if (attempt !== this.attempt) return
+        toast.error('The code could not be copied', {
+          description: 'Select it in the panel and copy it by hand, then open the browser again.'
+        })
+        return
+      }
+      const opened = await openInGlobalCioBrowserWhenReady(uri)
+      // The attempt may be over by now (a cancel, a restart, a resolved flow): a
+      // page that arrived late is the user's to keep, but the panel must not be
+      // docked, announced or re-flagged on behalf of a flow that is gone.
+      if (attempt !== this.attempt) return
+      if (!opened) {
+        toast.error('CodeInOven\u2019s browser did not open the GitHub page', {
+          description: 'Opening it in your default browser instead. The code is on your clipboard.'
+        })
+        await this.openInDefaultBrowser()
+        return
+      }
+      this.handedOffToAppBrowser = true
+      this.minimize()
+      if (!firstHandOff) return
+      toast.info('Code copied', {
+        description: `Paste it into the GitHub page (${pasteChord()}) and authorize.`
       })
-      return
+    } finally {
+      // Cleared by whichever call is in flight rather than only by the attempt
+      // that set it: a stale call that kept the flag after a restart would leave
+      // the panel's in-app control disabled for the rest of the session, which is
+      // worse than the double hand-off this guard exists to avoid. The attempt
+      // checks above are what keep a stale call from acting.
+      this.handingOffToAppBrowser = false
     }
-    this.handedOffToAppBrowser = true
-    openInGlobalCioBrowser(uri)
-    this.minimize()
-    if (!firstHandOff) return
-    toast.info('Code copied', {
-      description: `Paste it into the GitHub page (${pasteChord()}) and authorize.`
-    })
   }
 
   /** Ask GitHub for a device code and start watching it. */
@@ -221,6 +267,7 @@ class GitHubSignInState {
     this.polling = false
     this.stopFlowTimers()
     this.stopCopyFeedback()
+    this.handingOffToAppBrowser = false
     this.handedOffToAppBrowser = false
     this.phase = 'starting'
     this.device = null

@@ -40,10 +40,57 @@ export function openInCioBrowser(url: string): boolean {
  * is revealed first because reaching it is what builds the browser's lazy
  * store; the tab is then opened on the same store, which `withBrowser` loads
  * (and reuses, since it is the same in-flight load).
+ *
+ * For a click with nothing riding on the answer. A caller that must not claim the
+ * page is there until it really is uses
+ * {@link openInGlobalCioBrowserWhenReady}.
  */
 export function openInGlobalCioBrowser(url: string): void {
   workspaceState.navigateToBrowser?.()
   void withBrowser((store) => store.open(url))
+}
+
+/**
+ * How long {@link openInGlobalCioBrowserWhenReady} waits for the browser to take
+ * the page before it reports that it did not.
+ *
+ * Reaching the browser for the first time in a session loads its modules and then
+ * its durable tab list, and the answer is what decides whether that page is
+ * there. A read that never lands (a feature graph still assembling, a renderer
+ * that reloaded mid-call) must not leave the caller waiting on a click that
+ * visibly did nothing, and past this point the page in the operating system's
+ * browser is the better answer.
+ */
+const GLOBAL_BROWSER_OPEN_TIMEOUT_MS = 8000
+
+/**
+ * Open `url` in the app-wide global browser and report whether the browser
+ * actually took it, waiting until that is known.
+ *
+ * {@link openInGlobalCioBrowser} is the fire-and-forget form, for a click with
+ * nothing riding on the answer. A caller that must not claim success until the
+ * page exists needs this one: it resolves true only once the browser holds a tab
+ * showing `url`, and false when the browser refused it or did not answer within
+ * {@link GLOBAL_BROWSER_OPEN_TIMEOUT_MS}. The wait is not a cancellation: a
+ * late answer still opens its tab, which leaves the caller with the page it could
+ * not wait for.
+ */
+export function openInGlobalCioBrowserWhenReady(url: string): Promise<boolean> {
+  workspaceState.navigateToBrowser?.()
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    const settle = (opened: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(opened)
+    }
+    const timer = setTimeout(() => settle(false), GLOBAL_BROWSER_OPEN_TIMEOUT_MS)
+    withBrowser((store) => store.open(url)).then(
+      (tabId) => settle(Boolean(tabId)),
+      () => settle(false)
+    )
+  })
 }
 
 /**

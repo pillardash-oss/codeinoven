@@ -32,8 +32,9 @@
    * is parked in its dock and the browser holding the page it opened is the view
    * in front, both step out of the DOM entirely, which is exactly what leaves
    * that page usable; the panel returns by itself the moment the flow resolves.
-   * The code is on the clipboard by then, which is what the store's hand-off
-   * guarantees before it docks.
+   * The code is on the clipboard by then, and the store docks the panel only once
+   * the browser reports that it really holds the page, so the two cannot come
+   * apart: no page, no step-aside.
    */
 
   /** The panel's own dock: this is the only surface that owns this placement. */
@@ -67,6 +68,17 @@
   })
 
   const restoreLabel = $derived(`Show GitHub sign-in (${statusLabel.toLowerCase()})`)
+
+  /**
+   * What the chip's dismiss affordance says.
+   *
+   * While the flow is in flight, dropping the panel can only mean abandoning the
+   * attempt the user started, so the label says cancel. Once it settled there is
+   * nothing left to abandon and the same control just closes the panel.
+   */
+  const dismissLabel = $derived(
+    settled ? 'Close GitHub sign-in' : 'Cancel this sign-in and stop waiting for the code'
+  )
 </script>
 
 <DockableModal
@@ -107,18 +119,16 @@
             <TriangleAlert size={11} class="shrink-0 text-danger" aria-hidden="true" />
           {/if}
         </button>
-        {#if settled}
-          <span class="h-5 w-px bg-border"></span>
-          <button
-            type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Close GitHub sign-in"
-            title="Close GitHub sign-in"
-            onclick={() => githubSignIn.close()}
-          >
-            <X size={14} />
-          </button>
-        {/if}
+        <span class="h-5 w-px bg-border"></span>
+        <button
+          type="button"
+          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={dismissLabel}
+          title={dismissLabel}
+          onclick={() => githubSignIn.close()}
+        >
+          <X size={14} />
+        </button>
       </div>
     </DockRow>
   {/snippet}
@@ -206,7 +216,10 @@
   <!--
     The destinations stay in the footer in every in-flight phase, disabled until
     GitHub hands the code over, so the panel does not grow a second action row the
-    moment the flow starts.
+    moment the flow starts. Both are also held while the in-app hand-off is in
+    flight: the page it is waiting for is the answer to the click, and a second
+    destination started underneath it would race it. Cancel stays available
+    throughout, which is the panel's way out of a flow the user no longer wants.
   -->
   {#snippet footer()}
     {#if settled}
@@ -220,11 +233,29 @@
         {githubSignIn.phase === 'authorized' ? 'Done' : 'Try again'}
       </button>
     {:else}
+      <!--
+        In flight the panel had no exit: the header withholds its close affordance
+        until the flow settles (`closable={settled}`) and Escape only minimizes, so
+        a user who changed their mind was left watching a code they do not intend
+        to enter until GitHub expired it. This is that exit, on the footer's left
+        edge where a dismiss action belongs, and `data-modal-dismiss` keeps it out
+        of the ⌘/Ctrl+Enter primary-action lookup.
+      -->
+      <button
+        type="button"
+        data-modal-dismiss
+        class="mr-auto cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title="Cancel this sign-in and stop waiting for the code"
+        aria-label="Cancel this sign-in"
+        onclick={() => githubSignIn.close()}
+      >
+        Cancel
+      </button>
       <button
         type="button"
         class="flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
         title="Open the GitHub verification page in your default browser"
-        disabled={!githubSignIn.device}
+        disabled={!githubSignIn.device || githubSignIn.handingOffToAppBrowser}
         onclick={() => void githubSignIn.openInDefaultBrowser()}
       >
         <ExternalLink size={13} />
@@ -235,11 +266,22 @@
         data-modal-primary
         class="flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
         title="Sign in inside CodeInOven: opens the verification page in the app-wide browser and copies the code"
-        disabled={!githubSignIn.device}
+        disabled={!githubSignIn.device || githubSignIn.handingOffToAppBrowser}
         onclick={() => void githubSignIn.openInCioBrowser()}
       >
-        <Globe size={13} />
-        Open in Global CIO Browser
+        {#if githubSignIn.handingOffToAppBrowser}
+          <!--
+            The browser's modules and its durable tab list are read before the
+            page can be shown, so this is not instant. The wait is visible here
+            because the alternative is a click that looks like it did nothing,
+            which is exactly what a user reported when the hand-off was silent.
+          -->
+          <Loader2 size={13} class="animate-spin" />
+          Opening…
+        {:else}
+          <Globe size={13} />
+          Open in Global CIO Browser
+        {/if}
       </button>
     {/if}
   {/snippet}
