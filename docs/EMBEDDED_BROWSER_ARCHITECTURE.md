@@ -294,6 +294,44 @@ shutdown pipeline: the quit failsafe's forced exit, a crash, or `SIGKILL`. Those
 downloads keep their records and are offered *Start over*, because nothing moved
 the partial file out of Chromium's reach.
 
+## Tabs and the history they remember
+
+A tab's Back/Forward stack lives in its `WebContentsView`, and the view is
+deliberately destroyed rather than kept alive: hibernation frees a tab idle past
+its window, parking takes a page off screen, and a quit closes every view. Each of
+those took the stack with it, so Back was always disabled on the tab the user came
+back to. The stack is written down now.
+
+`src/lib/browser/browser-tab-history.ts` holds the shape both processes agree on,
+and `src/main/browser/browser-tab-history-store.ts` owns the file under the
+config root's `state/` directory, beside the browsing history. The main process is
+both reader and writer, because it is the only process that can read a stack off a
+view and the only one that already sees all three commit points:
+
+| Commit point | What happens to the stack |
+| --- | --- |
+| Parking a view (a switch to another surface) | read off the view, queued for the coalesced write |
+| Hibernating a tab (`browser:destroy` with `hibernated`) | read off the view, record kept, view closed |
+| Closing a tab (`browser:destroy` with `closed`) | record dropped: a closed tab's history goes with the tab row |
+| Quitting | every open tab read, then the write awaited before `dispose()` closes the views |
+
+Only the active entry keeps Chromium's `pageState` snapshot, and only when it fits
+its bound whole, because that blob dwarfs the rest of an entry and a truncated one
+is not a smaller snapshot but an invalid one. A stored stack is restored only into
+the tab whose `(projectId, threadId)` wrote it, so one tab's history can never
+appear behind another tab's Back button.
+
+The browsing history the address bar and the History panel read is a separate,
+bounded record, and it is scoped to the browser that made each visit
+(`src/renderer/lib/stores/browser-history.svelte.ts`). The global browser and each
+thread's browser keep their own list, so a page read inside a thread never appears
+in the global browser's history or under its address palette, and a local project's
+threads share one history because they already share one browser and one tab strip.
+The global browser's list is durable (`browser:loadHistory` /
+`browser:saveHistory`); a thread browser's lives for the session and is discarded
+when its last tab closes, so a thread's browsing never reaches app storage and
+never outlives the browser that made it.
+
 ## UI shape
 
 Browser should be an optional top-level workspace reachable from the primary sidebar/header, lazy-loaded like other major surfaces. It should not replace the project sidebar or embed permanent controls into every thread.

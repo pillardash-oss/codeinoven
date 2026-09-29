@@ -131,6 +131,16 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    // Commit every open tab's Back/Forward stack before the views are closed.
+    // `dispose()` closes them, which takes each stack with it, so this is the
+    // one write that has to be awaited rather than merely started: the process
+    // is about to stop giving the coalescing clock any time at all.
+    await state.browserService?.flushTabHistory()
+  } catch (error) {
+    Logger.error('Browser tab history could not be committed during shutdown:', error)
+  }
+
+  try {
     state.browserService?.dispose()
     state.browserService = null
   } catch (error) {

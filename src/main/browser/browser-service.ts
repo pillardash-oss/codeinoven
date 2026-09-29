@@ -38,12 +38,14 @@ import type {
   BrowserShortcutAction,
   BrowserShortcutBindings,
   BrowserSwitcherBindings,
+  BrowserTabDestroyReason,
   BrowserScrollbarTheme,
   BrowserTransportCommand,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc-contract'
 import { isVideoCaptureUrl } from '../../lib/video/project'
+import { boundedBrowserTabHistory } from '../../lib/browser/browser-tab-history'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
@@ -51,6 +53,7 @@ import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { ToastOverlayWindow } from './toast-overlay-window'
 import { BrowserDownloadManager } from './browser-service/browser-downloads'
+import { BrowserTabHistoryStore } from './browser-tab-history-store'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
 import { BrowserInspector } from './browser-service/browser-inspector'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
@@ -139,6 +142,7 @@ import {
   validateScrollbarTheme,
   validateSiteDataScopes,
   validateSiteMenuPoint,
+  validateTabDestroyReason,
   validateTabId,
   validateThreadId,
   validateToastOverlayAck,
@@ -431,6 +435,15 @@ export class BrowserService {
   /** The user-origin stylesheet inserted per tab, so a theme swap can replace
    *  the previous one instead of stacking. */
   private scrollbarStyles = new Map<string, string>()
+  /**
+   * Every tab's Back/Forward stack, made durable.
+   *
+   * The stack lives in the live `WebContentsView` and goes with it, and this
+   * process is the only one that can read it off a view or that sees all three
+   * moments it has to be written down: parking a view, destroying a tab, and
+   * quitting. See `browser-tab-history-store.ts`.
+   */
+  private readonly tabHistory = new BrowserTabHistoryStore()
   private consoleSequence = 0
   /**
    * The popup windows pages have opened, hosted by the app rather than by the
@@ -507,6 +520,97 @@ export class BrowserService {
     }
   }
 
+  /**
+   * Read every stored Back/Forward stack.
+   *
+   * Awaited by the bootstrap before the service accepts browser IPC, for the same
+   * reason the permission ledgers are: a tab can be shown on the very first frame
+   * the renderer is allowed to ask, and a stack that had not been read yet would
+   * be a tab restored with no history and no second chance to get one.
+   */
+  async hydrateTabHistory(): Promise<void> {
+    try {
+      await this.tabHistory.load()
+    } catch (error: unknown) {
+      Logger.error('Browser tab history could not be loaded:', error)
+    }
+  }
+
+  /**
+   * Read one tab's Back/Forward stack off its live view and remember it.
+   *
+   * Called at the moments the view is about to lose the stack: parking it off
+   * screen, hibernating it, and quitting. Nothing is captured on a navigation,
+   * because the view is where the stack belongs while the tab is alive.
+   */
+  private captureTabHistory(tabId: string, tab: BrowserTab): void {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) return
+    const history = contents.navigationHistory
+    const bounded = boundedBrowserTabHistory(
+      history.getAllEntries().map((entry) => {
+        const captured: { url: string; title: string; pageState?: string } = {
+          url: entry.url,
+          title: entry.title
+        }
+        if (entry.pageState) captured.pageState = entry.pageState
+        return captured
+      }),
+      history.getActiveIndex()
+    )
+    // Nothing loadable means nothing to restore, so the record is not written:
+    // an empty stack is the same as no stack, and one fewer row to keep.
+    if (!bounded) return
+    this.tabHistory.store(tabId, {
+      projectId: tab.projectId,
+      threadId: tab.threadId,
+      entries: bounded.entries,
+      index: bounded.index,
+      updatedAt: Date.now()
+    })
+  }
+
+  /**
+   * Put a tab's stored stack back into a view that has just been created.
+   *
+   * Answers whether a restore was started, which is what tells the caller not to
+   * load the tab's single stored address over it: `restore()` puts the view on the
+   * entry the tab was on, which is that address, with everything behind it alive.
+   *
+   * A record is only ever restored into the tab that wrote it. A tab id is unique,
+   * but the project and thread are checked as well, so a thread browser's stack can
+   * never be served to a global tab even if a file is edited to claim it.
+   */
+  private restoreTabHistory(tabId: string, tab: BrowserTab, fallbackUrl: string): boolean {
+    const record = this.tabHistory.recordFor(tabId)
+    if (!record) return false
+    if (record.projectId !== tab.projectId || record.threadId !== tab.threadId) return false
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) return false
+    void contents.navigationHistory
+      .restore({ entries: record.entries.map((entry) => ({ ...entry })), index: record.index })
+      .catch((error: unknown) => {
+        // A stack whose pages no longer load is not a reason to leave the tab
+        // blank: the address it was on is the whole of what is left to try.
+        Logger.dev('Browser tab history could not be restored:', { tabId, error })
+        if (contents.isDestroyed()) return
+        if (fallbackUrl) this.load(tabId, fallbackUrl)
+      })
+    return true
+  }
+
+  /**
+   * Write every open tab's stack, and wait for the file.
+   *
+   * The commit point for quitting, and the one place the write is awaited rather
+   * than coalesced: the views are closed right after it, so a write that had only
+   * been started would lose exactly what it was meant to save.
+   */
+  async flushTabHistory(): Promise<void> {
+    for (const [tabId, tab] of this.tabs) this.captureTabHistory(tabId, tab)
+    await this.tabHistory.flush()
+  }
+
   register(): void {
     this.guardAgainstStrandedView()
     replaceHandler(
@@ -563,9 +667,14 @@ export class BrowserService {
         this.injectDialogContext(tabId)
         if (!tab.initialNavigationStarted) {
           tab.initialNavigationStarted = true
-          // A blank tab has no address yet: nothing to load, and the tab must
-          // not spin. A later show still reports the live page state.
-          if (initialUrl) this.load(tabId, initialUrl)
+          // A tab restored after a restart or a hibernation gets its whole stack
+          // back, and the restore already puts it on the address it was left on.
+          // Only a tab with no stored stack loads that address as a single page.
+          if (!this.restoreTabHistory(tabId, tab, initialUrl)) {
+            // A blank tab has no address yet: nothing to load, and the tab must
+            // not spin. A later show still reports the live page state.
+            if (initialUrl) this.load(tabId, initialUrl)
+          }
         }
         return this.stateFor(tabId, tab)
       }
@@ -804,8 +913,8 @@ export class BrowserService {
       // guards that repeatedly dropped the first prompt (blank first popup).
       return this.promptWindow.currentContext()
     })
-    replaceHandler('browser:destroy', (_event, rawTabId) => {
-      this.destroy(validateTabId(rawTabId))
+    replaceHandler('browser:destroy', (_event, rawTabId, rawReason) => {
+      this.destroy(validateTabId(rawTabId), validateTabDestroyReason(rawReason))
     })
     replaceHandler('browser:bindAssistantPage', (_event, rawThreadId, rawTabId) => {
       // Binding is tolerant about the tab: a restored tab that is still
@@ -820,14 +929,21 @@ export class BrowserService {
       const projectId = validateProjectId(rawProjectId)
       const threadId = validateThreadId(rawThreadId)
       for (const [tabId, tab] of this.tabs) {
-        if (tab.projectId === projectId && tab.threadId === threadId) this.destroy(tabId)
+        if (tab.projectId === projectId && tab.threadId === threadId) this.destroy(tabId, 'closed')
       }
+      // A hibernated tab of that thread has no live tab for the loop above to
+      // find, so its stored stack is swept by owner rather than by tab. This is
+      // the thread browser going away: its history goes with it.
+      this.tabHistory.forgetScopes(
+        (record) => record.projectId === projectId && record.threadId === threadId
+      )
     })
     replaceHandler('browser:destroyProject', (_event, rawProjectId) => {
       const projectId = validateProjectId(rawProjectId)
       for (const [tabId, tab] of this.tabs) {
-        if (tab.projectId === projectId) this.destroy(tabId)
+        if (tab.projectId === projectId) this.destroy(tabId, 'closed')
       }
+      this.tabHistory.forgetScopes((record) => record.projectId === projectId)
       this.downloads.forgetProject(projectId)
     })
     replaceHandler('browser:getDownloads', (_event, rawProjectId) => {
@@ -894,6 +1010,13 @@ export class BrowserService {
     this.playheads.clear()
     this.capture.dispose()
     this.inspector.dispose()
+    // The views are closed two lines above, taking every stack with them. The last
+    // commit is normally `flushTabHistory()`, awaited by whoever is tearing this
+    // service down before it calls in here; this is the safety net for a teardown
+    // that did not. It is not merely a no-op in that case: a flush that finds a
+    // write still running waits for it and retries if it failed, which is the one
+    // window a fire-and-forget teardown would otherwise close on a lost stack.
+    void this.tabHistory.flush()
   }
 
   /**
@@ -3076,6 +3199,11 @@ export class BrowserService {
     const contents = tab.view.webContents
     return {
       tabId,
+      // The surface the tab belongs to. A store that keeps something per browser
+      // (the browsing history does) reads the ownership here rather than looking
+      // the tab up in a list the other surface's tabs are not in.
+      projectId: tab.projectId,
+      threadId: tab.threadId,
       url: contents.getURL(),
       title: contents.getTitle(),
       favicon: tab.favicon,
@@ -3270,6 +3398,10 @@ export class BrowserService {
     // A deferred hide can land after the app window is gone (the app is quitting),
     // and there is no child list left to take the view out of.
     if (this.window.isDestroyed()) return
+    // Leaving a tab is one of the two moments its stack has to be written down:
+    // the view keeps running offscreen, but the app must not depend on that. The
+    // write is coalesced, so a run of parks as the user moves around is one write.
+    this.captureTabHistory(tabId, tab)
     // A switch waiting for this tab is spent only when the park is a real
     // departure. A keep-active park (a toast holding the view off) leaves the tab
     // as the one on screen, so the switch has to survive until the page comes back
@@ -3561,12 +3693,22 @@ export class BrowserService {
     this.showActiveView()
   }
 
-  private destroy(tabId: string): void {
+  private destroy(tabId: string, reason: BrowserTabDestroyReason): void {
     // A hide that is still inside its grace window must not park a tab that is
     // about to be gone: the view would be handed to the stage window only to be
     // destroyed.
     this.dropPendingPark(tabId)
     const tab = this.tabs.get(tabId)
+    // The stack dies with the view, so a tab that is only being hibernated hands
+    // its stack over before it goes. A tab that is being closed drops it instead:
+    // history belongs to the tab it was made in, and a closed tab has none. Both
+    // halves run before the early return, because a destroy for a tab this process
+    // no longer holds still has a record to settle.
+    if (reason === 'hibernated') {
+      if (tab) this.captureTabHistory(tabId, tab)
+    } else {
+      this.tabHistory.forget(tabId)
+    }
     if (!tab) return
     // A popup window is the tab's own window as far as the user is concerned, so
     // closing the tab closes what its page opened rather than leaving a sign-in

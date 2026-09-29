@@ -3,7 +3,10 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import { appConfigState } from '$lib/stores/app-config.svelte'
-  import { browserHistory } from '$lib/stores/browser-history.svelte'
+  import {
+  BROWSER_HISTORY_GLOBAL_SCOPE,
+  browserHistory
+} from '$lib/stores/browser-history.svelte'
   import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
 
   interface Props {
@@ -23,7 +26,10 @@
    * This is the global browser's address bar, which is a control that opens the
    * app's own palette: the whole window is available to it, so the address is
    * replaced in a palette pre-filled with the page on screen and selected, with
-   * the pages the user has already been to offered underneath.
+   * the pages the user has already been to offered underneath. Those pages are the
+   * global browser's own, because a visit belongs to the browser that made it: a
+   * page read inside a thread's browser is that thread's, and is never offered
+   * here.
    *
    * The thread browser does not use this. Its address bar is the field itself and
    * brings the same history down in a drawer under it
@@ -53,7 +59,9 @@
    *  just a caret at one end of it. */
   let addressInput = $state<HTMLInputElement | null>(null)
 
-  const suggestions = $derived(browserHistory.suggestions(value, SUGGESTION_LIMIT))
+  const suggestions = $derived(
+    browserHistory.suggestionsFor(BROWSER_HISTORY_GLOBAL_SCOPE, value, SUGGESTION_LIMIT)
+  )
   const secure = $derived(initialValue.startsWith('https:'))
 
   function open(url: string): void {

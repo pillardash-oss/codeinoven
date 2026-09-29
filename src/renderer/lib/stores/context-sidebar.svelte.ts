@@ -591,6 +591,24 @@ class ContextSidebarState {
     return this.browser.removeForThread(projectId, threadId)
   }
 
+  /**
+   * The browser surface a conversation's tabs belong to.
+   *
+   * The same identity the strip groups its tabs by (see
+   * `threadBrowserScopeId`), exposed because the browsing history files its lists
+   * under it: a history and the strip it belongs to must agree on what "this
+   * browser" is, or a page could be remembered by a browser that is not showing
+   * it.
+   */
+  browserScopeIdFor(projectId: string, threadId: string): string {
+    return this.threadBrowserScopeId(projectId, threadId)
+  }
+
+  /** Whether a browser surface still has a tab of the sidebar's browser docked. */
+  browserScopeIsLive(scope: string): boolean {
+    return this.browser.isScopeLive(scope)
+  }
+
   /** Opens the thread's note as a sidebar panel, creating one the first time
    *  it's visited so the panel is ready to write into even before a note
    *  exists. The body loads asynchronously onto the tab itself (not local

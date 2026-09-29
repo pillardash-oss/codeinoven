@@ -14,6 +14,7 @@ import type {
   BrowserShortcutChord,
   BrowserSwitcherBindings,
   BrowserSiteDataScope,
+  BrowserTabDestroyReason,
   BrowserTransportCommand,
   BrowserViewBounds
 } from '../../../lib/ipc-contract'
@@ -442,6 +443,16 @@ export const MAX_INSPECTOR_ARM_FAILURES = 4
 export function validateTabId(value: unknown): string {
   if (!isBrowserTabId(value)) {
     throw new TypeError('Browser tab ID is invalid')
+  }
+  return value
+}
+
+/** Why a tab is being destroyed. The reason decides whether its stored Back/Forward
+ *  stack survives, and there is no default: an absent reason is a caller that has
+ *  not decided, and guessing here would silently lose or keep the wrong history. */
+export function validateTabDestroyReason(value: unknown): BrowserTabDestroyReason {
+  if (value !== 'closed' && value !== 'hibernated') {
+    throw new TypeError('Browser tab destroy reason must be closed or hibernated')
   }
   return value
 }

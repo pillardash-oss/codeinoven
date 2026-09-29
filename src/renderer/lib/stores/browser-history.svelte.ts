@@ -1,26 +1,33 @@
 /**
- * The app's browsing history.
+ * The app's browsing history, one list per browser surface.
  *
- * One MRU of the pages the browser has been to, newest first, shared by every tab
- * the app shows   the global browser's and a project's alike   because a person's
- * history is theirs, not a project's. It survives a restart, and it is capped:
- * older visits evict for newer ones once the configured limit is reached, so the
- * list stays a useful memory instead of growing without end.
+ * A visit belongs to the browser that made it. The global browser and each
+ * thread's browser keep their own list, so a page read in a thread never appears
+ * in the global browser's history panel or under its address palette, and a
+ * thread's own history is not diluted by everything else the app browsed. The
+ * scope key is the browser surface itself (see {@link BrowserHistoryState.scopeFor}),
+ * so a local project's threads, which already share one browser and one tab
+ * strip, share one history as well.
+ *
+ * Only the global browser's list is durable. It survives a restart through the
+ * main process (`browser:loadHistory` / `browser:saveHistory`), the same contract
+ * the durable tab list follows, because renderer `localStorage` is scoped to the
+ * renderer origin and silently empties whenever another app instance holds the
+ * profile. A thread browser's list lives in this renderer for the session and
+ * dies with the browser: when its last tab closes the surface is gone and so is
+ * what it remembers, which is what keeps a thread's browsing out of the global
+ * browser's file and out of app storage.
  *
  * A visit is derived from main's own page state (`browser:state`), which is
- * published for every tab whichever surface is showing it. That also makes the
- * recording honest: one record per committed address, so a page reporting its
- * title, its icon or its loading state after it committed is the same visit rather
- * than a new one.
- *
- * The list is durable app state owned by the main process (see
- * `browser:loadHistory` / `browser:saveHistory`), the same contract the tab list
- * follows, because renderer `localStorage` silently empties whenever another app
- * instance holds the profile.
+ * published for every tab whichever surface is showing it and carries the tab's
+ * ownership for exactly this reason. That also makes the recording honest: one
+ * record per committed address, so a page reporting its title, its icon or its
+ * loading state after it committed is the same visit rather than a new one.
  */
 
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import type { BrowserPageState } from '$shared/ipc-contract'
+import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPageState } from '$shared/ipc-contract'
+import { conversationScopeId } from '$shared/types'
 import {
   BROWSER_LIBRARY_SAVE_COALESCE_MS,
   MAX_BROWSER_HISTORY_RECORDS,
@@ -33,12 +40,42 @@ import {
 import { appConfigState } from './app-config.svelte'
 import { reportError } from './app-errors.svelte'
 
+/**
+ * The scope key of the global browser's own history.
+ *
+ * The global browser's project id is the identity every other durable browser
+ * record uses for it, so the history uses it too: one string no conversation can
+ * collide with, because a conversation's scope is its project, its thread or its
+ * routine.
+ */
+export const BROWSER_HISTORY_GLOBAL_SCOPE = GLOBAL_BROWSER_PROJECT_ID
+
+/** How a browser surface is turned into the key its visits live under. */
+export type BrowserHistoryScopeResolver = (projectId: string, threadId: string) => string
+
+/** Every surface's visits, keyed by scope. */
+type BrowserHistoryLists = Record<string, BrowserHistoryEntry[]>
+
 /** An empty list, shared so a panel's derived value does not churn on every read. */
 const EMPTY_ENTRIES: BrowserHistoryEntry[] = []
 
+/** Where a tab was last recorded, and in which browser: what makes a repeat report
+ *  the same visit rather than a second one. */
+interface RecordedVisit {
+  scope: string
+  url: string
+}
+
 export class BrowserHistoryState {
-  /** Every visit, newest first. */
-  entries: BrowserHistoryEntry[] = $state(EMPTY_ENTRIES)
+  /**
+   * Every surface's visits, newest first, keyed by scope.
+   *
+   * One `$state` record rather than a reactive map, so the whole store is the same
+   * kind of value the single list used to be: a panel's derived slice reads it,
+   * and the write-time snapshot copies it, with no second reactivity model in
+   * between.
+   */
+  private lists = $state<BrowserHistoryLists>({})
 
   /**
    * True once the stored list has been read. Nothing is written before then, so a
@@ -47,23 +84,90 @@ export class BrowserHistoryState {
    */
   hydrated = $state(false)
 
-  /** The last address recorded for each tab, so one committed page is one visit
-   *  however many state reports it produces. Plain, not reactive: nothing renders
+  /**
+   * Resolves a conversation to the browser surface its tabs belong to.
+   *
+   * Injected by the runtime seam, because the answer for an assistant routine's
+   * threads needs the thread rows the sidebar deliberately does not hold. Until it
+   * is installed, {@link scopeFor} falls back to the same
+   * `conversationScopeId` the tab strip does.
+   */
+  private scopeResolver: BrowserHistoryScopeResolver | null = null
+  /**
+   * Whether a browser surface currently holds at least one tab.
+   *
+   * Injected by the runtime seam from the tab list that owns the surface, and null
+   * until then: with no answer available no scope can be proven dead, and dropping
+   * one would throw away a history the user is still reading.
+   */
+  private isLiveThreadScope: ((scope: string) => boolean) | null = null
+
+  /** The last visit recorded for each tab. Plain, not reactive: nothing renders
    *  it. */
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
-  private readonly lastRecordedUrl = new Map<string, string>()
+  private readonly lastVisit = new Map<string, RecordedVisit>()
   private saveTimer: number | null = null
-  /** Whether this session changed the list while the stored list was still
+  /** Whether this session changed the global list while the stored list was still
    *  arriving. A visit the user made is theirs, so it is merged rather than
    *  replaced by what was read. */
   private mutatedSinceBoot = false
+  /** Whether the user cleared the history before the stored list had landed. The
+   *  read was already in flight when the clear was applied, so its answer describes
+   *  a list the user has since said is gone, and restoring it would undo the clear
+   *  until the next visit wrote it back. */
+  private clearedSinceBoot = false
   /** Whether {@link start} has wired the runtime. The store is only reachable
    *  through the browser's own chunk, but it stays inert until the runtime seam
    *  asks for it, exactly like every other browser store. */
   private started = false
 
+  /** How many pages the global browser remembers, which is the list the configured
+   *  cap is about and the one the settings screen reports. */
   get count(): number {
-    return this.entries.length
+    return this.entriesFor(BROWSER_HISTORY_GLOBAL_SCOPE).length
+  }
+
+  /** Take the surface resolver. Called once by the runtime seam, before
+   *  {@link start}, so even the first visit is filed under the right scope. */
+  setScopeResolver(resolver: BrowserHistoryScopeResolver): void {
+    this.scopeResolver = resolver
+  }
+
+  /** Take the live-surface predicate. Called once by the runtime seam. */
+  setLiveThreadScope(predicate: (scope: string) => boolean): void {
+    this.isLiveThreadScope = predicate
+  }
+
+  /**
+   * The key the visits of one browser surface live under.
+   *
+   * The global browser is always its own surface, whichever conversation happened
+   * to open the tab. A conversation resolves through the injected resolver, which
+   * widens an assistant routine's threads to the routine, the same way the tab
+   * strip does, so a browser's history always covers exactly the tabs the user can
+   * see.
+   */
+  scopeFor(projectId: string, threadId: string): string {
+    if (projectId === GLOBAL_BROWSER_PROJECT_ID) return BROWSER_HISTORY_GLOBAL_SCOPE
+    return (
+      this.scopeResolver?.(projectId, threadId) ??
+      conversationScopeId(projectId, threadId, null)
+    )
+  }
+
+  /** One surface's visits, newest first. */
+  entriesFor(scope: string): BrowserHistoryEntry[] {
+    return this.lists[scope] ?? EMPTY_ENTRIES
+  }
+
+  /**
+   * The pages to offer for a query in one surface, best first.
+   *
+   * The ranking lives in the shared module, so the address palette, the address
+   * drawer and the history panel answer the same question the same way.
+   */
+  suggestionsFor(scope: string, query: string, limit: number): BrowserHistoryEntry[] {
+    return browserHistorySuggestions(this.entriesFor(scope), query, limit)
   }
 
   /** Wire the runtime and read the stored list. Idempotent. */
@@ -71,8 +175,8 @@ export class BrowserHistoryState {
     if (this.started) return
     this.started = true
     subscribe('browser:state', (state) => this.record(state))
-    // The coalesced write is the last chance the list has to carry what the user
-    // just visited; the shutdown pipeline keeps the renderer alive for it.
+    // The coalesced write is the last chance the global list has to carry what the
+    // user just visited; the shutdown pipeline keeps the renderer alive for it.
     subscribe('window:beforeQuit', () => this.flush())
     void this.hydrate()
   }
@@ -86,36 +190,34 @@ export class BrowserHistoryState {
   }
 
   /**
-   * The pages to offer for a query, best first.
+   * Forget one page of one surface, which is the only way to take back a single
+   * visit without clearing everything.
    *
-   * The ranking lives in the shared module, so the address spotlight and the
-   * history panel answer the same question the same way.
+   * The tab's own last-visit record is left alone, so a page the user forgets
+   * while reading it stays forgotten until the tab actually goes somewhere else.
    */
-  suggestions(query: string, limit: number): BrowserHistoryEntry[] {
-    return browserHistorySuggestions(this.entries, query, limit)
+  forget(scope: string, url: string): void {
+    const entries = this.entriesFor(scope)
+    if (!entries.some((entry) => entry.url === url)) return
+    this.lists[scope] = entries.filter((entry) => entry.url !== url)
+    if (scope === BROWSER_HISTORY_GLOBAL_SCOPE) this.persist()
   }
 
   /**
-   * Forget one page, which is the only way to take back a single visit without
-   * clearing everything.
-   */
-  forget(url: string): void {
-    if (!this.entries.some((entry) => entry.url === url)) return
-    this.entries = this.entries.filter((entry) => entry.url !== url)
-    this.persist()
-  }
-
-  /**
-   * Forget everything.
+   * Forget everything, in every surface.
    *
-   * The clear is applied in the main process, and the pending write is dropped
-   * with it: a coalesced save still in flight would otherwise put back the very
-   * list the user just cleared.
+   * The durable half is cleared in the main process, and the pending write is
+   * dropped with it: a coalesced save still in flight would otherwise put back the
+   * very list the user just cleared. The session-only lists go with it, because
+   * "clear browsing history" is a statement about the browser, not about one
+   * surface of it.
    */
   async clear(): Promise<void> {
     this.cancelPendingSave()
-    this.entries = EMPTY_ENTRIES
-    this.lastRecordedUrl.clear()
+    this.lists = {}
+    this.lastVisit.clear()
+    this.mutatedSinceBoot = false
+    this.clearedSinceBoot = true
     try {
       await invoke('browser:clearHistory')
     } catch (error) {
@@ -124,15 +226,46 @@ export class BrowserHistoryState {
   }
 
   /** Re-apply the configured cap after the user changed it, evicting the oldest
-   *  visits the smaller limit can no longer hold. */
+   *  visits of every surface the smaller limit can no longer hold. */
   applyLimit(): void {
-    if (this.trimToLimit()) this.persist()
+    let globalTrimmed = false
+    for (const scope of Object.keys(this.lists)) {
+      const trimmed = this.trimToLimit(scope)
+      if (trimmed && scope === BROWSER_HISTORY_GLOBAL_SCOPE) globalTrimmed = true
+    }
+    if (globalTrimmed) this.persist()
+  }
+
+  /**
+   * Drop the history of every thread browser that no longer exists.
+   *
+   * Called when a browser's tab list changes, which is the moment a surface can
+   * lose its last tab, and again from {@link record}. The second call is the one
+   * that closes a race: a `browser:state` sent just before the destroy of a tab can
+   * land just after the close, and it must not put back the history that close has
+   * already discarded.
+   */
+  pruneThreadScopes(): void {
+    if (!this.isLiveThreadScope) return
+    let changed = false
+    for (const scope of Object.keys(this.lists)) {
+      if (scope === BROWSER_HISTORY_GLOBAL_SCOPE || this.isLive(scope)) continue
+      delete this.lists[scope]
+      changed = true
+    }
+    if (!changed) return
+    // A tab of a dropped surface must start a fresh visit rather than be treated as
+    // already recorded into a list that no longer exists.
+    for (const [tabId, visit] of this.lastVisit) {
+      if (this.isLive(visit.scope)) continue
+      this.lastVisit.delete(tabId)
+    }
   }
 
   // ─── Recording ────────────────────────────────────────────────────────────
 
   /**
-   * Take one page-state report into the history.
+   * Take one page-state report into its surface's history.
    *
    * A report is a visit only when it names a page the tab was not already on: a
    * title, icon or loading update for the document already there is the same
@@ -142,54 +275,77 @@ export class BrowserHistoryState {
    * later counts again.
    */
   private record(state: BrowserPageState): void {
+    const scope = this.scopeFor(state.projectId, state.threadId)
+    // A thread browser is only as long-lived as its tabs, so reconcile the lists
+    // against the surfaces that still exist before filing this report. Doing it
+    // here as well as on every tab-list change closes the one race a tab-list
+    // change cannot: a `browser:state` sent just before a tab was destroyed can
+    // land just after the close, and it must not bring the history back.
+    const threadScope = scope !== BROWSER_HISTORY_GLOBAL_SCOPE
+    if (threadScope) this.pruneThreadScopes()
     const url = state.design || state.composition ? null : normalizeBrowserLibraryUrl(state.url)
-    if (url === null) {
-      this.lastRecordedUrl.delete(state.tabId)
+    if (url === null || (threadScope && !this.isLive(scope))) {
+      this.lastVisit.delete(state.tabId)
       return
     }
-    const previous = this.lastRecordedUrl.get(state.tabId)
-    if (previous === url) {
-      this.updateTitle(url, state.title)
+    const previous = this.lastVisit.get(state.tabId)
+    if (previous && previous.url === url && previous.scope === scope) {
+      this.updateTitle(scope, url, state.title)
       return
     }
-    this.lastRecordedUrl.set(state.tabId, url)
-    this.recordVisit(url, state.title)
+    this.lastVisit.set(state.tabId, { scope, url })
+    this.recordVisit(scope, url, state.title)
+  }
+
+  /** Whether a surface still exists to record a visit against. The global browser
+   *  always does; a thread browser is asked of the tab list that owns it, and
+   *  before that answer is available nothing is treated as gone. */
+  private isLive(scope: string): boolean {
+    if (scope === BROWSER_HISTORY_GLOBAL_SCOPE) return true
+    return this.isLiveThreadScope?.(scope) ?? true
   }
 
   /** Fold a later report's title onto the visit it belongs to. A page often
    *  commits before it reports its title, and the strip's own label falls back to
    *  the host, so this is what upgrades that placeholder to the real one. */
-  private updateTitle(url: string, title: string): void {
+  private updateTitle(scope: string, url: string, title: string): void {
     const trimmed = title.trim()
     if (trimmed === '') return
-    const entry = this.entries.find((candidate) => candidate.url === url)
+    const entry = this.entriesFor(scope).find((candidate) => candidate.url === url)
     if (!entry || entry.title === trimmed) return
     entry.title = trimmed
-    this.persist()
+    if (scope === BROWSER_HISTORY_GLOBAL_SCOPE) this.persist()
   }
 
-  /** Move an address to the front of the list, counting the visit. */
-  private recordVisit(url: string, title: string): void {
-    this.mutatedSinceBoot = true
+  /** Move an address to the front of one surface's list, counting the visit. */
+  private recordVisit(scope: string, url: string, title: string): void {
     const trimmed = title.trim()
-    const existing = this.entries.find((entry) => entry.url === url)
+    const entries = this.entriesFor(scope)
+    const existing = entries.find((entry) => entry.url === url)
     if (existing) {
-      existing.visitCount += 1
-      existing.visitedAt = Date.now()
-      if (trimmed !== '') existing.title = trimmed
-      this.entries = [existing, ...this.entries.filter((entry) => entry.url !== url)]
+      this.lists[scope] = [
+        {
+          url: existing.url,
+          title: trimmed === '' ? existing.title : trimmed,
+          visitedAt: Date.now(),
+          visitCount: existing.visitCount + 1
+        },
+        ...entries.filter((entry) => entry.url !== url)
+      ]
     } else {
-      this.entries = [
+      this.lists[scope] = [
         {
           url,
           title: trimmed === '' ? url : trimmed,
           visitedAt: Date.now(),
           visitCount: 1
         },
-        ...this.entries
+        ...entries
       ]
     }
-    this.trimToLimit()
+    this.trimToLimit(scope)
+    if (scope !== BROWSER_HISTORY_GLOBAL_SCOPE) return
+    this.mutatedSinceBoot = true
     this.persist()
   }
 
@@ -206,30 +362,42 @@ export class BrowserHistoryState {
     )
   }
 
-  /** Evict the oldest visits past the cap. Reports whether anything went. */
-  private trimToLimit(): boolean {
+  /**
+   * Evict the oldest visits of one surface past the cap.
+   *
+   * The cap is applied per surface rather than to a total: a surface only gains
+   * visits while its browser has tabs, and dies with the last of them, so the
+   * number of lists that can exist is already bounded by the browsers the user has
+   * open. One limit, the one the user set, is worth more than a second one nobody
+   * can explain.
+   *
+   * Reports whether anything went.
+   */
+  private trimToLimit(scope: string): boolean {
+    const entries = this.entriesFor(scope)
     const limit = this.limit
-    if (this.entries.length <= limit) return false
-    const kept = this.entries.slice(0, limit)
+    if (entries.length <= limit) return false
+    const kept = entries.slice(0, limit)
     // eslint-disable-next-line svelte/prefer-svelte-reactivity
     const keptUrls = new Set(kept.map((entry) => entry.url))
-    for (const [tabId, url] of this.lastRecordedUrl) {
+    for (const [tabId, visit] of this.lastVisit) {
       // A tab still sitting on an evicted address must start a new visit if it
       // comes back to it, instead of being silently dropped from the list.
-      if (!keptUrls.has(url)) this.lastRecordedUrl.delete(tabId)
+      if (visit.scope === scope && !keptUrls.has(visit.url)) this.lastVisit.delete(tabId)
     }
-    this.entries = kept
+    this.lists[scope] = kept
     return true
   }
 
   // ─── Storage ──────────────────────────────────────────────────────────────
 
   /**
-   * Read the stored list and put it on screen.
+   * Read the stored list into the global browser's scope.
    *
    * A profile that stored a corrupt or absent file simply starts empty, and a
    * visit made while the read was in flight is merged with what arrived rather
-   * than replaced by it.
+   * than replaced by it. No other scope is read, because no other scope was ever
+   * written.
    */
   private async hydrate(): Promise<void> {
     let stored: BrowserHistorySnapshot | null = null
@@ -238,21 +406,24 @@ export class BrowserHistoryState {
     } catch (error) {
       reportError(error, 'The saved browsing history could not be read.')
     }
-    const entries = parseBrowserHistorySnapshot(stored).entries
+    const entries = this.clearedSinceBoot ? [] : parseBrowserHistorySnapshot(stored).entries
     if (entries.length > 0) {
-      this.entries = this.mutatedSinceBoot ? this.merge(entries) : entries
+      this.lists[BROWSER_HISTORY_GLOBAL_SCOPE] = this.mutatedSinceBoot
+        ? this.merge(entries)
+        : entries
     }
-    this.trimToLimit()
+    this.trimToLimit(BROWSER_HISTORY_GLOBAL_SCOPE)
     this.hydrated = true
     if (this.mutatedSinceBoot) this.persist()
   }
 
-  /** The stored list folded under the visits this session already made, one
-   *  record per address. */
+  /** The stored list folded under the visits this session already made, one record
+   *  per address. */
   private merge(stored: readonly BrowserHistoryEntry[]): BrowserHistoryEntry[] {
+    const current = this.entriesFor(BROWSER_HISTORY_GLOBAL_SCOPE)
     // eslint-disable-next-line svelte/prefer-svelte-reactivity
-    const known = new Set(this.entries.map((entry) => entry.url))
-    const merged = [...this.entries]
+    const known = new Set(current.map((entry) => entry.url))
+    const merged = [...current]
     for (const entry of stored) {
       if (known.has(entry.url)) continue
       known.add(entry.url)
@@ -262,7 +433,7 @@ export class BrowserHistoryState {
     return merged
   }
 
-  /** Write the list soon, so a burst of visits (a redirect chain, an agent
+  /** Write the global list soon, so a burst of visits (a redirect chain, an agent
    *  clicking through a flow) becomes one write instead of one per page. */
   private persist(): void {
     // Never write before the stored list has landed: an unread list is not an
@@ -272,14 +443,16 @@ export class BrowserHistoryState {
     this.saveTimer = window.setTimeout(() => this.flush(), BROWSER_LIBRARY_SAVE_COALESCE_MS)
   }
 
-  /** Write the pending list now, which is what a quit and a clear both need. */
+  /** Write the pending global list now, which is what a quit needs. */
   private flush(): void {
     if (this.saveTimer !== null) {
       window.clearTimeout(this.saveTimer)
       this.saveTimer = null
     }
     if (!this.hydrated) return
-    const snapshot: BrowserHistorySnapshot = { entries: $state.snapshot(this.entries) }
+    const snapshot: BrowserHistorySnapshot = {
+      entries: $state.snapshot(this.entriesFor(BROWSER_HISTORY_GLOBAL_SCOPE))
+    }
     void invoke('browser:saveHistory', snapshot).catch((error: unknown) => {
       reportError(error, 'The browsing history could not be saved.')
     })

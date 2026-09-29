@@ -338,8 +338,9 @@
         <div>
           <p class="text-sm font-medium">History size</p>
           <p class="text-xs leading-relaxed text-dimmed">
-            How many pages the browser remembers. Older visits are dropped once the limit is
-            reached, so the newest ones are always kept.
+            How many pages each browser remembers. Older visits are dropped once the limit is
+            reached, so the newest ones are always kept. A thread's browser keeps its history
+            only while it is open; the global browser's is kept between launches.
           </p>
         </div>
         <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
@@ -363,7 +364,8 @@
           <div>
             <p class="text-sm font-medium">Clear browsing history</p>
             <p class="text-xs leading-relaxed text-dimmed">
-              Forget every page you have visited. Your bookmarks are kept.
+              Forget every page the app has browsed, in the global browser and in any thread's
+              browser. Your bookmarks are kept.
             </p>
           </div>
           <button

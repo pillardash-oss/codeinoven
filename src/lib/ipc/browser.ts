@@ -106,6 +106,16 @@ export interface BrowserLoadError {
 /** Navigation state mirrored from an app-scoped browser WebContentsView. */
 export interface BrowserPageState {
   tabId: string
+  /**
+   * The surface the tab belongs to: its project and the thread that owns it.
+   *
+   * A tab's page state is the one report every browser store sees, whichever
+   * surface is showing the tab, so a reader that has to tell a thread browser's
+   * page from the global browser's needs the ownership here rather than having to
+   * look the tab up. `browser-global` is the global browser's own project id.
+   */
+  projectId: string
+  threadId: string
   url: string
   title: string
   /** Favicon data URL reported by the page, or null until the page declares one. */
@@ -399,6 +409,17 @@ export interface BrowserPermissionRequest {
   permission: string
   mediaTypes: string[]
 }
+
+/**
+ * Why a tab is being destroyed, which decides what happens to its history.
+ *
+ * The same channel serves both outcomes, and they are opposites: `hibernated`
+ * frees the page while the tab itself stays in the strip, so its Back/Forward
+ * stack is written down first; `closed` removes the tab, so its stack goes with
+ * it. Main cannot tell the two apart on its own, so the surface that decided says
+ * which one it is.
+ */
+export type BrowserTabDestroyReason = 'closed' | 'hibernated'
 
 /**
  * How the user answered a browser permission prompt.

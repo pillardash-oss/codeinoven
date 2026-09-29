@@ -4,6 +4,7 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import type { BrowserPageState } from '$shared/ipc-contract'
 import { reportError } from './app-errors.svelte'
 import { loadPersistedBrowserTabs, persistBrowserTabs } from './context-sidebar-persistence'
+import { browserHistory } from './browser-history.svelte'
 import type { BrowserContextTab } from './context-sidebar-types'
 import { IDLE_BROWSER_TAB_RUNTIME, type BrowserTabRuntime } from './browser-tab-status'
 
@@ -119,6 +120,21 @@ export class SidebarBrowserTabs {
 
   has(id: string): boolean {
     return this.tabs.some((tab) => tab.id === id)
+  }
+
+  /**
+   * Whether the browser surface a visit belongs to still has a tab.
+   *
+   * The browsing history keeps one list per surface and a thread browser's list
+   * dies with the browser, so it asks this of the list that owns the surface. A
+   * surface is a conversation (see the host's `threadScopeId`), which is exactly
+   * what the strip groups its tabs by, so this is the same identity the history
+   * files its lists under.
+   */
+  isScopeLive(scope: string): boolean {
+    return this.tabs.some(
+      (tab) => this.host.threadScopeId(tab.projectId, tab.threadId) === scope
+    )
   }
 
   /**
@@ -412,5 +428,10 @@ export class SidebarBrowserTabs {
     // empty one, and writing here would replace what the user had with nothing.
     if (!this.started) return
     persistBrowserTabs(this.tabs, this.activeTabId)
+    // The tab list is the only thing that can end a browser surface, so this is
+    // where the history of a surface that just lost its last tab is discarded. A
+    // close that leaves the surface with a tab left changes nothing, and a state
+    // report arriving after a close is caught by the history store's own check.
+    browserHistory.pruneThreadScopes()
   }
 }

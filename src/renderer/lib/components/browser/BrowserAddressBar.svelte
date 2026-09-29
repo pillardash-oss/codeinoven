@@ -12,6 +12,10 @@
     /** The address of the page on screen, which the field mirrors until the user
      *  types over it. */
     url: string
+    /** The surface this field's tab belongs to, which is what decides whose
+     *  history is offered under it. */
+    projectId: string
+    threadId: string
     /** Whether the page on screen is served over https. */
     secure: boolean
     /** Whether the page is loading. */
@@ -24,7 +28,8 @@
     onNavigate: (url: string) => void
   }
 
-  let { url, secure, loading, siteMenuOpen, onOpenSiteMenu, onNavigate }: Props = $props()
+  let { url, projectId, threadId, secure, loading, siteMenuOpen, onOpenSiteMenu, onNavigate }: Props =
+    $props()
 
   /**
    * The thread browser's address bar.
@@ -40,6 +45,12 @@
    * page-state report   a title, a finished load, a redirect   can never
    * overwrite text the user is mid-way through. Leaving the field drops the draft,
    * so the bar can never show an address the tab is not on.
+   *
+   * The drawer offers the pages this browser has been to, and only those: a visit
+   * belongs to the browser that made it, so a thread's browser never suggests what
+   * the global browser read, or the other way round. A thread's browser keeps its
+   * list for the session and loses it with its last tab, which is why the drawer
+   * can be empty after a restart even on a tab that came back.
    *
    * The drawer is a floating DOM overlay over the page, and the page is a native
    * view composed above every DOM surface, so the drawer publishes its own
@@ -72,7 +83,10 @@
   let drawerOpen = $state(false)
 
   const value = $derived(draft ?? url)
-  const suggestions = $derived(browserHistory.suggestions(value, SUGGESTION_LIMIT))
+  const scope = $derived(browserHistory.scopeFor(projectId, threadId))
+  const suggestions = $derived(
+    browserHistory.suggestionsFor(scope, value, SUGGESTION_LIMIT)
+  )
   /** Whether the drawer is actually on screen, which is when the field may claim
    *  it is expanded and point the screen reader at a highlighted row. */
   const drawerVisible = $derived(drawerOpen && suggestions.length > 0)

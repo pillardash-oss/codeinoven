@@ -82,6 +82,8 @@
   function initialPageState(): BrowserPageState {
     return {
       tabId,
+      projectId: tabProjectId,
+      threadId: tabThreadId,
       url: tabInitialUrl,
       title: tabInitialTitle,
       favicon: null,
@@ -500,6 +502,8 @@
     <BrowserAddressBar
       bind:this={addressBar}
       url={pageState.url}
+      projectId={tabProjectId}
+      threadId={tabThreadId}
       {secure}
       loading={pageState.loading}
       {siteMenuOpen}

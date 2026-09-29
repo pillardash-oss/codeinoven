@@ -50,6 +50,16 @@ export function startBrowserRuntime(): void {
   // page a tab commits, the other is what the user saved. Both are read here, once
   // the browser is actually wanted, so a launch that never reaches it pays nothing
   // for them.
+  //
+  // The history keeps one list per browser surface, so it is told two things only
+  // this seam can join: which surface a conversation's tabs belong to, and whether
+  // a surface still has any. The first comes from the sidebar's own scope resolver,
+  // so a history always covers exactly the tabs its strip shows; the second is what
+  // lets a thread browser's list die with the browser.
+  browserHistory.setScopeResolver((projectId, threadId) =>
+    contextSidebarState.browserScopeIdFor(projectId, threadId)
+  )
+  browserHistory.setLiveThreadScope((scope) => contextSidebarState.browserScopeIsLive(scope))
   browserHistory.start()
   browserBookmarks.start()
   // A browser tab's assistant conversation is a real chat thread, and this store

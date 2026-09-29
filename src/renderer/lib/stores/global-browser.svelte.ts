@@ -905,7 +905,10 @@ export class GlobalBrowserState {
       this.contextSidebarVisible = false
     }
     this.persist()
-    void invoke('browser:destroy', tabId).catch(() => {})
+    // The tab is closed, not released: its row is gone from the strip, so its
+    // Back/Forward stack goes with it rather than waiting for a tab that will
+    // never come back to claim it.
+    void invoke('browser:destroy', tabId, 'closed').catch(() => {})
     // A tab's note is keyed by the tab id, so closing the tab is what removes
     // it   exactly the way deleting a thread removes its note.
     if (threadNotesState.has(tabId)) {
@@ -1200,7 +1203,9 @@ export class GlobalBrowserState {
       tab.hibernated = true
       changed = true
       this.runtime.delete(tab.id)
-      void invoke('browser:destroy', tab.id).catch(() => {})
+      // Only the page is released: the row stays in the strip, so main writes the
+      // tab's stack down before the view goes and the next visit restores it.
+      void invoke('browser:destroy', tab.id, 'hibernated').catch(() => {})
     }
     // A sweep that released nothing leaves the stored list untouched, so the
     // minute-long clock never rewrites the file for its own sake.

@@ -1470,7 +1470,11 @@
     if (tab.kind === 'coordinator') coordinatorDockState.setAutoOpen(false)
     if (tab.kind === 'browser') {
       if (browserFullscreenTabId === tab.id) browserFullscreenTabId = null
-      void invoke('browser:destroy', tab.id)
+      // A thread browser tab that is closed takes its Back/Forward stack with it.
+      // There is no hibernation on this surface, so a destroy here is always the
+      // tab really going away, and the last tab of a thread browser going this way
+      // is that browser being closed: no tab of it is left to own a history.
+      void invoke('browser:destroy', tab.id, 'closed')
     }
     // Symmetric with the browser: closing the terminal that is showing fullscreen
     // would otherwise leave the fullscreen record pointing at a tab that is gone.

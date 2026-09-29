@@ -312,6 +312,10 @@ const backgroundLifecycle = new BackgroundLifecycleService({
     // main that would otherwise keep running page content or a shell with no
     // visible window.
     try {
+      // Commit every open tab's Back/Forward stack before the views are closed
+      // with the window. The app keeps running here rather than quitting, so the
+      // write is started and left to finish on its own.
+      void state.browserService?.flushTabHistory()
       state.browserService?.dispose()
       state.browserService = null
     } catch (error) {

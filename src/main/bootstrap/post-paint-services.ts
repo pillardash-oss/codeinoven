@@ -67,6 +67,10 @@ async function attachBrowserService(
   const chatEngine = state.chatEngine
   if (!chatEngine) return
   if (state.browserService) {
+    // The previous window's tabs are about to lose their views, so their stacks
+    // are committed first. This await is what makes the write survive: `dispose()`
+    // closes the views and nothing would be left to read a stack from afterwards.
+    await state.browserService.flushTabHistory()
     state.browserService.dispose()
     state.browserService = null
   }
@@ -87,6 +91,11 @@ async function attachBrowserService(
   // IPC, so a site is never re-prompted for a permission the user already
   // granted in this or an earlier run.
   await service.hydratePermissionMemory()
+  // The stored Back/Forward stacks load before the service accepts browser IPC.
+  // A tab can be shown on the very first frame the renderer is allowed to ask,
+  // and a tab restored from a hibernated row has to find its history already
+  // there: there is no second chance to restore it once it has loaded.
+  await service.hydrateTabHistory()
   service.register()
   // The browser's native context menu is built in main, so it needs the address
   // bar's search engine. The config is read once at attach; the renderer pushes
