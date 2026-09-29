@@ -14,12 +14,19 @@
  *   - blocks    DOM surfaces that are on screen and must stay in front
  *   - claims    which tab wants to display native content, on which surface
  *   - occlusion floating overlays that currently overlap a surface's frame
+ *   - frames    native rectangles actually on screen, the inverse question
  *
  * A component that needs the browser hidden publishes one block for as long as
  * it is on screen (`hideWhile`). A component that displays native content claims
  * the view for its tab (`claimTab`) and asks whether it may be shown
  * (`isVisible`). Both are keyed and return their own release function, so a
  * block or claim can never outlive the surface that published it.
+ *
+ * The third question runs the other way. A DOM surface that has to be readable
+ * while the page is up   the toaster, which picks a lane no native view covers
+ *   needs to know where the page actually is (`publishNativeFrame`). That
+ * publication is a read for everyone else and must never reach `isCovered`,
+ * which is the mechanism that hides the page in the first place.
  *
  * Extending the browser to a new scope is a change in this file: add the surface
  * to `BrowserSurface`, add the reason to `BrowserHideBlock`, and resolve it in
@@ -78,6 +85,13 @@ class BrowserVisibilityState {
    *  which is also the space the browser view is positioned in. */
   private overlays = new SvelteMap<string, BrowserViewBounds>()
 
+  /** On-screen rectangles of the native views themselves, published by the
+   *  surface displaying each one. Read by anything that has to stay out from
+   *  under a page (the toaster's lane picker). Deliberately not consulted by
+   *  `isCovered`: that is the decision to hide the page, and feeding the page's
+   *  own rectangle back into it would hide it on every write. */
+  private nativeFrames = new SvelteMap<string, BrowserViewBounds>()
+
   /**
    * Keep the native view hidden while `hidden` is true, for as long as the
    * publisher is on screen. Returns the release function, so the caller can hand
@@ -124,6 +138,40 @@ class BrowserVisibilityState {
   /** Drop an overlay's rectangle once it is hidden or unmounted. */
   clearOcclusion(key: string): void {
     this.overlays.delete(key)
+  }
+
+  /**
+   * Publish a native view's on-screen rectangle for as long as it is really on
+   * screen. A parked view covers nothing, so its surface clears the frame
+   * instead of publishing the rectangle it would occupy.
+   */
+  publishNativeFrame(key: string, rect: BrowserViewBounds): void {
+    this.nativeFrames.set(key, rect)
+  }
+
+  /** Drop a native view's rectangle once it is off screen or unmounted. */
+  clearNativeFrame(key: string): void {
+    this.nativeFrames.delete(key)
+  }
+
+  /** Every native rectangle currently on screen, in viewport CSS pixels. */
+  get onScreenFrames(): BrowserViewBounds[] {
+    return [...this.nativeFrames.values()]
+  }
+
+  /**
+   * Whether any on-screen native view overlaps `bounds`.
+   *
+   * The question a DOM surface asks before drawing somewhere: a page is opaque
+   * and composites above every DOM node, so a surface that must be readable picks
+   * somewhere else to be. Both rectangles are in viewport CSS pixels, which is
+   * the space the native views are positioned in.
+   */
+  overlapsNative(bounds: BrowserViewBounds): boolean {
+    for (const frame of this.nativeFrames.values()) {
+      if (intersects(frame, bounds)) return true
+    }
+    return false
   }
 
   /**

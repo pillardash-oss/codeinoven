@@ -54,6 +54,26 @@
    *  needs no claim of its own. */
   const frameVisible = $derived(popup !== null && browserVisibility.isPopupVisible(frameRect))
 
+  /** This popup's entry in the store's list of native rectangles on screen. */
+  const nativeFrameKey = $derived(`native-popup-${popupId}`)
+
+  /**
+   * Report this popup's rectangle while its page is really on screen, which is
+   * what lets anything that must stay readable (the toaster's lane picker) avoid
+   * it. A popup behind a modal, or one the rail is not showing, publishes
+   * nothing.
+   */
+  $effect(() => {
+    const key = nativeFrameKey
+    const frame = frameVisible ? frameRect : null
+    if (!frame) {
+      browserVisibility.clearNativeFrame(key)
+      return
+    }
+    browserVisibility.publishNativeFrame(key, frame)
+    return () => browserVisibility.clearNativeFrame(key)
+  })
+
   function frameBounds(): BrowserViewBounds | null {
     if (!frameElement) return null
     const rect = frameElement.getBoundingClientRect()

@@ -1,11 +1,14 @@
 <script lang="ts">
   import { Toaster as Sonner, toast } from 'svelte-sonner'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { CheckCircle2, AlertTriangle, XCircle, Info } from '@lucide/svelte'
   import MemoryToastComponent from './MemoryToast.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { resolveToastLane } from '$lib/stores/toast-lane'
+  import { TOAST_LAYER_SELECTOR } from '$lib/toast-layer'
 
   interface ToastAction {
     label: string
@@ -13,27 +16,101 @@
     threadId: string
   }
 
+  /**
+   * The lane this toaster renders in, and where that lane sits.
+   *
+   * The in-app browser's page is a native `WebContentsView` painted above every
+   * DOM node of the window, so a toast cannot draw over it and the toaster has to
+   * be somewhere the page is not. `toast-lane.ts` owns that decision; the window's
+   * width is tracked here because it is an input the store cannot read for itself.
+   */
+  const POSITION_BY_LANE = {
+    right: 'top-right',
+    'narrow-right': 'top-right',
+    left: 'top-left',
+    'narrow-left': 'top-left',
+    compact: 'top-center'
+  } as const
+
+  let viewportWidth = $state(window.innerWidth)
+  let placement = $derived(resolveToastLane(viewportWidth, browserVisibility.onScreenFrames))
+  let lanePosition = $derived(POSITION_BY_LANE[placement.lane])
+
   let theme = $state<'light' | 'dark'>(
     document.documentElement.classList.contains('dark') ? 'dark' : 'light'
   )
 
-  // The in-app browser is a native WebContentsView that composites above every
-  // DOM surface of the window, so it must be detached while a toast is on
-  // screen or it would cover the toast (see `browser:setToastVisible` in
-  // browser-service.ts). svelte-sonner starts dismissing by flagging the toast
-  // while its ~200ms exit animation still plays, so the restore is delayed to
-  // wait the animation out instead of clipping a fading toast.
   let toastActive = $derived(toast.getActiveToasts().length > 0)
 
+  /**
+   * How many cards the toaster keeps on screen at once.
+   *
+   * The compact lane is one line inside the 48px header, so a second card would
+   * start below it and end up behind the page. One card at a time is the honest
+   * answer there; the narrower lanes and the normal one have room for the default
+   * stack.
+   */
+  let visibleToasts = $derived(placement.lane === 'compact' ? 1 : undefined)
+
+  /**
+   * The width the narrow and compact lanes render at, published to CSS.
+   *
+   * It goes on the document element rather than on the toaster because the width
+   * has to reach a rule that can beat svelte-sonner's own inline `--width`, and
+   * the library writes its inline custom properties on the same element the lane
+   * attribute sits on.
+   */
   $effect(() => {
-    if (toastActive) {
-      void invoke('browser:setToastVisible', true).catch(() => {})
-      return
+    document.documentElement.style.setProperty('--toast-lane-width', `${placement.width}px`)
+  })
+
+  /**
+   * Park the browser page for the one case the lane cannot serve.
+   *
+   * A lane is picked before a card is measured, so it reserves room for the tallest
+   * card this app builds rather than the card in hand. This is the check that makes
+   * that an assumption instead of a promise: once the cards are laid out their real
+   * rectangle is measured against the pages actually on screen, and a toast that
+   * still lands under one takes the old route rather than being invisible behind
+   * it. It should not fire: the compact lane lives in the application header, the
+   * one band no page can reach, because every page is placed inside `main` below
+   * it.
+   */
+  let laneParked = false
+
+  async function parkIfCovered(): Promise<void> {
+    await tick()
+    const layer = document.querySelector(TOAST_LAYER_SELECTOR)
+    const rect = layer?.getBoundingClientRect()
+    if (!rect || rect.width < 1 || rect.height < 1) return
+    // Shrink by a couple of pixels first, so a rounded corner is not read as a page
+    // sitting on top of the toast.
+    const covered = browserVisibility.overlapsNative({
+      x: rect.x + 2,
+      y: rect.y + 2,
+      width: Math.max(1, rect.width - 4),
+      height: Math.max(1, rect.height - 4)
+    })
+    if (covered === laneParked) return
+    laneParked = covered
+    await invoke('browser:setToastVisible', covered).catch(() => {})
+  }
+
+  $effect(() => {
+    // Reading the frames here is what re-runs the check when the layout under the
+    // page changes and the lane moves with it.
+    const frames = browserVisibility.onScreenFrames
+    if (!toastActive) {
+      // The restore waits out svelte-sonner's ~200ms exit animation, so a fading
+      // toast is never clipped by the page coming back.
+      const restoreTimer = setTimeout(() => {
+        laneParked = false
+        void invoke('browser:setToastVisible', false).catch(() => {})
+      }, 300)
+      return () => clearTimeout(restoreTimer)
     }
-    const restoreTimer = setTimeout(() => {
-      void invoke('browser:setToastVisible', false).catch(() => {})
-    }, 300)
-    return () => clearTimeout(restoreTimer)
+    if (frames.length === 0) return
+    void parkIfCovered()
   })
 
   $effect(() => {
@@ -45,7 +122,11 @@
   })
 
   onMount(() => {
-    return subscribe('app:toast', (event) => {
+    const trackViewport = (): void => {
+      viewportWidth = window.innerWidth
+    }
+    window.addEventListener('resize', trackViewport)
+    const unsubscribe = subscribe('app:toast', (event) => {
       const payload = event as
         | {
             message?: string
@@ -80,6 +161,10 @@
         })
       }
     })
+    return () => {
+      window.removeEventListener('resize', trackViewport)
+      unsubscribe()
+    }
   })
 </script>
 
@@ -99,26 +184,29 @@
   <Info size={15} stroke-width={2.25} />
 {/snippet}
 
-<Sonner
-  position="top-right"
-  {theme}
-  closeButton
-  pauseWhenPageIsHidden
-  offset={{ top: '56px' }}
-  {successIcon}
-  {warningIcon}
-  {errorIcon}
-  {infoIcon}
-  toastOptions={{
-    classes: {
-      toast: 'group toast shadow-lg rounded-lg font-[inherit]',
-      title: 'text-[0.8125rem] font-semibold tracking-tight',
-      description: 'group-[.toast]:text-muted text-xs',
-      actionButton: 'group-[.toast]:bg-primary group-[.toast]:text-on-primary',
-      cancelButton: 'group-[.toast]:bg-elevated group-[.toast]:text-muted'
-    }
-  }}
-/>
+<div data-toast-lane={placement.lane}>
+  <Sonner
+    position={lanePosition}
+    {theme}
+    closeButton
+    pauseWhenPageIsHidden
+    {visibleToasts}
+    offset={{ top: '56px' }}
+    {successIcon}
+    {warningIcon}
+    {errorIcon}
+    {infoIcon}
+    toastOptions={{
+      classes: {
+        toast: 'group toast shadow-lg rounded-lg font-[inherit]',
+        title: 'text-[0.8125rem] font-semibold tracking-tight',
+        description: 'group-[.toast]:text-muted text-xs',
+        actionButton: 'group-[.toast]:bg-primary group-[.toast]:text-on-primary',
+        cancelButton: 'group-[.toast]:bg-elevated group-[.toast]:text-muted'
+      }
+    }}
+  />
+</div>
 
 <style>
   :global([data-close-button]) {

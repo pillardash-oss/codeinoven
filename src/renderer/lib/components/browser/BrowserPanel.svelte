@@ -78,6 +78,11 @@
   // svelte-ignore state_referenced_locally
   const tabInitialTitle = tab.title
 
+  /** This page's entry in the store's list of native rectangles on screen. Keyed
+   *  by surface as well as tab: the full screen dialog and a sidebar panel can
+   *  both be mounted for one tab, and only the one allowed to show it publishes. */
+  const nativeFrameKey = `native-${surface}-${tabId}`
+
   function initialPageState(): BrowserPageState {
     return {
       tabId,
@@ -250,6 +255,22 @@
       void invoke('browser:hide', tabId).catch(() => {})
     }
   }
+
+  /**
+   * Report this page's rectangle while it is really on screen, which is what lets
+   * anything that must stay readable (the toaster's lane picker) avoid it. A panel
+   * the store is not showing publishes nothing, so the two instances of one tab
+   * can never both claim the same screen space.
+   */
+  $effect(() => {
+    const frame = panelVisible && !pageState.loadError ? contentRect : null
+    if (!frame) {
+      browserVisibility.clearNativeFrame(nativeFrameKey)
+      return
+    }
+    browserVisibility.publishNativeFrame(nativeFrameKey, frame)
+    return () => browserVisibility.clearNativeFrame(nativeFrameKey)
+  })
 
   function contentBounds(): BrowserViewBounds | null {
     if (!contentElement) return null

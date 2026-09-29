@@ -372,9 +372,16 @@ export class BrowserService {
   private readonly abandonedReveals = new Map<string, { count: number; at: number }>()
   /** Threads whose agent reveals were ignored, until this timestamp. */
   private readonly relaxedUntil = new Map<string, number>()
-  /** True while a Sonner toast is visible in the renderer. A native
-   *  WebContentsView floats above every DOM surface, so while this is set the
-   *  active browser view stays detached and the DOM toast composites normally. */
+  /** True while the renderer asked for the active browser view to be parked
+   *  because a toast could not be placed anywhere a page does not cover.
+   *
+   *  A native WebContentsView floats above every DOM surface, so while this is set
+   *  the active view stays detached and the DOM toast composites normally. The
+   *  renderer no longer asks for this on every toast: it moves the toaster to a
+   *  lane no on-screen page occupies (renderer `stores/toast-lane.ts`) and asks
+   *  only when the measured toast still lands under one, which the header band as
+   *  the last lane should make impossible. This path is the safety net, not the
+   *  primary one. */
   private toastVisible = false
   /**
    * The address bar's active search engine, reported by the renderer (which
@@ -3384,9 +3391,9 @@ export class BrowserService {
     return true
   }
 
-  /** Pull a tab out of the app window while a toast is on screen and put it back
-   *  afterwards, so the DOM toast composites normally without the page losing
-   *  its viewport. */
+  /** Pull a tab out of the app window when a toast has nowhere else to go, and
+   *  put it back afterwards, so the DOM toast composites normally without the page
+   *  losing its viewport. */
   private setToastVisible(visible: boolean): void {
     this.toastVisible = visible
     // A popup window's page is a native view too, so a DOM toast under it would be

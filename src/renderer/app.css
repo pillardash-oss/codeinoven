@@ -886,6 +886,81 @@ html body [data-sonner-toaster] {
   pointer-events: auto;
 }
 
+/* ─── Toast lanes while the browser page is on screen ───────────────────── */
+/* The in-app browser's page is a native WebContentsView and composites above
+   every DOM node of the window, so a toast in its usual top right corner would
+   be painted under it. The toaster picks a lane no on-screen page occupies
+   (src/renderer/lib/stores/toast-lane.ts), publishes it as `data-toast-lane` on
+   the wrapper it renders, and these rules move the box. The lane is also the
+   reason the page is no longer detached for the lifetime of a toast.
+
+   `!important` is required on the width and on the offsets: svelte-sonner writes
+   them as inline custom properties on the toaster itself (see its Toaster.svelte,
+   `style:--width` / `style:--offset-left`), and an important declaration is the
+   only thing that beats an inline one. */
+[data-toast-lane='left'] [data-sonner-toaster],
+[data-toast-lane='narrow-left'] [data-sonner-toaster] {
+  --offset-left: 52px !important;
+}
+
+[data-toast-lane='narrow-left'] [data-sonner-toaster],
+[data-toast-lane='narrow-right'] [data-sonner-toaster],
+[data-toast-lane='compact'] [data-sonner-toaster] {
+  --width: var(--toast-lane-width, 356px) !important;
+}
+
+/* The compact lane is the 48px application header: the one band of the window a
+   page can never reach, because every page is placed inside `main`, below it
+   (src/renderer/App.svelte). One line, and it keeps what the toast came with:
+   the action button when the toast has one, and the close button always, because
+   a status with something to do about it is still a status you can act on. */
+[data-toast-lane='compact'] [data-sonner-toaster] {
+  --offset-top: 4px !important;
+  --gap: 8px !important;
+}
+
+[data-toast-lane='compact'] [data-sonner-toast] {
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  gap: 8px !important;
+  /* Room on the right for the close button, which stays out of the flow. */
+  padding: 7px 30px 7px 10px !important;
+}
+
+[data-toast-lane='compact'] [data-sonner-toast] [data-description] {
+  display: none !important;
+}
+
+[data-toast-lane='compact'] [data-sonner-toast] [data-title] {
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  font-size: 0.75rem !important;
+  line-height: 1.4 !important;
+}
+
+[data-toast-lane='compact'] [data-sonner-toast] [data-icon] {
+  width: 1.25rem !important;
+  height: 1.25rem !important;
+  margin-top: 0 !important;
+}
+
+[data-toast-lane='compact'] [data-sonner-toast] [data-button] {
+  /* Side by side with the title rather than on a row of its own, and only as
+     wide as its own label: the title, not the button, is what gives way. */
+  flex: 0 0 auto !important;
+  width: auto !important;
+  margin: 0 !important;
+  padding: 2px 8px !important;
+  font-size: 0.6875rem !important;
+  line-height: 1.4 !important;
+}
+
+[data-toast-lane='compact'] [data-sonner-toast] [data-close-button] {
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+}
+
 /* ─── Rich markdown editor: GitHub-style links and footnotes ────────────── */
 /* Links render for recognition (GitHub reference-style + inline) but clicks
    are intercepted in the editor so composing never navigates. Footnote

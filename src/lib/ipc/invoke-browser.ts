@@ -63,6 +63,12 @@ export const invokeBrowserContract = {
   'browser:closePopupWindow': {} as Contract<[popupId: string], void>,
   /** The popup windows the browser is holding for one project. */
   'browser:getPopupWindows': {} as Contract<[projectId: string], BrowserPopupWindow[]>,
+  /**
+   * Park the active browser page because a toast could not be placed anywhere a
+   * page does not cover. The renderer picks a lane first (renderer
+   * `stores/toast-lane.ts`), so this is the safety net rather than the normal
+   * path, and the page comes back as soon as the toast is gone.
+   */
   'browser:setToastVisible': {} as Contract<[visible: boolean], void>,
   'browser:navigate': {} as Contract<
     [tabId: string, projectId: string, threadId: string, url: string],

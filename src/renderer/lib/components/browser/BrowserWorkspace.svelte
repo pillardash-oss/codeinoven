@@ -33,6 +33,9 @@
   // svelte-ignore state_referenced_locally
   const tabId = tab.id
 
+  /** This page's entry in the store's list of native rectangles on screen. */
+  const nativeFrameKey = `native-workspace-${tabId}`
+
   let contentElement = $state<HTMLDivElement>()
   /** This frame's current on-screen rectangle, refreshed by the same observers
    *  that align the native view. It is state, not a plain local, because the
@@ -134,6 +137,25 @@
       void invoke('browser:hide', tabId).catch(() => {})
     }
   }
+
+  /**
+   * Report this page's rectangle while it is really on screen.
+   *
+   * The visibility store owns the opposite question ("may this page be shown"),
+   * which is what hides it; this is the answer anything that has to stay out from
+   * under a page needs, and the toaster's lane picker is the only reader today. A
+   * page behind a modal, or one parked for any other reason, publishes nothing,
+   * so a toast is never moved aside for a view nobody can see.
+   */
+  $effect(() => {
+    const frame = pageVisible && !loadError ? contentRect : null
+    if (!frame) {
+      browserVisibility.clearNativeFrame(nativeFrameKey)
+      return
+    }
+    browserVisibility.publishNativeFrame(nativeFrameKey, frame)
+    return () => browserVisibility.clearNativeFrame(nativeFrameKey)
+  })
 
   /**
    * The browser owns the keyboard for as long as its page is the surface on
