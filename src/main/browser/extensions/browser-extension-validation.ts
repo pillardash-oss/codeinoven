@@ -41,10 +41,45 @@ export function validateExtensionInstallInput(value: unknown): BrowserExtensionI
   if (trimmed.length === 0 || trimmed.length > MAX_INSTALL_VALUE_LENGTH) {
     throw new TypeError('Browser extension install value is invalid')
   }
+  const rawBoxes = record['boxes']
   return {
     source,
-    value: trimmed
+    value: trimmed,
+    // Absent means the extension is installed and loaded nowhere. It never means
+    // every jar, which is the shape this field exists to make impossible.
+    boxes: rawBoxes === undefined ? [] : parseJarList(rawBoxes)
   }
+}
+
+/**
+ * One jar list from the renderer: box ids, plus the empty string for the context's
+ * own jar.
+ *
+ * Shared by install and update so a list can never be accepted on one path and
+ * refused on the other, and so the box id shape is checked against what the
+ * partition builder will later embed.
+ */
+function parseJarList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError('Browser extension jar list is invalid')
+  }
+  const jars: string[] = []
+  for (const candidate of value) {
+    if (typeof candidate !== 'string') {
+      throw new TypeError('Browser extension jar list is invalid')
+    }
+    // The empty string is the context's own jar, which has no box id.
+    if (candidate.length === 0) {
+      if (!jars.includes('')) jars.push('')
+      continue
+    }
+    if (!BOX_ID_PATTERN.test(candidate)) {
+      throw new TypeError('Browser extension jar list names an invalid box')
+    }
+    if (!jars.includes(candidate)) jars.push(candidate)
+    if (jars.length > MAX_BOXES_PER_PATCH) break
+  }
+  return jars
 }
 
 export function validateExtensionUpdatePatch(value: unknown): {
@@ -63,28 +98,7 @@ export function validateExtensionUpdatePatch(value: unknown): {
     patch.enabled = record['enabled']
   }
   if (record['boxes'] !== undefined) {
-    const boxes = record['boxes']
-    if (Array.isArray(boxes)) {
-      const jars: string[] = []
-      for (const candidate of boxes) {
-        if (typeof candidate !== 'string') {
-          throw new TypeError('Browser extension jar list is invalid')
-        }
-        // The empty string is the context's own jar, which has no box id.
-        if (candidate.length === 0) {
-          if (!jars.includes('')) jars.push('')
-          continue
-        }
-        if (!BOX_ID_PATTERN.test(candidate)) {
-          throw new TypeError('Browser extension jar list names an invalid box')
-        }
-        if (!jars.includes(candidate)) jars.push(candidate)
-        if (jars.length > MAX_BOXES_PER_PATCH) break
-      }
-      patch.boxes = jars
-    } else {
-      throw new TypeError('Browser extension jar list is invalid')
-    }
+    patch.boxes = parseJarList(record['boxes'])
   }
   if (patch.enabled === undefined && patch.boxes === undefined) {
     throw new TypeError('Browser extension update changed nothing')

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { Boxes, Plus, Settings2 } from '@lucide/svelte'
+  import { Plus, Settings2 } from '@lucide/svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import EmptyState from '$lib/components/ui/EmptyState.svelte'
+  import { jarIdForBox } from '$lib/stores/global-browser-types'
   import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
   import BrowserBoxModal from './BrowserBoxModal.svelte'
 
@@ -15,7 +15,9 @@
    * box before any tab exists.
    *
    * A row's own action opens a tab straight into that box; editing and deleting
-   * live behind the row's settings button and the box modal.
+   * live behind the row's settings button and the box modal. The list always
+   * holds the default box first, because that is the jar the browser's own pages
+   * live in, so it is never empty.
    */
 
   /** The box whose editor is open; `undefined` means closed and null means
@@ -23,7 +25,7 @@
   let editorBoxId = $state<string | null | undefined>(undefined)
 
   const boxes = $derived(globalBrowser.boxes)
-  const activeBoxId = $derived(globalBrowser.activeBox?.id ?? null)
+  const activeBoxId = $derived(globalBrowser.activeTabBoxId)
 
   // A box's icon is a file on disk, so its bytes are read once and cached; this
   // keeps the panel's icons current without every row reading a file itself.
@@ -66,69 +68,61 @@
     </button>
   </div>
 
-  {#if boxes.length === 0}
-    <EmptyState
-      icon={Boxes}
-      title="No boxes yet"
-      description="A box is its own cookies, so it holds its own sign-ins. Make one to stay signed in to the same site as two accounts at once."
-    />
-  {:else}
-    <ul class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-      {#each boxes as box (box.id)}
-        {@const url = iconUrl(box)}
-        <li>
-          <div
-            class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors {activeBoxId ===
-            box.id
-              ? 'bg-elevated'
-              : 'hover:bg-elevated'}"
+  <ul class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
+    {#each boxes as box (box.id)}
+      {@const url = iconUrl(box)}
+      <li>
+        <div
+          class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors {activeBoxId ===
+          box.id
+            ? 'bg-elevated'
+            : 'hover:bg-elevated'}"
+        >
+          <button
+            type="button"
+            class="flex min-w-0 flex-1 items-center gap-2 text-left"
+            title={`Open a new tab in ${box.name}`}
+            aria-label={`Open a new tab in ${box.name}`}
+            onclick={() => globalBrowser.openNewTabAddress(null, jarIdForBox(box.id))}
           >
-            <button
-              type="button"
-              class="flex min-w-0 flex-1 items-center gap-2 text-left"
-              title={`Open a new tab in ${box.name}`}
-              aria-label={`Open a new tab in ${box.name}`}
-              onclick={() => globalBrowser.openNewTabAddress(null, box.id)}
-            >
-              <span class="flex h-4 w-4 shrink-0 items-center justify-center">
-                {#if url}
-                  <img src={url} alt="" class="h-4 w-4 rounded-sm object-contain" />
-                {:else}
-                  <span class="h-2.5 w-2.5 rounded-full" style="background-color: {accent(box)}"
-                  ></span>
-                {/if}
+            <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+              {#if url}
+                <img src={url} alt="" class="h-4 w-4 rounded-sm object-contain" />
+              {:else}
+                <span class="h-2.5 w-2.5 rounded-full" style="background-color: {accent(box)}"
+                ></span>
+              {/if}
+            </span>
+            <span class="flex min-w-0 flex-1 flex-col">
+              <span class="truncate text-xs text-foreground" style="color: {accent(box)}">
+                {box.name}
               </span>
-              <span class="flex min-w-0 flex-1 flex-col">
-                <span class="truncate text-xs text-foreground" style="color: {accent(box)}">
-                  {box.name}
-                </span>
-                <span class="truncate text-[0.625rem] text-dimmed">
-                  {globalBrowser.tabCountInBox(box.id)}
-                  {globalBrowser.tabCountInBox(box.id) === 1 ? 'tab' : 'tabs'}
-                  {#if activeBoxId === box.id}· in use{/if}
-                </span>
+              <span class="truncate text-[0.625rem] text-dimmed">
+                {globalBrowser.tabCountInBox(jarIdForBox(box.id))}
+                {globalBrowser.tabCountInBox(jarIdForBox(box.id)) === 1 ? 'tab' : 'tabs'}
+                {#if activeBoxId === box.id}· in use{/if}
               </span>
-            </button>
-            <button
-              type="button"
-              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
-              title={`Edit ${box.name}`}
-              aria-label={`Edit ${box.name}`}
-              onclick={() => (editorBoxId = box.id)}
-            >
-              <Settings2 size={13} />
-            </button>
-          </div>
-        </li>
-      {/each}
-    </ul>
-    <p
-      class="shrink-0 border-t border-border px-3 py-1.5 text-[0.625rem] leading-relaxed text-dimmed"
-    >
-      Tabs in the same box share sign-ins. Pick a box when you open a tab; a tab cannot change boxes
-      in place.
-    </p>
-  {/if}
+            </span>
+          </button>
+          <button
+            type="button"
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
+            title={`Edit ${box.name}`}
+            aria-label={`Edit ${box.name}`}
+            onclick={() => (editorBoxId = box.id)}
+          >
+            <Settings2 size={13} />
+          </button>
+        </div>
+      </li>
+    {/each}
+  </ul>
+  <p
+    class="shrink-0 border-t border-border px-3 py-1.5 text-[0.625rem] leading-relaxed text-dimmed"
+  >
+    Tabs in the same box share sign-ins. Pick a box when you open a tab; a tab cannot change boxes
+    in place.
+  </p>
 </div>
 
 {#if editorBoxId !== undefined}

@@ -344,9 +344,9 @@ export class BrowserExtensionService {
         injected: result.injected,
         sourceHash: result.sourceHash,
         enabled: true,
-        // Installed and loaded nowhere: an extension is placed in jars from its own
-        // settings, so nothing starts by loading into every jar the user has.
-        boxes: [],
+        // Where the install put it, which the caller chose: the jar the user was
+        // looking at, never every jar. An absent list means loaded nowhere yet.
+        boxes: input.boxes ?? [],
         installedAt: Date.now()
       }
       await this.registry.upsert(record)

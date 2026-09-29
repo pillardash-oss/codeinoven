@@ -5,6 +5,12 @@
     label: string
     /** One short line explaining what picking this value means. */
     hint?: string
+    /** The entity's own colour, drawn as a dot before the label. Boxes, groups and
+     *  projects all carry one, and a picker that hides it leaves two similarly
+     *  named entities looking identical. */
+    accent?: string
+    /** An image drawn instead of the dot, for an entity with a picked icon. */
+    iconUrl?: string | null
   }
 </script>
 
@@ -57,8 +63,16 @@
     {title}
     {disabled}
   >
-    <span class="min-w-0 flex-1 truncate text-[0.75rem] {selected ? '' : 'text-dimmed'}">
-      {selected?.label ?? placeholder}
+    <span class="flex min-w-0 flex-1 items-center gap-1.5">
+      {#if selected?.iconUrl}
+        <img src={selected.iconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain" />
+      {:else if selected?.accent}
+        <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {selected.accent}"
+        ></span>
+      {/if}
+      <span class="min-w-0 truncate text-[0.75rem] {selected ? '' : 'text-dimmed'}">
+        {selected?.label ?? placeholder}
+      </span>
     </span>
     <ChevronDown size={13} class="shrink-0 text-dimmed" />
   </DropdownMenu.Trigger>
@@ -79,6 +93,18 @@
             onChange(option.id)
           }}
         >
+          {#if option.iconUrl}
+            <img
+              src={option.iconUrl}
+              alt=""
+              class="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+            />
+          {:else if option.accent}
+            <span
+              class="mt-0.5 h-2 w-2 shrink-0 rounded-full"
+              style="background-color: {option.accent}"
+            ></span>
+          {/if}
           <span class="min-w-0 flex-1">
             <span class="block truncate text-xs font-medium text-foreground">{option.label}</span>
             {#if option.hint}

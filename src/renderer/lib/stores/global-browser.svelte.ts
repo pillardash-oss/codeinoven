@@ -57,6 +57,9 @@ import {
   browserTabTitleForUrl,
   isBlankBrowserAddress,
   isSameBrowserLoadError,
+  DEFAULT_BOX_ID,
+  boxIdForJar,
+  defaultBrowserBox,
   isTabIdlePastWindow,
   type BrowserBoxAppearance,
   type BrowserGroupAppearance,
@@ -76,6 +79,18 @@ const HIBERNATION_SWEEP_INTERVAL_MS = 60_000
  *  enough that a quit moments after a change loses nothing: the quit path flushes
  *  the pending write outright. */
 const TAB_SAVE_COALESCE_MS = 250
+
+/**
+ * The stored boxes with the default box guaranteed present and first.
+ *
+ * The default box is not optional. It is the jar the browser's own pages live in,
+ * so a snapshot from before it was named, or one written by a build that had no
+ * such idea, still describes a browser whose unboxed pages have a box to belong to.
+ */
+function withDefaultBox(boxes: GlobalBrowserBox[]): GlobalBrowserBox[] {
+  if (boxes.some((box) => box.id === DEFAULT_BOX_ID)) return boxes
+  return [defaultBrowserBox(), ...boxes]
+}
 
 export class GlobalBrowserState {
   tabs: GlobalBrowserTab[] = $state([])
@@ -281,7 +296,7 @@ export class GlobalBrowserState {
   private adoptSnapshot(snapshot: GlobalBrowserTabsSnapshot): void {
     this.tabs = snapshot.tabs.map(runtimeTabFromPersisted)
     this.groups = snapshot.groups.map(runtimeGroupFromPersisted)
-    this.boxes = (snapshot.boxes ?? []).map(runtimeBoxFromPersisted)
+    this.boxes = withDefaultBox((snapshot.boxes ?? []).map(runtimeBoxFromPersisted))
     // Through `setActiveTab`, not a direct assignment: the restored tab is the one
     // the browser view is about to show, and it has to count as a visit for the
     // Ctrl+Tab switcher exactly as an activation does. `markOpened` runs before
@@ -312,6 +327,11 @@ export class GlobalBrowserState {
       if (this.boxes.some((box) => box.id === persisted.id)) continue
       this.boxes = [...this.boxes, runtimeBoxFromPersisted(persisted)]
     }
+    // Outside the loop and unconditional on purpose. The default box is not one of
+    // the stored boxes, so a merge that already knows every stored box would run the
+    // loop zero times and never mint it, which is exactly what happened when this
+    // first shipped: a profile with one box showed one box and no default.
+    this.boxes = withDefaultBox(this.boxes)
   }
 
   /**
@@ -453,6 +473,16 @@ export class GlobalBrowserState {
   /** One box by id, or null once it has been deleted. */
   boxById(boxId: string): GlobalBrowserBox | null {
     return this.boxes.find((box) => box.id === boxId) ?? null
+  }
+
+  /**
+   * The box the page on screen lives in, named as a box rather than as a jar.
+   *
+   * A tab with no box is in the default box, so panels that have to say where the
+   * user currently is answer with a box in every case.
+   */
+  get activeTabBoxId(): string {
+    return boxIdForJar(this.activeTab?.boxId ?? null)
   }
 
   /** The loaded data URL for a box's picked image icon, when there is one. */
@@ -1282,8 +1312,11 @@ export class GlobalBrowserState {
    *  cannot keep making partitions without bound. */
   createBox(name: string, appearance: Partial<BrowserBoxAppearance> = {}): string {
     const id = `box:${crypto.randomUUID()}`
-    if (this.boxes.length >= MAX_GLOBAL_BROWSER_BOXES) return id
-    this.boxes = [
+    // The default box is not one of the user's, so it does not count against the
+    // cap the user's own boxes obey: it exists whether they make any or not.
+    const userBoxCount = this.boxes.filter((box) => box.id !== DEFAULT_BOX_ID).length
+    if (userBoxCount >= MAX_GLOBAL_BROWSER_BOXES) return id
+    this.boxes = withDefaultBox([
       ...this.boxes,
       {
         id,
@@ -1293,7 +1326,7 @@ export class GlobalBrowserState {
         customSvg: appearance.customSvg ?? null,
         imagePath: appearance.imagePath ?? null
       }
-    ]
+    ])
     this.persist()
     return id
   }
@@ -1333,16 +1366,21 @@ export class GlobalBrowserState {
     }
   }
 
-  /** How many tabs currently run in a box. */
-  tabCountInBox(boxId: string): number {
-    return this.tabs.filter((tab) => tab.boxId === boxId).length
+  /** How many tabs currently run in a jar. The argument is a jar id, not a box id:
+   *  the default box's jar is the absent id, so pass it through `jarIdForBox`. */
+  tabCountInBox(jarId: string | null): number {
+    return this.tabs.filter((tab) => tab.boxId === jarId).length
   }
 
-  /** The box the tab on screen runs in, or null when it is in the default jar.
-   *  This is what the rail's active-box chip reads. */
-  get activeBox(): GlobalBrowserBox | null {
-    const boxId = this.activeTab?.boxId ?? null
-    return boxId ? this.boxById(boxId) : null
+  /**
+   * The box the tab on screen runs in.
+   *
+   * A tab with no box is in the default box, so this is never null: the rail's
+   * active-box chip and the extensions panel's scope both name a box in every case,
+   * including the browser's own first launch with nothing made yet.
+   */
+  get activeBox(): GlobalBrowserBox {
+    return this.boxById(this.activeTabBoxId) ?? defaultBrowserBox()
   }
 
   /**
@@ -1354,6 +1392,10 @@ export class GlobalBrowserState {
    * choice and belongs behind its own confirmation.
    */
   deleteBox(id: string): void {
+    // The default box is the jar the context's own pages live in, so it is the one
+    // box that cannot be removed: every unboxed tab already belongs to it, and
+    // there would be no way to name its replacement.
+    if (id === DEFAULT_BOX_ID) return
     if (!this.boxes.some((box) => box.id === id)) return
     for (const tab of this.tabs.filter((candidate) => candidate.boxId === id)) {
       this.close(tab.id)

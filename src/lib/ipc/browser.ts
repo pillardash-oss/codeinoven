@@ -590,6 +590,16 @@ export interface BrowserExtensionInstallInput {
   source: BrowserExtensionSource
   /** A Web Store id, a Web Store URL, or the folder to install from. */
   value: string
+  /**
+   * The jars it is loaded into as soon as it is installed: box ids, with the empty
+   * string for the context's own jar.
+   *
+   * Explicit and always a list. An install lands in the jar the user was looking at
+   * and nowhere else, and the other jars are turned on from the extension's own
+   * settings, so no install can load a copy into every box by omission. An empty
+   * list means installed and loaded nowhere yet.
+   */
+  boxes?: string[]
 }
 
 /** One step of an install, so a fetch and an unpack that take seconds are not a

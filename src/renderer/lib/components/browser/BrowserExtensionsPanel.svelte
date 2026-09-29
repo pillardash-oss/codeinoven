@@ -11,6 +11,15 @@
   } from '$lib/stores/browser-extensions.svelte'
   import type { BrowserExtension } from '$shared/ipc-contract'
   import BrowserExtensionInstallModal from './BrowserExtensionInstallModal.svelte'
+  import BrowserBoxChips from './BrowserBoxChips.svelte'
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
+  import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
+  import {
+    DEFAULT_BOX_ID,
+    DEFAULT_BOX_NAME,
+    defaultBrowserBox,
+    extensionJarForBox
+  } from '$lib/stores/global-browser-types'
 
   /**
    * The browser extensions panel, docked in the browser's right rail.
@@ -30,7 +39,51 @@
   let uninstalling = $state(false)
 
   const extensions = $derived(browserExtensions.extensions)
-  const count = $derived(browserExtensions.count)
+
+  /** The value the picker uses for every extension rather than one box's. */
+  const ALL_BOXES_SELECTION = 'all'
+
+  /**
+   * The box the panel is scoped to, or the all-boxes value.
+   *
+   * Null means follow the page on screen, so the panel describes whichever box the
+   * tab in front of the user lives in and an install lands in that same box without
+   * them having to say so. Picking a box by hand pins that choice until they switch
+   * again, and All boxes is the one that lists everything at once.
+   */
+  let pinnedBoxId = $state<string | null>(null)
+  const selection = $derived(pinnedBoxId ?? globalBrowser.activeTabBoxId)
+  /** The box in view, or null while the all view is up. */
+  const scopedBox = $derived(
+    selection === ALL_BOXES_SELECTION ? null : (globalBrowser.boxById(selection) ?? null)
+  )
+  /** Where an install lands: the box in view, or the page on screen's box while the
+   *  all view is up, since a box still has to own the extension. */
+  const installBox = $derived(
+    scopedBox ?? globalBrowser.boxById(globalBrowser.activeTabBoxId) ?? defaultBrowserBox()
+  )
+  const boxOptions = $derived([
+    {
+      id: ALL_BOXES_SELECTION,
+      label: 'All boxes',
+      hint: 'Every installed extension, with the boxes each one runs in on its row.'
+    },
+    ...globalBrowser.boxes.map((box) => ({
+      id: box.id,
+      label: box.name,
+      accent: browserAppearanceAccent(box),
+      iconUrl: browserAppearanceIconUrl(box, globalBrowser.boxIconUrl(box.id))
+    }))
+  ])
+  /** The extensions this panel lists: all of them, or the ones this box runs. */
+  const shown = $derived(
+    scopedBox
+      ? extensions.filter((extension) => extension.boxes.includes(extensionJarForBox(scopedBox.id)))
+      : extensions
+  )
+  /** Whether each row has to say which boxes it runs in, which is only useful when
+   *  more than one box is on screen. */
+  const showChips = $derived(scopedBox === null)
   const detailExtension = $derived(
     detailId ? (extensions.find((extension) => extension.id === detailId) ?? null) : null
   )
@@ -71,8 +124,10 @@
    *  merging into it. */
   function jarChoices(): { id: string; name: string }[] {
     return [
-      { id: '', name: 'No box' },
-      ...globalBrowser.boxes.map((box) => ({ id: box.id, name: box.name }))
+      { id: '', name: globalBrowser.boxById(DEFAULT_BOX_ID)?.name ?? DEFAULT_BOX_NAME },
+      ...globalBrowser.boxes
+        .filter((box) => box.id !== DEFAULT_BOX_ID)
+        .map((box) => ({ id: box.id, name: box.name }))
     ]
   }
 
@@ -107,8 +162,8 @@
 <div class="flex h-full min-h-0 flex-col">
   <div class="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
     <p class="text-xs font-medium text-muted">
-      {count}
-      {count === 1 ? 'extension' : 'extensions'}
+      {shown.length}
+      {shown.length === 1 ? 'extension' : 'extensions'}
     </p>
     <button
       type="button"
@@ -122,15 +177,28 @@
     </button>
   </div>
 
-  {#if extensions.length === 0}
+  <div class="shrink-0 border-b border-border px-3 py-2">
+    <EnumSelect
+      options={boxOptions}
+      value={selection}
+      onChange={(id) => (pinnedBoxId = id)}
+      placeholder="Choose a box"
+      ariaLabel="Box whose extensions are listed"
+      title="Box whose extensions are listed"
+    />
+  </div>
+
+  {#if shown.length === 0}
     <EmptyState
       icon={Puzzle}
-      title="No extensions yet"
-      description="An extension runs inside the boxes you choose, keeps its own storage in each, and is only loaded while a box has a tab open."
+      title={scopedBox ? `Nothing in ${scopedBox.name} yet` : 'No extensions yet'}
+      description={scopedBox
+        ? 'Install one and it lands in this box. Other boxes can be turned on later from its settings.'
+        : 'An extension runs inside the boxes you choose, keeps its own storage in each, and is only loaded while a box has a tab open.'}
     />
   {:else}
     <ul class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-      {#each extensions as extension (extension.id)}
+      {#each shown as extension (extension.id)}
         <li>
           <div
             class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-elevated"
@@ -158,9 +226,13 @@
                 {/if}
               </span>
               <span class="truncate text-[0.625rem] text-dimmed">
-                {sourceLabel(extension)} · {describeBoxes(extension)}
+                {sourceLabel(extension)}{#if !showChips}
+                  · {describeBoxes(extension)}{/if}
               </span>
             </span>
+            {#if showChips}
+              <BrowserBoxChips jars={extension.boxes} />
+            {/if}
             <Switch
               checked={extension.enabled}
               title={extension.enabled ? `Disable ${extension.name}` : `Enable ${extension.name}`}
@@ -328,5 +400,10 @@
 {/if}
 
 {#if installOpen}
-  <BrowserExtensionInstallModal open onClose={() => (installOpen = false)} />
+  <BrowserExtensionInstallModal
+    open
+    boxes={[extensionJarForBox(installBox.id)]}
+    boxName={installBox.name}
+    onClose={() => (installOpen = false)}
+  />
 {/if}

@@ -78,6 +78,55 @@ export interface GlobalBrowserBox extends BrowserAppearance {
 }
 
 /**
+ * The box every context has without making one: the jar the browser's own pages
+ * live in.
+ *
+ * Naming it is what lets the boxes panel, the extensions panel and the install
+ * target treat "a box" and "no box" as one question with one answer. The id is a
+ * literal rather than a minted uuid because a stored extension record has to keep
+ * pointing at the same jar across releases.
+ */
+export const DEFAULT_BOX_ID = 'box:default'
+
+/** What the default box is called before the user renames it. */
+export const DEFAULT_BOX_NAME = 'Default'
+
+/** The default box with nothing chosen yet, for a snapshot that predates it. */
+export function defaultBrowserBox(): GlobalBrowserBox {
+  return {
+    id: DEFAULT_BOX_ID,
+    name: DEFAULT_BOX_NAME,
+    color: null,
+    iconType: null,
+    customSvg: null,
+    imagePath: null
+  }
+}
+
+/**
+ * The jar main knows for a box the interface names.
+ *
+ * Main has no notion of a default box: the context's own jar is the absent box id,
+ * which is what a tab with no box already uses. Every conversion between the two
+ * vocabularies goes through here, because a default box id handed to main as-is
+ * would be taken for a box that exists and would mint a partition for it.
+ */
+export function jarIdForBox(boxId: string): string | null {
+  return boxId === DEFAULT_BOX_ID ? null : boxId
+}
+
+/** The same jar as an extension record spells it, where the context's own jar is
+ *  the empty string rather than an absent id. */
+export function extensionJarForBox(boxId: string): string {
+  return jarIdForBox(boxId) ?? ''
+}
+
+/** The box a jar names, for showing a stored jar list as boxes. */
+export function boxIdForJar(jarId: string | null): string {
+  return jarId === null || jarId === '' ? DEFAULT_BOX_ID : jarId
+}
+
+/**
  * The appearance fields a box carries, named once so the store's create and
  * update signatures cannot drift from the modal that fills them in.
  */

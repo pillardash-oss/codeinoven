@@ -24,10 +24,17 @@
 
   interface Props {
     open: boolean
+    /** The jars the extension lands in, chosen by the panel that opened this. Never a
+     *  choice inside the dialog: an install belongs in the box the user is looking at,
+     *  and every other box is turned on afterwards from its settings. */
+    boxes: readonly string[]
+    /** The name of the box those jars belong to, so the form can say where the
+     *  extension is about to go instead of leaving the user to guess. */
+    boxName: string
     onClose: () => void
   }
 
-  let { open, onClose }: Props = $props()
+  let { open, boxes, boxName, onClose }: Props = $props()
 
   /** The 32-character Chromium Web Store id. */
   const WEBSTORE_ID_PATTERN = /^[a-p]{32}$/
@@ -91,7 +98,8 @@
     if (!canInstall || installing) return
     const installed = await browserExtensions.install({
       source,
-      value: source === 'webstore' ? webstoreValue.trim() : folderPath.trim()
+      value: source === 'webstore' ? webstoreValue.trim() : folderPath.trim(),
+      boxes: [...boxes]
     })
     if (installed) result = installed
   }
@@ -234,6 +242,14 @@
         </div>
       </div>
     {/if}
+
+    <div class="rounded-lg border px-3 py-2.5">
+      <p class="text-sm text-foreground">Installs into {boxName}</p>
+      <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-dimmed">
+        The box you are looking at. Give it other boxes from its settings once it is installed, and
+        each keeps its own storage.
+      </p>
+    </div>
 
     {#if progress}
       <div class="rounded-lg border bg-elevated/50 px-3 py-2.5">

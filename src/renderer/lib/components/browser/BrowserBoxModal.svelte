@@ -6,7 +6,7 @@
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { MAX_BROWSER_BOX_NAME_LENGTH } from '$lib/stores/global-browser-types'
+  import { DEFAULT_BOX_ID, MAX_BROWSER_BOX_NAME_LENGTH } from '$lib/stores/global-browser-types'
   import { resolveAppearanceImagePath } from './browser-group-appearance'
   import type { CustomIcon } from '$shared/types'
 
@@ -23,6 +23,10 @@
   // disappears underneath (deleted elsewhere), saving becomes a no-op.
   // svelte-ignore state_referenced_locally
   const existing = boxId ? globalBrowser.boxById(boxId) : null
+  // The default box is the jar the browser's own pages live in, so it is the one
+  // box that cannot be removed; its editor shows no Delete affordance at all.
+  // svelte-ignore state_referenced_locally
+  const isDefaultBox = boxId === DEFAULT_BOX_ID
 
   let customIcons = $state<CustomIcon[]>([])
 
@@ -212,6 +216,8 @@
         >
           Clear data
         </button>
+      {/if}
+      {#if existing && !isDefaultBox}
         <button
           type="button"
           class="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
@@ -273,7 +279,7 @@
   </ConfirmDialog>
 {/if}
 
-{#if confirmDelete}
+{#if confirmDelete && !isDefaultBox}
   <ConfirmDialog
     open
     variant="danger"
