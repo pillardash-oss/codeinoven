@@ -112,6 +112,9 @@ export class GlobalBrowserState {
   /** True once the stored tab list has been read. Nothing is written before then,
    *  so a store that has not seen the stored list can never overwrite it. */
   hydrated = $state(false)
+  /** The read behind {@link whenHydrated}, so a caller that has to resolve a tab
+   *  against the list can wait for it instead of racing it. */
+  private hydration: Promise<void> | null = null
   private readonly runtime = new SvelteMap<string, GlobalBrowserRuntime>()
   /** The agent side chat bound to each browser tab, keyed by browser tab id.
    *  Session-scoped on purpose: a tab's conversation is an ephemeral side chat
@@ -176,7 +179,32 @@ export class GlobalBrowserState {
         HIBERNATION_SWEEP_INTERVAL_MS
       )
     }
-    void this.hydrate()
+    // The read is kept rather than dropped: a caller that has to resolve a tab
+    // against the list (opening an address, switching to a tab) awaits it through
+    // `whenHydrated` instead of racing it.
+    this.hydration = this.hydrate()
+  }
+
+  /**
+   * The durable tab list, once it has arrived.
+   *
+   * A caller that is about to act on one tab (switch to it, or open an address
+   * that may already be open) has to resolve it against this list, and the list
+   * arrives asynchronously: the store is published as soon as its modules load,
+   * which is well before this read lands. Waiting here is what stops a cold
+   * switch from being dropped against a list that is still empty. A store whose
+   * runtime never started has nothing to read, so it is ready by definition.
+   */
+  get whenHydrated(): Promise<void> {
+    const read = this.hydration
+    if (!read) return Promise.resolve()
+    // A read that failed has already been reported where it happened; the callers
+    // waiting on this promise still have to run, or a browser view would never
+    // open because its tab list never arrived.
+    return read.then(
+      () => undefined,
+      () => undefined
+    )
   }
 
   /** Release the sweep timer and the pending write. The store lives for the

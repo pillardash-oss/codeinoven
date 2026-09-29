@@ -19,6 +19,12 @@
    * slot, its label, and a `Browser` badge on the right so the surface a row
    * will switch to is never ambiguous. The icon is the tab's custom icon when it
    * has one, else the page's favicon, else a globe.
+   *
+   * Before the browser's runtime has been loaded the row is built from the
+   * durable tab list rather than the live store (see `switcherBrowserTabs`), and
+   * that list carries no favicon because no page survived the restart it was
+   * written for. Such a tab therefore shows its own custom icon and then the
+   * globe, which is exactly what its row in the strip shows after a restart.
    */
   const runtime = $derived(globalBrowser.runtimeFor(tab.id))
   const label = $derived(browserTabLabel(tab))

@@ -15,6 +15,12 @@
  * real one after, without either of them pulling the browser into the entry
  * chunk.
  *
+ * The switcher cannot wait for a load that may never come: a session that
+ * restores onto a thread never opens the browser, yet its tabs are exactly the
+ * surfaces the switcher is for. So this module also mirrors the durable tab
+ * list, which is what {@link switcherBrowserTabs} resolves rows against until
+ * the live store has read it (see {@link ensureStoredBrowserTabs}).
+ *
  * A surface that can put a browser on screen calls {@link loadBrowser} before it
  * needs the state, so the store is already there when it renders. The single
  * launch allowed to pay eagerly is a session that restores straight onto the
@@ -23,12 +29,20 @@
 
 import { preloadBrowserChunk } from '$lib/page-preload'
 import type { GlobalBrowserState } from './global-browser.svelte'
+import type { GlobalBrowserTab } from './global-browser-types'
+import { loadStoredGlobalBrowserTabs, runtimeTabFromPersisted } from './global-browser-persistence'
 
 /** The live store, or null while the browser has not been asked for. */
 let store: GlobalBrowserState | null = $state(null)
 
 /** The load in flight, so every caller shares one and the second call is free. */
 let pending: Promise<GlobalBrowserState> | null = null
+
+/** The durable tab list, for a switcher that has no live store to read yet. */
+let storedTabs: readonly GlobalBrowserTab[] = $state([])
+
+/** The one read of that list, in flight or done, so it is never repeated. */
+let storedTabsRead: Promise<void> | null = null
 
 /**
  * The live browser store, or null while the browser has not been asked for.
@@ -60,14 +74,22 @@ export function isBrowserLoaded(): boolean {
  * later calls resolve against the same promise. `browser-access.svelte.ts` is
  * eager while this import is not, so the browser's code is fetched the first time
  * something actually reaches for it.
+ *
+ * The store is published as soon as its modules are loaded, which is what makes
+ * the eager surfaces that render off {@link browserStore} work; the returned
+ * promise additionally waits for its durable tab list, because what a caller
+ * does with the answer is almost always resolve one tab against that list (open
+ * an address, switch to a tab) and doing that before the list arrives silently
+ * acted on an empty strip.
  */
 export function loadBrowser(): Promise<GlobalBrowserState> {
   // Warm the surfaces first: they are separate chunks and fetching them in
   // parallel with the stores means the first open is not the one that waits.
   preloadBrowserChunk()
-  pending ??= import('./browser-runtime').then((runtime) => {
+  pending ??= import('./browser-runtime').then(async (runtime) => {
     runtime.startBrowserRuntime()
     store = runtime.globalBrowser
+    await store.whenHydrated
     return store
   })
   return pending
@@ -85,4 +107,42 @@ export function loadBrowser(): Promise<GlobalBrowserState> {
  */
 export function withBrowser<T>(action: (store: GlobalBrowserState) => T): Promise<T> {
   return loadBrowser().then(action)
+}
+
+/**
+ * The tab list the Ctrl+Tab switcher resolves its browser rows against.
+ *
+ * The switching order is the recent-visit list, which the eager shell already
+ * holds, but a key there only becomes a row if the tab it names still exists.
+ * The live store answers that once it has read the durable list; before then - a
+ * launch that restored onto a thread, a renderer that reloaded, a session that
+ * has simply not opened the browser - the same durable list is what the
+ * switcher needs, and it is exactly the tabs the user was using.
+ */
+export function switcherBrowserTabs(): readonly GlobalBrowserTab[] {
+  const live = store
+  // Only once the store has read the list: before that its `tabs` is empty, and
+  // a mirror of the stored tabs is the better answer rather than a stale one.
+  if (live?.hydrated) return live.tabs
+  return storedTabs
+}
+
+/**
+ * Read the durable tab list for {@link switcherBrowserTabs}, once.
+ *
+ * Deliberately not {@link loadBrowser}: this is one small IPC read and leaves
+ * the browser's runtime inert (no listeners, no idle sweep, no page), so a
+ * session that only ever switches between threads still pays nothing for the
+ * browser. A failed read leaves the mirror empty, which costs the switcher its
+ * browser rows and nothing else.
+ */
+export function ensureStoredBrowserTabs(): void {
+  if (storedTabsRead) return
+  storedTabsRead = loadStoredGlobalBrowserTabs()
+    .then((snapshot) => {
+      if (snapshot) storedTabs = snapshot.tabs.map(runtimeTabFromPersisted)
+    })
+    .catch(() => {
+      // The switcher simply lists no browser tab.
+    })
 }

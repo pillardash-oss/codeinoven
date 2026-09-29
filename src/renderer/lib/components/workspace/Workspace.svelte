@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { fly } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
   import { motionDuration } from '$lib/motion'
@@ -105,8 +105,12 @@
     threadVisitKey
   } from '$lib/stores/workspace.svelte'
   import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
-  import { browserStore, loadBrowser } from '$lib/stores/browser-access.svelte'
-  import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import {
+    browserStore,
+    ensureStoredBrowserTabs,
+    loadBrowser,
+    switcherBrowserTabs
+  } from '$lib/stores/browser-access.svelte'
   import {
     buildThreadSwitcherEntries,
     type ThreadSwitcherEntry
@@ -1292,6 +1296,16 @@
   // until the outro actually finishes keeps the panel inside its cell for
   // the whole animation.
   //
+  // The panel must leave the moment its region goes away, not when the
+  // reservation ends: the outro is what the reservation is for. Gating the
+  // panel on the reservation instead held it in its cell, squeezed it to
+  // nothing as the animated rail track collapsed, and only *then* let it fly
+  // out. With the column gone by that point the flying panel fell into an
+  // implicit auto track, so the thread narrowed again by the panel's own width
+  // for the whole outro and snapped back when the node was finally removed.
+  // The region's panel and its track are two clocks, and the panel's starts
+  // first.
+  //
   // A region can also have to stay mounted because a panel inside it owns a
   // surface that covers the whole window: the full screen file editor renders
   // its modal from the files panel. Hiding the sidebar, or any other reason
@@ -1306,10 +1320,13 @@
   const PANEL_EXIT_MS = 160
   let sidebarTrackReserved = $state(false)
   let sidebarWasVisible = false
+  /** Whether the sidebar's own panel is the one hosting a window-sized surface,
+   *  which has to outlive `sidebarVisible` going false (see above). */
+  let sidebarHostsFullscreenEditor = $derived(
+    contextSidebarState.sidebarActiveTab?.kind === 'files' && projectFilesWorkspace.fullscreenOpen
+  )
   $effect(() => {
-    const hostsFullscreenEditor =
-      contextSidebarState.sidebarActiveTab?.kind === 'files' && projectFilesWorkspace.fullscreenOpen
-    if (sidebarVisible || hostsFullscreenEditor) {
+    if (sidebarVisible || sidebarHostsFullscreenEditor) {
       sidebarWasVisible = true
       sidebarTrackReserved = true
       return
@@ -1608,10 +1625,14 @@
     return [...pinned, ...unpinned]
   })
 
-  /** What the switcher sees while the browser's modules are still unloaded: no
-   *  browser tab can be switched to until one exists, and the derived re-runs the
-   *  moment the store arrives. */
-  const NO_BROWSER_TABS: readonly GlobalBrowserTab[] = []
+  // The switcher's browser rows resolve against the durable tab list while the
+  // browser's own runtime has not been loaded (see `switcherBrowserTabs`), which
+  // is the state of any session that restored onto a thread. Nothing can be
+  // listed there unless the recent-visit list names a browser tab, so that is
+  // what decides whether the read is worth making at all.
+  onMount(() => {
+    if (recentVisits.browserTabIds.length > 0) ensureStoredBrowserTabs()
+  })
 
   let recentSwitcherEntries = $derived.by(() =>
     buildThreadSwitcherEntries({
@@ -1620,7 +1641,7 @@
       // was last visited.
       visits: recentVisits.all,
       threads: allThreads.filter((thread) => !thread.archived),
-      tabs: browserStore()?.tabs ?? NO_BROWSER_TABS
+      tabs: switcherBrowserTabs()
     })
   )
 
@@ -3984,7 +4005,7 @@
         }}
       />
 
-      {#if sidebarTrackReserved}
+      {#if sidebarVisible || sidebarHostsFullscreenEditor}
         {#snippet contextSidebarContent()}
           <WorkspaceContextPanelContent
             {gitPanelProjectId}
