@@ -4,6 +4,7 @@
   import {
     Bell,
     Bot,
+    Boxes,
     BrainCircuit,
     Bug,
     ChevronDown,
@@ -138,6 +139,7 @@
     'downloads',
     'history',
     'bookmarks',
+    'boxes',
     'git',
     'actions',
     'thread-note',
@@ -363,6 +365,8 @@
       {:else}
         <AppWindow size={12} class="shrink-0" />
       {/if}
+    {:else if tab.kind === 'boxes'}
+      <Boxes size={12} class="shrink-0" />
     {:else if tab.kind === 'coordinator'}
       <Network size={12} class="shrink-0 text-primary" />
     {:else if tab.kind === 'assistant-how-to'}
