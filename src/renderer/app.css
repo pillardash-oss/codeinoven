@@ -903,6 +903,15 @@ html body [data-sonner-toaster] {
   --offset-left: 52px !important;
 }
 
+/* A toast is never a window handle. The compact lane lands inside the 48px
+   application header, which the shell marks as the titlebar drag region
+   (`.titlebar-drag`), so the layer cuts itself out of it: without this the card's
+   action and close buttons would move the window instead of pressing. In the
+   lanes below the header it changes nothing. */
+[data-toast-lane] [data-sonner-toaster] {
+  -webkit-app-region: no-drag;
+}
+
 [data-toast-lane='narrow-left'] [data-sonner-toaster],
 [data-toast-lane='narrow-right'] [data-sonner-toaster],
 [data-toast-lane='compact'] [data-sonner-toaster] {
