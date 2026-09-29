@@ -20,6 +20,7 @@ import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
 import type { BrowserBookmarksSnapshot, BrowserHistorySnapshot } from '../browser/browser-library'
 import type {
   ToastOverlayAck,
+  ToastOverlayCursor,
   ToastOverlayInteractionReport,
   ToastOverlayRequest,
   ToastOverlayRequestStack
@@ -126,6 +127,17 @@ export const invokeBrowserContract = {
    * after `loadURL` loses the same race the permission popup documents.
    */
   'browser:toastOverlayReady': {} as Contract<[], ToastOverlayRequestStack | null>,
+  /**
+   * Where the pointer is, in the overlay document's own client coordinates, or
+   * null while there is no overlay window to measure it in.
+   *
+   * The overlay asks for this rather than believing its own pointer events,
+   * because the events a click-through window receives cannot tell a card the
+   * pointer is on from a window the window server has just re-evaluated. It is
+   * what settles the click-through state, so it is answered from the window
+   * server every time.
+   */
+  'browser:toastOverlayCursor': {} as Contract<[], ToastOverlayCursor | null>,
   /**
    * The user acted on a card the overlay drew. The overlay carries no handlers,
    * so it names the toast and the interaction and the app renderer runs the

@@ -1,10 +1,11 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, screen } from 'electron'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
   TOAST_OVERLAY_HEIGHT,
   TOAST_OVERLAY_WIDTH,
   toastOverlayWindowBounds,
+  type ToastOverlayCursor,
   type ToastOverlayRequestStack
 } from '../../lib/toast-overlay'
 import {
@@ -51,6 +52,10 @@ export class ToastOverlayWindow {
   private ready = false
   /** Tracked rather than read back, because the toggle is only ever a change. */
   private pointerOverToast = false
+  /** The click-through state the window server was last given, so it is only
+   *  ever told about a change: a needless call re-evaluates the window under
+   *  the pointer and hands the document an event it would misread. */
+  private ignoringMouse = true
 
   constructor(
     private readonly parent: BrowserWindow,
@@ -77,14 +82,19 @@ export class ToastOverlayWindow {
     if (!popup) return false
     this.stack = stack
     this.position(popup)
-    this.publish(popup)
     if (!popup.isVisible()) {
-      // Never `show()`: the overlay must not become the active window, or the
-      // page the user was typing in would lose the keyboard to a card.
-      popup.showInactive()
+      // The window is shown before the stack is published, not after: the
+      // document answers a publish by asking where the pointer is and asserting
+      // the click-through state, and a window that arms click-through
+      // afterwards would overwrite that answer and put a card under the pointer
+      // back into click-through, where its buttons are dead. Never `show()`:
+      // the overlay must not become the active window, or the page the user was
+      // typing in would lose the keyboard to a card.
       this.pointerOverToast = false
-      popup.setIgnoreMouseEvents(true, { forward: true })
+      popup.showInactive()
+      this.applyClickThrough()
     }
+    this.publish(popup)
     return true
   }
 
@@ -95,11 +105,52 @@ export class ToastOverlayWindow {
 
   /** Whether the pointer is over a card, which decides click-through. */
   setPointerOverToast(overToast: boolean): void {
-    if (overToast === this.pointerOverToast) return
     this.pointerOverToast = overToast
+    this.applyClickThrough()
+  }
+
+  /**
+   * Where the pointer is, in this window's own client coordinates.
+   *
+   * Read from the window server rather than from the events this window is sent,
+   * because those events cannot be trusted about it: this window ignores the
+   * mouse until a card is under the pointer, and every call that changes that is
+   * what makes the window server re-evaluate the window under the pointer and
+   * send back a mouseout that reads as a departure. Answered null while there is
+   * no window to measure, which the document takes as "nothing to say" rather
+   * than as "the pointer is nowhere".
+   */
+  pointerInClientSpace(): ToastOverlayCursor | null {
+    const popup = this.popup
+    if (!popup || popup.isDestroyed()) return null
+    const point = screen.getCursorScreenPoint()
+    const bounds = popup.getContentBounds()
+    return { x: point.x - bounds.x, y: point.y - bounds.y }
+  }
+
+  /**
+   * Hand the window server the one click-through state that follows from what
+   * this window is showing and where the pointer is.
+   *
+   * A card is the only thing here that is not transparent, so every pixel
+   * outside one belongs to the page underneath and a click there has to pass
+   * through. Called only on a change: `setIgnoreMouseEvents` makes the window
+   * server re-evaluate the window under the pointer, and the events that come
+   * back are exactly what a document cannot distinguish from the pointer having
+   * left.
+   */
+  private applyClickThrough(): void {
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
-    popup.setIgnoreMouseEvents(!overToast, { forward: true })
+    const ignore = !(this.pointerOverToast && this.hasCards())
+    if (ignore === this.ignoringMouse) return
+    this.ignoringMouse = ignore
+    popup.setIgnoreMouseEvents(ignore, { forward: true })
+  }
+
+  /** Whether this window has any card on screen to be pressed. */
+  private hasCards(): boolean {
+    return this.stack !== null && this.stack.toasts.length > 0
   }
 
   /** Hide the window while keeping it ready for the next toast. */
@@ -108,7 +159,7 @@ export class ToastOverlayWindow {
     this.pointerOverToast = false
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
-    popup.setIgnoreMouseEvents(true, { forward: true })
+    this.applyClickThrough()
     if (popup.isVisible()) popup.hide()
   }
 
@@ -127,6 +178,7 @@ export class ToastOverlayWindow {
     this.stack = null
     this.ready = false
     this.pointerOverToast = false
+    this.ignoringMouse = true
     if (popup && !popup.isDestroyed()) popup.destroy()
   }
 
@@ -190,6 +242,7 @@ export class ToastOverlayWindow {
     popup.setMenuBarVisibility(false)
     // An invisible window must never swallow a click meant for the page: the
     // document arms this off, and back on only over a card.
+    this.ignoringMouse = true
     popup.setIgnoreMouseEvents(true, { forward: true })
     this.position(popup)
     popup.webContents.on('did-finish-load', () => {

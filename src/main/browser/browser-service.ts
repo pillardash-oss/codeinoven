@@ -630,6 +630,7 @@ export class BrowserService {
     replaceHandler('browser:toastOverlayPointer', (_event, rawOverToast) => {
       this.toastOverlay.setPointerOverToast(rawOverToast === true)
     })
+    replaceHandler('browser:toastOverlayCursor', () => this.toastOverlay.pointerInClientSpace())
     replaceHandler(
       'browser:navigate',
       (_event, rawTabId, rawProjectId, rawThreadId, rawUrl, rawBoxId) => {

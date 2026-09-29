@@ -38,6 +38,16 @@
   let pointerOverCard = false
   let pointer = { x: 0, y: 0, known: false }
 
+  /**
+   * Bumped by every pointer event this document sees.
+   *
+   * The cursor position is read from the window server through an IPC round
+   * trip, so an answer can land after a newer pointer event has already been
+   * processed. One that was overtaken is dropped: the newer event describes a
+   * later moment than the answer does.
+   */
+  let pointerEpoch = 0
+
   function keyOf(id: number | string): string {
     return String(id)
   }
@@ -136,9 +146,15 @@
       draw(entry)
     }
     // A card can appear or leave under a stationary pointer, which decides
-    // whether this window may keep swallowing clicks where it now sits.
+    // whether this window may keep swallowing clicks where it now sits. The app
+    // window also resets its own copy of that answer every time it shows this
+    // window, so this document forgets its copy with it and asserts the truth
+    // again; otherwise a belief that still holds here would be left unreported
+    // and the card would be unpressable.
     void tick().then(() => {
-      reportPointer()
+      pointerOverCard = false
+      setPointerWatch(stack.toasts.length > 0)
+      syncPointerFromCursor(true)
       reportDrawn(stack)
     })
   }
@@ -154,25 +170,92 @@
     return false
   }
 
-  function reportPointer(): void {
+  function reportPointer(force = false): void {
     if (!pointer.known) return
     const over = overCard(pointer.x, pointer.y)
-    if (over === pointerOverCard) return
+    if (!force && over === pointerOverCard) return
     pointerOverCard = over
     void invoke('browser:toastOverlayPointer', over).catch(() => {})
   }
 
+  /**
+   * How often the hover state is re-derived from the cursor while cards are on
+   * screen.
+   *
+   * The safety net under every other input to it. A card enters with a
+   * transition, so its rectangle is still moving when it is first drawn and a
+   * check made at that instant reads the card as somewhere else; the window
+   * server re-evaluates the window under the pointer every time the click-through
+   * state changes and answers with an event that reads as a departure; and a card
+   * can appear, leave and be replaced with no pointer event at all. None of that
+   * can be reasoned away from the events, and all of it is settled by asking, so
+   * it is asked on a slow beat for exactly as long as there is a card to press:
+   * which is nothing next to drawing the card itself, and the price of a button
+   * that always answers.
+   */
+  const POINTER_WATCH_INTERVAL_MS = 120
+
+  let pointerWatch: ReturnType<typeof setInterval> | undefined
+
+  /** Watch the pointer while there is something to press, and only then. */
+  function setPointerWatch(active: boolean): void {
+    if (active) {
+      pointerWatch ??= setInterval(syncPointerFromCursor, POINTER_WATCH_INTERVAL_MS)
+      return
+    }
+    if (pointerWatch !== undefined) clearInterval(pointerWatch)
+    pointerWatch = undefined
+  }
+
+  /**
+   * Settle the hover state from where the window server says the pointer is.
+   *
+   * This is the answer to a problem the events cannot solve. A card that appears
+   * or leaves under a stationary pointer produces no pointer event at all, and
+   * the events this window does get are not trustworthy either: the window
+   * ignores the mouse until a card is under the pointer, and lifting that is
+   * what makes the window server re-evaluate the window under the pointer and
+   * send back a mouseout that reads exactly like the pointer having left. That
+   * is what put a card the user was pressing back into click-through, so the
+   * press landed on the page underneath and its button did nothing.
+   *
+   * The report is forced when the stack changes, because the app window resets its
+   * own copy of the state whenever it shows or hides this window: a state that did
+   * not change from this document's point of view still has to be asserted, or the
+   * two sides stay disagreeing and the card stays unpressable. The watch that runs
+   * while cards are on screen reports only a change, which is all it can ever have
+   * to say.
+   */
+  function syncPointerFromCursor(force = false): void {
+    const epoch = pointerEpoch
+    void invoke('browser:toastOverlayCursor')
+      .then((cursor) => {
+        if (!cursor || epoch !== pointerEpoch) return
+        pointer = { x: cursor.x, y: cursor.y, known: true }
+        reportPointer(force)
+      })
+      .catch(() => {})
+  }
+
   function trackPointer(event: MouseEvent): void {
+    pointerEpoch += 1
     pointer = { x: event.clientX, y: event.clientY, known: true }
     reportPointer()
   }
 
-  /** Leaving the document leaves the cards behind, so a click belongs to the
-   *  page again even though no further move will arrive inside this window. */
+  /**
+   * A pointer event that claims the pointer left this document.
+   *
+   * Not believed on its own: every time the app window lifts click-through the
+   * window server re-evaluates the window under the pointer and sends a mouseout
+   * with no related target, in the middle of a card. The cursor decides instead,
+   * so a real departure still arms click-through and a phantom one does not
+   * disarm the card the pointer is on.
+   */
   function leaveDocument(event: MouseEvent): void {
     if (event.relatedTarget !== null) return
-    pointer = { x: -1, y: -1, known: true }
-    reportPointer()
+    pointerEpoch += 1
+    syncPointerFromCursor()
   }
 
   onMount(() => {
@@ -187,6 +270,7 @@
     window.addEventListener('mousemove', trackPointer)
     document.addEventListener('mouseout', leaveDocument)
     return () => {
+      setPointerWatch(false)
       unsubscribe()
       window.removeEventListener('mousemove', trackPointer)
       document.removeEventListener('mouseout', leaveDocument)

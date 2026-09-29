@@ -147,6 +147,24 @@ export interface ToastOverlayAck {
  *  itself: it reports the interaction and the app renderer runs the original. */
 export type ToastOverlayInteraction = 'action' | 'cancel' | 'dismiss' | 'autoclose'
 
+/**
+ * Where the pointer is inside the overlay document, in that document's own
+ * client coordinates, or null when there is no window to measure it in.
+ *
+ * The document asks for this whenever it has to settle the click-through state
+ * from scratch, instead of believing what its own pointer events say. Events are
+ * not a reliable witness here: this window ignores the mouse until a card is
+ * under the pointer, and the call that lifts that is what makes the window
+ * server re-evaluate the window the pointer is over, which sends back a mouseout
+ * that is indistinguishable from the pointer having left. Believing it put the
+ * window back into click-through while the pointer sat on a card, so the next
+ * press fell through to the page and the card's button did nothing.
+ */
+export interface ToastOverlayCursor {
+  x: number
+  y: number
+}
+
 export interface ToastOverlayInteractionReport {
   id: number | string
   interaction: ToastOverlayInteraction
