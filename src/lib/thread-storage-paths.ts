@@ -90,13 +90,12 @@ export function threadScratchDirectory(
  * folder of its own inside the routine's. */
 export function threadAttachmentDirectory(
   project: ScratchProject,
-  scope: { projectId: string; threadId: string },
-  routineId?: string | null
+  scope: { projectId: string; threadId: string; routineId?: string | null }
 ): string {
   if (project?.source === 'local' && project.path) {
     return join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments', scope.threadId)
   }
-  const scratchDirectory = threadScratchDirectory(project, { ...scope, routineId })
+  const scratchDirectory = threadScratchDirectory(project, scope)
   return scope.projectId === ASSISTANT_SPACE_ID
     ? join(scratchDirectory, 'attachments', scope.threadId)
     : join(scratchDirectory, 'attachments')
@@ -130,7 +129,7 @@ export function threadOwnedDirectories(
     // The routine's workspace holds every task's scratch, so only this task's
     // own attachment folder goes with the task; the rest is the routine's and
     // `routineOwnedDirectories` removes it.
-    dirs.push(threadAttachmentDirectory(null, { projectId, threadId }, routineId))
+    dirs.push(threadAttachmentDirectory(null, { projectId, threadId, routineId }))
   }
   dirs.push(
     // Legacy chat-scope attachments/exports root, superseded by the workspace

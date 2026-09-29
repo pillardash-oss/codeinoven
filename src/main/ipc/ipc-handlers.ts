@@ -348,7 +348,7 @@ export function registerIpcHandlers(
       scope.projectId === ASSISTANT_SPACE_ID
         ? (await threadManager.getThread(scope.projectId, scope.threadId))?.routineId
         : null
-    return threadAttachmentDirectory(project ?? null, scope, routineId)
+    return threadAttachmentDirectory(project ?? null, { ...scope, routineId })
   }
 
   const resolveProjectPath = async (projectId: string, scopeBucketId?: string): Promise<string> => {
