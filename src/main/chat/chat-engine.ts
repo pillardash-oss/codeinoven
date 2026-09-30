@@ -105,7 +105,12 @@ import {
   routineHowToUpdateContext
 } from '../../lib/routine-authoring'
 import { isRoutineNextStepsPrompt } from '../../lib/assistant-next-steps'
-import { continuationRequestPrompt, pendingContinuationRequest } from '../../lib/pending-request'
+import {
+  continuationRequestPrompt,
+  isContinuationRelayPrompt,
+  pendingContinuationRequest,
+  type PendingContinuationRequest
+} from '../../lib/pending-request'
 import { composeRoutineInstruction, routineRunContext } from '../../lib/routine-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
@@ -622,6 +627,7 @@ import {
   isSameImageDescriptorModel,
   parseBatchedDescriptorJson
 } from './chat-engine/chat-engine-images'
+import { readableRelayAttachments } from './chat-engine/continuation-attachments'
 import {
   UNBOUNDED_MUTATING_TOOLS,
   changedPathsFromTool,
@@ -8286,6 +8292,13 @@ export class ChatEngine {
     await this.threadCreation?.awaitReady(threadId)
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 0, 200_000)
+    // A continuation relay re-sends a request the user made earlier, and its
+    // files can be gone from disk by the time the retry runs. A vanished file
+    // drops from the relay so the turn still carries the request; failing it
+    // would leave the user with the same unanswered request.
+    if (isContinuationRelayPrompt(text)) {
+      attachments = await this.relayAttachments(projectId, threadId, attachments)
+    }
     const hasSendableContext =
       text.length > 0 ||
       (attachments?.length ?? 0) > 0 ||
@@ -9503,7 +9516,7 @@ export class ChatEngine {
     if (!Array.isArray(attachments)) {
       throw new TypeError('Temporary chat attachments must be an array')
     }
-    const validatedAttachments = attachments.map((attachment) => {
+    let validatedAttachments = attachments.map((attachment) => {
       const url = validateBoundedString(attachment.url, 'Attachment URL', 1, 20_000)
       const mime = validateBoundedString(attachment.mime, 'Attachment MIME', 1, 512)
       return {
@@ -9514,6 +9527,11 @@ export class ChatEngine {
           : {})
       }
     })
+    // A retried temporary-chat turn re-sends the request's files, and they can
+    // be gone from disk by then; the relay drops what it cannot materialize.
+    if (isContinuationRelayPrompt(text)) {
+      validatedAttachments = await this.relayAttachments(projectId, threadId, validatedAttachments)
+    }
     const selectedTexts = validatedReferences.map((reference) => reference.text).filter(Boolean)
     let context = initialContext
       ? validateBoundedString(initialContext, 'Temporary chat context', 1, 100_000)
@@ -19265,16 +19283,17 @@ export class ChatEngine {
     }
     const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
     const resumesSpecContract = activeSpec?.status === 'approved' && !thread.auditState
+    const continuation = await this.continuationTurnRequest(
+      thread.projectId,
+      thread.id,
+      resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue'
+    )
     await this.sendPrompt(
       thread.projectId,
       thread.id,
       validateThreadSettings(thread.settings),
-      await this.continuationTurnPrompt(
-        thread.projectId,
-        thread.id,
-        resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue'
-      ),
-      [],
+      continuation.text,
+      continuation.attachments,
       resumesSpecContract ? 'implement' : undefined,
       createMessageId(),
       undefined,
@@ -23571,21 +23590,23 @@ export class ChatEngine {
   }
 
   /**
-   * The prompt a continuation turn sends on the app's own initiative (the retry
-   * chip, an automatic resume after a provider reset, a recovered thread).
+   * The request a continuation turn has to carry on the app's own initiative
+   * (the retry chip, an automatic resume after a provider reset, a recovered
+   * thread), plus the prompt that relays it.
    *
    * The request the failed turn was answering travels with the nudge. A bare
    * "Continue" was trusting the harness session to still hold that request, and
    * nothing guarantees it: a provider pause that leaves the turn held, an
    * account or harness change, or a released session all leave the agent with a
    * "Continue" and no request to continue, which reads to the user as their
-   * message being silently dropped.
+   * message being silently dropped. The request's files ride along as send-path
+   * attachments, so a relayed screenshot reaches the agent too.
    */
-  private async continuationTurnPrompt(
+  private async continuationTurnRequest(
     projectId: string,
     threadId: string,
     nudge: string
-  ): Promise<string> {
+  ): Promise<PendingContinuationRequest> {
     try {
       const page = await this.threadManager.loadMessagePage(
         projectId,
@@ -23594,7 +23615,9 @@ export class ChatEngine {
         CONTINUATION_REQUEST_PAGE_MESSAGES
       )
       const request = pendingContinuationRequest(page.messages)
-      return request ? continuationRequestPrompt(request, nudge) : nudge
+      return request
+        ? { text: continuationRequestPrompt(request, nudge), attachments: request.attachments }
+        : { text: nudge, attachments: [] }
     } catch (error) {
       // A continuation must still run when the mirror read fails: the harness
       // session usually holds the request itself.
@@ -23603,8 +23626,33 @@ export class ChatEngine {
         threadId,
         error: rawErrorMessage(error)
       })
-      return nudge
+      return { text: nudge, attachments: [] }
     }
+  }
+
+  /**
+   * The attachments a continuation relay can still materialize. A relay
+   * re-sends a request the user made earlier, and its files can be gone from
+   * disk by the time the retry runs; a vanished file drops from the relay, and
+   * the drop is recorded so a half-delivered retry is never silent.
+   */
+  private async relayAttachments(
+    projectId: string,
+    threadId: string,
+    attachments: PromptAttachment[]
+  ): Promise<PromptAttachment[]> {
+    const readable = await readableRelayAttachments(attachments)
+    if (readable.length !== attachments.length) {
+      const kept = new Set(readable)
+      Logger.info('Dropped missing files from a continuation relay', {
+        projectId,
+        threadId,
+        dropped: attachments
+          .filter((attachment) => !kept.has(attachment))
+          .map((attachment) => attachment.filename ?? attachment.url)
+      })
+    }
+    return readable
   }
 
   /**
@@ -23658,12 +23706,13 @@ export class ChatEngine {
         fileSystemMode: false
       }
     )
+    const continuation = await this.continuationTurnRequest(projectId, threadId, 'Continue')
     await this.sendPrompt(
       projectId,
       threadId,
       settings,
-      await this.continuationTurnPrompt(projectId, threadId, 'Continue'),
-      [],
+      continuation.text,
+      continuation.attachments,
       undefined,
       createMessageId(),
       undefined,

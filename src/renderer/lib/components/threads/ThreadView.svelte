@@ -284,7 +284,11 @@
   import { APP_NAME } from '$shared/brand'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
-  import { continuationRequestPrompt, pendingContinuationRequest } from '$shared/pending-request'
+  import {
+    continuationRequestPrompt,
+    pendingContinuationRequest,
+    type PendingContinuationRequest
+  } from '$shared/pending-request'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { LiveGenerationRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -4944,18 +4948,19 @@
   }
 
   /**
-   * The prompt a retry sends.
+   * The request a retry re-sends: the unanswered request's text plus the files
+   * it carried.
    *
    * A retry used to send a bare "Continue" and trust the harness session to
    * still hold the request the failed turn was answering. Nothing guarantees
    * that: a provider pause, an account change, or a replaced session leaves the
    * agent with a "Continue" and no request to continue, and the message reads
    * as delivered while the agent never saw it. Relaying the unanswered request
-   * with the nudge makes the turn answerable on any session.
+   * with the nudge makes the turn answerable on any session, and its
+   * attachments ride along so a screenshotted request is not half delivered.
    */
-  function retryPrompt(): string {
-    const request = pendingContinuationRequest(messages)
-    return request ? continuationRequestPrompt(request) : 'Continue'
+  function retryRequest(): PendingContinuationRequest | undefined {
+    return pendingContinuationRequest(messages)
   }
 
   /** Retry after an error or a paused provider retry   replace the live turn first. */
@@ -4977,9 +4982,17 @@
           providerStatus = null
         }
       }
-      await sendMessage(retryPrompt(), [], undefined, true, undefined, [], [], {
-        action: 'Retry connection'
-      })
+      const request = retryRequest()
+      await sendMessage(
+        request ? continuationRequestPrompt(request) : 'Continue',
+        request?.attachments ?? [],
+        undefined,
+        true,
+        undefined,
+        [],
+        [],
+        { action: 'Retry connection' }
+      )
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The connection could not be retried.'
     } finally {
