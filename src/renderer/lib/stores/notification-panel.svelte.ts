@@ -241,10 +241,18 @@ class NotificationPanelState {
    * depends on what the notice reports. A needs-attention notice *is* the
    * thread's parked state: it survives being opened or read, because reading a
    * card answers nothing, and it leaves exactly when the thread stops waiting on
-   * the user (the status changes). Every other notice reports a moment that has
-   * already passed, so reading the thread retires it.
+   * the user (the status changes, whether the user answered or the card settled
+   * on its own). Every other notice reports a moment that has already passed, so
+   * reading the thread retires it.
    */
   reconcileThread(thread: Thread): void {
+    // Runs on every agent status tick, so leave immediately when no entry on the
+    // panel belongs to this thread (the common case) instead of allocating a
+    // filtered copy for it.
+    const relevant = this._notifications.some(
+      (entry) => entry.projectId === thread.projectId && entry.threadId === thread.id
+    )
+    if (!relevant) return
     const parked = threadStatusPolicy(thread.status).awaitingUser
     const next = this._notifications.filter((entry) => {
       if (entry.projectId !== thread.projectId || entry.threadId !== thread.id) return true

@@ -215,9 +215,12 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     if (workspaceState.selectedThread?.id === thread.id) {
       workspaceState.updateThread(thread)
     }
-    if (thread.read) {
-      notificationPanelState.reconcileThread(thread)
-    }
+    // Reconcile the thread's notices on every status update: a needs-attention
+    // notice stays while the thread is parked (reading it answers nothing) and
+    // leaves the moment the park ends, a failure or completion leaves once read.
+    // The store returns immediately when no entry belongs to this thread, so a
+    // status tick with nothing on the panel costs one scan of a short list.
+    notificationPanelState.reconcileThread(thread)
     deps.settleCloseConfirmationThread(thread)
   })
   const unsubscribeThreadDeleted = subscribeGuarded('thread:deleted', (projectId, threadId) => {
