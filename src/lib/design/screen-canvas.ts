@@ -179,25 +179,35 @@ export function screenCanvasRequestMessage(input: {
 }
 
 /**
- * What the user sends when they press "Live view": the request that turns the
- * canvas from a picture into the app.
+ * What the user sends when they press "Generate live preview": the request that
+ * gives the design something to show live.
  *
- * A sketch frame is a state the agent drew on the canvas and no screen file
- * holds. Making it live is ordinary screen work, and the frame already says
- * which screen it is meant to become.
+ * A live preview is the design's own entry page served in the browser, so it can
+ * be missing in two ways, and both are ordinary screen work. A design with no
+ * `index.html` has no page for the preview to open at all. A canvas whose frames
+ * are still sketches has states the design never built, and each frame already
+ * says which screen it is meant to become.
  */
-export function screenCanvasLiveViewMessage(input: {
+export function screenCanvasLivePreviewMessage(input: {
   directory: string
   /** The sketch frames to turn into real screens, by title or by what they show. */
   sketchTitles: string[]
+  /** True when the design has no `index.html` for the live preview to open. */
+  needsEntry: boolean
 }): string {
-  const names =
-    input.sketchTitles.length > 0
-      ? `These frames are still sketches: ${input.sketchTitles.join(', ')}.`
-      : 'Some frames are still sketches.'
-  return [
-    `Make the Screen Canvas in ${input.directory} live.`,
-    names,
-    'Build each one as a real screen file beside the design: the page the frame sketched, working rather than drawn, following the same layout, states and copy the sketch shows. Then point its frame at that file so the canvas shows the live screen, and link it from the design where it belongs. Do not leave a sketch frame behind for a state you have built.'
-  ].join('\n\n')
+  const parts = [
+    `Make the design in ${input.directory} live, so it can be previewed in the browser.`
+  ]
+  if (input.needsEntry) {
+    parts.push(
+      'The design has no entry page yet: write the `index.html` a visitor lands on, following the screens the folder already holds.'
+    )
+  }
+  if (input.sketchTitles.length > 0) {
+    parts.push(`These canvas frames are still sketches: ${input.sketchTitles.join(', ')}.`)
+    parts.push(
+      'Build each one as a real screen file beside the design: the page the frame sketched, working rather than drawn, following the same layout, states and copy the sketch shows. Then point its frame at that file so the canvas shows the live screen, and link it from the design where it belongs. Do not leave a sketch frame behind for a state you have built.'
+    )
+  }
+  return parts.join('\n\n')
 }

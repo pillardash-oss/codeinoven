@@ -7,9 +7,11 @@
     Frame,
     GlobeCode,
     ImageOff,
+    ListClock,
     LoaderCircle,
     Pencil,
-    Play,
+    PlayingCardsFan,
+    Presentation,
     RefreshCw,
     RotateCcw,
     Volume2,
@@ -17,6 +19,7 @@
     X
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
+  import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
@@ -26,7 +29,8 @@
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
   import {
     SCREEN_CANVAS_FILE,
-    screenCanvasLiveViewMessage,
+    isScreenCanvasEntry,
+    screenCanvasLivePreviewMessage,
     screenCanvasRequestMessage
   } from '$shared/design/screen-canvas'
   import type {
@@ -47,16 +51,17 @@
    * folder in use, a preview of every screen it holds, and the controls that move
    * between designs, bring one on screen, or ask the agent for more.
    *
-   * The panel is a header plus one scrolling surface, and the scrolling surface is
-   * only ever the screens. Everything that is a control or a status lives in the
-   * header: the design in front, its design tabs when the project holds more than
-   * one, the Screen Canvas strip, and the menu that owns the save path. A board whose
-   * settings scroll away with the work makes the user hunt for a button they were
-   * just looking at.
+   * The panel is a header plus one scrolling surface. The header owns the design in
+   * front, the design tabs the user can drag into their own order, the refresh and
+   * the menu; the surface is the board, and its first two entries are the two pages
+   * that are not screens: the Screen Canvas that shows every screen at once, and the
+   * live preview a visitor lands on. Everything after them is a screen of the folder
+   * in front, all the same size: a picture is a picture of a screen, not the screen
+   * itself, and the one in front is marked rather than enlarged.
    *
-   * A design is a product rather than a page, so the previews are one per screen of
-   * the folder in front, all the same size: a picture is a picture of a screen, not
-   * the screen itself, and the one in front is marked rather than enlarged.
+   * The canvas is the one entry that can fall behind the design it frames, and that is
+   * the board's warning rather than a line of text: the same banner a stale panel
+   * wears, over the screens, with the one action that fixes it.
    *
    * It loads its own state rather than receiving it through props, because the work
    * outlives the turn that made it: there is no live turn to hand it anything, and a
@@ -80,6 +85,15 @@
    */
   const SCREEN_SHOT_WIDTH = 520
 
+  /**
+   * The file the live preview opens: the design's own entry page.
+   *
+   * A design is previewed by opening the page a visitor lands on, and the design
+   * playbook makes that `index.html`. A folder without one has nothing to preview
+   * live, which is what the board's menu offers to fix.
+   */
+  const LIVE_PREVIEW_ENTRY = 'index.html'
+
   // Seeded from whatever the workspace already fetched, so the panel paints on
   // its first frame instead of flashing a spinner.
   // svelte-ignore state_referenced_locally
@@ -93,6 +107,17 @@
   /** The canvas open in flight, kept apart from the design preview so opening one
    *  never spins the other's button. */
   let openingCanvas = $state(false)
+  /** The tab strip's scroller, so the tab in front can be scrolled into view. */
+  let tabStrip = $state<HTMLElement | null>(null)
+
+  function captureTabStrip(element: HTMLElement): void {
+    tabStrip = element
+  }
+  /** The design tab being dragged, the one it is over, and which side of it the
+   *  dragged tab would land on: the same three the terminal strip keeps. */
+  let draggingTab = $state('')
+  let dropTab = $state('')
+  let dropSide = $state<'before' | 'after'>('after')
   let error = $state('')
   /** The tab holding the work, so the board can reach its own controls. Empty
    *  until the first capture opens one, and an empty id reads as idle state. */
@@ -115,13 +140,13 @@
    * are main's answer, because the page is a file the board cannot read for itself.
    */
   let canvasState = $state<ScreenCanvasState | null>(null)
-  /** Whether main has answered about the canvas, so the strip is not drawn from
+  /** Whether main has answered about the canvas, so its entry is not drawn from
    *  "no canvas yet" before the first read settles. */
   let canvasRead = $state(false)
   /** Which canvas request is in flight, or an empty string when none is. */
   let canvasBusy = $state('')
   /** The folder the canvas answer belongs to, so a folder switch cannot paint
-   *  the previous folder's canvas strip while the new one is being read. */
+   *  the previous folder's canvas entry while the new one is being read. */
   let canvasDirectory = $state('')
   /** What happened to the last canvas request, in the user's terms. */
   let canvasNotice = $state('')
@@ -171,6 +196,8 @@
 
   /** Every folder of this kind the project holds, newest first. */
   let items = $derived(designState?.items ?? [])
+  /** The same folders in the order the user dragged their tabs into. */
+  let tabs = $derived(designCoordinatorState.orderedItems(projectId, threadId, items))
   /** The folder in front: the one the user picked, else the thread's own. */
   let selected = $derived.by(() => {
     const current = designState?.current ?? null
@@ -182,24 +209,37 @@
       picked !== '' ? picked : (current?.directory ?? designState?.defaultDirectory ?? '')
     return { directory, entry: current?.directory === directory ? current.entry : null }
   })
-  let selectedName = $derived(
-    items.find((item) => item.directory === selected.directory)?.name ??
-      selected.directory.split('/').at(-1) ??
-      ''
-  )
+  /** The folder in front as main lists it, which is where its entry page is known. */
+  let selectedItem = $derived(items.find((item) => item.directory === selected.directory) ?? null)
+  let selectedName = $derived(selectedItem?.name ?? selected.directory.split('/').at(-1) ?? '')
 
-  /** How many frames of the canvas are sketches waiting for a real screen. */
-  let canvasSketches = $derived(canvasState?.sketchTitles.length ?? 0)
-  /** What the canvas holds, in one line, or nothing before there is one. */
-  let canvasSummary = $derived.by(() => {
-    const state = canvasState
-    if (state === null) return ''
-    const live = state.frames.filter((frame) => frame.entry !== null).length
-    const parts = [`${live} screen${live === 1 ? '' : 's'}`]
-    const sketches = state.sketchTitles.length
-    if (sketches > 0) parts.push(`${sketches} sketch${sketches === 1 ? '' : 'es'}`)
-    return parts.join(', ')
-  })
+  /**
+   * The two entries that are not screens, and the screens themselves.
+   *
+   * The canvas is swept with the screens so its entry has a picture like any other,
+   * and the live preview is the design's entry page pictured once more. Both are
+   * split out of the grid's screens rather than listed twice.
+   */
+  let canvasShot = $derived(gallery.find((screen) => isScreenCanvasEntry(screen.entry)) ?? null)
+  let designScreens = $derived(gallery.filter((screen) => !isScreenCanvasEntry(screen.entry)))
+  let liveShot = $derived(
+    designScreens.find((screen) => screen.entry === LIVE_PREVIEW_ENTRY) ?? null
+  )
+  /** Whether the design has a page the live preview could open at all. Main's
+   *  listing knows the entry file, and the sweep shows it once it is pictured, so
+   *  either answer is enough to open it. */
+  let liveReady = $derived(!video && (selectedItem?.hasEntry === true || liveShot !== null))
+  /** What the canvas entry says while it has no picture to show. */
+  let canvasEntryNote = $derived(
+    !canvasRead
+      ? 'Reading the canvas…'
+      : canvasState === null
+        ? 'No Screen Canvas yet'
+        : 'No preview yet.'
+  )
+  /** What the live preview entry says while it has no picture to show. */
+  let liveEntryNote = $derived(liveReady ? 'No preview yet.' : 'No entry page yet')
+
   /** What the canvas is behind on, in one line, or nothing when it is current. */
   let canvasDrift = $derived.by(() => {
     const state = canvasState
@@ -218,7 +258,7 @@
 
   let refreshLabel = $derived(video ? 'Refresh the composition preview' : 'Refresh the screens')
   let screensLabel = $derived(
-    video ? 'Composition preview' : `Screens in this design (${gallery.length})`
+    video ? 'Composition preview' : `Screens in this design (${designScreens.length})`
   )
 
   async function loadState(): Promise<void> {
@@ -357,6 +397,53 @@
     void loadCanvas()
   }
 
+  /**
+   * Drag a design tab into the user's own order.
+   *
+   * The order is the panel's and the set is main's: a design written since the last
+   * look is not in the order yet, so it lands in front where the newest work belongs.
+   */
+  function handleTabDragStart(event: DragEvent, directory: string): void {
+    draggingTab = directory
+    if (!event.dataTransfer) return
+    event.dataTransfer.setData('text/plain', directory)
+    event.dataTransfer.effectAllowed = 'move'
+  }
+
+  function handleTabDragOver(event: DragEvent, directory: string): void {
+    if (draggingTab === '' || draggingTab === directory) return
+    event.preventDefault()
+    dropTab = directory
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    dropSide = event.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+  }
+
+  function handleTabDrop(event: DragEvent, directory: string): void {
+    event.preventDefault()
+    const dragged = event.dataTransfer?.getData('text/plain') || draggingTab
+    if (dragged !== '' && dragged !== directory) {
+      designCoordinatorState.moveTab(projectId, threadId, items, dragged, directory, dropSide)
+    }
+    endTabDrag()
+  }
+
+  function endTabDrag(): void {
+    draggingTab = ''
+    dropTab = ''
+  }
+
+  $effect(() => {
+    // The tab in front is scrolled into the strip, so a design the user picked is
+    // never the one tab they cannot see.
+    const directory = selected.directory
+    const strip = tabStrip
+    if (strip === null || directory === '') return
+    strip.querySelector<HTMLElement>('[data-active-design="true"]')?.scrollIntoView({
+      inline: 'nearest',
+      block: 'nearest'
+    })
+  })
+
   /** Serve the work and bring its tab to the user. Main reveals it; the
    *  workspace opens and focuses the sidebar tab from that event, so this panel
    *  never has to know how the browser is laid out. */
@@ -427,8 +514,8 @@
    * Ask the agent for the canvas, or for the change the user just asked for.
    *
    * The request is a message in the thread, sent when the agent is idle and
-   * queued behind a running turn when it is not: the button never steers work in
-   * flight, and what happened is said under it either way.
+   * queued behind a running turn when it is not: the menu never steers work in
+   * flight, and what happened is said under the header either way.
    */
   async function requestCanvas(action: 'create' | 'update' | 'live'): Promise<void> {
     if (selected.directory === '' || canvasBusy !== '') return
@@ -437,9 +524,10 @@
     try {
       const text =
         action === 'live'
-          ? screenCanvasLiveViewMessage({
+          ? screenCanvasLivePreviewMessage({
               directory: selected.directory,
-              sketchTitles: canvasState?.sketchTitles ?? []
+              sketchTitles: canvasState?.sketchTitles ?? [],
+              needsEntry: !liveReady
             })
           : screenCanvasRequestMessage({
               directory: selected.directory,
@@ -453,7 +541,11 @@
       canvasNotice =
         delivery === 'queued'
           ? 'Queued: it will be built when the current turn ends.'
-          : 'Asked the agent to build it.'
+          : action === 'live'
+            ? 'Asked the agent to make the design live.'
+            : action === 'create'
+              ? 'Asked the agent to write the canvas.'
+              : 'Asked the agent to sync the canvas.'
       error = ''
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'The canvas request could not be sent.'
@@ -557,20 +649,128 @@
     </button>
   {/snippet}
 
+  {#snippet entryCard(input: {
+    icon: typeof Presentation
+    name: string
+    shot: DesignScreenShot | null
+    label: string
+    empty: string
+    busy: boolean
+    ready: boolean
+    onOpen: () => void
+  })}
+    {@const Icon = input.icon}
+    <button
+      type="button"
+      class="group relative block overflow-hidden rounded-md border border-border bg-elevated transition-colors hover:border-primary/60 disabled:opacity-40"
+      title={input.label}
+      aria-label={input.label}
+      disabled={!input.ready || input.busy}
+      onclick={input.onOpen}
+    >
+      {#if input.shot?.dataUrl}
+        <img
+          src={input.shot.dataUrl}
+          alt={input.label}
+          class="block max-h-44 w-full object-cover object-top"
+        />
+      {:else}
+        <span
+          class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
+        >
+          {#if input.busy}
+            <LoaderCircle size={14} class="animate-spin" />
+          {:else}
+            <Icon size={16} />
+          {/if}
+          <span class="px-2 text-center text-[0.625rem]">{input.empty}</span>
+        </span>
+      {/if}
+      <span
+        class="absolute inset-x-0 bottom-0 flex items-center gap-1 bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-1"
+      >
+        <Icon size={11} class="shrink-0 text-white/90" aria-hidden="true" />
+        <span class="truncate text-[0.625rem] font-medium text-white">{input.name}</span>
+      </span>
+      {#if input.ready}
+        <span
+          class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
+        >
+          <span class="text-[0.625rem] font-medium text-white">Open in the in-app browser</span>
+        </span>
+      {/if}
+    </button>
+  {/snippet}
+
   <header class="shrink-0 border-b border-border">
     <div class="flex items-center gap-1.5 px-2.5 py-1.5">
       <WorkIcon size={13} class="shrink-0 text-accent" />
-      <span class="truncate text-xs font-semibold text-foreground" title={selected.directory}>
-        {selectedName === '' ? nounTitle : selectedName}
-      </span>
-      {#if !video && gallery.length > 0}
+      {#if tabs.length === 1}
         <span
-          class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+          class="max-w-40 shrink-0 truncate text-xs font-semibold text-foreground"
+          title={selected.directory}
         >
-          {gallery.length}
+          {selectedName === '' ? nounTitle : selectedName}
         </span>
+        {#if !video && designScreens.length > 0}
+          <span
+            class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+          >
+            {designScreens.length}
+          </span>
+        {/if}
       {/if}
-      <span class="ml-auto flex shrink-0 items-center gap-0.5">
+      {#if tabs.length > 1}
+        <div
+          class="-my-1.5 min-w-0 flex-1 overflow-x-auto"
+          {@attach captureTabStrip}
+          aria-label={listLabel}
+        >
+          <div class="flex min-w-max items-stretch">
+            {#each tabs as item (item.directory)}
+              {@const active = item.directory === selected.directory}
+              {@const updated = updatedLabel(item)}
+              <button
+                type="button"
+                class="group relative flex max-w-40 shrink-0 cursor-grab items-center gap-1 border-r border-border px-2 text-[0.6875rem] transition-colors active:cursor-grabbing {active
+                  ? 'bg-app font-medium text-foreground'
+                  : 'text-muted hover:bg-elevated hover:text-foreground'}"
+                draggable="true"
+                data-active-design={active ? 'true' : undefined}
+                title={item.hasEntry
+                  ? updated === ''
+                    ? item.name
+                    : `${item.name}, updated ${updated}`
+                  : `${item.name}, no index.html`}
+                aria-current={active ? 'true' : undefined}
+                onclick={() => selectDesign(item.directory)}
+                ondragstart={(event) => handleTabDragStart(event, item.directory)}
+                ondragover={(event) => handleTabDragOver(event, item.directory)}
+                ondrop={(event) => handleTabDrop(event, item.directory)}
+                ondragend={endTabDrag}
+              >
+                <WorkIcon
+                  size={10}
+                  class={active ? 'shrink-0 text-accent' : 'shrink-0 text-dimmed'}
+                />
+                <span class="truncate">{item.name}</span>
+                {#if dropTab === item.directory}
+                  <span
+                    class="absolute inset-y-0 w-0.5 bg-accent {dropSide === 'before'
+                      ? 'left-0'
+                      : 'right-0'}"
+                    aria-hidden="true"
+                  ></span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+      {#if tabs.length <= 1}
+        <span class="min-w-0 flex-1"></span>
+      {/if}
+      <span class="flex shrink-0 items-center gap-0.5">
         {#if video && tabId !== ''}
           <button
             type="button"
@@ -626,6 +826,26 @@
                 <RefreshCw size={13} class="shrink-0 text-muted" />
                 {refreshLabel}
               </DropdownMenu.Item>
+              {#if !video && canvasRead && canvasState === null}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  disabled={canvasBusy !== '' || selected.directory === ''}
+                  onSelect={() => void requestCanvas('create')}
+                >
+                  <Presentation size={13} class="shrink-0 text-muted" />
+                  Generate Screen Canvas
+                </DropdownMenu.Item>
+              {/if}
+              {#if !video && canvasRead && !liveReady}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  disabled={canvasBusy !== '' || selected.directory === ''}
+                  onSelect={() => void requestCanvas('live')}
+                >
+                  <PlayingCardsFan size={13} class="shrink-0 text-muted" />
+                  Generate Live Preview
+                </DropdownMenu.Item>
+              {/if}
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
               <DropdownMenu.Item
                 class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
@@ -704,32 +924,6 @@
           <X size={12} />
         </button>
       </div>
-    {:else if items.length > 1}
-      <div
-        class="flex items-center gap-1 overflow-x-auto border-t border-border/60 px-2 py-1"
-        aria-label={listLabel}
-      >
-        {#each items as item (item.directory)}
-          {@const active = item.directory === selected.directory}
-          {@const updated = updatedLabel(item)}
-          <button
-            type="button"
-            class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] transition-colors {active
-              ? 'bg-accent/10 font-medium text-foreground'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            title={item.hasEntry
-              ? updated === ''
-                ? item.name
-                : `${item.name}, updated ${updated}`
-              : `${item.name}, no index.html`}
-            aria-current={active ? 'true' : undefined}
-            onclick={() => selectDesign(item.directory)}
-          >
-            <WorkIcon size={10} class={active ? 'shrink-0 text-accent' : 'shrink-0 text-dimmed'} />
-            <span class="max-w-32 truncate">{item.name}</span>
-          </button>
-        {/each}
-      </div>
     {/if}
 
     {#if rootError !== ''}
@@ -738,96 +932,37 @@
       <p class="px-2.5 pb-1.5 text-[0.6875rem] text-muted">{rootNotice}</p>
     {/if}
 
-    {#if !video && canvasRead}
-      <div class="border-t border-border/60 px-2.5 py-1.5">
-        <div class="flex items-center gap-1.5">
-          <Frame size={11} class="shrink-0 text-accent" />
-          <span class="truncate text-[0.6875rem] font-medium text-foreground">Screen canvas</span>
-          <span class="ml-auto shrink-0 text-[0.625rem] text-dimmed tabular-nums">
-            {canvasState === null ? 'not made yet' : canvasSummary}
-          </span>
-        </div>
-
-        <div class="mt-1 flex flex-wrap items-center gap-1">
-          {#if canvasState === null}
-            <button
-              type="button"
-              class="flex h-6 items-center gap-1 rounded-md bg-primary px-2 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
-              disabled={canvasBusy !== '' || selected.directory === ''}
-              title="Ask the agent to create the screen canvas for this design"
-              aria-label="Ask the agent to create the screen canvas for this design"
-              onclick={() => void requestCanvas('create')}
-            >
-              {#if canvasBusy === 'create'}
-                <LoaderCircle size={11} class="animate-spin" />
-              {:else}
-                <Play size={11} />
-              {/if}
-              Create
-            </button>
-            <span class="text-[0.625rem] text-muted">
-              Every screen and state on one pannable page.
-            </span>
-          {:else}
-            <button
-              type="button"
-              class="flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-              disabled={openingCanvas}
-              title="Open the screen canvas in the in-app browser"
-              aria-label="Open the screen canvas in the in-app browser"
-              onclick={() => void openCanvas()}
-            >
-              {#if openingCanvas}
-                <LoaderCircle size={11} class="animate-spin" />
-              {:else}
-                <GlobeCode size={11} />
-              {/if}
-              Open
-            </button>
-            <button
-              type="button"
-              class="flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-              disabled={canvasBusy !== ''}
-              title="Ask the agent to bring the canvas up to date with the screens"
-              aria-label="Ask the agent to update the screen canvas"
-              onclick={() => void requestCanvas('update')}
-            >
-              {#if canvasBusy === 'update'}
-                <LoaderCircle size={11} class="animate-spin" />
-              {:else}
-                <RefreshCw size={11} />
-              {/if}
-              Update
-            </button>
-            {#if canvasSketches > 0}
-              <button
-                type="button"
-                class="flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                disabled={canvasBusy !== ''}
-                title="Ask the agent to build every sketch on the canvas as a real screen"
-                aria-label="Ask the agent to build the canvas sketches as real screens"
-                onclick={() => void requestCanvas('live')}
-              >
-                {#if canvasBusy === 'live'}
-                  <LoaderCircle size={11} class="animate-spin" />
-                {:else}
-                  <Play size={11} />
-                {/if}
-                Live view ({canvasSketches})
-              </button>
-            {/if}
-          {/if}
-        </div>
-
-        {#if canvasDrift !== ''}
-          <p class="mt-1 text-[0.625rem] text-warning">{canvasDrift}</p>
-        {/if}
-        {#if canvasNotice !== ''}
-          <p class="mt-1 text-[0.625rem] text-dimmed">{canvasNotice}</p>
-        {/if}
-      </div>
+    {#if canvasNotice !== ''}
+      <p class="px-2.5 pb-1.5 text-[0.625rem] text-dimmed">{canvasNotice}</p>
     {/if}
   </header>
+
+  {#if !video && canvasDrift !== ''}
+    <StalePanelNotice
+      stale
+      reason="canvas"
+      wrap
+      message={`The Screen Canvas is behind: ${canvasDrift}.`}
+    >
+      {#snippet action()}
+        <button
+          type="button"
+          class="ml-auto flex shrink-0 items-center gap-1 rounded border border-warning/40 px-2 py-0.5 text-xs font-semibold text-warning transition-colors hover:bg-warning/20 disabled:opacity-50"
+          disabled={canvasBusy !== ''}
+          title="Ask the agent to bring the Screen Canvas up to date with the screens"
+          aria-label="Ask the agent to sync the Screen Canvas"
+          onclick={() => void requestCanvas('update')}
+        >
+          {#if canvasBusy === 'update'}
+            <LoaderCircle size={12} class="animate-spin" />
+          {:else}
+            <ListClock size={12} />
+          {/if}
+          Sync
+        </button>
+      {/snippet}
+    </StalePanelNotice>
+  {/if}
 
   <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
     {#if error !== ''}
@@ -839,7 +974,7 @@
       </p>
     {/if}
 
-    {#if gallery.length === 0}
+    {#if video && gallery.length === 0}
       <div
         class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
       >
@@ -851,18 +986,50 @@
           <span class="px-4 text-center text-[0.6875rem]">
             {items.length === 0
               ? `The agent has not written a ${noun} yet. It will appear here when it does.`
-              : video
-                ? 'No preview captured yet.'
-                : 'This design has no HTML screens yet.'}
+              : 'No preview captured yet.'}
           </span>
         {/if}
       </div>
     {:else}
       <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
-        {#each gallery as screen (screen.entry)}
+        {#if !video}
+          {@render entryCard({
+            icon: Presentation,
+            name: 'Screen Canvas',
+            shot: canvasShot,
+            label: 'Open the Screen Canvas in the in-app browser',
+            empty: canvasEntryNote,
+            busy: !canvasRead || openingCanvas,
+            ready: canvasState !== null,
+            onOpen: () => void openCanvas()
+          })}
+          {@render entryCard({
+            icon: PlayingCardsFan,
+            name: 'Live preview',
+            shot: liveShot,
+            label: `Open the live preview of this ${noun} in the in-app browser`,
+            empty: liveEntryNote,
+            busy: opening,
+            ready: liveReady,
+            onOpen: () => void openPreview(LIVE_PREVIEW_ENTRY)
+          })}
+        {/if}
+        {#each designScreens as screen (screen.entry)}
           {@render screenCard(screen, video)}
         {/each}
       </div>
+      {#if !video && designScreens.length === 0}
+        {#if galleryBusy}
+          <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
+            <LoaderCircle size={12} class="animate-spin" />
+            Capturing the {noun}…
+          </p>
+        {:else}
+          <p class="mt-2 text-center text-[0.6875rem] text-muted">
+            {`The agent has not written a ${noun} yet. It will appear here when it does.`}
+          </p>
+        {/if}
+      {/if}
     {/if}
   </div>
 </div>
