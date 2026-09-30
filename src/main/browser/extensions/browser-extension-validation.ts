@@ -85,12 +85,13 @@ function parseJarList(value: unknown): string[] {
 export function validateExtensionUpdatePatch(value: unknown): {
   enabled?: boolean
   boxes?: string[]
+  pinned?: boolean
 } {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError('Browser extension update is invalid')
   }
   const record = value as Record<string, unknown>
-  const patch: { enabled?: boolean; boxes?: string[] } = {}
+  const patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean } = {}
   if (record['enabled'] !== undefined) {
     if (typeof record['enabled'] !== 'boolean') {
       throw new TypeError('Browser extension enabled flag is invalid')
@@ -100,7 +101,13 @@ export function validateExtensionUpdatePatch(value: unknown): {
   if (record['boxes'] !== undefined) {
     patch.boxes = parseJarList(record['boxes'])
   }
-  if (patch.enabled === undefined && patch.boxes === undefined) {
+  if (record['pinned'] !== undefined) {
+    if (typeof record['pinned'] !== 'boolean') {
+      throw new TypeError('Browser extension pinned flag is invalid')
+    }
+    patch.pinned = record['pinned']
+  }
+  if (patch.enabled === undefined && patch.boxes === undefined && patch.pinned === undefined) {
     throw new TypeError('Browser extension update changed nothing')
   }
   return patch

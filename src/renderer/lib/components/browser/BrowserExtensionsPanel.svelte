@@ -3,6 +3,7 @@
     AlertTriangle,
     ChevronDown,
     FolderOpen,
+    Pin,
     Plus,
     Puzzle,
     Store,
@@ -24,6 +25,7 @@
   } from '$lib/stores/browser-extension-store-offer'
   import type { BrowserExtension } from '$shared/ipc-contract'
   import { WEBSTORE_HOME_URL } from '$shared/browser/browser-webstore'
+  import { MAX_PINNED_EXTENSIONS } from '$shared/browser/browser-extension-pins'
   import BrowserExtensionInstallProgress from './BrowserExtensionInstallProgress.svelte'
   import BrowserBoxChips from './BrowserBoxChips.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
@@ -145,6 +147,28 @@
       parts.push(n === 1 ? '1 warning' : `${n} warnings`)
     }
     return parts.join(' · ')
+  }
+
+  /**
+   * What one row's pin control says and whether it can be used.
+   *
+   * A pin is a place in the app header whose only job is opening the extension's
+   * popup, so an extension that declares none has nothing to pin, and the header
+   * holds `MAX_PINNED_EXTENSIONS` of them. The cap is stated in the control's own
+   * words rather than left to a refusal, which is what the user reads first.
+   */
+  function pinAction(extension: BrowserExtension): { disabled: boolean; title: string } {
+    if (extension.pinned) return { disabled: false, title: `Unpin ${extension.name}` }
+    if (extension.popupPath === null) {
+      return { disabled: true, title: `${extension.name} declares no popup to open` }
+    }
+    if (browserExtensions.pinnedCount >= MAX_PINNED_EXTENSIONS) {
+      return {
+        disabled: false,
+        title: `${MAX_PINNED_EXTENSIONS} extensions are already pinned. Unpin one to make room for ${extension.name}.`
+      }
+    }
+    return { disabled: false, title: `Pin ${extension.name} to the header` }
   }
 
   /** The jars a user can choose: the context's own jar (the empty id), then each
@@ -359,6 +383,7 @@
   {:else}
     <ul class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
       {#each shown as extension (extension.id)}
+        {@const pin = pinAction(extension)}
         <li>
           <div
             class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-elevated"
@@ -401,6 +426,23 @@
                 : `Enable ${extension.name}`}
               onchange={(next) => void browserExtensions.setEnabled(extension.id, next)}
             />
+            <button
+              type="button"
+              class={[
+                'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay hover:text-foreground focus-visible:opacity-100',
+                pin.disabled
+                  ? 'cursor-not-allowed text-muted opacity-40'
+                  : extension.pinned
+                    ? 'text-foreground'
+                    : 'text-muted opacity-0 group-hover:opacity-100'
+              ]}
+              disabled={pin.disabled}
+              title={pin.title}
+              aria-label={pin.title}
+              onclick={() => void browserExtensions.setPinned(extension.id, !extension.pinned)}
+            >
+              <Pin size={13} />
+            </button>
             <button
               type="button"
               class={[

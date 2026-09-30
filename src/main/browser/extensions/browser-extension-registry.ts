@@ -88,6 +88,9 @@ export interface BrowserExtensionRecord {
   /** The Web Store id it was fetched by, or null for a folder install. */
   webstoreId: string | null
   popupPath: string | null
+  /** Whether the user pinned it into the app header. A pin is bounded and needs a
+   *  popup to open, which is what the service enforces before it is written. */
+  pinned: boolean
   iconDataUrl: string | null
   declaredPermissions: string[]
   ruleResources: { id: string; enabled: boolean }[]
@@ -214,6 +217,7 @@ function parseRecord(value: unknown): BrowserExtensionRecord | null {
     source,
     webstoreId: isExtensionId(value['webstoreId']) ? value['webstoreId'] : null,
     popupPath: optionalBoundedString(value['popupPath'], MAX_POPUP_PATH_LENGTH),
+    pinned: value['pinned'] === true,
     iconDataUrl: iconDataUrl && iconDataUrl.startsWith('data:image/') ? iconDataUrl : null,
     declaredPermissions: boundedStringList(
       value['declaredPermissions'],
@@ -270,6 +274,7 @@ export function toExtensionView(
     enabled: record.enabled,
     boxes: record.boxes,
     popupPath: record.popupPath,
+    pinned: record.pinned,
     missingCapabilities: [...record.missingCapabilities],
     warnings,
     injected: record.injected,
@@ -329,12 +334,13 @@ export class BrowserExtensionRegistry {
 
   async patch(
     id: string,
-    patch: { enabled?: boolean; boxes?: string[] }
+    patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean }
   ): Promise<BrowserExtensionRecord | null> {
     const record = this.records.get(id)
     if (!record) return null
     if (patch.enabled !== undefined) record.enabled = patch.enabled
     if (patch.boxes !== undefined) record.boxes = parseJars(patch.boxes)
+    if (patch.pinned !== undefined) record.pinned = patch.pinned
     await this.persist()
     return record
   }

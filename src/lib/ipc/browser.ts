@@ -583,6 +583,14 @@ export interface BrowserExtension {
   boxes: string[]
   /** The popup document the extension declares, or null when it has none. */
   popupPath: string | null
+  /**
+   * Whether the user pinned it into the app header.
+   *
+   * A pin is a place in the app's own chrome, so it is bounded
+   * (`MAX_PINNED_EXTENSIONS`) and it only means something for an extension that
+   * declares a popup: opening that popup is the only thing a pin can do.
+   */
+  pinned: boolean
   /** Namespaces the runtime lacks that this extension declares or reaches for, so
    *  the row can state what it cannot do. */
   missingCapabilities: string[]

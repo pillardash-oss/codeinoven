@@ -29,6 +29,7 @@ import { isAbsolute, join, resolve, sep } from 'node:path'
 import { dialog, type BrowserWindow, type Session } from 'electron'
 import preambleSource from './compat/cio-compat-preamble.js?raw'
 import { missingExtensionCapabilities } from '../../../lib/browser/browser-extension-capabilities'
+import { MAX_PINNED_EXTENSIONS } from '../../../lib/browser/browser-extension-pins'
 import type {
   BrowserExtension,
   BrowserExtensionInstallInput,
@@ -166,12 +167,31 @@ export class BrowserExtensionService {
     this.host.publish()
   }
 
-  /** Enable or disable one extension, and choose the jars it runs in. */
+  /** Enable or disable one extension, choose the jars it runs in, or pin it into
+   *  the app header.
+   *
+   * The pin rules live here rather than in the panel, because a pin is a place in
+   * the app's own chrome: only a header's worth of them exists
+   * (`MAX_PINNED_EXTENSIONS`), and a pin only means something for an extension
+   * that declares a popup, since opening that popup is the only thing a pin does. */
   async update(
     extensionId: string,
-    patch: { enabled?: boolean; boxes?: string[] }
+    patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean }
   ): Promise<BrowserExtension> {
     if (!isExtensionId(extensionId)) throw new TypeError('Browser extension ID is invalid')
+    const current = this.registry.get(extensionId)
+    if (!current) throw new Error('That extension is not installed')
+    if (patch.pinned === true) {
+      if (!current.popupPath) {
+        throw new Error('That extension declares no popup to open from a pin')
+      }
+      const pinned = this.registry
+        .list()
+        .filter((record) => record.pinned && record.id !== extensionId)
+      if (pinned.length >= MAX_PINNED_EXTENSIONS) {
+        throw new Error(`Only ${MAX_PINNED_EXTENSIONS} extensions can be pinned at once`)
+      }
+    }
     const record = await this.registry.patch(extensionId, patch)
     if (!record) throw new Error('That extension is not installed')
     await this.reconcileLiveJars()
@@ -350,6 +370,7 @@ export class BrowserExtensionService {
         source: input.source,
         webstoreId,
         popupPath: result.popupPath,
+        pinned: false,
         iconDataUrl: result.iconDataUrl,
         declaredPermissions: result.declaredPermissions,
         ruleResources: result.ruleResources,

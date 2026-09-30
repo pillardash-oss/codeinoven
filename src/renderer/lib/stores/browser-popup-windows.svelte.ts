@@ -139,6 +139,20 @@ class BrowserPopupWindowsState {
   }
 
   /**
+   * The popup one extension already has open in one tab, if it has one.
+   *
+   * An extension has at most one popup per tab, so this is how a surface that
+   * wears the extension (a header pin, the extension's own row) says whether its
+   * popup is up without keeping a second copy of that answer.
+   */
+  extensionPopupFor(extensionId: string, tabId: string): string | null {
+    for (const popup of this.forTab(tabId)) {
+      if (popup.extensionId === extensionId) return popup.id
+    }
+    return null
+  }
+
+  /**
    * The popup the rail shows for a browser tab: the one the user picked, or the
    * newest still open. Null when that tab holds none, which is when the rail has
    * nothing left to display.

@@ -91,6 +91,29 @@ class BrowserExtensionsState {
     )
   }
 
+  /** How many extensions are pinned into the app header, for the cap's own rule. */
+  get pinnedCount(): number {
+    return this.extensions.filter((extension) => extension.pinned).length
+  }
+
+  /**
+   * The pinned extensions of one jar, which is the header's whole list.
+   *
+   * A pin is a place in the app's own chrome, so it is shown while the box on
+   * screen runs the extension and steps aside for every other box. An extension
+   * that is disabled or loaded nowhere is not running in that jar, so it is not
+   * pinned into anything either.
+   */
+  pinnedExtensionsInJar(jar: string): BrowserExtension[] {
+    return this.extensions.filter(
+      (extension) =>
+        extension.pinned &&
+        extension.enabled &&
+        extension.popupPath !== null &&
+        extension.boxes.includes(jar)
+    )
+  }
+
   /** Register the runtime's subscriptions and read the installed list once. */
   start(): void {
     if (this.started) return
@@ -177,6 +200,12 @@ class BrowserExtensionsState {
     await this.patch(extensionId, { enabled }, 'The extension could not be updated.')
   }
 
+  /** Pin or unpin one extension, for the place it takes in the app header. Both
+   *  pin rules are main's, so a refusal arrives as the error it is. */
+  async setPinned(extensionId: string, pinned: boolean): Promise<void> {
+    await this.patch(extensionId, { pinned }, 'The extension could not be pinned.')
+  }
+
   /**
    * Replace the whole set of jars an extension runs in.
    *
@@ -192,7 +221,7 @@ class BrowserExtensionsState {
   /** Send one patch to main and apply the record it answers with. */
   private async patch(
     extensionId: string,
-    patch: { enabled?: boolean; boxes?: string[] },
+    patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean },
     fallback: string
   ): Promise<void> {
     try {
