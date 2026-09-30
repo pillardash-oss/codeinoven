@@ -10696,15 +10696,14 @@
   }
 
   /**
-   * Pause a secret card's countdown while the user reads a temporary chat: the
-   * same interaction that pauses a question (an update with no next index)
-   * clears the request's deadline. Best-effort, so the chat still opens when the
-   * request is already resolving.
+   * Hold a secret card's countdown while the user works on it: the same
+   * interaction that pauses a question (an update with no next index) clears the
+   * request's deadline. The card owns the best-effort handling, so a pause that
+   * did not land is retried on the next interaction instead of being swallowed
+   * here.
    */
-  function handleSecretPause(requestId: string, questionIndex: number): void {
-    void handleQuestionUpdate(requestId, questionIndex, [], undefined).catch(() => {
-      // The request may already be resolving; the chat still opens.
-    })
+  function handleSecretPause(requestId: string, questionIndex: number): Promise<void> {
+    return handleQuestionUpdate(requestId, questionIndex, [], undefined).then(() => undefined)
   }
 
   /**

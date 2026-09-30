@@ -3058,6 +3058,13 @@ export class ChatEngine {
         pending.request.expiresAt = Date.now() + pending.timeoutMs
         this.schedulePendingQuestion(pending)
       }
+    } else if (pending.request.questions.some(isSecretQuestion)) {
+      // A secret card the user is filling in stays paused, and re-scheduling is
+      // what holds that pause (and what gives the card a full window back once
+      // the user stops interacting). Without it a cleared deadline would sit
+      // there until the next unrelated activity turned it into a fresh
+      // countdown, under a card that still says it is paused.
+      this.schedulePendingQuestion(pending)
     }
     return structuredClone(pending.request)
   }
@@ -21043,6 +21050,21 @@ export class ChatEngine {
     // when they are fetching it. Nothing can invent a secret, so the deadline
     // closes the card rather than answering it.
     if (pending.request.questions.some(isSecretQuestion)) {
+      // A card the user has started filling in is paused instead: the value they
+      // are pasting is never cut off, and no deadline runs under their hands.
+      // The pause lasts while they are interacting with the app; once they are
+      // not, the card gets a full window again so an abandoned request still
+      // closes and settles the tool call waiting on it.
+      if (pending.request.interactedQuestionIndexes.length > 0) {
+        pending.request.expiresAt = undefined
+        if (this.isUserActive()) {
+          pending.timer = setTimeout(
+            () => this.schedulePendingQuestion(pending),
+            ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
+          )
+          return
+        }
+      }
       const secretExpiresAt = pending.request.expiresAt ?? Date.now() + pending.timeoutMs
       pending.request.expiresAt = secretExpiresAt
       pending.timer = setTimeout(

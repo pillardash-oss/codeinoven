@@ -285,11 +285,12 @@ Cmd+Q so a routine still fires on time. It is on by default
   retry-scheduler change, so the icon returns to normal the moment the error
   clears, and a windowless run that breaks flips it with no window open.
 - **Gates.** A question with a timer answers itself with its recommended option
-  through `questionTimeoutMs`; a secret card runs its own absolute timer and
-  closes unanswered; a destructive scope confirmation denies itself at its
-  `expiresAt`. Every one of those is recorded so the app never decides silently
-  (see **Auto-resolved gates**). A permission gate has no timer, so it parks
-  durably and flips the icon; nothing proceeds until the user answers.
+  through `questionTimeoutMs`; a secret card counts down from the moment its card
+  appears and closes unanswered, paused while the user fills it in; a destructive
+  scope confirmation denies itself at its `expiresAt`. Every one of those is
+  recorded so the app never decides silently (see **Auto-resolved gates**). A
+  permission gate has no timer, so it parks durably and flips the icon; nothing
+  proceeds until the user answers.
 - **Sleep.** A machine that is asleep cannot run work. Inside
   `backgroundWakeLeadMs` before a due run the app holds
   `prevent-app-suspension`, capped by `maxBackgroundWakeHoldMs` so a
@@ -837,13 +838,16 @@ prompt"; the user-facing term is how-to.
 - A human decision runs on the app's one timer. `questionTimeoutMs` is read per
   request, so a Settings change applies to the next card instead of a restart,
   and both the question card and the `cio_ask_secret` card count down to the
-  same `expiresAt` the main process is running. A secret card deliberately skips
-  the activity pause a question uses: the user usually leaves the app to obtain
-  the value, so a card that only counted down while they were elsewhere would
-  expire exactly when they are fetching it. Nothing can invent a secret, so an
-  expired card closes and settles the waiting tool call as dismissed
-  (`expireSecretQuestion`) rather than answering it, which lets the agent react
-  instead of hanging on an unreachable card.
+  same `expiresAt` the main process is running. Until the user touches it, a
+  secret card deliberately skips the activity pause a question uses: the user
+  usually leaves the app to obtain the value, so a card that only counted down
+  while they were elsewhere would expire exactly when they are fetching it. From
+  the first keystroke that changes: the deadline is cleared, and the card gets a
+  full window back only once the user has stopped interacting with the app, so a
+  pasted value is never cut off while an abandoned card still closes. Nothing can
+  invent a secret, so an expired card closes and settles the waiting tool call as
+  dismissed (`expireSecretQuestion`) rather than answering it, which lets the
+  agent react instead of hanging on an unreachable card.
 - The app publishes that deadline to every gateway transport, because a harness
   whose client has its own shorter request timeout abandons the call while the
   card is still on screen. That is how a Slack token request was lost three times
