@@ -225,12 +225,22 @@ export default defineConfig(({ mode }) => {
         // Bundle the CodeMirror core packages as shared pre-bundled deps so
         // the dynamic imports in codemirror-file-editor.ts and every language
         // package resolve to one instance instead of separate chunks.
+        //
+        // jsonc-parser is listed for a different reason: the startup scan only
+        // reads the `<script>` blocks of a `.svelte` file, so a dependency that
+        // is reached only through a markup-level lazy import (the file tree
+        // panel behind `{#await import(...)}` imports file-beautify.ts, which
+        // imports jsonc-parser) is invisible to it. Left out, the very first
+        // open of that panel makes Vite discover the dependency at runtime,
+        // re-optimize, and full-reload the renderer, which restarts the whole
+        // app mid-session. Every newly lazily imported dependency belongs here.
         include: [
           '@codemirror/state',
           '@codemirror/view',
           '@codemirror/commands',
           '@codemirror/language',
-          '@codemirror/language-data'
+          '@codemirror/language-data',
+          'jsonc-parser'
         ]
       },
       // Pin the dev origin. The renderer's persisted state (recovery snapshot,
