@@ -45,8 +45,14 @@ export function hasUpcomingWork(state: BootstrapState, database: Database): bool
  * The menu bar icon mirrors the thread's own error card, so the user learns a
  * run broke without opening the app. Three conditions light it:
  *
- *   - a thread parked on an approval gate, which cannot proceed on its own;
- *   - a thread that settled `failed`, until the user reads it;
+ *   - a thread parked on the user (`awaiting_approval`): a permission, question,
+ *     or secret card, or a reviewable artifact, that cannot proceed on its own.
+ *     This is live state, so it is deliberately *not* gated on `read`: opening
+ *     or reading the thread answers nothing, and the light must stay until the
+ *     status itself changes (the user answers, or the turn resumes);
+ *   - a thread that settled `failed`, until the user reads it   a failure is a
+ *     past event the user acknowledges by reading it, not a state they are
+ *     being asked to act on right now;
  *   - a thread paused on a provider issue (`working-paused`), which carries the
  *     visible error card   a usage reset, a connection interruption, a
  *     provider outage. It is deliberately not gated on `read`: the run is
@@ -63,8 +69,8 @@ export function computeAttention(database: Database): boolean {
   try {
     const row = database.get<{ cnt: number }>(
       `SELECT COUNT(*) AS cnt FROM threads
-        WHERE status = 'working-paused'
-           OR (read = 0 AND status IN ('awaiting_approval', 'failed'))`
+        WHERE status IN ('working-paused', 'awaiting_approval')
+           OR (read = 0 AND status = 'failed')`
     )
     return (row?.cnt ?? 0) > 0
   } catch (error) {

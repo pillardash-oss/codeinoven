@@ -264,9 +264,11 @@ class WorkspaceState {
     // tells the git store the project is in use, so it can refresh status and
     // the connection-gated PR indicators without any polling.
     gitState.notifyThreadOpened(project, thread)
-    // The moment a thread is opened its notifications are stale — drop them so
-    // an error/completion that was already seen never lingers in the panel.
-    notificationPanelState.dismissForThread(thread.projectId, thread.id)
+    // The moment a thread is opened its notices are retired, so an
+    // error/completion that was already seen never lingers in the panel. A
+    // needs-attention notice is the exception: the thread is still parked on the
+    // user, and only a status change (answering the card) leaves that state.
+    notificationPanelState.reconcileThread(thread)
     // The live process count is a badge, and reading it walks a session's
     // process table. It must never share the switch instant with the
     // conversation mount.

@@ -2,17 +2,11 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { MessagesSquare } from '@lucide/svelte'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import { invoke } from '$lib/ipc.svelte'
-import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
-import { statusBadgeForThread } from '$lib/thread-status-badge'
+import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
 import { threadScopeBucket } from '$lib/threads/thread-scope'
-import {
-  isOrchestrationChildThread,
-  isThreadWorking,
-  type Thread,
-  type ThreadSearchResult
-} from '$shared/types'
+import { isOrchestrationChildThread, type Thread, type ThreadSearchResult } from '$shared/types'
 import { actionId } from './app-palette-actions'
 
 interface ThreadSearchTarget {
@@ -213,9 +207,7 @@ export class ThreadSearchPaletteController {
       const projectIconUri = scopeState.projects.find(
         (candidate) => candidate.id === thread.projectId
       )?.iconUrl
-      const isLiveWorking = agentRuns.hasSettled(thread.projectId, thread.id)
-        ? agentRuns.isBusy(thread.projectId, thread.id)
-        : Boolean(thread.sessionId) && isThreadWorking(thread)
+      const isLiveWorking = isThreadLiveWorking(thread)
       const status = statusBadgeForThread(thread, isLiveWorking)
       // Model/harness metadata for the result row: while the thread is working
       // the current provider + model is shown, otherwise the thread's harnesses

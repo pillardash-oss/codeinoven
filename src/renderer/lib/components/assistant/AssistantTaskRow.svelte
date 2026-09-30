@@ -19,10 +19,10 @@
   } from '$lib/components/shared/thread-hover-popover-layout'
   import { longPress } from '$lib/long-press.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import { isAssistantSetupThread, isThreadWorking, type Thread } from '$shared/types'
+  import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
+  import { isAssistantSetupThread, type Thread } from '$shared/types'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
   import { runRowLine, taskPopoverState, taskRowIconKey, taskRunLine } from './assistant-view'
 
@@ -109,18 +109,23 @@
     return taskRunLine(task, nextRunAt, Date.now())
   })
 
-  const statusTone = $derived(threadStatusPolicy(task.status).tone)
   const title = $derived(`Open ${isRun ? 'run' : 'task'}: ${task.title}`)
 
   /** Live-work flags, settled by the same run state the thread rows use so a
    *  stale persisted status cannot keep a spinner alive after the turn ended.
-   *  A task row also lights while any of its runs is in flight. */
-  const isWorking = $derived(
-    runWorking ||
-      (agentRuns.hasSettled(task.projectId, task.id)
-        ? agentRuns.isBusy(task.projectId, task.id)
-        : Boolean(task.sessionId) && isThreadWorking(task))
-  )
+   *  A task row also lights while any of its runs is in flight, and a thread
+   *  parked on a card (a question, a permission, a secret) is never working: it
+   *  is waiting on the user. */
+  const isWorking = $derived(runWorking || isThreadLiveWorking(task))
+  /**
+   * The row's status indicator, from the app's canonical status mapping, so an
+   * assistant row wears exactly the colour every other thread surface gives the
+   * same state: the unread green for a finished run nobody has opened yet (a
+   * successful run's own colour), the parked amber while a card waits on the
+   * user, the working blue only while work is actually being produced, and the
+   * muted done colour once a finished run has been read.
+   */
+  const statusBadge = $derived(statusBadgeForThread(task, isWorking))
   const isRetryPaused = $derived(task.status === 'working-paused')
   const isForeignRun = $derived(foreignRuns.isForeign(task.projectId, task.id))
   const stageLabel = $derived(threadStatusPolicy(task.status).label)
@@ -319,9 +324,13 @@
       </span>
       <span class="mt-0.5 flex items-center gap-1.5">
         <StatusBadge
-          tone={missed ? 'missed' : statusTone}
+          stage={missed ? undefined : statusBadge.stage}
+          tone={missed ? 'missed' : statusBadge.tone}
+          kind={missed ? undefined : statusBadge.kind}
+          variant={missed ? 'dot' : (statusBadge.variant ?? 'dot')}
+          animated={!missed && statusBadge.animated}
           size="sm"
-          title={missed ? 'Missed run' : task.status}
+          title={missed ? 'A scheduled run was missed' : statusBadge.label}
         />
         <span class="truncate text-[0.625rem] text-dimmed" title={scheduleLabel ?? undefined}>
           {runLine}

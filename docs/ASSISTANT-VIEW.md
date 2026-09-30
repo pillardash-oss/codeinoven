@@ -387,6 +387,18 @@ default). Every assistant notification surface uses that colour and **never an
 icon**, keeping the notification badge contract (just the colour of what it
 represents).
 
+A **needs-attention** notice is the thread's own parked state, not a message
+about a moment that has passed, so it is the one notice that reading does not
+retire: it leaves when the thread stops waiting on the user (the status changes
+as the card is answered), or when the user dismisses the entry itself. Opening
+the thread, marking it read, and the thread's own row all keep saying the same
+thing for as long as the park holds
+(`notificationPanelState.reconcileThread` in
+`src/renderer/lib/stores/notification-panel.svelte.ts`, the menu bar predicate in
+`src/main/system/background-work-state.ts`, and `isThreadLiveWorking` in
+`src/renderer/lib/thread-status-badge.ts`). Every other notice (done, spec, error,
+chat) reports a moment that has already passed, so reading the thread retires it.
+
 The header bell draws one plain colour dot per waiting kind, each in the exact
 status colour the app uses for the same meaning everywhere else
 (`NOTIFICATION_KIND_COLORS` in
@@ -508,6 +520,17 @@ runs is working (`runWorking`), because the run, not the task, is what is
 executing, and the routine row aggregates the same signal. Missed badges stay on
 the task (and its routine): a miss is a property of the schedule, not of one
 execution.
+
+A task or run row's status indicator comes from the same canonical mapping every
+other thread surface reads, `statusBadgeForThread`
+(`src/renderer/lib/thread-status-badge.ts`, via the one live-working rule
+`isThreadLiveWorking`), so an assistant row can never disagree with a project
+row about the same state: the unread green for a finished run nobody has opened
+yet, the muted done colour once it has been read, the parked amber while a card
+(a question, a permission, a secret) waits on the user, and the working blue
+only while work is actually being produced. A parked run is never blue: its
+session stays bound and reports `waiting` for as long as the card is open, so
+the parked status is the authority until the user answers it.
 
 **A routine's Getting started runs leave that row once the routine is set up.**
 While the routine is still authoring (its how-to unsaved) its runs stay nested

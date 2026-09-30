@@ -21,6 +21,7 @@ export type ThreadStatus =
   | 'failed'
 
 import {
+  isThreadAwaitingUserStatus,
   isThreadBusyStatus,
   isThreadExecutionActiveStatus,
   isThreadRetryPausedStatus,
@@ -252,6 +253,15 @@ export function isThreadBusy(thread: Thread): boolean {
 /** True when the provider is paused until an automatic retry deadline. */
 export function isThreadRetryPaused(thread: Thread): boolean {
   return isThreadRetryPausedStatus(thread.status)
+}
+
+/**
+ * True while the thread is parked on the user (a permission, question, or
+ * secret card, or a reviewable artifact waiting on them) and produces no work.
+ * Its session stays bound while a card waits, so the status is the authority.
+ */
+export function isThreadAwaitingUser(thread: Thread): boolean {
+  return isThreadAwaitingUserStatus(thread.status)
 }
 
 /**

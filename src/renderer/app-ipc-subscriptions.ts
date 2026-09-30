@@ -62,7 +62,6 @@ async function openNotificationThread(
   deps: AppIpcSubscriptionDeps
 ): Promise<void> {
   const { projectId, threadId } = payload
-  notificationPanelState.dismissForThread(projectId, threadId)
   try {
     const [project, thread] = await Promise.all([
       invoke('project:get', projectId),
@@ -77,6 +76,10 @@ async function openNotificationThread(
       )
       return
     }
+    // Opening retires the thread's notices, except a needs-attention one whose
+    // thread is still parked on the user: going to the card to answer it is not
+    // answering it, so that entry stays until the status itself changes.
+    notificationPanelState.reconcileThread(thread)
     await deps.openThreadFromNotification(thread, project, payload.temporaryChatId)
     logRendererDev(`A notification click opened thread ${threadId} in project ${projectId}`)
   } catch (error) {
@@ -213,7 +216,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
       workspaceState.updateThread(thread)
     }
     if (thread.read) {
-      notificationPanelState.dismissForThread(thread.projectId, thread.id)
+      notificationPanelState.reconcileThread(thread)
     }
     deps.settleCloseConfirmationThread(thread)
   })
