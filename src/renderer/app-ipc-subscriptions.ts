@@ -9,6 +9,7 @@ import {
   showToastWarning
 } from '$lib/stores/app-errors.svelte'
 import { clearDraftLabelCookie } from '$lib/stores/draft-label'
+import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import { pipState } from '$lib/stores/pip.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -67,10 +68,22 @@ async function openNotificationThread(
       invoke('project:get', projectId),
       invoke('thread:get', projectId, threadId)
     ])
-    if (!project || !thread) return
+    if (!project || !thread) {
+      // This is the one outcome a user cannot tell apart from a broken button:
+      // the card said "Open thread" and the window did nothing. Say which half
+      // of the thread is gone so a report of that click is answerable.
+      logRendererDev(
+        `A notification click could not open thread ${threadId}: ${project ? 'the thread' : 'the project'} is gone`
+      )
+      return
+    }
     await deps.openThreadFromNotification(thread, project, payload.temporaryChatId)
-  } catch {
-    // The project or thread may have been deleted before the notification was clicked.
+    logRendererDev(`A notification click opened thread ${threadId} in project ${projectId}`)
+  } catch (error) {
+    // A thread that was deleted before the click lands here and is expected,
+    // but so is every real failure in the open path. Both used to be swallowed
+    // whole, which left a click that did nothing with no record of why.
+    logRendererError(`A notification click could not open thread ${threadId}`, error)
   }
 }
 

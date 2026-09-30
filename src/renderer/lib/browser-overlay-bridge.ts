@@ -13,6 +13,7 @@ import {
   type ToastOverlayToast
 } from '$shared/browser-overlay'
 import MemoryToastComponent from './components/ui/MemoryToast.svelte'
+import { logRendererDev } from './system/renderer-logger'
 import { openMemoryProposal } from './stores/memory-proposal-open'
 import { globalBrowser } from './stores/global-browser.svelte'
 import { browserTabLabel } from './stores/global-browser-types'
@@ -232,7 +233,18 @@ export function projectStripChrome(): BrowserStripOverlayChrome {
  */
 export function handleToastOverlayInteraction(report: ToastOverlayInteractionReport): void {
   const live = toast.getActiveToasts().find((entry) => entry.id === report.id)
-  if (!live) return
+  if (!live) {
+    // The overlay draws from a projection and holds no handlers, so a press on a
+    // card this window has already dropped is the one case where a control that
+    // was on screen goes nowhere. Only a press is logged: dismissals and
+    // auto-closes cross the boundary by design and would only be noise.
+    if (report.interaction === 'action' || report.interaction === 'cancel') {
+      logRendererDev(
+        `The toast overlay reported a ${report.interaction} on card ${String(report.id)}, which is no longer on the stack`
+      )
+    }
+    return
+  }
   if (report.interaction === 'action' || report.interaction === 'cancel') {
     const memory = report.interaction === 'action' ? memoryProposalProps(live) : null
     if (memory) {
