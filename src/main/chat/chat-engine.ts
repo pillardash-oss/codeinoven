@@ -2870,6 +2870,13 @@ export class ChatEngine {
   ): Promise<void> {
     await this.awaitSessionIdleFinalization(pending.request.sessionId)
     await this.resolvePendingQuestion(pending, resolution, answers, async () => undefined)
+    // The answer starts a new turn, so the turn that asked the question can
+    // never resume and its checkpoint would stay active forever. Settle it
+    // here, while the workspace still reflects that turn, so its file changes
+    // land on their own card instead of vanishing.
+    await this.settleUnresumableQuestionTurn(pending.request.sessionId).catch((error: unknown) =>
+      Logger.error('Question turn settlement failed:', error)
+    )
 
     const thread = await this.threadManager.getThread(
       pending.request.projectId,
@@ -2897,6 +2904,46 @@ export class ChatEngine {
       // such record, so its presentation still has to render.
       resolution === 'answered' ? undefined : decision.presentation
     )
+  }
+
+  /**
+   * Finalize the checkpoint of a turn whose question answer cannot reach it.
+   *
+   * A turn that ends on a question skips checkpoint finalization on purpose, so
+   * the answer can continue the same native turn under the same checkpoint.
+   * When the answer cannot reach that turn, the engine sends a new turn instead,
+   * which starts a new checkpoint and replaces the thread's `active_turns` row.
+   * Nothing then points at the old checkpoint: the renderer skips `active`
+   * rows, restart recovery walks the ledger, and the late-claim reopen only
+   * accepts terminal checkpoints, so the turn's file changes disappeared with
+   * no card, no diff, and no undo.
+   */
+  private async settleUnresumableQuestionTurn(sessionId: string): Promise<void> {
+    const session = this.sessionRegistry.get(sessionId)
+    if (!session?.activeTurnId) return
+    this.reassertTurnToolEvidence(session, await this.turnTranscriptMessages(session))
+    await this.finishCheckpoint(sessionId, session, 'completed')
+  }
+
+  /**
+   * The current turn's messages from the driver's own transcript, or none when
+   * the driver cannot be resolved or its transcript is unavailable.
+   */
+  private async turnTranscriptMessages(session: SessionInfo): Promise<AgentMessage[]> {
+    const driver = this.driverForRuntime(session.driverId, session.accountId)
+    if (!driver) return []
+    try {
+      return session.activeTurnUserMessageId && driver.loadMessagesSince
+        ? await driver.loadMessagesSince(
+            session.projectPath,
+            session.sessionId,
+            session.activeTurnUserMessageId
+          )
+        : await driver.loadMessages(session.projectPath, session.sessionId)
+    } catch (error) {
+      Logger.dev('turn transcript re-read failed:', error)
+      return []
+    }
   }
 
   /**
@@ -24664,6 +24711,7 @@ export class ChatEngine {
         }
       }
       if (!awaitingUser) {
+        this.reassertTurnToolEvidence(info, messages)
         await this.finishCheckpoint(
           sessionId,
           info,
@@ -26599,6 +26647,42 @@ export class ChatEngine {
     return merged
   }
 
+  /**
+   * Re-assert the mutating-tool evidence a settled turn's own transcript
+   * proves. Live part events are the normal source, but they can be missed: a
+   * driver that mirrors parts only once the turn settles, a mid-turn session
+   * re-registration, or a dropped event. Completion reads that evidence to
+   * decide which workspace changes belong to the turn, and an empty set means
+   * "this turn claimed nothing", which records no diff at all and silently
+   * deletes real edits from the card. This only ever widens what completion
+   * considers the turn's own, and every path must still appear in the workspace
+   * diff, so no change is invented.
+   */
+  private reassertTurnToolEvidence(session: SessionInfo, messages: readonly AgentMessage[]): void {
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      for (const part of message.parts) {
+        if (part.type !== 'tool') continue
+        if (UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
+          session.unboundedToolObserved = true
+          continue
+        }
+        const paths = changedPathsFromTool(session.projectPath, part)
+        if (paths.length === 0) continue
+        session.changedPaths ??= new Set()
+        session.preciseChangedPaths ??= new Map()
+        const claimedAt = Date.now()
+        for (const path of paths) {
+          // A path the user saved through the in-app editor during this turn is
+          // the user's edit, exactly as in the live part handler.
+          if (session.userTouchedPaths?.has(path)) continue
+          session.changedPaths.add(path)
+          session.preciseChangedPaths.set(path, claimedAt)
+        }
+      }
+    }
+  }
+
   private async finishCheckpoint(
     sessionId: string,
     info: SessionInfo | undefined,
@@ -26908,6 +26992,13 @@ export class ChatEngine {
     ephemeral?: boolean
   ): void {
     const existing = this.sessionRegistry.get(sessionId)
+    // Naming the very turn the session is already running is a refresh, not a
+    // new turn: keep the attribution that turn has built up. Resetting it here
+    // used to erase the turn's claimed paths and its shell-tool flag, and
+    // completion then recorded no workspace changes at all for a turn that
+    // really did edit files.
+    const sameTurn = activeTurnId !== undefined && existing?.activeTurnId === activeTurnId
+    const continuesTurn = activeTurnId === undefined || sameTurn
     this.sessionRegistry.set(sessionId, {
       sessionId,
       projectId,
@@ -26925,15 +27016,15 @@ export class ChatEngine {
       lastTurnId: activeTurnId ?? existing?.activeTurnId ?? existing?.lastTurnId,
       activeTurnUserMessageId: existing?.activeTurnUserMessageId,
       activeTurnOrigin: existing?.activeTurnOrigin,
-      estimatedContextUsed: activeTurnId ? undefined : existing?.estimatedContextUsed,
+      estimatedContextUsed: continuesTurn ? existing?.estimatedContextUsed : undefined,
       hasReportedTokenUsage: existing?.hasReportedTokenUsage,
-      changedPaths: activeTurnId ? undefined : existing?.changedPaths,
-      preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
-      userTouchedPaths: activeTurnId ? undefined : existing?.userTouchedPaths,
-      openUnboundedTools: activeTurnId ? new Set() : existing?.openUnboundedTools,
-      unboundedToolObserved: activeTurnId ? false : existing?.unboundedToolObserved,
-      unboundedWindowStart: activeTurnId ? undefined : existing?.unboundedWindowStart,
-      pendingWindowScans: activeTurnId ? new Set() : existing?.pendingWindowScans,
+      changedPaths: continuesTurn ? existing?.changedPaths : undefined,
+      preciseChangedPaths: continuesTurn ? existing?.preciseChangedPaths : new Map(),
+      userTouchedPaths: continuesTurn ? existing?.userTouchedPaths : undefined,
+      openUnboundedTools: continuesTurn ? existing?.openUnboundedTools : new Set(),
+      unboundedToolObserved: continuesTurn ? existing?.unboundedToolObserved : false,
+      unboundedWindowStart: continuesTurn ? existing?.unboundedWindowStart : undefined,
+      pendingWindowScans: continuesTurn ? existing?.pendingWindowScans : new Set(),
       ephemeral: ephemeral ?? existing?.ephemeral
     })
     this.agentProcesses.claimSession(sessionId, projectId, threadId)

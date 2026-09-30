@@ -2,6 +2,7 @@ import type { Thread, ThreadStatus } from '../../lib/types'
 import type { Database } from '../database/database'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { CheckpointManager } from '../storage/checkpoint-manager'
+import { Logger } from './logger'
 
 const RECOVERABLE_STATUSES = new Set<ThreadStatus>(['planning', 'executing'])
 
@@ -174,6 +175,20 @@ export class RestartRecoveryService {
       } catch (error) {
         failures.push(this.failure(thread, 'thread', error))
       }
+    }
+
+    // A checkpoint the per-thread pass above cannot reach still has no way to
+    // finalize: its thread sits outside the recoverable set and its ledger row
+    // is gone, or the process that recorded it is gone. The renderer treats
+    // such a row as a turn in flight forever, so its file changes never reach a
+    // card. Settle that backlog, bounded and oldest-first.
+    try {
+      const settled = await this.checkpoints.settleAbandonedActiveCheckpoints({
+        isOwnerAlive: options.isRunOwnerAlive
+      })
+      if (settled > 0) Logger.info('Settled abandoned turn checkpoints', { settled })
+    } catch (error) {
+      Logger.error('Abandoned checkpoint settlement failed (non-fatal):', error)
     }
 
     return {
