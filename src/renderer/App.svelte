@@ -1535,6 +1535,7 @@
           active={showsContentView}
           scopeViewActive={activeView === 'scope'}
           {navigate}
+          lastProjectViewLanding={() => navigation.projectFamilyLanding()}
           {config}
           {updateConfig}
         />

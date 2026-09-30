@@ -15,6 +15,16 @@ import { SvelteSet } from 'svelte/reactivity'
 export type HeaderViewOptionId =
   'projects' | 'threads' | 'scoped-threads' | 'scope-board' | 'chats' | 'assistant' | 'browser'
 
+/**
+ * The view a return to the project family lands on.
+ *
+ * `scoped` is the projects view carrying the scope sidebar; `scope` is the
+ * Scope page, which follows the open thread's project. The two differ from the
+ * rail option ids because they are what a navigation can land on, not what the
+ * rail paints.
+ */
+export type ProjectFamilyLanding = 'projects' | 'threads' | 'scoped' | 'scope'
+
 /** The four views that share the project family's single activity badge. */
 const PROJECT_FAMILY_VIEW_OPTIONS: readonly HeaderViewOptionId[] = [
   'projects',
@@ -317,6 +327,29 @@ export class AppHeaderNavigationController {
   shownHeaderViewOption = $derived<HeaderViewOptionId | null>(
     this.showsPrimaryOption ? this.activeHeaderViewOption : null
   )
+
+  /**
+   * The view a return to the project family lands on: the option the user last
+   * selected for the family, which is also the one the rail's project badge
+   * rides while another family (or none, in the browser) is on screen.
+   *
+   * The Ctrl+Tab switcher asks for this when it brings the project family
+   * forward from the browser, Settings, Chats or Assistant: the jump lands on
+   * the project view the user left instead of resetting to the default
+   * Projects view.
+   */
+  projectFamilyLanding(): ProjectFamilyLanding {
+    switch (this.lastProjectViewOption) {
+      case 'threads':
+        return 'threads'
+      case 'scoped-threads':
+        return 'scoped'
+      case 'scope-board':
+        return 'scope'
+      default:
+        return 'projects'
+    }
+  }
 
   /** The rail option that carries the project family's activity badge: the live
    *  project view when one is shown, otherwise the last project view the user

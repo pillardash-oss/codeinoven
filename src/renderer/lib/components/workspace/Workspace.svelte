@@ -59,6 +59,7 @@
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
   import { contentThreadFamily } from '$lib/content-view-threads'
+  import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
   import { chatDraft } from '$lib/stores/chat-draft'
   import {
     assistantEffectiveSettings,
@@ -154,6 +155,11 @@
      *  scope store's active project in sync with the selected thread. */
     scopeViewActive?: boolean
     navigate: (view: MainView) => void
+    /** The project view a Ctrl+Tab return to the project family lands on: the
+     *  view the user last used for the family, which is also the one the rail's
+     *  project badge rides. Read per call, because the browser can be left long
+     *  after the value last changed. */
+    lastProjectViewLanding?: () => ProjectFamilyLanding
     /** Global app config   drives the image-descriptor default + ask-again flag. */
     config?: AppConfig
     updateConfig?: (patch: AppConfigPatch) => Promise<void>
@@ -164,6 +170,7 @@
     active = true,
     scopeViewActive = false,
     navigate,
+    lastProjectViewLanding = () => 'projects',
     config,
     updateConfig
   }: Props = $props()
@@ -3839,22 +3846,42 @@
    * A Ctrl+Tab selection is a deliberate jump to one specific thread, so the
    * shell lands in the view that owns that thread's family: a chat is only ever
    * shown by Chats, an assistant task only by Assistant, and a project thread by
-   * Projects (or by the scope state, which the projects family owns). Without
-   * this the switcher could select a thread in a view that does not own it, leaving
-   * the wrong sidebar and that view's own tools on screen for it.
+   * whichever project view the user last used (Projects, Threads, Scoped or
+   * Board), because that is the view the rail's project badge rides. Without
+   * this the switcher could select a thread in a view that does not own it,
+   * leaving the wrong sidebar and that view's own tools on screen for it.
    */
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
     const family = contentThreadFamily(thread)
     // The switcher can be opened from the browser view, where Ctrl+Tab is
     // claimed inside a page, or from Settings: the shell is mounted but not the
     // on-screen view. A project thread then has to bring the shell forward,
-    // because `mode` already reads 'projects' and the guard below would change
-    // only a selection nobody can see, leaving the browser (or Settings) on
-    // screen. The Scope page keeps its own behavior, so it is excluded.
+    // because `mode` still reads the last content view and the guard below would
+    // change only a selection nobody can see, leaving the browser (or Settings)
+    // on screen. On the Scope page the landing resolves to the page itself, so a
+    // switch made there stays on the board and only follows the picked project.
     const shellHidden = !active && !scopeViewActive
+    /** Whether the landing selected the thread already, because it needed to. */
+    let openedThread = false
+    /** The project family's landing when this jump re-enters it, else null. */
+    let projectLanding: ProjectFamilyLanding | null = null
     if (family === 'chats') navigate('chats')
     else if (family === 'assistant') navigate('assistant')
-    else if (mode === 'chats' || mode === 'assistant' || shellHidden) navigate('projects')
+    else if (mode === 'chats' || mode === 'assistant' || shellHidden) {
+      // A project thread can be shown by several project views, so the jump
+      // returns to the one the user last used (the view the rail's project
+      // badge rides) instead of resetting to the default Projects view.
+      projectLanding = lastProjectViewLanding()
+      if (projectLanding === 'threads') navigate('threads')
+      else if (projectLanding === 'scope') {
+        // The Scope page activates the open thread's project, so the thread is
+        // selected before the page is entered; otherwise the board would follow
+        // the thread the user left instead of the one they picked.
+        await openThread(thread)
+        openedThread = true
+        navigate('scope')
+      } else navigate('projects')
+    }
     // The scope store reads its own activeProjectId / sidebarContext, not the
     // workspace selection, so a cross-project Ctrl+Tab jump must sync it
     // otherwise the scope view tabs and the scope-state sidebar stay stuck on
@@ -3864,11 +3891,14 @@
     if (family === 'projects') {
       if (scopeViewActive) {
         void scopeState.activateProject(thread.projectId)
-      } else if (scopeState.sidebarContext) {
+      } else if (projectLanding === 'scoped' || scopeState.sidebarContext) {
+        // The scoped state is the projects view carrying the scope sidebar: the
+        // sidebar is what the rail reports as Scoped, so a landing there has to
+        // bring it back focused on the thread the user picked.
         scopeState.showSidebarForThread(thread)
       }
     }
-    await openThread(thread)
+    if (!openedThread) await openThread(thread)
     // A Ctrl+Tab selection is a deliberate jump to a specific thread. When it
     // crosses modes (e.g. Chats → Projects) the mode switch opens a suppression
     // window and restores the incoming mode's saved scroll, which would keep the
