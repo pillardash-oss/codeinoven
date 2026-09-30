@@ -62,10 +62,10 @@
    * The offer the store page on screen makes, when it is one this profile does
    * not have yet.
    *
-   * The rail's indicator promises exactly this, so the panel answers it at the
-   * top: the user clicked through to install what they were looking at, not to
-   * fill in a form. Once installed the offer is gone, because there is nothing
-   * left to install and the row is already in the list below.
+   * The rail's indicator promises exactly this, so the panel answers it above
+   * the list: the user clicked through to install what they were looking at,
+   * not to fill in a form. Once installed the offer is gone, because there is
+   * nothing left to install and the row is already in the list below.
    */
   const installableStoreOffer = $derived.by(() => {
     const offer = storeExtensionOffer()
@@ -259,7 +259,12 @@
     </p>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover data-[state=open]:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+        class={[
+          'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+          installableStoreOffer
+            ? 'text-muted hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground'
+            : 'bg-primary text-on-primary hover:bg-primary-hover data-[state=open]:bg-primary-hover'
+        ]}
         disabled={browserExtensions.installing}
         title="Install an extension"
         aria-label="Install an extension"
@@ -297,6 +302,20 @@
     </DropdownMenu.Root>
   </div>
 
+  <!-- The scope comes before everything it scopes: the box picker is the panel's
+       own control, so it sits directly under the header and the page's offer,
+       the install in flight and the list all read below it. -->
+  <div class="shrink-0 border-b border-border px-3 py-2">
+    <EnumSelect
+      options={boxOptions}
+      value={selection}
+      onChange={(id) => (pinnedBoxId = id)}
+      placeholder="Choose a box"
+      ariaLabel="Box whose extensions are listed"
+      title="Box whose extensions are listed"
+    />
+  </div>
+
   {#if installableStoreOffer}
     <div class="shrink-0 border-b border-border px-3 py-2">
       <button
@@ -328,17 +347,6 @@
       />
     </div>
   {/if}
-
-  <div class="shrink-0 border-b border-border px-3 py-2">
-    <EnumSelect
-      options={boxOptions}
-      value={selection}
-      onChange={(id) => (pinnedBoxId = id)}
-      placeholder="Choose a box"
-      ariaLabel="Box whose extensions are listed"
-      title="Box whose extensions are listed"
-    />
-  </div>
 
   {#if shown.length === 0}
     <EmptyState
