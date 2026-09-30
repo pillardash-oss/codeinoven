@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Puzzle } from '@lucide/svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import type { BrowserExtension } from '$shared/ipc-contract'
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
@@ -51,6 +52,17 @@
   }
 
   /**
+   * The action icons that would not decode, so each is drawn as the extension's
+   * manifest icon instead.
+   *
+   * Main resolves an action icon's bytes before sending it, so a pin normally
+   * receives a data URL and this stays empty. It exists because the alternative to
+   * one is a broken image glyph where the extension's icon belongs, and an icon
+   * that fails to decode must never be what the user sees.
+   */
+  const undrawableIcons = new SvelteSet<string>()
+
+  /**
    * Open a pinned extension's popup in the rail, or close the one it already has.
    *
    * The popup is hosted by the rail, which is chrome of this same view, so all the
@@ -83,7 +95,11 @@
   <div class="flex items-center gap-1">
     {#each pinned as extension (extension.id)}
       {@const activity = browserExtensions.activityFor(jar, activeTabId, extension.id)}
-      {@const icon = activity?.iconUrl ?? extension.iconDataUrl}
+      {@const actionIcon = activity?.iconUrl ?? null}
+      {@const icon =
+        actionIcon !== null && !undrawableIcons.has(actionIcon)
+          ? actionIcon
+          : extension.iconDataUrl}
       <button
         type="button"
         class="relative flex h-8 w-8 items-center justify-center transition-colors duration-150 hover:bg-elevated focus-visible:bg-elevated {openPopupFor(
@@ -97,7 +113,12 @@
         onclick={() => void toggle(extension.id)}
       >
         {#if icon}
-          <img src={icon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+          <img
+            src={icon}
+            alt=""
+            class="h-4 w-4 rounded-sm object-contain"
+            onerror={() => actionIcon !== null && undrawableIcons.add(actionIcon)}
+          />
         {:else}
           <Puzzle size={15} />
         {/if}

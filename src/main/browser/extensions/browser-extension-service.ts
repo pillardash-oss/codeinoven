@@ -55,6 +55,7 @@ import { downloadWebStoreRelease, resolveWebStoreRelease } from './browser-exten
 import {
   EXTENSION_MANIFEST_NAME,
   extensionPopupUrl,
+  readActionIconDataUrl,
   readManifestObject
 } from './browser-extension-source'
 import {
@@ -95,6 +96,10 @@ interface LoadedJar {
   /** Activity already sent to the renderer, so the 500 ms mailbox poll sends a
    *  change once instead of on every read. Keyed `extensionId\u0000tabId`. */
   published: Map<string, string>
+  /** Snapshots waiting to be published, one extension's at a time. Resolving an
+   *  action icon reads from disk, and two snapshots must not be published out of
+   *  the order their worker wrote them in. */
+  publishing: Promise<void>
 }
 
 /**
@@ -155,6 +160,9 @@ export class BrowserExtensionService {
   /** partition -> an in-flight reconcile, so two shows cannot race a load. */
   private readonly loading = new Map<string, Promise<void>>()
   private installing = false
+  /** Icons an extension set on its action, by absolute path. Shared across jars:
+   *  the bytes belong to the extension's own folder, not to a session. */
+  private readonly actionIcons = new Map<string, string | null>()
   private disposed = false
   private lastProgressAt = 0
   private lastPhase: BrowserExtensionProgress['phase'] | null = null
@@ -221,6 +229,9 @@ export class BrowserExtensionService {
     if (!record) return
     await this.unloadEverywhere(extensionId)
     await rm(this.extensionDirectory(extensionId), { recursive: true, force: true })
+    // Its icons went with the folder. Held bytes would outlive the files they
+    // came from and be drawn for whatever is installed under the same id next.
+    this.actionIcons.clear()
     await this.registry.remove(extensionId)
     this.host.publish()
   }
@@ -409,6 +420,9 @@ export class BrowserExtensionService {
       await rm(extensionDir, { recursive: true, force: true })
       await mkdir(extensionDir, { recursive: true })
       await rename(stagingSource, join(extensionDir, BROWSER_EXTENSION_SOURCE_DIR))
+      // An install can replace an existing copy's files in place, and every icon
+      // held in memory belongs to the tree that was just replaced.
+      this.actionIcons.clear()
 
       const warnings: string[] = []
       if (result.skippedLinks > 0) {
@@ -628,7 +642,8 @@ export class BrowserExtensionService {
       bridges: new Map(),
       mail: new Map(),
       publishedGeneration: new Map(),
-      published: new Map()
+      published: new Map(),
+      publishing: Promise.resolve()
     }
     this.loaded.set(partition, created)
     return created
@@ -721,12 +736,67 @@ export class BrowserExtensionService {
       }
     }
     state.publishedGeneration.set(extensionId, mail.generation)
-    this.publishActivityEntry(state, extensionId, null, mail.actions.global, mail.at)
+    // Publishing resolves each icon's bytes, so it is queued per jar: two
+    // snapshots landing out of order would draw the older state over the newer.
+    state.publishing = state.publishing
+      .then(() => this.publishSnapshot(state, extensionId, mail))
+      .catch((error: unknown) =>
+        Logger.dev('Browser extension activity could not be published:', {
+          extensionId,
+          error
+        })
+      )
+  }
+
+  /**
+   * One snapshot published, with every icon address it carries replaced by the
+   * icon's own bytes.
+   *
+   * A snapshot older than the one already held is dropped: each mailbox carries
+   * the whole action state, so the newer snapshot publishes everything this one
+   * would have, and dropping it keeps a slow disk read from drawing stale state.
+   */
+  private async publishSnapshot(
+    state: LoadedJar,
+    extensionId: string,
+    mail: BrowserExtensionMailbox
+  ): Promise<void> {
+    if (state.mail.get(extensionId) !== mail) return
+    const directory = extensionSourceDirectory(this.configRoot, extensionId)
+    const global = await this.drawableActivity(directory, extensionId, mail.actions.global)
+    this.publishActivityEntry(state, extensionId, null, global, mail.at)
     for (const [tabId, patch] of Object.entries(mail.actions.tabs)) {
       const appTabId = this.host.resolveTabId(state.projectId, Number(tabId))
       if (!appTabId) continue
-      this.publishActivityEntry(state, extensionId, appTabId, patch, mail.at)
+      const resolved = await this.drawableActivity(directory, extensionId, patch)
+      this.publishActivityEntry(state, extensionId, appTabId, resolved, mail.at)
     }
+  }
+
+  /**
+   * A patch whose recorded icon address has been replaced by the icon's own
+   * bytes.
+   *
+   * An extension records `chrome.runtime.getURL(...)` for `setIcon`, and that
+   * address cannot be drawn where the app draws: the renderer is a different
+   * session with no such extension in it, and an action icon is not a
+   * web-accessible resource. An address the app cannot resolve becomes null,
+   * which the pin reads as "draw the extension's manifest icon" instead of
+   * showing a broken image.
+   */
+  private async drawableActivity(
+    directory: string,
+    extensionId: string,
+    patch: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    if (typeof patch['iconUrl'] !== 'string') return patch
+    const iconUrl = await readActionIconDataUrl(
+      directory,
+      extensionId,
+      patch['iconUrl'],
+      this.actionIcons
+    )
+    return { ...patch, iconUrl }
   }
 
   private publishActivityEntry(

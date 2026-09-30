@@ -372,6 +372,96 @@ export async function readManifestIconDataUrl(
   return null
 }
 
+/** How many action icons are held in memory at once. A worker re-records its
+ *  action state on every change and the app reads that snapshot every 80 ms, so
+ *  the bytes behind one icon would otherwise be re-read from disk on each read. */
+const MAX_ACTION_ICON_CACHE = 64
+
+/**
+ * An icon an extension set on its own action, as a data URL the app's renderer
+ * can actually draw.
+ *
+ * The extension hands back what `chrome.runtime.getURL` gave it, a
+ * `chrome-extension://` address, and that address is unloadable where the app
+ * draws: the renderer runs in a different session that has no such extension
+ * loaded, and an action icon is not a web-accessible resource in the first place
+ * (Bitwarden declares two icons as accessible and none of its state icons).
+ * Measured, with the address an extension really records: `{ok: false}` in the
+ * app's own renderer, and the same icon inlined `{ok: true, w: 19}`. So the
+ * bytes are read from the extension's own folder and carried as a data URL.
+ *
+ * Null means "nothing the app can draw", which a caller reads as "use the
+ * extension's manifest icon" rather than as a failure. That is the case for
+ * every reason this can miss: an address of another extension's file, a path
+ * that leaves the extension's folder, a format with no image MIME type, a file
+ * over the size bound, and a file that is simply not there.
+ */
+export async function readActionIconDataUrl(
+  extensionDir: string,
+  extensionId: string,
+  iconUrl: unknown,
+  cache?: Map<string, string | null>
+): Promise<string | null> {
+  if (typeof iconUrl !== 'string' || !iconUrl) return null
+  const relative = actionIconRelativePath(iconUrl, extensionId)
+  if (!relative) return null
+  const mime = ICON_MIME_TYPES[extname(relative).toLowerCase()]
+  if (!mime) return null
+  const absolute = join(extensionDir, relative)
+  if (!isInside(extensionDir, absolute)) return null
+  const cached = cache?.get(absolute)
+  if (cached !== undefined) return cached
+  let value: string | null = null
+  try {
+    const bytes = await readFile(absolute)
+    if (bytes.byteLength > 0 && bytes.byteLength <= MAX_ICON_BYTES) {
+      value = `data:${mime};base64,${bytes.toString('base64')}`
+    }
+  } catch {
+    // A recorded icon whose file is gone is not an error worth reporting: the
+    // pin falls back to the extension's manifest icon.
+  }
+  if (cache) {
+    // A crude bound rather than an LRU: this holds a handful of small images and
+    // an extension swapping between two icons is the case that matters.
+    if (cache.size >= MAX_ACTION_ICON_CACHE) cache.clear()
+    cache.set(absolute, value)
+  }
+  return value
+}
+
+/** The extension-root-relative path inside a recorded icon address, or null when
+ *  the address is not one of this extension's own files.
+ *
+ * A `chrome-extension://` address carries the extension's id as its host, and a
+ * resource belonging to another extension is not this one's to inline. */
+function actionIconRelativePath(iconUrl: string, extensionId: string): string | null {
+  const scheme = 'chrome-extension://'
+  let rest: string
+  if (iconUrl.startsWith(scheme)) {
+    const afterScheme = iconUrl.slice(scheme.length)
+    const slash = afterScheme.indexOf('/')
+    if (slash < 0) return null
+    if (afterScheme.slice(0, slash) !== extensionId) return null
+    rest = afterScheme.slice(slash + 1)
+  } else if (iconUrl.startsWith('/') || !iconUrl.includes('://')) {
+    // A root-relative or bare path, which `setIcon` also accepts and which the
+    // extension's own `getURL` would have resolved before recording it.
+    rest = iconUrl.replace(/^\/+/, '')
+  } else {
+    return null
+  }
+  const cut = rest.search(/[?#]/)
+  if (cut >= 0) rest = rest.slice(0, cut)
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(rest)
+  } catch {
+    return null
+  }
+  return decoded || null
+}
+
 /** A fresh RSA key, as the base64 SPKI a manifest `key` expects.
  *
  *  A folder install has no publisher key of its own, and without one its id would

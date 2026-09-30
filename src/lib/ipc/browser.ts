@@ -663,8 +663,18 @@ export interface BrowserExtensionProgress {
 export interface BrowserExtensionActivity {
   badgeText?: string
   badgeColor?: string
-  /** The extension's own icon for its action, or null when it set image data,
-   *  which no URL can reach. */
+  /**
+   * The extension's own icon for its action, as a data URL, or null.
+   *
+   * The extension records a `chrome-extension://` address for `setIcon`, and that
+   * address cannot be drawn where this is drawn: the renderer is a different
+   * session with no such extension loaded, and an action icon is not a
+   * web-accessible resource. Main reads the bytes out of the extension's own folder
+   * instead, so what arrives here is already drawable.
+   *
+   * Null covers both "it set no icon" and "the app cannot draw the one it set",
+   * which the pin reads the same way: fall back to the extension's manifest icon.
+   */
   iconUrl?: string | null
   title?: string | null
   /** Epoch milliseconds of the snapshot this entry came from. */
