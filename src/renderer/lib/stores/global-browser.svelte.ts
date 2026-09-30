@@ -378,20 +378,39 @@ export class GlobalBrowserState {
     // The panel belongs to one tab's windows, so when that tab holds none there is
     // nothing left for the rail to show and it closes with the last of them rather
     // than sitting there as an empty strip.
-    this.closePopupsWithNoWindows()
+    //
+    // The answer comes from this report and not from the popup store's mirror of
+    // it: this listener is registered before the popup store's own, so inside this
+    // dispatch the mirror still holds the previous list. Reading it here would undo
+    // the open above, and it would leave the panel up after the last window closed:
+    // the two are the same mistake in opposite directions.
+    this.closePopupsWithNoWindows(tabId !== null && popups.some((popup) => popup.tabId === tabId))
   }
 
   /** Close the popup tool once the tab on screen holds no popup window: the panel
    *  exists to show a window and the rail only offers the tool while the tab has
    *  one, so it leaves with the last window rather than lingering as an empty
    *  strip. An extension's own popup is a popup window too, so the same rule
-   *  covers both doors. */
-  private closePopupsWithNoWindows(): void {
+   *  covers both doors.
+   *
+   *  `activeTabHoldsWindow` is passed in rather than read here because the report
+   *  handler runs inside the popup report's own dispatch, where the popup store's
+   *  mirror is still one report behind. Callers outside that dispatch answer with
+   *  {@link activeTabHoldsPopupWindow}. */
+  private closePopupsWithNoWindows(activeTabHoldsWindow: boolean): void {
     if (!this.contextSidebarVisible) return
     if (this.contextSidebarTool !== 'popups') return
-    const tab = this.activeTab
-    if (tab && browserPopupWindows.forTab(tab.id).length > 0) return
+    if (activeTabHoldsWindow) return
     this.contextSidebarVisible = false
+  }
+
+  /** Whether the tab on screen holds a popup window in the popup store's mirror.
+   *  Only for callers outside a popup report's own dispatch: the report handler
+   *  answers from the report itself, because the mirror lags one event there. */
+  private activeTabHoldsPopupWindow(): boolean {
+    const tab = this.activeTab
+    if (!tab) return false
+    return browserPopupWindows.forTab(tab.id).length > 0
   }
 
   // ─── Reads ────────────────────────────────────────────────────────────────
@@ -865,7 +884,11 @@ export class GlobalBrowserState {
     // tab's own conversation must be the one on screen. A tab the user has never
     // asked the agent about shows its start state instead of being given a
     // conversation nobody asked for; the rail's own action creates it.
-    if (this.contextSidebarTool === 'popups') this.closePopupsWithNoWindows()
+    if (this.contextSidebarTool === 'popups') {
+      // An activation is not a popup report, so the mirror already holds every
+      // list it was sent and is the right thing to answer from.
+      this.closePopupsWithNoWindows(this.activeTabHoldsPopupWindow())
+    }
   }
 
   private dockActiveTabNote(): void {
