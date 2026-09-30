@@ -856,17 +856,15 @@ export class BrowserService {
         this.load(tabId, url)
       }
     )
+    // Back/Forward, Reload and Stop are issued from the tab the renderer held a
+    // moment ago, so each acts only while that tab is still live (see `liveTab`).
     replaceHandler('browser:goBack', (_event, rawTabId) => {
-      const tab = this.requireTab(validateTabId(rawTabId))
-      if (tab.view.webContents.navigationHistory.canGoBack()) {
-        tab.view.webContents.navigationHistory.goBack()
-      }
+      const current = this.liveTab(validateTabId(rawTabId))?.view.webContents.navigationHistory
+      if (current?.canGoBack()) current.goBack()
     })
     replaceHandler('browser:goForward', (_event, rawTabId) => {
-      const tab = this.requireTab(validateTabId(rawTabId))
-      if (tab.view.webContents.navigationHistory.canGoForward()) {
-        tab.view.webContents.navigationHistory.goForward()
-      }
+      const current = this.liveTab(validateTabId(rawTabId))?.view.webContents.navigationHistory
+      if (current?.canGoForward()) current.goForward()
     })
     replaceHandler('browser:mouseHistoryNavigation', (_event, rawDirection) => {
       if (rawDirection !== 'back' && rawDirection !== 'forward') {
@@ -875,7 +873,7 @@ export class BrowserService {
       return this.navigateFocusedHistory(rawDirection)
     })
     replaceHandler('browser:reload', (_event, rawTabId) => {
-      this.requireTab(validateTabId(rawTabId)).view.webContents.reload()
+      this.liveTab(validateTabId(rawTabId))?.view.webContents.reload()
     })
     replaceHandler('browser:transport', async (_event, rawTabId, rawCommand, rawValue) => {
       const tabId = validateTabId(rawTabId)
@@ -886,10 +884,10 @@ export class BrowserService {
       this.transportState(validateTabId(rawTabId))
     )
     replaceHandler('browser:reloadIgnoringCache', (_event, rawTabId) => {
-      this.requireTab(validateTabId(rawTabId)).view.webContents.reloadIgnoringCache()
+      this.liveTab(validateTabId(rawTabId))?.view.webContents.reloadIgnoringCache()
     })
     replaceHandler('browser:stop', (_event, rawTabId) => {
-      this.requireTab(validateTabId(rawTabId)).view.webContents.stop()
+      this.liveTab(validateTabId(rawTabId))?.view.webContents.stop()
     })
     replaceHandler('browser:findInPage', (_event, rawTabId, rawRequest) => {
       this.findInPage(validateTabId(rawTabId), validateBrowserFindRequest(rawRequest))
@@ -2880,6 +2878,22 @@ export class BrowserService {
     const tab = this.tabs.get(tabId)
     if (!tab) throw new Error('Browser tab does not exist')
     return tab
+  }
+
+  /**
+   * The tab a best-effort page control works on, or `undefined` once it is gone.
+   *
+   * The renderer issues Back/Forward, Reload and Stop from the tab state it held
+   * a moment ago, so the tab can be gone before the command lands: the user closed
+   * it, or its page is a tab this process has never shown and therefore never
+   * created. A control with no page to act on is nothing to do rather than a
+   * failure, exactly as the page context menu already treats a gone tab
+   * (`live()?.reload()`), so the close race never surfaces as a main-process
+   * "Browser tab does not exist" error. Operations that mutate the tab's durable
+   * state still use `requireTab`, because a missing tab there is a real defect.
+   */
+  private liveTab(tabId: string): BrowserTab | undefined {
+    return this.tabs.get(tabId)
   }
 
   /**
