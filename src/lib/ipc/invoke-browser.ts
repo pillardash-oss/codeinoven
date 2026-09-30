@@ -24,12 +24,14 @@ import type { BrowserSearchEngine } from '../browser-search-engines'
 import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
 import type { BrowserBookmarksSnapshot, BrowserHistorySnapshot } from '../browser/browser-library'
 import type {
-  ToastOverlayAck,
+  BrowserOverlayAck,
+  BrowserOverlaySnapshot,
+  BrowserStripOverlayInteraction,
+  BrowserStripOverlayRequest,
   ToastOverlayCursor,
   ToastOverlayInteractionReport,
-  ToastOverlayRequest,
-  ToastOverlayRequestStack
-} from '../toast-overlay'
+  ToastOverlayRequest
+} from '../browser-overlay'
 
 export const invokeBrowserContract = {
   /**
@@ -118,7 +120,7 @@ export const invokeBrowserContract = {
    */
   'browser:setToastVisible': {} as Contract<[visible: boolean], void>,
   /**
-   * Point the native toast overlay at the stack the app renderer is holding, or
+   * Point the native overlay at the toast stack the app renderer is holding, or
    * take it down with null because no page covers the stack's corner.
    *
    * Answers false only when the overlay had to be created and could not be, so
@@ -127,43 +129,59 @@ export const invokeBrowserContract = {
    */
   'browser:setToastOverlay': {} as Contract<[request: ToastOverlayRequest], boolean>,
   /**
-   * The stack on display, asked for by the overlay document itself once its
-   * listener is bound. First delivery is a pull here because a push straight
-   * after `loadURL` loses the same race the permission popup documents.
+   * Point the native overlay at the browser's floating tab strip, or take it
+   * down with null because the panel closed or no page covers its band.
+   *
+   * Answers false only when the overlay window could not be created, which is
+   * the app renderer's cue to keep the strip in its own DOM and let it occlude
+   * the page, exactly as it did before the overlay existed.
    */
-  'browser:toastOverlayReady': {} as Contract<[], ToastOverlayRequestStack | null>,
+  'browser:setStripOverlay': {} as Contract<[request: BrowserStripOverlayRequest | null], boolean>,
+  /**
+   * Everything on display in the overlay, asked for by the overlay document
+   * itself once its listener is bound. First delivery is a pull here because a
+   * push straight after `loadURL` loses the same race the permission popup
+   * documents.
+   */
+  'browser:overlayReady': {} as Contract<[], BrowserOverlaySnapshot>,
   /**
    * Where the pointer is, in the overlay document's own client coordinates, or
    * null while there is no overlay window to measure it in.
    *
    * The overlay asks for this rather than believing its own pointer events,
-   * because the events a click-through window receives cannot tell a card the
+   * because the events a click-through window receives cannot tell content the
    * pointer is on from a window the window server has just re-evaluated. It is
    * what settles the click-through state, so it is answered from the window
    * server every time.
    */
-  'browser:toastOverlayCursor': {} as Contract<[], ToastOverlayCursor | null>,
+  'browser:overlayCursor': {} as Contract<[], ToastOverlayCursor | null>,
   /**
    * The user acted on a card the overlay drew. The overlay carries no handlers,
    * so it names the toast and the interaction and the app renderer runs the
    * handler that toast actually holds.
    */
-  'browser:toastOverlayInteract': {} as Contract<[report: ToastOverlayInteractionReport], void>,
+  'browser:overlayInteract': {} as Contract<[report: ToastOverlayInteractionReport], void>,
   /**
-   * The stack the overlay was given is now on its screen.
+   * The user acted on the floating strip the overlay drew: picked a tab to show,
+   * closed one, or moved the pointer into or out of the strip's own rectangle.
+   * The overlay carries no handlers, so the app renderer owns what each means.
+   */
+  'browser:overlayStripInteract': {} as Contract<[report: BrowserStripOverlayInteraction], void>,
+  /**
+   * The content the overlay was given is now on its screen.
    *
-   * The cards carry handlers that live in the app renderer, so the overlay is
-   * only usable while that round trip works. This is the overlay's confirmation
-   * of it: it names the revision it drew, and the app renderer stops drawing its
-   * own cards only once it has heard this, taking the stack back to its own
-   * toaster when it never does.
+   * Cards and rows carry handlers that live in the app renderer, so the overlay
+   * is only usable while that round trip works. This is the overlay's
+   * confirmation of it: it names the revisions it drew, and the app renderer
+   * stops drawing its own copy only once it has heard them, taking the content
+   * back into its own window when it never does.
    */
-  'browser:toastOverlayDrawn': {} as Contract<[ack: ToastOverlayAck], void>,
+  'browser:overlayDrawn': {} as Contract<[ack: BrowserOverlayAck], void>,
   /**
-   * Whether the pointer is over a card, which is what decides if the overlay
-   * window swallows a click or passes it through to the page beneath it.
+   * Whether the pointer is over drawn content, which is what decides if the
+   * overlay window swallows a click or passes it through to the page beneath it.
    */
-  'browser:toastOverlayPointer': {} as Contract<[overToast: boolean], void>,
+  'browser:overlayPointer': {} as Contract<[overContent: boolean], void>,
   'browser:navigate': {} as Contract<
     [tabId: string, projectId: string, threadId: string, url: string, boxId?: string | null],
     void

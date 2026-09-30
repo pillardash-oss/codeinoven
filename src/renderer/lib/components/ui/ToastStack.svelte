@@ -6,7 +6,7 @@
    * The app's toaster, configured once.
    *
    * Two windows draw this stack: the app window, and the native overlay that
-   * covers a browser page (`ToastOverlaySurface.svelte`). They have to be the
+   * covers a browser page (`BrowserOverlaySurface.svelte`). They have to be the
    * same toaster to the pixel, or a toast would visibly jump when the stack
    * hands over between them, so the configuration lives here rather than being
    * written out twice. The cards' own look is `toaster.css`, which the app's

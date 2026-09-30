@@ -17,10 +17,15 @@
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
+  import { GLOBAL_BROWSER_PROJECT_ID, type BrowserViewBounds } from '$shared/ipc-contract'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { browserStripOverlay } from '$lib/stores/browser-strip-overlay.svelte'
+  import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { projectStripTabs } from '$lib/browser-overlay-bridge'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import BrowserTabRow from './BrowserTabRow.svelte'
   import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'
@@ -200,6 +205,84 @@
     globalBrowser.moveToGroup(dragged, groupId)
     globalBrowser.endDrag()
   }
+  // ─── The floating panel above a live page ─────────────────────────────────
+  /**
+   * While the browser's sidebar is collapsed, hovering the left edge reveals it
+   * as a floating panel. The page is a native view painted above every DOM node,
+   * so from the moment a page reaches the panel's band the panel is drawn by the
+   * native overlay window instead, and the page keeps running underneath it.
+   *
+   * The decision is geometric and lives here because this is the only place that
+   * knows the panel and the window: the panel's rectangle is the sidebar's own
+   * width against the viewport, and a page covers it when a native frame
+   * intersects it. The overlay then gets the projection, and answers with an
+   * acknowledgement `browserStripOverlay` watches.
+   *
+   * The occlusion rule is the load-bearing half: while the overlay is being asked
+   * to draw the panel, the panel must not publish itself as an occluder, or the
+   * visibility store would detach the page and the overlay would mirror a frame
+   * that no longer exists. That is why the phase, not the panel alone, decides
+   * both the occlusion and whether the DOM panel is drawn.
+   */
+
+  /** The window's own size, tracked because the panel's band runs to its bottom
+   *  edge and the page frame is measured in the same space. */
+  let viewport = $state({ width: window.innerWidth, height: window.innerHeight })
+
+  /** The floating panel's top edge, which is the application header's own height
+   *  (`top-12`), and therefore follows the user's appearance font size. */
+  const stripTop = $derived(Math.round(3 * appConfigState.appFontSize))
+
+  /** The band the floating panel occupies in the viewport. */
+  const stripBand = $derived<BrowserViewBounds>({
+    x: 0,
+    y: stripTop,
+    width: sidebarState.width,
+    height: Math.max(0, viewport.height - stripTop)
+  })
+
+  const floating = $derived(!sidebarState.docked && sidebarState.hoverOpen)
+  const pageCoversStrip = $derived(browserVisibility.overlapsNative(stripBand))
+  const overlayWanted = $derived(floating && pageCoversStrip && !browserStripOverlay.unavailable)
+
+  /**
+   * What the sidebar is told about its floating panel: `none` leaves everything
+   * to the DOM panel, `pending` means the overlay is loading so the panel must
+   * keep drawing but must not occlude, and `live` means the overlay owns it.
+   */
+  const stripPhase = $derived<'none' | 'pending' | 'live'>(
+    !overlayWanted ? 'none' : browserStripOverlay.live ? 'live' : 'pending'
+  )
+
+  $effect(() => {
+    if (!overlayWanted) {
+      void browserStripOverlay.publish(null)
+      return
+    }
+    void browserStripOverlay.publish({
+      width: sidebarState.width,
+      top: stripTop,
+      theme: browserStripOverlay.theme,
+      tabs: projectStripTabs()
+    })
+  })
+
+  onMount(() => {
+    const trackViewport = (): void => {
+      viewport = { width: window.innerWidth, height: window.innerHeight }
+    }
+    window.addEventListener('resize', trackViewport)
+    // Wire the overlay's reports before anything can publish a strip, so a
+    // window that cannot hear it never hands it the panel in the first place.
+    const stopOverlay = browserStripOverlay.start()
+    return () => {
+      window.removeEventListener('resize', trackViewport)
+      // Leaving the view drops the panel with it: the page it was drawn over is
+      // going away in the same breath.
+      void browserStripOverlay.publish(null)
+      stopOverlay()
+    }
+  })
 </script>
 
 {#snippet chrome()}
@@ -361,6 +444,7 @@
   onboardingAnchor={false}
   label="Browser tabs"
   region="browser-sidebar"
+  overlayPhase={stripPhase}
   {chrome}
 >
   {#if totalTabs === 0}

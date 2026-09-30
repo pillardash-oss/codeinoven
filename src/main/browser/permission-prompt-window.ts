@@ -1,6 +1,6 @@
 import { BrowserWindow } from 'electron'
 import type { BrowserPermissionRequest } from '../../lib/ipc-contract'
-import { TOAST_CARD_WIDTH, TOAST_STACK_RIGHT } from '../../lib/toast-overlay'
+import { TOAST_CARD_WIDTH, TOAST_STACK_RIGHT } from '../../lib/browser-overlay'
 import {
   loadRendererDocument,
   resolveAppTheme,
@@ -204,7 +204,7 @@ export class PermissionPromptWindow {
    *
    *  It used to sit at the top right of that content, which is where the toast
    *  stack lives: a toast is drawn by a child window of its own while a page
-   *  covers that corner (`toast-overlay-window.ts`), so a centred card on a
+   *  covers that corner (`browser-overlay-window.ts`), so a centred card on a
    *  narrow window would sit under the stack. It now stops short of the stack's
    *  band instead of drifting into it, and is exactly centred on every window
    *  wide enough for the two to clear each other. */

@@ -30,10 +30,12 @@ import type {
 import type { UpdaterStatus } from './updater'
 import type { SkillUpdateStatus } from '../types/utility'
 import type {
-  ToastOverlayAck,
+  BrowserOverlayAck,
+  BrowserStripOverlayInteraction,
+  BrowserStripOverlayRequest,
   ToastOverlayInteractionReport,
   ToastOverlayRequestStack
-} from '../toast-overlay'
+} from '../browser-overlay'
 
 export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
@@ -240,23 +242,37 @@ export const IPC_EVENT_CONTRACT = {
     context: { queueSize: number; projectLabel: string | null }
   ],
   /**
-   * The stack the native toast overlay should draw, delivered to the overlay
+   * The toast stack the native overlay should draw, delivered to the overlay
    * document rather than to the app renderer. The app window keeps its own copy
-   * of the same state and draws nothing while the overlay is up.
+   * of the same state and draws nothing while the overlay is up. Null takes the
+   * stack down without touching the rest of the window.
    */
-  'browser:toastOverlay:stack': [] as unknown as [stack: ToastOverlayRequestStack],
+  'browser:overlay:stack': [] as unknown as [stack: ToastOverlayRequestStack | null],
+  /**
+   * The browser's floating tab strip the native overlay should draw, delivered
+   * to the overlay document. Null takes it down; the window itself stays for the
+   * next surface that needs it.
+   */
+  'browser:overlay:strip': [] as unknown as [strip: BrowserStripOverlayRequest | null],
   /**
    * One interaction with a toast the overlay drew, delivered back to the app
    * renderer, which runs the handler that toast holds (open the thread, copy the
    * details, and so on) and then drops the toast from its own state.
    */
-  'browser:toastOverlay:event': [] as unknown as [report: ToastOverlayInteractionReport],
+  'browser:overlay:event': [] as unknown as [report: ToastOverlayInteractionReport],
   /**
-   * The overlay has drawn a stack, confirming that a press on one of its cards
-   * can still reach the app renderer that owns the handler. The app renderer
-   * holds the cards in its own toaster until this arrives.
+   * One interaction with the floating tab strip the overlay drew: a tab picked, a
+   * tab closed, or the pointer entering or leaving the strip's own rectangle
+   * (which is what keeps the floating panel open while it is the overlay's to
+   * draw). The app renderer owns what each one means.
    */
-  'browser:toastOverlay:drawn': [] as unknown as [ack: ToastOverlayAck],
+  'browser:overlay:stripEvent': [] as unknown as [report: BrowserStripOverlayInteraction],
+  /**
+   * The overlay has drawn what it was given, confirming that a press on a card or
+   * a tab row can still reach the app renderer that owns the handler. The app
+   * renderer holds the content in its own window until this arrives.
+   */
+  'browser:overlay:drawn': [] as unknown as [ack: BrowserOverlayAck],
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
   'browser:download': [] as unknown as [download: BrowserDownload],

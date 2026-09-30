@@ -61,7 +61,7 @@ import {
 } from './extensions/browser-extension-validation'
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
-import { ToastOverlayWindow } from './toast-overlay-window'
+import { BrowserOverlayWindow } from './browser-overlay-window'
 import { BrowserDownloadManager } from './browser-service/browser-downloads'
 import { BrowserTabHistoryStore } from './browser-tab-history-store'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
@@ -137,6 +137,8 @@ import {
   validateBoundedHost,
   validateBrowserSearchEngine,
   validateBrowserShortcutBindings,
+  validateBrowserStripInteraction,
+  validateBrowserStripOverlayRequest,
   validateBrowserSwitcherBindings,
   validateBrowserUrl,
   validateDownloadId,
@@ -333,12 +335,12 @@ export class BrowserService {
   private readonly permissionMemory: BrowserPermissionMemory
   private readonly promptWindow: PermissionPromptWindow
   /**
-   * The window that draws the toast stack while a page covers the toaster's
-   * corner. It is created on the first toast that needs it and released as soon
-   * as no page covers that corner, so a browsing session that never raises a
-   * toast never pays for a second renderer.
+   * The window that draws the toast stack and the floating tab strip while a page
+   * covers where they belong. It is created on the first surface that needs it
+   * and kept while a page keeps needing it, so a browsing session that never
+   * raises a toast and never hovers the strip never pays for a second renderer.
    */
-  private readonly toastOverlay: ToastOverlayWindow
+  private readonly overlay: BrowserOverlayWindow
   private readonly projects: ProjectRepo
   private readonly threads: ThreadRepo
   /** Invisible windows that keep non-displayed tabs alive offscreen. */
@@ -459,7 +461,7 @@ export class BrowserService {
    *  the active view stays detached and the DOM toast composites normally. This
    *  is the safety net for the one case the toast overlay cannot serve (it could
    *  not be created at all), not the primary path: the renderer normally moves
-   *  the stack into `toast-overlay-window.ts`, which draws it above the page. */
+   *  the stack into `browser-overlay-window.ts`, which draws it above the page. */
   private toastVisible = false
   /**
    * The address bar's active search engine, reported by the renderer (which
@@ -518,7 +520,7 @@ export class BrowserService {
     private readonly downloads: BrowserDownloadManager
   ) {
     this.promptWindow = new PermissionPromptWindow(window)
-    this.toastOverlay = new ToastOverlayWindow(window)
+    this.overlay = new BrowserOverlayWindow(window)
     this.stage = new BrowserTabStage(window)
     this.permissionMemory = new BrowserPermissionMemory(permissionPersistence)
     this.projects = new ProjectRepo(db)
@@ -767,33 +769,42 @@ export class BrowserService {
     replaceHandler('browser:setToastOverlay', (_event, rawRequest) => {
       const request = validateToastOverlayRequest(rawRequest)
       // Null is the renderer saying no page covers the toaster's corner any
-      // more, so the stack belongs back in the app's own DOM and the overlay
-      // window, with the renderer it holds, is released.
+      // more, so the stack belongs back in the app's own DOM. The window itself
+      // only goes when nothing else is drawing in it.
       if (request === null) {
-        this.toastOverlay.release()
+        this.overlay.releaseStack()
         return true
       }
-      return this.toastOverlay.apply(request)
+      return this.overlay.applyStack(request)
     })
-    replaceHandler('browser:toastOverlayReady', () => this.toastOverlay.currentStack())
-    replaceHandler('browser:toastOverlayInteract', (_event, rawReport) => {
+    replaceHandler('browser:setStripOverlay', (_event, rawRequest) =>
+      this.overlay.applyStrip(validateBrowserStripOverlayRequest(rawRequest))
+    )
+    replaceHandler('browser:overlayReady', () => this.overlay.currentState())
+    replaceHandler('browser:overlayInteract', (_event, rawReport) => {
       // The overlay carries no handlers, so an interaction is only a fact about
       // what the user did: the app renderer owns the toast and runs its handler.
       const report = validateToastOverlayInteraction(rawReport)
-      sendToRenderer(this.window.webContents, 'browser:toastOverlay:event', report)
+      sendToRenderer(this.window.webContents, 'browser:overlay:event', report)
     })
-    replaceHandler('browser:toastOverlayDrawn', (_event, rawAck) => {
-      // The cards the overlay drew carry handlers that live in the app renderer,
-      // so this is the overlay proving it can still reach them. It is relayed
-      // rather than answered here: only the renderer that published the stack
-      // knows which revision it is waiting for.
+    replaceHandler('browser:overlayStripInteract', (_event, rawReport) => {
+      // The same contract one surface over: the overlay reports what the user did
+      // to the strip, and the app renderer owns what it means.
+      const report = validateBrowserStripInteraction(rawReport)
+      sendToRenderer(this.window.webContents, 'browser:overlay:stripEvent', report)
+    })
+    replaceHandler('browser:overlayDrawn', (_event, rawAck) => {
+      // The content the overlay drew carries handlers that live in the app
+      // renderer, so this is the overlay proving it can still reach them. It is
+      // relayed rather than answered here: only the renderer that published a
+      // revision knows which one it is waiting for.
       const ack = validateToastOverlayAck(rawAck)
-      sendToRenderer(this.window.webContents, 'browser:toastOverlay:drawn', ack)
+      sendToRenderer(this.window.webContents, 'browser:overlay:drawn', ack)
     })
-    replaceHandler('browser:toastOverlayPointer', (_event, rawOverToast) => {
-      this.toastOverlay.setPointerOverToast(rawOverToast === true)
+    replaceHandler('browser:overlayPointer', (_event, rawOverContent) => {
+      this.overlay.setPointerOverContent(rawOverContent === true)
     })
-    replaceHandler('browser:toastOverlayCursor', () => this.toastOverlay.pointerInClientSpace())
+    replaceHandler('browser:overlayCursor', () => this.overlay.pointerInClientSpace())
     replaceHandler(
       'browser:navigate',
       (_event, rawTabId, rawProjectId, rawThreadId, rawUrl, rawBoxId) => {
@@ -1096,7 +1107,7 @@ export class BrowserService {
     this.relaxedUntil.clear()
     this.stage.dispose()
     this.promptWindow.dispose()
-    this.toastOverlay.dispose()
+    this.overlay.dispose()
     for (const requestId of [...this.pendingPermissions.keys()]) {
       this.resolvePermission(requestId, permissionResolutions.dismiss)
     }

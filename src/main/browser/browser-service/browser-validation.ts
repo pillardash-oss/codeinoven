@@ -31,13 +31,16 @@ import {
 } from '../../../lib/browser-search-engines'
 import type { BrowserViewport } from './browser-types'
 import type {
-  ToastOverlayAck,
+  BrowserOverlayAck,
+  BrowserStripOverlayInteraction,
+  BrowserStripOverlayRequest,
+  BrowserStripOverlayTab,
   ToastOverlayInteraction,
   ToastOverlayInteractionReport,
   ToastOverlayKind,
   ToastOverlayRequest,
   ToastOverlayToast
-} from '../../../lib/toast-overlay'
+} from '../../../lib/browser-overlay'
 
 export const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
 
@@ -963,29 +966,143 @@ function overlayRevision(value: unknown): number {
 }
 
 /**
- * Validate the overlay's confirmation that it drew a stack.
+ * The most tabs the floating strip is ever asked to draw. The strip is the
+ * browser's whole tab list and nothing else bounds it, so this is the ceiling
+ * that keeps a pathological list from crossing IPC whole.
+ */
+export const MAX_OVERLAY_STRIP_TABS = 256
+
+/** Characters kept from one favicon or custom icon, which arrives as a data URL. */
+const MAX_OVERLAY_ICON_LENGTH = 200_000
+
+/**
+ * Validate the floating tab strip the app renderer points the overlay at.
+ *
+ * `null` is a real request: the panel closed, or no page covers its band any
+ * more, so the overlay takes the strip down. Every field is optional in the
+ * projection, so a malformed tab is dropped rather than rejected whole: one odd
+ * row must never cost the renderer its strip.
+ */
+export function validateBrowserStripOverlayRequest(
+  value: unknown
+): BrowserStripOverlayRequest | null {
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('The strip overlay request must be an object or null')
+  }
+  const strip = value as Record<string, unknown>
+  const width = strip['width']
+  const top = strip['top']
+  if (typeof width !== 'number' || !Number.isFinite(width) || width < 0 || width > 10_000) {
+    throw new TypeError('The strip overlay request must carry a plausible width')
+  }
+  if (typeof top !== 'number' || !Number.isFinite(top) || top < 0 || top > 10_000) {
+    throw new TypeError('The strip overlay request must carry a plausible top edge')
+  }
+  const rawTabs = strip['tabs']
+  if (!Array.isArray(rawTabs)) {
+    throw new TypeError('The strip overlay request must carry a tab list')
+  }
+  if (rawTabs.length > MAX_OVERLAY_STRIP_TABS) {
+    throw new TypeError('The strip overlay request carries too many tabs')
+  }
+  const tabs: BrowserStripOverlayTab[] = []
+  for (const raw of rawTabs) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const entry = raw as Record<string, unknown>
+    const id = entry['id']
+    const label = overlayText(entry['label'], 300)
+    if (typeof id !== 'string' || id.length === 0 || id.length > 300 || label === undefined) {
+      continue
+    }
+    tabs.push({
+      id,
+      label,
+      url: overlayText(entry['url'], MAX_BROWSER_URL_LENGTH) ?? '',
+      icon: overlayText(entry['icon'], MAX_OVERLAY_ICON_LENGTH) ?? null,
+      accent: overlayText(entry['accent'], 64) ?? null,
+      active: entry['active'] === true,
+      loading: entry['loading'] === true,
+      pinned: entry['pinned'] === true,
+      hibernated: entry['hibernated'] === true,
+      audible: entry['audible'] === true,
+      muted: entry['muted'] === true
+    })
+  }
+  return {
+    width: Math.round(width),
+    top: Math.round(top),
+    theme: strip['theme'] === 'dark' ? 'dark' : 'light',
+    tabs,
+    // The revision the overlay echoes back once these rows are drawn. A request
+    // without one is not rejected: revision 0 simply never matches what the
+    // renderer waits for, so the strip falls back rather than being trusted.
+    revision: overlayRevision(strip['revision'])
+  }
+}
+
+/**
+ * Validate one interaction the overlay reports for the strip it drew.
+ *
+ * The overlay cannot run a handler, so this is only ever a fact about what the
+ * user did. It arrives from a window of its own, so the tab it names is checked
+ * against the browser's own tab-id shape: a report naming a tab that no longer
+ * exists is answerable rather than trusted, because the app renderer looks the
+ * tab up and drops the report when it has already gone.
+ */
+export function validateBrowserStripInteraction(value: unknown): BrowserStripOverlayInteraction {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('A strip overlay interaction must be an object')
+  }
+  const report = value as Record<string, unknown>
+  const kind = report['kind']
+  if (kind === 'pointer') return { kind: 'pointer', over: report['over'] === true }
+  if (kind !== 'select' && kind !== 'close') {
+    throw new TypeError('A strip overlay interaction must name a known kind')
+  }
+  return { kind, tabId: validateTabId(report['tabId']) }
+}
+
+/**
+ * Validate the overlay's confirmation that it drew what it was given.
  *
  * The ids are not compared against the request here: main is a relay for this
- * one, and the renderer that published the stack is the only place that knows
- * what it published. A malformed acknowledgement is refused rather than passed
- * on, so a broken overlay can never look like a healthy one.
+ * one, and the renderer that published a revision is the only place that knows
+ * which one it is waiting for. A malformed acknowledgement is refused rather
+ * than passed on, so a broken overlay can never look like a healthy one.
+ *
+ * The stack and the strip are confirmed in one message because they are drawn in
+ * one document: a window that can draw one can draw the other, and the two
+ * subscribers in the app renderer each wait for their own revision field.
  */
-export function validateToastOverlayAck(value: unknown): ToastOverlayAck {
+export function validateToastOverlayAck(value: unknown): BrowserOverlayAck {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError('A toast overlay acknowledgement must be an object')
+    throw new TypeError('An overlay acknowledgement must be an object')
   }
   const ack = value as Record<string, unknown>
-  const revision = ack['revision']
-  if (typeof revision !== 'number' || !Number.isInteger(revision) || revision <= 0) {
-    throw new TypeError('A toast overlay acknowledgement must name the revision it drew')
-  }
   const rawDrawn = ack['drawn']
-  if (!Array.isArray(rawDrawn) || rawDrawn.length > MAX_OVERLAY_TOASTS) {
-    throw new TypeError('A toast overlay acknowledgement must carry the cards it drew')
+  let drawn: Array<number | string> | undefined
+  if (rawDrawn !== undefined) {
+    if (!Array.isArray(rawDrawn) || rawDrawn.length > MAX_OVERLAY_TOASTS) {
+      throw new TypeError('An overlay acknowledgement must carry the cards it drew')
+    }
+    drawn = []
+    for (const id of rawDrawn) {
+      if (typeof id === 'number' || typeof id === 'string') drawn.push(id)
+    }
   }
-  const drawn: Array<number | string> = []
-  for (const id of rawDrawn) {
-    if (typeof id === 'number' || typeof id === 'string') drawn.push(id)
+  return {
+    revision: overlayOptionalRevision(ack['revision']),
+    drawn,
+    stripRevision: overlayOptionalRevision(ack['stripRevision'])
   }
-  return { revision, drawn }
+}
+
+/** A revision an acknowledgement carries, or undefined when it carries none. */
+function overlayOptionalRevision(value: unknown): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new TypeError('An overlay acknowledgement revision must be a positive integer')
+  }
+  return value
 }

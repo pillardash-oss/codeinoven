@@ -4,7 +4,7 @@
   import { ShieldAlert } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { applyAppTypography } from '$lib/app-typography'
-  import { TOAST_CARD_WIDTH } from '$shared/toast-overlay'
+  import { TOAST_CARD_WIDTH } from '$shared/browser-overlay'
   import type {
     BrowserPermissionDecision,
     BrowserPermissionPromptContext,

@@ -3,16 +3,16 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { onDestroy, onMount } from 'svelte'
   import {
-    TOAST_OVERLAY_ACK_TIMEOUT_MS,
+    OVERLAY_ACK_TIMEOUT_MS,
     TOAST_STACK_TOP,
-    type ToastOverlayAck
-  } from '$shared/toast-overlay'
+    type BrowserOverlayAck
+  } from '$shared/browser-overlay'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import {
     handleToastOverlayInteraction,
     projectStack,
     toastCornerBounds
-  } from '$lib/toast-overlay-bridge'
+  } from '$lib/browser-overlay-bridge'
   import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
   import MemoryToastComponent from './MemoryToast.svelte'
   import ToastStack from './ToastStack.svelte'
@@ -32,7 +32,7 @@
    * its only owner. The in-app browser's page is a native `WebContentsView`
    * painted above every DOM node of the window, so while a page covers the
    * corner the cards are drawn in, this component hands the stack to the native
-   * overlay window (`toast-overlay-window.ts`) and draws nothing itself. The
+   * overlay window (`browser-overlay-window.ts`) and draws nothing itself. The
    * handover is by state, not by call site: every toast in the app keeps calling
    * `toast.*` exactly as it always has.
    *
@@ -140,15 +140,15 @@
       ackTimer = undefined
       if (awaitedRevision === 0) return
       abandonOverlay('it never confirmed the cards it was given')
-    }, TOAST_OVERLAY_ACK_TIMEOUT_MS)
+    }, OVERLAY_ACK_TIMEOUT_MS)
   }
 
   /** The overlay drew the revision this window published, so the path works. */
-  function noteOverlayDrawn(ack: ToastOverlayAck): void {
-    if (ack.revision !== awaitedRevision) return
-    if (import.meta.env.DEV && ack.drawn.length !== awaitedIds.length) {
+  function noteOverlayDrawn(ack: BrowserOverlayAck): void {
+    if (ack.revision === undefined || ack.revision !== awaitedRevision) return
+    if (import.meta.env.DEV && (ack.drawn?.length ?? 0) !== awaitedIds.length) {
       logRendererDev(
-        `The toast overlay drew ${ack.drawn.length} of the ${awaitedIds.length} cards it was given`
+        `The toast overlay drew ${ack.drawn?.length ?? 0} of the ${awaitedIds.length} cards it was given`
       )
     }
     stopAckWatch()
@@ -167,8 +167,8 @@
   const overlayReports: Array<() => void> = (() => {
     try {
       return [
-        subscribe('browser:toastOverlay:event', (report) => handleToastOverlayInteraction(report)),
-        subscribe('browser:toastOverlay:drawn', (ack) => noteOverlayDrawn(ack))
+        subscribe('browser:overlay:event', (report) => handleToastOverlayInteraction(report)),
+        subscribe('browser:overlay:drawn', (ack) => noteOverlayDrawn(ack))
       ]
     } catch (error) {
       overlayUnavailable = true
