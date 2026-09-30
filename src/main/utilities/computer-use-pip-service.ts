@@ -15,7 +15,27 @@ import { sendToRenderer } from '../ipc/renderer-delivery'
 
 const TARGET_FRAME_RATE = 15
 const FRAME_INTERVAL_MS = Math.round(1_000 / TARGET_FRAME_RATE)
-const MAX_MISSES = TARGET_FRAME_RATE
+/** Failed re-resolutions a run that has never painted a frame may report before
+ *  it hides. Nothing is on screen to freeze, so the overlay lets go after a
+ *  couple of seconds and the thread row keeps reporting the run. */
+const MAX_MISSES = 8
+/** The same budget once the run has painted: the frame already on screen stays
+ *  there while the window is re-resolved, so one refused photograph (a window
+ *  mid-resize, a Space change, a surface not yet capturable) never empties the
+ *  preview for the rest of the run. */
+const STALE_FRAME_MISS_BUDGET = 20
+/** The pause between re-resolutions while frames are failing. Full frame rate
+ *  through a failure would spend every attempt on a driver call that cannot
+ *  change the answer yet. */
+const RETRY_INTERVAL_MS = 250
+/** How long a window the driver refused to photograph is skipped while the pid
+ *  has another window worth showing. The refusal is a property of the moment,
+ *  not of the window. */
+const WINDOW_REJECT_TTL_MS = 5_000
+/** Most windows one frame tries before it counts as a failed capture. The ranked
+ *  head is what the user expects to see; each further try is another driver
+ *  round trip. */
+const MAX_FRAME_WINDOW_ATTEMPTS = 3
 const AUTO_DISMISS_GRACE_MS = 3_000
 /** The default capture ceiling. The overlay's default preview is 224 CSS px
  *  wide, which is exactly this many device pixels on a 2x display, so the
@@ -71,6 +91,17 @@ export class ComputerUsePipService {
   private active = false
   private misses = 0
   private captureInFlight = false
+  /** Window ids the driver refused to photograph, until a deadline. Consulted
+   *  by the next frame so a dud window (a wrapper surface, a window that is not
+   *  capturable yet) does not sink the run while the pid has another window
+   *  worth showing. */
+  private readonly rejectedWindows = new Map<number, number>()
+  /** Whether the current run has painted at least one frame. A run with nothing
+   *  on screen may let go quickly; one that has something keeps its last frame. */
+  private framePainted = false
+  /** Earliest time of the next capture attempt while the current run is failing
+   *  frames. Zero while frames are landing. */
+  private nextAttemptAt = 0
   /**
    * Bumped by every teardown, so a capture that resumes after one never revives
    * the run it was started for: its client and daemon hold were already released.
@@ -159,6 +190,14 @@ export class ComputerUsePipService {
     this.frameCursor = null
   }
 
+  /** Forget which windows refused a capture and whether a frame was ever painted:
+   *  a run that starts or ends now deserves a clean slate. */
+  private resetWindowCapture(): void {
+    this.rejectedWindows.clear()
+    this.framePainted = false
+    this.nextAttemptAt = 0
+  }
+
   /** Every thread whose agent is currently driving the computer. */
   getActivitySnapshot(): ComputerUseActivity[] {
     return [...this.activityByThread.values()]
@@ -209,6 +248,7 @@ export class ComputerUsePipService {
     this.targetPermissionLevel = permissionLevel
     if (targetChanged) {
       this.clearCursor()
+      this.resetWindowCapture()
       this.captureGeneration += 1
     }
     if (this.active && this.targetPid === pid) return
@@ -336,6 +376,7 @@ export class ComputerUsePipService {
     this.ownerThreadId = null
     this.targetSessionId = null
     this.clearCursor()
+    this.resetWindowCapture()
     this.clearAutoDismiss()
     this.clearLoop()
     await this.releaseDriverConnection()
@@ -366,6 +407,7 @@ export class ComputerUsePipService {
     this.runGeneration += 1
     this.captureGeneration += 1
     this.clearCursor()
+    this.resetWindowCapture()
     this.clearLoop()
     await this.releaseDriverConnection()
   }
@@ -481,14 +523,15 @@ export class ComputerUsePipService {
 
   private async captureOnce(): Promise<void> {
     if (!this.active || this.targetPid === null || this.captureInFlight) return
+    if (Date.now() < this.nextAttemptAt) return
     this.captureInFlight = true
     const pid = this.targetPid
     const sessionId = this.targetSessionId
     const generation = this.captureGeneration
     try {
       const client = await this.ensureClient()
-      const window = await this.frontmostWindow(client, pid)
-      if (!window) {
+      const candidates = this.captureCandidates(rankWindows(await this.listWindows(client, pid)))
+      if (candidates.length === 0) {
         await this.failFrame({ generation, pid }, `pid ${pid} has no capturable top-level window`)
         return
       }
@@ -500,54 +543,79 @@ export class ComputerUsePipService {
       // either: this monitor's own connection cannot see it (see
       // `noteAgentCursor`), so the position arrives with the operation that moved
       // it.
-      const [screenshotResult] = await Promise.allSettled([
-        client.callTool('get_window_state', {
-          pid,
-          window_id: window.window_id,
-          include_screenshot: true,
-          max_elements: 1
-        })
-      ])
-      const image =
-        screenshotResult.status === 'fulfilled' ? extractImage(screenshotResult.value) : null
-      if (!image) {
+      let refusedWindowId: number | null = null
+      let refusedDetail: string | null = null
+      let refusedTransport = false
+      for (const window of candidates) {
+        let result: unknown
+        try {
+          result = await client.callTool('get_window_state', {
+            pid,
+            window_id: window.window_id,
+            include_screenshot: true,
+            max_elements: 1
+          })
+        } catch (error) {
+          // A rejected call belongs to the transport or the run, not to one
+          // window: the pid's other windows would only repeat it.
+          const message = error instanceof Error ? error.message : String(error)
+          await this.failFrame({ generation, pid }, 'the driver call failed', {
+            detail: message,
+            error,
+            transport: isCuaDaemonTransportFailure(message)
+          })
+          return
+        }
+        const image = extractImage(result)
+        if (image) {
+          const optimizedImage = optimizeImage(image, this.frameCap())
+          // The overlay may have been dismissed, re-targeted, or re-latched while
+          // we awaited the driver   never paint a stale frame, or record the
+          // run's state from a stale window, into the run that replaced it.
+          if (!this.isCurrentCapture(generation, pid, sessionId)) return
+          this.misses = 0
+          this.nextAttemptAt = 0
+          this.framePainted = true
+          this.appName = window.app_name || this.appName || 'App'
+          this.windowId = window.window_id
+          // Reprojected every frame against the window this frame really shows,
+          // so the marker holds its place in the app when the window moves or is
+          // replaced.
+          const projectedCursor = this.agentCursorScreen
+            ? projectCursor(this.agentCursorScreen, window, optimizedImage)
+            : null
+          if (projectedCursor) this.frameCursor = projectedCursor
+          const frame: ComputerUsePipFrame = {
+            pid,
+            appName: this.appName,
+            windowId: window.window_id,
+            dataUrl: optimizedImage.dataUrl,
+            width: optimizedImage.width,
+            height: optimizedImage.height,
+            timestamp: Date.now(),
+            ...(this.frameCursor ? { cursor: this.frameCursor } : {})
+          }
+          this.broadcast('computerUse:pipFrame', frame)
+          return
+        }
         // A refused capture resolves with `isError: true` instead of rejecting,
-        // so this has to be accounted for here   returning quietly left the
-        // overlay latched as active with no frame to show, and the UI is gated
-        // on having a frame.
-        const detail = settledFailureText(screenshotResult)
-        await this.failFrame(
-          { generation, pid },
-          `the driver returned no screenshot for window ${window.window_id}`,
-          { detail, transport: detail !== null && isCuaDaemonTransportFailure(detail) }
-        )
-        return
+        // so it has to be accounted for by hand. Remember the refusal and look at
+        // the next candidate: a window the driver will not photograph must not
+        // hide the preview while the pid's real window can still be shown   and
+        // the refusal belongs to this run only: a capture that outlived its run
+        // must not leave its cooldown on the run that replaced it.
+        if (!this.isCurrentCapture(generation, pid, sessionId)) return
+        refusedWindowId = window.window_id
+        refusedDetail = settledFailureText({ status: 'fulfilled', value: result })
+        refusedTransport = refusedDetail !== null && isCuaDaemonTransportFailure(refusedDetail)
+        this.rejectedWindows.set(window.window_id, Date.now() + WINDOW_REJECT_TTL_MS)
+        if (refusedTransport) break
       }
-      const optimizedImage = optimizeImage(image, this.frameCap())
-      // The overlay may have been dismissed, re-targeted, or re-latched while we
-      // awaited the driver   never paint a stale frame, or record the run's state
-      // from a stale window, into the run that replaced it.
-      if (!this.isCurrentCapture(generation, pid, sessionId)) return
-      this.misses = 0
-      this.appName = window.app_name || this.appName || 'App'
-      this.windowId = window.window_id
-      // Reprojected every frame against the window this frame really shows, so the
-      // marker holds its place in the app when the window moves or is replaced.
-      const projectedCursor = this.agentCursorScreen
-        ? projectCursor(this.agentCursorScreen, window, optimizedImage)
-        : null
-      if (projectedCursor) this.frameCursor = projectedCursor
-      const frame: ComputerUsePipFrame = {
-        pid,
-        appName: this.appName,
-        windowId: window.window_id,
-        dataUrl: optimizedImage.dataUrl,
-        width: optimizedImage.width,
-        height: optimizedImage.height,
-        timestamp: Date.now(),
-        ...(this.frameCursor ? { cursor: this.frameCursor } : {})
-      }
-      this.broadcast('computerUse:pipFrame', frame)
+      await this.failFrame(
+        { generation, pid },
+        `the driver returned no screenshot for window ${refusedWindowId}`,
+        { detail: refusedDetail, transport: refusedTransport }
+      )
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       await this.failFrame({ generation, pid }, 'the driver call failed', {
@@ -587,10 +655,16 @@ export class ComputerUsePipService {
    * connection is a fault and keeps its error-level line and stack.
    *
    * A transport failure ends the run here instead of aging out over the next
-   * fifteen frames, because every one of those frames could only repeat the same
+   * attempts, because every one of those attempts could only repeat the same
    * call against a driver whose daemon is gone. Anything else keeps the retry
-   * budget: a connection that failed to come up once may well come up on the next
-   * frame, and the miss counter is what gives it those chances.
+   * budget: a connection that failed to come up once may well come up on the
+   * next attempt, and the miss counter is what gives it those chances.
+   *
+   * The budget depends on what the user is looking at. A run that has never
+   * painted has nothing on screen to lose, so it lets go after a couple of
+   * seconds; a run that has painted keeps its last frame while the window is
+   * re-resolved, because one refused photograph used to empty the preview for
+   * the rest of the run.
    */
   private async failFrame(
     run: { generation: number; pid: number },
@@ -612,7 +686,12 @@ export class ComputerUsePipService {
       else Logger.dev(message)
     }
     this.misses += 1
-    if (failure.transport || this.misses >= MAX_MISSES) await this.hide()
+    const budget = this.framePainted ? STALE_FRAME_MISS_BUDGET : MAX_MISSES
+    if (failure.transport || this.misses >= budget) {
+      await this.hide()
+      return
+    }
+    this.nextAttemptAt = Date.now() + RETRY_INTERVAL_MS
   }
 
   /**
@@ -630,8 +709,22 @@ export class ComputerUsePipService {
     return frameCapFor(this.requestedFrameWidth)
   }
 
-  private async frontmostWindow(client: McpClient, pid: number): Promise<WindowRecord | null> {
-    return rankWindows(await this.listWindows(client, pid))[0] ?? null
+  /**
+   * The ranked windows worth a capture attempt this frame.
+   *
+   * Windows the driver recently refused to photograph are skipped while their
+   * cooldown lasts, so a dud at the head of the ranking does not take the frame
+   * away from the window the user can actually see. When every candidate is
+   * cooling down the ranked head is tried again anyway: a refusal is a property
+   * of the moment, and the run has to notice a window that became capturable.
+   */
+  private captureCandidates(ranked: WindowRecord[]): WindowRecord[] {
+    if (ranked.length === 0) return []
+    const now = Date.now()
+    const cooled = ranked.filter(
+      (window) => (this.rejectedWindows.get(window.window_id) ?? 0) <= now
+    )
+    return (cooled.length > 0 ? cooled : ranked).slice(0, MAX_FRAME_WINDOW_ATTEMPTS)
   }
 
   /** The tracked pid's current top-level windows, freshly resolved. */
