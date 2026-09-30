@@ -523,6 +523,17 @@ export interface BrowserConsoleEntry {
   sourceId: string
   lineNumber: number
   timestamp: number
+  /**
+   * URL of the frame that logged the message, or null when the event named no
+   * frame (a failed navigation, a renderer that stopped).
+   *
+   * `sourceId` names the script and is not a substitute: it is empty for a
+   * document that has no address of its own, and one page logs from several
+   * frames. Which frame spoke is the whole answer for a message that says
+   * something was refused for "the document" rather than for a script, because
+   * the frame URL is what names that document.
+   */
+  frameUrl: string | null
 }
 
 /** Lifecycle state of a download started by an app-scoped browser tab.

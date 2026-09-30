@@ -287,6 +287,23 @@ function isWebContents(value: unknown): value is WebContents {
 }
 
 /**
+ * URL of the frame that logged a console message, or null when there is none to
+ * name.
+ *
+ * Reading the URL of a frame that is already gone throws, and a document with no
+ * address of its own reports an empty one, so both edges answer null rather than
+ * costing the entry it belongs to.
+ */
+function consoleFrameUrl(frame: WebFrameMain | null | undefined): string | null {
+  if (!frame) return null
+  try {
+    return frame.url.length > 0 ? frame.url : null
+  } catch {
+    return null
+  }
+}
+
+/**
  * Rebind a browser IPC channel.
  *
  * Reopening a window after a close-to-background rebuilds the browser service,
@@ -2445,7 +2462,8 @@ export class BrowserService {
         level: details.level,
         message: details.message,
         sourceId: details.sourceId,
-        lineNumber: details.lineNumber
+        lineNumber: details.lineNumber,
+        frameUrl: consoleFrameUrl(details.frame)
       })
     })
     view.webContents.on(
@@ -2470,7 +2488,10 @@ export class BrowserService {
           level: 'error',
           message: `Navigation failed (${errorCode}): ${errorDescription}`,
           sourceId: validatedURL,
-          lineNumber: 0
+          lineNumber: 0,
+          // The navigation that failed never committed a document, so there is no
+          // frame behind this entry: the address is the one in the message.
+          frameUrl: null
         })
       }
     )
@@ -2491,7 +2512,9 @@ export class BrowserService {
         level: 'error',
         message: `Browser renderer stopped: ${details.reason} (exit ${details.exitCode})`,
         sourceId: view.webContents.getURL(),
-        lineNumber: 0
+        lineNumber: 0,
+        // The frame that would have named itself is the one that died.
+        frameUrl: null
       })
     })
     view.webContents.on('will-navigate', (event, url) => {
@@ -2714,6 +2737,19 @@ export class BrowserService {
    */
   private wirePopupWindow(record: BrowserPopupWindowRecord): void {
     const contents = record.view.webContents
+    // A popup's page is a page in the app's browser, so what it logs belongs to
+    // the tab that owns it rather than being dropped: a page that opens a popup
+    // for a sign-in flow reports its own troubles there, and without this the
+    // ownership of that page is the only record that the trouble happened.
+    contents.on('console-message', (details) => {
+      this.appendConsoleEntry(record.tabId, {
+        level: details.level,
+        message: details.message,
+        sourceId: details.sourceId,
+        lineNumber: details.lineNumber,
+        frameUrl: consoleFrameUrl(details.frame)
+      })
+    })
     // A popup's keys reach its own page and then the application menu, where
     // Cmd/Ctrl+W would close the app window rather than this popup.
     contents.on('before-input-event', (event, input) => {
@@ -3695,6 +3731,7 @@ export class BrowserService {
       message: string
       sourceId: string
       lineNumber: number
+      frameUrl: string | null
     }
   ): void {
     const tab = this.tabs.get(tabId)
@@ -3706,7 +3743,8 @@ export class BrowserService {
       message: input.message.slice(0, 10_000),
       sourceId: input.sourceId.slice(0, 2_048),
       lineNumber: Math.max(0, input.lineNumber),
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      frameUrl: input.frameUrl === null ? null : input.frameUrl.slice(0, 2_048)
     }
     tab.consoleEntries = [...tab.consoleEntries, entry].slice(-MAX_CONSOLE_ENTRIES)
   }
