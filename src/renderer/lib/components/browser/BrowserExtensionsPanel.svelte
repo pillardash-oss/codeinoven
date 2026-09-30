@@ -1,5 +1,15 @@
 <script lang="ts">
-  import { AlertTriangle, ChevronDown, Plus, Puzzle, Trash2 } from '@lucide/svelte'
+  import {
+    AlertTriangle,
+    ChevronDown,
+    FolderOpen,
+    Plus,
+    Puzzle,
+    Store,
+    Trash2
+  } from '@lucide/svelte'
+  import { DropdownMenu } from 'bits-ui'
+  import type { Component } from 'svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
@@ -14,7 +24,6 @@
   } from '$lib/stores/browser-extension-store-offer'
   import type { BrowserExtension } from '$shared/ipc-contract'
   import { WEBSTORE_HOME_URL } from '$shared/browser/browser-webstore'
-  import BrowserExtensionInstallModal from './BrowserExtensionInstallModal.svelte'
   import BrowserExtensionInstallProgress from './BrowserExtensionInstallProgress.svelte'
   import BrowserBoxChips from './BrowserBoxChips.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
@@ -36,10 +45,11 @@
    * it is loaded, and it folds open in place for the rest: the boxes it runs in,
    * its compatibility notes and uninstalling. A fold rather than a dialog,
    * because these are the row's own settings and the list stays in view while
-   * they are read.
+   * they are read. Installing is the header's own menu for the same reason: two
+   * doors are a list, and a dialog that only lists them would hide the panel the
+   * install lands in.
    */
 
-  let installOpen = $state(false)
   /** The extension whose settings are folded open on its row, or null. */
   let expandedId = $state<string | null>(null)
   /** The extension the uninstall confirmation is for, or null. */
@@ -165,13 +175,67 @@
   }
 
   /** Open the store in the box this panel is on, which is where the install for
-   *  any extension's page happens: the dialog leaves first, so the tab behind it
+   *  any extension's page happens: the menu leaves first, so the tab behind it
    *  and the rail are what the user sees next. */
   function browseStore(): void {
-    installOpen = false
     globalBrowser.open(WEBSTORE_HOME_URL, null, jarIdForBox(installBox.id))
     globalBrowser.showExtensionsSidebar()
   }
+
+  /**
+   * Install from an unpacked folder, where choosing the folder is the install.
+   *
+   * The install lands in the box the panel is on, captured before the folder
+   * picker opens so the extension does not follow a box the user switched to
+   * while it was up. The new row is left folded open, because that is where its
+   * version, popup and compatibility notes live and the menu that started it is
+   * gone by the time the files have been read.
+   */
+  async function installFromFolder(): Promise<void> {
+    if (browserExtensions.installing) return
+    const box = installBox
+    const folder = await browserExtensions.pickFolder()
+    if (!folder) return
+    const installed = await browserExtensions.install({
+      source: 'folder',
+      value: folder,
+      boxes: [extensionJarForBox(box.id)]
+    })
+    if (installed) expandedId = installed.id
+  }
+
+  /**
+   * The two ways in, as the header menu's rows.
+   *
+   * One list rather than two hand-written items, because both rows are the same
+   * shape: an icon, a name and one line saying what the door does. Neither asks
+   * for an extension id, since an id is a developer's handle rather than
+   * something a user knows, and the store's own "Add to Chrome" button is
+   * Chrome's inline-install API. So the store row is a door: it opens the store,
+   * and an extension's page is where the install happens from the browser chrome.
+   */
+  const installDoors: {
+    id: string
+    icon: Component
+    label: string
+    hint: string
+    run: () => void
+  }[] = [
+    {
+      id: 'store',
+      icon: Store,
+      label: 'Chrome Web Store',
+      hint: "Open the store, then install from the extension's page with the button beside the address.",
+      run: browseStore
+    },
+    {
+      id: 'folder',
+      icon: FolderOpen,
+      label: 'Local folder',
+      hint: 'Pick an unpacked extension folder on this computer.',
+      run: () => void installFromFolder()
+    }
+  ]
 
   async function uninstall(): Promise<void> {
     const target = uninstallTarget
@@ -193,16 +257,44 @@
       {shown.length}
       {shown.length === 1 ? 'extension' : 'extensions'}
     </p>
-    <button
-      type="button"
-      class="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      title="Install an extension"
-      aria-label="Install an extension"
-      onclick={() => (installOpen = true)}
-    >
-      <Plus size={13} />
-      Install extension
-    </button>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger
+        class="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover data-[state=open]:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={browserExtensions.installing}
+        title="Install an extension"
+        aria-label="Install an extension"
+      >
+        <Plus size={13} />
+        Install extension
+        <ChevronDown size={12} class="shrink-0" />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          side="bottom"
+          align="end"
+          sideOffset={6}
+          collisionPadding={8}
+          class="z-60 w-64 rounded-xl border border-border bg-surface p-1 shadow-lg"
+        >
+          {#each installDoors as door (door.id)}
+            {@const DoorIcon = door.icon}
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-start gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+              textValue={door.label}
+              onSelect={door.run}
+            >
+              <DoorIcon size={14} class="mt-0.5 shrink-0 text-muted" />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-xs font-medium text-foreground">{door.label}</span>
+                <span class="mt-0.5 block text-[0.625rem] leading-relaxed text-dimmed">
+                  {door.hint}
+                </span>
+              </span>
+            </DropdownMenu.Item>
+          {/each}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   </div>
 
   {#if installableStoreOffer}
@@ -227,8 +319,8 @@
   {/if}
 
   {#if browserExtensions.progress}
-    <!-- An install can start from the browser chrome on a store page, where no
-         dialog is open, so the rail reports it. -->
+    <!-- An install can start from the browser chrome on a store page, where the
+         install menu was never opened, so the rail reports it. -->
     <div class="shrink-0 border-b border-border px-3 py-2">
       <BrowserExtensionInstallProgress
         progress={browserExtensions.progress}
@@ -446,14 +538,4 @@
       it, and a reinstall starts from nothing.
     </p>
   </ConfirmDialog>
-{/if}
-
-{#if installOpen}
-  <BrowserExtensionInstallModal
-    open
-    boxes={[extensionJarForBox(installBox.id)]}
-    boxName={installBox.name}
-    onBrowseStore={browseStore}
-    onClose={() => (installOpen = false)}
-  />
 {/if}

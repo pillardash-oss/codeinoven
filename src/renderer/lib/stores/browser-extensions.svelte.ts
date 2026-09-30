@@ -54,11 +54,11 @@ class BrowserExtensionsState {
   /** True once the first read has answered, so the panel can tell "none
    *  installed" from "not read yet". */
   loaded = $state(false)
-  /** The install currently running, or null. Main reports one at a time, and the
-   *  modal draws where the current one is. */
+  /** The install currently running, or null. Main reports one at a time, and
+   *  the extensions rail draws where the current one is. */
   progress: BrowserExtensionProgress | null = $state(null)
-  /** True while an install is in flight, so the modal can keep its primary
-   *  action disabled and say what is happening. */
+  /** True while an install is in flight, so the rail can keep the door it was
+   *  started from shut and say what is happening. */
   installing = $state(false)
 
   /** Whether {@link start} has wired the runtime. Idempotent. */
@@ -87,7 +87,7 @@ class BrowserExtensionsState {
       this.loaded = true
     })
     // One install at a time, so a single progress line is enough: it names the
-    // step, and the modal draws it until the install resolves.
+    // step, and the rail draws it until the install resolves.
     subscribe('browser:extensionProgress', (progress) => {
       this.progress = progress
     })
@@ -124,8 +124,8 @@ class BrowserExtensionsState {
    * Install an extension by Web Store id or URL, or from an unpacked folder.
    *
    * Resolves with the installed record, or null when it failed. The progress
-   * line is cleared before the install starts and again when it ends, so a modal
-   * that stays open never shows a stale phase from a previous attempt.
+   * line is cleared before the install starts and again when it ends, so the rail
+   * never shows a stale phase from a previous attempt.
    */
   async install(input: BrowserExtensionInstallInput): Promise<BrowserExtension | null> {
     this.installing = true

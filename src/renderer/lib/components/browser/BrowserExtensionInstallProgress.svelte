@@ -5,10 +5,9 @@
   /**
    * One install's progress, drawn by whichever surface started it.
    *
-   * The install dialog owns the form, but an install also starts from the browser
-   * chrome on a store page, where no dialog is open and the rail's extensions
-   * panel is what shows it. One component means both places name the phases and
-   * read the percentage the same way.
+   * An install can start from the rail's own install menu or from the browser
+   * chrome on a store page, and both watch the same store. One component means
+   * both places name the phases and read the percentage the same way.
    */
 
   interface Props {
