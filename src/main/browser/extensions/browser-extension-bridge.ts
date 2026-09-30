@@ -66,7 +66,71 @@ export interface BrowserExtensionMailbox {
   }
   menus: BrowserExtensionMenuRecord[]
   menuSeq: number
+  /** The OS notifications the worker asked the app to raise, oldest first. Main
+   *  acts only on the entries newer than the last sequence it saw, and a
+   *  restarted worker starts its own sequence over with no memory. */
+  notifications: BrowserExtensionNotificationRecord[]
+  /** What the extension wants a side panel to be, and when it asked for one.
+   *  Main acts only on the requests newer than the last sequence it saw, and a
+   *  restarted worker starts its own sequence over with no memory. */
+  sidePanel: BrowserExtensionSidePanelMailbox
   bridgeCommands: number
+}
+
+/** The kinds of OS-notification request an extension can make through
+ *  `chrome.notifications`, carried in one mailbox entry. */
+export type BrowserExtensionNotificationKind = 'create' | 'update' | 'clear' | 'clearAll'
+
+/** The fields of a notification an extension asked the app to raise, only the
+ *  ones it actually set. */
+export interface BrowserExtensionNotificationOptions {
+  title?: string
+  message?: string
+  iconUrl?: string
+  silent?: boolean
+  buttons?: { title?: string }[]
+}
+
+/** One `chrome.notifications` request, normalised so a malformed field cannot
+ *  reach the app's notifier as `undefined`. `seq` increases per request within
+ *  one worker life, exactly as the recorded menu sequence does. */
+export interface BrowserExtensionNotificationRecord {
+  seq: number
+  id: string
+  kind: BrowserExtensionNotificationKind
+  options?: BrowserExtensionNotificationOptions
+}
+
+/** How an extension wants its action click to behave, when it set a behavior
+ *  through `chrome.sidePanel.setPanelBehavior`. */
+export interface BrowserExtensionSidePanelBehavior {
+  openPanelOnActionClick: boolean
+}
+
+/** One `chrome.sidePanel.setOptions` record, normalised so a malformed field
+ *  cannot reach the view layer. A record with no `tabId` is the extension-wide
+ *  default; one with a `tabId` overrides it for that tab. */
+export interface BrowserExtensionSidePanelOption {
+  tabId?: number
+  path?: string
+  enabled?: boolean
+}
+
+/** One `chrome.sidePanel.open` or `chrome.sidePanel.close` request, normalised so
+ *  a malformed field cannot reach the view layer. `seq` increases per request
+ *  within one worker life, exactly as the notification sequence does. */
+export interface BrowserExtensionSidePanelRequest {
+  seq: number
+  kind: 'open' | 'close'
+  tabId?: number
+}
+
+/** Everything one worker life recorded about its side panel: the behavior it
+ *  asked for, the options it set per scope, and the requests it queued. */
+export interface BrowserExtensionSidePanelMailbox {
+  behavior: BrowserExtensionSidePanelBehavior | null
+  options: BrowserExtensionSidePanelOption[]
+  requests: BrowserExtensionSidePanelRequest[]
 }
 
 export interface BrowserExtensionBridgeDeps {
@@ -119,6 +183,95 @@ function toMenuRecord(value: unknown): BrowserExtensionMenuRecord | null {
     checked: record['checked'] === true,
     documentUrlPatterns: asStringArray(record['documentUrlPatterns']),
     targetUrlPatterns: asStringArray(record['targetUrlPatterns'])
+  }
+}
+
+/** Whether an unknown value from the wire is a usable notification request,
+ *  normalised so a malformed field cannot reach the app's notifier. */
+function toNotificationRecord(value: unknown): BrowserExtensionNotificationRecord | null {
+  const record = asRecord(value)
+  const seq = record['seq']
+  if (typeof seq !== 'number' || !Number.isFinite(seq) || seq <= 0) return null
+  const kind = record['kind']
+  if (kind !== 'create' && kind !== 'update' && kind !== 'clear' && kind !== 'clearAll') {
+    return null
+  }
+  const options = asRecord(record['options'])
+  const normalisedOptions: BrowserExtensionNotificationOptions = {}
+  if (typeof options['title'] === 'string') normalisedOptions.title = options['title']
+  if (typeof options['message'] === 'string') normalisedOptions.message = options['message']
+  if (typeof options['iconUrl'] === 'string') normalisedOptions.iconUrl = options['iconUrl']
+  if (typeof options['silent'] === 'boolean') normalisedOptions.silent = options['silent']
+  if (Array.isArray(options['buttons'])) {
+    normalisedOptions.buttons = options['buttons'].map((button) => {
+      const item = asRecord(button)
+      return { title: typeof item['title'] === 'string' ? item['title'] : '' }
+    })
+  }
+  const id = record['id']
+  return {
+    seq,
+    id: typeof id === 'string' ? id : '',
+    kind,
+    ...(Object.keys(normalisedOptions).length > 0 ? { options: normalisedOptions } : {})
+  }
+}
+
+/** Whether an unknown value from the wire is a usable side-panel behavior.
+ *  Null is the extension never having set one, which the app reads as the
+ *  default behavior. */
+function toSidePanelBehavior(value: unknown): BrowserExtensionSidePanelBehavior | null {
+  if (typeof value !== 'object' || value === null) return null
+  const record = asRecord(value)
+  return { openPanelOnActionClick: record['openPanelOnActionClick'] === true }
+}
+
+/** Whether an unknown value from the wire is a usable side-panel option record.
+ *  A record that carries neither a path nor an enabled flag says nothing the app
+ *  can act on, so it is dropped rather than stored as an empty override. */
+function toSidePanelOption(value: unknown): BrowserExtensionSidePanelOption | null {
+  const record = asRecord(value)
+  const option: BrowserExtensionSidePanelOption = {}
+  const tabId = record['tabId']
+  if (typeof tabId === 'number' && Number.isFinite(tabId) && tabId >= 0) option.tabId = tabId
+  const path = record['path']
+  if (typeof path === 'string') option.path = path
+  const enabled = record['enabled']
+  if (typeof enabled === 'boolean') option.enabled = enabled
+  if (option.path === undefined && option.enabled === undefined) return null
+  return option
+}
+
+/** Whether an unknown value from the wire is a usable side-panel request,
+ *  normalised so a malformed field cannot reach the view layer. */
+function toSidePanelRequest(value: unknown): BrowserExtensionSidePanelRequest | null {
+  const record = asRecord(value)
+  const seq = record['seq']
+  if (typeof seq !== 'number' || !Number.isFinite(seq) || seq <= 0) return null
+  const kind = record['kind']
+  if (kind !== 'open' && kind !== 'close') return null
+  const request: BrowserExtensionSidePanelRequest = { seq, kind }
+  const tabId = record['tabId']
+  if (typeof tabId === 'number' && Number.isFinite(tabId) && tabId >= 0) request.tabId = tabId
+  return request
+}
+
+/** One side-panel mailbox field, always carrying usable arrays so a malformed
+ *  payload cannot arrive at the view layer as `undefined`. */
+function toSidePanelMailbox(value: unknown): BrowserExtensionSidePanelMailbox {
+  const record = asRecord(value)
+  return {
+    behavior: toSidePanelBehavior(record['behavior']),
+    options: Array.isArray(record['options'])
+      ? record['options']
+          .map(toSidePanelOption)
+          .filter((item): item is BrowserExtensionSidePanelOption => item !== null)
+      : [],
+    requests: Array.isArray(record['requests'])
+      ? record['requests']
+          .map(toSidePanelRequest)
+          .filter((item): item is BrowserExtensionSidePanelRequest => item !== null)
+      : []
   }
 }
 
@@ -227,6 +380,12 @@ export class BrowserExtensionBridge {
               .filter((item): item is BrowserExtensionMenuRecord => item !== null)
           : [],
         menuSeq: typeof parsed['menuSeq'] === 'number' ? parsed['menuSeq'] : 0,
+        notifications: Array.isArray(parsed['notifications'])
+          ? parsed['notifications']
+              .map(toNotificationRecord)
+              .filter((item): item is BrowserExtensionNotificationRecord => item !== null)
+          : [],
+        sidePanel: toSidePanelMailbox(parsed['sidePanel']),
         bridgeCommands: typeof parsed['bridgeCommands'] === 'number' ? parsed['bridgeCommands'] : 0
       }
       this.generation = generation

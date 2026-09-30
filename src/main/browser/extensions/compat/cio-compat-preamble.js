@@ -85,6 +85,24 @@
   }
 
   /**
+   * Chrome's shimmed methods have to answer both ways: an extension may pass a
+   * callback or await a promise, and the two are used interchangeably in the wild.
+   * The callback is deferred a microtask rather than called in line, because a
+   * listener that runs before the shimmed call returns sees a value the caller has
+   * not been handed yet.
+   */
+  const answerWith = (callback, result) => {
+    if (typeof callback === 'function') {
+      try {
+        Promise.resolve().then(() => callback(result))
+      } catch (error) {
+        state.errors.push('callback: ' + String(error))
+      }
+    }
+    return Promise.resolve(result)
+  }
+
+  /**
    * The runtime exposes `chrome` and a distinct `browser` object, and the two do
    * not carry the same surface. An extension that reaches for `browser.*` (uBlock
    * Origin Lite, AdGuard, 1Password all do) has to be patched on both roots, or it
@@ -396,6 +414,497 @@
     }
   }
 
+  // The same treatment for navigation, and for the same reason: `chrome.webNavigation`
+  // is compiled out entirely, so its nine events were no-op stubs that a listener
+  // registered on and waited on forever. These dispatchers are what the app pushes
+  // the lifecycle it already watches into.
+  //
+  // Main frame only. The app observes the main frame's own `did-*` events, so a
+  // listener filtered to a subframe would never be called; saying so here is better
+  // than quietly dropping those events, and the capability report carries the same
+  // limit.
+  const webNavigationEvents = {}
+  for (const name of [
+    'onBeforeNavigate',
+    'onCommitted',
+    'onDOMContentLoaded',
+    'onCompleted',
+    'onErrorOccurred',
+    'onHistoryStateUpdated',
+    'onReferenceFragmentUpdated'
+  ]) {
+    const dispatcher = makeRealEvent()
+    webNavigationEvents[name] = dispatcher
+    for (const root of roots) {
+      const navigationApi = root && root.webNavigation
+      if (!navigationApi) continue
+      try {
+        // Enumerable, like the runtime's own events: an extension that discovers
+        // what it can listen to by iterating must see these.
+        Object.defineProperty(navigationApi, name, {
+          value: dispatcher,
+          configurable: true,
+          writable: true,
+          enumerable: true
+        })
+      } catch (error) {
+        state.errors.push('webNavigation.' + name + ': ' + String(error))
+      }
+    }
+  }
+  state.webNavigation = { events: Object.keys(webNavigationEvents), mainFrameOnly: true }
+
+  // ── privacy, for real ───────────────────────────────────────────────────────
+  // `chrome.privacy` is read while an extension's module graph evaluates, not on
+  // demand: uBlock Origin classic touches `networkPredictionEnabled` and
+  // `hyperlinkAuditingEnabled` as its own modules run, and Electron compiles the
+  // whole namespace out, so there was nothing there to read and the extension died
+  // before it could filter anything (measured, see `.cio/work/browser-containers/plan.md`).
+  //
+  // What this can honestly be is a reader. The app does not gate network
+  // prediction, hyperlink auditing or WebRTC policy on an extension's say-so, so
+  // these settings report `not_controllable` rather than claim a control nobody
+  // wired up, and every `set` or `clear` is counted in `state.privacy.inertCalls`
+  // so the install-time capability report can say the setting was read-only instead
+  // of reporting the namespace as present and whole. `set` still resolves rather
+  // than rejects: an extension that tries is better off carrying on with a setting
+  // that does nothing than being thrown out of its own startup path.
+  //
+  // Values are Chromium's own defaults for a profile with no policy, which is what
+  // an extension expects to read in a browser nobody has configured.
+  const privacyDefaults = {
+    network: {
+      networkPredictionEnabled: true,
+      webRTCIPHandlingPolicy: 'default_public_interface_only'
+    },
+    services: {
+      alternateErrorPagesEnabled: true,
+      autofillAddressEnabled: true,
+      autofillCreditCardEnabled: true,
+      passwordSavingEnabled: true,
+      safeBrowsingEnabled: true,
+      searchSuggestEnabled: true,
+      spellingServiceEnabled: true,
+      translationServiceEnabled: true
+    },
+    websites: {
+      thirdPartyCookiesAllowed: true,
+      referrersEnabled: true,
+      hyperlinkAuditingEnabled: true,
+      protectedContentEnabled: true
+    }
+  }
+  const makePrivacySetting = (initial) => {
+    const onChange = makeRealEvent()
+    let value = initial
+    const read = () => ({
+      value,
+      // Not a claim about the value, a claim about who can change it. The app
+      // does not act on any of these, so saying otherwise would be a lie an
+      // extension could plan around.
+      levelOfControl: 'not_controllable',
+      incognitoSpecific: false
+    })
+    const note = (call) => {
+      state.privacy.inertCalls += 1
+      state.privacy.lastCall = call
+    }
+    // Chrome's dual callback/promise surface, shared with the other shims.
+    const answer = answerWith
+    return {
+      get: (details, callback) => {
+        try {
+          return answer(callback, read())
+        } catch (error) {
+          state.errors.push('privacy-get: ' + String(error))
+          return Promise.resolve(read())
+        }
+      },
+      set: (details, callback) => {
+        try {
+          const next = details && 'value' in details ? details.value : undefined
+          // The value is kept in this life so a read after a write does not
+          // contradict what the extension was just told, even though the app is
+          // not acting on it.
+          if (next !== undefined && next !== value) {
+            value = next
+            onChange.__cioEmit([{ value }])
+          }
+          note('set')
+          return answer(callback)
+        } catch (error) {
+          state.errors.push('privacy-set: ' + String(error))
+          return Promise.resolve()
+        }
+      },
+      clear: (details, callback) => {
+        try {
+          // Back to the default this shim started from, which is what clearing a
+          // setting means when nobody else has set it.
+          value = initial
+          note('clear')
+          return answer(callback)
+        } catch (error) {
+          state.errors.push('privacy-clear: ' + String(error))
+          return Promise.resolve()
+        }
+      },
+      onChange
+    }
+  }
+  // One instance per setting, shared by both roots, for the same reason the tab
+  // dispatchers are shared: an extension that registered on `browser.privacy` and
+  // reads `chrome.privacy` must be looking at one setting, not two.
+  state.privacy = { settings: [], inertCalls: 0, areas: [] }
+  const privacyAreas = {}
+  for (const areaName of Object.keys(privacyDefaults)) {
+    const area = {}
+    for (const settingName of Object.keys(privacyDefaults[areaName])) {
+      // Enumerable, because Chromium's own API objects are: an extension that
+      // discovers capability by iterating sees nothing of a non-enumerable one.
+      Object.defineProperty(area, settingName, {
+        value: makePrivacySetting(privacyDefaults[areaName][settingName]),
+        configurable: true,
+        writable: true,
+        enumerable: true
+      })
+      state.privacy.settings.push(areaName + '.' + settingName)
+    }
+    Object.defineProperty(privacyAreas, areaName, {
+      value: area,
+      configurable: true,
+      writable: true,
+      enumerable: true
+    })
+    state.privacy.areas.push(areaName)
+  }
+  for (const root of roots) {
+    try {
+      if (!root) continue
+      const existing = root.privacy
+      if (existing && typeof existing === 'object') {
+        // Add-only, so a runtime that ever compiles part of this in is not
+        // overwritten. Nothing here is enumerable-breaking: a setting that is
+        // already there is left exactly as the runtime made it.
+        for (const areaName of Object.keys(privacyAreas)) {
+          if (!existing[areaName] || typeof existing[areaName] !== 'object') {
+            Object.defineProperty(existing, areaName, {
+              value: privacyAreas[areaName],
+              configurable: true,
+              writable: true,
+              enumerable: true
+            })
+          }
+        }
+        continue
+      }
+      Object.defineProperty(root, 'privacy', {
+        value: privacyAreas,
+        configurable: true,
+        writable: true,
+        enumerable: true
+      })
+    } catch (error) {
+      state.errors.push('privacy: ' + String(error))
+    }
+  }
+
+  // ── notifications, for real ────────────────────────────────────────────────
+  // The namespace is compiled out, so the stubs above made `create` return a
+  // plausible id and raise nothing: an extension that reports a problem to the user
+  // was talking to itself. The app can do better than that, because it owns the
+  // desktop. A request is queued here, main reads it out of the mailbox and raises
+  // it through the app's own notifier, and a click comes back over the bridge as a
+  // real `onClicked`, which is the half an extension actually needs.
+  //
+  // The ids stay the extension's own, because an extension that stores the id it
+  // was handed and clears it later must be able to. Main namespaces them per
+  // extension on its side instead of rewriting them here.
+  const notificationQueue = []
+  let notificationSeq = 0
+  let notificationAutoId = 0
+  const notificationBox = new Map()
+  const notificationClicked = makeRealEvent()
+  const notificationClosed = makeRealEvent()
+  const notificationButtonClicked = makeRealEvent()
+  state.notifications = { queued: 0, live: 0 }
+
+  const queueNotification = (kind, id, options) => {
+    notificationSeq += 1
+    notificationQueue.push({
+      seq: notificationSeq,
+      id,
+      kind,
+      options: options && typeof options === 'object' ? options : undefined
+    })
+    // Only what the app has not seen yet matters, but a life that raises a
+    // thousand toasts is not worth unbounded memory either.
+    if (notificationQueue.length > 60) {
+      notificationQueue.splice(0, notificationQueue.length - 60)
+    }
+    state.notifications.queued = notificationSeq
+    state.notifications.live = notificationBox.size
+    scheduleMailbox()
+    return id
+  }
+  const resolveNotificationId = (id) => {
+    if (typeof id === 'string' && id.length > 0) return id
+    notificationAutoId += 1
+    return 'cio-notification-' + String(notificationAutoId)
+  }
+  const notificationApi = {
+    create: (idOrOptions, optionsOrCallback, maybeCallback) => {
+      try {
+        let id = null
+        let options = null
+        let callback = null
+        if (typeof idOrOptions === 'string') {
+          id = idOrOptions
+          options = optionsOrCallback
+          callback = maybeCallback
+        } else {
+          options = idOrOptions
+          callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : null
+        }
+        const resolvedId = resolveNotificationId(id)
+        notificationBox.set(resolvedId, options && typeof options === 'object' ? options : {})
+        queueNotification('create', resolvedId, options)
+        return answerWith(callback, resolvedId)
+      } catch (error) {
+        state.errors.push('notifications-create: ' + String(error))
+        return Promise.resolve(null)
+      }
+    },
+    update: (id, options, callback) => {
+      try {
+        const key = String(id === undefined || id === null ? '' : id)
+        // Chromium answers whether an update landed, and an extension that clears
+        // a stale id relies on the false rather than on an exception.
+        if (!notificationBox.has(key)) return answerWith(callback, false)
+        notificationBox.set(key, options && typeof options === 'object' ? options : {})
+        queueNotification('update', key, options)
+        return answerWith(callback, true)
+      } catch (error) {
+        state.errors.push('notifications-update: ' + String(error))
+        return Promise.resolve(false)
+      }
+    },
+    clear: (id, callback) => {
+      try {
+        const key = String(id === undefined || id === null ? '' : id)
+        const existed = notificationBox.delete(key)
+        queueNotification('clear', key, undefined)
+        return answerWith(callback, existed)
+      } catch (error) {
+        state.errors.push('notifications-clear: ' + String(error))
+        return Promise.resolve(false)
+      }
+    },
+    getAll: (callback) => {
+      try {
+        const all = {}
+        for (const [key, value] of notificationBox.entries()) {
+          all[key] = JSON.parse(JSON.stringify(value))
+        }
+        return answerWith(callback, all)
+      } catch (error) {
+        state.errors.push('notifications-getAll: ' + String(error))
+        return Promise.resolve({})
+      }
+    },
+    // The app shows these itself, so an extension is entitled to a yes rather than
+    // the prompt Chromium would show.
+    getPermissionLevel: (callback) => answerWith(callback, 'granted')
+  }
+  const notificationEvents = {
+    onClicked: notificationClicked,
+    onClosed: notificationClosed,
+    onButtonClicked: notificationButtonClicked,
+    onPermissionLevelChanged: makeRealEvent(),
+    onShowSettings: makeRealEvent()
+  }
+  // Replaced, not ensured: these members are the stubs this same file installed a
+  // few hundred lines up, so overwriting them replaces a placeholder rather than
+  // clobbering something the runtime provided. Enumerable, like Chromium's own.
+  for (const root of roots) {
+    const api = root && root.notifications
+    if (!api) continue
+    for (const key of Object.keys(notificationApi)) {
+      try {
+        Object.defineProperty(api, key, {
+          value: notificationApi[key],
+          configurable: true,
+          writable: true,
+          enumerable: true
+        })
+      } catch (error) {
+        state.errors.push('notifications.' + key + ': ' + String(error))
+      }
+    }
+    for (const key of Object.keys(notificationEvents)) {
+      try {
+        Object.defineProperty(api, key, {
+          value: notificationEvents[key],
+          configurable: true,
+          writable: true,
+          enumerable: true
+        })
+      } catch (error) {
+        state.errors.push('notifications.' + key + ': ' + String(error))
+      }
+    }
+  }
+  state.notifications.shimmed = true
+
+  // ── sidePanel, for real ─────────────────────────────────────────────────────
+  // Electron compiles the namespace out, so `setOptions` and `open` were calls that
+  // returned nothing and changed nothing: an extension that offers its UI in a side
+  // panel simply had no UI. The app has a rail it can host one in, so the extension's
+  // intent is carried to main here and main puts the panel in that rail.
+  //
+  // What travels is the extension's own `path`, unchanged. The panel is the
+  // extension's HTML loaded from its own origin in its own jar, not markup the app
+  // re-renders, so a panel that scripts itself works the way it does in a browser.
+  const sidePanelRequests = []
+  let sidePanelRequestSeq = 0
+  let sidePanelBehavior = null
+  const sidePanelOptionRecords = []
+  const sidePanelOpened = makeRealEvent()
+  const sidePanelClosed = makeRealEvent()
+  state.sidePanel = { requests: 0, options: 0, behavior: null }
+
+  const sidePanelScopeKey = (options) => {
+    const tabId = options && typeof options === 'object' ? options.tabId : undefined
+    // Chromium keeps a per-tab override and a default; the default is the record
+    // with no tab id, which is what an extension that never passes one means.
+    return typeof tabId === 'number' && tabId >= 0 ? String(tabId) : ''
+  }
+  const queueSidePanelRequest = (kind, options) => {
+    sidePanelRequestSeq += 1
+    sidePanelRequests.push({
+      seq: sidePanelRequestSeq,
+      kind,
+      tabId:
+        options && typeof options.tabId === 'number' && options.tabId >= 0
+          ? options.tabId
+          : undefined
+    })
+    if (sidePanelRequests.length > 20) {
+      sidePanelRequests.splice(0, sidePanelRequests.length - 20)
+    }
+    state.sidePanel.requests = sidePanelRequestSeq
+    scheduleMailbox()
+  }
+  const sidePanelDetails = (command) => ({
+    tabId: command && typeof command.tabId === 'number' ? command.tabId : -1,
+    windowId: -1,
+    path:
+      command && typeof command.path === 'string'
+        ? command.path
+        : sidePanelOptionRecords.find((record) => record.tabId === undefined)?.path || ''
+  })
+  const sidePanelApi = {
+    setOptions: (options, callback) => {
+      try {
+        const scope = sidePanelScopeKey(options)
+        const record = {
+          tabId: scope === '' ? undefined : Number(scope),
+          path: options && typeof options.path === 'string' ? options.path : undefined,
+          enabled: options && typeof options.enabled === 'boolean' ? options.enabled : undefined
+        }
+        const index = sidePanelOptionRecords.findIndex(
+          (entry) => (entry.tabId === undefined ? '' : String(entry.tabId)) === scope
+        )
+        if (index === -1) sidePanelOptionRecords.push(record)
+        else sidePanelOptionRecords[index] = record
+        state.sidePanel.options = sidePanelOptionRecords.length
+        scheduleMailbox()
+        return answerWith(callback)
+      } catch (error) {
+        state.errors.push('sidePanel-setOptions: ' + String(error))
+        return Promise.resolve()
+      }
+    },
+    getOptions: (options, callback) => {
+      try {
+        const scope = sidePanelScopeKey(options)
+        const found = sidePanelOptionRecords.find(
+          (entry) => (entry.tabId === undefined ? '' : String(entry.tabId)) === scope
+        )
+        // Chromium's own answer for a panel nobody configured is `enabled: true`
+        // with no path, and an extension that reads it back before setting it
+        // expects that rather than an empty object.
+        return answerWith(callback, found ? { ...found } : { enabled: true })
+      } catch (error) {
+        state.errors.push('sidePanel-getOptions: ' + String(error))
+        return Promise.resolve({ enabled: true })
+      }
+    },
+    setPanelBehavior: (behavior, callback) => {
+      try {
+        sidePanelBehavior = {
+          openPanelOnActionClick: !!(behavior && behavior.openPanelOnActionClick)
+        }
+        state.sidePanel.behavior = sidePanelBehavior
+        scheduleMailbox()
+        return answerWith(callback)
+      } catch (error) {
+        state.errors.push('sidePanel-setPanelBehavior: ' + String(error))
+        return Promise.resolve()
+      }
+    },
+    open: (options, callback) => {
+      try {
+        queueSidePanelRequest('open', options)
+        return answerWith(callback)
+      } catch (error) {
+        state.errors.push('sidePanel-open: ' + String(error))
+        return Promise.resolve()
+      }
+    },
+    close: (options, callback) => {
+      try {
+        queueSidePanelRequest('close', options)
+        return answerWith(callback)
+      } catch (error) {
+        state.errors.push('sidePanel-close: ' + String(error))
+        return Promise.resolve()
+      }
+    }
+  }
+  const sidePanelEvents = { onOpened: sidePanelOpened, onClosed: sidePanelClosed }
+  // Replaced, not ensured, for the same reason as notifications: these members are
+  // this file's own placeholders from the stub section above.
+  for (const root of roots) {
+    const api = root && root.sidePanel
+    if (!api) continue
+    for (const key of Object.keys(sidePanelApi)) {
+      try {
+        Object.defineProperty(api, key, {
+          value: sidePanelApi[key],
+          configurable: true,
+          writable: true,
+          enumerable: true
+        })
+      } catch (error) {
+        state.errors.push('sidePanel.' + key + ': ' + String(error))
+      }
+    }
+    for (const key of Object.keys(sidePanelEvents)) {
+      try {
+        Object.defineProperty(api, key, {
+          value: sidePanelEvents[key],
+          configurable: true,
+          writable: true,
+          enumerable: true
+        })
+      } catch (error) {
+        state.errors.push('sidePanel.' + key + ': ' + String(error))
+      }
+    }
+  }
+  state.sidePanel.shimmed = true
+
   // ── The state the app reads back ────────────────────────────────────────────
   // A worker that goes idle is released and restarted by the next message, and
   // the new life's sequence starts over with none of the previous action state.
@@ -440,6 +949,15 @@
         actions: actionState,
         menus: Array.from(contextMenuItems.values()),
         menuSeq,
+        // The notifications this life has asked the app to raise. Main acts on the
+        // entries newer than the last sequence it saw, the same way it does menus.
+        notifications: notificationQueue,
+        // What the extension wants a side panel to be, and when it asked for one.
+        sidePanel: {
+          behavior: sidePanelBehavior,
+          options: sidePanelOptionRecords,
+          requests: sidePanelRequests
+        },
         bridgeCommands: state.bridgeCommands || 0,
         commandLog: state.commandLog || [],
         eventDispatch: state.eventDispatch || {},
@@ -677,28 +1195,57 @@
     if (state.commandLog.length > 100) {
       state.commandLog.splice(0, state.commandLog.length - 100)
     }
+    // What was delivered and how many listeners were there to receive it: an
+    // event delivered before an extension registered its listener looks exactly
+    // like one it never reacted to, and the two are worth telling apart when a
+    // menu or a panel does not appear. Tab events and navigation events both
+    // record through here, because the shim's own delivery is the first thing to
+    // doubt when a real extension seems not to react.
+    const emitRecorded = (name, dispatcher, args) => {
+      const counters = state.eventDispatch || (state.eventDispatch = {})
+      const entry = counters[name] || (counters[name] = { delivered: 0, listeners: 0, errors: 0 })
+      entry.delivered += 1
+      entry.listeners = typeof dispatcher.__cioCount === 'function' ? dispatcher.__cioCount() : 0
+      const errorsBefore = state.errors.length
+      dispatcher.__cioEmit(args)
+      entry.errors += state.errors.length - errorsBefore
+    }
     if (command.kind === 'tab') {
       const dispatcher = tabEvents[command.name]
       if (dispatcher) {
-        // What was delivered and how many listeners were there to receive it: an
-        // event delivered before an extension registered its listener looks
-        // exactly like one it never reacted to, and the two are worth telling
-        // apart when a menu does not appear.
-        const counters = state.eventDispatch || (state.eventDispatch = {})
-        const entry =
-          counters[command.name] ||
-          (counters[command.name] = { delivered: 0, listeners: 0, errors: 0 })
-        entry.delivered += 1
-        entry.listeners = typeof dispatcher.__cioCount === 'function' ? dispatcher.__cioCount() : 0
-        const errorsBefore = state.errors.length
-        dispatcher.__cioEmit(Array.isArray(command.args) ? command.args : [])
-        entry.errors += state.errors.length - errorsBefore
+        emitRecorded(command.name, dispatcher, Array.isArray(command.args) ? command.args : [])
         // A closed tab's action state goes with the event, so a long session
         // does not accumulate entries for tabs nobody has.
         if (command.name === 'onRemoved' && command.args && command.args[0] !== undefined) {
           delete actionState.tabs[String(command.args[0])]
         }
       }
+    } else if (command.kind === 'web-navigation') {
+      // The details object is built on the app's side in `chrome.webNavigation`'s
+      // own shape, so a listener written against the real API runs unmodified.
+      const dispatcher = webNavigationEvents[command.name]
+      if (dispatcher) {
+        emitRecorded(
+          command.name,
+          dispatcher,
+          Array.isArray(command.args) ? command.args : [command.details || {}]
+        )
+      }
+    } else if (command.kind === 'side-panel-opened') {
+      sidePanelOpened.__cioEmit([sidePanelDetails(command)])
+    } else if (command.kind === 'side-panel-closed') {
+      sidePanelClosed.__cioEmit([sidePanelDetails(command)])
+    } else if (command.kind === 'notification-click') {
+      const id = String(command.id || '')
+      // A button click is not a body click: Chromium reports them on different
+      // events, and an extension that offers buttons only listens for the former.
+      if (typeof command.buttonIndex === 'number') {
+        notificationButtonClicked.__cioEmit([id, command.buttonIndex])
+      } else {
+        notificationClicked.__cioEmit([id])
+      }
+    } else if (command.kind === 'notification-close') {
+      notificationClosed.__cioEmit([String(command.id || ''), command.byUser === true])
     } else if (command.kind === 'startup') {
       state.startupAt = Date.now()
       runtimeEvents.onStartup.__cioEmit([])

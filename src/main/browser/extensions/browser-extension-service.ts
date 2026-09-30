@@ -46,10 +46,18 @@ import type {
   BrowserExtensionProgress
 } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
+import { getNotificationService } from '../../notifications/notification-service'
 import { browserPartitionFor } from '../browser-service/browser-validation'
 import { prepareExtensionSource } from './browser-extension-install-job'
 import { COMPAT_BRIDGE_PAGE_FILE_NAME, ensureInjectionCurrent } from './browser-extension-inject'
-import { BrowserExtensionBridge, type BrowserExtensionMailbox } from './browser-extension-bridge'
+import {
+  BrowserExtensionBridge,
+  type BrowserExtensionMailbox,
+  type BrowserExtensionNotificationRecord,
+  type BrowserExtensionSidePanelMailbox,
+  type BrowserExtensionSidePanelOption,
+  type BrowserExtensionSidePanelRequest
+} from './browser-extension-bridge'
 import { extensionIdFromInput, isExtensionId } from './browser-extension-crx'
 import { downloadWebStoreRelease, resolveWebStoreRelease } from './browser-extension-webstore'
 import {
@@ -124,6 +132,14 @@ interface LoadedJar {
   mail: Map<string, BrowserExtensionMailbox>
   /** The worker life the last published activity came from, per extension. */
   publishedGeneration: Map<string, string>
+  /** The highest notification sequence number already acted on, per extension,
+   *  so the poll never raises the same request twice. Dropped when that
+   *  extension's worker restarts, whose own sequence starts over. */
+  notificationSeq: Map<string, number>
+  /** The highest side-panel request sequence number already acted on, per
+   *  extension, so the poll never raises the same request twice. Dropped when
+   *  that extension's worker restarts, whose own sequence starts over. */
+  sidePanelSeq: Map<string, number>
   /** Activity already sent to the renderer, so the 500 ms mailbox poll sends a
    *  change once instead of on every read. Keyed `extensionId\u0000tabId`. */
   published: Map<string, string>
@@ -155,11 +171,50 @@ export interface BrowserExtensionHost {
   reportProgress(progress: BrowserExtensionProgress): void
   /** The installed list changed. */
   publish(): void
+  /** Raise one extension's side panel, loading the extension's own document in
+   *  the jar it runs in. The panel is registered before this returns, so the
+   *  worker's `onOpened` follows the request that asked for it. */
+  openSidePanel(request: BrowserExtensionSidePanelOpenRequest): void
+  /** Close one extension's side panel. `extensionTabId` names the tab the
+   *  request was for; null closes it whatever tab it belongs to. */
+  closeSidePanel(extensionId: string, extensionTabId: number | null): void
+}
+
+/** One side panel a worker asked the app to raise. The extension service
+ *  resolves which tab and which path; the browser service owns the view and the
+ *  jar's session, and loads the document this names. */
+export interface BrowserExtensionSidePanelOpenRequest {
+  projectId: string
+  boxId: string | null
+  extensionId: string
+  extensionName: string
+  /** The extension's own tab id, or null when the request named no tab and the
+   *  active tab of the project's browser is the one meant. */
+  extensionTabId: number | null
+  path: string
+  url: string
 }
 
 /** The tab events the app synthesizes, under the extension API's own names. */
 export type BrowserExtensionTabEventName =
   'onCreated' | 'onUpdated' | 'onRemoved' | 'onActivated' | 'onHighlighted'
+
+/**
+ * The navigation lifecycle the app synthesizes for `chrome.webNavigation`, under
+ * the extension API's own event names.
+ *
+ * Chromium's navigation runtime is not reachable from an embedded page, so these
+ * come from the main frame's own `did-*` hooks instead. Only the main frame is
+ * observed, which is why no subframe event is synthesized.
+ */
+export type BrowserExtensionWebNavigationEventName =
+  | 'onBeforeNavigate'
+  | 'onCommitted'
+  | 'onDOMContentLoaded'
+  | 'onCompleted'
+  | 'onErrorOccurred'
+  | 'onHistoryStateUpdated'
+  | 'onReferenceFragmentUpdated'
 
 /** Action state as an extension recorded it, or null when a patch carries
  *  nothing the pins can draw. Only the fields the extension actually set are
@@ -208,6 +263,9 @@ export class BrowserExtensionService {
   /** Icons an extension set on its action, by absolute path. Shared across jars:
    *  the bytes belong to the extension's own folder, not to a session. */
   private readonly actionIcons = new Map<string, string | null>()
+  /** The namespaced OS notification ids each extension currently has raised, so
+   *  a `clearAll` can dismiss exactly that extension's cards. */
+  private readonly raisedNotifications = new Map<string, Set<string>>()
   private disposed = false
 
   constructor(
@@ -768,6 +826,8 @@ export class BrowserExtensionService {
       bridges: new Map(),
       mail: new Map(),
       publishedGeneration: new Map(),
+      notificationSeq: new Map(),
+      sidePanelSeq: new Map(),
       published: new Map(),
       publishing: Promise.resolve()
     }
@@ -795,6 +855,29 @@ export class BrowserExtensionService {
     const state = this.loaded.get(browserPartitionFor(projectId, boxId))
     if (!state || state.bridges.size === 0) return
     for (const bridge of state.bridges.values()) bridge.push({ kind: 'tab', name, args })
+  }
+
+  /**
+   * One main-frame navigation fact, delivered into every extension loaded in
+   * that tab's jar.
+   *
+   * `chrome.webNavigation` is compiled out of the runtime, so nothing drives an
+   * extension's navigation listeners on its own. The app watches the tab's own
+   * main frame and hands each step over in the details shape the API documents,
+   * so a listener written against the real API runs unmodified. Nothing crosses
+   * into a worker when the jar has no extension loaded.
+   */
+  onWebNavigationEvent(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserExtensionWebNavigationEventName,
+    details: Record<string, unknown>
+  ): void {
+    const state = this.loaded.get(browserPartitionFor(projectId, boxId))
+    if (!state || state.bridges.size === 0) return
+    for (const bridge of state.bridges.values()) {
+      bridge.push({ kind: 'web-navigation', name, args: [details] })
+    }
   }
 
   /** Open the channel into one extension's worker, beside its load. */
@@ -833,6 +916,9 @@ export class BrowserExtensionService {
     }
     state.mail.delete(extensionId)
     state.publishedGeneration.delete(extensionId)
+    state.notificationSeq.delete(extensionId)
+    state.sidePanelSeq.delete(extensionId)
+    this.dismissExtensionNotifications(extensionId)
     for (const key of [...state.published.keys()]) {
       if (key.startsWith(`${extensionId}\u0000`)) state.published.delete(key)
     }
@@ -864,8 +950,14 @@ export class BrowserExtensionService {
       for (const key of [...state.published.keys()]) {
         if (key.startsWith(`${extensionId}\u0000`)) state.published.delete(key)
       }
+      // The dead life's notification sequence means nothing to the new one.
+      state.notificationSeq.delete(extensionId)
+      // Nor does its side-panel request sequence.
+      state.sidePanelSeq.delete(extensionId)
     }
     state.publishedGeneration.set(extensionId, mail.generation)
+    this.handleNotifications(state, extensionId, mail)
+    this.handleSidePanelRequests(state, extensionId, mail)
     // Publishing resolves each icon's bytes, so it is queued per jar: two
     // snapshots landing out of order would draw the older state over the newer.
     state.publishing = state.publishing
@@ -876,6 +968,257 @@ export class BrowserExtensionService {
           error
         })
       )
+  }
+
+  /**
+   * Act on the OS notifications a worker asked the app to raise.
+   *
+   * Only entries newer than the highest sequence already acted on are handled,
+   * so the 500 ms poll re-reading the same snapshot never raises a card twice.
+   * A restarted worker starts its sequence over with no memory, so its
+   * bookkeeping is dropped with the generation reset in `onMailbox`.
+   */
+  private handleNotifications(
+    state: LoadedJar,
+    extensionId: string,
+    mail: BrowserExtensionMailbox
+  ): void {
+    if (mail.notifications.length === 0) return
+    const lastSeen = state.notificationSeq.get(extensionId) ?? 0
+    let newest = lastSeen
+    for (const entry of mail.notifications) {
+      if (entry.seq <= lastSeen) continue
+      newest = Math.max(newest, entry.seq)
+      this.applyNotification(state, extensionId, entry)
+    }
+    state.notificationSeq.set(extensionId, newest)
+  }
+
+  /**
+   * One notification request: raise, replace or dismiss the card it names.
+   *
+   * The extension's own id is kept for the click that comes back to it, while
+   * the OS card is keyed by an id namespaced with the extension so two
+   * extensions cannot collide. A click or a user close is pushed straight into
+   * the worker that raised the card, from the jar whose bridge it is.
+   */
+  private applyNotification(
+    state: LoadedJar,
+    extensionId: string,
+    entry: BrowserExtensionNotificationRecord
+  ): void {
+    const service = getNotificationService()
+    const namespacedId = `${extensionId}:${entry.id}`
+    const raised = this.raisedNotifications.get(extensionId) ?? new Set<string>()
+    this.raisedNotifications.set(extensionId, raised)
+    switch (entry.kind) {
+      case 'create':
+      case 'update': {
+        const record = this.registry.get(extensionId)
+        raised.add(namespacedId)
+        service?.notifyExternal({
+          id: namespacedId,
+          title: entry.options?.title?.trim() || record?.name || 'Extension',
+          message: entry.options?.message ?? '',
+          silent: entry.options?.silent === true,
+          onClick: (): void =>
+            this.pushNotificationCommand(state, extensionId, {
+              kind: 'notification-click',
+              id: entry.id
+            }),
+          onClose: (): void => {
+            raised.delete(namespacedId)
+            this.pushNotificationCommand(state, extensionId, {
+              kind: 'notification-close',
+              id: entry.id,
+              byUser: true
+            })
+          }
+        })
+        break
+      }
+      case 'clear':
+        raised.delete(namespacedId)
+        service?.dismissExternal(namespacedId)
+        break
+      case 'clearAll':
+        if (service) {
+          for (const id of raised) service.dismissExternal(id)
+        }
+        raised.clear()
+        break
+    }
+  }
+
+  /** Hand one notification command back to the extension's own worker. */
+  private pushNotificationCommand(
+    state: LoadedJar,
+    extensionId: string,
+    command: Record<string, unknown>
+  ): void {
+    state.bridges.get(extensionId)?.push(command)
+  }
+
+  /** Drop every OS notification an extension still has raised. */
+  private dismissExtensionNotifications(extensionId: string): void {
+    const raised = this.raisedNotifications.get(extensionId)
+    if (!raised) return
+    this.raisedNotifications.delete(extensionId)
+    const service = getNotificationService()
+    if (!service) return
+    for (const id of raised) service.dismissExternal(id)
+  }
+
+  /**
+   * Act on the side-panel requests a worker queued.
+   *
+   * Only entries newer than the highest sequence already acted on are handled, so
+   * the 500 ms poll re-reading the same snapshot never raises a panel twice. A
+   * restarted worker starts its sequence over with no memory, so its bookkeeping
+   * is dropped with the generation reset in `onMailbox`.
+   */
+  private handleSidePanelRequests(
+    state: LoadedJar,
+    extensionId: string,
+    mail: BrowserExtensionMailbox
+  ): void {
+    if (mail.sidePanel.requests.length === 0) return
+    const lastSeen = state.sidePanelSeq.get(extensionId) ?? 0
+    let newest = lastSeen
+    for (const entry of mail.sidePanel.requests) {
+      if (entry.seq <= lastSeen) continue
+      newest = Math.max(newest, entry.seq)
+      this.applySidePanelRequest(state, extensionId, mail.sidePanel, entry)
+    }
+    state.sidePanelSeq.set(extensionId, newest)
+  }
+
+  /** One side-panel request: raise the panel for its tab, or close it. */
+  private applySidePanelRequest(
+    state: LoadedJar,
+    extensionId: string,
+    sidePanel: BrowserExtensionSidePanelMailbox,
+    entry: BrowserExtensionSidePanelRequest
+  ): void {
+    if (entry.kind === 'close') {
+      this.host.closeSidePanel(extensionId, entry.tabId ?? null)
+      return
+    }
+    const record = this.registry.get(extensionId)
+    const path = this.resolveSidePanelPath(sidePanel.options, entry.tabId)
+    if (!path) {
+      // An extension that opens a panel it never gave a path is nothing to show,
+      // which is the same answer Chromium gives.
+      Logger.dev('An extension side panel was requested with no usable path:', {
+        extensionId,
+        tabId: entry.tabId ?? null
+      })
+      return
+    }
+    const url = extensionPopupUrl(extensionId, path)
+    if (!url) {
+      Logger.dev('An extension side panel path could not be resolved:', { extensionId, path })
+      return
+    }
+    this.host.openSidePanel({
+      projectId: state.projectId,
+      boxId: state.boxId,
+      extensionId,
+      extensionName: record?.name ?? extensionId,
+      extensionTabId: entry.tabId ?? null,
+      path,
+      url
+    })
+  }
+
+  /**
+   * The path one side panel opens: the record for the request's own tab when it
+   * exists and is not disabled, otherwise the extension-wide default. Null when
+   * neither yields a path, which is the one case there is nothing to host.
+   */
+  private resolveSidePanelPath(
+    options: BrowserExtensionSidePanelOption[],
+    tabId: number | undefined
+  ): string | null {
+    const perTab =
+      tabId === undefined ? undefined : options.find((option) => option.tabId === tabId)
+    const fallback = options.find((option) => option.tabId === undefined)
+    const chosen = perTab && perTab.enabled !== false ? perTab : fallback
+    const path = chosen?.path
+    return typeof path === 'string' && path.length > 0 ? path : null
+  }
+
+  /**
+   * The side panel an action click should open for one extension, or null when
+   * the extension did not ask for that behavior or has no usable path.
+   *
+   * An extension that sets `openPanelOnActionClick` gets its panel when its
+   * action is clicked, exactly as Chromium behaves; the path rules are the same
+   * ones its own `sidePanel.open` request follows.
+   */
+  sidePanelForActionClick(
+    projectId: string,
+    boxId: string | null,
+    extensionId: string,
+    extensionTabId: number
+  ): { extensionName: string; path: string; url: string } | null {
+    const sidePanel = this.loaded
+      .get(browserPartitionFor(projectId, boxId))
+      ?.mail.get(extensionId)?.sidePanel
+    if (!sidePanel || sidePanel.behavior?.openPanelOnActionClick !== true) return null
+    const path = this.resolveSidePanelPath(sidePanel.options, extensionTabId)
+    if (!path) {
+      Logger.dev('An extension side panel action click had no usable path:', { extensionId })
+      return null
+    }
+    const url = extensionPopupUrl(extensionId, path)
+    if (!url) {
+      Logger.dev('An extension side panel action click path could not be resolved:', {
+        extensionId,
+        path
+      })
+      return null
+    }
+    const record = this.registry.get(extensionId)
+    return { extensionName: record?.name ?? extensionId, path, url }
+  }
+
+  /** Tell one extension's worker that its panel opened, for its own
+   *  `chrome.sidePanel.onOpened`. */
+  reportSidePanelOpened(
+    projectId: string,
+    boxId: string | null,
+    extensionId: string,
+    extensionTabId: number
+  ): void {
+    this.pushSidePanelCommand(projectId, boxId, extensionId, {
+      kind: 'side-panel-opened',
+      tabId: extensionTabId
+    })
+  }
+
+  /** Tell one extension's worker that its panel closed, for its own
+   *  `chrome.sidePanel.onClosed`. */
+  reportSidePanelClosed(
+    projectId: string,
+    boxId: string | null,
+    extensionId: string,
+    extensionTabId: number
+  ): void {
+    this.pushSidePanelCommand(projectId, boxId, extensionId, {
+      kind: 'side-panel-closed',
+      tabId: extensionTabId
+    })
+  }
+
+  /** Hand one side-panel command back to the extension's own worker. */
+  private pushSidePanelCommand(
+    projectId: string,
+    boxId: string | null,
+    extensionId: string,
+    command: Record<string, unknown>
+  ): void {
+    this.loaded.get(browserPartitionFor(projectId, boxId))?.bridges.get(extensionId)?.push(command)
   }
 
   /**

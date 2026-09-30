@@ -12,6 +12,7 @@ import type {
   BrowserDevToolsState,
   BrowserDownload,
   BrowserExtensionActivityUpdate,
+  BrowserExtensionSidePanel,
   BrowserFindResult,
   BrowserInspectorEvent,
   BrowserOpenRequestContext,
@@ -241,6 +242,17 @@ export const IPC_EVENT_CONTRACT = {
    * rather than as add/remove/update deltas.
    */
   'browser:popupWindows': [] as unknown as [popups: BrowserPopupWindow[]],
+  /**
+   * Every extension side panel the rail is hosting, whole, after any change to
+   * one of them: an extension asked for one, it closed, or the tab it belonged to
+   * went away. Like the popup list, it is short enough to publish whole rather
+   * than as deltas.
+   *
+   * `chrome.sidePanel` is compiled out of this runtime, so this is the record an
+   * extension declared through the compatibility shim rather than a surface the
+   * runtime provided.
+   */
+  'browser:extensionSidePanels': [] as unknown as [panels: BrowserExtensionSidePanel[]],
   /**
    * Delivered to the native permission-prompt popup window (not the main
    * renderer): the page permission awaiting a decision, plus how many requests

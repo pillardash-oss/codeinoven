@@ -3,6 +3,7 @@ import type {
   BrowserDownload,
   BrowserExtension,
   BrowserExtensionInstallInput,
+  BrowserExtensionSidePanel,
   BrowserFindRequest,
   BrowserFindStopAction,
   BrowserInspectorMarker,
@@ -90,6 +91,35 @@ export const invokeBrowserContract = {
   'browser:unbindAssistantPage': {} as Contract<[assistantThreadId: string], void>,
   'browser:hide': {} as Contract<[tabId: string], void>,
   /**
+   * Show an extension's own side panel in the rail.
+   *
+   * Electron compiles `chrome.sidePanel` out, so an extension that declares a
+   * panel has no host of its own. The app hosts the extension's own document,
+   * loaded from its own origin in the jar the extension runs in, and this is the
+   * call that puts it on screen: the rail measures the frame it drew for the panel
+   * and this app puts the document in it. The panel is the extension's own HTML,
+   * not markup this app re-renders.
+   */
+  'browser:showExtensionSidePanel': {} as Contract<
+    [extensionId: string, bounds: BrowserViewBounds],
+    void
+  >,
+  /**
+   * Take an extension side panel off screen without stopping it, the way a parked
+   * tab is laid out offscreen rather than unloaded, so a panel mid-request is not
+   * frozen by the user closing the rail.
+   */
+  'browser:hideExtensionSidePanel': {} as Contract<[extensionId: string], void>,
+  /** Give an extension side panel the keyboard, after the user picks it in the rail. */
+  'browser:focusExtensionSidePanel': {} as Contract<[extensionId: string], void>,
+  /**
+   * Close an extension side panel: its document stops and it leaves the rail. The
+   * extension is told through its own `chrome.sidePanel.onClosed`.
+   */
+  'browser:closeExtensionSidePanel': {} as Contract<[extensionId: string], void>,
+  /** The extension side panels the rail is hosting for one project. */
+  'browser:getExtensionSidePanels': {} as Contract<[projectId: string], BrowserExtensionSidePanel[]>,
+  /**
    * Place a popup window's page over the frame the rail measured for it. The
    * popup is a native view like a tab's page is, so the rail's rectangle is
    * what puts it on screen inside the panel rather than over the window.
@@ -127,10 +157,15 @@ export const invokeBrowserContract = {
    * it, and the popup has to be hosted on the jar that tab lives in. The rail is
    * shared by the global browser and by a project's, so a caller naming the global
    * project for a project tab would be refused.
+   *
+   * Answers the popup's id, which is the popup already open when that extension
+   * already has one in this tab. Answers `null` when nothing opened, which is the
+   * case where the extension asked to open its own side panel on an action click
+   * and the rail raised that panel instead.
    */
   'browser:openExtensionPopup': {} as Contract<
     [projectId: string, tabId: string, threadId: string, boxId: string | null, extensionId: string],
-    string
+    string | null
   >,
   /**
    * Park the active browser page because a toast could not be shown over it.

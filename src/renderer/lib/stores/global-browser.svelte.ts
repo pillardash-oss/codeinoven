@@ -16,6 +16,7 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import type {
+  BrowserExtensionSidePanel,
   BrowserOpenRequestContext,
   BrowserPageState,
   BrowserPopupWindow
@@ -33,6 +34,7 @@ import {
   BROWSER_ASSISTANT_DEFAULT_TITLE,
   type BrowserAssistantChat
 } from './browser-assistant.svelte'
+import { browserExtensionSidePanels } from './browser-extension-side-panels.svelte'
 import { browserPopupWindows } from './browser-popup-windows.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { sidebarState } from './sidebar.svelte'
@@ -124,7 +126,15 @@ export class GlobalBrowserState {
    *  shared browser library rather than a tab, so those tools are the entries that
    *  can stay open with no tab. */
   contextSidebarTool = $state<
-    'note' | 'agent' | 'downloads' | 'popups' | 'history' | 'bookmarks' | 'boxes' | 'extensions'
+    | 'note'
+    | 'agent'
+    | 'downloads'
+    | 'popups'
+    | 'history'
+    | 'bookmarks'
+    | 'boxes'
+    | 'extensions'
+    | 'extension-side-panel'
   >('note')
   /** Whether the address spotlight is up. It lives here rather than in a surface
    *  because it is summoned from anywhere in the browser view (Cmd/Ctrl+L) and
@@ -162,6 +172,10 @@ export class GlobalBrowserState {
    *  a new one brings the rail's popup panel up. Bounded by the live list: an id
    *  whose popup is gone is forgotten. */
   private readonly seenPopupWindowIds = new SvelteSet<string>()
+  /** Extension side panels this renderer has already reported on, so only the
+   *  arrival of a new one brings the rail's side panel tool up. Bounded by the
+   *  live list: a key whose panel is gone is forgotten. */
+  private readonly seenExtensionSidePanelIds = new SvelteSet<string>()
   private sweepTimer: number | null = null
   /** The coalesced write still waiting to leave, or null. */
   private saveTimer: number | null = null
@@ -206,6 +220,13 @@ export class GlobalBrowserState {
     // and the other direction of the same rule closes the panel when the last one
     // ends.
     subscribe('browser:popupWindows', (popups) => this.applyPopupWindows(popups))
+    // An extension that asks to show its own side panel is asking for a place
+    // beside the page, so the first panel for the tab on screen reveals the rail's
+    // side panel tool, exactly as a popup window does, and the last one leaving
+    // closes it again. This listener is registered before the side panel store's
+    // own, so inside this dispatch the open/close decision answers from the report
+    // itself rather than from a mirror that is one report behind.
+    subscribe('browser:extensionSidePanels', (panels) => this.applyExtensionSidePanels(panels))
     // The app is quitting, so the coalesced write is the last chance the stored
     // list has to carry what the user just did. The shutdown pipeline keeps the
     // renderer alive for it, which is what makes this write land.
@@ -411,6 +432,68 @@ export class GlobalBrowserState {
     const tab = this.activeTab
     if (!tab) return false
     return browserPopupWindows.forTab(tab.id).length > 0
+  }
+
+  /**
+   * Take main's extension side panels into the rail.
+   *
+   * An extension's panel is the extension putting its own UI beside the page, so
+   * the first panel for the tab on screen is shown: the rail comes up on it exactly
+   * as it does for a popup window the user asked for, and a panel for a background
+   * tab waits in that tab's own rail until the user goes back to it. A further
+   * panel only joins the list, so an extension cannot move the panel under the
+   * user's hands while they are using the one already up.
+   */
+  private applyExtensionSidePanels(panels: BrowserExtensionSidePanel[]): void {
+    const live = panels.map((panel) => this.extensionSidePanelKey(panel))
+    for (const key of [...this.seenExtensionSidePanelIds]) {
+      if (!live.includes(key)) this.seenExtensionSidePanelIds.delete(key)
+    }
+    const tabId = this.activeTabId
+    for (const panel of panels) {
+      const key = this.extensionSidePanelKey(panel)
+      if (this.seenExtensionSidePanelIds.has(key)) continue
+      this.seenExtensionSidePanelIds.add(key)
+      if (tabId !== null && panel.appTabId === tabId) this.showExtensionSidePanelSidebar()
+    }
+    // The panel belongs to one tab's visit, so when that tab holds none there is
+    // nothing left for the rail to show and it closes with the last of them rather
+    // than sitting there as an empty frame. The answer comes from this report and
+    // not from the store's mirror of it: this listener is registered before the
+    // store's own, so inside this dispatch the mirror still holds the previous
+    // list.
+    this.closeExtensionSidePanelWithNoPanels(
+      tabId !== null && panels.some((panel) => panel.appTabId === tabId)
+    )
+  }
+
+  /** The identity of one extension side panel: one panel per extension per tab. */
+  private extensionSidePanelKey(panel: BrowserExtensionSidePanel): string {
+    return `${panel.appTabId}\u0000${panel.extensionId}`
+  }
+
+  /** Close the side panel tool once the tab on screen holds no panel: the panel
+   *  exists to show an extension's own UI and the rail only offers the tool while
+   *  the tab has one, so it leaves with the last panel rather than lingering as an
+   *  empty frame.
+   *
+   *  `activeTabHoldsPanel` is passed in rather than read here because the report
+   *  handler runs inside the panel report's own dispatch, where the panel store's
+   *  mirror is still one report behind. Callers outside that dispatch answer with
+   *  {@link activeTabHoldsExtensionSidePanel}. */
+  private closeExtensionSidePanelWithNoPanels(activeTabHoldsPanel: boolean): void {
+    if (!this.contextSidebarVisible) return
+    if (this.contextSidebarTool !== 'extension-side-panel') return
+    if (activeTabHoldsPanel) return
+    this.contextSidebarVisible = false
+  }
+
+  /** Whether the tab on screen holds an extension side panel in the panel store's
+   *  mirror. Only for callers outside a panel report's own dispatch. */
+  private activeTabHoldsExtensionSidePanel(): boolean {
+    const tab = this.activeTab
+    if (!tab) return false
+    return browserExtensionSidePanels.hasPanelForTab(tab.id)
   }
 
   // ─── Reads ────────────────────────────────────────────────────────────────
@@ -794,6 +877,34 @@ export class GlobalBrowserState {
   }
 
   /**
+   * Reveal the rail on an extension's own side panel.
+   *
+   * The panel belongs to the tab on screen: it is the extension putting its UI
+   * beside the page the user is reading, so it opens the way a popup window does.
+   * Unlike the popup tool it is not offered by a strip or a dock button, because
+   * the panel is the extension's to raise through its own API; the first panel to
+   * arrive for the active tab calls this, and the close control in the panel ends
+   * it.
+   */
+  showExtensionSidePanelSidebar(): void {
+    if (!this.activeTab) return
+    this.dismissNotifications()
+    this.contextSidebarTool = 'extension-side-panel'
+    this.contextSidebarVisible = true
+  }
+
+  /** Hide the side panel tool without ending the panel: main keeps the document
+   *  running, so it is still there when the tool is shown again. */
+  closeExtensionSidePanelSidebar(): void {
+    if (this.contextSidebarTool === 'extension-side-panel') this.contextSidebarVisible = false
+  }
+
+  /** Whether the rail is currently showing an extension's own side panel. */
+  get extensionSidePanelSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'extension-side-panel'
+  }
+
+  /**
    * Drop the notifications tool when another rail tool takes over. The
    * notifications flag lives in the context-sidebar store (the header bell owns
    * it), so the rail can only ask it to close, and only while it is the tool on
@@ -888,6 +999,12 @@ export class GlobalBrowserState {
       // An activation is not a popup report, so the mirror already holds every
       // list it was sent and is the right thing to answer from.
       this.closePopupsWithNoWindows(this.activeTabHoldsPopupWindow())
+    }
+    if (this.contextSidebarTool === 'extension-side-panel') {
+      // The same rule as popups: the panel belongs to one tab's visit, so moving
+      // to a tab that holds none closes the rail rather than leaving an empty
+      // frame over the new page.
+      this.closeExtensionSidePanelWithNoPanels(this.activeTabHoldsExtensionSidePanel())
     }
   }
 

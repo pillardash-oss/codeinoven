@@ -131,7 +131,10 @@ class BrowserPopupWindowsState {
         owner.boxId,
         extensionId
       )
-      this.select(popupId)
+      // Null rather than an id means nothing opened: the extension's action is
+      // configured to raise its own side panel, which is a surface of the rail and
+      // has no popup to select.
+      if (popupId !== null) this.select(popupId)
       return popupId
     } catch (error: unknown) {
       reportError(error, 'That extension popup could not be opened.')

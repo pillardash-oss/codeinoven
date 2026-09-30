@@ -60,7 +60,9 @@ import type {
 } from '../../lib/ipc/browser'
 import {
   BrowserExtensionService,
-  type BrowserExtensionTabEventName
+  type BrowserExtensionSidePanelOpenRequest,
+  type BrowserExtensionTabEventName,
+  type BrowserExtensionWebNavigationEventName
 } from './extensions/browser-extension-service'
 import {
   validateExtensionId,
@@ -80,6 +82,10 @@ import {
   type BrowserPopupWindowHost,
   type BrowserPopupWindowRecord
 } from './browser-service/browser-popup-windows'
+import {
+  BrowserExtensionSidePanels,
+  type BrowserExtensionSidePanelHost
+} from './browser-service/browser-extension-side-panels'
 import { dialogContextScript } from './browser-service/browser-dialog-context'
 import {
   buildBrowserContextMenuItems,
@@ -494,6 +500,10 @@ export class BrowserService {
    *  The shim is idempotent per document, so a repeat is a script evaluation
    *  per frame for no change. Cleared when a new document commits. */
   private readonly injectedDialogLabels = new Map<string, string>()
+  /** The last address each tab's main frame committed or moved to inside the
+   *  page, so a navigation event can be told from a reload and a fragment change
+   *  from a history push. Chromium's own transition is not exposed. */
+  private readonly extensionNavigationUrls = new Map<string, string>()
   /** Parked tab ids in least-recently-used order, newest last. Drives the cap on
    *  how many tabs may render offscreen at once. */
   private readonly parkedOrder: string[] = []
@@ -547,6 +557,13 @@ export class BrowserService {
    */
   private readonly popupWindows: BrowserPopupWindows
   /**
+   * The extension side panels the rail hosts, over the frame it measures. A panel
+   * is the extension's own document, loaded in the jar the extension runs in,
+   * exactly as its action popup is, and `chrome.sidePanel` is compiled out of the
+   * runtime so this is the only host one can have.
+   */
+  private readonly sidePanels: BrowserExtensionSidePanels
+  /**
    * The popup views currently mounted in the app window.
    *
    * Tracked rather than read back from `contentView.children`: a popup's page can
@@ -558,6 +575,11 @@ export class BrowserService {
   /** The frame each mounted popup view was last placed at, so a move is reported
    *  as a move rather than as another placement. */
   private readonly popupViewFrames = new Map<WebContentsView, BrowserViewBounds>()
+  /** The side-panel views currently mounted in the app window, tracked for the
+   *  same reason the popup views are. */
+  private readonly mountedSidePanelViews = new Set<WebContentsView>()
+  /** The frame each mounted side-panel view was last placed at. */
+  private readonly sidePanelViewFrames = new Map<WebContentsView, BrowserViewBounds>()
   /**
    * Installed extensions, and which jars load them.
    *
@@ -580,6 +602,7 @@ export class BrowserService {
     this.projects = new ProjectRepo(db)
     this.threads = new ThreadRepo(db)
     this.popupWindows = new BrowserPopupWindows(this.popupWindowHost())
+    this.sidePanels = new BrowserExtensionSidePanels(this.sidePanelHost())
     // A download started by a popup window is the tab's download: the row the
     // user sees must name the tab they were reading, not a page with no strip.
     this.downloads.setTabResolver((projectId, contentsId) =>
@@ -603,7 +626,10 @@ export class BrowserService {
       reportProgress: (progress) => this.publishExtensionProgress(progress),
       resolveTabId: (projectId, contentsId) => this.tabIdForContents(projectId, contentsId) ?? null,
       publishActivity: (update) => this.publishExtensionActivity(update),
-      publish: () => this.publishExtensions()
+      publish: () => this.publishExtensions(),
+      openSidePanel: (request) => this.openExtensionSidePanel(request),
+      closeSidePanel: (extensionId, extensionTabId) =>
+        this.sidePanels.closeForExtension(extensionId, extensionTabId, 'the extension closed it')
     })
     this.capture = new BrowserCaptureObserver({
       // A capture change is a tab-level fact the user must see, so it is
@@ -820,6 +846,25 @@ export class BrowserService {
     })
     replaceHandler('browser:getPopupWindows', (_event, rawProjectId) =>
       this.popupWindows.list(validateProjectId(rawProjectId))
+    )
+    /**
+     * Extension side panels: the rail measures a frame and these place the
+     * extension's own document in it, exactly as the popup channels do.
+     */
+    replaceHandler('browser:showExtensionSidePanel', (_event, rawExtensionId, rawBounds) => {
+      this.sidePanels.show(validateExtensionId(rawExtensionId), validateBounds(rawBounds))
+    })
+    replaceHandler('browser:hideExtensionSidePanel', (_event, rawExtensionId) => {
+      this.sidePanels.hide(validateExtensionId(rawExtensionId))
+    })
+    replaceHandler('browser:focusExtensionSidePanel', (_event, rawExtensionId) => {
+      this.sidePanels.focus(validateExtensionId(rawExtensionId))
+    })
+    replaceHandler('browser:closeExtensionSidePanel', (_event, rawExtensionId) => {
+      this.sidePanels.close(validateExtensionId(rawExtensionId), 'the user closed it')
+    })
+    replaceHandler('browser:getExtensionSidePanels', (_event, rawProjectId) =>
+      this.sidePanels.list(validateProjectId(rawProjectId))
     )
     /**
      * Open an extension's own action popup, which the app hosts because Electron
@@ -1160,6 +1205,9 @@ export class BrowserService {
     this.popupWindows.closeAll('the browser was torn down')
     this.mountedPopupViews.clear()
     this.popupViewFrames.clear()
+    this.sidePanels.closeAll('the browser was torn down')
+    this.mountedSidePanelViews.clear()
+    this.sidePanelViewFrames.clear()
     this.activeTabId = null
     this.toastVisible = false
     this.activeTabBounds = null
@@ -2415,6 +2463,12 @@ export class BrowserService {
       // app's scrollbar colours are installed again here.
       this.applyScrollbarTheme(tabId, view.webContents)
       publish()
+      this.notifyExtensionWebNavigation(
+        tab.projectId,
+        tab.boxId,
+        'onDOMContentLoaded',
+        this.extensionWebNavigationDetails(tab, view.webContents.getURL())
+      )
     })
     view.webContents.on('did-finish-load', () => {
       this.injectDialogContext(tabId)
@@ -2428,6 +2482,12 @@ export class BrowserService {
       // The document that arrived is the answer to whether the navigation failed,
       // so this is where the error card is confirmed or lifted.
       this.resolveLoadOutcome(tabId)
+      this.notifyExtensionWebNavigation(
+        tab.projectId,
+        tab.boxId,
+        'onCompleted',
+        this.extensionWebNavigationDetails(tab, view.webContents.getURL())
+      )
     })
     view.webContents.on(
       'did-frame-finish-load',
@@ -2466,6 +2526,16 @@ export class BrowserService {
     view.webContents.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument) return
       tab.navigationFailure = null
+      this.notifyExtensionWebNavigation(
+        tab.projectId,
+        tab.boxId,
+        'onBeforeNavigate',
+        // The generation this navigation will land on, so the attempt and the
+        // commit it leads to carry the same document id.
+        this.extensionWebNavigationDetails(tab, details.url, {
+          documentGeneration: tab.navigationGeneration + 1
+        })
+      )
     })
     view.webContents.on('did-navigate', (_event, url, httpResponseCode, httpStatusText) => {
       // An HTTP error status is provisional: it becomes the tab's error only if
@@ -2517,6 +2587,18 @@ export class BrowserService {
         { status: 'complete', url },
         this.extensionTabInfo(tabId, tab)
       ])
+      // Chromium's page transition is not exposed, so a commit to the address the
+      // tab was already showing is the one case the app can tell apart: a reload.
+      const committedFrom = this.extensionNavigationUrls.get(tabId) ?? null
+      this.notifyExtensionWebNavigation(
+        tab.projectId,
+        tab.boxId,
+        'onCommitted',
+        this.extensionWebNavigationDetails(tab, url, {
+          transitionType: committedFrom === url ? 'reload' : 'link'
+        })
+      )
+      this.extensionNavigationUrls.set(tabId, url)
       // Chromium's find does not survive a document, so a session that was live
       // across this navigation is over: the page has no matches to report and the
       // bar must not keep showing the count of the document that just went away.
@@ -2545,6 +2627,25 @@ export class BrowserService {
         { url },
         this.extensionTabInfo(tabId, tab)
       ])
+      const navigatedFrom = this.extensionNavigationUrls.get(tabId) ?? ''
+      const previousHash = navigatedFrom.indexOf('#')
+      const nextHash = url.indexOf('#')
+      // Two addresses that agree through their first '#' moved inside the same
+      // document, which the runtime reports as a fragment change rather than a
+      // history push.
+      const fragmentOnly =
+        previousHash !== -1 &&
+        nextHash !== -1 &&
+        navigatedFrom.slice(0, previousHash + 1) === url.slice(0, nextHash + 1)
+      this.notifyExtensionWebNavigation(
+        tab.projectId,
+        tab.boxId,
+        fragmentOnly ? 'onReferenceFragmentUpdated' : 'onHistoryStateUpdated',
+        this.extensionWebNavigationDetails(tab, url, {
+          transitionType: navigatedFrom === url ? 'reload' : 'link'
+        })
+      )
+      this.extensionNavigationUrls.set(tabId, url)
     })
     view.webContents.on('page-title-updated', (_event, title) => {
       publish()
@@ -2617,6 +2718,14 @@ export class BrowserService {
           // frame behind this entry: the address is the one in the message.
           frameUrl: null
         })
+        this.notifyExtensionWebNavigation(
+          tab.projectId,
+          tab.boxId,
+          'onErrorOccurred',
+          this.extensionWebNavigationDetails(tab, validatedURL, {
+            error: errorDescription
+          })
+        )
       }
     )
     view.webContents.on('render-process-gone', (_event, details) => {
@@ -2748,8 +2857,29 @@ export class BrowserService {
     threadId: string,
     boxId: string | null,
     extensionId: string
-  ): Promise<string> {
+  ): Promise<string | null> {
     const tab = this.ensureTab(tabId, projectId, threadId, boxId)
+    // An extension can ask for its panel to open when its action is clicked, and
+    // Chromium opens the panel rather than the action popup when it does. The
+    // panel is a surface of the rail, so there is no popup id to answer with.
+    const actionPanel = this.extensions.sidePanelForActionClick(
+      projectId,
+      tab.boxId,
+      extensionId,
+      tab.view.webContents.id
+    )
+    if (actionPanel) {
+      this.openExtensionSidePanel({
+        projectId,
+        boxId: tab.boxId,
+        extensionId,
+        extensionName: actionPanel.extensionName,
+        extensionTabId: tab.view.webContents.id,
+        path: actionPanel.path,
+        url: actionPanel.url
+      })
+      return null
+    }
     // One popup per extension per tab: asking again is the user coming back to the
     // popup they already have, not asking for a second copy of it.
     const existing = this.popupWindows.extensionPopupFor(extensionId, tabId)
@@ -2852,6 +2982,128 @@ export class BrowserService {
       return false
     }
     return true
+  }
+
+  /**
+   * The view plumbing extension side panels run on.
+   *
+   * The registry owns panel lifetimes; every native call a view needs stays here,
+   * beside the tab and popup ones, so a panel is placed, parked and dropped the
+   * same way and there is one place to look when a document is not where it should
+   * be.
+   */
+  private sidePanelHost(): BrowserExtensionSidePanelHost {
+    return {
+      mount: (view, bounds) => {
+        if (this.window.isDestroyed()) return
+        try {
+          this.sidePanelViewFrames.set(view, bounds)
+          if (this.mountedSidePanelViews.has(view)) {
+            // Already on screen: re-asserting the frame is cheaper than the
+            // re-parent a repeat would otherwise cost.
+            view.setBounds(bounds)
+            return
+          }
+          this.stage.release(view)
+          this.window.contentView.addChildView(view)
+          this.mountedSidePanelViews.add(view)
+          view.setBounds(bounds)
+        } catch (error: unknown) {
+          Logger.error('Browser extension side panel could not be placed:', error)
+        }
+      },
+      unmount: (view, viewport) => {
+        this.detachSidePanelView(view)
+        this.stage.park(view, viewport)
+      },
+      discard: (view) => {
+        this.detachSidePanelView(view)
+        this.stage.release(view)
+      },
+      changed: () => this.publishExtensionSidePanels(),
+      notify: (record, opened) => {
+        // A panel opening and closing are the two facts the worker's own
+        // `chrome.sidePanel.onOpened` / `onClosed` are made of, and the tab id is
+        // the one the extension already knows this panel by.
+        if (opened) {
+          this.extensions.reportSidePanelOpened(
+            record.projectId,
+            record.boxId,
+            record.extensionId,
+            record.extensionTabId
+          )
+          return
+        }
+        this.extensions.reportSidePanelClosed(
+          record.projectId,
+          record.boxId,
+          record.extensionId,
+          record.extensionTabId
+        )
+      }
+    }
+  }
+
+  /**
+   * Take a side panel's view out of the app window, answering whether it was in
+   * it. A view whose document destroyed itself cannot be handed to the window at
+   * all, so every native call is defended.
+   */
+  private detachSidePanelView(view: WebContentsView): boolean {
+    this.sidePanelViewFrames.delete(view)
+    if (!this.mountedSidePanelViews.has(view)) return false
+    this.mountedSidePanelViews.delete(view)
+    if (this.window.isDestroyed()) return false
+    try {
+      this.window.contentView.removeChildView(view)
+    } catch (error: unknown) {
+      Logger.error('Browser extension side panel could not be detached:', error)
+      return false
+    }
+    return true
+  }
+
+  /**
+   * Raise one extension's side panel over the rail.
+   *
+   * The worker names the extension's own tab id; a request may name none, in which
+   * case Chromium's answer is the active tab of that project's browser. The panel's
+   * document is loaded in the jar the extension runs in, which is the only session
+   * its own files resolve in.
+   */
+  private openExtensionSidePanel(request: BrowserExtensionSidePanelOpenRequest): void {
+    const appTabId =
+      request.extensionTabId === null
+        ? this.activeTabIdInProject(request.projectId)
+        : (this.tabIdForContents(request.projectId, request.extensionTabId) ?? null)
+    if (!appTabId) {
+      Logger.dev('An extension side panel had no tab to open on:', {
+        extensionId: request.extensionId,
+        extensionTabId: request.extensionTabId
+      })
+      return
+    }
+    const tab = this.tabs.get(appTabId)
+    if (!tab) return
+    this.sidePanels.open({
+      session: this.sessionForProject(request.projectId, request.boxId),
+      extensionId: request.extensionId,
+      extensionName: request.extensionName,
+      projectId: request.projectId,
+      boxId: request.boxId,
+      appTabId,
+      extensionTabId: request.extensionTabId ?? tab.view.webContents.id,
+      path: request.path,
+      url: request.url
+    })
+  }
+
+  /** The active tab of one project's browser, or null when it has none. */
+  private activeTabIdInProject(projectId: string): string | null {
+    const tabId = this.activeTabId
+    if (!tabId) return null
+    const tab = this.tabs.get(tabId)
+    return tab && tab.projectId === projectId ? tabId : null
   }
 
   /**
@@ -2983,6 +3235,12 @@ export class BrowserService {
   private publishPopupWindows(): void {
     if (this.window.webContents.isDestroyed()) return
     sendToRenderer(this.window.webContents, 'browser:popupWindows', this.popupWindows.list())
+  }
+
+  /** Publish the extension side panels the browser holds, whole, after any change. */
+  private publishExtensionSidePanels(): void {
+    if (this.window.webContents.isDestroyed()) return
+    sendToRenderer(this.window.webContents, 'browser:extensionSidePanels', this.sidePanels.list())
   }
 
   /**
@@ -3228,6 +3486,7 @@ export class BrowserService {
 
   private publishExtensions(): void {
     this.reconcileExtensionPopups()
+    this.reconcileExtensionSidePanels()
     if (this.window.webContents.isDestroyed()) return
     sendToRenderer(this.window.webContents, 'browser:extensions', this.extensions.list())
   }
@@ -3315,6 +3574,60 @@ export class BrowserService {
           error: error instanceof Error ? error.message : String(error)
         })
       })
+  }
+
+  /**
+   * One navigation fact for a tab's main frame, aimed at the extensions loaded
+   * in that tab's jar.
+   *
+   * `chrome.webNavigation` is compiled out of the runtime, so nothing drives an
+   * extension's navigation listeners on its own. The app watches the tab's own
+   * main frame and hands each step over in the details shape the API documents,
+   * so a listener written against the real API runs unmodified.
+   */
+  private notifyExtensionWebNavigation(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserExtensionWebNavigationEventName,
+    details: Record<string, unknown>
+  ): void {
+    this.extensions.onWebNavigationEvent(projectId, boxId, name, details)
+  }
+
+  /**
+   * One `chrome.webNavigation` details record for a main-frame event.
+   *
+   * Chromium exposes neither a document id nor a page transition, so the document
+   * id is the page's own web contents id and a navigation generation, and the
+   * transition is approximated by the caller.
+   *
+   * The generation is the tab's committed-navigation counter, which is why
+   * `onBeforeNavigate` passes `documentGeneration + 1`: that counter increments when
+   * the navigation commits, so the attempt and the commit that follows it only share
+   * a document id if the attempt names the document it is about to create. An
+   * extension correlating the two events by `documentId` is the reason.
+   */
+  private extensionWebNavigationDetails(
+    tab: BrowserTab,
+    url: string,
+    options?: { transitionType?: 'link' | 'reload'; error?: string; documentGeneration?: number }
+  ): Record<string, unknown> {
+    const contents: WebContents | undefined = tab.view.webContents
+    const webContentsId = contents && !contents.isDestroyed() ? contents.id : -1
+    const generation = options?.documentGeneration ?? tab.navigationGeneration
+    const details: Record<string, unknown> = {
+      tabId: webContentsId,
+      frameId: 0,
+      parentFrameId: -1,
+      url,
+      timeStamp: Date.now(),
+      documentId: `${webContentsId}-${generation}`,
+      documentLifecycle: 'active',
+      transitionQualifiers: []
+    }
+    if (options?.transitionType) details['transitionType'] = options.transitionType
+    if (options?.error) details['error'] = options.error
+    return details
   }
 
   /** A tab became the one on screen: the extension-visible activation event. */
@@ -3425,6 +3738,27 @@ export class BrowserService {
     }
     this.popupWindows.closeWhere((record) => {
       if (record.extensionId === null) return false
+      const jars = jarsByExtension.get(record.extensionId)
+      if (!jars) return true
+      return !jars.has(record.boxId ?? '')
+    }, 'its extension was unloaded')
+  }
+
+  /**
+   * Close side panels whose extension is no longer there to answer.
+   *
+   * A panel hosts the extension's own document in the jar that runs it, so an
+   * extension that was uninstalled, disabled, or taken out of that box leaves a
+   * document behind that nothing can talk to. The installed list is published on
+   * every change to it, which makes that the one place that sees all of them.
+   */
+  private reconcileExtensionSidePanels(): void {
+    const jarsByExtension = new Map<string, Set<string>>()
+    for (const extension of this.extensions.list()) {
+      if (!extension.enabled) continue
+      jarsByExtension.set(extension.id, new Set(extension.boxes))
+    }
+    this.sidePanels.closeWhere((record) => {
       const jars = jarsByExtension.get(record.extensionId)
       if (!jars) return true
       return !jars.has(record.boxId ?? '')
@@ -4570,6 +4904,7 @@ export class BrowserService {
     // closing the tab closes what its page opened rather than leaving a sign-in
     // stranded behind a tab that no longer exists.
     this.popupWindows.closeForTab(tabId, 'its tab closed')
+    this.sidePanels.closeForTab(tabId, 'its tab closed')
     for (const [requestId, pending] of this.pendingPermissions) {
       if (pending.request.tabId === tabId)
         this.resolvePermission(requestId, permissionResolutions.dismiss)
@@ -4583,6 +4918,7 @@ export class BrowserService {
     // stay the tab the window-level interception routes to.
     if (this.focusedChromeTabId === tabId) this.focusedChromeTabId = null
     this.injectedDialogLabels.delete(tabId)
+    this.extensionNavigationUrls.delete(tabId)
     this.forgetParked(tabId)
     this.agentReveals.delete(tabId)
     this.lastScreenshot.delete(tabId)

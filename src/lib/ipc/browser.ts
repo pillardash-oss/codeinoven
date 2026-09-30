@@ -88,6 +88,31 @@ export interface BrowserViewBounds {
 }
 
 /**
+ * An extension's own side panel, hosted in the rail.
+ *
+ * Electron compiles `chrome.sidePanel` out, so an extension that declares a panel
+ * has no host of its own. The app hosts the extension's own document, loaded from
+ * its own origin in the jar the extension runs in, over the rectangle the rail
+ * measures for it, exactly as it hosts an extension's action popup. This record is
+ * metadata about the panel, never its content.
+ */
+export interface BrowserExtensionSidePanel {
+  extensionId: string
+  /** Display name, so the rail names the panel without a second lookup. */
+  extensionName: string
+  /** The app browser tab this panel belongs to. */
+  appTabId: string
+  /** The project and box the panel's jar belongs to, so the rail scopes it. */
+  projectId: string
+  /** The extension-relative path it asked to show. */
+  path: string
+  /** Absolute `chrome-extension://` address the panel document is loaded from. */
+  url: string
+  /** Title of the panel document, or the extension's name until it sets one. */
+  title: string
+}
+
+/**
  * Why one browser tab's page could not be shown.
  *
  * `kind` names the layer that failed so a surface picks its copy without

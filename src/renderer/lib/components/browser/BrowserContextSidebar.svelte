@@ -15,6 +15,7 @@
     type ContextSidebarTab
   } from '$lib/stores/context-sidebar.svelte'
   import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
+  import { browserExtensionSidePanels } from '$lib/stores/browser-extension-side-panels.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -119,6 +120,20 @@
     title: 'Extensions'
   }
   /**
+   * The shell tab for an extension's own side panel.
+   *
+   * The rail's shell renders no content without a tab, and the side panel is one
+   * headerless frame that draws its own header, so it takes the same `extensions`
+   * kind the other single-frame browser tools use. The tab is never listed in a
+   * strip: the shell draws no strip for a headerless kind, and the panel's tool is
+   * opened by the extension itself rather than from a strip row.
+   */
+  const extensionSidePanelTab: BrowserExtensionsContextTab = {
+    id: 'browser-extension-side-panel',
+    kind: 'extensions',
+    title: 'Extension panel'
+  }
+  /**
    * The popup windows the active page opened, one tab per window.
    *
    * A popup belongs to the tab whose page opened it, like the note and the agent
@@ -130,6 +145,16 @@
   const activePopup = $derived(
     activeTab && globalBrowser.popupsSidebarShown
       ? browserPopupWindows.activeFor(activeTab.id)
+      : null
+  )
+  /**
+   * The extension side panel of the tab on screen, or null while that tool is not
+   * up. The rail draws one panel at a time, so the tool and the panel are the same
+   * choice, and the frame below names the extension from this record.
+   */
+  const activeExtensionPanel = $derived(
+    activeTab && globalBrowser.extensionSidePanelSidebarShown
+      ? browserExtensionSidePanels.panelForTab(activeTab.id)
       : null
   )
   /**
@@ -149,6 +174,7 @@
     bookmarksTab,
     boxesTab,
     extensionsTab,
+    ...(globalBrowser.extensionSidePanelSidebarShown ? [extensionSidePanelTab] : []),
     downloadsTab,
     ...(noteTab ? [noteTab] : []),
     ...(agentTab ? [agentTab] : []),
@@ -170,7 +196,9 @@
                   ? historyTab.id
                   : globalBrowser.bookmarksSidebarShown
                     ? bookmarksTab.id
-                    : (noteTab?.id ?? null))
+                    : globalBrowser.extensionSidePanelSidebarShown
+                      ? extensionSidePanelTab.id
+                      : (noteTab?.id ?? null))
   )
 
   /** Whether the tool on screen is a popup window, for the two callbacks that
@@ -341,6 +369,16 @@
     {#await import('./BrowserExtensionsPanel.svelte') then { default: BrowserExtensionsPanel }}
       <BrowserExtensionsPanel />
     {/await}
+  {:else if globalBrowser.extensionSidePanelSidebarShown}
+    {#if activeExtensionPanel}
+      <!-- Keyed by extension so one panel's frame and native document are torn
+           down and parked before the next extension's are placed. -->
+      {#key activeExtensionPanel.extensionId}
+        {#await import('./BrowserExtensionSidePanel.svelte') then { default: BrowserExtensionSidePanel }}
+          <BrowserExtensionSidePanel extensionId={activeExtensionPanel.extensionId} />
+        {/await}
+      {/key}
+    {/if}
   {:else if globalBrowser.agentSidebarShown}
     {#if agentChat}
       <!-- Keyed by thread id so switching browser tabs swaps the whole
