@@ -141,6 +141,14 @@ export interface BrowserExtensionBridgeDeps {
   /** One snapshot, every time it changes, and once more when the worker
    *  restarted (so main can drop what the dead life left behind). */
   onMailbox: (mail: BrowserExtensionMailbox, restarted: boolean) => void
+  /**
+   * The tab events that describe the extension's own jar right now.
+   *
+   * Asked for once when the channel opens and again after every worker restart,
+   * because a worker that has just started its life knows of no tab that was
+   * already open and the runtime gives it no way to ask.
+   */
+  tabReplay?: () => { name: string; args: unknown[] }[]
   /** The bridge page could not be brought up, so nothing can be delivered. */
   onUnavailable: (reason: string) => void
   /**
@@ -318,6 +326,7 @@ export class BrowserExtensionBridge {
         // A worker that has just been loaded has no notion of a session start;
         // this is the one event that says the jar it runs in is awake.
         this.push({ kind: 'startup' })
+        this.replayTabs()
         this.poll = setInterval(() => {
           void this.drain()
           void this.writeUserScriptFiles()
@@ -342,6 +351,20 @@ export class BrowserExtensionBridge {
     if (!contents || contents.isDestroyed()) return
     const script = `globalThis.__cioBridgeReceive && globalThis.__cioBridgeReceive(${JSON.stringify(command)})`
     void contents.executeJavaScript(script, true).catch(() => undefined)
+  }
+
+  /**
+   * Hand the worker the tab state it cannot ask for itself.
+   *
+   * No-ops when there is nothing to say, which is the common case for a jar whose
+   * tabs are all hibernated: an empty replay would only wake a worker to tell it
+   * nothing.
+   */
+  private replayTabs(): void {
+    const events = this.deps.tabReplay?.() ?? []
+    for (const event of events) {
+      this.push({ kind: 'tab', name: event.name, args: event.args })
+    }
   }
 
   private async drain(): Promise<void> {
@@ -390,6 +413,10 @@ export class BrowserExtensionBridge {
       }
       this.generation = generation
       this.lastSeq = seq
+      // A restarted worker is a fresh life: it holds no memory of the tabs the
+      // dead one was told about, so the jar's tab state is handed over again
+      // before anything it recorded is published as its new state.
+      if (restarted) this.replayTabs()
       this.deps.onMailbox(mail, restarted)
     } catch (error) {
       // A read that failed or a snapshot that could not be parsed is skipped; the

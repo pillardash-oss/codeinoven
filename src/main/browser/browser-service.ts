@@ -62,6 +62,7 @@ import {
   BrowserExtensionService,
   type BrowserExtensionSidePanelOpenRequest,
   type BrowserExtensionTabEventName,
+  type BrowserExtensionTabReplay,
   type BrowserExtensionWebNavigationEventName
 } from './extensions/browser-extension-service'
 import {
@@ -625,6 +626,7 @@ export class BrowserService {
       liveJars: () => this.liveJars(),
       reportProgress: (progress) => this.publishExtensionProgress(progress),
       resolveTabId: (projectId, contentsId) => this.tabIdForContents(projectId, contentsId) ?? null,
+      tabReplay: (projectId, boxId) => this.extensionTabReplay(projectId, boxId),
       publishActivity: (update) => this.publishExtensionActivity(update),
       publish: () => this.publishExtensions(),
       openSidePanel: (request) => this.openExtensionSidePanel(request),
@@ -3639,6 +3641,56 @@ export class BrowserService {
     this.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onActivated', [
       { tabId: contents.id, windowId: 0 }
     ])
+  }
+
+  /**
+   * Every tab event a jar's worker needs to know what is already open.
+   *
+   * A worker starts long after the tabs it runs beside, and the runtime gives it
+   * no usable way to discover them: `chrome.tabs.query` answers from the
+   * runtime's own focus state, so a query for the active tab comes back empty
+   * whenever the app is not the focused one, and a browser view is not a tab in
+   * a window the runtime tracks. Both a fresh worker and a restarted one are
+   * therefore handed this replay, built from the app's own tab registry.
+   *
+   * Order matters and is the only contract here: every tab is announced, then
+   * each tab's address and title, then the tab that is on screen. An extension
+   * that scopes its state per tab ends up with the right state on the right tab,
+   * which is what a badge count or a locked padlock on the current tab is.
+   *
+   * A hibernated tab has no page and is left out: announcing a page the runtime
+   * cannot resolve would be a lie the extension then acts on.
+   */
+  private extensionTabReplay(projectId: string, boxId: string | null): BrowserExtensionTabReplay[] {
+    const live: { tabId: string; tab: BrowserTab; contents: WebContents }[] = []
+    for (const [tabId, tab] of this.tabs) {
+      if (tab.projectId !== projectId || tab.boxId !== boxId) continue
+      const contents: WebContents | undefined = tab.view.webContents
+      if (!contents || contents.isDestroyed()) continue
+      live.push({ tabId, tab, contents })
+    }
+    const events: BrowserExtensionTabReplay[] = []
+    for (const entry of live) {
+      events.push({ name: 'onCreated', args: [this.extensionTabInfo(entry.tabId, entry.tab)] })
+    }
+    for (const entry of live) {
+      const info = this.extensionTabInfo(entry.tabId, entry.tab)
+      // `changeInfo.url` is not decoration: an extension that tracks what a tab
+      // is showing filters its `onUpdated` listener on it, so an update that
+      // omits the address is an update it never sees.
+      events.push({
+        name: 'onUpdated',
+        args: [entry.contents.id, { status: info.status, url: info.url }, info]
+      })
+    }
+    const active = live.find((entry) => entry.tabId === this.activeTabId)
+    if (active) {
+      events.push({
+        name: 'onActivated',
+        args: [{ tabId: active.contents.id, windowId: 0 }]
+      })
+    }
+    return events
   }
 
   /** One tab as `chrome.tabs` describes it, for a synthesized event. */

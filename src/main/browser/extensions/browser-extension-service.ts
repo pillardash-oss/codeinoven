@@ -164,6 +164,16 @@ export interface BrowserExtensionHost {
   /** The app tab a browser page belongs to, for action state an extension scoped
    *  to the tab ids the runtime gave it. */
   resolveTabId(projectId: string, contentsId: number): string | null
+  /**
+   * The tab events that describe a jar's tabs right now, in the order a
+   * freshly started worker needs them.
+   *
+   * A worker that starts while tabs already exist has no way to learn about
+   * them: `chrome.tabs.query` is answered from the runtime's own focus state,
+   * which is empty whenever the window is not the focused one, and nothing else
+   * announces a tab the extension did not see arrive. A restarted worker is a
+   * fresh life with the same problem, so both are handed this replay. */
+  tabReplay(projectId: string, boxId: string | null): BrowserExtensionTabReplay[]
   /** One extension's action state changed for a tab, or for every tab of its jar
    *  when the tab is null. */
   publishActivity(update: BrowserExtensionActivityUpdate): void
@@ -198,6 +208,12 @@ export interface BrowserExtensionSidePanelOpenRequest {
 /** The tab events the app synthesizes, under the extension API's own names. */
 export type BrowserExtensionTabEventName =
   'onCreated' | 'onUpdated' | 'onRemoved' | 'onActivated' | 'onHighlighted'
+
+/** One tab event, in the shape `chrome.tabs` hands a listener its arguments. */
+export interface BrowserExtensionTabReplay {
+  name: BrowserExtensionTabEventName
+  args: unknown[]
+}
 
 /**
  * The navigation lifecycle the app synthesizes for `chrome.webNavigation`, under
@@ -898,6 +914,9 @@ export class BrowserExtensionService {
       onMailbox: (mail, restarted) => this.onMailbox(state, record.id, mail, restarted),
       onUnavailable: (reason) =>
         Logger.dev('Browser extension bridge unavailable:', { extensionId: record.id, reason }),
+      // Sent after `startup` and after every restart, because a worker that has
+      // just begun its life knows of no tab that was already open.
+      tabReplay: () => this.host.tabReplay(state.projectId, state.boxId),
       // `chrome.userScripts.register` takes code and this runtime only registers
       // files, so the preamble asks for the write and waits for the answer.
       materializeUserScripts: (request) =>
