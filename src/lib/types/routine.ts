@@ -203,6 +203,19 @@ export function routineHowToComplete(routine: Pick<Routine, 'howTo'>): boolean {
 }
 
 /**
+ * Whether a save is the one that gives a routine its first how-to: the moment
+ * it stops being a draft and its owner has work they expect to run. Compares
+ * the routine before and after the save, so every caller reads one rule instead
+ * of re-deriving it from the incoming patch.
+ */
+export function routineFirstHowToSave(
+  before: Pick<Routine, 'howTo'>,
+  after: Pick<Routine, 'howTo'>
+): boolean {
+  return !routineHowToComplete(before) && routineHowToComplete(after)
+}
+
+/**
  * Whether the routine has its model set. A routine without a primary model
  * cannot run a task, so the panel marks it Incomplete.
  */

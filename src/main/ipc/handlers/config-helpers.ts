@@ -197,6 +197,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'openAllLinksInCioBrowser',
   'backgroundMode',
   'launchAtLogin',
+  'launchAtLoginPrompted',
   'autoRunMissedAssistantRuns',
   'backgroundWakeLeadMs',
   'maxBackgroundWakeHoldMs',
@@ -998,6 +999,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('launchAtLogin must be a boolean')
     }
     patch.launchAtLogin = value.launchAtLogin
+  }
+
+  if ('launchAtLoginPrompted' in value) {
+    if (typeof value.launchAtLoginPrompted !== 'boolean') {
+      throw new TypeError('launchAtLoginPrompted must be a boolean')
+    }
+    patch.launchAtLoginPrompted = value.launchAtLoginPrompted
   }
 
   if ('autoRunMissedAssistantRuns' in value) {

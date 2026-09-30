@@ -106,7 +106,8 @@ const DEFAULT_CONFIG: AppConfig = {
   browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
   browserHistoryLimit: DEFAULT_BROWSER_HISTORY_LIMIT,
   backgroundMode: 'scheduled',
-  launchAtLogin: true,
+  launchAtLogin: false,
+  launchAtLoginPrompted: false,
   autoRunMissedAssistantRuns: true,
   backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
   maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
@@ -263,6 +264,10 @@ export class StorageEngine {
         typeof config?.launchAtLogin === 'boolean'
           ? config.launchAtLogin
           : DEFAULT_CONFIG.launchAtLogin,
+      launchAtLoginPrompted:
+        typeof config?.launchAtLoginPrompted === 'boolean'
+          ? config.launchAtLoginPrompted
+          : DEFAULT_CONFIG.launchAtLoginPrompted,
       autoRunMissedAssistantRuns:
         typeof config?.autoRunMissedAssistantRuns === 'boolean'
           ? config.autoRunMissedAssistantRuns

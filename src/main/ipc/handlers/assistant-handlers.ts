@@ -8,12 +8,14 @@ import {
   ROUTINE_IMPACT_IDS,
   ROUTINE_TIMELINESS_IDS
 } from '../../../lib/routine-reporting'
+import { routineFirstHowToSave } from '../../../lib/types'
 import {
   broadcastAutoAnswersChanged,
   broadcastMissedRunsChanged,
   broadcastRoutinesChanged
 } from '../../scheduler/assistant-events'
 import { broadcastThreadUpdate } from '../../chat/thread-events'
+import { raiseStartAtLoginOffer } from '../../system/start-at-login-offer'
 import type { IpcHandlerContext } from './context'
 import type {
   CreateRoutineInput,
@@ -300,10 +302,17 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     return routine
   })
 
-  ipcMain.handle('routine:update', (_, routineId: unknown, input: unknown) => {
+  ipcMain.handle('routine:update', async (_, routineId: unknown, input: unknown) => {
     const safeId = validateEntityId(routineId, 'Routine ID')
+    const existing = routineManager.getRoutine(safeId)
     const routine = routineManager.updateRoutine(safeId, validateUpdateInput(input))
     broadcastRoutines()
+    // The first how-to a routine ever gets is the moment its owner has work they
+    // expect to run, so it is the one moment the app offers to start at login.
+    // It is raised once in an install's life: the offer carries its own flag.
+    if (existing && routineFirstHowToSave(existing, routine)) {
+      await raiseStartAtLoginOffer(ctx.storage)
+    }
     return routine
   })
 

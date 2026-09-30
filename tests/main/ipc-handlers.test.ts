@@ -126,6 +126,7 @@ const defaultConfig: AppConfig = {
   browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
   backgroundMode: 'scheduled',
   launchAtLogin: true,
+  launchAtLoginPrompted: true,
   autoRunMissedAssistantRuns: true,
   backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
   maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,

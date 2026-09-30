@@ -46,6 +46,8 @@ export interface AppIpcSubscriptionDeps {
   /** Park the window (destroy it, keep the backend alive) instead of quitting. */
   parkWindow: () => Promise<void>
   setInstanceRole: (role: InstanceRole) => void
+  /** Raise the one-time start-at-login offer (raised after a routine's first how-to). */
+  showStartAtLoginOffer: () => void
   settleCloseConfirmationThread: (thread: Thread) => void
   handleCloseShortcut: () => void
   handleNewTerminalShortcut: () => void
@@ -181,6 +183,12 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   const unsubscribeInstanceRole = subscribe('app:instanceRole', (role) => {
     deps.setInstanceRole(role)
   })
+  // The one-time start-at-login offer. Main raises it once in an install's life,
+  // right after a routine gets its first how-to, and only while
+  // `launchAtLoginPrompted` is unanswered, so this only ever asks once.
+  const unsubscribeStartAtLoginOffer = subscribe('app:startAtLoginPrompt', () => {
+    deps.showStartAtLoginOffer()
+  })
   const unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
     const thread = args[0] as Thread
     // Once a real title exists the draft-derived label is no longer needed.
@@ -256,6 +264,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeShow()
     unsubscribeConfirmClose()
     unsubscribeInstanceRole()
+    unsubscribeStartAtLoginOffer()
     unsubscribeThreadUpdated()
     unsubscribeThreadDeleted()
     unsubscribeScopeBoardChanged()

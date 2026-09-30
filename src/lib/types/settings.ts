@@ -414,8 +414,18 @@ export interface AppConfig {
    * so Assistant routines can fire while the window is closed.
    */
   backgroundMode: BackgroundMode
-  /** Launch CodeInOven at login so a schedule can fire after a restart. */
+  /**
+   * Launch CodeInOven at login so a schedule can fire after a restart. Off
+   * until the user asks for it: the app offers it once, after the first
+   * routine's how-to is saved, and never assumes the answer.
+   */
   launchAtLogin: boolean
+  /**
+   * True once the one-time start-at-login offer has been answered. The offer is
+   * raised only when a routine gets its first how-to, and this flag is saved
+   * with the answer, so no later routine setup asks again.
+   */
+  launchAtLoginPrompted: boolean
   /** Run assistant slots missed to sleep or a closed app when the app returns. */
   autoRunMissedAssistantRuns: boolean
   /** How long before a due run the app holds the machine awake. Bounded to
@@ -495,6 +505,7 @@ export type AppConfigPatch = Partial<
     | 'browserHistoryLimit'
     | 'backgroundMode'
     | 'launchAtLogin'
+    | 'launchAtLoginPrompted'
     | 'autoRunMissedAssistantRuns'
     | 'backgroundWakeLeadMs'
     | 'maxBackgroundWakeHoldMs'

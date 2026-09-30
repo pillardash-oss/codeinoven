@@ -40,6 +40,14 @@ import type {
 export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
+  /**
+   * The one-time start-at-login offer, raised right after a routine gets its
+   * first how-to: the app asks whether it should start at login so a scheduled
+   * run can fire after a restart. Sent at most once in an install's life, and
+   * only while `launchAtLoginPrompted` is still false, so nothing has to guard
+   * against a second prompt arriving.
+   */
+  'app:startAtLoginPrompt': [] as [],
   'agent:processesChanged': [] as unknown as [projectId: string, threadId: string],
   /** Live agent lifecycle/stream event broadcast to every window. */
   'agent:event': [] as unknown as [event: import('../types').AgentEvent],

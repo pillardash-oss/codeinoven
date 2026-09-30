@@ -15,14 +15,15 @@ import { Logger } from '../../main/system/logger'
 import type { Database } from '../../main/database/database'
 import { RoutineRepo } from '../../main/database/repositories/routine-repo'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
-import type {
-  CreateRoutineInput,
-  Routine,
-  RoutineAgents,
-  RoutineDeletionResult,
-  RoutineSchedule,
-  Thread,
-  UpdateRoutineInput
+import {
+  routineFirstHowToSave,
+  type CreateRoutineInput,
+  type Routine,
+  type RoutineAgents,
+  type RoutineDeletionResult,
+  type RoutineSchedule,
+  type Thread,
+  type UpdateRoutineInput
 } from '../types'
 
 /**
@@ -133,7 +134,8 @@ export class RoutineManager {
     // flow saves the how-to and the schedule in one call. A due slot before
     // this moment was never really due, so it is neither fired nor recorded as
     // missed.
-    const becameRunnable = !existing.howTo.trim() && (input.howTo ?? existing.howTo).trim() !== ''
+    const nextHowTo = input.howTo ?? existing.howTo
+    const becameRunnable = routineFirstHowToSave(existing, { howTo: nextHowTo })
     const updated: Routine = {
       ...existing,
       name: input.name?.trim() || existing.name,
@@ -145,7 +147,7 @@ export class RoutineManager {
       customSvg: 'customSvg' in input ? (input.customSvg ?? undefined) : existing.customSvg,
       schedule: input.schedule !== undefined ? input.schedule : existing.schedule,
       scheduleUpdatedAt: scheduleChanged || becameRunnable ? now : existing.scheduleUpdatedAt,
-      howTo: input.howTo ?? existing.howTo,
+      howTo: nextHowTo,
       howToUpdatedAt: howToChanged ? now : existing.howToUpdatedAt,
       connections: input.connections ?? existing.connections,
       delivery: 'delivery' in input ? (input.delivery ?? undefined) : existing.delivery,

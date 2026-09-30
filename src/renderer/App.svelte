@@ -119,6 +119,8 @@
   let commandPaletteOpen = $state(false)
   let closeConfirmation = $state<CloseConfirmationPayload | null>(null)
   let instanceRole = $state<InstanceRole | null>(null)
+  /** The one-time start-at-login offer, raised once after the first routine how-to. */
+  let startAtLoginOfferOpen = $state(false)
   const fileSearch = new FileSearchPaletteController()
   const threadSearch = new ThreadSearchPaletteController({
     openThread: (thread) => void openThreadFromSearch(thread)
@@ -354,6 +356,16 @@
       applyTheme()
       settingsError = 'Your settings change could not be saved.'
     }
+  }
+
+  /**
+   * Answer the one-time start-at-login offer. The choice and the flag that keeps
+   * the question from ever being raised again are saved together, so no later
+   * routine setup asks a second time however this one is answered.
+   */
+  function answerStartAtLoginOffer(startAtLogin: boolean): void {
+    startAtLoginOfferOpen = false
+    void updateConfig({ launchAtLogin: startAtLogin, launchAtLoginPrompted: true })
   }
 
   function setPreference(pref: ThemePreference): void {
@@ -1440,6 +1452,7 @@
       parkWindow,
       setInstanceRole: (role) => (instanceRole = role),
       settleCloseConfirmationThread,
+      showStartAtLoginOffer: () => (startAtLoginOfferOpen = true),
       handleCloseShortcut,
       handleNewTerminalShortcut,
       goBack: () => handleMouseHistoryNavigation('back'),
@@ -1626,6 +1639,15 @@
         />
       {/await}
     {/key}
+  {/if}
+  {#if startAtLoginOfferOpen}
+    <!-- The one-time start-at-login offer. Raised right after a routine is given
+         its first how-to, so the question is about the runs the user has just
+         set up, and floated above every view because that save happens in the
+         thread the routine belongs to. -->
+    {#await import('$lib/components/layout/StartAtLoginPrompt.svelte') then { default: StartAtLoginPrompt }}
+      <StartAtLoginPrompt open onChoose={answerStartAtLoginOffer} />
+    {/await}
   {/if}
   <Toaster />
   <TextSelectionContextMenu />
