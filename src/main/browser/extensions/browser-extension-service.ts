@@ -38,9 +38,14 @@ import type {
 import { Logger } from '../../system/logger'
 import { browserPartitionFor } from '../browser-service/browser-validation'
 import { prepareExtensionSource } from './browser-extension-install-job'
+import { ensureInjectionCurrent } from './browser-extension-inject'
 import { extensionIdFromInput, isExtensionId } from './browser-extension-crx'
 import { downloadWebStoreRelease, resolveWebStoreRelease } from './browser-extension-webstore'
-import { EXTENSION_MANIFEST_NAME, extensionPopupUrl } from './browser-extension-source'
+import {
+  EXTENSION_MANIFEST_NAME,
+  extensionPopupUrl,
+  readManifestObject
+} from './browser-extension-source'
 import {
   BROWSER_EXTENSION_SOURCE_DIR,
   BROWSER_EXTENSION_STORE_DIR,
@@ -464,6 +469,7 @@ export class BrowserExtensionService {
   ): Promise<boolean> {
     const directory = extensionSourceDirectory(this.configRoot, record.id)
     try {
+      await this.refreshInstalledPreamble(directory, record)
       await session.extensions.loadExtension(directory, { allowFileAccess: false })
       this.loadedFor(partition, session).ids.add(record.id)
       // A successful load answers any earlier failure, so the row stops claiming
@@ -474,6 +480,36 @@ export class BrowserExtensionService {
       const warning = `It could not be loaded (${reason})`
       Logger.error(`Browser extension ${record.id} could not be loaded:`, error)
       return this.registry.setLoadWarning(record.id, warning)
+    }
+  }
+
+  /**
+   * Keep an installed copy's compatibility preamble current.
+   *
+   * The preamble is the app's own code living inside the extension, so a copy
+   * installed before a preamble fix landed would keep the old one for the rest of
+   * its life and the fix would only ever apply to extensions installed afterwards.
+   * Refreshing is safe here and only here: the file is being handed to Electron for
+   * the first time in this jar, so nothing has executed the old text yet.
+   */
+  private async refreshInstalledPreamble(
+    directory: string,
+    record: BrowserExtensionRecord
+  ): Promise<void> {
+    if (record.injected === 'none') return
+    try {
+      const manifest = await readManifestObject(directory)
+      const outcome = await ensureInjectionCurrent(directory, manifest, preambleSource)
+      if (outcome === 'rewritten') {
+        Logger.dev('Browser extension preamble refreshed:', { extensionId: record.id })
+      }
+    } catch (error) {
+      // A copy that cannot be refreshed still loads. The preamble is an addition,
+      // never a requirement, so this must not become a load failure.
+      Logger.dev('Browser extension preamble could not be refreshed:', {
+        extensionId: record.id,
+        error
+      })
     }
   }
 
