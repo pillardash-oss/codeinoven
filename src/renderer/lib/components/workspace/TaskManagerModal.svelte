@@ -579,15 +579,29 @@
   }
 
   /**
-   * Open a process's listening port in the browser of the conversation that
-   * owns it.
+   * Land the workspace on the conversation a resolved target names.
    *
-   * The app lands on the owning thread first. A tab belongs to a conversation,
-   * and the reveal that opens the browser dock only reaches the conversation
-   * that is on screen, so opening a page for a process in another project, chat,
-   * or routine run without moving first created a tab nobody could see. Landing
-   * first is also what makes the browser belong to the right owner: a run of a
-   * routine shares the routine's browser, a chat owns its own.
+   * Everything the task manager opens belongs to a conversation: a browser tab,
+   * a terminal, or the conversation itself. A tab's context is the project that
+   * is on screen, and opening one for a process in another project, chat, or
+   * routine run without landing there first created it in a context nobody
+   * could see. Landing first also puts the surface in the right hands: a run of
+   * a routine shares the routine's browser and terminal, a chat owns its own.
+   */
+  async function landOnOwner(target: { projectId: string; threadId: string }): Promise<void> {
+    const [thread, project] = await Promise.all([
+      invoke('thread:get', target.projectId, target.threadId),
+      invoke('project:get', target.projectId)
+    ])
+    if (thread && project) {
+      workspaceState.openThreadInOwningView(thread, project)
+    }
+  }
+
+  /**
+   * Open a process's listening port in the browser of the conversation that
+   * owns it: land there, open the page, and close the modal so the page is what
+   * the user looks at.
    */
   async function openInBrowser(process: TaskManagerProcess): Promise<void> {
     if (process.ports.length === 0) return
@@ -598,13 +612,7 @@
         error = `No project available to open ${process.pid}.`
         return
       }
-      const [thread, project] = await Promise.all([
-        invoke('thread:get', target.projectId, target.threadId),
-        invoke('project:get', target.projectId)
-      ])
-      if (thread && project) {
-        workspaceState.openThreadInOwningView(thread, project)
-      }
+      await landOnOwner(target)
       contextSidebarState.openBrowserForContext(
         `http://localhost:${process.ports[0]}`,
         target.projectId,
@@ -618,6 +626,14 @@
     }
   }
 
+  /**
+   * Open a terminal in the conversation that owns a process.
+   *
+   * The landing is what makes the shell visible: a terminal tab lives in a
+   * project context, and both the sidebar and the bottom dock render the
+   * context of the project on screen. Closing the modal is the second half, so
+   * the terminal is what the user looks at.
+   */
   async function openInTerminal(process: TaskManagerProcess): Promise<void> {
     error = ''
     try {
@@ -626,7 +642,9 @@
         error = `No project available to open ${process.pid}.`
         return
       }
+      await landOnOwner(target)
       contextSidebarState.openNewTerminal(target.projectId, target.threadId)
+      onClose()
     } catch (openError) {
       error = openError instanceof Error ? openError.message : 'Could not open the terminal.'
     }
@@ -647,16 +665,7 @@
         error = `No project available to open ${process.pid}.`
         return
       }
-      const [thread, project] = await Promise.all([
-        invoke('thread:get', target.projectId, target.threadId),
-        invoke('project:get', target.projectId)
-      ])
-      if (thread && project) {
-        // Landing in the view that owns the thread is the point of the action:
-        // a process can belong to a chat or an assistant task, and selecting it
-        // without moving left the user on a view that could not show it.
-        workspaceState.openThreadInOwningView(thread, project)
-      }
+      await landOnOwner(target)
       onClose()
     } catch (navigateError) {
       error = navigateError instanceof Error ? navigateError.message : 'Could not open the process.'
