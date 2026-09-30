@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { readFile, readlink } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import type { AgentRunningProcess, TaskManagerProcess } from '../../lib/types'
 import type { AgentProcessObserver } from '../drivers/driver.interface'
@@ -23,6 +23,10 @@ const PORT_SCAN_TIMEOUT_MS = 2_000
 const SCAN_MIN_INTERVAL_MS = 1_500
 /** Maximum pids per batched `ps -E` ownership probe. */
 const OWNERSHIP_PROBE_CHUNK = 64
+/** Maximum pids per batched `lsof` working-directory probe. */
+const CWD_PROBE_CHUNK = 64
+/** A probe is best-effort: a wedged `lsof` must never stall a scan. */
+const CWD_PROBE_TIMEOUT_MS = 2_000
 /** Key under which app-wide roots (e.g. the shared opencode server) are tracked. */
 const APP_SCOPE = '__codeinoven_app_scope__'
 
@@ -686,6 +690,63 @@ export class AgentProcessService implements AgentProcessObserver {
     return (await this.readOwnership([pid])).get(pid)?.owned ?? null
   }
 
+  /**
+   * Working directory of each pid, best effort.
+   *
+   * A daemon that re-parents to launchd (the adb fork-server) is adopted from
+   * the process snapshot, and that snapshot carries no cwd field on any
+   * platform, so this is the only way its row can show where it was launched,
+   * and the only handle the task manager has for attributing it to a project.
+   * One batched `lsof` answers the whole adoption batch on macOS and the BSDs;
+   * Linux answers from `/proc/<pid>/cwd` without spawning anything. Windows has
+   * no read path for another process's cwd, so adopted rows there keep none.
+   */
+  private async resolveWorkingDirectories(pids: readonly number[]): Promise<Map<number, string>> {
+    const result = new Map<number, string>()
+    if (pids.length === 0) return result
+    if (process.platform === 'linux') {
+      await Promise.all(
+        pids.map(async (pid): Promise<void> => {
+          try {
+            const cwd = await readlink(`/proc/${pid}/cwd`)
+            if (cwd) result.set(pid, cwd)
+          } catch {
+            // The process exited, or its directory is unreadable: leave it unknown.
+          }
+        })
+      )
+      return result
+    }
+    if (process.platform === 'win32') return result
+    for (let index = 0; index < pids.length; index += CWD_PROBE_CHUNK) {
+      const chunk = pids.slice(index, index + CWD_PROBE_CHUNK)
+      let stdout: string
+      try {
+        stdout = (
+          await execFileAsync('lsof', ['-a', '-d', 'cwd', '-F', 'pn', '-p', chunk.join(',')], {
+            timeout: CWD_PROBE_TIMEOUT_MS,
+            windowsHide: true
+          })
+        ).stdout
+      } catch (error) {
+        // `lsof` exits non-zero as soon as one pid has already exited; the rows
+        // it did match are still on stdout.
+        const failed = record(error)
+        stdout = typeof failed?.['stdout'] === 'string' ? failed['stdout'] : ''
+      }
+      let currentPid = 0
+      for (const line of stdout.split(/\r?\n/u)) {
+        if (line.startsWith('p')) {
+          currentPid = Number(line.slice(1))
+        } else if (line.startsWith('n') && currentPid > 0) {
+          const cwd = line.slice(1)
+          if (cwd) result.set(currentPid, cwd)
+        }
+      }
+    }
+    return result
+  }
+
   private sessionsForThread(projectId: string, threadId: string): string[] {
     return [...this.owners.entries()].flatMap(([sessionId, owner]) =>
       owner.projectId === projectId && owner.threadId === threadId ? [sessionId] : []
@@ -826,6 +887,15 @@ export class AgentProcessService implements AgentProcessObserver {
     )
     if (candidates.length === 0) return
     const ownership = await this.readOwnership(candidates.map((entry) => entry.pid))
+    // Resolve where each adoptable daemon was launched before recording it. An
+    // adopted row has no session to fall back on, so this cwd is both the path
+    // its row shows and the handle the task manager attributes it to a project
+    // with. One batched probe covers the whole adoption batch.
+    const adoptedCwds = await this.resolveWorkingDirectories(
+      candidates
+        .filter((entry) => ownership.get(entry.pid)?.owned === true)
+        .map((entry) => entry.pid)
+    )
     // Journal an adopted daemon only when no entry exists yet: an entry written
     // by the process that spawned it carries the real command and cwd and stays a
     // swept root, while overwriting it as "adopted" would hide it from the
@@ -848,6 +918,7 @@ export class AgentProcessService implements AgentProcessObserver {
         this.tracked.set(scope, sessionProcesses)
       }
       if (sessionProcesses.has(entry.pid)) continue
+      const cwd = adoptedCwds.get(entry.pid) ?? null
       sessionProcesses.set(entry.pid, {
         pid: entry.pid,
         parentPid: entry.parentPid,
@@ -855,12 +926,12 @@ export class AgentProcessService implements AgentProcessObserver {
         startedAt: Date.now(),
         scope: scope === APP_SCOPE ? 'app' : 'thread',
         sessionId: scope,
-        cwd: null
+        cwd
       })
       // Journal the adopted daemon so reapOrphans can still kill it after the
       // app closes without a clean shutdown.
       if (this.journal && !journalled.has(entry.pid)) {
-        this.journal.registerAdopted(entry.pid, entry.command)
+        this.journal.registerAdopted(entry.pid, entry.command, cwd ?? '')
         journalled.add(entry.pid)
       }
       adoptedScopes.add(scope)

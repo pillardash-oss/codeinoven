@@ -62,9 +62,12 @@ export class OwnedProcessJournal {
    * Register a process the app adopted rather than spawned. See
    * {@link OwnedRoot.adopted}: the flag keeps a repeated orphan sweep from
    * SIGTERM'ing a daemon a harness re-parented and the app may still be using.
+   * `cwd` is the daemon's resolved working directory when the platform exposes
+   * one, so a later journal read (and the task manager) still knows where it
+   * was launched.
    */
-  registerAdopted(pid: number, command: string): void {
-    this.setRoot(pid, { pid, command, cwd: '', adopted: true })
+  registerAdopted(pid: number, command: string, cwd = ''): void {
+    this.setRoot(pid, { pid, command, cwd, adopted: true })
   }
 
   private setRoot(pid: number, root: OwnedRoot): void {

@@ -189,6 +189,10 @@ import {
 import { refreshCustomProviderModels } from '../providers/base-url-model-refresh'
 import { AgentProcessService } from '../agents/agent-process-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
+import {
+  projectDirectories,
+  projectIdForWorkingDirectory
+} from '../agents/process-project-attribution'
 import { appServiceRegistry } from '../system/app-service-registry'
 import { UtilityOrchestrationService } from '../utilities/utility-orchestration-service'
 import {
@@ -5863,6 +5867,21 @@ export class ChatEngine {
     const services = appServiceRegistry.list()
     const projectNames = new Map<string, string>()
     const threadTitles = new Map<string, string>()
+    // A row with no session owner can still belong to a project: its working
+    // directory names the project whose files it is working in. That is how a
+    // re-parented daemon (the adb fork-server) and an app-wide shared runtime
+    // keep their project once their session, or their session marker, is gone,
+    // instead of listing under the app-wide node with a project path showing
+    // underneath.
+    const directories = await projectDirectories(await this.projectManager.listProjects())
+    const attributedProjectIds = new Map<number, string>()
+    for (const process of processes) {
+      if (process.projectId || !process.cwd) continue
+      const projectId = await projectIdForWorkingDirectory(process.cwd, directories)
+      if (projectId) attributedProjectIds.set(process.pid, projectId)
+    }
+    const ownerProjectId = (row: { pid: number; projectId: string | null }): string | null =>
+      row.projectId ?? attributedProjectIds.get(row.pid) ?? null
     // One resolution pass across both lists, so a project or thread that owns a
     // process and a service is read from the database once.
     const resolveOwner = async (projectId: string | null, threadId: string | null) => {
@@ -5875,13 +5894,16 @@ export class ChatEngine {
         threadTitles.set(threadId, thread?.title ?? threadId)
       }
     }
-    for (const process of processes) await resolveOwner(process.projectId, process.threadId)
+    for (const process of processes) await resolveOwner(ownerProjectId(process), process.threadId)
     for (const service of services) await resolveOwner(service.projectId, service.threadId)
-    const resolvedProcesses = processes.map((process) => ({
-      ...process,
-      ...(process.projectId ? { projectName: projectNames.get(process.projectId) ?? null } : {}),
-      ...(process.threadId ? { threadTitle: threadTitles.get(process.threadId) ?? null } : {})
-    }))
+    const resolvedProcesses = processes.map((process) => {
+      const projectId = ownerProjectId(process)
+      return {
+        ...process,
+        ...(projectId ? { projectId, projectName: projectNames.get(projectId) ?? null } : {}),
+        ...(process.threadId ? { threadTitle: threadTitles.get(process.threadId) ?? null } : {})
+      }
+    })
     const resolvedServices = services.map((service) => ({
       ...service,
       ...(service.projectId ? { projectName: projectNames.get(service.projectId) ?? null } : {}),

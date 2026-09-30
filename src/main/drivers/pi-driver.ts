@@ -19,7 +19,7 @@ import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { WORKER_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
 import { CIO_SUBAGENT_STREAM_STATUS_KEY } from '../../lib/core-tools'
-import { buildProcessEnvironment } from './cli-environment'
+import { buildProcessEnvironment, OWNED_SESSION_MARKER } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -1539,7 +1539,12 @@ export class PiDriver extends PersistentCliDriver {
         env: {
           ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
           ...(this.cioProvidersExtensionEnvs.get(sessionId) ?? {}),
-          ...runtimeEnv
+          ...runtimeEnv,
+          // Session-scoped ownership marker so any daemon this Pi session spawns
+          // that re-parents away from the process tree (e.g. the adb server) can
+          // still be attributed back to this session by the agent process
+          // service. It is the same marker every other CLI harness stamps.
+          [OWNED_SESSION_MARKER]: sessionId
         }
       }
     )
