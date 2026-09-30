@@ -1,6 +1,14 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte'
-  import { ChevronDown, ChevronRight, ChevronUp, Replace, ReplaceAll, X } from '@lucide/svelte'
+  import {
+    CaseSensitive,
+    ChevronDown,
+    ChevronRight,
+    ChevronUp,
+    Replace,
+    ReplaceAll,
+    X
+  } from '@lucide/svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
@@ -12,6 +20,11 @@
     floating?: boolean
     focusTrigger?: number
     debounceMs?: number
+    /** Whether the search is case-sensitive. Only meaningful with a toggle. */
+    matchCase?: boolean
+    /** Provide a callback to offer the case-sensitivity toggle, which a surface
+     *  can only offer when the search behind it understands case at all. */
+    onToggleMatchCase?: () => void
     enableReplace?: boolean
     replaceValue?: string
     onQueryChange: (query: string) => void | Promise<void>
@@ -33,6 +46,8 @@
     floating = false,
     focusTrigger = 0,
     debounceMs = 180,
+    matchCase = false,
+    onToggleMatchCase = undefined,
     enableReplace = false,
     replaceValue = '',
     onQueryChange,
@@ -161,11 +176,31 @@
     type="search"
     class="h-7 min-w-0 flex-1 rounded-lg border border-border bg-app px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
     {placeholder}
+    aria-label={label}
     value={draft}
     oninput={(event: Event & { currentTarget: HTMLInputElement }) =>
       scheduleQuery(event.currentTarget.value)}
     onkeydown={(event: KeyboardEvent) => void handleKeydown(event)}
   />
+  {#if onToggleMatchCase}
+    <button
+      type="button"
+      class={[
+        'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors',
+        matchCase
+          ? 'bg-elevated text-foreground'
+          : 'text-dimmed hover:bg-elevated hover:text-foreground'
+      ]}
+      aria-label="Match case"
+      aria-pressed={matchCase}
+      title={matchCase
+        ? 'Matching case: click to ignore case'
+        : 'Ignoring case: click to match case'}
+      onclick={onToggleMatchCase}
+    >
+      <CaseSensitive size={13} aria-hidden="true" />
+    </button>
+  {/if}
   {#if draft}
     <span class="whitespace-nowrap text-[0.625rem] text-dimmed tabular-nums">
       {matches > 0 ? `${activeIndex + 1}/${matches}` : '0/0'}

@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
+  import { AppWindow } from '@lucide/svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
+  import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 
   /**
    * One popup window's page, filling the rail.
@@ -19,7 +22,14 @@
    *
    * Nothing here holds a popup open or closes one: a popup's page ends it by
    * calling `window.close()`, which is what it does when it is done, and main
-   * reports that, which takes the window's tab out of the strip with it.
+   * reports that, which takes the window's tab out of the strip with it. An
+   * extension's popup is closed the same way, from the rail's own strip.
+   *
+   * The panel exists only while the tab on screen holds a window, because the tool
+   * is only offered then: a window is what it shows, and an extension's own popup
+   * is opened from the extension's own row in the extensions panel or from a
+   * header pin. The empty state below is only the frame or two between the last
+   * window ending and the rail closing after it.
    */
 
   interface Props {
@@ -53,6 +63,25 @@
    *  screen. Absent a block, the rail showing this popup is what puts it up, so it
    *  needs no claim of its own. */
   const frameVisible = $derived(popup !== null && browserVisibility.isPopupVisible(frameRect))
+
+  /** This popup's entry in the store's list of native rectangles on screen. */
+  const nativeFrameKey = $derived(`native-popup-${popupId}`)
+
+  /**
+   * Report this popup's rectangle while its page is really on screen, which is
+   * what lets the toaster's corner check see that a page covers it. A popup
+   * behind a modal, or one the rail is not showing, publishes nothing.
+   */
+  $effect(() => {
+    const key = nativeFrameKey
+    const frame = frameVisible ? frameRect : null
+    if (!frame) {
+      browserVisibility.clearNativeFrame(key)
+      return
+    }
+    browserVisibility.publishNativeFrame(key, frame)
+    return () => browserVisibility.clearNativeFrame(key)
+  })
 
   function frameBounds(): BrowserViewBounds | null {
     if (!frameElement) return null
@@ -94,31 +123,40 @@
     }
   }
 
+  /**
+   * Re-place the page whenever the rail's width changes.
+   *
+   * The rail is laid out from the store, and every change also moves the frame:
+   * a move without a size change is the one thing a ResizeObserver cannot see,
+   * and the rail's own width is the single input every such move flows from.
+   * Reading it here places the page on the frame the rail has just settled on
+   * instead of whenever an observer callback happens to land.
+   */
+  $effect(() => {
+    void contextSidebarState.width
+    if (!frameElement) return
+    void tick().then(() => placePopup(popupId).catch(() => {}))
+  })
+
   const attachFrame = (shownId: string): Attachment<HTMLDivElement> => {
     return (element) => {
       frameElement = element
-      // Keep the page aligned with the frame it is placed over.
-      const observer = new ResizeObserver(() => {
-        void placePopup(shownId).catch(() => {})
-      })
-      observer.observe(element)
-
-      // Follow the frame while it moves.
-      //
-      // The rail opens by growing its own width, and while it does the panel moves
-      // without changing size, which is the one thing a ResizeObserver cannot see:
-      // without this the page would be placed at the frame the panel had mid-open
-      // and sit a rail's width to the right of it, off the window. The loop
-      // re-measures until the rectangle holds still, and is bounded so a frame that
-      // never settles cannot leave a loop running.
+      // Keep the page aligned with the frame it is placed over, and keep the
+      // follow alive across changes: a rail that is still easing into its width
+      // moves the frame after the last observer callback, and a page left at a
+      // rectangle a drag passed through would sit where the frame no longer is.
+      // Every resize restarts the tail, so the page ends on the rectangle the
+      // rail settled on.
       let following = true
+      let followScheduled = false
       let lastKey = ''
       let stableFrames = 0
       let frames = 0
       const follow = (): void => {
         if (!following) return
         const bounds = frameBounds()
-        const key = bounds === null ? '' : `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`
+        const key =
+          bounds === null ? '' : `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`
         if (key === lastKey) stableFrames += 1
         else {
           lastKey = key
@@ -127,20 +165,46 @@
         }
         frames += 1
         if (stableFrames < 3 && frames < 180) requestAnimationFrame(follow)
+        else followScheduled = false
       }
+      /**
+       * Follow the frame until it holds still: called on mount, after every
+       * resize and when the window becomes visible again. A call while a follow
+       * is already running is ignored, so a drag that fires an observer callback
+       * per frame keeps one bounded loop rather than a pile of them. The loop is
+       * the tail for motion a transition keeps producing; it is never the only
+       * path that places a page, because a window the compositor throttles does
+       * not run animation frames at all.
+       */
+      const followUntilSettled = (): void => {
+        if (!following || followScheduled) return
+        followScheduled = true
+        stableFrames = 0
+        frames = 0
+        requestAnimationFrame(follow)
+      }
+      const observer = new ResizeObserver(() => {
+        // Place on this change right now   a callback does not wait on an
+        // animation frame   and follow whatever the rail's transition keeps
+        // moving afterwards.
+        void placePopup(shownId).catch(() => {})
+        followUntilSettled()
+      })
+      observer.observe(element)
       const keepUp = (): void => {
         void placePopup(shownId).catch(() => {})
+        followUntilSettled()
       }
       const restartFollow = (): void => {
         if (document.visibilityState !== 'visible') return
         // A rail opening while the window was in the background resumes its opening
         // when the window comes back, so the frame has to be followed again.
-        stableFrames = 0
-        frames = 0
-        void tick().then(() => requestAnimationFrame(follow))
-        keepUp()
+        void tick().then(() => {
+          void placePopup(shownId).catch(() => {})
+          followUntilSettled()
+        })
       }
-      requestAnimationFrame(follow)
+      followUntilSettled()
       window.addEventListener('resize', keepUp)
       document.addEventListener('visibilitychange', restartFollow)
       return () => {
@@ -186,11 +250,22 @@
   <!-- Keyed by popup, so switching windows tears one placement down and builds the
        next instead of moving a page that is already on screen. -->
   {#key popupId}
+    <!-- `.native-rail-gutter` keeps this frame clear of the rail's resize band: the
+         page is a native view composited above the DOM, so a frame reaching the
+         band would swallow the drag that adjusts the rail. The frame is sized by
+         its own box rather than `w-full`, because a full width plus a left margin
+         would run past the rail's edge. -->
     <div
       {@attach attachFrame(popupId)}
       {@attach frameVisible && manageNativeView(popupId)}
-      class="relative h-full w-full bg-app"
+      class="native-rail-gutter relative h-full bg-app"
       data-region="browser-popup-window"
     ></div>
   {/key}
+{:else}
+  <EmptyState
+    icon={AppWindow}
+    title="No popups right now"
+    description="A page's popup window and an extension's own popup both show up here, each as its own tab."
+  />
 {/if}

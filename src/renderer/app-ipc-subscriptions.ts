@@ -1,5 +1,5 @@
 import { toast } from 'svelte-sonner'
-import { invoke, subscribe } from '$lib/ipc.svelte'
+import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { playInAppAlert } from '$lib/notification-sound'
 import {
@@ -9,6 +9,7 @@ import {
   showToastWarning
 } from '$lib/stores/app-errors.svelte'
 import { clearDraftLabelCookie } from '$lib/stores/draft-label'
+import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import { pipState } from '$lib/stores/pip.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -46,6 +47,8 @@ export interface AppIpcSubscriptionDeps {
   /** Park the window (destroy it, keep the backend alive) instead of quitting. */
   parkWindow: () => Promise<void>
   setInstanceRole: (role: InstanceRole) => void
+  /** Raise the one-time start-at-login offer (raised after a routine's first how-to). */
+  showStartAtLoginOffer: () => void
   settleCloseConfirmationThread: (thread: Thread) => void
   handleCloseShortcut: () => void
   handleNewTerminalShortcut: () => void
@@ -59,16 +62,31 @@ async function openNotificationThread(
   deps: AppIpcSubscriptionDeps
 ): Promise<void> {
   const { projectId, threadId } = payload
-  notificationPanelState.dismissForThread(projectId, threadId)
   try {
     const [project, thread] = await Promise.all([
       invoke('project:get', projectId),
       invoke('thread:get', projectId, threadId)
     ])
-    if (!project || !thread) return
+    if (!project || !thread) {
+      // This is the one outcome a user cannot tell apart from a broken button:
+      // the card said "Open thread" and the window did nothing. Say which half
+      // of the thread is gone so a report of that click is answerable.
+      logRendererDev(
+        `A notification click could not open thread ${threadId}: ${project ? 'the thread' : 'the project'} is gone`
+      )
+      return
+    }
+    // Opening retires the thread's notices, except a needs-attention one whose
+    // thread is still parked on the user: going to the card to answer it is not
+    // answering it, so that entry stays until the status itself changes.
+    notificationPanelState.reconcileThread(thread)
     await deps.openThreadFromNotification(thread, project, payload.temporaryChatId)
-  } catch {
-    // The project or thread may have been deleted before the notification was clicked.
+    logRendererDev(`A notification click opened thread ${threadId} in project ${projectId}`)
+  } catch (error) {
+    // A thread that was deleted before the click lands here and is expected,
+    // but so is every real failure in the open path. Both used to be swallowed
+    // whole, which left a click that did nothing with no record of why.
+    logRendererError(`A notification click could not open thread ${threadId}`, error)
   }
 }
 
@@ -153,28 +171,41 @@ function showAgentNotification(
  * cleanup that unsubscribes them all.
  */
 export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => void {
-  const unsubscribeClick = subscribe('notification:threadClicked', (payload) => {
+  const unsubscribeClick = subscribeGuarded('notification:threadClicked', (payload) => {
     void openNotificationThread(payload, deps)
   })
-  const unsubscribeShow = subscribe('notification:show', (payload) =>
+  const unsubscribeShow = subscribeGuarded('notification:show', (payload) =>
     showAgentNotification(payload, deps)
   )
-  const unsubscribeConfirmClose = subscribe('window:confirmClose', (payload) => {
+  const unsubscribeConfirmClose = subscribeGuarded('window:confirmClose', (payload) => {
     // The renderer owns the unsaved-file editor state, so it computes the
-    // pending files here. With nothing pending the close proceeds right away
-    // as a park when background mode keeps the backend alive, otherwise a quit.
+    // pending files here. Downloads arrive with the payload: main is the one
+    // download owner, and its list is already the truth. With nothing pending
+    // the close proceeds right away as a park when background mode keeps the
+    // backend alive, otherwise a quit.
     const files = [...projectFilesWorkspace.getUnsavedFiles(), ...standaloneFiles.getUnsavedFiles()]
     const park = payload.park === true
-    if (payload.projects.length === 0 && files.length === 0) {
+    if (payload.projects.length === 0 && files.length === 0 && payload.downloads.length === 0) {
       void (park ? deps.parkWindow() : deps.confirmForceClose())
       return
     }
-    deps.setCloseConfirmation({ projects: payload.projects, files, park })
+    deps.setCloseConfirmation({
+      projects: payload.projects,
+      files,
+      downloads: payload.downloads,
+      park
+    })
   })
-  const unsubscribeInstanceRole = subscribe('app:instanceRole', (role) => {
+  const unsubscribeInstanceRole = subscribeGuarded('app:instanceRole', (role) => {
     deps.setInstanceRole(role)
   })
-  const unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
+  // The one-time start-at-login offer. Main raises it once in an install's life,
+  // right after a routine gets its first how-to, and only while
+  // `launchAtLoginPrompted` is unanswered, so this only ever asks once.
+  const unsubscribeStartAtLoginOffer = subscribeGuarded('app:startAtLoginPrompt', () => {
+    deps.showStartAtLoginOffer()
+  })
+  const unsubscribeThreadUpdated = subscribeGuarded('thread:updated', (...args: unknown[]) => {
     const thread = args[0] as Thread
     // Once a real title exists the draft-derived label is no longer needed.
     if (thread.title !== DEFAULT_THREAD_TITLE) {
@@ -184,12 +215,15 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     if (workspaceState.selectedThread?.id === thread.id) {
       workspaceState.updateThread(thread)
     }
-    if (thread.read) {
-      notificationPanelState.dismissForThread(thread.projectId, thread.id)
-    }
+    // Reconcile the thread's notices on every status update: a needs-attention
+    // notice stays while the thread is parked (reading it answers nothing) and
+    // leaves the moment the park ends, a failure or completion leaves once read.
+    // The store returns immediately when no entry belongs to this thread, so a
+    // status tick with nothing on the panel costs one scan of a short list.
+    notificationPanelState.reconcileThread(thread)
     deps.settleCloseConfirmationThread(thread)
   })
-  const unsubscribeThreadDeleted = subscribe('thread:deleted', (projectId, threadId) => {
+  const unsubscribeThreadDeleted = subscribeGuarded('thread:deleted', (projectId, threadId) => {
     scopeState.removeThread(threadId)
     notificationPanelState.dismissForThread(projectId, threadId)
     temporaryChatUnread.clearThread(projectId, threadId)
@@ -198,32 +232,32 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // An agent created, renamed, archived, deleted, synced or merged a scope:
   // reload the board it changed so the user sees the worktree it made instead
   // of a stale snapshot.
-  const unsubscribeScopeBoardChanged = subscribe('scope:boardChanged', (event) => {
+  const unsubscribeScopeBoardChanged = subscribeGuarded('scope:boardChanged', (event) => {
     void scopeState.handleBoardChangedEvent(event)
   })
   // A destructive scope action an agent asked for waits on this dialog; its
   // answer is what releases the agent's parked tool call.
-  const unsubscribeScopeConfirmation = subscribe('scope:agentConfirmation', (request) => {
+  const unsubscribeScopeConfirmation = subscribeGuarded('scope:agentConfirmation', (request) => {
     scopeConfirmations.enqueue(request)
   })
   // Listen from app start (not from the first local job): an agent-run
   // worktree has no renderer-owned job until its first progress event.
   scopeJobs.listen()
-  const unsubscribeCloseShortcut = subscribe('window:closeShortcut', () => {
+  const unsubscribeCloseShortcut = subscribeGuarded('window:closeShortcut', () => {
     deps.handleCloseShortcut()
   })
-  const unsubscribeNewTerminalShortcut = subscribe('window:newTerminalShortcut', () => {
+  const unsubscribeNewTerminalShortcut = subscribeGuarded('window:newTerminalShortcut', () => {
     deps.handleNewTerminalShortcut()
   })
-  const unsubscribeHistoryBack = subscribe('window:historyBack', () => {
+  const unsubscribeHistoryBack = subscribeGuarded('window:historyBack', () => {
     void deps.goBack()
   })
-  const unsubscribeHistoryForward = subscribe('window:historyForward', () => {
+  const unsubscribeHistoryForward = subscribeGuarded('window:historyForward', () => {
     void deps.goForward()
   })
   // OS hand-offs that arrive after mount; the queue drain below covers the
   // paths that were already waiting when the renderer started.
-  const unsubscribeOpenedPaths = subscribe('openWith:paths', (paths: OpenedPath[]) => {
+  const unsubscribeOpenedPaths = subscribeGuarded('openWith:paths', (paths: OpenedPath[]) => {
     void deps.handleOpenedPaths(paths)
   })
   void invoke('openWith:consumePending')
@@ -249,6 +283,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeShow()
     unsubscribeConfirmClose()
     unsubscribeInstanceRole()
+    unsubscribeStartAtLoginOffer()
     unsubscribeThreadUpdated()
     unsubscribeThreadDeleted()
     unsubscribeScopeBoardChanged()

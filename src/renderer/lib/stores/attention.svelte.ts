@@ -1,5 +1,9 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import type { AutoAnswerItem } from '$shared/types'
+import {
+  autoAnswerConcernsThread,
+  type AutoAnswerItem,
+  type AutoAnswerThreadScope
+} from '$shared/types'
 
 /**
  * The gates the app resolved without the user: a question whose timer picked the
@@ -7,6 +11,11 @@ import type { AutoAnswerItem } from '$shared/types'
  * that timed out. Main owns the durable records; this store is the renderer's
  * mirror of them, so the right rail and the attention panel render one list
  * instead of each fetching their own copy.
+ *
+ * A record is read relative to the conversation on screen, not globally: the
+ * rail item only exists while the open thread (or its task, or its routine) has
+ * an undismissed decision, so a decision made in one thread never lights the
+ * rail in another.
  */
 class AttentionState {
   private _items = $state<AutoAnswerItem[]>([])
@@ -20,13 +29,19 @@ class AttentionState {
     return this._items
   }
 
-  /** Records the user has not dismissed yet: what the rail counts. */
-  get unread(): AutoAnswerItem[] {
-    return this._items.filter((item) => item.dismissedAt === undefined)
+  /**
+   * Undismissed records that concern `scope`, newest first: what the rail counts
+   * and the panel renders for the thread on screen.
+   */
+  unreadFor(scope: AutoAnswerThreadScope): AutoAnswerItem[] {
+    return this._items.filter(
+      (item) => item.dismissedAt === undefined && autoAnswerConcernsThread(item, scope)
+    )
   }
 
-  get unreadCount(): number {
-    return this.unread.length
+  /** How many undismissed records concern `scope`. */
+  unreadCountFor(scope: AutoAnswerThreadScope): number {
+    return this.unreadFor(scope).length
   }
 
   /** Load the recorded decisions once, then mirror live updates from main. */

@@ -4,7 +4,7 @@ import {
   AUTHORED_WORK_ICON_BY_KIND,
   AUTHORED_WORK_NAME_BY_KIND
 } from '$lib/authored-work-presentation'
-import type { AuthoredWorkKind, ThreadDesignState } from '$shared/ipc-contract'
+import type { AuthoredWorkKind, DesignEntry, ThreadDesignState } from '$shared/ipc-contract'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { coordinatorDockState } from './coordinator-dock.svelte'
 
@@ -65,6 +65,55 @@ class DesignCoordinatorState {
   private activeKey: string | null = null
   /** The latest coordinates per thread, for a trailing read that only has a key. */
   private readonly refs = new Map<string, { projectId: string; threadId: string }>()
+  /** The order the user dragged this thread's design tabs into, per thread. A
+   *  board's tabs are the project's designs, so main lists them newest first and
+   *  the user's order is applied on top of that listing rather than replacing it. */
+  private readonly tabOrders = new SvelteMap<string, string[]>()
+
+  /**
+   * The design tabs in the order the board shows them.
+   *
+   * A design written since the last look is not in the user's order yet, and it
+   * belongs in front: it is the newest work, and it is what the user just asked
+   * for. Everything the user has already arranged keeps the place they gave it.
+   */
+  orderedItems(projectId: string, threadId: string, items: DesignEntry[]): DesignEntry[] {
+    const order = this.tabOrders.get(threadKey(projectId, threadId)) ?? []
+    if (order.length === 0) return items
+    const arranged = order.flatMap((directory) => {
+      const item = items.find((candidate) => candidate.directory === directory)
+      return item === undefined ? [] : [item]
+    })
+    const unarranged = items.filter((item) => !order.includes(item.directory))
+    return [...unarranged, ...arranged]
+  }
+
+  /**
+   * Move one design tab next to another, the way a dragged terminal tab moves.
+   *
+   * The whole order is stored, not the move: a listing that changes underneath
+   * an arrangement is then still read in the order the user last saw, with only
+   * the designs they never touched keeping main's newest-first place.
+   */
+  moveTab(
+    projectId: string,
+    threadId: string,
+    items: DesignEntry[],
+    id: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ): void {
+    if (id === targetId) return
+    const current = this.orderedItems(projectId, threadId, items).map((item) => item.directory)
+    const from = current.indexOf(id)
+    const target = current.indexOf(targetId)
+    if (from === -1 || target === -1) return
+    const next = [...current]
+    next.splice(from, 1)
+    const at = next.indexOf(targetId)
+    next.splice(position === 'before' ? at : at + 1, 0, id)
+    this.tabOrders.set(threadKey(projectId, threadId), next)
+  }
 
   /** The last answer for a thread, or null before the first one arrives. */
   stateFor(projectId: string, threadId: string): ThreadDesignState | null {

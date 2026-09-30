@@ -4,25 +4,43 @@
   import {
     ArrowLeft,
     ArrowRight,
+    Check,
     Globe,
+    Loader2,
     Lock,
     LockOpen,
     Pin,
     PinOff,
     Plus,
+    Puzzle,
     RotateCw,
     Search,
     Settings2,
+    Star,
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { resolveBrowserAddress } from '$shared/browser-search-engines'
-  import { appConfigState } from '$lib/stores/app-config.svelte'
-  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
-  import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { GLOBAL_BROWSER_PROJECT_ID, type BrowserViewBounds } from '$shared/ipc-contract'
+  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
-  import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { browserStripOverlay } from '$lib/stores/browser-strip-overlay.svelte'
+  import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { projectStripChrome, projectStripTabs } from '$lib/browser-strip-overlay-bridge'
+  import {
+    browserTabLabel,
+    DEFAULT_BOX_NAME,
+    type GlobalBrowserTab
+  } from '$lib/stores/global-browser-types'
+  import {
+    installStoreExtensionOffer,
+    storeExtensionOffer,
+    storeOfferInstallVerb
+  } from '$lib/stores/browser-extension-store-offer'
   import BrowserTabRow from './BrowserTabRow.svelte'
+  import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'
   import BrowserGroupModal from './BrowserGroupModal.svelte'
   import BrowserTabModal from './BrowserTabModal.svelte'
   import { browserGroupAccent, browserGroupIconUrl } from './browser-group-appearance'
@@ -68,13 +86,45 @@
   // button has to drop its expanded state.
   onMount(() => subscribe('browser:siteMenuClosed', () => (siteMenuOpen = false)))
 
-  /** Null while the address mirrors the page; a string once the user types, so a
-   *  page that navigates mid-edit never steals the caret's line. The draft is
-   *  only consulted while the field has focus, which is what makes a tab switch
-   *  show the new tab's address without a reset effect. */
-  let addressDraft = $state('')
-  let addressFocused = $state(false)
-  let addressError = $state('')
+  /** The page on screen's address. The bar shows it rather than owning an
+   *  editable copy of it: the address the user types goes through the spotlight
+   *  (see {@link onOpenAddress}), which is where history is suggested too. */
+  const address = $derived(activeTab?.url ?? '')
+  /** Whether the page on screen is already saved, which is what the star beside
+   *  the address reads and toggles. */
+  const bookmarked = $derived(browserBookmarks.isBookmarked(address))
+
+  /**
+   * The extension the page on screen is, when it is a Chrome Web Store page.
+   *
+   * The store cannot install anything in this app: its "Add to Chrome" button is
+   * Chrome's inline-install API, which Electron does not implement, so it sits
+   * disabled. The app therefore offers the install itself, and this is what
+   * decides when the affordance exists.
+   */
+  const storeOffer = $derived(storeExtensionOffer())
+  const storeOfferTitle = $derived.by(() => {
+    if (!storeOffer) return 'Open the extensions panel'
+    const verb = storeOfferInstallVerb(storeOffer)
+    if (verb) return `${verb} ${storeOffer.name ?? 'the extension'}`
+    if (storeOffer.installed) {
+      return `${storeOffer.name ?? 'This extension'} is installed. Open the extensions panel.`
+    }
+    return `Install ${storeOffer.name ?? 'this extension'} in ${storeOffer.boxName}`
+  })
+  /** This offer's own install, if it has one. Only this extension's install makes
+   *  the chip busy: another extension downloading behind it must not. */
+  const storeOfferInstall = $derived(storeOffer?.install ?? null)
+
+  /** Install the offer, or open the rail on what is already installed. */
+  function actOnStoreOffer(): void {
+    if (!storeOffer) return
+    if (storeOffer.installed) {
+      globalBrowser.showExtensionsSidebar()
+      return
+    }
+    void installStoreExtensionOffer()
+  }
 
   const groups = $derived(globalBrowser.orderedGroups)
 
@@ -92,6 +142,14 @@
         void globalBrowser.ensureTabIconLoaded(tab.id)
       }
     }
+    // A tab the app has no page for (one a restart restored, one hibernated
+    // before its page reported an icon) takes the icon its own address is known
+    // by, so the row wears the site's mark instead of a globe. The store asks at
+    // most once per address per tab and writes the answer down with the tab, so
+    // this is not a render-time lookup.
+    for (const tab of globalBrowser.tabs) {
+      if (tab.url !== '' && tab.favicon === null) void globalBrowser.ensureFavicon(tab.id)
+    }
   })
   const ungrouped = $derived(globalBrowser.tabsInGroup(null))
   const pinned = $derived(globalBrowser.pinnedTabs.filter(matches))
@@ -99,14 +157,21 @@
   const query = $derived(globalBrowser.tabSearchQuery)
   const searchGroupId = $derived(globalBrowser.tabSearchGroupId)
   const scopedGroup = $derived(searchGroupId ? globalBrowser.groupById(searchGroupId) : null)
-  const address = $derived(addressFocused ? addressDraft : (activeTab?.url ?? ''))
 
   function matches(tab: GlobalBrowserTab): boolean {
     const needle = query.trim().toLowerCase()
     if (needle === '') return true
-    return (
-      browserTabLabel(tab).toLowerCase().includes(needle) || tab.url.toLowerCase().includes(needle)
-    )
+    if (
+      browserTabLabel(tab).toLowerCase().includes(needle) ||
+      tab.url.toLowerCase().includes(needle)
+    ) {
+      return true
+    }
+    // The box a tab runs in is part of what the user is searching for, so a
+    // query for "work" finds every page in the work box and not only the pages
+    // whose own title or address happens to contain the word.
+    const box = tab.boxId ? globalBrowser.boxById(tab.boxId) : null
+    return box ? box.name.toLowerCase().includes(needle) : false
   }
 
   function tabsFor(groupId: string | null): GlobalBrowserTab[] {
@@ -124,32 +189,13 @@
     globalBrowser.openTabSearch(groupId)
   }
 
-  function navigate(): void {
-    const resolution = resolveBrowserAddress(addressDraft, appConfigState.browserSearchEngine)
-    if (!resolution) {
-      addressError = 'Enter a search or an address'
-      return
-    }
-    addressError = ''
-    addressFocused = false
-    // With a tab on screen the address drives it. With none it is the way in, so
-    // it opens the first tab instead of doing nothing.
-    if (activeTab)
-      void invoke(
-        'browser:navigate',
-        activeTab.id,
-        GLOBAL_BROWSER_CONTEXT.projectId,
-        GLOBAL_BROWSER_CONTEXT.threadId,
-        resolution.url
-      ).catch(() => {})
-    else globalBrowser.createTab(resolution.url)
-  }
-
-  function startEditingAddress(input: EventTarget | null): void {
-    if (!(input instanceof HTMLInputElement)) return
-    addressFocused = true
-    addressDraft = activeTab?.url ?? ''
-    input.select()
+  /** Save the page on screen, or take it out of the list again. The page's own
+   *  favicon goes with it: that is what a saved page wears by default, and the tab
+   *  holds one for as long as it holds its address, hibernated or not. */
+  function toggleBookmark(): void {
+    const tab = activeTab
+    if (!tab || tab.url === '') return
+    browserBookmarks.toggle(tab.url, browserTabLabel(tab), tab.favicon)
   }
 
   /** Left click reloads, or aborts the in-flight navigation while loading. */
@@ -179,7 +225,13 @@
     if (!(button instanceof HTMLElement)) return
     const host = browserSiteHost(tab.url)
     siteMenuOpen = true
-    void openBrowserSiteMenu(GLOBAL_BROWSER_PROJECT_ID, host, button).then((opened) => {
+    void openBrowserSiteMenu(
+      GLOBAL_BROWSER_PROJECT_ID,
+      host,
+      button,
+      globalBrowser.activeTabBoxId,
+      globalBrowser.boxById(globalBrowser.activeTabBoxId)?.name ?? DEFAULT_BOX_NAME
+    ).then((opened) => {
       if (!opened) siteMenuOpen = false
     })
   }
@@ -203,12 +255,124 @@
     globalBrowser.moveToGroup(dragged, groupId)
     globalBrowser.endDrag()
   }
+
+  // ─── The floating panel above a live page ─────────────────────────────────
+  /**
+   * While the browser's sidebar is collapsed, hovering the left edge reveals it
+   * as a floating panel. The page is a native view painted above every DOM node,
+   * so from the moment a page reaches the panel's band the panel is drawn by the
+   * native overlay window instead, and the page keeps running underneath it.
+   *
+   * The decision is geometric and lives here because this is the only place that
+   * knows the panel and the window: the panel's rectangle is the sidebar's own
+   * width against the viewport, and a page covers it when a native frame
+   * intersects it. The overlay then gets the projection, and answers with an
+   * acknowledgement `browserStripOverlay` watches.
+   *
+   * The occlusion rule is the load-bearing half: while the overlay is being asked
+   * to draw the panel, the panel must not publish itself as an occluder, or the
+   * visibility store would detach the page and the overlay would mirror a frame
+   * that no longer exists. That is why the phase, not the panel alone, decides
+   * both the occlusion and whether the DOM panel is drawn.
+   */
+
+  /** The window's own size, tracked because the panel's band runs to its bottom
+   *  edge and the page frame is measured in the same space. */
+  let viewport = $state({ width: window.innerWidth, height: window.innerHeight })
+
+  /** The floating panel's top edge, which is the application header's own height
+   *  (`top-12`), and therefore follows the user's appearance font size. */
+  const stripTop = $derived(Math.round(3 * appConfigState.appFontSize))
+
+  /** The band the floating panel occupies in the viewport. */
+  const stripBand = $derived<BrowserViewBounds>({
+    x: 0,
+    y: stripTop,
+    width: sidebarState.width,
+    height: Math.max(0, viewport.height - stripTop)
+  })
+
+  const floating = $derived(!sidebarState.docked && sidebarState.hoverOpen)
+  const pageCoversStrip = $derived(browserVisibility.overlapsNative(stripBand))
+  /** Whether the overlay may be used for the floating panel at all: the panel has
+   *  to be floating, and the window has to be able to hear and draw it. */
+  const overlayAvailable = $derived(floating && !browserStripOverlay.unavailable)
+  /**
+   * Whether the strip belongs in the overlay right now.
+   *
+   * `pageCoversStrip` alone is not enough. A tab switch remounts the page frame
+   * (`BrowserView` keys `BrowserWorkspace` by tab), and the new frame only
+   * publishes its rectangle after a `tick`, so the coverage reading dips false
+   * for a flush. Releasing the strip on that dip both flashed the panel and let
+   * the DOM panel publish an occlusion over the page frame the switch was about
+   * to attach, which parked the new page and left the panel showing. Keeping the
+   * overlay while it is already live bridges the dip; a genuine full-window
+   * surface (a modal) is the signal that actually ends the handover.
+   */
+  const overlayWanted = $derived(
+    overlayAvailable &&
+      (pageCoversStrip || browserStripOverlay.live) &&
+      !browserVisibility.hasFullWindowSurface
+  )
+
+  /**
+   * What the sidebar is told about its floating panel: `none` leaves everything
+   * to the DOM panel, `pending` means the overlay is loading so the panel must
+   * keep drawing but must not occlude, and `live` means the overlay owns it.
+   *
+   * While the panel floats and the overlay is usable the DOM panel never falls
+   * back to `none`, even when no page covers its band this instant. Publishing an
+   * occlusion there is what detached the page and left the overlay mirroring a
+   * frame that no longer existed; `pending` keeps the panel drawable without
+   * occluding, so the page can always attach underneath it.
+   */
+  const stripPhase = $derived<'none' | 'pending' | 'live'>(
+    overlayAvailable && !browserVisibility.hasFullWindowSurface
+      ? browserStripOverlay.live
+        ? 'live'
+        : 'pending'
+      : 'none'
+  )
+
+  $effect(() => {
+    if (!overlayWanted) {
+      void browserStripOverlay.publish(null)
+      return
+    }
+    void browserStripOverlay.publish({
+      width: sidebarState.width,
+      top: stripTop,
+      theme: browserStripOverlay.theme,
+      chrome: projectStripChrome(),
+      tabs: projectStripTabs()
+    })
+  })
+
+  onMount(() => {
+    const trackViewport = (): void => {
+      viewport = { width: window.innerWidth, height: window.innerHeight }
+    }
+    window.addEventListener('resize', trackViewport)
+    // Wire the overlay's reports before anything can publish a strip, so a
+    // window that cannot hear it never hands it the panel in the first place.
+    const stopOverlay = browserStripOverlay.start()
+    return () => {
+      window.removeEventListener('resize', trackViewport)
+      // Leaving the view drops the panel with it: the page it was drawn over is
+      // going away in the same breath.
+      void browserStripOverlay.publish(null)
+      stopOverlay()
+    }
+  })
 </script>
 
 {#snippet chrome()}
   <!-- Fixed chrome: the address and history stay at the top left while the tab
-       strip scrolls beneath them. Downloads live in the right rail, so the
-       address bar keeps the room between the history buttons and the edge. -->
+       strip scrolls beneath them. The address is a control, not a field: clicking
+       it opens the address spotlight, where the address is replaced and the pages
+       already visited are offered underneath it. Bookmarks and downloads live in
+       the right rail, so the address bar keeps the room between the history
+       buttons and the edge. -->
   <div class="shrink-0 border-b px-2 py-2">
     <div class="mb-1.5 flex items-center gap-1">
       <!-- Only the navigation a page can actually take is shown: back when there
@@ -258,7 +422,7 @@
           {/if}
         </button>
       {/if}
-      <div class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-elevated px-2">
+      <div class="flex min-w-0 flex-1 items-center gap-1 rounded-lg bg-elevated pr-0.5 pl-1.5">
         {#if activeTab?.url}
           <button
             type="button"
@@ -281,25 +445,61 @@
         {:else}
           <Globe size={12} class="shrink-0 text-dimmed" />
         {/if}
-        <input
-          type="text"
-          class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
-          placeholder="Search or enter an address"
-          aria-label="Address"
-          aria-invalid={addressError !== ''}
-          value={address}
-          onfocus={(event: FocusEvent) => startEditingAddress(event.currentTarget)}
-          onblur={() => (addressFocused = false)}
-          oninput={(event: Event) => {
-            if (event.currentTarget instanceof HTMLInputElement)
-              addressDraft = event.currentTarget.value
-          }}
-          onkeydown={(event: KeyboardEvent) => {
-            if (event.key !== 'Enter') return
-            event.preventDefault()
-            navigate()
-          }}
-        />
+        <!-- The page's address is a control rather than a field: clicking it opens
+             the address spotlight, where the address is replaced and the pages
+             already visited are offered underneath it. The address is only read
+             here, so nothing in the strip ever mutates it. -->
+        <button
+          type="button"
+          class={[
+            'h-7 min-w-0 flex-1 truncate text-left text-xs',
+            address === '' ? 'text-dimmed' : 'text-foreground'
+          ]}
+          title="Search or enter an address"
+          aria-label="Search or enter an address"
+          onclick={onOpenAddress}
+        >
+          {address === '' ? 'Search or enter an address' : address}
+        </button>
+        {#if storeOffer}
+          <!-- The install the store's own button cannot offer: "Add to Chrome" is
+               Chrome's inline-install API, which this runtime does not
+               implement. Icon only, because the rail and the panel carry the
+               words. -->
+          <button
+            type="button"
+            class={[
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay disabled:opacity-60',
+              storeOffer.installed ? 'text-success' : 'text-primary'
+            ]}
+            disabled={storeOfferInstall !== null && !storeOffer.installed}
+            title={storeOfferTitle}
+            aria-label={storeOfferTitle}
+            onclick={actOnStoreOffer}
+          >
+            {#if storeOfferInstall !== null && !storeOffer.installed}
+              <Loader2 size={12} class="animate-spin" />
+            {:else if storeOffer.installed}
+              <Check size={12} />
+            {:else}
+              <Puzzle size={12} />
+            {/if}
+          </button>
+        {/if}
+        <button
+          type="button"
+          class={[
+            'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay',
+            bookmarked ? 'text-warning' : 'text-dimmed hover:text-foreground'
+          ]}
+          disabled={address === ''}
+          aria-label={bookmarked ? 'Remove this page from bookmarks' : 'Bookmark this page'}
+          aria-pressed={bookmarked}
+          title={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
+          onclick={toggleBookmark}
+        >
+          <Star size={12} class={bookmarked ? 'fill-current' : ''} />
+        </button>
       </div>
     </div>
   </div>
@@ -350,6 +550,7 @@
   onboardingAnchor={false}
   label="Browser tabs"
   region="browser-sidebar"
+  overlayPhase={stripPhase}
   {chrome}
 >
   {#if totalTabs === 0}
@@ -359,14 +560,18 @@
         No tabs are open. Pages here run in their own profile, separate from the browsers your
         agents use.
       </p>
-      <button
-        type="button"
-        class="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        title="Open a new browser tab"
-        onclick={() => newTab()}
-      >
-        New tab
-      </button>
+      <BrowserNewTabMenu>
+        {#snippet trigger()}
+          <button
+            type="button"
+            class="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            title="Open a new browser tab"
+            onclick={() => newTab()}
+          >
+            New tab
+          </button>
+        {/snippet}
+      </BrowserNewTabMenu>
     </div>
   {:else}
     {#if searchGroupId === null && pinned.length > 0}
@@ -442,15 +647,19 @@
                   {tabsFor(group.id).length}
                 </span>
               </button>
-              <button
-                type="button"
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-                aria-label={`New tab in ${group.name}`}
-                title={`New tab in ${group.name}`}
-                onclick={() => newTab(group.id)}
-              >
-                <Plus size={13} />
-              </button>
+              <BrowserNewTabMenu groupId={group.id} anchorTabId={activeTab?.id ?? null}>
+                {#snippet trigger()}
+                  <button
+                    type="button"
+                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                    aria-label={`New tab in ${group.name}`}
+                    title={`New tab in ${group.name}`}
+                    onclick={() => newTab(group.id)}
+                  >
+                    <Plus size={13} />
+                  </button>
+                {/snippet}
+              </BrowserNewTabMenu>
               <button
                 type="button"
                 class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"

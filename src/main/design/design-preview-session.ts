@@ -12,10 +12,13 @@ import {
  * One way to put a design on screen.
  *
  * Two callers need it: the design capability's `preview` operation, which the
- * agent runs, and the design coordinator's open and thumbnail actions, which the
- * user runs. Both must serve the folder on the same loopback origin, show it in
- * the same thread tab, and mark that tab as a design so the element inspector
- * arms. A second copy of this would let the two drift, so it lives here.
+ * agent runs, and the design coordinator's open and capture actions, which the
+ * user runs. All of them must serve the folder on the same loopback origin, show
+ * it in a browser tab, and mark that tab as a design so the element inspector
+ * arms. Which tab is the caller's choice (see `tab` on the request): the
+ * capability's own preview and every capture move through the thread's one tab,
+ * while the board's open gives each screen a tab of its own. A second copy of
+ * this would let the two drift, so it lives here.
  */
 
 /** File the folder is expected to hold, and the one a preview falls back to. */
@@ -46,10 +49,22 @@ export interface DesignPreviewRequest {
    * configured design root.
    */
   defaultRoot: string
-  /** How the capability's own open behaves when it has to create the tab. */
+  /** How the capability's own open behaves when it has to create the tab. The
+   *  screen path ignores it: a screen tab is always mounted offscreen and brought
+   *  forward only by `reveal`, because a user who clicked a canvas asked for it. */
   attention: 'focus' | 'background'
   /** Bring the tab to the user even when it already existed. */
   reveal: boolean
+  /**
+   * Which tab the preview may use.
+   *
+   * A capture and the capability's own preview belong in the thread's single tab:
+   * they are the app moving through the work, and one tab keeps that movement in
+   * one place. The board's open is the user choosing a screen, so it gets a tab
+   * per screen: clicking one canvas never replaces another canvas's tab, and
+   * clicking the same canvas again replaces only that screen's own tab.
+   */
+  tab: 'thread' | 'screen'
 }
 
 export interface DesignPreviewResult {
@@ -72,11 +87,11 @@ function tabIdOf(result: unknown): string | null {
 }
 
 /**
- * Serve one design folder and show it in the project and thread's browser tab.
+ * Serve one design folder and show it in a browser tab.
  *
- * The thread has one agent tab, so a preview of a folder the thread already has
- * open navigates that tab instead of stacking a second one; the browser is the
- * authority on whether it still exists, not a memo here.
+ * Which tab is the caller's choice (`tab`), so the board's canvas clicks can
+ * each keep their own while the app's own captures share the thread's; the
+ * browser is the authority on whether a tab still exists, not a memo here.
  */
 export async function openDesignPreview(
   deps: DesignPreviewDeps,
@@ -97,23 +112,42 @@ export async function openDesignPreview(
   let tab: 'reused' | 'opened' | null = null
   let tabId: string | null = null
   if (browser) {
-    const target = { projectId: request.projectId, threadId: request.threadId }
-    if (browser.agentTabFor(request.projectId, request.threadId)) {
-      tabId = tabIdOf(await browser.executeUtility('navigate', { url }, target))
-      tab = 'reused'
+    if (request.tab === 'screen') {
+      // A screen tab reveals (and un-reveals) through the open itself: the event
+      // carries the URL that was asked for, where a separate reveal would read
+      // the page a moment after its load started.
+      const opened = await browser.openDesignScreen({
+        projectId: request.projectId,
+        threadId: request.threadId,
+        directory: directory.display,
+        // The file the URL resolves to is the screen's identity, so a screen
+        // asked for as `index.html` and a default entry that lands on it are one
+        // screen with one tab.
+        entry: entry === null ? null : entry.segments.join('/'),
+        url,
+        reveal: request.reveal
+      })
+      tabId = opened.tabId
+      tab = opened.tab
     } else {
-      tabId = tabIdOf(
-        await browser.executeUtility('open', { url, attention: request.attention }, target)
-      )
-      tab = 'opened'
+      const target = { projectId: request.projectId, threadId: request.threadId }
+      if (browser.agentTabFor(request.projectId, request.threadId)) {
+        tabId = tabIdOf(await browser.executeUtility('navigate', { url }, target))
+        tab = 'reused'
+      } else {
+        tabId = tabIdOf(
+          await browser.executeUtility('open', { url, attention: request.attention }, target)
+        )
+        tab = 'opened'
+      }
+      // The capability's own open reveals; a reused tab does not, so a design the
+      // user asked for again is brought forward explicitly.
+      if (tabId && request.reveal) browser.revealTab(tabId)
     }
     if (tabId) {
       // Marking the tab is what arms the element inspector: the panel offers
       // inspection only on a tab that is rendering a design.
       browser.markDesignTab(tabId, design)
-      // The capability's own open reveals; a reused tab does not, so a design the
-      // user asked for again is brought forward explicitly.
-      if (request.reveal) browser.revealTab(tabId)
     }
   }
 

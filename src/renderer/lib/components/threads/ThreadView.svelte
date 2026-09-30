@@ -158,6 +158,7 @@
     type RoutinePlanDraft
   } from '$lib/components/assistant/assistant-view'
   import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
+  import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
@@ -283,6 +284,11 @@
   import { APP_NAME } from '$shared/brand'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
+  import {
+    continuationRequestPrompt,
+    pendingContinuationRequest,
+    type PendingContinuationRequest
+  } from '$shared/pending-request'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { LiveGenerationRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -387,6 +393,26 @@
      *  conversation. Workspace gates this: always true in chat mode, and in
      *  project mode only for a project's sole, untouched thread. */
     allowCenteredComposer?: boolean
+    /**
+     * Replaces the centered empty state's heading when the conversation is about
+     * something more specific than "a new chat". The browser rail's conversation
+     * is the user today: it names the page the tab is on instead of greeting the
+     * user like the Chats tab. Rendered inside the shared centered block, so the
+     * snippet supplies only the heading and its own supporting line.
+     */
+    emptyStateHeading?: Snippet
+    /**
+     * Suggested prompts for the centered empty state, replacing the generic
+     * chat/project list. Each entry has to read as something the user would send,
+     * because picking one fills the composer with it.
+     */
+    promptSuggestions?: readonly string[]
+    /**
+     * The composer's placeholder once nothing more specific applies. The states
+     * that describe what is happening right now (a run in flight, a routine's
+     * how-to, a plan being prepared) all outrank it.
+     */
+    composerPlaceholder?: string
     /** Opens the scoped projects view with the sidebar focused on this thread
      *  (composer scope shoe   existing threads). */
     onOpenScopeView?: (thread: Thread) => void
@@ -413,6 +439,9 @@
     controller,
     headerSnippet,
     allowCenteredComposer = true,
+    emptyStateHeading,
+    promptSuggestions,
+    composerPlaceholder,
     onOpenScopeView,
     active = true
   }: Props = $props()
@@ -528,7 +557,9 @@
     'Brainstorm ideas with me'
   ]
 
-  const suggestedPrompts = $derived(chatMode ? chatSuggestedPrompts : projectSuggestedPrompts)
+  const suggestedPrompts = $derived(
+    promptSuggestions ?? (chatMode ? chatSuggestedPrompts : projectSuggestedPrompts)
+  )
 
   /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
    *  paint, one batch per frame. Batches mount above the viewport only, so
@@ -1507,6 +1538,23 @@
         category: 'command',
         source: applicationActionSource,
         keywords: ['quick', 'chat', 'side', 'question', 'temporary', 'read-only']
+      })
+    }
+
+    // The conversation's own browser: reveal the page it already has, or start
+    // a blank tab the user can type an address into. Offered only where a
+    // conversation owns a thread browser   a project thread, an inbox chat, an
+    // assistant task   never in a controller-driven side surface (a quick chat,
+    // the browser rail's own conversation), which is a panel beside the page it
+    // is about rather than a workspace of its own.
+    if (!hasController) {
+      actions.push({
+        id: 'command:browser',
+        title: '/browser',
+        description: "Open this thread's browser, or start a new tab to begin browsing",
+        category: 'command',
+        source: applicationActionSource,
+        keywords: ['browser', 'web', 'browse', 'tab', 'page', 'site', 'address', 'url']
       })
     }
 
@@ -4188,6 +4236,10 @@
       // Remounting into a side chat that is already blocked on a permission
       // request rehydrates its card; the parent thread is never asked for it.
       void refreshPendingPermissions()
+      // Same for a question the agent asked: a controller-driven conversation can
+      // be a durable thread (a browser tab's assistant chat), and a question has
+      // no other surface, so its queue is rehydrated here too.
+      void refreshPendingQuestions()
 
       return () => {
         alive = false
@@ -4895,6 +4947,22 @@
     }
   }
 
+  /**
+   * The request a retry re-sends: the unanswered request's text plus the files
+   * it carried.
+   *
+   * A retry used to send a bare "Continue" and trust the harness session to
+   * still hold the request the failed turn was answering. Nothing guarantees
+   * that: a provider pause, an account change, or a replaced session leaves the
+   * agent with a "Continue" and no request to continue, and the message reads
+   * as delivered while the agent never saw it. Relaying the unanswered request
+   * with the nudge makes the turn answerable on any session, and its
+   * attachments ride along so a screenshotted request is not half delivered.
+   */
+  function retryRequest(): PendingContinuationRequest | undefined {
+    return pendingContinuationRequest(messages)
+  }
+
   /** Retry after an error or a paused provider retry   replace the live turn first. */
   async function retryConnection(): Promise<void> {
     if (providerRetrying) return
@@ -4914,9 +4982,17 @@
           providerStatus = null
         }
       }
-      await sendMessage('Continue', [], undefined, true, undefined, [], [], {
-        action: 'Retry connection'
-      })
+      const request = retryRequest()
+      await sendMessage(
+        request ? continuationRequestPrompt(request) : 'Continue',
+        request?.attachments ?? [],
+        undefined,
+        true,
+        undefined,
+        [],
+        [],
+        { action: 'Retry connection' }
+      )
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The connection could not be retried.'
     } finally {
@@ -5004,8 +5080,29 @@
   }
 
   function handleAgentEvent(event: AgentEvent): void {
-    // Controller-driven conversations handle their own live events.
-    if (controller) return
+    // A controller-driven conversation is still a real conversation when it is
+    // durable (a browser tab's assistant chat is a thread of its own), so the
+    // events that carry a human gate have to reach it: a question the agent asked
+    // has no other surface, and a card the user never sees leaves the panel
+    // blocked until the question times out. Everything else this view handles is
+    // either published by the primary conversation surface, which a panel must
+    // never touch, or owned by the controller's own store.
+    if (controller) {
+      if (event.type === 'question.asked' || event.type === 'question.updated') {
+        // No session filter: a panel can mount before it has learned its session
+        // id, and reconciling asks main for this conversation's own queue, so an
+        // event belonging to another conversation costs one read and nothing else.
+        void refreshPendingQuestions()
+        return
+      }
+      if (event.type === 'question.resolved') {
+        resolvedQuestionRequestIds.add(event.requestId)
+        pendingQuestionRequests = pendingQuestionRequests.filter(
+          (request) => request.requestId !== event.requestId
+        )
+      }
+      return
+    }
 
     if (
       event.type === 'spec.trace' &&
@@ -6498,6 +6595,32 @@
     }
   }
 
+  /**
+   * Open the conversation's browser from the composer: reveal the page it
+   * already has, or start a blank tab when it has none, handing that tab's
+   * address bar the keyboard so the user begins browsing straight away.
+   *
+   * Both halves are the gestures the user already has on the rail, composed
+   * here: the reveal is the browser toggle's own read (the conversation on
+   * screen), and the create is the strip's new-tab path, which is blank and
+   * takes the caret.
+   */
+  function openThreadBrowser(): void {
+    const existingTabId = contextSidebarState.rememberedBrowserTabId
+    if (existingTabId) {
+      contextSidebarState.focus(existingTabId)
+      return
+    }
+    const tabId = contextSidebarState.openBrowserForContext(
+      '',
+      thread.projectId,
+      thread.id,
+      undefined,
+      true
+    )
+    browserAddressFocus.request(tabId)
+  }
+
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
     if (busy || commandExecuting) return
     if (commandId === 'command:save-how-to') {
@@ -6616,6 +6739,14 @@
 
     if (action.id === 'command:quick-chat') {
       openQuickChatFromLastTurn()
+      return
+    }
+
+    // The conversation's own browser runs the moment it is chosen, exactly like
+    // quick chat: it takes no arguments, so there is never anything to type
+    // after it, and it is a rail gesture rather than a harness command.
+    if (action.id === 'command:browser') {
+      openThreadBrowser()
       return
     }
 
@@ -10578,23 +10709,28 @@
   }
 
   /**
-   * Pause a secret card's countdown while the user reads a temporary chat: the
-   * same interaction that pauses a question (an update with no next index)
-   * clears the request's deadline. Best-effort, so the chat still opens when the
-   * request is already resolving.
+   * Hold a secret card's countdown while the user works on it: the same
+   * interaction that pauses a question (an update with no next index) clears the
+   * request's deadline. The card owns the best-effort handling, so a pause that
+   * did not land is retried on the next interaction instead of being swallowed
+   * here.
    */
-  function handleSecretPause(requestId: string, questionIndex: number): void {
-    void handleQuestionUpdate(requestId, questionIndex, [], undefined).catch(() => {
-      // The request may already be resolving; the chat still opens.
-    })
+  function handleSecretPause(requestId: string, questionIndex: number): Promise<void> {
+    return handleQuestionUpdate(requestId, questionIndex, [], undefined).then(() => undefined)
   }
 
+  /**
+   * Persist the draft progress of one question card. The main process answers
+   * `null` when the request already settled (it was answered, dismissed, timed
+   * out, or retired with its session), so a save that lost that race closes the
+   * stale card instead of reporting a failure for a card nobody can answer.
+   */
   async function handleQuestionUpdate(
     requestId: string,
     questionIndex: number,
     answers: string[],
     nextQuestionIndex?: number
-  ): Promise<PendingAgentQuestionRequest> {
+  ): Promise<PendingAgentQuestionRequest | null> {
     const updated = await invoke(
       'agent:updateQuestion',
       thread.projectId,
@@ -10604,6 +10740,13 @@
       answers,
       nextQuestionIndex
     )
+    if (!updated) {
+      resolvedQuestionRequestIds.add(requestId)
+      pendingQuestionRequests = pendingQuestionRequests.filter(
+        (request) => request.requestId !== requestId
+      )
+      return null
+    }
     pendingQuestionRequests = pendingQuestionRequests.map((request) =>
       request.requestId === requestId ? updated : request
     )
@@ -12496,6 +12639,10 @@
                     {/if}
                   </p>
                 </div>
+              {:else if emptyStateHeading}
+                <div class="mb-5 text-center">
+                  {@render emptyStateHeading()}
+                </div>
               {:else}
                 <div class="mb-5 text-center">
                   <h1
@@ -13000,7 +13147,7 @@
                                     ? `${delegatedActivityLabel}   message the Sr. Engineer`
                                     : busy
                                       ? `${APP_NAME} is working   type to queue a message`
-                                      : 'Send a message...'}
+                                      : (composerPlaceholder ?? 'Send a message...')}
                       disabled={specFormulating}
                       working={busy}
                       onStop={abortRun}

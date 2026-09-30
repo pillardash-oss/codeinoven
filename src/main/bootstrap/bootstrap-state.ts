@@ -9,6 +9,7 @@
 
 import type { BrowserWindow } from 'electron'
 import type { BrowserService } from '../browser/browser-service'
+import type { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { ChatEngine } from '../chat/chat-engine'
 import type { ForeignRunService } from '../chat/foreign-run-service'
 import type { ThreadTransferService } from '../chat/thread-transfer-service'
@@ -23,6 +24,7 @@ import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-se
 import type { RoutineSchedulerService } from '../scheduler/routine-scheduler-service'
 import type { BackgroundRunLedger } from '../scheduler/background-run-ledger'
 import type { AutoAnswerStore } from '../system/auto-answer-store'
+import type { CleanShutdownStore } from '../system/clean-shutdown-store'
 import type { RoutineManager } from '../../lib/engines/routine-manager'
 import type { PtyService } from '../system/pty-service'
 import type { ProviderConnectionService } from '../providers/provider-connection'
@@ -43,6 +45,13 @@ export interface BootstrapState {
   /** Primary window; null before creation and after it closes. */
   mainWindow: BrowserWindow | null
   browserService: BrowserService | null
+  /**
+   * Every browser download this process knows about, and the durable records
+   * they come from. One instance for the whole process, because a download keeps
+   * running while the window that started it is parked or rebuilt, and because
+   * the records outlive both. Null until the post-paint graph builds it.
+   */
+  browserDownloads: BrowserDownloadManager | null
   gatewaySupervisor: GatewaySupervisorService | null
 
   // Quit lifecycle flags shared by the close gate, the signal handlers and the
@@ -87,6 +96,11 @@ export interface BootstrapState {
   backgroundRunLedger: BackgroundRunLedger | null
   /** Durable record of gates the app resolved without the user (attention rail). */
   autoAnswerStore: AutoAnswerStore | null
+  /**
+   * Proof the previous process exited on purpose, so a turn left in flight is
+   * settled as a clean app-closed stop rather than a crash failure.
+   */
+  cleanShutdownStore: CleanShutdownStore | null
 
   /** Stops the instance take-over watcher registered after launch recovery. */
   stopInstanceTakeOverListener: (() => void) | null
@@ -134,6 +148,7 @@ export function createBootstrapState(): BootstrapState {
   return {
     mainWindow: null,
     browserService: null,
+    browserDownloads: null,
     gatewaySupervisor: null,
     quitCleanupStarted: false,
     quitConfirmed: false,
@@ -163,6 +178,7 @@ export function createBootstrapState(): BootstrapState {
     routineScheduler: null,
     backgroundRunLedger: null,
     autoAnswerStore: null,
+    cleanShutdownStore: null,
     stopInstanceTakeOverListener: null,
     foreignRuns: null,
     threadTransfer: null,

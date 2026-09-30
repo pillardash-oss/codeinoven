@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Archive, Cog, Loader2 } from '@lucide/svelte'
+  import { Archive, CodeXml, Cog, Loader2 } from '@lucide/svelte'
   import type { SubagentPart } from '$lib/working-trace-parts'
   import WorkingTraceSubagentBadge from './WorkingTraceSubagentBadge.svelte'
 
@@ -11,6 +11,8 @@
     /** Number of entries this trace holds. */
     count: number
     hasCompaction: boolean
+    /** True when this trace ran code-mode scripts (any harness). */
+    hasCodeMode: boolean
     subagentCount: number
     activeSubagentCount: number
     subagentParts: SubagentPart[]
@@ -30,6 +32,7 @@
     busy,
     count,
     hasCompaction,
+    hasCodeMode,
     subagentCount,
     activeSubagentCount,
     subagentParts,
@@ -54,8 +57,18 @@
   {/if}
   Working Trace
   <span class="tabular-nums text-dimmed">({count})</span>
-  {#if hasCompaction || subagentCount > 0}
+  {#if hasCompaction || subagentCount > 0 || hasCodeMode}
     <span class="ml-auto flex items-center gap-1.5">
+      {#if hasCodeMode}
+        <span
+          class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
+          title="This activity includes code-mode scripts that call tools in one run."
+          aria-label="This activity includes code-mode scripts."
+        >
+          <CodeXml size={10} />
+          Code
+        </span>
+      {/if}
       {#if hasCompaction}
         <span
           class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"

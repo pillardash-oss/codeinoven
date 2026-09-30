@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { importPiAiProvidersRegistry } from './pi-ai-registry'
 
 /**
@@ -38,12 +39,25 @@ export type PiLoginCredential =
   | ({ type: 'api_key'; key?: string; env?: Record<string, string> } & Record<string, unknown>)
   | ({ type: 'oauth'; refresh: string; access: string; expires: number } & Record<string, unknown>)
 
+/** App-supplied context for a sign-in flow, mirroring pi-ai's LoginOptions. */
+export interface PiLoginOptions {
+  /**
+   * Stable id of this app installation, sent by flows that register the host
+   * with the provider (OpenAI's "Sign in with ChatGPT"). pi-ai calls it only
+   * from the flows that need it, and it must return the same id every time.
+   */
+  getDeviceId?: () => string
+}
+
 interface ProviderAuthFlow {
-  login(interaction: {
-    signal: AbortSignal
-    prompt(prompt: unknown): Promise<string>
-    notify(event: unknown): void
-  }): Promise<Record<string, unknown>>
+  login(
+    interaction: {
+      signal: AbortSignal
+      prompt(prompt: unknown): Promise<string>
+      notify(event: unknown): void
+    },
+    options?: PiLoginOptions
+  ): Promise<Record<string, unknown>>
 }
 
 interface PiProvider {
@@ -99,26 +113,52 @@ async function findPiProvider(providerId: string): Promise<PiProvider | undefine
 }
 
 /**
+ * A stable device id for sign-in flows that register this installation with the
+ * provider. OpenAI's "Sign in with ChatGPT" sends it as the agent host id and
+ * rejects a missing or non-UUID value, and pi-ai's own CLI passes a fresh random
+ * UUID on every sign-in, which makes the provider see a new device each time.
+ *
+ * CodeInOven derives it from the account's agent directory instead: the id is
+ * the same across restarts, app updates and re-installs of the account, no
+ * state file is written, and two accounts on one machine look like two hosts.
+ */
+function deriveDeviceId(hostSeed: string): string {
+  const bytes = createHash('sha256').update(`codeinoven-agent-host:${hostSeed}`).digest()
+  const hex = bytes.toString('hex')
+  // UUID v4 shape, because the flow validates the value against a UUID pattern.
+  const variant = ((bytes[8] & 0x3f) | 0x80).toString(16).padStart(2, '0')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(18, 20)}-${hex.slice(20, 32)}`
+}
+
+/**
  * Run one provider's sign-in to completion   Pi's own `login()` for the
  * provider, OAuth flow or multi-field API-key flow alike. Emits browser URLs,
  * device codes and progress through `handlers`, and awaits prompts (paste-
  * the-code, account ids, selects) through `handlers.prompt`. Resolves with
  * the credential to store.
+ *
+ * `options.hostSeed` names this account's storage (its Pi agent directory), so
+ * every flow that needs a device id gets one that is stable for this account.
  */
 export async function runPiLogin(
   providerId: string,
-  handlers: PiLoginHandlers
+  handlers: PiLoginHandlers,
+  options: { hostSeed?: string } = {}
 ): Promise<PiLoginCredential> {
   const provider = await findPiProvider(providerId)
   const login = provider?.auth?.oauth?.login ?? provider?.auth?.apiKey?.login
   if (!login) {
     throw new Error(`"${providerId}" does not expose a sign-in flow in this Pi version.`)
   }
-  const credential = (await login({
-    signal: handlers.signal,
-    prompt: (raw: unknown) => handlers.prompt(normalizePrompt(raw)),
-    notify: (raw: unknown) => handlers.onEvent(normalizeEvent(raw))
-  })) as PiLoginCredential
+  const deviceId = deriveDeviceId(options.hostSeed ?? 'codeinoven')
+  const credential = (await login(
+    {
+      signal: handlers.signal,
+      prompt: (raw: unknown) => handlers.prompt(normalizePrompt(raw)),
+      notify: (raw: unknown) => handlers.onEvent(normalizeEvent(raw))
+    },
+    { getDeviceId: () => deviceId }
+  )) as PiLoginCredential
   if (credential.type !== 'api_key' && credential.type !== 'oauth') {
     throw new Error(`"${providerId}'s sign-in returned an unrecognized credential.`)
   }

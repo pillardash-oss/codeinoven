@@ -31,6 +31,31 @@ export function contentViewFamily(view: MainView): ContentThreadFamily | null {
   return null
 }
 
+/**
+ * The content view that owns a thread's family: the only view allowed to show it.
+ *
+ * A chat belongs to Chats and an assistant task to Assistant, because those are
+ * the only containers they live in. A project thread belongs to Projects; the
+ * Threads view is the project family's own timeline, so a caller that is already
+ * on it asks `viewShowsThread` before moving anyone.
+ */
+export function contentViewForThread(thread: Pick<Thread, 'projectId'>): MainView {
+  const family = contentThreadFamily(thread)
+  if (family === 'chats') return 'chats'
+  if (family === 'assistant') return 'assistant'
+  return 'projects'
+}
+
+/**
+ * True when the view already shown owns a thread, so landing on that thread must
+ * not move the user off it. Projects and Threads share one family, so a project
+ * thread opened from Threads stays in Threads. Takeover views (Settings, Scope,
+ * Browser) own no thread of their own and always answer false.
+ */
+export function viewShowsThread(view: MainView, thread: Pick<Thread, 'projectId'>): boolean {
+  return contentViewFamily(view) === contentThreadFamily(thread)
+}
+
 /** What a content view should show once the shell lands on it. */
 export type ContentViewThreadDecision =
   { kind: 'keep' } | { kind: 'open'; thread: Thread } | { kind: 'clear' }

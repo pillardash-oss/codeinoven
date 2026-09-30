@@ -39,6 +39,18 @@ interface InstanceEntry {
 }
 
 /**
+ * An explicit, user-requested ownership transfer. The election picks the
+ * longest-running live process, but a user who opened a fresh instance after a
+ * crash (or to escape a stale window) can ask the schedule to move there. The
+ * override names the new owner; the election resumes the moment that pid is no
+ * longer live, so a transfer to a process that later dies cannot strand work.
+ */
+interface OwnerOverride {
+  pid: number
+  assignedAt: number
+}
+
+/**
  * A filesystem registry of the CodeInOven processes currently running against
  * the same config root. Every instance writes a small PID + heartbeat file, so
  * any instance can ask "are other instances alive?" without a single-instance
@@ -60,9 +72,14 @@ export class InstanceRegistry {
   private readonly seenCheckpointEvents = new Set<string>()
   /** Live process ids as of the last membership check, to filter heartbeat noise. */
   private liveSetSignature = ''
+  private readonly ownerFilePath: string
+  private readonly ownershipListeners = new Set<() => void>()
+  /** Last effective owner announced, so only a real hand-off notifies. */
+  private ownerSignature = ''
 
   constructor() {
     this.dir = join(getConfigRoot(), 'instances')
+    this.ownerFilePath = join(this.dir, 'owner.json')
     this.selfEntry = { pid: process.pid, startedAt: Date.now(), lastHeartbeat: Date.now() }
   }
 
@@ -79,6 +96,7 @@ export class InstanceRegistry {
       // Seed the membership baseline with our own registration so the first
       // heartbeat cannot report a change that already existed at launch.
       this.liveSetSignature = this.readLiveSetSignature()
+      this.ownerSignature = this.ownerSignatureOf(this.effectiveOwnerPid())
       this.startWatcher()
       this.heartbeatTimer = setInterval(() => this.heartbeat(), HEARTBEAT_MS)
       if (this.heartbeatTimer.unref) this.heartbeatTimer.unref()
@@ -150,6 +168,16 @@ export class InstanceRegistry {
   }
 
   /**
+   * Subscribe to a change in *which* live process owns scheduled work. Fires
+   * when an explicit {@link transferOwnership} lands, and when the process that
+   * override named disappears, so the previous owner can reclaim the schedule.
+   */
+  onOwnershipChanged(listener: () => void): () => void {
+    this.ownershipListeners.add(listener)
+    return () => this.ownershipListeners.delete(listener)
+  }
+
+  /**
    * Elect the longest-running live process as the incumbent owner of work that
    * must happen exactly once for the whole config root, whoever started it   a
    * scheduled auto-resume today.
@@ -161,12 +189,12 @@ export class InstanceRegistry {
    */
   isIncumbentInstance(): boolean {
     try {
+      const owner = this.effectiveOwnerPid()
       const entries = this.liveEntries()
       if (entries.length <= 1) return true
       // A registry that cannot see our own entry cannot elect anybody.
       if (!entries.some((entry) => entry.pid === this.selfEntry.pid)) return true
-      entries.sort((left, right) => left.startedAt - right.startedAt || left.pid - right.pid)
-      return entries[0]?.pid === this.selfEntry.pid
+      return owner === this.selfEntry.pid
     } catch {
       // Registry failures must never disable shared scheduled work.
       return true
@@ -174,19 +202,50 @@ export class InstanceRegistry {
   }
 
   /**
-   * The process id the election would pick, or null when it cannot be resolved.
-   * A secondary instance uses this to address the owner ("bring your window
-   * forward"), so it must answer with the same deterministic rule
-   * {@link isIncumbentInstance} uses rather than a second derivation.
+   * The process id that owns scheduled work, or null when it cannot be
+   * resolved. A secondary instance uses this to address the owner ("bring your
+   * window forward", "show the user its process id"), so it must answer with
+   * the same resolution {@link isIncumbentInstance} uses rather than a second
+   * derivation.
    */
   incumbentPid(): number | null {
     try {
-      const entries = this.liveEntries()
-      if (entries.length === 0) return null
-      entries.sort((left, right) => left.startedAt - right.startedAt || left.pid - right.pid)
-      return entries[0]?.pid ?? null
+      return this.effectiveOwnerPid()
     } catch {
       return null
+    }
+  }
+
+  /**
+   * Hand ownership of shared scheduled work to a live process, overriding the
+   * longest-running election. The user asks for this when the elected owner is
+   * a stale window, or a crashed process still in the registry, and they want
+   * the schedule to move to the instance they are actually working in.
+   *
+   * The override is honoured only while its target is live and registered, so a
+   * transfer to a process that later dies falls back to the election instead of
+   * stranding scheduling on a dead pid.
+   */
+  transferOwnership(pid: number = this.selfEntry.pid): boolean {
+    if (!Number.isInteger(pid) || pid <= 0) return false
+    try {
+      mkdirSync(this.dir, { recursive: true })
+      const payload: OwnerOverride = { pid, assignedAt: Date.now() }
+      writeFileSync(this.ownerFilePath, JSON.stringify(payload), 'utf8')
+      this.maybeNotifyOwnershipChanged()
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** Drop any override so the deterministic election applies again. */
+  clearOwnershipOverride(): void {
+    try {
+      rmSync(this.ownerFilePath, { force: true })
+      this.maybeNotifyOwnershipChanged()
+    } catch {
+      // Best effort   a missing file is the desired state anyway.
     }
   }
 
@@ -280,6 +339,79 @@ export class InstanceRegistry {
       this.writeEntry()
     } finally {
       this.checkLiveInstanceSet()
+      // A transfer target that died is detected by heartbeat age, not by a file
+      // write, so ownership is re-checked on our own heartbeat too.
+      this.maybeNotifyOwnershipChanged()
+    }
+  }
+
+  /**
+   * The process that owns scheduled work: an explicit transfer whose target is
+   * still live and registered wins, otherwise the longest-running election.
+   * Every instance reads the same override and the same live entries, so they
+   * cannot disagree about who owns the schedule.
+   */
+  private effectiveOwnerPid(): number | null {
+    const override = this.readOwnerOverride()
+    if (override) {
+      if (this.isLiveRegistered(override.pid)) return override.pid
+      // The transfer target is gone; drop the override so the election resumes.
+      this.removeStaleOwnerOverride()
+    }
+    const entries = this.liveEntries()
+    if (entries.length === 0) return null
+    entries.sort((left, right) => left.startedAt - right.startedAt || left.pid - right.pid)
+    return entries[0]?.pid ?? null
+  }
+
+  private isLiveRegistered(pid: number): boolean {
+    if (pid === this.selfEntry.pid) return true
+    try {
+      return this.liveEntries().some((entry) => entry.pid === pid)
+    } catch {
+      return false
+    }
+  }
+
+  private ownerSignatureOf(ownerPid: number | null): string {
+    return ownerPid === null ? 'none' : String(ownerPid)
+  }
+
+  private readOwnerOverride(): OwnerOverride | null {
+    try {
+      const raw = readFileSync(this.ownerFilePath, 'utf8')
+      const value = JSON.parse(raw) as Partial<OwnerOverride>
+      if (typeof value.pid !== 'number' || typeof value.assignedAt !== 'number') return null
+      return { pid: value.pid, assignedAt: value.assignedAt }
+    } catch {
+      return null
+    }
+  }
+
+  private removeStaleOwnerOverride(): void {
+    try {
+      rmSync(this.ownerFilePath, { force: true })
+    } catch {
+      // Best effort.
+    }
+  }
+
+  /** Notify ownership listeners only when the effective owner actually changed. */
+  private maybeNotifyOwnershipChanged(): void {
+    let signature: string
+    try {
+      signature = this.ownerSignatureOf(this.effectiveOwnerPid())
+    } catch {
+      return
+    }
+    if (signature === this.ownerSignature) return
+    this.ownerSignature = signature
+    for (const listener of this.ownershipListeners) {
+      try {
+        listener()
+      } catch {
+        // One service failing to reconcile must not block the others.
+      }
     }
   }
 
@@ -369,6 +501,7 @@ export class InstanceRegistry {
             }
           }
           this.checkLiveInstanceSet()
+          this.maybeNotifyOwnershipChanged()
         } catch {
           // The directory can disappear during shutdown between notification
           // delivery and the read. A later heartbeat restores normal delivery.

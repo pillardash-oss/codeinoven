@@ -8,6 +8,7 @@ import {
   type Thread
 } from '$shared/types'
 import { assistantRoutines } from './assistant-routines.svelte'
+import { threadStatusPolicy } from '$shared/thread-status-policy'
 
 /** Top-level panel sections. */
 export type NotificationTopTab = 'projects' | 'chats' | 'assistants' | 'app-errors'
@@ -233,6 +234,33 @@ class NotificationPanelState {
     )
   }
 
+  /**
+   * Reconcile one thread's entries with the thread's own status.
+   *
+   * A notice is retired when it is acknowledged, and what acknowledging means
+   * depends on what the notice reports. A needs-attention notice *is* the
+   * thread's parked state: it survives being opened or read, because reading a
+   * card answers nothing, and it leaves exactly when the thread stops waiting on
+   * the user (the status changes, whether the user answered or the card settled
+   * on its own). Every other notice reports a moment that has already passed, so
+   * reading the thread retires it.
+   */
+  reconcileThread(thread: Thread): void {
+    // Runs on every agent status tick, so leave immediately when no entry on the
+    // panel belongs to this thread (the common case) instead of allocating a
+    // filtered copy for it.
+    const relevant = this._notifications.some(
+      (entry) => entry.projectId === thread.projectId && entry.threadId === thread.id
+    )
+    if (!relevant) return
+    const parked = threadStatusPolicy(thread.status).awaitingUser
+    const next = this._notifications.filter((entry) => {
+      if (entry.projectId !== thread.projectId || entry.threadId !== thread.id) return true
+      return entry.kind === 'attention' ? parked : !thread.read
+    })
+    if (next.length !== this._notifications.length) this._notifications = next
+  }
+
   setTab(tab: NotificationTopTab): void {
     this.topTab = tab
     this.subFilter = 'all'
@@ -246,7 +274,13 @@ class NotificationPanelState {
   hydrateFromThreads(threads: Thread[], projects: Project[] = []): void {
     const projectById = new Map(projects.map((project) => [project.id, project]))
     for (const thread of threads) {
-      if (isOrchestrationChildThread(thread) || thread.read) continue
+      // A parked thread is live state, so it keeps its needs-attention entry
+      // whether or not the user has read it, exactly like the menu bar icon:
+      // reading the thread answers nothing, and only the status change that
+      // answers the card ends the state. Every other notice is rehydrated only
+      // while unread, because reading the thread is its acknowledgement.
+      if (isOrchestrationChildThread(thread)) continue
+      if (thread.read && !threadStatusPolicy(thread.status).awaitingUser) continue
 
       const project = projectById.get(thread.projectId)
       const isChat = thread.projectId === INBOX_PROJECT_ID

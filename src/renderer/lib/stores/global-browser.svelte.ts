@@ -16,16 +16,27 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import type {
+  BrowserExtensionSidePanel,
   BrowserOpenRequestContext,
   BrowserPageState,
   BrowserPopupWindow
 } from '$shared/ipc-contract'
-import type { GlobalBrowserTabsSnapshot } from '$shared/browser/global-browser-tabs'
+import {
+  isStorableBrowserFavicon,
+  type GlobalBrowserTabsSnapshot
+} from '$shared/browser/global-browser-tabs'
 import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '$shared/ipc-contract'
 import { appConfigState } from './app-config.svelte'
 import { reportError } from './app-errors.svelte'
+import { BrowserTabFavicons } from './browser-tab-favicon'
+import {
+  browserAssistant,
+  BROWSER_ASSISTANT_DEFAULT_TITLE,
+  type BrowserAssistantChat
+} from './browser-assistant.svelte'
+import { browserExtensionSidePanels } from './browser-extension-side-panels.svelte'
 import { browserPopupWindows } from './browser-popup-windows.svelte'
-import { contextSidebarState, type TemporaryChatContextTab } from './context-sidebar.svelte'
+import { contextSidebarState } from './context-sidebar.svelte'
 import { sidebarState } from './sidebar.svelte'
 import { defaultSettingsFor } from './thread-settings.svelte'
 import { threadNotesState } from './thread-notes.svelte'
@@ -35,22 +46,30 @@ import {
   globalBrowserTabsSnapshot,
   loadLegacyGlobalBrowserTabs,
   loadStoredGlobalBrowserTabs,
+  runtimeBoxFromPersisted,
   runtimeGroupFromPersisted,
   runtimeTabFromPersisted,
   saveStoredGlobalBrowserTabs
 } from './global-browser-persistence'
 import {
   IDLE_GLOBAL_BROWSER_RUNTIME,
+  MAX_BROWSER_BOX_NAME_LENGTH,
   MAX_BROWSER_GROUP_NAME_LENGTH,
   MAX_BROWSER_TAB_TITLE_LENGTH,
+  MAX_GLOBAL_BROWSER_BOXES,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
   browserTabLabel,
   browserTabTitleForUrl,
   isBlankBrowserAddress,
   isSameBrowserLoadError,
+  DEFAULT_BOX_ID,
+  boxIdForJar,
+  defaultBrowserBox,
   isTabIdlePastWindow,
+  type BrowserBoxAppearance,
   type BrowserGroupAppearance,
+  type GlobalBrowserBox,
   type GlobalBrowserGroup,
   type GlobalBrowserRuntime,
   type GlobalBrowserTab
@@ -67,12 +86,30 @@ const HIBERNATION_SWEEP_INTERVAL_MS = 60_000
  *  the pending write outright. */
 const TAB_SAVE_COALESCE_MS = 250
 
+/**
+ * The stored boxes with the default box guaranteed present and first.
+ *
+ * The default box is not optional. It is the jar the browser's own pages live in,
+ * so a snapshot from before it was named, or one written by a build that had no
+ * such idea, still describes a browser whose unboxed pages have a box to belong to.
+ */
+function withDefaultBox(boxes: GlobalBrowserBox[]): GlobalBrowserBox[] {
+  if (boxes.some((box) => box.id === DEFAULT_BOX_ID)) return boxes
+  return [defaultBrowserBox(), ...boxes]
+}
+
 export class GlobalBrowserState {
   tabs: GlobalBrowserTab[] = $state([])
   groups: GlobalBrowserGroup[] = $state([])
+  /** The profile's boxes: named cookie jars sharing the browser's one set of
+   *  extensions. A box owns no tab; the tabs that name it do, and a box nobody
+   *  uses is a row here and a profile directory on disk, nothing more. */
+  boxes: GlobalBrowserBox[] = $state([])
   /** Data URLs for groups with a picked image icon, keyed by group id. Loaded
    *  lazily, because a stored icon is a file path on disk and not inline bytes. */
   groupIconUrls: SvelteMap<string, string> = $state(new SvelteMap())
+  /** Data URLs for boxes with a picked image icon, keyed by box id. */
+  boxIconUrls: SvelteMap<string, string> = $state(new SvelteMap())
   /** Data URLs for tabs with a picked image icon, keyed by tab id. */
   tabIconUrls: SvelteMap<string, string> = $state(new SvelteMap())
   activeTabId: string | null = $state(null)
@@ -83,11 +120,22 @@ export class GlobalBrowserState {
    *  panels belong to one tab's visit and never open on their own. */
   contextSidebarVisible = $state(false)
   /** Which tool of the rail is on screen. The rail hosts the active tab's note
-   *  and its agent conversation, plus the browser's own downloads; exactly one
-   *  is shown at a time, the way the context dock picks one tool in every other
-   *  view. Downloads belong to the shared profile rather than a tab, so that tool
-   *  is the one entry that can stay open with no tab. */
-  contextSidebarTool = $state<'note' | 'agent' | 'downloads' | 'popups'>('note')
+   *  and its agent conversation, plus the browser's own downloads, history and
+   *  bookmarks; exactly one is shown at a time, the way the context dock picks one
+   *  tool in every other view. Downloads, history and bookmarks belong to the
+   *  shared browser library rather than a tab, so those tools are the entries that
+   *  can stay open with no tab. */
+  contextSidebarTool = $state<
+    | 'note'
+    | 'agent'
+    | 'downloads'
+    | 'popups'
+    | 'history'
+    | 'bookmarks'
+    | 'boxes'
+    | 'extensions'
+    | 'extension-side-panel'
+  >('note')
   /** Whether the address spotlight is up. It lives here rather than in a surface
    *  because it is summoned from anywhere in the browser view (Cmd/Ctrl+L) and
    *  from a freshly opened tab, which has no surface of its own yet. */
@@ -112,16 +160,22 @@ export class GlobalBrowserState {
   /** True once the stored tab list has been read. Nothing is written before then,
    *  so a store that has not seen the stored list can never overwrite it. */
   hydrated = $state(false)
+  /** The read behind {@link whenHydrated}, so a caller that has to resolve a tab
+   *  against the list can wait for it instead of racing it. */
+  private hydration: Promise<void> | null = null
   private readonly runtime = new SvelteMap<string, GlobalBrowserRuntime>()
-  /** The agent side chat bound to each browser tab, keyed by browser tab id.
-   *  Session-scoped on purpose: a tab's conversation is an ephemeral side chat
-   *  and its backend session does not outlive the app, so a restart starts fresh
-   *  rather than pointing at a session that is gone. */
-  private readonly agentChatIds = new SvelteMap<string, string>()
+  /** Fills in the icon of a tab the app has no page for, from the tab's own
+   *  address. One per strip, because it owns the "asked at most once per address"
+   *  bookkeeping that keeps the lookups bounded. */
+  private readonly tabFavicons = new BrowserTabFavicons()
   /** Popup windows this renderer has already reported on, so only the arrival of
    *  a new one brings the rail's popup panel up. Bounded by the live list: an id
    *  whose popup is gone is forgotten. */
   private readonly seenPopupWindowIds = new SvelteSet<string>()
+  /** Extension side panels this renderer has already reported on, so only the
+   *  arrival of a new one brings the rail's side panel tool up. Bounded by the
+   *  live list: a key whose panel is gone is forgotten. */
+  private readonly seenExtensionSidePanelIds = new SvelteSet<string>()
   private sweepTimer: number | null = null
   /** The coalesced write still waiting to leave, or null. */
   private saveTimer: number | null = null
@@ -166,6 +220,13 @@ export class GlobalBrowserState {
     // and the other direction of the same rule closes the panel when the last one
     // ends.
     subscribe('browser:popupWindows', (popups) => this.applyPopupWindows(popups))
+    // An extension that asks to show its own side panel is asking for a place
+    // beside the page, so the first panel for the tab on screen reveals the rail's
+    // side panel tool, exactly as a popup window does, and the last one leaving
+    // closes it again. This listener is registered before the side panel store's
+    // own, so inside this dispatch the open/close decision answers from the report
+    // itself rather than from a mirror that is one report behind.
+    subscribe('browser:extensionSidePanels', (panels) => this.applyExtensionSidePanels(panels))
     // The app is quitting, so the coalesced write is the last chance the stored
     // list has to carry what the user just did. The shutdown pipeline keeps the
     // renderer alive for it, which is what makes this write land.
@@ -176,7 +237,32 @@ export class GlobalBrowserState {
         HIBERNATION_SWEEP_INTERVAL_MS
       )
     }
-    void this.hydrate()
+    // The read is kept rather than dropped: a caller that has to resolve a tab
+    // against the list (opening an address, switching to a tab) awaits it through
+    // `whenHydrated` instead of racing it.
+    this.hydration = this.hydrate()
+  }
+
+  /**
+   * The durable tab list, once it has arrived.
+   *
+   * A caller that is about to act on one tab (switch to it, or open an address
+   * that may already be open) has to resolve it against this list, and the list
+   * arrives asynchronously: the store is published as soon as its modules load,
+   * which is well before this read lands. Waiting here is what stops a cold
+   * switch from being dropped against a list that is still empty. A store whose
+   * runtime never started has nothing to read, so it is ready by definition.
+   */
+  get whenHydrated(): Promise<void> {
+    const read = this.hydration
+    if (!read) return Promise.resolve()
+    // A read that failed has already been reported where it happened; the callers
+    // waiting on this promise still have to run, or a browser view would never
+    // open because its tab list never arrived.
+    return read.then(
+      () => undefined,
+      () => undefined
+    )
   }
 
   /** Release the sweep timer and the pending write. The store lives for the
@@ -227,6 +313,13 @@ export class GlobalBrowserState {
       }
     }
     this.hydrated = true
+    // A box's icon is a file on disk, so its bytes are read once, here rather than
+    // by whichever surface happens to show a box first: the rail, a tab row and
+    // the boxes panel all draw the same icon, and none of them should have to wait
+    // for another to be opened before it can.
+    for (const box of this.boxes) {
+      if (box.imagePath) void this.ensureBoxIconLoaded(box.id)
+    }
     try {
       // Nothing to write when the durable file already holds the whole list.
       if (!stored || legacy) await saveStoredGlobalBrowserTabs(this.snapshot())
@@ -239,7 +332,12 @@ export class GlobalBrowserState {
   private adoptSnapshot(snapshot: GlobalBrowserTabsSnapshot): void {
     this.tabs = snapshot.tabs.map(runtimeTabFromPersisted)
     this.groups = snapshot.groups.map(runtimeGroupFromPersisted)
-    this.activeTabId = snapshot.activeTabId
+    this.boxes = withDefaultBox((snapshot.boxes ?? []).map(runtimeBoxFromPersisted))
+    // Through `setActiveTab`, not a direct assignment: the restored tab is the one
+    // the browser view is about to show, and it has to count as a visit for the
+    // Ctrl+Tab switcher exactly as an activation does. `markOpened` runs before
+    // this read lands, so it cannot cover the cold case on its own.
+    this.setActiveTab(snapshot.activeTabId)
   }
 
   /** Fold a stored list into the strip a change left on screen, skipping the tabs
@@ -261,6 +359,15 @@ export class GlobalBrowserState {
       if (this.groups.some((group) => group.id === persisted.id)) continue
       this.groups = [...this.groups, runtimeGroupFromPersisted(persisted)]
     }
+    for (const persisted of snapshot.boxes ?? []) {
+      if (this.boxes.some((box) => box.id === persisted.id)) continue
+      this.boxes = [...this.boxes, runtimeBoxFromPersisted(persisted)]
+    }
+    // Outside the loop and unconditional on purpose. The default box is not one of
+    // the stored boxes, so a merge that already knows every stored box would run the
+    // loop zero times and never mint it, which is exactly what happened when this
+    // first shipped: a profile with one box showed one box and no default.
+    this.boxes = withDefaultBox(this.boxes)
   }
 
   /**
@@ -292,16 +399,101 @@ export class GlobalBrowserState {
     // The panel belongs to one tab's windows, so when that tab holds none there is
     // nothing left for the rail to show and it closes with the last of them rather
     // than sitting there as an empty strip.
-    this.closePopupsWithNoWindows()
+    //
+    // The answer comes from this report and not from the popup store's mirror of
+    // it: this listener is registered before the popup store's own, so inside this
+    // dispatch the mirror still holds the previous list. Reading it here would undo
+    // the open above, and it would leave the panel up after the last window closed:
+    // the two are the same mistake in opposite directions.
+    this.closePopupsWithNoWindows(tabId !== null && popups.some((popup) => popup.tabId === tabId))
   }
 
-  /** Close the popup tool once the tab on screen has no popup windows left. */
-  private closePopupsWithNoWindows(): void {
+  /** Close the popup tool once the tab on screen holds no popup window: the panel
+   *  exists to show a window and the rail only offers the tool while the tab has
+   *  one, so it leaves with the last window rather than lingering as an empty
+   *  strip. An extension's own popup is a popup window too, so the same rule
+   *  covers both doors.
+   *
+   *  `activeTabHoldsWindow` is passed in rather than read here because the report
+   *  handler runs inside the popup report's own dispatch, where the popup store's
+   *  mirror is still one report behind. Callers outside that dispatch answer with
+   *  {@link activeTabHoldsPopupWindow}. */
+  private closePopupsWithNoWindows(activeTabHoldsWindow: boolean): void {
     if (!this.contextSidebarVisible) return
     if (this.contextSidebarTool !== 'popups') return
-    const tab = this.activeTab
-    if (tab && browserPopupWindows.forTab(tab.id).length > 0) return
+    if (activeTabHoldsWindow) return
     this.contextSidebarVisible = false
+  }
+
+  /** Whether the tab on screen holds a popup window in the popup store's mirror.
+   *  Only for callers outside a popup report's own dispatch: the report handler
+   *  answers from the report itself, because the mirror lags one event there. */
+  private activeTabHoldsPopupWindow(): boolean {
+    const tab = this.activeTab
+    if (!tab) return false
+    return browserPopupWindows.forTab(tab.id).length > 0
+  }
+
+  /**
+   * Take main's extension side panels into the rail.
+   *
+   * An extension's panel is the extension putting its own UI beside the page, so
+   * the first panel for the tab on screen is shown: the rail comes up on it exactly
+   * as it does for a popup window the user asked for, and a panel for a background
+   * tab waits in that tab's own rail until the user goes back to it. A further
+   * panel only joins the list, so an extension cannot move the panel under the
+   * user's hands while they are using the one already up.
+   */
+  private applyExtensionSidePanels(panels: BrowserExtensionSidePanel[]): void {
+    const live = panels.map((panel) => this.extensionSidePanelKey(panel))
+    for (const key of [...this.seenExtensionSidePanelIds]) {
+      if (!live.includes(key)) this.seenExtensionSidePanelIds.delete(key)
+    }
+    const tabId = this.activeTabId
+    for (const panel of panels) {
+      const key = this.extensionSidePanelKey(panel)
+      if (this.seenExtensionSidePanelIds.has(key)) continue
+      this.seenExtensionSidePanelIds.add(key)
+      if (tabId !== null && panel.appTabId === tabId) this.showExtensionSidePanelSidebar()
+    }
+    // The panel belongs to one tab's visit, so when that tab holds none there is
+    // nothing left for the rail to show and it closes with the last of them rather
+    // than sitting there as an empty frame. The answer comes from this report and
+    // not from the store's mirror of it: this listener is registered before the
+    // store's own, so inside this dispatch the mirror still holds the previous
+    // list.
+    this.closeExtensionSidePanelWithNoPanels(
+      tabId !== null && panels.some((panel) => panel.appTabId === tabId)
+    )
+  }
+
+  /** The identity of one extension side panel: one panel per extension per tab. */
+  private extensionSidePanelKey(panel: BrowserExtensionSidePanel): string {
+    return `${panel.appTabId}\u0000${panel.extensionId}`
+  }
+
+  /** Close the side panel tool once the tab on screen holds no panel: the panel
+   *  exists to show an extension's own UI and the rail only offers the tool while
+   *  the tab has one, so it leaves with the last panel rather than lingering as an
+   *  empty frame.
+   *
+   *  `activeTabHoldsPanel` is passed in rather than read here because the report
+   *  handler runs inside the panel report's own dispatch, where the panel store's
+   *  mirror is still one report behind. Callers outside that dispatch answer with
+   *  {@link activeTabHoldsExtensionSidePanel}. */
+  private closeExtensionSidePanelWithNoPanels(activeTabHoldsPanel: boolean): void {
+    if (!this.contextSidebarVisible) return
+    if (this.contextSidebarTool !== 'extension-side-panel') return
+    if (activeTabHoldsPanel) return
+    this.contextSidebarVisible = false
+  }
+
+  /** Whether the tab on screen holds an extension side panel in the panel store's
+   *  mirror. Only for callers outside a panel report's own dispatch. */
+  private activeTabHoldsExtensionSidePanel(): boolean {
+    const tab = this.activeTab
+    if (!tab) return false
+    return browserExtensionSidePanels.hasPanelForTab(tab.id)
   }
 
   // ─── Reads ────────────────────────────────────────────────────────────────
@@ -331,8 +523,27 @@ export class GlobalBrowserState {
   get contextSidebarShown(): boolean {
     if (this.notificationsShown) return false
     if (!this.contextSidebarVisible) return false
-    if (this.contextSidebarTool === 'downloads') return true
+    // The browser library tools (downloads, history, bookmarks) belong to the
+    // person rather than to a tab, so they are what keeps the rail present with
+    // the strip empty; every other tool needs a tab to have a subject.
+    if (this.railToolNeedsNoTab) return true
     return this.activeTab !== null
+  }
+
+  /** Whether the tool on the rail is one of the browser library tools, which are
+   *  the entries that can stay open with no tab on screen. A box is a property of
+   *  the profile rather than of a page, so it belongs in the same set. An
+   *  extension is managed from the same place for the same reason: it is installed
+   *  once and then loaded into the jars the user picks, with its own storage in
+   *  each, and it has no tab of its own. */
+  private get railToolNeedsNoTab(): boolean {
+    return (
+      this.contextSidebarTool === 'downloads' ||
+      this.contextSidebarTool === 'history' ||
+      this.contextSidebarTool === 'bookmarks' ||
+      this.contextSidebarTool === 'boxes' ||
+      this.contextSidebarTool === 'extensions'
+    )
   }
 
   /** Whether the rail is currently showing the browser's popup windows. */
@@ -380,6 +591,26 @@ export class GlobalBrowserState {
     return this.groupIconUrls.get(groupId) ?? null
   }
 
+  /** One box by id, or null once it has been deleted. */
+  boxById(boxId: string): GlobalBrowserBox | null {
+    return this.boxes.find((box) => box.id === boxId) ?? null
+  }
+
+  /**
+   * The box the page on screen lives in, named as a box rather than as a jar.
+   *
+   * A tab with no box is in the default box, so panels that have to say where the
+   * user currently is answer with a box in every case.
+   */
+  get activeTabBoxId(): string {
+    return boxIdForJar(this.activeTab?.boxId ?? null)
+  }
+
+  /** The loaded data URL for a box's picked image icon, when there is one. */
+  boxIconUrl(boxId: string): string | null {
+    return this.boxIconUrls.get(boxId) ?? null
+  }
+
   /** Live runtime of one tab, or the shared idle value while main has reported
    *  nothing for it. */
   runtimeFor(tabId: string): GlobalBrowserRuntime {
@@ -387,10 +618,20 @@ export class GlobalBrowserState {
   }
 
   /** Whether a browser tab with this address is already open. A blank address
-   *  never matches, so "new tab" always makes a new one. */
-  findTabByUrl(url: string): GlobalBrowserTab | null {
+   *  never matches, so "new tab" always makes a new one. When a box is named the
+   *  match is scoped to it: the same address in two jars is two different sessions
+   *  and must stay two tabs. */
+  findTabByUrl(url: string, boxId?: string | null): GlobalBrowserTab | null {
     if (isBlankBrowserAddress(url)) return null
-    return this.tabs.find((tab) => tab.url === url) ?? null
+    return (
+      this.tabs.find((tab) => tab.url === url && (boxId === undefined || tab.boxId === boxId)) ??
+      null
+    )
+  }
+
+  /** One tab by id, or null once it has been closed. */
+  tabById(tabId: string): GlobalBrowserTab | null {
+    return this.tabs.find((tab) => tab.id === tabId) ?? null
   }
 
   // ─── The active tab ───────────────────────────────────────────────────────
@@ -435,10 +676,19 @@ export class GlobalBrowserState {
     void invoke('browser:focusPage', tab.id).catch(() => {})
   }
 
-  /** Mark the workspace as opened, so the first activation can reveal a tab. */
+  /**
+   * Mark the workspace as opened, so the first activation can reveal a tab.
+   *
+   * Opening the browser view is using the tab it shows, so that tab is counted as
+   * a visit here rather than only when it is activated. Without this the tab the
+   * user is looking at carries a stale (or absent) visit key, and the Ctrl+Tab
+   * switcher either leaves it out or cycles from somewhere else: a blank tab
+   * looked right only because creating it went through `setActiveTab`.
+   */
   markOpened(): void {
     this.opened = true
     this.dockActiveTabNote()
+    if (this.activeTabId) recentVisits.recordBrowserTab(this.activeTabId)
   }
 
   /** The notes chord and the notes dock item both land here: it reveals the
@@ -485,6 +735,120 @@ export class GlobalBrowserState {
   }
 
   /**
+   * Reveal the rail on the browsing history.
+   *
+   * History belongs to the browser rather than to a tab, like downloads do, so this
+   * is one of the tools that keeps the rail present with no tab on screen.
+   */
+  showHistorySidebar(): void {
+    this.dismissNotifications()
+    this.contextSidebarTool = 'history'
+    this.contextSidebarVisible = true
+  }
+
+  toggleHistorySidebar(): void {
+    if (this.contextSidebarTool === 'history' && this.contextSidebarVisible) {
+      this.closeHistorySidebar()
+      return
+    }
+    this.showHistorySidebar()
+  }
+
+  closeHistorySidebar(): void {
+    if (this.contextSidebarTool === 'history') this.contextSidebarVisible = false
+  }
+
+  /** Whether the rail is currently showing the browsing history. */
+  get historySidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'history'
+  }
+
+  /** Reveal the rail on the saved pages. */
+  showBookmarksSidebar(): void {
+    this.dismissNotifications()
+    this.contextSidebarTool = 'bookmarks'
+    this.contextSidebarVisible = true
+  }
+
+  toggleBookmarksSidebar(): void {
+    if (this.contextSidebarTool === 'bookmarks' && this.contextSidebarVisible) {
+      this.closeBookmarksSidebar()
+      return
+    }
+    this.showBookmarksSidebar()
+  }
+
+  closeBookmarksSidebar(): void {
+    if (this.contextSidebarTool === 'bookmarks') this.contextSidebarVisible = false
+  }
+
+  /** Whether the rail is currently showing the saved pages. */
+  get bookmarksSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'bookmarks'
+  }
+
+  /**
+   * Reveal the rail on the profile's boxes.
+   *
+   * Boxes belong to the browser rather than to a tab, like downloads do, so the
+   * panel is reachable with the strip empty. That is also what makes it the tool
+   * a user opens first, before any tab exists in a box.
+   */
+  showBoxesSidebar(): void {
+    this.dismissNotifications()
+    this.contextSidebarTool = 'boxes'
+    this.contextSidebarVisible = true
+  }
+
+  toggleBoxesSidebar(): void {
+    if (this.contextSidebarTool === 'boxes' && this.contextSidebarVisible) {
+      this.closeBoxesSidebar()
+      return
+    }
+    this.showBoxesSidebar()
+  }
+
+  closeBoxesSidebar(): void {
+    if (this.contextSidebarTool === 'boxes') this.contextSidebarVisible = false
+  }
+
+  /** Whether the rail is currently showing the profile's boxes. */
+  get boxesSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'boxes'
+  }
+
+  /**
+   * Reveal the rail on the profile's installed extensions.
+   *
+   * An extension belongs to the profile rather than to a page, like a box, so the
+   * panel is reachable with the strip empty. That is the order the work happens
+   * in: an extension is installed and its compatibility report read before any
+   * box exists to contain it.
+   */
+  showExtensionsSidebar(): void {
+    this.dismissNotifications()
+    this.contextSidebarTool = 'extensions'
+    this.contextSidebarVisible = true
+  }
+
+  toggleExtensionsSidebar(): void {
+    if (this.contextSidebarTool === 'extensions' && this.contextSidebarVisible) {
+      this.closeExtensionsSidebar()
+      return
+    }
+    this.showExtensionsSidebar()
+  }
+
+  closeExtensionsSidebar(): void {
+    if (this.contextSidebarTool === 'extensions') this.contextSidebarVisible = false
+  }
+
+  /** Whether the rail is currently showing the profile's installed extensions. */
+  get extensionsSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'extensions'
+  }
+
+  /**
    * Reveal the rail on the active tab's popup windows.
    *
    * A popup window is a window the user asked for by clicking something in the
@@ -513,6 +877,34 @@ export class GlobalBrowserState {
   }
 
   /**
+   * Reveal the rail on an extension's own side panel.
+   *
+   * The panel belongs to the tab on screen: it is the extension putting its UI
+   * beside the page the user is reading, so it opens the way a popup window does.
+   * Unlike the popup tool it is not offered by a strip or a dock button, because
+   * the panel is the extension's to raise through its own API; the first panel to
+   * arrive for the active tab calls this, and the close control in the panel ends
+   * it.
+   */
+  showExtensionSidePanelSidebar(): void {
+    if (!this.activeTab) return
+    this.dismissNotifications()
+    this.contextSidebarTool = 'extension-side-panel'
+    this.contextSidebarVisible = true
+  }
+
+  /** Hide the side panel tool without ending the panel: main keeps the document
+   *  running, so it is still there when the tool is shown again. */
+  closeExtensionSidePanelSidebar(): void {
+    if (this.contextSidebarTool === 'extension-side-panel') this.contextSidebarVisible = false
+  }
+
+  /** Whether the rail is currently showing an extension's own side panel. */
+  get extensionSidePanelSidebarShown(): boolean {
+    return this.contextSidebarShown && this.contextSidebarTool === 'extension-side-panel'
+  }
+
+  /**
    * Drop the notifications tool when another rail tool takes over. The
    * notifications flag lives in the context-sidebar store (the header bell owns
    * it), so the rail can only ask it to close, and only while it is the tool on
@@ -523,15 +915,16 @@ export class GlobalBrowserState {
   }
 
   /** Reveal the rail on the active tab's agent conversation, creating it on the
-   *  first open. The chat is the app's own temporary side chat, so it binds to a
-   *  browser tab the way a side chat binds to a thread. */
+   *  first open. A tab's conversation is a real chat thread of the reserved
+   *  browser project, so it is created once and then kept until the user closes
+   *  it (or closes the tab it belongs to). */
   showAgentSidebar(): void {
     const tab = this.activeTab
     if (!tab) return
     this.dismissNotifications()
-    this.ensureAgentChat(tab)
     this.contextSidebarTool = 'agent'
     this.contextSidebarVisible = true
+    void this.ensureAssistantChat(tab)
   }
 
   toggleAgentSidebar(): void {
@@ -551,43 +944,37 @@ export class GlobalBrowserState {
     return this.contextSidebarShown && this.contextSidebarTool === 'agent'
   }
 
-  /** The agent side chat bound to a browser tab, or null before its first open. */
-  agentChatTabFor(tabId: string): TemporaryChatContextTab | null {
-    const chatId = this.agentChatIds.get(tabId)
-    if (!chatId) return null
-    return contextSidebarState.temporaryChatTab(`temporary-chat:${chatId}`)
-  }
-
-  /** The harness a browser tab's agent chat runs on, for the strip row's second
-   *  line. Null while the tab has no agent chat. */
-  agentHarnessFor(tabId: string): string | null {
-    return this.agentChatTabFor(tabId)?.settings.harnessId ?? null
+  /** The agent conversation bound to a browser tab, or null before its first
+   *  open (or while the row behind its durable link is still being resolved). */
+  agentChatFor(tabId: string): BrowserAssistantChat | null {
+    return browserAssistant.chatForTab(tabId)
   }
 
   /**
-   * Create (or return) the side chat bound to one browser tab.
+   * Resolve (creating on the very first open) the assistant conversation bound to
+   * one browser tab, and hand main the page it answers about.
    *
-   * A browser tab has no thread of its own, so the chat resolves its scope
-   * against the browser's reserved parent thread and carries the page identity
-   * as hidden context, which is what lets the agent answer about the page on
-   * screen. An expired chat is replaced rather than reused.
+   * The conversation and the tab point at each other: the thread id is written
+   * into the tab's durable row, so a restart restores the link, and main is told
+   * which browser tab the thread is looking at, which is what lets the agent's
+   * browser capability read the page the user is on rather than a page of its own.
    */
-  ensureAgentChat(tab: GlobalBrowserTab): TemporaryChatContextTab {
-    const existingId = this.agentChatIds.get(tab.id)
-    if (existingId) {
-      const existing = contextSidebarState.temporaryChatTab(`temporary-chat:${existingId}`)
-      if (existing && !existing.expired) return existing
+  private async ensureAssistantChat(tab: GlobalBrowserTab): Promise<void> {
+    try {
+      const chat = await browserAssistant.ensureChat({
+        browserTabId: tab.id,
+        existingThreadId: tab.assistantThreadId,
+        title: browserAssistantChatTitle(tab),
+        settings: defaultSettingsFor('chat')
+      })
+      if (tab.assistantThreadId !== chat.threadId) {
+        tab.assistantThreadId = chat.threadId
+        this.persist()
+      }
+      void invoke('browser:bindAssistantPage', chat.threadId, tab.id).catch(() => {})
+    } catch (error) {
+      reportError(error, 'The assistant conversation could not be started.')
     }
-    const temporaryChatId = crypto.randomUUID()
-    const chat = contextSidebarState.ensureBrowserAgentChat(
-      GLOBAL_BROWSER_PROJECT_ID,
-      GLOBAL_BROWSER_THREAD_ID,
-      temporaryChatId,
-      defaultSettingsFor('chat'),
-      browserAgentPageContext(tab)
-    )
-    this.agentChatIds.set(tab.id, temporaryChatId)
-    return chat
   }
 
   /**
@@ -605,13 +992,20 @@ export class GlobalBrowserState {
     this.activeTabId = tabId
     this.dockActiveTabNote()
     // The rail follows the active tab: while the agent tool is shown, the new
-    // tab's own conversation must be the one on screen, and the popup panel, which
-    // belongs to the tab whose page opened the windows, closes when that tab has
-    // none.
-    if (this.contextSidebarTool === 'agent' && this.contextSidebarVisible && this.activeTab) {
-      this.ensureAgentChat(this.activeTab)
+    // tab's own conversation must be the one on screen. A tab the user has never
+    // asked the agent about shows its start state instead of being given a
+    // conversation nobody asked for; the rail's own action creates it.
+    if (this.contextSidebarTool === 'popups') {
+      // An activation is not a popup report, so the mirror already holds every
+      // list it was sent and is the right thing to answer from.
+      this.closePopupsWithNoWindows(this.activeTabHoldsPopupWindow())
     }
-    if (this.contextSidebarTool === 'popups') this.closePopupsWithNoWindows()
+    if (this.contextSidebarTool === 'extension-side-panel') {
+      // The same rule as popups: the panel belongs to one tab's visit, so moving
+      // to a tab that holds none closes the rail rather than leaving an empty
+      // frame over the new page.
+      this.closeExtensionSidePanelWithNoPanels(this.activeTabHoldsExtensionSidePanel())
+    }
   }
 
   private dockActiveTabNote(): void {
@@ -638,9 +1032,10 @@ export class GlobalBrowserState {
   }
 
   /** Open a blank tab and put the caret in the address field, which is what a
-   *  new tab is for. */
-  openNewTabAddress(groupId: string | null = null): void {
-    this.createTab('', groupId)
+   *  new tab is for. A box is named here, so the empty strip's new-tab menu can
+   *  start a tab directly inside one. */
+  openNewTabAddress(groupId: string | null = null, boxId: string | null = null): void {
+    this.createTab('', groupId, boxId)
     this.addressSpotlightOpen = true
   }
 
@@ -710,11 +1105,17 @@ export class GlobalBrowserState {
         favicon: null,
         // A popup belongs beside the page that opened it.
         groupId: this.activeTab?.groupId ?? null,
+        // Main creates the tab in the opener's jar and hands back the box it
+        // used, so the row and the session agree from the first show. Main is the
+        // only side that knows the true owner when a background tab opens the
+        // popup, so its answer is trusted over the active tab's box.
+        boxId: context.boxId ?? null,
         createdAt: now,
         lastUsedAt: now,
         hibernated: false,
         pinned: false,
         pinnedAt: null,
+        assistantThreadId: null,
         color: null,
         iconType: null,
         customSvg: null,
@@ -727,19 +1128,65 @@ export class GlobalBrowserState {
 
   // ─── Tabs ─────────────────────────────────────────────────────────────────
 
-  /** Open an address: focus the tab already showing it, otherwise create one. */
-  open(url: string, groupId: string | null = null): string {
-    const existing = this.findTabByUrl(url)
+  /** Open an address: focus the tab already showing it, otherwise create one.
+   *  A named box scopes the match, so the same address in another jar opens its
+   *  own tab rather than stealing the one already logged in elsewhere; with no
+   *  box named, an open copy of the address is focused wherever it lives. */
+  open(url: string, groupId: string | null = null, boxId: string | null = null): string {
+    const existing = this.findTabByUrl(url, boxId ?? undefined)
     if (existing) {
       this.activate(existing.id)
       return existing.id
     }
-    return this.createTab(url, groupId)
+    return this.createTab(url, groupId, boxId)
   }
 
-  /** Create a tab for an address (blank allowed) and make it active. */
-  createTab(url: string, groupId: string | null = null): string {
+  /**
+   * Open an address in the tab on screen, or start the browser with a first tab when
+   * there is none.
+   *
+   * This is what the address spotlight, a history row and a bookmark all do: unlike
+   * {@link open}, which is how a link arriving from a thread finds the tab already
+   * showing it, these are the user saying "take me there now", so the page on screen
+   * is the one that moves.
+   */
+  openInActiveTab(url: string): void {
+    const tab = this.activeTab
+    if (!tab) {
+      this.createTab(url)
+      return
+    }
+    // Silent on failure: the tab can be destroyed between the click and the call.
+    // The tab's own box rides along, so an existing tab is ensured in the jar it
+    // already lives in rather than the default one.
+    void invoke(
+      'browser:navigate',
+      tab.id,
+      GLOBAL_BROWSER_CONTEXT.projectId,
+      GLOBAL_BROWSER_CONTEXT.threadId,
+      url,
+      tab.boxId
+    ).catch(() => {})
+  }
+
+  /**
+   * Create a tab for an address (blank allowed) and make it active.
+   *
+   * `boxId` names the jar the tab runs in, or null for the default one. `anchor`
+   * places the new row before or after an existing tab and, when no group or box
+   * is named, inherits both from that tab, which keeps "new tab here" a one-click
+   * gesture that lands beside the page it came from.
+   */
+  createTab(
+    url: string,
+    groupId: string | null = null,
+    boxId: string | null = null,
+    anchor: { tabId: string; position: 'before' | 'after' } | null = null
+  ): string {
     this.enforceTabCap()
+    const anchorTab = anchor ? this.tabById(anchor.tabId) : null
+    const targetGroupId = groupId ?? anchorTab?.groupId ?? null
+    const targetBoxId = boxId ?? anchorTab?.boxId ?? null
     const now = Date.now()
     const tab: GlobalBrowserTab = {
       id: `browser:${crypto.randomUUID()}`,
@@ -747,66 +1194,103 @@ export class GlobalBrowserState {
       customTitle: null,
       url,
       favicon: null,
-      groupId: this.groups.some((group) => group.id === groupId) ? groupId : null,
+      groupId: this.groups.some((group) => group.id === targetGroupId) ? targetGroupId : null,
+      boxId: this.boxes.some((box) => box.id === targetBoxId) ? targetBoxId : null,
       createdAt: now,
       lastUsedAt: now,
       hibernated: false,
       pinned: false,
       pinnedAt: null,
+      assistantThreadId: null,
       color: null,
       iconType: null,
       customSvg: null,
       imagePath: null
     }
-    this.tabs = [...this.tabs, tab]
+    if (anchorTab) {
+      const index = this.tabs.findIndex((candidate) => candidate.id === anchorTab.id)
+      const at = anchor?.position === 'before' ? index : index + 1
+      const ordered = [...this.tabs]
+      ordered.splice(at, 0, tab)
+      this.tabs = ordered
+    } else {
+      this.tabs = [...this.tabs, tab]
+    }
     this.setActiveTab(tab.id)
     this.persist()
     return tab.id
+  }
+
+  /**
+   * Reopen a tab in another box.
+   *
+   * Cookies do not migrate between jars, so a tab cannot change boxes in place:
+   * this closes the tab and opens its address in the target box, which is the only
+   * honest move and why the menu item says "Reopen" rather than "Move". Returns
+   * the new tab id, or null when the source tab is gone or already in the box.
+   */
+  reopenInBox(tabId: string, boxId: string | null): string | null {
+    const tab = this.tabById(tabId)
+    if (!tab || tab.boxId === boxId) return null
+    const url = tab.url
+    const groupId = tab.groupId
+    this.close(tabId)
+    return this.createTab(url, groupId, boxId)
   }
 
   /** Close a tab and land on its neighbour in the strip. */
   close(tabId: string): void {
     const index = this.tabs.findIndex((tab) => tab.id === tabId)
     if (index < 0) return
+    // The tab can never be switched to again, so its Ctrl+Tab visit goes with it
+    // instead of holding a slot in the recency list.
+    recentVisits.forgetBrowserTab(tabId)
+    const closedThreadId = this.tabs[index]?.assistantThreadId ?? null
     const remaining = this.tabs.filter((tab) => tab.id !== tabId)
     this.tabs = remaining
     this.runtime.delete(tabId)
+    this.tabFavicons.forget(tabId)
     if (this.activeTabId === tabId) {
       const neighbour = remaining[Math.min(index, remaining.length - 1)]
       this.setActiveTab(neighbour?.id ?? null)
       if (neighbour) neighbour.lastUsedAt = Date.now()
     }
-    if (this.tabs.length === 0 && this.contextSidebarTool !== 'downloads') {
+    if (this.tabs.length === 0 && !this.railToolNeedsNoTab) {
       // With no tab left the note and agent tools have no subject, so the rail
       // returns to its closed default instead of lingering for the next tab.
-      // Downloads need no tab, so they stay open.
+      // The library tools need no tab, so they stay open.
       this.contextSidebarVisible = false
     }
     this.persist()
-    void invoke('browser:destroy', tabId).catch(() => {})
+    // The tab is closed, not released: its row is gone from the strip, so its
+    // Back/Forward stack goes with it rather than waiting for a tab that will
+    // never come back to claim it.
+    void invoke('browser:destroy', tabId, 'closed').catch(() => {})
     // A tab's note is keyed by the tab id, so closing the tab is what removes
     // it   exactly the way deleting a thread removes its note.
     if (threadNotesState.has(tabId)) {
       void invoke('note:delete', GLOBAL_BROWSER_PROJECT_ID, tabId).catch(() => {})
     }
-    // The tab's agent chat is the same kind of subject-scoped state: closing the
-    // tab closes its side chat and releases the backend session.
-    this.closeAgentChatFor(tabId)
+    // The tab's agent conversation is the same kind of subject-scoped state:
+    // closing the tab closes the conversation it owns, because the conversation
+    // exists for that page and is unreachable without it.
+    this.closeAssistantChatFor(tabId, closedThreadId)
   }
 
-  /** Tear down one browser tab's agent chat: close its harness session and drop
-   *  its tab from the browser's reserved context. */
-  private closeAgentChatFor(tabId: string): void {
-    const chatId = this.agentChatIds.get(tabId)
-    if (!chatId) return
-    const chatTab = contextSidebarState.temporaryChatTab(`temporary-chat:${chatId}`)
-    if (chatTab) contextSidebarState.expireTemporaryChat(chatTab)
-    contextSidebarState.removeBrowserAgentChat(
-      GLOBAL_BROWSER_PROJECT_ID,
-      GLOBAL_BROWSER_THREAD_ID,
-      chatId
-    )
-    this.agentChatIds.delete(tabId)
+  /**
+   * Tear down one browser tab's agent conversation: the thread that holds its
+   * transcript is deleted with the tab that owned it.
+   *
+   * The link is read from the store first and from the tab's own durable field
+   * second, so a conversation this session never opened (a tab restored from a
+   * previous launch) is still cleaned up instead of being left behind as a
+   * thread nothing can reach.
+   */
+  private closeAssistantChatFor(tabId: string, linkedThreadId: string | null): void {
+    const threadId = browserAssistant.releaseTab(tabId) ?? linkedThreadId
+    if (!threadId) return
+    void invoke('thread:delete', GLOBAL_BROWSER_PROJECT_ID, threadId).catch(() => {})
+    void invoke('browser:unbindAssistantPage', threadId).catch(() => {})
   }
 
   moveToGroup(tabId: string, groupId: string | null): void {
@@ -981,7 +1465,151 @@ export class GlobalBrowserState {
     this.persist()
   }
 
-  // ─── Page state ───────────────────────────────────────────────────────────
+  // ─── Boxes ────────────────────────────────────────────────────────────────
+
+  /** Create a box and return its id. The cap is enforced the way the group cap
+   *  is: at the limit the call is a no-op that returns an unusable id, so a caller
+   *  cannot keep making partitions without bound. */
+  createBox(name: string, appearance: Partial<BrowserBoxAppearance> = {}): string {
+    const id = `box:${crypto.randomUUID()}`
+    // The default box is not one of the user's, so it does not count against the
+    // cap the user's own boxes obey: it exists whether they make any or not.
+    const userBoxCount = this.boxes.filter((box) => box.id !== DEFAULT_BOX_ID).length
+    if (userBoxCount >= MAX_GLOBAL_BROWSER_BOXES) return id
+    this.boxes = withDefaultBox([
+      ...this.boxes,
+      {
+        id,
+        name: name.trim().slice(0, MAX_BROWSER_BOX_NAME_LENGTH) || 'New box',
+        color: appearance.color ?? null,
+        iconType: appearance.iconType ?? null,
+        customSvg: appearance.customSvg ?? null,
+        imagePath: appearance.imagePath ?? null
+      }
+    ])
+    this.persist()
+    if (appearance.imagePath) void this.ensureBoxIconLoaded(id)
+    return id
+  }
+
+  /** Read a box's picked image icon into a data URL, once. Best-effort: a missing
+   *  or unreadable file leaves the box on its colour/SVG icon. */
+  async ensureBoxIconLoaded(boxId: string): Promise<void> {
+    const box = this.boxById(boxId)
+    if (!box?.imagePath) {
+      this.boxIconUrls.delete(boxId)
+      return
+    }
+    if (this.boxIconUrls.has(boxId)) return
+    try {
+      const url = await invoke('file:readAsDataUrl', box.imagePath)
+      if (url) this.boxIconUrls.set(boxId, url)
+    } catch {
+      // Icon loading is best-effort; the resolver's fallback remains.
+    }
+  }
+
+  updateBox(id: string, patch: Partial<Omit<GlobalBrowserBox, 'id'>>): void {
+    const box = this.boxById(id)
+    if (!box) return
+    if (patch.name !== undefined) {
+      const name = patch.name.trim().slice(0, MAX_BROWSER_BOX_NAME_LENGTH)
+      if (name) box.name = name
+    }
+    if (patch.color !== undefined) box.color = patch.color
+    if (patch.iconType !== undefined) box.iconType = patch.iconType
+    if (patch.customSvg !== undefined) box.customSvg = patch.customSvg
+    if (patch.imagePath !== undefined) box.imagePath = patch.imagePath
+    this.persist()
+    if (patch.imagePath !== undefined) {
+      this.boxIconUrls.delete(id)
+      void this.ensureBoxIconLoaded(id)
+    }
+  }
+
+  /** How many tabs currently run in a jar. The argument is a jar id, not a box id:
+   *  the default box's jar is the absent id, so pass it through `jarIdForBox`. */
+  tabCountInBox(jarId: string | null): number {
+    return this.tabs.filter((tab) => tab.boxId === jarId).length
+  }
+
+  /**
+   * The box the tab on screen runs in.
+   *
+   * A tab with no box is in the default box, so this is never null: the rail's
+   * active-box chip and the extensions panel's scope both name a box in every case,
+   * including the browser's own first launch with nothing made yet.
+   */
+  get activeBox(): GlobalBrowserBox {
+    return this.boxById(this.activeTabBoxId) ?? defaultBrowserBox()
+  }
+
+  /**
+   * Remove a box.
+   *
+   * Its tabs close with it: a tab cannot change jars, so keeping them open while
+   * the jar goes away would leave rows claiming a session nothing owns. The
+   * caller erases the box's cookies separately, because that is the destructive
+   * choice and belongs behind its own confirmation.
+   */
+  deleteBox(id: string): void {
+    // The default box is the jar the context's own pages live in, so it is the one
+    // box that cannot be removed: every unboxed tab already belongs to it, and
+    // there would be no way to name its replacement.
+    if (id === DEFAULT_BOX_ID) return
+    if (!this.boxes.some((box) => box.id === id)) return
+    for (const tab of this.tabs.filter((candidate) => candidate.boxId === id)) {
+      this.close(tab.id)
+    }
+    this.boxes = this.boxes.filter((box) => box.id !== id)
+    this.boxIconUrls.delete(id)
+    this.persist()
+  }
+
+  /** Erase a box's cookies, site data and cache in the main process. Best-effort
+   *  with a report, because the user asked for the data to be gone and a silent
+   *  failure would leave them believing it is. */
+  async clearBoxData(boxId: string): Promise<void> {
+    try {
+      await invoke('browser:clearBoxData', GLOBAL_BROWSER_CONTEXT.projectId, boxId)
+    } catch (error) {
+      reportError(error, 'The box\u2019s cookies and site data could not be cleared.')
+    }
+  }
+
+  /** A box was deleted: erase it and take its Chromium profile with it. Nothing can
+   *  name a deleted box's jar again, so leaving the profile in place would strand
+   *  its cache on disk. Best-effort with a report, exactly like `clearBoxData`: the
+   *  user asked for the data to be gone, and a silent failure would leave them
+   *  believing it is. */
+  async forgetBox(boxId: string): Promise<void> {
+    try {
+      await invoke('browser:forgetBox', GLOBAL_BROWSER_CONTEXT.projectId, boxId)
+    } catch (error) {
+      reportError(error, 'The box\u2019s data could not be erased.')
+    }
+  }
+
+  // ─── Page state ───────────────────────────────────────────────────────
+
+  /**
+   * Give one tab the icon its address is known by, when it has none.
+   *
+   * Called for every tab the strip draws, so a tab the app has no page for (one a
+   * restart restored, one hibernated before its page announced an icon, one an
+   * agent opened and never showed) wears the site's mark instead of a globe. The
+   * answer is written down with the tab, which is what makes it durable: the read
+   * already happened when the looked-up icon lands, so the store cannot gain a
+   * write of its own unless the icon is new. One lookup per address per tab, and
+   * none at all for a tab that already holds an icon.
+   */
+  async ensureFavicon(tabId: string): Promise<void> {
+    const favicon = await this.tabFavicons.resolve(tabId, () => this.tabById(tabId))
+    const tab = this.tabById(tabId)
+    if (favicon === null || !tab || tab.favicon !== null) return
+    tab.favicon = favicon
+    this.persist()
+  }
 
   /** Apply a live page snapshot: the navigation identity onto the tab, and the
    *  loading/audio/capture state onto the map the strip and header read. */
@@ -993,6 +1621,14 @@ export class GlobalBrowserState {
     // popup) reports an empty URL and must not erase the address on screen.
     if (state.url && tab.url !== state.url) {
       tab.url = state.url
+      // The icon is the icon of an address, so a tab that moved is not the tab
+      // the stored icon was read from: it goes with the address it came from, and
+      // the row picks up the new one from the page or from the address itself
+      // (see `ensureFavicon`).
+      if (tab.favicon !== null) {
+        tab.favicon = null
+        this.tabFavicons.forget(tab.id)
+      }
       changed = true
     }
     const title = state.title.trim()
@@ -1000,7 +1636,13 @@ export class GlobalBrowserState {
       tab.title = title
       changed = true
     }
-    if (state.favicon !== tab.favicon) {
+    // An icon the document reported is adopted. A report of none is deliberately
+    // not an erasure: Chromium announces an icon only when it differs from the one
+    // the tab already holds, so a reopened hibernated tab (whose page has no
+    // remembered icon yet) would blank its own row on the way back, and a page
+    // that reloads at the same address would lose the mark it just had. Only the
+    // address changing replaces the icon, above.
+    if (isStorableBrowserFavicon(state.favicon) && tab.favicon !== state.favicon) {
       tab.favicon = state.favicon
       changed = true
     }
@@ -1060,8 +1702,9 @@ export class GlobalBrowserState {
    *
    * The active tab, a tab playing audio, and a tab holding a capture are never
    * hibernated: those are exactly the tabs whose disappearance the user would
-   * notice. A hibernated tab keeps its title, favicon, group and address, so
-   * the strip is unchanged and the page simply reloads on the next visit.
+   * notice. A hibernated tab keeps its title, its own icon, its group and its
+   * address, and all four are written down, so the strip reads the same before and
+   * after a restart; only the page is gone, and it reloads on the next visit.
    */
   sweepIdleTabs(now: number = Date.now()): void {
     const windowMs = this.hibernationWindowMs
@@ -1076,7 +1719,9 @@ export class GlobalBrowserState {
       tab.hibernated = true
       changed = true
       this.runtime.delete(tab.id)
-      void invoke('browser:destroy', tab.id).catch(() => {})
+      // Only the page is released: the row stays in the strip, so main writes the
+      // tab's stack down before the view goes and the next visit restores it.
+      void invoke('browser:destroy', tab.id, 'hibernated').catch(() => {})
     }
     // A sweep that released nothing leaves the stored list untouched, so the
     // minute-long clock never rewrites the file for its own sake.
@@ -1103,7 +1748,7 @@ export class GlobalBrowserState {
 
   /** The strip in its stored shape. */
   private snapshot(): GlobalBrowserTabsSnapshot {
-    return globalBrowserTabsSnapshot(this.tabs, this.groups, this.activeTabId)
+    return globalBrowserTabsSnapshot(this.tabs, this.groups, this.boxes, this.activeTabId)
   }
 
   /**
@@ -1149,11 +1794,29 @@ export const GLOBAL_BROWSER_CONTEXT = {
 } as const
 
 /** The hidden page identity handed to a browser tab's agent as context, so a
- *  question with no page named still knows which page it is about. */
-function browserAgentPageContext(tab: GlobalBrowserTab): string {
+ *  question with no page named still knows which page it is about.
+ *
+ * It rides every turn of the conversation, not only the first: a lasting chat
+ * outlives the page it started on, and the tab may have navigated many times by
+ * the time the user asks something. The text also names the page the agent's own
+ * browser capability is pointed at, which is what makes an answer about "this
+ * page" a reading of the page that is actually on screen. */
+export function browserAgentPageContext(tab: GlobalBrowserTab): string {
   const lines = ['The user is asking about a web page they have open in the built-in browser.']
   const title = browserTabLabel(tab).trim()
   if (title) lines.push(`Page title: ${title}`)
   if (tab.url) lines.push(`Page URL: ${tab.url}`)
+  lines.push(
+    'The page is attached to this conversation: the in-app browser capability (`cio:browser`) reads this very page, so `snapshot`, `screenshot` and `console` answer about what the user is looking at. Opening or driving a page of your own uses the same capability and never moves the user\u2019s page.'
+  )
   return lines.join('\n')
+}
+
+/** The title a browser tab's conversation starts on, before the model names it
+ *  from the user's first question. The page's own label is what the user would
+ *  call that conversation, and the first turn replaces it with the generated
+ *  title. */
+function browserAssistantChatTitle(tab: GlobalBrowserTab): string {
+  const label = browserTabLabel(tab).trim()
+  return label === '' ? BROWSER_ASSISTANT_DEFAULT_TITLE : label
 }

@@ -15,6 +15,7 @@ import {
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
 import {
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_BROWSER_HISTORY_LIMIT,
   DEFAULT_MAX_CONFLICT_FILE_BYTES,
   DEFAULT_IN_APP_NOTIFICATION_SOUND,
   DEFAULT_BACKGROUND_WAKE_LEAD_MS,
@@ -40,7 +41,6 @@ import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../.
 import type { Project } from '../../lib/types'
 import {
   ASSISTANT_CWD_DIR,
-  CHATS_ARTIFACTS_DIRECTORY,
   CHATS_CWD_DIR,
   featureArtifactDirectory,
   featureSlugFromTitle
@@ -104,8 +104,10 @@ const DEFAULT_CONFIG: AppConfig = {
   openLocalhostInCioBrowser: true,
   openAllLinksInCioBrowser: false,
   browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  browserHistoryLimit: DEFAULT_BROWSER_HISTORY_LIMIT,
   backgroundMode: 'scheduled',
-  launchAtLogin: true,
+  launchAtLogin: false,
+  launchAtLoginPrompted: false,
   autoRunMissedAssistantRuns: true,
   backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
   maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
@@ -175,7 +177,6 @@ export class StorageEngine {
     await ensureDir(this.resolve('logs'))
     await ensureDir(this.resolve(CHATS_CWD_DIR))
     await ensureDir(this.resolve(ASSISTANT_CWD_DIR))
-    await ensureDir(this.resolve(CHATS_ARTIFACTS_DIRECTORY))
     await ensureDir(this.resolve('window-state'))
     await ensureDir(this.resolve('scheduler'))
     await ensureDir(this.resolve('memory'))
@@ -263,6 +264,10 @@ export class StorageEngine {
         typeof config?.launchAtLogin === 'boolean'
           ? config.launchAtLogin
           : DEFAULT_CONFIG.launchAtLogin,
+      launchAtLoginPrompted:
+        typeof config?.launchAtLoginPrompted === 'boolean'
+          ? config.launchAtLoginPrompted
+          : DEFAULT_CONFIG.launchAtLoginPrompted,
       autoRunMissedAssistantRuns:
         typeof config?.autoRunMissedAssistantRuns === 'boolean'
           ? config.autoRunMissedAssistantRuns

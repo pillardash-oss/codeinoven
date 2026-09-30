@@ -359,8 +359,10 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     // Background mode is applied live: the login item, the menu bar icon, and the
     // wake policy all follow the saved value without a restart.
     options.powerWakeService?.setBackgroundPolicy({
-      enabled: config.backgroundMode !== 'off',
-      wakeLeadMs: config.backgroundWakeLeadMs,
+      // The lifecycle is the authority: it also knows whether this launch opted
+      // out of background work, which no config value can express.
+      enabled: options.backgroundLifecycle?.backgroundEnabled ?? config.backgroundMode !== 'off',
+      wakeLeadMs: options.backgroundLifecycle?.wakeLeadMs ?? config.backgroundWakeLeadMs,
       maxHoldMs: config.maxBackgroundWakeHoldMs
     })
     void options.backgroundLifecycle?.applyConfig(config)

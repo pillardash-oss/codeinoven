@@ -1,4 +1,5 @@
 import { APP_SLUG } from '$shared/brand'
+import { isStorableBrowserFavicon } from '$shared/browser/global-browser-tabs'
 import type { BrowserContextTab, TerminalPlacement } from './context-sidebar-types'
 
 const TERMINAL_PLACEMENT_STORAGE_KEY = `${APP_SLUG}.terminal-placement.v1`
@@ -105,7 +106,10 @@ function loadBrowserTabs(snapshot: Record<string, unknown>): BrowserContextTab[]
       title,
       projectId,
       threadId,
-      url: normalizedUrl
+      url: normalizedUrl,
+      // The page's own icon, kept across the restart for the same reason the
+      // address is: it is what the row wears, and it is what a saved page copies.
+      favicon: isStorableBrowserFavicon(tab['favicon']) ? tab['favicon'] : null
     })
   }
   return restored

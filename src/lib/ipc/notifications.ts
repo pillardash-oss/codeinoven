@@ -1,3 +1,4 @@
+import type { BrowserDownload } from './browser'
 import { ASSISTANT_SPACE_ID } from '../types'
 
 export interface ThreadClickedPayload {
@@ -31,12 +32,22 @@ export interface CloseConfirmationFile {
   path: string
 }
 
-/** Sent when the user tries to close the app while threads are still working
- *  or files have unsaved edits. `files` is populated by the renderer, which
- *  owns the unsaved-editor state. */
+/** Sent when the user tries to close the app while threads are still working,
+ *  browser downloads are running, or files have unsaved edits. `files` is
+ *  populated by the renderer, which owns the unsaved-editor state. */
 export interface CloseConfirmationPayload {
   projects: CloseConfirmationProject[]
   files: CloseConfirmationFile[]
+  /**
+   * Browser downloads a quit would stop, as the main process sees them. Main is
+   * the one tracked-download owner, so this half of the prompt cannot come from
+   * the renderer: its mirror of the list only exists once the browser runtime
+   * chunk has loaded.
+   *
+   * Closing pauses each one and keeps its partial file, so the next launch
+   * continues it where the server allows a range request.
+   */
+  downloads: BrowserDownload[]
   /**
    * The close is a park, not a quit: the window is torn down but the backend
    * keeps running so scheduled work still fires. The renderer answers with

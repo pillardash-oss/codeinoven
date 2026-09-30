@@ -149,6 +149,10 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
     return parseLessonExtraction(text)
   }
 
+  isResident(): boolean {
+    return this.child !== null
+  }
+
   async dispose(): Promise<void> {
     const child = this.child
     this.child = null

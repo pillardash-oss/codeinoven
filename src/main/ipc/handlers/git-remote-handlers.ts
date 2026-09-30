@@ -68,26 +68,37 @@ export function registerGitRemoteHandlers(ctx: IpcHandlerContext): void {
         validateRemoteName(name)
       )
   )
+  /**
+   * An automatic fetch runs whenever a project opens, so a remote the device
+   * cannot reach is the one failure that must never reject: the envelope
+   * carries it back as the panel's notice instead, and Electron logs nothing.
+   */
   ipcMain.handle('git:fetch', async (_, projectId: unknown, scopeBucketId?: unknown) =>
-    gitService.fetch(
-      await resolveProjectPath(
-        validateEntityId(projectId, 'Project ID'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+    gitInvocation(async () =>
+      gitService.fetch(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        )
       )
     )
   )
   ipcMain.handle(
     'git:fetchBranch',
     async (_, projectId: unknown, remote: unknown, branch: unknown, scopeBucketId?: unknown) =>
-      gitService.fetchBranch(
-        await resolveProjectPath(
-          validateEntityId(projectId, 'Project ID'),
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validateRemoteName(remote),
-        validateBranchName(branch)
+      gitInvocation(async () =>
+        gitService.fetchBranch(
+          await resolveProjectPath(
+            validateEntityId(projectId, 'Project ID'),
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          ),
+          validateRemoteName(remote),
+          validateBranchName(branch)
+        )
       )
   )
   ipcMain.handle('git:pull', async (_, projectId: unknown, scopeBucketId?: unknown) =>

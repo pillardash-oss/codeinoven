@@ -165,14 +165,18 @@
   <!-- Cross-fades the panel body when the active tool changes. Both the
        out-going and the in-coming panel are absolutely placed in the same cell,
        so they overlap for the length of the switch instead of one blinking off
-       before the other appears. -->
+       before the other appears. Only the incoming panel rises: the outgoing one
+       is always positioned with no translate, because a transition's params are
+       re-read when the block is destroyed   by then the active tab is already
+       the new one, so a rising outgoing browser panel would slide the native
+       `WebContentsView` it reports the bounds of. -->
   <div class="relative h-full">
     {#key activePanelKey}
       <div
         class="absolute inset-0"
         data-panel-kind={activeContextTab.kind}
         in:fly={panelReveal(activePanelIsBrowser)}
-        out:fly={panelReveal(activePanelIsBrowser)}
+        out:fly={panelReveal(true)}
       >
         {#if activeContextTab.kind === 'files'}
           {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
@@ -321,14 +325,17 @@
           {/await}
         {:else if activeContextTab.kind === 'attention'}
           {#await import('../notifications/AttentionPanel.svelte') then { default: AttentionPanel }}
-            <AttentionPanel />
+            <AttentionPanel
+              projectId={activeContextTab.projectId}
+              threadId={activeContextTab.threadId}
+            />
           {/await}
-        <!-- The sub-agent transcript is the only tab kind left after the branches
+        {:else if activeContextTab.kind === 'subagent'}
+          <!-- The sub-agent transcript is the only tab kind left after the branches
             above, so it is named explicitly instead of being an `{:else}`: the
             browser rail's downloads and popup-window tabs share the tab union but
             are never in this sidebar's tab list, and rendering them in
             SubagentSessionView would be wrong. -->
-        {:else if activeContextTab.kind === 'subagent'}
           {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
             <SubagentSessionView tab={activeContextTab} {onOpenSubagent} />
           {/await}

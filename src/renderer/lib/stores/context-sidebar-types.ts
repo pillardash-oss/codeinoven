@@ -87,8 +87,38 @@ export interface BrowserContextTab {
   projectId: string
   threadId: string
   url: string
-  /** Live page favicon (data URL) from the browser panel, if reported. */
-  favicon?: string
+  /**
+   * The page's own icon as a data URL, as the app last had it, or null while the
+   * tab has none.
+   *
+   * The icon belongs to the address rather than to the running page, so it is
+   * written down with the tab list: a strip restored by a restart wears the marks
+   * it wore when the tabs were last open, and a saved page copies the icon of the
+   * tab it was saved from.
+   */
+  favicon: string | null
+}
+
+/**
+ * A browser tab's agent conversation, on the browser's right rail.
+ *
+ * The conversation is a real chat thread of the reserved hidden browser project,
+ * so the tab is a view of that thread rather than a conversation of its own: the
+ * title is the thread's title, the panel renders the thread's own transcript and
+ * settings, and closing the tab deletes the thread. The browser tab it answers
+ * about is carried here because the rail only ever shows the conversation of the
+ * tab on screen.
+ */
+export interface BrowserAgentContextTab {
+  id: string
+  kind: 'browser-agent'
+  title: string
+  /** The reserved browser project the conversation's thread lives in. */
+  projectId: string
+  /** The conversation thread itself. */
+  threadId: string
+  /** The browser tab whose page the conversation answers about. */
+  browserTabId: string
 }
 
 export interface ThreadNoteContextTab {
@@ -130,16 +160,20 @@ export interface NotificationContextTab {
 
 /**
  * The rail panel that lists the gates the app resolved without the user.
+/**
+ * The auto-resolved decision panel, keyed to the conversation it belongs to.
  *
- * Unlike a notification, an auto-resolved decision is not dismissed by an
- * action inside the panel: the record stays until the user reads it, so the
- * tab carries no project or thread scope and the rail icon only exists while
- * at least one record is unread.
+ * A decision concerns the thread it settled on, and through it the assistant
+ * task it ran for and the routine that owns that task; the tab therefore carries
+ * the thread it was opened for, exactly like the sources or memory panels, and
+ * the rail icon only exists while that scope has an undismissed record.
  */
 export interface AttentionContextTab {
   id: string
   kind: 'attention'
   title: string
+  projectId: string
+  threadId: string
 }
 
 /**
@@ -152,6 +186,59 @@ export interface AttentionContextTab {
 export interface BrowserDownloadsContextTab {
   id: string
   kind: 'downloads'
+  title: string
+}
+
+/**
+ * The global browser's browsing history panel.
+ *
+ * History is scoped to the browser that made each visit, so this panel lists the
+ * global browser's own and none of a thread browser's. Inside that browser it
+ * belongs to the profile rather than to a tab, so the tab carries no scope and is
+ * one of the rail tools that can be docked with no tab on screen.
+ */
+export interface BrowserHistoryContextTab {
+  id: string
+  kind: 'history'
+  title: string
+}
+
+/**
+ * The global browser's bookmarks panel. A saved page belongs to the person rather
+ * than to the browser that saved it, unlike the history, so the tab carries no
+ * scope either.
+ */
+export interface BrowserBookmarksContextTab {
+  id: string
+  kind: 'bookmarks'
+  title: string
+}
+
+/**
+ * The global browser's boxes panel.
+ *
+ * A box is a property of the profile rather than of a page, so like downloads,
+ * history and bookmarks this panel carries no scope and stays docked with no tab
+ * on screen. It is also the one browser panel that is useful before any tab
+ * exists, which is exactly when a user makes their first box.
+ */
+export interface BrowserBoxesContextTab {
+  id: string
+  kind: 'boxes'
+  title: string
+}
+
+/**
+ * The global browser's extensions panel.
+ *
+ * An extension belongs to the browser profile rather than to a page, exactly like
+ * a box, so this panel carries no scope and stays docked with no tab on screen.
+ * It is also the panel a user needs before a box can be given anything: installing
+ * is what puts the extension on disk to be contained.
+ */
+export interface BrowserExtensionsContextTab {
+  id: string
+  kind: 'extensions'
   title: string
 }
 
@@ -283,11 +370,16 @@ export type ContextSidebarTab =
   | NotificationContextTab
   | AttentionContextTab
   | BrowserDownloadsContextTab
+  | BrowserHistoryContextTab
+  | BrowserBookmarksContextTab
+  | BrowserBoxesContextTab
+  | BrowserExtensionsContextTab
   | BrowserPopupWindowContextTab
   | MemoryContextTab
   | CoordinatorContextTab
   | AssistantHowToContextTab
   | BrowserContextTab
+  | BrowserAgentContextTab
 
 export interface ThreadSidebarContext {
   projectId: string
@@ -316,10 +408,17 @@ export const NOTIFICATIONS_TAB: NotificationContextTab = {
   kind: 'notifications',
   title: 'Notifications'
 }
-export const ATTENTION_TAB: AttentionContextTab = {
-  id: 'attention',
-  kind: 'attention',
-  title: 'Decisions made for you'
+export const ATTENTION_TAB_ID = 'attention'
+
+/** The decision panel for one conversation, constructed for its thread's scope. */
+export function attentionTab(projectId: string, threadId: string): AttentionContextTab {
+  return {
+    id: ATTENTION_TAB_ID,
+    kind: 'attention',
+    title: 'Decisions made for you',
+    projectId,
+    threadId
+  }
 }
 
 /** Tabs whose component/session state belongs to a project. Every other tab

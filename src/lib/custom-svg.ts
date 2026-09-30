@@ -1,4 +1,11 @@
 import { DOMParser, XMLSerializer, type Element } from '@xmldom/xmldom'
+import { getCustomSvgDataUrl } from './custom-svg-tint'
+
+/** The tinting half of this pipeline lives apart from the parser above, because
+ *  the icons that tint an already-sanitized SVG resolve on the first paint while
+ *  a paste that needs sanitizing never does. Re-exported so a caller that wants
+ *  both still imports them from one place. */
+export { getCustomSvgDataUrl }
 
 const MAX_CUSTOM_SVG_LENGTH = 16_384
 const ALLOWED_ELEMENTS = new Set([
@@ -57,7 +64,6 @@ const NEUTRAL_NAMES = new Set([
   'gainsboro',
   'whitesmoke'
 ])
-const svgUrlCache = new Map<string, string>()
 
 function isNeutralColor(value: string): boolean {
   const color = value.trim().toLowerCase()
@@ -140,31 +146,4 @@ export function sanitizeCustomSvg(input: string): string {
   cleanTree(root)
   root.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
   return new XMLSerializer().serializeToString(root)
-}
-
-/** Render a normalized SVG as an image URL with its chromatic paint tinted. */
-export function getCustomSvgDataUrl(svg: string, color: string): string {
-  const cacheKey = `${color}\u0000${svg}`
-  const cached = svgUrlCache.get(cacheKey)
-  if (cached) return cached
-  const escapedColor = color.replace(/[&"<>]/g, (character) => {
-    const escapes: Record<string, string> = {
-      '&': '&amp;',
-      '"': '&quot;',
-      '<': '&lt;',
-      '>': '&gt;'
-    }
-    return escapes[character] ?? character
-  })
-  const rendered = svg.replace(/currentColor/g, escapedColor)
-  const binary = Array.from(new TextEncoder().encode(rendered), (byte) =>
-    String.fromCharCode(byte)
-  ).join('')
-  const url = `data:image/svg+xml;base64,${btoa(binary)}`
-  svgUrlCache.set(cacheKey, url)
-  if (svgUrlCache.size > 256) {
-    const oldest = svgUrlCache.keys().next().value
-    if (oldest !== undefined) svgUrlCache.delete(oldest)
-  }
-  return url
 }

@@ -1,6 +1,6 @@
 import { Workflow } from '@lucide/svelte'
 import { getIconSvgDataUrl } from './project-svg-icons'
-import { getCustomSvgDataUrl } from '../../lib/custom-svg'
+import { getCustomSvgDataUrl } from '../../lib/custom-svg-tint'
 
 /** Muted tint used when a routine declares no accent colour of its own. */
 export const ROUTINE_ICON_FALLBACK_COLOR = '#8b95a5'

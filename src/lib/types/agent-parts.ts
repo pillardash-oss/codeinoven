@@ -16,6 +16,13 @@ export interface AgentToolState {
   error?: string
   metadata?: Record<string, unknown>
   time?: { start: number; end?: number }
+  /**
+   * Provider-reported USD cost of this call, when the harness reports it.
+   * A harness can fold work that produced no assistant message onto a tool
+   * result (Pi's codemode: the script's nested calls and its classifier
+   * models), and this is the only place that spend survives for accounting.
+   */
+  cost?: number
 }
 
 /**

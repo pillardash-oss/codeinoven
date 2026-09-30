@@ -5,21 +5,19 @@
     ArrowLeft,
     ArrowRight,
     Download,
-    LoaderCircle,
-    Lock,
-    LockOpen,
     RotateCw,
     SquareDashedMousePointer,
     SquareTerminal,
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { resolveBrowserAddress } from '$shared/browser-search-engines'
-  import { appConfigState } from '$lib/stores/app-config.svelte'
+  import BrowserAddressBar from './BrowserAddressBar.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
   import BrowserCommentEditor from './BrowserCommentEditor.svelte'
+  import BrowserFindBar from './BrowserFindBar.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
+  import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
@@ -78,9 +76,16 @@
   // svelte-ignore state_referenced_locally
   const tabInitialTitle = tab.title
 
+  /** This page's entry in the store's list of native rectangles on screen. Keyed
+   *  by surface as well as tab: the full screen dialog and a sidebar panel can
+   *  both be mounted for one tab, and only the one allowed to show it publishes. */
+  const nativeFrameKey = `native-${surface}-${tabId}`
+
   function initialPageState(): BrowserPageState {
     return {
       tabId,
+      projectId: tabProjectId,
+      threadId: tabThreadId,
       url: tabInitialUrl,
       title: tabInitialTitle,
       favicon: null,
@@ -99,9 +104,11 @@
   }
 
   let contentElement = $state<HTMLDivElement>()
-  let addressInput = $state<HTMLInputElement>()
   let address = $state(initialPageState().url)
-  let addressError = $state('')
+  /** The address bar, which is the field the user types an address in. It is
+   *  taken imperatively because taking the keyboard for a tab the user just
+   *  opened is a gesture, not a state this panel holds. */
+  let addressBar = $state<BrowserAddressBar | undefined>(undefined)
   let pageState = $state<BrowserPageState>(initialPageState())
   /** The panel's current on-screen content rectangle, refreshed by the same
    *  observers that align the native view. */
@@ -137,7 +144,13 @@
    *  expanded state of the anchor button. The downloads and page menus follow
    *  the same native-popup pattern. */
   let siteMenuOpen = $state(false)
-  const activeDownloadCount = $derived(browserDownloads.activeCount(tabProjectId))
+  /** How many of this tab's project's downloads are unfinished: still running, or
+   *  stopped with bytes on disk waiting for a resume. */
+  const unfinishedDownloadCount = $derived(browserDownloads.unfinishedCount(tabProjectId))
+  /** Whether this tab's find bar is up. The bar itself is one row of this column,
+   *  and the store is its authority because the global Browser view shows a tab's
+   *  page too. */
+  const findOpen = $derived(browserFindState.stateFor(tabId).open)
 
   /** Open the native downloads menu anchored under the download button. The
    *  OS popup composites above the page view, so the panel's layout never has
@@ -177,29 +190,23 @@
   }
 
   /**
-   * Move focus to the address bar and select what is there, which is what
-   * Cmd/Ctrl+L does in a browser. Main asks for it because the chord is claimed
-   * in the main process, where a page-focused key is visible before the
-   * application menu acts on it.
-   */
-  function focusAddress(): void {
-    addressInput?.focus()
-    addressInput?.select()
-  }
-
-  /**
-   * Take the keyboard for the address bar of a tab the user just opened.
+   * Take the keyboard for the address bar of the tab the user just opened, with
+   * the address on screen selected, which is the new tab's gesture: nothing loads
+   * until an address is typed, so the field is where the user is about to be.
    *
    * The request is made where the tab is created, and it is honored here the
-   * moment this panel owns the visible view: a panel that is mounted but not on
-   * screen (the sidebar while the full screen browser is up) leaves the request
-   * alone, because taking focus behind another surface is exactly what it must
-   * not do, and the request is still waiting when the user sees the tab.
+   * moment this panel owns the visible view AND has an address bar to give it to:
+   * a panel that is mounted but not on screen (the sidebar while the full screen
+   * browser is up) leaves the request alone, because taking focus behind another
+   * surface is exactly what it must not do, and the request is still waiting when
+   * the user sees the tab.
    */
   $effect(() => {
+    const bar = addressBar
+    if (!bar) return
     if (!panelVisible) return
     if (!browserAddressFocus.take(tabId)) return
-    focusAddress()
+    bar.focusAndSelect()
   })
 
   /**
@@ -228,11 +235,28 @@
    * The focus a keyboard-driven shortcut lands on. Only the instance that owns
    * the native view may take it: a full screen and a sidebar panel can both be
    * mounted for one tab, and the hidden one has no visible address bar.
+   *
+   * Find is the same shape of answer   the bar is this column's own row, so the
+   * request is honoured by the instance that is on screen and the other one leaves
+   * it alone   and its state is the shared one, so the surface that does answer
+   * opens the bar the user last left.
    */
   function onPanelShortcut(eventTabId: string, action: BrowserPanelShortcutAction): void {
-    if (eventTabId !== tabId || action !== 'focus-address') return
+    if (eventTabId !== tabId) return
     if (!panelVisible) return
-    focusAddress()
+    if (action === 'focus-address') {
+      addressBar?.focusAndSelect()
+      return
+    }
+    if (action === 'find') {
+      browserFindState.open(tabId)
+      return
+    }
+    if (action === 'find-next') {
+      browserFindState.step(tabId, 'next')
+      return
+    }
+    if (action === 'find-previous') browserFindState.step(tabId, 'previous')
   }
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {
@@ -250,6 +274,22 @@
       void invoke('browser:hide', tabId).catch(() => {})
     }
   }
+
+  /**
+   * Report this page's rectangle while it is really on screen, which is what lets
+   * the toaster's corner check see that a page covers it. A panel the store is not
+   * showing publishes nothing, so the two instances of one tab can never both
+   * claim the same screen space.
+   */
+  $effect(() => {
+    const frame = panelVisible && !pageState.loadError ? contentRect : null
+    if (!frame) {
+      browserVisibility.clearNativeFrame(nativeFrameKey)
+      return
+    }
+    browserVisibility.publishNativeFrame(nativeFrameKey, frame)
+    return () => browserVisibility.clearNativeFrame(nativeFrameKey)
+  })
 
   function contentBounds(): BrowserViewBounds | null {
     if (!contentElement) return null
@@ -297,18 +337,11 @@
     }
   }
 
-  function navigate(): void {
-    const resolution = resolveBrowserAddress(address, appConfigState.browserSearchEngine)
-    if (!resolution) {
-      addressError = 'Enter a search or an address'
-      return
-    }
-    addressError = ''
-    address = resolution.url
-    contextSidebarState.updateBrowserTab(tabId, resolution.url)
-    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, resolution.url).catch(
-      () => {}
-    )
+  /** Open a resolved address in this tab. */
+  function navigate(url: string): void {
+    address = url
+    contextSidebarState.updateBrowserTab(tabId, url)
+    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url).catch(() => {})
   }
 
   function applyPageState(next: BrowserPageState): void {
@@ -371,6 +404,10 @@
     // Claim the native view for this tab while this panel is mounted. The claim
     // is released with the component, so a destroyed panel can never keep the view.
     const releaseBrowserClaim = browserVisibility.claimTab(tabId, surface)
+    // Downloads outlive the run that started them, so the project's records are
+    // read back when the panel appears: the badge and the menu are how a download
+    // the app stopped on its way out becomes visible again rather than silent.
+    void browserDownloads.load(tabProjectId)
     const unsubscribeSiteMenu = subscribe('browser:siteMenuClosed', () => {
       siteMenuOpen = false
     })
@@ -425,6 +462,10 @@
       unsubscribeState()
       unsubscribeDevTools()
       unsubscribePanelShortcut()
+      // The bar is gone with this column, so its search ends with it: the page is
+      // parked rather than destroyed, and a highlight left on it would still be
+      // painted when the user comes back.
+      browserFindState.forget(tabId)
       // The inspection session outlives this panel on purpose: the mode, the
       // pins and the open comment belong to the tab, and the other surface (the
       // full screen dialog, or the sidebar it is returning to) keeps them. Only
@@ -443,13 +484,7 @@
   {@attach panelVisible && !pageState.loadError && manageNativeBrowserView}
   class="flex h-full min-h-0 flex-col bg-app"
 >
-  <form
-    class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2"
-    onsubmit={(event) => {
-      event.preventDefault()
-      navigate()
-    }}
-  >
+  <div class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2">
     <button
       type="button"
       class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-35"
@@ -489,42 +524,17 @@
         {/if}
       </button>
     {/if}
-    <div class="relative min-w-0 flex-1">
-      <span class="sr-only">Browser address</span>
-      {#if pageState.url !== ''}
-        <button
-          type="button"
-          class="absolute left-1.5 top-1/2 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          title={secure ? 'Site settings' : 'Connection is not secure'}
-          aria-label={secure ? 'Site settings' : 'Connection is not secure'}
-          aria-haspopup="menu"
-          aria-expanded={siteMenuOpen}
-          onclick={openSiteMenu}
-        >
-          {#if secure}
-            <Lock size={13} />
-          {:else}
-            <LockOpen size={13} />
-          {/if}
-        </button>
-      {/if}
-      <input
-        class="h-7 w-full rounded-lg border border-border bg-elevated pl-8 pr-8 text-xs text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary"
-        class:border-danger={addressError !== ''}
-        bind:this={addressInput}
-        bind:value={address}
-        spellcheck="false"
-        autocomplete="url"
-        placeholder="localhost:3000"
-        aria-invalid={addressError ? 'true' : undefined}
-      />
-      {#if pageState.loading}
-        <LoaderCircle
-          size={13}
-          class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 animate-spin text-primary"
-        />
-      {/if}
-    </div>
+    <BrowserAddressBar
+      bind:this={addressBar}
+      url={pageState.url}
+      projectId={tabProjectId}
+      threadId={tabThreadId}
+      {secure}
+      loading={pageState.loading}
+      {siteMenuOpen}
+      onOpenSiteMenu={openSiteMenu}
+      onNavigate={navigate}
+    />
     <button
       type="button"
       class="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -533,11 +543,11 @@
       onclick={openDownloadsMenu}
     >
       <Download size={13} />
-      {#if activeDownloadCount > 0}
+      {#if unfinishedDownloadCount > 0}
         <span
           class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
         >
-          {activeDownloadCount}
+          {unfinishedDownloadCount}
         </span>
       {/if}
     </button>
@@ -583,7 +593,22 @@
         {/if}
       </button>
     {/if}
-  </form>
+  </div>
+  {#if findOpen && panelVisible}
+    <!-- The bar is a row of this column rather than an overlay: the page is a
+         native view composited above the DOM, so a row above it shrinks the
+         content rect and the observers place the page under the bar.
+
+         Gated on `panelVisible` as well as on the shared open state, because a
+         full screen and a sidebar panel can both be mounted for one tab: the
+         state is one, so both would draw the bar and the one behind the other
+         surface would take the keyboard for a field nobody can see. -->
+    <div class="flex shrink-0 justify-center px-2 py-1.5">
+      <div class="w-full max-w-xl">
+        <BrowserFindBar {tabId} />
+      </div>
+    </div>
+  {/if}
   {#if pageState.composition}
     <BrowserCompositionTransport
       {tabId}
@@ -599,18 +624,10 @@
       Hover an element and click to comment on it. Escape exits.
     </p>
   {/if}
-  {#if addressError}
-    <p
-      class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[0.6875rem] text-danger"
-      role="alert"
-    >
-      {addressError}
-    </p>
-  {/if}
   <div
     {@attach attachContentElement}
     data-native-browser-content
-    class="min-h-0 min-w-0 flex-1 bg-surface"
+    class="native-rail-gutter min-h-0 min-w-0 flex-1 bg-surface"
     role={pageState.loadError ? undefined : 'document'}
     aria-label={pageState.loadError
       ? undefined

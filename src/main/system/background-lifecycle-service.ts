@@ -10,11 +10,15 @@
  *
  * This service owns the decisions and the surfaces:
  *   - whether a close parks or quits (`shouldPark`),
- *   - the menu bar icon and its two states (working / attention),
+ *   - the menu bar icon and its two states (normal / error, the latter a bold
+ *     exclamation beside the mark whenever a thread holds a live problem),
  *   - the Dock icon hiding while windowless and returning with a window,
  *   - the login item,
  *   - this process's role against the shared backend (`instanceRegistry`), so a
- *     second instance schedules nothing and says so instead of double-firing.
+ *     second instance schedules nothing and says so instead of double-firing,
+ *   - whether this launch registers for any of it at all: a probe sets
+ *     `CODEINOVEN_NO_BACKGROUND` and gets a plain window instead
+ *     (`isBackgroundRegistrationDisabled`).
  *
  * It is deliberately decoupled from the window and from the schedulers: the
  * composition root hands in the callbacks (`openWindow`, `destroyWindow`,
@@ -29,6 +33,7 @@ import {
   nativeImage,
   Notification,
   Tray,
+  type MenuItemConstructorOptions,
   type NativeImage
 } from 'electron'
 import {
@@ -42,7 +47,8 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import type { AppConfig, BackgroundMode, InstanceRole } from '../../lib/types'
-import { getConfigRoot } from '../../lib/utils'
+import type { UpdaterStatus } from '../../lib/ipc-contract'
+import { getConfigRoot, isBackgroundRegistrationDisabled } from '../../lib/utils'
 import { APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
 import { instanceRegistry } from './instance-registry'
@@ -58,6 +64,14 @@ const ACTIVATION_POLL_MS = 2_000
 
 /** Activation requests older than this are leftovers from a crashed instance. */
 const ACTIVATION_TTL_MS = 60_000
+
+/**
+ * How long thread-update bursts are coalesced before the icon is recomputed.
+ * A turn settles many thread updates in a row (status, read flag, messages),
+ * and the icon only ever needs the final state, so the predicate runs once per
+ * burst instead of once per update.
+ */
+const ATTENTION_REFRESH_DEBOUNCE_MS = 150
 
 const NOTICE_MARKER_PATH = 'background/menu-bar-notice-shown'
 
@@ -87,16 +101,45 @@ export interface BackgroundLifecycleDeps {
   resolveTrayIcon: (attention: boolean) => string
 }
 
+/**
+ * The updater as the menu bar sees it.
+ *
+ * Held behind a bridge, not imported, because the updater is built later than
+ * the tray: the composition root creates the menu bar icon before the feature
+ * service graph exists, then hands the updater in through {@link setUpdater}.
+ */
+export interface BackgroundUpdaterBridge {
+  /** Check, and on availability download, install, and relaunch. */
+  updateInBackground: () => Promise<void>
+  /** Current updater state, for the menu item's label. */
+  status: () => UpdaterStatus
+  /** Subscribe to updater state changes; returns the unsubscribe. */
+  onStatusChange: (callback: (status: UpdaterStatus) => void) => () => void
+}
+
 export class BackgroundLifecycleService {
   private tray: Tray | null = null
   private mode: BackgroundMode = 'off'
+  /**
+   * A probe launch runs as a plain window: no icon, no login item, no wake
+   * hold, and a close that quits. Resolved once because it is fixed for the
+   * life of the process.
+   */
+  private readonly optedOut = isBackgroundRegistrationDisabled()
   private config: AppConfig | null = null
   private attention = false
+  /** Pending coalesced attention recompute, or null when none is scheduled. */
+  private attentionRefreshTimer: ReturnType<typeof setTimeout> | null = null
   private stopped = false
   private activationWatcher: FSWatcher | null = null
   private activationTimer: ReturnType<typeof setInterval> | null = null
   private readonly activationDir = join(getConfigRoot(), 'instances', 'activate')
   private readonly unsubscribers: Array<() => void> = []
+  private updater: BackgroundUpdaterBridge | null = null
+  private updaterStatus: UpdaterStatus | null = null
+  private updaterUnsubscribe: (() => void) | null = null
+  /** True while a menu bar update check the user asked for is still resolving. */
+  private trayCheckRequested = false
 
   constructor(private readonly deps: BackgroundLifecycleDeps) {}
 
@@ -106,17 +149,29 @@ export class BackgroundLifecycleService {
     this.mode = this.config.backgroundMode
     this.applyLoginItem(this.config)
     // The menu bar icon exists whenever background mode is on, so Cmd+Q always
-    // has a place to park to. A secondary instance never shows one.
+    // has a place to park to. A secondary instance never shows one, and a probe
+    // launch never registers at all.
     this.syncTray()
     this.unsubscribers.push(instanceRegistry.onLiveInstanceSetChanged(() => this.evaluateRole()))
+    this.unsubscribers.push(instanceRegistry.onOwnershipChanged(() => this.evaluateRole()))
     this.startActivationWatcher()
     this.broadcastRole()
+    // A launch can inherit problems from the last one: a run that failed
+    // overnight, a thread still parked on an approval gate. The icon states
+    // that from the first frame instead of waiting for the next event.
+    this.refreshAttention()
   }
 
   stop(): void {
     this.stopped = true
+    if (this.attentionRefreshTimer !== null) {
+      clearTimeout(this.attentionRefreshTimer)
+      this.attentionRefreshTimer = null
+    }
     for (const unsubscribe of this.unsubscribers) unsubscribe()
     this.unsubscribers.length = 0
+    this.updaterUnsubscribe?.()
+    this.updaterUnsubscribe = null
     this.activationWatcher?.close()
     this.activationWatcher = null
     if (this.activationTimer) {
@@ -131,8 +186,22 @@ export class BackgroundLifecycleService {
     return this.mode
   }
 
+  /**
+   * Whether this process registers as a background instance at all. A probe
+   * launch opts out, and an explicit `backgroundMode: 'off'` disables it too.
+   */
+  get backgroundEnabled(): boolean {
+    return !this.optedOut && this.mode !== 'off'
+  }
+
+  /** Whether this launch opted out of background registration entirely. */
+  get backgroundOptOut(): boolean {
+    return this.optedOut
+  }
+
   /** How long before a due run the machine is held awake, in milliseconds. */
   get wakeLeadMs(): number {
+    if (!this.backgroundEnabled) return 0
     return this.config?.backgroundWakeLeadMs ?? 0
   }
 
@@ -141,15 +210,26 @@ export class BackgroundLifecycleService {
     return this.config?.autoRunMissedAssistantRuns ?? true
   }
 
+  /** Register the updater once the feature graph is up, and rebuild the menu. */
+  setUpdater(bridge: BackgroundUpdaterBridge): void {
+    this.updaterUnsubscribe?.()
+    this.updater = bridge
+    this.updaterStatus = bridge.status()
+    this.updaterUnsubscribe = bridge.onStatusChange((status) => this.onUpdaterStatus(status))
+    this.refreshTrayMenu()
+  }
+
   /**
    * Whether closing the window (or Cmd+Q) should park to the menu bar instead of
    * quitting. Background mode on means the backend is expected to keep the
-   * schedule, so the only full quit is the menu bar's Quit item (or OS logout).
-   * A secondary instance parks nothing: it owns no schedule, so closing it quits
-   * that process and leaves the owner alone.
+   * schedule, so the full quits are the menu bar's Quit item, the direct-quit
+   * shortcut, and an OS logout. A secondary instance parks nothing: it owns no
+   * schedule, so closing it quits that process and leaves the owner alone. A
+   * probe launch opted out of registration outright, so closing its window
+   * closes the process.
    */
   shouldPark(): boolean {
-    if (this.stopped || this.mode === 'off') return false
+    if (this.stopped || this.optedOut || this.mode === 'off') return false
     return this.currentRole().role === 'owner'
   }
 
@@ -171,13 +251,25 @@ export class BackgroundLifecycleService {
 
   /** The window is gone: menu-bar-only while background mode is on. */
   onWindowClosed(): void {
-    if (this.mode !== 'off') this.hideDock()
+    if (this.mode !== 'off' && !this.optedOut) this.hideDock()
     this.syncTray()
     this.refreshAttention()
   }
 
-  /** Recompute the attention state and update the icon. */
+  /**
+   * Recompute the attention state and update the icon.
+   *
+   * Safe to call for every state change: the menu bar only ever shows the
+   * latest truth, so it is enough to run the predicate once however many
+   * changes landed. Callers that must be reflected immediately (a config
+   * change, a window opening) use this directly; the per-update hooks use
+   * {@link requestAttentionRefresh}.
+   */
   refreshAttention(): void {
+    if (this.attentionRefreshTimer !== null) {
+      clearTimeout(this.attentionRefreshTimer)
+      this.attentionRefreshTimer = null
+    }
     let next = false
     try {
       next = this.deps.computeAttention()
@@ -187,6 +279,19 @@ export class BackgroundLifecycleService {
     if (next === this.attention && this.tray) return
     this.attention = next
     this.updateTrayAppearance()
+  }
+
+  /**
+   * Ask for an attention recompute, coalescing a burst into one pass. Wired to
+   * every persisted thread update and to the retry scheduler, which is what
+   * makes the icon clear itself the moment the error does.
+   */
+  requestAttentionRefresh(): void {
+    if (this.stopped || this.attentionRefreshTimer !== null) return
+    this.attentionRefreshTimer = setTimeout(() => {
+      this.attentionRefreshTimer = null
+      this.refreshAttention()
+    }, ATTENTION_REFRESH_DEBOUNCE_MS)
   }
 
   /** Push this process's role to every open window. */
@@ -222,6 +327,18 @@ export class BackgroundLifecycleService {
     }
   }
 
+  /**
+   * Make this instance the owner of scheduled work, at the user's request. A
+   * secondary's "Make this the main instance" action asks for it, which is the
+   * escape hatch when the elected owner is a stale window, or a crashed process
+   * still in the registry, and the user wants the schedule where they are
+   * working. The previous owner steps down through the same ownership
+   * notification and shows the secondary notice instead.
+   */
+  takeOverControl(): boolean {
+    return instanceRegistry.transferOwnership(process.pid)
+  }
+
   /** Tear the window down for background mode: hibernate, persist, destroy. */
   async park(): Promise<void> {
     if (this.stopped || this.deps.state.quitCleanupStarted) return
@@ -254,7 +371,7 @@ export class BackgroundLifecycleService {
 
   /** Create, destroy, or refresh the menu bar icon for the current role/mode. */
   private syncTray(): void {
-    const shouldExist = this.mode !== 'off' && this.currentRole().role === 'owner'
+    const shouldExist = !this.optedOut && this.mode !== 'off' && this.currentRole().role === 'owner'
     if (!shouldExist) {
       this.destroyTray()
       return
@@ -267,13 +384,7 @@ export class BackgroundLifecycleService {
       const image = this.loadTrayImage(this.attention)
       this.tray = new Tray(image)
       this.tray.setToolTip(this.trayTooltip())
-      this.tray.setContextMenu(
-        Menu.buildFromTemplate([
-          { label: 'Open CodeInOven', click: () => this.deps.openWindow() },
-          { type: 'separator' },
-          { label: 'Quit CodeInOven', click: () => this.deps.quitApp() }
-        ])
-      )
+      this.tray.setContextMenu(this.buildContextMenu())
       // A left click on the icon opens the app, matching every other menu bar app.
       this.tray.on('click', () => this.deps.openWindow())
     } catch (error) {
@@ -304,9 +415,108 @@ export class BackgroundLifecycleService {
   }
 
   private trayTooltip(): string {
-    if (this.attention) return `${APP_NAME} is waiting for your approval`
+    if (this.attention) return `${APP_NAME} has a thread that needs your attention`
     if (this.deps.hasUpcomingWork()) return `${APP_NAME} is running a scheduled task`
     return `${APP_NAME} is running in the menu bar`
+  }
+
+  /** Rebuild the menu, so a status change or a newly attached updater shows. */
+  private refreshTrayMenu(): void {
+    if (!this.tray) return
+    try {
+      this.tray.setContextMenu(this.buildContextMenu())
+    } catch (error) {
+      Logger.error('Could not update the menu bar menu', error)
+    }
+  }
+
+  private buildContextMenu(): Menu {
+    return Menu.buildFromTemplate([
+      { label: `Open ${APP_NAME}`, click: () => this.deps.openWindow() },
+      { type: 'separator' },
+      this.updateMenuItem(),
+      { type: 'separator' },
+      { label: `Quit ${APP_NAME}`, click: () => this.deps.quitApp() }
+    ])
+  }
+
+  /** The update item's label and action follow the updater's current state. */
+  private updateMenuItem(): MenuItemConstructorOptions {
+    const status = this.updaterStatus
+    if (!this.updater || status === null || !status.canAutoUpdate) {
+      return { label: 'Check for Updates', enabled: false }
+    }
+    switch (status.state) {
+      case 'checking':
+        return { label: 'Checking for Updates…', enabled: false }
+      case 'available':
+      case 'downloading':
+        return {
+          label:
+            status.downloadProgress !== undefined
+              ? `Downloading Update… ${status.downloadProgress}%`
+              : 'Downloading Update…',
+          enabled: false
+        }
+      case 'downloaded':
+      case 'waiting':
+        return { label: 'Restarting to Update…', enabled: false }
+      default:
+        return { label: 'Check for Updates', click: () => this.runTrayUpdate() }
+    }
+  }
+
+  /**
+   * The user asked for an update from the menu bar. Show the check in the menu
+   * immediately so the click has visible feedback, then let the updater drive the
+   * rest: download, then a silent install that relaunches windowless.
+   */
+  private runTrayUpdate(): void {
+    const updater = this.updater
+    if (!updater) return
+    this.trayCheckRequested = true
+    this.updaterStatus = { ...updater.status(), state: 'checking' }
+    this.refreshTrayMenu()
+    void updater.updateInBackground().catch((error) => {
+      Logger.error('Menu bar update failed', error)
+      this.trayCheckRequested = false
+      this.refreshTrayMenu()
+    })
+  }
+
+  private onUpdaterStatus(status: UpdaterStatus): void {
+    const previousState = this.updaterStatus?.state
+    this.updaterStatus = status
+    if (this.trayCheckRequested) {
+      if (status.state === 'idle' && previousState === 'checking') {
+        // `idle` right after a check means the feed had nothing newer.
+        this.trayCheckRequested = false
+        this.notifyUpdate(
+          `${APP_NAME} is up to date`,
+          `You are on the latest version (${status.currentVersion ?? 'unknown'}).`
+        )
+      } else if (status.state === 'error') {
+        this.trayCheckRequested = false
+        this.notifyUpdate(
+          'Update check failed',
+          status.errorMessage ?? 'The update could not be completed.'
+        )
+      } else if (status.state !== 'checking') {
+        // Availability, download, and install carry on in the background and the
+        // menu label tracks them, so the request needs no outcome notification.
+        this.trayCheckRequested = false
+      }
+    }
+    this.refreshTrayMenu()
+  }
+
+  private notifyUpdate(title: string, body: string): void {
+    if (!Notification.isSupported()) return
+    try {
+      new Notification({ title, body }).show()
+    } catch (error) {
+      Logger.dev('Update notification could not be shown (non-fatal):', error)
+    }
   }
 
   // --------------------------------------------------------------- role -----
@@ -317,7 +527,9 @@ export class BackgroundLifecycleService {
     const wasOwner = this.tray !== null
     this.syncTray()
     this.broadcastRole()
-    if (!wasOwner && this.mode !== 'off' && this.currentRole().role === 'owner') {
+    // A launch that opted out never owned the icon, so "promotion" is not a
+    // hand-off and must not run the catch-up.
+    if (!wasOwner && this.backgroundEnabled && this.currentRole().role === 'owner') {
       this.deps.onBecameOwner()
     }
   }
@@ -335,6 +547,8 @@ export class BackgroundLifecycleService {
    * item API and is a no-op here.
    */
   private applyLoginItem(config: AppConfig): void {
+    // A probe launch must never register itself to start at login.
+    if (this.optedOut) return
     if (process.platform !== 'darwin' && process.platform !== 'win32') return
     // Never register a development launch as a login item: the dev Electron
     // binary is not the app, and a stray entry would start it at every login.

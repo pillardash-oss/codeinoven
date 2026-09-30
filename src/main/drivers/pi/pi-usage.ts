@@ -114,6 +114,16 @@ function mirroredSessionCost(session: PersistentCliSession): number | undefined 
   let unmirrored = false
   for (const message of session.messages) {
     if (message.role !== 'assistant') continue
+    // Work that produced no assistant message is folded onto the tool result
+    // that caused it (a codemode script's nested calls and its classifier
+    // models), so the tool parts are the only mirror of that spend. Nested
+    // parts intentionally carry no cost: pi combines their usage onto the
+    // calling tool's result, and counting both would double it.
+    for (const part of message.parts) {
+      if (part.type === 'tool' && typeof part.state.cost === 'number') {
+        total = (total ?? 0) + part.state.cost
+      }
+    }
     if (typeof message.cost === 'number') total = (total ?? 0) + message.cost
     else unmirrored = true
   }

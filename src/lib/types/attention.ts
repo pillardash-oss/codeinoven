@@ -40,10 +40,58 @@ export interface AutoAnswerItem {
   kind: AutoAnswerKind
   outcome: AutoAnswerOutcome
   projectId: string
+  /** The conversation the gate settled on: what the panel is keyed to. */
   threadId: string
+  /**
+   * The assistant task this gate belongs to, when it settled on a run thread.
+   * The run thread is transient and gets evicted, so without this a decision
+   * would stop surfacing on the task it actually ran for.
+   */
+  taskId?: string
+  /**
+   * The routine that owns the task, when the task belongs to one. A routine's
+   * decisions surface on any of its threads, so the panel is keyed to what the
+   * gate concerns rather than to the window it happened to land in.
+   */
+  routineId?: string
   /** Epoch ms the gate was resolved. */
   at: number
   entries: AutoAnswerEntry[]
   /** Epoch ms the user dismissed the notice; absent while it is still unread. */
   dismissedAt?: number
+}
+
+/**
+ * The identity a decision is keyed to, resolved from a thread row. Only the
+ * fields the scope test needs, so a run thread, its task, and the task's routine
+ * all match without loading the whole thread graph.
+ */
+export interface AutoAnswerThreadScope {
+  id: string
+  projectId: string
+  routineId?: string
+  assistantTaskId?: string
+}
+
+/**
+ * Whether a decision concerns the given thread.
+ *
+ * A gate belongs to the conversation it settled on, and through that
+ * conversation to the assistant task it ran for and the routine that owns that
+ * task. It is shown wherever any of those is open, so an unattended decision is
+ * visible exactly where the user would look for it.
+ */
+export function autoAnswerConcernsThread(
+  item: AutoAnswerItem,
+  thread: AutoAnswerThreadScope
+): boolean {
+  if (item.projectId !== thread.projectId) return false
+  if (item.threadId === thread.id) return true
+  if (
+    item.taskId !== undefined &&
+    (item.taskId === thread.id || item.taskId === thread.assistantTaskId)
+  ) {
+    return true
+  }
+  return item.routineId !== undefined && item.routineId === thread.routineId
 }

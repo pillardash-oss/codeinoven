@@ -7,12 +7,13 @@
     Cpu,
     Check,
     ChevronDown,
-    ExternalLink,
+    GlobeCode,
     MemoryStick,
     MessagesSquare,
     Network,
     Plug,
     RefreshCw,
+    Search,
     Server,
     SquareTerminal,
     Thermometer,
@@ -20,6 +21,7 @@
     X
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
+  import type { Attachment } from 'svelte/attachments'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -103,6 +105,10 @@
   let sortMode = $state<TaskSortMode>('memory')
   /** Project filter for project-owned processes; null shows everything. */
   let filterProjectId = $state<string | null>(null)
+  /** True while the toolbar holds the search field instead of the stats row. */
+  let searchOpen = $state(false)
+  /** Raw query text; matching is case-insensitive and token by token. */
+  let searchQuery = $state('')
   let selected = new SvelteSet<number>()
   /** Tree nodes folded away, keyed by node id (`app`, `project:<id>`, `thread:<id>`). */
   let collapsed = new SvelteSet<string>()
@@ -142,6 +148,68 @@
       left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
     )
   })
+
+  /** Query tokens. Every token must appear in one of a row's searchable fields,
+   *  so "adb milogs" narrows to an adb row whose path or owner says milogs. */
+  const searchTokens = $derived(
+    searchQuery
+      .trim()
+      .toLowerCase()
+      .split(/\s+/u)
+      .filter((token) => token.length > 0)
+  )
+
+  /**
+   * The visible rows narrowed by the search. Search composes with the filters
+   * above it instead of replacing them: an active project filter and a query
+   * both apply, so the field can only ever hide rows the current view already
+   * shows. Nothing outside the rendered tree reads these lists.
+   */
+  const searchedProcesses = $derived.by(() => {
+    const tokens = searchTokens
+    if (tokens.length === 0) return visibleProcesses
+    return visibleProcesses.filter((process) => matchesTokens(tokens, processSearchText(process)))
+  })
+
+  const searchedServices = $derived.by(() => {
+    const tokens = searchTokens
+    if (tokens.length === 0) return visibleServices
+    return visibleServices.filter((service) => matchesTokens(tokens, serviceSearchText(service)))
+  })
+
+  /** Everything a process row can be found by: app name, pid, ports, path, and
+   *  the project and thread it belongs to. */
+  function processSearchText(process: TaskManagerProcess): string {
+    return [
+      processName(process.command),
+      String(process.pid),
+      process.ports.join(' '),
+      process.cwd ?? '',
+      process.projectName ?? '',
+      process.threadTitle ?? ''
+    ]
+      .join('\n')
+      .toLowerCase()
+  }
+
+  /** What a service row can be found by: name, pid, port, detail (its URL,
+   *  command, or folder), and the project and thread it belongs to. */
+  function serviceSearchText(service: TaskManagerService): string {
+    return [
+      service.name,
+      service.pid !== null ? String(service.pid) : '',
+      service.port !== null ? String(service.port) : '',
+      service.detail ?? '',
+      service.projectName ?? '',
+      service.threadTitle ?? ''
+    ]
+      .join('\n')
+      .toLowerCase()
+  }
+
+  function matchesTokens(tokens: readonly string[], text: string): boolean {
+    return tokens.every((token) => text.includes(token))
+  }
 
   /**
    * Aggregate resource use for a set of rows. A harness root already reports the
@@ -206,13 +274,14 @@
   }
 
   /**
-   * Visible runtimes grouped by their owner. Each node holds both the processes
-   * and the services that owner started, so a project's whole footprint reads
-   * as one branch. App-scoped runtimes have no owner and are excluded here.
+   * Visible runtimes grouped by their owner, after the search has narrowed
+   * them. Each node holds both the processes and the services that owner
+   * started, so a project's whole footprint reads as one branch. App-scoped
+   * runtimes have no owner and are excluded here.
    */
   const ownerGroups = $derived.by(() => {
     const groups = new SvelteMap<string, OwnerGroup>()
-    for (const process of visibleProcesses) {
+    for (const process of searchedProcesses) {
       const owner = ownerOf(
         process.projectId,
         process.threadId,
@@ -222,7 +291,7 @@
       if (!owner) continue
       ensureOwnerGroup(groups, owner).processes.push(process)
     }
-    for (const service of visibleServices) {
+    for (const service of searchedServices) {
       const owner = ownerOf(
         service.projectId,
         service.threadId,
@@ -244,12 +313,12 @@
 
   /** App-scoped processes the app owns directly, with no project or thread. */
   const appScopedProcesses = $derived(
-    visibleProcesses.filter((process) => !process.projectId && !process.threadId)
+    searchedProcesses.filter((process) => !process.projectId && !process.threadId)
   )
 
   /** App-owned services that belong to no project or thread (the config part). */
   const appOwnedServices = $derived(
-    visibleServices.filter((service) => !service.projectId && !service.threadId)
+    searchedServices.filter((service) => !service.projectId && !service.threadId)
   )
 
   const appOwnedPids = $derived(appScopedProcesses.map((process) => process.pid))
@@ -452,6 +521,22 @@
     if (projectId) void ensureProjectIcons(processes)
   }
 
+  /**
+   * Reveal or hide the toolbar search. Hiding always clears the query, so a
+   * filter can never stay armed behind a field that is no longer on screen.
+   */
+  function toggleSearch(): void {
+    searchOpen = !searchOpen
+    if (!searchOpen) searchQuery = ''
+  }
+
+  /** The field takes focus (with any previous text selected) the instant the
+   *  toolbar swaps to it, so the button press is one step instead of two. */
+  const focusSearchInput: Attachment<HTMLInputElement> = (element) => {
+    element.focus()
+    element.select()
+  }
+
   function thermalLabel(): string {
     const state = power.thermalState
     return `${state.slice(0, 1).toUpperCase()}${state.slice(1)} thermal pressure`
@@ -493,6 +578,31 @@
     return { projectId, threadId: created.id }
   }
 
+  /**
+   * Land the workspace on the conversation a resolved target names.
+   *
+   * Everything the task manager opens belongs to a conversation: a browser tab,
+   * a terminal, or the conversation itself. A tab's context is the project that
+   * is on screen, and opening one for a process in another project, chat, or
+   * routine run without landing there first created it in a context nobody
+   * could see. Landing first also puts the surface in the right hands: a run of
+   * a routine shares the routine's browser and terminal, a chat owns its own.
+   */
+  async function landOnOwner(target: { projectId: string; threadId: string }): Promise<void> {
+    const [thread, project] = await Promise.all([
+      invoke('thread:get', target.projectId, target.threadId),
+      invoke('project:get', target.projectId)
+    ])
+    if (thread && project) {
+      workspaceState.openThreadInOwningView(thread, project)
+    }
+  }
+
+  /**
+   * Open a process's listening port in the browser of the conversation that
+   * owns it: land there, open the page, and close the modal so the page is what
+   * the user looks at.
+   */
   async function openInBrowser(process: TaskManagerProcess): Promise<void> {
     if (process.ports.length === 0) return
     error = ''
@@ -502,19 +612,28 @@
         error = `No project available to open ${process.pid}.`
         return
       }
-      const url = `http://localhost:${process.ports[0]}`
+      await landOnOwner(target)
       contextSidebarState.openBrowserForContext(
-        url,
+        `http://localhost:${process.ports[0]}`,
         target.projectId,
         target.threadId,
         undefined,
         true
       )
+      onClose()
     } catch (openError) {
       error = openError instanceof Error ? openError.message : 'Could not open the process.'
     }
   }
 
+  /**
+   * Open a terminal in the conversation that owns a process.
+   *
+   * The landing is what makes the shell visible: a terminal tab lives in a
+   * project context, and both the sidebar and the bottom dock render the
+   * context of the project on screen. Closing the modal is the second half, so
+   * the terminal is what the user looks at.
+   */
   async function openInTerminal(process: TaskManagerProcess): Promise<void> {
     error = ''
     try {
@@ -523,7 +642,9 @@
         error = `No project available to open ${process.pid}.`
         return
       }
+      await landOnOwner(target)
       contextSidebarState.openNewTerminal(target.projectId, target.threadId)
+      onClose()
     } catch (openError) {
       error = openError instanceof Error ? openError.message : 'Could not open the terminal.'
     }
@@ -544,13 +665,7 @@
         error = `No project available to open ${process.pid}.`
         return
       }
-      const [thread, project] = await Promise.all([
-        invoke('thread:get', target.projectId, target.threadId),
-        invoke('project:get', target.projectId)
-      ])
-      if (thread && project) {
-        workspaceState.openThread(thread, project)
-      }
+      await landOnOwner(target)
       onClose()
     } catch (navigateError) {
       error = navigateError instanceof Error ? navigateError.message : 'Could not open the process.'
@@ -629,7 +744,21 @@
   }
 </script>
 
-<Modal {open} title="Task Manager" {onClose} size="xl" fill contentClass="p-0">
+<Modal
+  {open}
+  title="Task Manager"
+  {onClose}
+  size="xl"
+  fill
+  contentClass="p-0"
+  onEscapeKeydown={(event) => {
+    // Escape backs out of the search first; only an Escape with the field
+    // already closed dismisses the whole surface.
+    if (!searchOpen) return
+    event.preventDefault()
+    toggleSearch()
+  }}
+>
   <div class="flex h-full flex-col overflow-hidden">
     {#if error}
       <div class="shrink-0 border-b border-border px-5 py-2" role="alert">
@@ -648,16 +777,24 @@
           ></span>
           <p class="text-xs text-dimmed">Checking running processes…</p>
         </div>
-      {:else if visibleServices.length === 0 && visibleProcesses.length === 0}
+      {:else if searchedServices.length === 0 && searchedProcesses.length === 0}
         <div class="flex h-full items-center justify-center px-8 text-center">
           <div class="max-w-64">
             <Plug size={20} class="mx-auto text-muted" />
-            <p class="mt-3 text-sm font-semibold text-foreground">Nothing is running</p>
-            <p class="mt-1 text-xs leading-relaxed text-dimmed">
-              {filterProjectId
-                ? 'No processes or services match the current filter. Shared runtimes always stay visible.'
-                : 'Processes and services the app starts will appear here while they are running.'}
-            </p>
+            {#if searchTokens.length > 0}
+              <p class="mt-3 text-sm font-semibold text-foreground">No matches</p>
+              <p class="mt-1 text-xs leading-relaxed text-dimmed">
+                Nothing matches "{searchQuery.trim()}". Search by pid, port, path, thread title, or
+                app name.
+              </p>
+            {:else}
+              <p class="mt-3 text-sm font-semibold text-foreground">Nothing is running</p>
+              <p class="mt-1 text-xs leading-relaxed text-dimmed">
+                {filterProjectId
+                  ? 'No processes or services match the current filter. Shared runtimes always stay visible.'
+                  : 'Processes and services the app starts will appear here while they are running.'}
+              </p>
+            {/if}
           </div>
         </div>
       {:else}
@@ -865,12 +1002,12 @@
                 title={process.ports.length === 0
                   ? 'No port detected'
                   : process.projectId
-                    ? 'Open in in-app browser'
+                    ? 'Open in thread browser'
                     : 'No project associated with this process'}
-                aria-label={`Open ${processName(process.command)} in the in-app browser`}
+                aria-label={`Open ${processName(process.command)} in the thread browser`}
                 onclick={() => void openInBrowser(process)}
               >
-                <ExternalLink size={15} />
+                <GlobeCode size={15} />
               </button>
               <button
                 type="button"
@@ -974,116 +1111,157 @@
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-4">
       <div class="flex min-w-0 flex-1 items-center gap-2">
-        {#if power.source === 'battery'}
-          <BatteryMedium
-            size={14}
-            class="shrink-0 text-muted"
-            title="On battery"
-            aria-label="On battery"
-          />
+        {#if searchOpen}
+          <!-- The field replaces the stats and filters to its left: a query is
+          the only control that matters while it is being typed, and this slot
+          is exactly the space they occupied. The filter stays applied   only
+          its control is off screen. -->
+          <div
+            class="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-elevated px-2"
+          >
+            <Search size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+            <input
+              {@attach focusSearchInput}
+              bind:value={searchQuery}
+              type="search"
+              class="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
+              placeholder="Search by pid, port, path, thread, or app name"
+              title="Search by pid, port, path, thread title, or app name"
+              aria-label="Search running processes and services"
+            />
+          </div>
         {:else}
-          <BatteryCharging
-            size={14}
-            class="shrink-0 text-success"
-            title="Plugged in"
-            aria-label="Plugged in"
-          />
-        {/if}
-        {#if power.thermalState !== 'unknown' && power.thermalState !== 'nominal'}
-          <span
-            class="inline-flex shrink-0 items-center gap-1 text-danger"
-            title="Current macOS thermal pressure   {thermalLabel()}"
-            aria-label="Current macOS thermal pressure   {thermalLabel()}"
-          >
-            <Thermometer size={14} />
-          </span>
-        {/if}
-        <p class="min-w-0 truncate text-xs text-dimmed tabular-nums">
-          {#if selected.size > 0}
-            {selected.size} of {processes.length} selected
+          {#if power.source === 'battery'}
+            <BatteryMedium
+              size={14}
+              class="shrink-0 text-muted"
+              title="On battery"
+              aria-label="On battery"
+            />
           {:else}
-            {processes.length} processes · {services.length} services
+            <BatteryCharging
+              size={14}
+              class="shrink-0 text-success"
+              title="Plugged in"
+              aria-label="Plugged in"
+            />
           {/if}
-        </p>
-        <span
-          class="inline-flex shrink-0 items-center gap-1 text-xs text-dimmed tabular-nums"
-          title="Total memory used by listed processes"
-          aria-label="Total memory used by listed processes"
-        >
-          <MemoryStick size={13} aria-hidden="true" />
-          {formatMemory(totalRamBytes)}
-        </span>
-        <span
-          class="inline-flex shrink-0 items-center gap-1 text-xs text-dimmed tabular-nums"
-          title="Total CPU usage of listed processes"
-          aria-label="Total CPU usage of listed processes"
-        >
-          <Cpu size={13} aria-hidden="true" />
-          {formatCpu(totalCpuPercent)}
-        </span>
-        <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
-        <ProjectSwitch
-          projects={scopeState.projects}
-          activeProjectId={filterProjectId}
-          onSwitch={(projectId) => setFilterProject(projectId)}
-          ariaLabel="Filter processes by project"
-          placeholder="All projects"
-          searchPlaceholder="Search projects…"
-          emptyMessage="No matching projects"
-          class="h-7 shrink-0"
-          compact
-          align="start"
-        />
-        {#if filterProjectId}
-          <button
-            type="button"
-            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-elevated text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-            title="Clear the project filter"
-            aria-label="Clear the project filter"
-            onclick={() => setFilterProject(null)}
-          >
-            <X size={12} />
-          </button>
-        {/if}
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
-            title="Choose sort mode"
-            aria-label="Choose sort mode"
-          >
-            <ArrowDownUp size={12} />
-            {SORT_MODE_LABELS[sortMode]}
-            <ChevronDown size={11} class="text-dimmed" />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="top"
-              align="start"
-              sideOffset={6}
-              collisionPadding={8}
-              class="z-60 w-36 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+          {#if power.thermalState !== 'unknown' && power.thermalState !== 'nominal'}
+            <span
+              class="inline-flex shrink-0 items-center gap-1 text-danger"
+              title="Current macOS thermal pressure   {thermalLabel()}"
+              aria-label="Current macOS thermal pressure   {thermalLabel()}"
             >
-              {#each SORT_MODES as mode (mode)}
-                <DropdownMenu.Item
-                  class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] outline-none transition-colors hover:bg-elevated focus:bg-elevated max-md:py-2.5 {mode ===
-                  sortMode
-                    ? 'text-foreground'
-                    : 'text-muted'}"
-                  title={SORT_MODE_DESCRIPTIONS[mode]}
-                  aria-label={SORT_MODE_DESCRIPTIONS[mode]}
-                  onSelect={() => (sortMode = mode)}
-                >
-                  <Check
-                    size={12}
-                    class={mode === sortMode ? 'text-primary' : 'opacity-0'}
-                    aria-hidden="true"
-                  />
-                  {SORT_MODE_LABELS[mode]}
-                </DropdownMenu.Item>
-              {/each}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+              <Thermometer size={14} />
+            </span>
+          {/if}
+          <p class="min-w-0 truncate text-xs text-dimmed tabular-nums">
+            {#if selected.size > 0}
+              {selected.size} of {processes.length} selected
+            {:else}
+              {processes.length} processes · {services.length} services
+            {/if}
+          </p>
+          <span
+            class="inline-flex shrink-0 items-center gap-1 text-xs text-dimmed tabular-nums"
+            title="Total memory used by listed processes"
+            aria-label="Total memory used by listed processes"
+          >
+            <MemoryStick size={13} aria-hidden="true" />
+            {formatMemory(totalRamBytes)}
+          </span>
+          <span
+            class="inline-flex shrink-0 items-center gap-1 text-xs text-dimmed tabular-nums"
+            title="Total CPU usage of listed processes"
+            aria-label="Total CPU usage of listed processes"
+          >
+            <Cpu size={13} aria-hidden="true" />
+            {formatCpu(totalCpuPercent)}
+          </span>
+          <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+          <ProjectSwitch
+            projects={scopeState.projects}
+            activeProjectId={filterProjectId}
+            onSwitch={(projectId) => setFilterProject(projectId)}
+            ariaLabel="Filter processes by project"
+            placeholder="All projects"
+            searchPlaceholder="Search projects…"
+            emptyMessage="No matching projects"
+            class="h-7 shrink-0"
+            compact
+            align="start"
+          />
+          {#if filterProjectId}
+            <button
+              type="button"
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-elevated text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+              title="Clear the project filter"
+              aria-label="Clear the project filter"
+              onclick={() => setFilterProject(null)}
+            >
+              <X size={12} />
+            </button>
+          {/if}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
+              title="Choose sort mode"
+              aria-label="Choose sort mode"
+            >
+              <ArrowDownUp size={12} />
+              {SORT_MODE_LABELS[sortMode]}
+              <ChevronDown size={11} class="text-dimmed" />
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="top"
+                align="start"
+                sideOffset={6}
+                collisionPadding={8}
+                class="z-60 w-36 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+              >
+                {#each SORT_MODES as mode (mode)}
+                  <DropdownMenu.Item
+                    class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] outline-none transition-colors hover:bg-elevated focus:bg-elevated max-md:py-2.5 {mode ===
+                    sortMode
+                      ? 'text-foreground'
+                      : 'text-muted'}"
+                    title={SORT_MODE_DESCRIPTIONS[mode]}
+                    aria-label={SORT_MODE_DESCRIPTIONS[mode]}
+                    onSelect={() => (sortMode = mode)}
+                  >
+                    <Check
+                      size={12}
+                      class={mode === sortMode ? 'text-primary' : 'opacity-0'}
+                      aria-hidden="true"
+                    />
+                    {SORT_MODE_LABELS[mode]}
+                  </DropdownMenu.Item>
+                {/each}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        {/if}
+        <button
+          type="button"
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border transition-colors {searchOpen
+            ? 'bg-overlay text-foreground'
+            : 'bg-elevated text-dimmed hover:bg-overlay hover:text-foreground'}"
+          aria-pressed={searchOpen}
+          title={searchOpen
+            ? 'Close search and clear the query'
+            : 'Search running processes by pid, port, path, thread, or app name'}
+          aria-label={searchOpen
+            ? 'Close search and clear the query'
+            : 'Search running processes by pid, port, path, thread, or app name'}
+          onclick={toggleSearch}
+        >
+          {#if searchOpen}
+            <X size={13} />
+          {:else}
+            <Search size={13} />
+          {/if}
+        </button>
       </div>
       <div class="flex shrink-0 items-center gap-1.5">
         <button

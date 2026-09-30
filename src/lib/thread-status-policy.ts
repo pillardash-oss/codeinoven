@@ -2,14 +2,7 @@ import type { ScopeSlice, ThreadStatus } from './types'
 import { harnessSupportsManualCompaction } from '../main/agents/harness-registry'
 
 export type ThreadStatusTone =
-  | 'todo'
-  | 'working'
-  | 'working-paused'
-  | 'attention'
-  | 'spec'
-  | 'done'
-  | 'error'
-  | 'missed'
+  'todo' | 'working' | 'working-paused' | 'attention' | 'spec' | 'done' | 'error' | 'missed'
 
 export type ThreadStatusNotificationKind = 'completed' | 'attention' | 'spec' | 'error'
 
@@ -23,6 +16,18 @@ export interface ThreadStatusPolicy {
   readonly busy: boolean
   /** True when a provider retry is pending and no harness work is running. */
   readonly retryPaused: boolean
+  /**
+   * True while the thread is parked on the user: a permission, question, or
+   * secret card is on screen, or a reviewable artifact is waiting on them.
+   *
+   * No work is being produced in this state, and no activity indicator may
+   * claim otherwise. The harness session stays bound (and reports `waiting`)
+   * for as long as the gate is open, so a live run flag cannot answer that
+   * question while a card waits   this status is the authority, and it stays
+   * the authority until the user answers, which is the change that leaves the
+   * state.
+   */
+  readonly awaitingUser: boolean
   /** How power management should account for this state. */
   readonly powerWake: 'active' | 'retry-window' | 'none'
   readonly notificationKind?: ThreadStatusNotificationKind
@@ -48,6 +53,7 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
     executionActive: false,
     busy: false,
     retryPaused: false,
+    awaitingUser: false,
     powerWake: 'none'
   },
   planning: {
@@ -57,6 +63,7 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
     executionActive: true,
     busy: true,
     retryPaused: false,
+    awaitingUser: false,
     powerWake: 'active'
   },
   awaiting_approval: {
@@ -66,6 +73,7 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
     executionActive: false,
     busy: false,
     retryPaused: false,
+    awaitingUser: true,
     powerWake: 'none',
     notificationKind: 'attention'
   },
@@ -76,6 +84,7 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
     executionActive: false,
     busy: false,
     retryPaused: false,
+    awaitingUser: false,
     powerWake: 'none',
     notificationKind: 'spec'
   },
@@ -86,6 +95,7 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
     executionActive: true,
     busy: true,
     retryPaused: false,
+    awaitingUser: false,
     powerWake: 'active'
   },
   'working-paused': {
@@ -95,6 +105,7 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
     executionActive: false,
     busy: true,
     retryPaused: true,
+    awaitingUser: false,
     powerWake: 'retry-window'
   },
   interrupted: {
@@ -104,6 +115,7 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
     executionActive: false,
     busy: false,
     retryPaused: false,
+    awaitingUser: false,
     powerWake: 'none'
   },
   completed: {
@@ -113,6 +125,7 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
     executionActive: false,
     busy: false,
     retryPaused: false,
+    awaitingUser: false,
     powerWake: 'none',
     notificationKind: 'completed'
   },
@@ -123,6 +136,7 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
     executionActive: false,
     busy: false,
     retryPaused: false,
+    awaitingUser: false,
     powerWake: 'none',
     notificationKind: 'error'
   }
@@ -159,4 +173,9 @@ export function isThreadBusyStatus(status: ThreadStatus): boolean {
 
 export function isThreadRetryPausedStatus(status: ThreadStatus): boolean {
   return threadStatusPolicy(status).retryPaused
+}
+
+/** True while the thread is parked on the user and produces no work. */
+export function isThreadAwaitingUserStatus(status: ThreadStatus): boolean {
+  return threadStatusPolicy(status).awaitingUser
 }

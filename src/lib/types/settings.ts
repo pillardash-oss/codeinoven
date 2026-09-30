@@ -270,6 +270,15 @@ export const MAX_BROWSER_HIBERNATION_MINUTES = 120
 export const DEFAULT_BROWSER_HIBERNATION_MINUTES = 30
 
 /**
+ * Bounds for `AppConfig.browserHistoryLimit`, how many pages the browser's
+ * history keeps. Older visits evict for newer ones once the cap is reached, so
+ * the setting trades a longer memory against the size of the stored file.
+ */
+export const MIN_BROWSER_HISTORY_LIMIT = 50
+export const MAX_BROWSER_HISTORY_LIMIT = 10_000
+export const DEFAULT_BROWSER_HISTORY_LIMIT = 1_000
+
+/**
  * How the app behaves once its last window closes.
  *
  * - `off` is the original behaviour: closing the last window quits the process.
@@ -396,12 +405,27 @@ export interface AppConfig {
    */
   browserHibernationMinutes: number
   /**
+   * How many pages the browser's browsing history keeps. Bounded to
+   * `MIN/MAX_BROWSER_HISTORY_LIMIT`; older visits evict for newer ones.
+   */
+  browserHistoryLimit: number
+  /**
    * How the app behaves once its last window closes. On by default (`scheduled`)
    * so Assistant routines can fire while the window is closed.
    */
   backgroundMode: BackgroundMode
-  /** Launch CodeInOven at login so a schedule can fire after a restart. */
+  /**
+   * Launch CodeInOven at login so a schedule can fire after a restart. Off
+   * until the user asks for it: the app offers it once, after the first
+   * routine's how-to is saved, and never assumes the answer.
+   */
   launchAtLogin: boolean
+  /**
+   * True once the one-time start-at-login offer has been answered. The offer is
+   * raised only when a routine gets its first how-to, and this flag is saved
+   * with the answer, so no later routine setup asks again.
+   */
+  launchAtLoginPrompted: boolean
   /** Run assistant slots missed to sleep or a closed app when the app returns. */
   autoRunMissedAssistantRuns: boolean
   /** How long before a due run the app holds the machine awake. Bounded to
@@ -478,8 +502,10 @@ export type AppConfigPatch = Partial<
     | 'openLocalhostInCioBrowser'
     | 'openAllLinksInCioBrowser'
     | 'browserHibernationMinutes'
+    | 'browserHistoryLimit'
     | 'backgroundMode'
     | 'launchAtLogin'
+    | 'launchAtLoginPrompted'
     | 'autoRunMissedAssistantRuns'
     | 'backgroundWakeLeadMs'
     | 'maxBackgroundWakeHoldMs'

@@ -10,18 +10,25 @@
 import { app, session } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { CloseConfirmationProject } from '../../lib/ipc-contract'
+import type { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { instanceRegistry } from '../system/instance-registry'
 import { Logger } from '../system/logger'
+import type { CleanShutdownStore } from '../system/clean-shutdown-store'
 
 /** The subset of bootstrap state the quit gate owns and mutates. */
 export interface QuitLifecycleState {
   quitCleanupStarted: boolean
   quitConfirmed: boolean
   shutdownFailsafe: ReturnType<typeof setTimeout> | null
+  /** The process-wide download owner, or null when no window ever attached the
+   *  browser. Read for the close prompt's downloads section. */
+  browserDownloads: BrowserDownloadManager | null
+  /** Proof of a deliberate exit, written by the forced-exit path. */
+  cleanShutdownStore: CleanShutdownStore | null
 }
 
 /**
@@ -52,6 +59,10 @@ export function armQuitFailsafe(state: QuitLifecycleState): void {
   state.shutdownFailsafe = setTimeout(() => {
     Logger.error('Quit failsafe fired   forcing exit')
     flushSessionStorage()
+    // The user asked to close and the pipeline could not finish in time: that is
+    // still a deliberate exit, so leave the marker before the forced one, or the
+    // next launch would report every in-flight turn as a harness crash.
+    state.cleanShutdownStore?.recordSync()
     app.exit(0)
   }, 15_000)
 }
@@ -127,9 +138,15 @@ export function requestCloseConfirmation(deps: CloseConfirmationDeps): void {
   // owns the unsaved-file gate, which it computes locally.
   const working =
     park || instanceRegistry.hasOtherLiveInstance() ? [] : getActiveThreadProjects(deps.database)
+  // Downloads follow the opposite rule. A park keeps the backend alive, so a
+  // download keeps running and the section stays empty; a quit stops what it
+  // holds open, whichever instance is quitting, because the manager and the
+  // Chromium sessions it downloads through belong to this process.
+  const downloads = park ? [] : (state.browserDownloads?.inFlight() ?? [])
   sendToRenderer(window.webContents, 'window:confirmClose', {
     projects: working,
     files: [],
+    downloads,
     ...(park ? { park: true } : {})
   })
 }

@@ -31,7 +31,7 @@ import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
 import { createBootstrapState } from './bootstrap/bootstrap-state'
-import { configureLinuxElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
+import { configureElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
 import { createSplashWindow, closeSplash } from './bootstrap/splash-window'
 import { isCloseShortcut, isNewTerminalShortcut } from './bootstrap/keyboard-shortcuts'
 import {
@@ -42,7 +42,9 @@ import {
 import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap/open-with'
 import { bootPostPaintServices, attachWindowServices } from './bootstrap/post-paint-services'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
+import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
+import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
 import { computeAttention, hasUpcomingWork } from './system/background-work-state'
 import { handleFatalStartup } from './bootstrap/fatal-startup'
 import {
@@ -52,6 +54,7 @@ import {
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 declare const __CODEINOVEN_APP_VERSION__: string
+declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -61,7 +64,7 @@ app.setName(APP_NAME)
 // inherits is rewritten here, before the first window exists.
 app.userAgentFallback = brandUserAgent(app.userAgentFallback, __CODEINOVEN_APP_VERSION__)
 
-configureLinuxElectronDataRoot()
+configureElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
 // per-window preferences below remain explicit so future windows inherit the
 // secure expectation even when reviewed in isolation.
@@ -77,10 +80,12 @@ if (app.isPackaged) {
 }
 
 /** Map OS termination signals into Electron's quit lifecycle so that every
- *  exit path (Cmd+Q, Dock menu, `kill`, system shutdown) converges into the
- *  same `before-quit` → disposal pipeline → `will-quit` sequence. */
+ *  exit path (Cmd+Q, Dock menu, `kill`, a closed terminal, system shutdown)
+ *  converges into the same `before-quit` → disposal pipeline → `will-quit`
+ *  sequence. SIGHUP matters in development: closing the terminal that runs the
+ *  dev server must not look like a crash to the next launch. */
 function registerSignalHandlers(): void {
-  const signals = ['SIGTERM', 'SIGINT'] as const
+  const signals = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const
   for (const signal of signals) {
     process.on(signal, () => {
       Logger.info(`Received ${signal}   shutting down`)
@@ -133,6 +138,11 @@ ipcMain.handle('app:parkWindow', async () => {
   await state.backgroundLifecycle?.park()
 })
 
+// Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+Q) is the menu bar's
+// Quit item without reaching for the menu bar, so it bypasses background mode
+// entirely.
+ipcMain.handle('app:quitDirect', () => quitAppDirectly())
+
 /** This process's role against the shared backend, for renderer hydration. */
 ipcMain.handle(
   'app:instanceRole',
@@ -144,6 +154,12 @@ ipcMain.handle(
 ipcMain.handle(
   'app:openInstanceOwner',
   () => state.backgroundLifecycle?.requestOwnerActivation() ?? false
+)
+
+/** A secondary takes over ownership of scheduled work from the current owner. */
+ipcMain.handle(
+  'app:transferInstanceControl',
+  () => state.backgroundLifecycle?.takeOverControl() ?? false
 )
 
 /** Track when a terminal in the renderer holds focus (Windows shortcut routing). */
@@ -295,16 +311,17 @@ const backgroundLifecycle = new BackgroundLifecycleService({
     const window = state.mainWindow
     if (window && !window.isDestroyed()) window.destroy()
   },
-  quitApp: () => {
-    state.quitConfirmed = true
-    app.quit()
-  },
+  quitApp: quitAppDirectly,
   persistWindowState: () => windowStateService.persistNow(state.mainWindow),
   releaseWindowServices: () => {
     // The renderer is about to die with the window; tear down everything in
     // main that would otherwise keep running page content or a shell with no
     // visible window.
     try {
+      // Commit every open tab's Back/Forward stack before the views are closed
+      // with the window. The app keeps running here rather than quitting, so the
+      // write is started and left to finish on its own.
+      void state.browserService?.flushTabHistory()
       state.browserService?.dispose()
       state.browserService = null
     } catch (error) {
@@ -328,6 +345,17 @@ const backgroundLifecycle = new BackgroundLifecycleService({
   resolveTrayIcon: (attention) => getTrayIconPath(attention)
 })
 state.backgroundLifecycle = backgroundLifecycle
+
+/**
+ * The real quit, with no park and no confirmation gate: what the menu bar's
+ * Quit item and the direct-quit shortcut both run. `quitConfirmed` is what makes
+ * the close gate and `before-quit` skip parking and go straight to the shutdown
+ * pipeline, which records the clean-shutdown marker before the harness dies.
+ */
+function quitAppDirectly(): void {
+  state.quitConfirmed = true
+  app.quit()
+}
 
 /** Create the window, or bring the existing one forward. */
 function openMainWindow(): void {
@@ -612,8 +640,14 @@ void app
     instanceRegistry.start()
     // A login launch in background mode starts windowless: no splash, no window,
     // no renderer process. Everything below still runs   the whole point is a
-    // backend that keeps the schedule without a UI.
-    const startHidden = wasOpenedAtLogin()
+    // backend that keeps the schedule without a UI. A relaunch that followed a
+    // menu bar update is the same: the update must not pop a window at the user.
+    // The marker is consumed either way, so a stale one can never hide a later
+    // launch. A probe is never hidden: it is a window someone opened to look at
+    // behaviour, so it shows itself.
+    const relaunchRequested = consumeBackgroundRelaunchMarker()
+    const startHidden =
+      !backgroundLifecycle.backgroundOptOut && (wasOpenedAtLogin() || relaunchRequested)
     // This is the first post-ready action. Construct and show the native splash
     // immediately, then yield the main event loop until Chromium presents its
     // first frame. Synchronous SQLite/schema work cannot begin before this
@@ -698,6 +732,10 @@ void app
       validator: windowBoundaryValidator,
       getMainWindow: () => state.mainWindow
     })
+
+    // Arm the platform authenticator before any browser tab can issue a passkey
+    // request. macOS only, and only in a build that can carry the entitlement.
+    installPlatformAuthenticator()
 
     // Install the `appfile://` preview protocol before the renderer loads: the
     // packaged renderer requests preview images as soon as it hydrates, and if
@@ -811,8 +849,9 @@ void app
   })
 
 app.on('window-all-closed', () => {
-  // Background mode keeps the backend alive in the menu bar; the only real quit
-  // is the menu bar's Quit item (or OS logout). Everything else quits as before.
+  // Background mode keeps the backend alive in the menu bar; a real quit is the
+  // menu bar's Quit item, the direct-quit shortcut, or an OS logout. Everything
+  // else quits as before.
   if (state.backgroundLifecycle?.shouldPark()) return
   // Closing the last window (traffic-light close button) fully quits the app.
   // Cmd+Q follows the same path through before-quit → shutdown pipeline →

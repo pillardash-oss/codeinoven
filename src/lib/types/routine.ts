@@ -108,7 +108,11 @@ export interface Routine {
   pinned?: boolean
   /** When the routine was pinned; newest pins sort first. */
   pinnedAt?: number
-  /** Position for manual ordering; items without sortOrder fall back to updatedAt. */
+  /**
+   * A manual sidebar position, written when the user drags the routine. A
+   * routine without one keeps its creation order (newest first), and an edit
+   * never moves a routine, so the list only changes when the user changes it.
+   */
   sortOrder?: number
   createdAt: number
   updatedAt: number
@@ -196,6 +200,19 @@ export interface UpdateRoutineInput {
 /** A routine is complete only once its how-to exists; drives the amber badge. */
 export function routineHowToComplete(routine: Pick<Routine, 'howTo'>): boolean {
   return routine.howTo.trim().length > 0
+}
+
+/**
+ * Whether a save is the one that gives a routine its first how-to: the moment
+ * it stops being a draft and its owner has work they expect to run. Compares
+ * the routine before and after the save, so every caller reads one rule instead
+ * of re-deriving it from the incoming patch.
+ */
+export function routineFirstHowToSave(
+  before: Pick<Routine, 'howTo'>,
+  after: Pick<Routine, 'howTo'>
+): boolean {
+  return !routineHowToComplete(before) && routineHowToComplete(after)
 }
 
 /**

@@ -13,6 +13,23 @@ import packageJson from './package.json'
 // otherwise fall back to.
 const resolvedAppVersion = process.env['CODEINOVEN_BUILD_VERSION'] || packageJson.version
 
+/**
+ * The Apple team identifier baked into the main bundle, so the runtime can name
+ * the WebAuthn keychain group the code-signing entitlement grants.
+ *
+ * The value is public: it is already in every signature this team produces and
+ * in the `keychain-access-groups` prefix of any build that carries the
+ * entitlement. It is read from the environment rather than hardcoded because
+ * both the signing job and the entitlement file derive from the same value, so a
+ * different team can build the app without editing a source file.
+ *
+ * Empty is a normal value, not a failure: an ad-hoc or unsigned local build has
+ * no team and therefore never arms the macOS platform authenticator.
+ */
+function resolveMacTeamId(): string {
+  return (process.env['CODEINOVEN_MAC_TEAM_ID'] || process.env['APPLE_TEAM_ID'] || '').trim()
+}
+
 /** Renderer dev port of the primary checkout. */
 const DEFAULT_RENDERER_PORT = 5173
 /** Deterministic port pool reserved for linked Git worktrees. */
@@ -151,7 +168,11 @@ export default defineConfig(({ mode }) => {
         // There is deliberately no production default.
         __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: JSON.stringify(
           env.MAIN_VITE_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN ?? ''
-        )
+        ),
+        // The team identifier the WebAuthn keychain group is derived from. See
+        // `resolveMacTeamId`; an empty value simply leaves the macOS platform
+        // authenticator unarmed.
+        __CODEINOVEN_MAC_TEAM_ID__: JSON.stringify(resolveMacTeamId())
       },
       build: {
         outDir: 'out/main',
@@ -204,12 +225,22 @@ export default defineConfig(({ mode }) => {
         // Bundle the CodeMirror core packages as shared pre-bundled deps so
         // the dynamic imports in codemirror-file-editor.ts and every language
         // package resolve to one instance instead of separate chunks.
+        //
+        // jsonc-parser is listed for a different reason: the startup scan only
+        // reads the `<script>` blocks of a `.svelte` file, so a dependency that
+        // is reached only through a markup-level lazy import (the file tree
+        // panel behind `{#await import(...)}` imports file-beautify.ts, which
+        // imports jsonc-parser) is invisible to it. Left out, the very first
+        // open of that panel makes Vite discover the dependency at runtime,
+        // re-optimize, and full-reload the renderer, which restarts the whole
+        // app mid-session. Every newly lazily imported dependency belongs here.
         include: [
           '@codemirror/state',
           '@codemirror/view',
           '@codemirror/commands',
           '@codemirror/language',
-          '@codemirror/language-data'
+          '@codemirror/language-data',
+          'jsonc-parser'
         ]
       },
       // Pin the dev origin. The renderer's persisted state (recovery snapshot,
@@ -227,7 +258,19 @@ export default defineConfig(({ mode }) => {
         outDir: resolve(__dirname, 'out/renderer'),
         rollupOptions: {
           input: {
-            index: resolve(__dirname, 'src/renderer/index.html')
+            index: resolve(__dirname, 'src/renderer/index.html'),
+            // The browser overlay: the app's toaster and the browser's floating
+            // tab strip in a frameless window of their own, which is the only
+            // way either can be drawn above the in-app browser's native page
+            // view. It is its own entry because it must load the app's
+            // stylesheet and nothing else of the app, so a second renderer stays
+            // cheap.
+            'browser-overlay': resolve(__dirname, 'src/renderer/browser-overlay.html'),
+            // The browser permission prompt: one card, floating over the in-app
+            // browser's page in a transparent window of its own. It is an entry
+            // of its own because it draws the card with the app's stylesheet,
+            // and runs nothing else of the app.
+            'permission-prompt': resolve(__dirname, 'src/renderer/permission-prompt.html')
           }
         }
       }

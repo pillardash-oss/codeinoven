@@ -28,12 +28,13 @@
     request: PendingAgentQuestionRequest
     onAnswer: (requestId: string, answers: string[][]) => Promise<void>
     onDismiss: (requestId: string) => Promise<void>
+    /** Persists draft progress; resolves to `null` when the request already settled. */
     onUpdate: (
       requestId: string,
       questionIndex: number,
       answers: string[],
       nextQuestionIndex?: number
-    ) => Promise<PendingAgentQuestionRequest>
+    ) => Promise<PendingAgentQuestionRequest | null>
     scope: SpeechScope
     /** Open the explain side chat for the given question, pausing its timeout. */
     onExplain?: (requestId: string, question: AgentQuestion) => void

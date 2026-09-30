@@ -1,8 +1,11 @@
-import { app, BrowserWindow, nativeTheme } from 'electron'
-import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { BrowserWindow } from 'electron'
 import type { BrowserPermissionRequest } from '../../lib/ipc-contract'
+import { TOAST_CARD_WIDTH, TOAST_STACK_RIGHT } from '../../lib/browser-overlay'
+import {
+  loadRendererDocument,
+  resolveAppTheme,
+  resolveChildWindowPreload
+} from './child-window-support'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 
 /** Window-content anchor for the popup, in density-independent pixels. */
@@ -21,28 +24,15 @@ export interface PromptRequestContext {
   projectLabel: string | null
 }
 
-const POPUP_WIDTH = 380
-const POPUP_HEIGHT = 240
+/** The card is as wide as a toast card, plus the translucent margins its shadow
+ *  needs; the document's own padding mirrors these numbers
+ *  (`src/renderer/permission-prompt.html`). The height fits the tallest card the
+ *  content can make   a three-line request at the largest base font size   so
+ *  the buttons are never clipped; the rest of the window is transparent. */
+const POPUP_SIDE_PAD = 12
+const POPUP_WIDTH = TOAST_CARD_WIDTH + POPUP_SIDE_PAD * 2
+const POPUP_HEIGHT = 176
 const POPUP_MARGIN = 8
-
-/** Resolve the app preload bundle (same lookup as the main window).
- *  `import.meta.url` is the compiled main bundle file (which lives in
- *  `out/main`), so take its directory first; the preload is one level up in
- *  `out/preload`. Passing the full file path to `join` instead silently
- *  resolved outside the bundle tree and the popup loaded with no preload. */
-function defaultPreloadPath(): string {
-  const dir = join(dirname(fileURLToPath(import.meta.url)), '../preload')
-  for (const name of ['index.mjs', 'index.js', 'index.cjs']) {
-    const candidate = join(dir, name)
-    if (existsSync(candidate)) return candidate
-  }
-  return join(dir, 'index.js')
-}
-
-/** First-paint theme hint; the popup document refines via `config:get`. */
-function defaultResolveTheme(): 'light' | 'dark' {
-  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
-}
 
 /**
  * Owns the frameless child window that shows browser permission requests.
@@ -52,6 +42,12 @@ function defaultResolveTheme(): 'light' | 'dark' {
  * main process to detach the whole view (blanking the page) whenever a site
  * asked for the camera or microphone. A real OS popup composites above the
  * view, so the page stays live and interactive while the prompt is open.
+ *
+ * The prompt is drawn as a card of the app's own   a toast card's width, tokens
+ * and type hierarchy   so it reads as the same surface the user already meets at
+ * the window's corner rather than as a foreign one. This window is only the
+ * transparent frame around that card, which is why it holds no background of
+ * its own.
  *
  * Delivery is pull-based: the document invokes `browser:popupReady` once its
  * permission listener is bound, and main resolves the invoke with the request
@@ -73,8 +69,8 @@ export class PermissionPromptWindow {
 
   constructor(
     private readonly parent: BrowserWindow,
-    private readonly preloadPath: string = defaultPreloadPath(),
-    private readonly resolveTheme: () => 'light' | 'dark' = defaultResolveTheme
+    private readonly preloadPath: string = resolveChildWindowPreload(),
+    private readonly resolveTheme: () => 'light' | 'dark' = resolveAppTheme
   ) {}
 
   /** Show (or update) the prompt for `context`; kept until the prompt hides. */
@@ -92,12 +88,17 @@ export class PermissionPromptWindow {
       return
     }
     if (!this.parent || this.parent.isDestroyed()) return
-    const theme = this.resolveTheme()
     const popup = new BrowserWindow({
       width: POPUP_WIDTH,
       height: POPUP_HEIGHT,
       show: false,
       frame: false,
+      // The document paints one rounded card and nothing else, so the window is
+      // transparent: the card floats over the page on its own shadow, in the
+      // shape it actually has, instead of sitting in an opaque rectangle.
+      transparent: true,
+      backgroundColor: '#00000000',
+      hasShadow: false,
       resizable: false,
       movable: true,
       minimizable: false,
@@ -108,7 +109,6 @@ export class PermissionPromptWindow {
       // Stay composited above the parent (and its WebContentsView) without
       // covering other apps' floating windows.
       alwaysOnTop: true,
-      backgroundColor: theme === 'dark' ? '#0b0b0d' : '#f7f6f2',
       title: 'Browser permission',
       webPreferences: {
         preload: this.preloadPath,
@@ -171,14 +171,7 @@ export class PermissionPromptWindow {
   }
 
   private load(popup: BrowserWindow): Promise<void> {
-    const theme = this.resolveTheme()
-    if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
-      const url = new URL('browser-popup.html', `${process.env['ELECTRON_RENDERER_URL']}/`)
-      url.searchParams.set('theme', theme)
-      return popup.loadURL(url.href).catch(() => {})
-    }
-    const document = join(dirname(fileURLToPath(import.meta.url)), '../renderer/browser-popup.html')
-    return popup.loadFile(document, { query: { theme } }).catch(() => {})
+    return loadRendererDocument(popup, 'permission-prompt.html', { theme: this.resolveTheme() })
   }
 
   /** Keep the prompt glued to the parent: reposition on move/resize and hide
@@ -206,17 +199,27 @@ export class PermissionPromptWindow {
     })
   }
 
-  /** Place the popup inside the parent's content area, top-right of the active
-   *  browser content when its bounds are known (clear of top-right toasts,
-   *  which render at the window edge), otherwise of the whole window. */
+  /** Place the popup inside the parent's content area, centred over the browser
+   *  content it belongs to.
+   *
+   *  It used to sit at the top right of that content, which is where the toast
+   *  stack lives: a toast is drawn by a child window of its own while a page
+   *  covers that corner (`browser-overlay-window.ts`), so a centred card on a
+   *  narrow window would sit under the stack. It now stops short of the stack's
+   *  band instead of drifting into it, and is exactly centred on every window
+   *  wide enough for the two to clear each other. */
   private position(popup: BrowserWindow): void {
     if (this.parent.isDestroyed()) return
     const content = this.parent.getContentBounds()
     const anchor = this.anchor
-    const right = anchor ? content.x + anchor.x + anchor.width : content.x + content.width
-    const top = anchor ? content.y + anchor.y : content.y
-    const x = Math.max(content.x, right - POPUP_WIDTH - POPUP_MARGIN)
-    const y = Math.max(content.y, top + POPUP_MARGIN)
+    const centre = anchor ? anchor.x + anchor.width / 2 : content.width / 2
+    const top = anchor ? anchor.y : 0
+    const stackLeft = content.x + content.width - TOAST_STACK_RIGHT - TOAST_CARD_WIDTH
+    const left = content.x + POPUP_MARGIN
+    const rightLimit = Math.max(left, stackLeft - POPUP_MARGIN - POPUP_WIDTH)
+    const centred = Math.round(content.x + centre - POPUP_WIDTH / 2)
+    const x = Math.min(Math.max(centred, left), rightLimit)
+    const y = Math.max(content.y, content.y + top + POPUP_MARGIN)
     popup.setBounds({ x, y, width: POPUP_WIDTH, height: POPUP_HEIGHT })
   }
 }

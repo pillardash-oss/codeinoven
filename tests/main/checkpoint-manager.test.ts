@@ -437,6 +437,61 @@ describe('CheckpointManager', () => {
     expect(failure.endsWith('…')).toBe(true)
   })
 
+  it('settles a checkpoint no process can finalize, without inventing a diff', async () => {
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    await writeFile(join(projectRoot, 'file.txt'), 'before', 'utf-8')
+    const active = await manager.beginTurn('projectY', 'threadY', projectRoot, 'Abandoned', false)
+    // No process owns the turn any more: nothing can walk to this row, and the
+    // renderer would treat it as in flight forever.
+    database.run('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
+      'projectY',
+      'threadY'
+    ])
+
+    const settled = await manager.settleAbandonedActiveCheckpoints({ minAgeMs: 0 })
+
+    expect(settled).toBe(1)
+    const stored = await manager.get('projectY', 'threadY', active.id)
+    expect(stored?.status).toBe('interrupted')
+    expect(stored?.stopReason).toBe('crash')
+    expect(stored?.changes).toEqual([])
+    expect(stored?.after).toBeUndefined()
+    // The window stays at the turn's own start, so a settled row can never
+    // claim an assistant message's file card.
+    expect(stored?.completedAt).toBe(active.createdAt)
+    expect(stored?.failure).toContain('No process was left to finish this turn')
+  })
+
+  it('leaves a checkpoint alone while a recorded owner may still be alive', async () => {
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const active = await manager.beginTurn('projectZ', 'threadZ', projectRoot, 'In flight', false)
+    database.run('UPDATE active_turns SET owner_pid = ? WHERE project_id = ? AND thread_id = ?', [
+      424_242,
+      'projectZ',
+      'threadZ'
+    ])
+
+    const kept = await manager.settleAbandonedActiveCheckpoints({
+      minAgeMs: 0,
+      isOwnerAlive: () => true
+    })
+    expect(kept).toBe(0)
+    expect((await manager.get('projectZ', 'threadZ', active.id))?.status).toBe('active')
+
+    const settled = await manager.settleAbandonedActiveCheckpoints({
+      minAgeMs: 0,
+      isOwnerAlive: () => false
+    })
+    expect(settled).toBe(1)
+    expect((await manager.get('projectZ', 'threadZ', active.id))?.status).toBe('interrupted')
+  })
+
   it('strips overlong legacy failure text when reading a checkpoint', async () => {
     const database = await createTestDb()
     testDatabases.push(database)

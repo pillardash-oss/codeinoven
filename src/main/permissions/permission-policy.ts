@@ -11,6 +11,14 @@ export interface PermissionRequest {
   path?: string
   paths?: readonly string[]
   commands?: readonly string[]
+  /**
+   * Tool name the caller could not classify as read-only. Pi's built-in MCP
+   * tools, `codemode`, `tool_search`, and anything a later harness release adds
+   * reach the gate without a path or a command, so no rule below can stand in
+   * for their behavior. Auto Review asks about them; Full Access keeps
+   * auto-approving, like every other request in that mode.
+   */
+  unclassifiedTool?: string
 }
 
 export interface PermissionScope {
@@ -55,7 +63,7 @@ export interface PermissionPolicyOptions {
    *  OFF chats so the agent can only touch files the user attached. */
   restrictToAllowed?: boolean
   /** Absolute directories pre-authorized for this session (e.g. the chat's own
-   *  `chats-artifacts/<threadId>` artifact directory). Any non-destructive,
+   *  `chats-cwd/<threadId>` workspace directory). Any non-destructive,
    *  path-scoped permission inside one of them is auto-approved in every mode,
    *  File-System-OFF chats included. Shell commands and destructive actions
    *  are never auto-approved through this carve-out. */
@@ -203,7 +211,14 @@ export class PermissionPolicy {
     }
 
     if (this.options.mode === 'auto_review') {
-      return this.evaluateAutoReview(permission, risk, paths, request.commands ?? [], scope)
+      return this.evaluateAutoReview(
+        permission,
+        risk,
+        paths,
+        request.commands ?? [],
+        scope,
+        request.unclassifiedTool
+      )
     }
 
     return this.evaluateFullAccess(permission, risk, paths, scope)
@@ -214,7 +229,8 @@ export class PermissionPolicy {
     risk: PermissionRisk,
     paths: readonly string[],
     commands: readonly string[],
-    scope: PermissionScope
+    scope: PermissionScope,
+    unclassifiedTool?: string
   ): PermissionDecisionResult {
     const destructiveReason = this.getDestructiveReason(permission)
     if (destructiveReason) {
@@ -282,6 +298,19 @@ export class PermissionPolicy {
     const pathReason = this.getAutoReviewPathReason(paths)
     if (pathReason) {
       return this.createDecision('ask', false, pathReason, risk, scope)
+    }
+
+    // A tool the caller could not classify is never auto-approved. The
+    // extension already ruled out a read-only surface, and no path rule can
+    // replace the behavior of a tool the app does not know, so the user decides.
+    if (unclassifiedTool) {
+      return this.createDecision(
+        'ask',
+        false,
+        `"${unclassifiedTool}" is a tool CodeInOven cannot verify as read-only, so it needs your approval.`,
+        'medium',
+        scope
+      )
     }
 
     return this.createDecision(

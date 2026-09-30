@@ -117,6 +117,9 @@ export type AgentPart =
       messageID: string
       callID: string
       tool: string
+      /** True when this call ran model-written code (a code-mode script) or
+       *  was made from inside one. The trace renders it with the code glyph. */
+      codeMode?: boolean
       state: AgentToolState
     }
   | {

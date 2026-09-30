@@ -546,6 +546,14 @@
         createError = gitState.error
         return
       }
+      // A pull that never reached the remote is reported here as well as in the
+      // panel's notice, and the push behind it is skipped: it would fail with
+      // the same verdict.
+      const remoteIssue = gitState.remoteIssueFor(projectId)
+      if (remoteIssue) {
+        createError = remoteIssue.message
+        return
+      }
       if (gitState.conflicted.length > 0) return
       submitPhase = 'push'
       const hasUpstream = headInfo?.kind === 'local' && headInfo.remote === 'origin'

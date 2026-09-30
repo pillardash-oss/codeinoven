@@ -42,6 +42,65 @@ material way, and the difference is deliberate.
   degrades to an empty, process-local storage whenever another app instance already
   holds the profile's storage database, so a second instance read no tabs, saved none,
   and the next launch restored nothing without a single error being raised.
+- **A browser tab's agent conversation is a real chat thread, not a side chat.** It
+  lives in the reserved hidden `browser-global` project, one thread per tab, linked by
+  `PersistedBrowserTab.assistantThreadId`, so its transcript, title, harness session and
+  model persist exactly as any other thread's do. It is created when the user first
+  opens the agent on that tab and deleted when the conversation (or the tab that owns
+  it) is closed, and the rail shows it through the ordinary conversation surface with a
+  controller that keeps it a panel rather than the primary conversation.
+  - Every thread list filters that container out at the repository boundary, and the
+    renderer refuses its `thread:updated` broadcasts too
+    (`src/renderer/lib/stores/scope-threads.svelte.ts`), so a browser chat can never
+    surface as a phantom row in the thread timeline or the switcher.
+  - Its turns do not notify: the answer is delivered beside the page it is about, which
+    is the rule the side chat it replaced already followed.
+- **The page a tab is on is attached to its assistant conversation for reading.** The
+  app records the pair when the rail resolves the conversation
+  (`browser:bindAssistantPage`), and main points the agent's browser capability
+  (`cio:browser`) at the user's tab whenever that conversation owns no page of its own:
+  `snapshot`, `screenshot` and `console` read the page the user is looking at and report
+  `page: "user"`. Everything that changes a page (open, navigate, click, type, reload,
+  viewport) still needs a page the agent opened itself, so an answer can never move the
+  page the user is reading.
+- **Extensions belong to the global browser.** An extension record names that
+  context's own jar (the empty jar id) and its boxes, and only jars of that context
+  are reconciled (`src/main/browser/extensions/browser-extension-service.ts`). A
+  project's browser, which is the light one a conversation opens with `/browser`
+  and has no boxes and no extension chrome, shares the project's cookies by design
+  but never loads them, so no extension renderer or service worker runs behind a
+  thread browser.
+- **An extension's worker is reached through a bridge page, and its state comes
+  back through it.** Electron delivers no tab lifecycle events to an extension and
+  has no API to read its action state, so the install path writes `cio-bridge.html`
+  into the extension's copy beside the compatibility preamble, and
+  `BrowserExtensionBridge` drives it for as long as that extension is loaded in
+  that jar: tab events travel in over a port named `__cio:bridge`, and the worker's
+  recorded action state and context-menu tree travel back through the extension's
+  session storage (`src/main/browser/extensions/browser-extension-bridge.ts`). A
+  worker Chromium has released is started again by the next port post, with a fresh
+  recording and a new generation, and the browser view's header draws each pinned
+  extension's badge, icon and title from what comes back. A port rather than
+  `runtime.sendMessage`, because a message is delivered to every `onMessage`
+  listener the extension has and a real one can throw on it.
+- **An extension's own popup is told which tab it is acting on.** The app hosts an
+  action's popup in a rail popup and gives it the keyboard on first show, so the
+  runtime answered the page's `chrome.tabs.query({ active: true })` with the popup's
+  own document   which a password manager reads as the website the user is on, and
+  reports as "Site doesn't match" naming the extension's id. The tab facts a tab's
+  pages receive are therefore pushed into the extension's own documents as well as
+  into its worker: `compat/cio-page-tabs.js` wraps `tabs.query` on both roots in the
+  page's world (never listing an extension surface as a tab, and reporting the page
+  behind the popup as the active one, with the `WebContents` id a message must use),
+  answers `tabs.getCurrent` with `undefined` as Chromium does in a popup, and leaves
+  `url`/`title` out when the extension may not read them. The snapshot comes from
+  `browser-extension-page-tabs.ts`, pushed on every `onUpdated`/`onActivated` fact and
+  on each document the popup arrives with.
+- **A link in the browser view belongs to that browser.** The link context menu offers
+  the default browser, a new tab of the app-wide browser and the tab already on screen
+  there, and the thread browser's item (which targets a project thread's tab) is not
+  offered; a plain click routed into the in-app browser follows the same rule
+  (`src/renderer/lib/open-in-browser.ts`).
 
 Treat the rest of this document as the target-state design; the points above describe the
 shipped behavior.
@@ -104,7 +163,7 @@ A page's `window.open(url, name, features)` is a popup window, not a tab: a sign
 - The rail animates the width of its own track with a plain CSS transition (`src/renderer/lib/components/browser/BrowserView.svelte`), the same motion the workspace rail's track makes. It must not go back to a Svelte `css` transition: those wait for a zero-duration dummy animation's `finish` event before the real animation starts, and a renderer whose window is not visible never sends that event, which pinned the rail at its first keyframe   `width: 0`   and left the page beside it half open until the view remounted.
 - The rail's popup panel places the popup's page by following the frame while the track opens, and re-follows it when the window becomes visible again, because a rail that opened while the window was in the background resumes its opening when the user comes back.
 - Install permission request and permission check handlers on the browser session. Default deny; prompt for the exact origin and permission; support Allow once, Always allow for this site, and Deny. Start with camera, microphone, geolocation, notifications, HID, serial, USB, MIDI, screen capture, and filesystem access denied.
-- Prevent silent downloads. A later download phase may use a native save dialog, safe filename normalization, progress UI, cancel, and an explicit “open” action. Downloads must never land in the active repository automatically.
+- Prevent silent downloads. A download always goes through the native save dialog and a safe filename, never lands in the repository by itself, and stays visible with progress and an explicit open/reveal action. See "Downloads" below for what happens when one is stopped, cancelled or left running at a quit.
 - Redact browser URLs/query strings from general logs and diagnostics. Sensitive page titles should not enter agent context or telemetry.
 
 ### Session and profile storage
@@ -169,10 +228,12 @@ If cookie migration remains a hard requirement after the browser workspace prove
   shim uses. The observer counts tracks only: it reads no stream, no media and no
   page data, and it gives page script no way to reach privileged APIs.
 - Downloads are visible in the browser toolbar, not only in a menu: the button
-  carries the active-download count and opens the list in normal layout flow.
+  carries the count of unfinished downloads (running ones plus stopped ones
+  waiting for a decision) and opens the list in normal layout flow.
   The page is a native view composited above the DOM, so the list takes layout
   space and resizes the view instead of floating over it, and each finished
   download can be revealed in the operating system's file manager.
+
 - Use Chromium's natural site isolation. Track renderer crashes and unresponsive events without allowing them to crash or block the agent UI.
 - Rate-limit browser-to-app metadata events (progress, title, favicon) so page churn cannot flood main/renderer IPC.
 - Maintain a browser-specific memory budget and expose a small diagnostic snapshot: live tabs, webContents/process IDs, approximate memory, crash count, and profile disk size.
@@ -190,6 +251,174 @@ Suggested acceptance budgets, to be confirmed on target hardware:
 | Browser renderer crash/hang  | Agent runs and terminal stay alive; browser surface offers reload/recreate                                    |
 
 Memory cannot have a universal fixed ceiling because websites control their own workload. Measure and publish representative baselines rather than promising zero impact.
+
+## Downloads
+
+One process-wide manager (`src/main/browser/browser-service/browser-downloads.ts`)
+owns every download a browser tab starts, and it is deliberately not window-bound:
+a window is parked to the menu bar and rebuilt on reopen, while a download
+belongs to its project's session and keeps running. The manager holds the live
+items, the durable records, and one `will-download` registration per project
+session; a parked window costs progress events and nothing else.
+
+Records persist to `browser/downloads.json` through the storage engine, with the
+same merge-on-write shape the browser permission memory uses, so a download is
+still on screen   with the action it can honour   in the next run:
+
+| State | What it means | Actions |
+| --- | --- | --- |
+| `progressing` | A live Chromium download; `paused` when the user paused it | Pause/Resume, Cancel |
+| `interrupted` | Stopped, with bytes on disk; `resumable` when they can continue it | Resume, Start over, Remove |
+| `cancelled` | Stopped and discarded, as Chrome's own Cancel does | Start over, Remove |
+| `completed` | The file is finished | Open, Reveal, Remove |
+
+The file is shared state: more than one instance can run against one config root,
+so a write re-reads it and merges this instance's records over it by id rather
+than replacing the other instance's downloads with this one's view. A record this
+instance dropped (the user removed it from the list) rides into that merge as a
+tombstone, and the tombstone outlives a write that was already in flight when the
+removal happened. That ordering matters: the write in flight carries a snapshot
+from before the removal, and without the tombstone surviving it the merge would
+put the record back and nothing would ever take it out again.
+
+A removal that reaches the file has to reach the list the user is looking at as
+well, and nothing else can carry it: a report of a download is a report *about* a
+record, so the record that was just dropped is the one no report can describe.
+The manager therefore sends `browser:downloadRemoved` wherever it drops a record
+on its own   the user removes it, its project is forgotten, or the tracked list is
+trimmed past its cap   and the renderer's mirror deletes that row on the report.
+The mirror is not written to optimistically: main is the one that decides a
+removal (it refuses one for a download still running), and a row deleted on the
+click would only come back on the next report.
+
+The same reasoning covers the moment between a request and a download. *Start
+over* and *Resume* ask Chromium for a download that takes a moment to exist, and
+the row reads as downloading while it waits, so Cancel is the obvious thing to
+reach for on a server that is not answering. The user's decision outlives the
+request: a download that arrives after they stopped it is cancelled rather than
+adopted back onto the row, and a request that never arrives leaves their stop in
+place instead of restoring the state it was asked to continue from.
+
+Three facts about Chromium's download stack shape the rest, all verified on
+Electron 44 and kept honest by the code that reads them:
+
+- A download's partial file is written at the path the save dialog chose, and
+  Chromium deletes it when the download is cancelled or the process owning it
+exits. Pausing does not save it. A quit therefore pauses each running download,
+lets it settle, and *moves its bytes* beside the target (`.codeinoven-part`,
+renamed rather than copied) before the records are written. Without that move a
+quit leaves a record with nothing to resume from, which is what "the download
+was gone after I closed the app" was.
+- Resuming is Chromium's own resume (`session.createInterruptedDownload` plus
+  `resume()`), which sends the range request with the validator the response
+  already provided (`ETag`, else `Last-Modified`). The offset never exceeds what
+  this app wrote, so a file that was longer before the download started cannot be
+  mistaken for downloaded bytes, and a download whose total or validator
+  Chromium never learned offers *Start over* instead of an unsafe resume.
+- `DownloadItem.getFilename()` is the name Chromium *suggests* (the `download`
+  attribute, a `Content-Disposition`, or the URL's last segment) and it keeps
+answering with that suggestion after the user renames the file in the save
+dialog: the chosen name only ever appears in `getSavePath()`. The path is
+therefore the truth as soon as it exists, and
+`src/main/browser/browser-service/browser-download-name.ts` reads the record's
+name from it. A record still without a path   the dialog is open, or an older run
+wrote it before the answer   keeps the suggestion until the next launch corrects
+it from the path the record holds.
+
+A download whose bytes already add up to its declared total is settled as
+completed: the last byte landed and only the completion event was lost.
+
+### What a quit does to a running download
+
+`BrowserDownloadManager.inFlight()` is the set a quit has to stop: every tracked
+download with a live Chromium item, including one the user paused. The
+close-confirmation prompt lists that set as its own section
+(`src/main/bootstrap/quit-lifecycle.ts`, `CloseConfirmationModal.svelte`), next to
+the working threads and the unsaved files, so a user who quits mid-download sees
+what is about to stop before answering. Main supplies that half of the payload:
+the renderer's mirror of the list only exists once the browser runtime chunk has
+loaded, so it cannot be asked for downloads the user has not opened the browser to
+see. A park keeps the backend alive and therefore keeps the download running, so
+the section stays empty there.
+
+The prompt says what closing means rather than what it costs: the download pauses,
+its bytes stay on disk, and a server that serves ranges lets the next launch
+continue it. The section is a snapshot taken when the close was requested, and it
+never makes the app wait a second time: once the user answers, the quit pipeline
+pauses whatever is running at that moment, so a download that finished while the
+prompt was open is simply already finished, and one that started after the prompt
+is paused like any other.
+
+The one path that cannot keep the bytes is a process that dies without running the
+shutdown pipeline: the quit failsafe's forced exit, a crash, or `SIGKILL`. Those
+downloads keep their records and are offered *Start over*, because nothing moved
+the partial file out of Chromium's reach.
+
+## Tabs and the history they remember
+
+A tab's Back/Forward stack lives in its `WebContentsView`, and the view is
+deliberately destroyed rather than kept alive: hibernation frees a tab idle past
+its window, parking takes a page off screen, and a quit closes every view. Each of
+those took the stack with it, so Back was always disabled on the tab the user came
+back to. The stack is written down now.
+
+`src/lib/browser/browser-tab-history.ts` holds the shape both processes agree on,
+and `src/main/browser/browser-tab-history-store.ts` owns the file under the
+config root's `state/` directory, beside the browsing history. The main process is
+both reader and writer, because it is the only process that can read a stack off a
+view and the only one that already sees all three commit points:
+
+| Commit point | What happens to the stack |
+| --- | --- |
+| Parking a view (a switch to another surface) | read off the view, queued for the coalesced write |
+| Hibernating a tab (`browser:destroy` with `hibernated`) | read off the view, record kept, view closed |
+| Closing a tab (`browser:destroy` with `closed`) | record dropped: a closed tab's history goes with the tab row |
+| Quitting | every open tab read, then the write awaited before `dispose()` closes the views |
+
+Only the active entry keeps Chromium's `pageState` snapshot, and only when it fits
+its bound whole, because that blob dwarfs the rest of an entry and a truncated one
+is not a smaller snapshot but an invalid one. A stored stack is restored only into
+the tab whose `(projectId, threadId)` wrote it, so one tab's history can never
+appear behind another tab's Back button.
+
+The browsing history the address bar and the History panel read is a separate,
+bounded record, and it is scoped to the browser that made each visit
+(`src/renderer/lib/stores/browser-history.svelte.ts`). The global browser and each
+thread's browser keep their own list, so a page read inside a thread never appears
+in the global browser's history or under its address palette, and a local project's
+threads share one history because they already share one browser and one tab strip.
+The global browser's list is durable (`browser:loadHistory` /
+`browser:saveHistory`); a thread browser's lives for the session and is discarded
+when its last tab closes, so a thread's browsing never reaches app storage and
+never outlives the browser that made it.
+
+### Bookmarks
+
+A bookmark is the user's own record rather than something the browser observed, so
+it is editable: its title, its address, its icon, and its place in the list. It is
+quick access to a page the user returns to, not an archive, which is what decides
+the rest.
+
+- **Its default icon is the page's own favicon, copied into the record when the page
+  was saved** (`BrowserBookmark.favicon` in `src/lib/browser/browser-library.ts`).
+  A copy and not a lookup: a saved page has to look like itself with the network
+  down, so the icon cannot be something the renderer resolves later. A page saved
+  from a surface that had no icon of its own (a history row) has its favicon asked
+  for once, through the resolver every other favicon in the app uses, and written
+  down when it answers; a page that comes back on screen with an icon the record
+  never got fills itself in from that visit. The copy is bounded, because the whole
+  list is rewritten on every change: a favicon past the bound is not stored at all,
+  which loses a glyph rather than the bookmark. An icon the user chooses (a library
+  SVG, a pasted SVG, a picked image) replaces it, in the same appearance vocabulary
+  a project, a tab, a group and a box wear, and asking for the page's own icon back
+  drops it again.
+- **The list's order is the stored order.** The parser preserves it instead of
+  sorting by `createdAt`, which is what makes a move durable. One reordering
+  primitive (`moveBefore`) serves both the panel's drag and its move commands.
+- **No indicator marks it.** The rail states the tool and nothing else: a user who
+  saved a page did so to get to it, not to be told it is there, so there is no
+  count badge and no count on the tool's label. Downloads keep theirs, because that
+  one reports work in flight.
 
 ## UI shape
 
@@ -229,7 +458,7 @@ Exit gate: external security review of the remote-content boundary and packaged-
 
 ### Phase 2: Usability and bounded tabs (about 1 engineering week)
 
-- Small capped tab model, sleeping/serialized inactive tabs, download manager, per-origin permission settings, session restore, keyboard shortcuts, accessibility.
+- Small capped tab model, sleeping/serialized inactive tabs, download manager (delivered; see “Downloads”), per-origin permission settings, session restore, keyboard shortcuts, accessibility.
 - Performance telemetry kept local and privacy-redacted.
 
 Exit gate: documented resource budgets hold during simultaneous terminal output, one agent stream, and representative dashboards.

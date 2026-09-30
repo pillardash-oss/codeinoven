@@ -21,7 +21,11 @@
 import { publishBrowserSearchEngine } from '$lib/browser-search-context'
 import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
 import { appConfigState } from './app-config.svelte'
+import { browserAssistant } from './browser-assistant.svelte'
+import { browserBookmarks } from './browser-bookmarks.svelte'
 import { browserDownloads } from './browser-downloads.svelte'
+import { browserExtensions } from './browser-extensions.svelte'
+import { browserHistory } from './browser-history.svelte'
 import { browserInspector } from './browser-inspector.svelte'
 import { browserPopupWindows } from './browser-popup-windows.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
@@ -42,7 +46,29 @@ export function startBrowserRuntime(): void {
   globalBrowser.start()
   browserPopupWindows.start()
   browserDownloads.start()
+  browserExtensions.start()
   browserInspector.start()
+  // The history and the bookmark list are the browser's memory: one records every
+  // page a tab commits, the other is what the user saved. Both are read here, once
+  // the browser is actually wanted, so a launch that never reaches it pays nothing
+  // for them.
+  //
+  // The history keeps one list per browser surface, so it is told two things only
+  // this seam can join: which surface a conversation's tabs belong to, and whether
+  // a surface still has any. The first comes from the sidebar's own scope resolver,
+  // so a history always covers exactly the tabs its strip shows; the second is what
+  // lets a thread browser's list die with the browser.
+  browserHistory.setScopeResolver((projectId, threadId) =>
+    contextSidebarState.browserScopeIdFor(projectId, threadId)
+  )
+  browserHistory.setLiveThreadScope((scope) => contextSidebarState.browserScopeIsLive(scope))
+  browserHistory.start()
+  browserBookmarks.start()
+  // A browser tab's assistant conversation is a real chat thread, and this store
+  // is what mirrors the links between them. It subscribes only from here, so a
+  // launch that never opens the browser pays nothing for the conversations it
+  // will never show.
+  browserAssistant.start()
   contextSidebarState.startBrowserTabs()
   // Two pushes to main describe the browser's chrome rather than its state, and
   // both are skipped while no browser exists (see `publishBrowserScrollbarTheme`

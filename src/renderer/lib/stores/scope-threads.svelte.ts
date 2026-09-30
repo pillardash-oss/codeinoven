@@ -1,5 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { SvelteSet } from 'svelte/reactivity'
+import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 import { threadStage, type ScopeSidebarContext, type ThreadStage } from './scope-board'
 import {
   isOrchestrationChildThread,
@@ -242,6 +243,13 @@ export class ScopeThreads {
   }
 
   updateThread(updated: Thread): void {
+    // A browser tab's assistant conversation is a real thread in the reserved
+    // hidden browser container. Every list is filtered at the repository
+    // boundary, but a `thread:updated` broadcast is not a list: without this the
+    // chat would appear as a phantom row in the thread timeline and the
+    // switcher, pointing at a container the workspace never shows. The browser's
+    // own rail owns that conversation instead.
+    if (updated.projectId === GLOBAL_BROWSER_PROJECT_ID) return
     const index = this.allScopeThreads.findIndex((thread) => thread.id === updated.id)
     if (index === -1) {
       this.allScopeThreads = [updated, ...this.allScopeThreads]

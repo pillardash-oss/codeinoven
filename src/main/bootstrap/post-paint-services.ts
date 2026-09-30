@@ -26,8 +26,10 @@ import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { Logger } from '../system/logger'
+import { resolveAutoAnswerScope } from '../system/auto-answer-scope'
 import {
   broadcastThreadUpdate,
+  setBackgroundAttention,
   setNotificationService,
   setPowerWakeService
 } from '../chat/thread-events'
@@ -39,6 +41,7 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
+import { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { DesignService } from '../design/design-service'
 import type { BootstrapState } from './bootstrap-state'
 
@@ -65,15 +68,35 @@ async function attachBrowserService(
   const chatEngine = state.chatEngine
   if (!chatEngine) return
   if (state.browserService) {
+    // The previous window's tabs are about to lose their views, so their stacks
+    // are committed first. This await is what makes the write survive: `dispose()`
+    // closes the views and nothing would be left to read a stack from afterwards.
+    await state.browserService.flushTabHistory()
     state.browserService.dispose()
     state.browserService = null
   }
-  const service = new BrowserService(window, database, storage)
+  // The download manager is deliberately *not* created per window. Downloads
+  // belong to their project's session and keep running while no window shows
+  // them, so the first attach builds it, hydrates the records an earlier run
+  // left behind, and every later window reuses the same one.
+  if (!state.browserDownloads) {
+    state.browserDownloads = new BrowserDownloadManager({
+      persistence: storage,
+      window: () => (state.mainWindow?.isDestroyed() ? null : state.mainWindow)
+    })
+  }
+  await state.browserDownloads.hydrate()
+  const service = new BrowserService(window, database, storage, state.browserDownloads)
   state.browserService = service
   // Remembered permission decisions load before the service accepts browser
   // IPC, so a site is never re-prompted for a permission the user already
   // granted in this or an earlier run.
   await service.hydratePermissionMemory()
+  // The stored Back/Forward stacks load before the service accepts browser IPC.
+  // A tab can be shown on the very first frame the renderer is allowed to ask,
+  // and a tab restored from a hibernated row has to find its history already
+  // there: there is no second chance to restore it once it has loaded.
+  await service.hydrateTabHistory()
   service.register()
   // The browser's native context menu is built in main, so it needs the address
   // bar's search engine. The config is read once at attach; the renderer pushes
@@ -199,7 +222,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const projectFilesService = new ProjectFilesService(
     projectManager,
     scopeRootProvider(scopeRootResolver),
-    // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
+    // Chat file trees mount on the thread's own `chats-cwd/<threadId>`
     // directory and assistant file trees on the task's
     // `assistant-cwd/<routineId ?? threadId>` workspace; both are created on
     // demand so an empty conversation still has a browsable root.
@@ -240,6 +263,16 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
   )
   state.updaterService = new UpdaterService(storage)
+  // The menu bar's "Check for Updates" drives the whole silent cycle. Wired here,
+  // where the updater is born, so the tray item is live the moment the updater is.
+  state.backgroundLifecycle?.setUpdater({
+    updateInBackground: async () => {
+      await state.updaterService?.updateInBackground()
+    },
+    status: () => state.updaterService?.status ?? { canAutoUpdate: false, state: 'idle' },
+    onStatusChange: (callback) =>
+      state.updaterService?.onStatusChange(callback) ?? (() => undefined)
+  })
   // One vault and one GitHub auth for the whole app: the skill updater reads the
   // same token the IPC layer does, so a check is authenticated exactly like an
   // install instead of running against the anonymous rate limit.
@@ -283,6 +316,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const { AutoAnswerStore } = await import('../system/auto-answer-store')
   state.autoAnswerStore = new AutoAnswerStore(storage)
   await state.autoAnswerStore.load()
+  // Proof a previous process shut down on purpose, so an orphaned turn is
+  // settled as a clean app-closed stop rather than a crash failure. Loaded
+  // before launch recovery reads it.
+  const { CleanShutdownStore } = await import('../system/clean-shutdown-store')
+  state.cleanShutdownStore = new CleanShutdownStore(storage)
+  await state.cleanShutdownStore.load()
   state.chatEngine.attachAutoAnswerRecorder((report) => {
     const store = state.autoAnswerStore
     if (!store) return
@@ -292,6 +331,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       outcome: report.outcome,
       projectId: report.projectId,
       threadId: report.threadId,
+      // File the gate under the task and routine it actually concerns, so the
+      // decision keeps surfacing after this run thread is evicted.
+      ...resolveAutoAnswerScope(database, report.projectId, report.threadId),
       entries: report.entries,
       at: report.at
     })
@@ -382,8 +424,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   try {
     const backgroundConfig = await storage.getConfig()
     state.powerWakeService.setBackgroundPolicy({
-      enabled: backgroundConfig.backgroundMode !== 'off',
-      wakeLeadMs: backgroundConfig.backgroundWakeLeadMs,
+      // The lifecycle is the authority: it also knows whether this launch opted
+      // out of background work, which no config value can express.
+      enabled:
+        state.backgroundLifecycle?.backgroundEnabled ?? backgroundConfig.backgroundMode !== 'off',
+      wakeLeadMs: state.backgroundLifecycle?.wakeLeadMs ?? backgroundConfig.backgroundWakeLeadMs,
       maxHoldMs: backgroundConfig.maxBackgroundWakeHoldMs
     })
   } catch (error) {
@@ -598,7 +643,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // Keep the device awake while a scheduled auto-retry is due within the wake
   // window, so a usage-limit reset fires even when the user is away.
   state.powerWakeService.attachRetryScheduler(state.retryScheduler)
-  state.retryScheduler.attachChangeListener(() => state.powerWakeService?.onRetryScheduleChanged())
+  state.retryScheduler.attachChangeListener(() => {
+    state.powerWakeService?.onRetryScheduleChanged()
+    // A tracked provider issue (and the retry that clears it) is the durable
+    // half of the thread's error card, which the icon mirrors.
+    state.backgroundLifecycle?.requestAttentionRefresh()
+  })
   state.updaterService.setChatEngine(state.chatEngine)
   // Reap any harness processes orphaned by an unclean previous run before the
   // first session can spawn fresh servers, so leftover dev servers/ports are
@@ -617,6 +667,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   registerIpcHandlers(storage, database, state.updaterService, state.chatEngine, {
     projectManager,
     projectFilesService,
+    browser: () => state.browserService,
     vault,
     githubAuthService,
     skillUpdates: skillUpdateService,
@@ -808,6 +859,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       Logger.error('Power wake startup failed (non-fatal):', error)
     }
 
+    // Every persisted thread update now re-evaluates the menu bar icon, so a
+    // thread that breaks while the window is closed flips it and a thread that
+    // recovers flips it back.
+    if (state.backgroundLifecycle) setBackgroundAttention(state.backgroundLifecycle)
+
     try {
       await state.retryScheduler?.start()
       await state.chatEngine?.repairPendingRetryThreadStatuses()
@@ -915,5 +971,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         .then(({ sweepOrphanProjectArtifacts }) => sweepOrphanProjectArtifacts(storage, database))
         .catch((error: unknown) => Logger.dev('Orphan artifact sweep failed:', error))
     }, 20_000)
+
+    // Reclaim the Chromium profiles no live project owns, the same way the sweep
+    // above reclaims directory trees under the config root: a deleted project's
+    // browser survives as a profile directory that can hold gigabytes. Delayed and
+    // bounded for the same reason, and it declines to run at all while a sibling
+    // instance is alive, because a sibling's live browser is not this one's to take
+    // away.
+    setTimeout(() => {
+      void import('../browser/browser-service/browser-profile-store')
+        .then(({ sweepUnclaimedBrowserProfiles }) => sweepUnclaimedBrowserProfiles(database))
+        .catch((error: unknown) => Logger.dev('Browser profile sweep failed:', error))
+    }, 25_000)
   })()
 }

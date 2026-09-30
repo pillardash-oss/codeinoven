@@ -3,6 +3,7 @@ import { readdir, readFile, rm, stat } from 'fs/promises'
 import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, resolve } from 'path'
+import { homedir } from 'os'
 import { fileURLToPath } from 'url'
 import { createHash, randomBytes, randomInt, randomUUID } from 'crypto'
 import { createServer } from 'http'
@@ -104,6 +105,12 @@ import {
   routineHowToUpdateContext
 } from '../../lib/routine-authoring'
 import { isRoutineNextStepsPrompt } from '../../lib/assistant-next-steps'
+import {
+  continuationRequestPrompt,
+  isContinuationRelayPrompt,
+  pendingContinuationRequest,
+  type PendingContinuationRequest
+} from '../../lib/pending-request'
 import { composeRoutineInstruction, routineRunContext } from '../../lib/routine-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
@@ -187,6 +194,10 @@ import {
 import { refreshCustomProviderModels } from '../providers/base-url-model-refresh'
 import { AgentProcessService } from '../agents/agent-process-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
+import {
+  projectDirectories,
+  projectIdForWorkingDirectory
+} from '../agents/process-project-attribution'
 import { appServiceRegistry } from '../system/app-service-registry'
 import { UtilityOrchestrationService } from '../utilities/utility-orchestration-service'
 import {
@@ -412,12 +423,14 @@ import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc/browser'
 import { GenerationClock, generatedTokens } from '../../lib/usage-rate'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
+  LEGACY_CHATS_ARTIFACTS_DIRECTORY,
   ASSISTANT_CWD_DIR,
   BROWSER_CWD_DIR,
   CHATS_CWD_DIR,
   PROJECT_DATA_DIRECTORY,
   assistantThreadWorkspaceDirectory,
-  chatThreadArtifactDirectory,
+  browserThreadWorkspaceDirectory,
+  chatThreadWorkspaceDirectory,
   ensureFeatureSlug,
   featureArtifactDirectory,
   featureSlugFromTitle,
@@ -533,6 +546,7 @@ import {
 } from './chat-engine/chat-engine-message-text'
 import {
   BRAINSTORM_GENERATION_TIMEOUT_MS,
+  CONTINUATION_REQUEST_PAGE_MESSAGES,
   COORDINATOR_HANDOFF_QUEUE_DIR,
   CURRENT_SPEC_GENERATION_VERSION,
   DEFAULT_QUESTION_TIMEOUT_MS,
@@ -613,6 +627,7 @@ import {
   isSameImageDescriptorModel,
   parseBatchedDescriptorJson
 } from './chat-engine/chat-engine-images'
+import { readableRelayAttachments } from './chat-engine/continuation-attachments'
 import {
   UNBOUNDED_MUTATING_TOOLS,
   changedPathsFromTool,
@@ -2865,6 +2880,13 @@ export class ChatEngine {
   ): Promise<void> {
     await this.awaitSessionIdleFinalization(pending.request.sessionId)
     await this.resolvePendingQuestion(pending, resolution, answers, async () => undefined)
+    // The answer starts a new turn, so the turn that asked the question can
+    // never resume and its checkpoint would stay active forever. Settle it
+    // here, while the workspace still reflects that turn, so its file changes
+    // land on their own card instead of vanishing.
+    await this.settleUnresumableQuestionTurn(pending.request.sessionId).catch((error: unknown) =>
+      Logger.error('Question turn settlement failed:', error)
+    )
 
     const thread = await this.threadManager.getThread(
       pending.request.projectId,
@@ -2892,6 +2914,46 @@ export class ChatEngine {
       // such record, so its presentation still has to render.
       resolution === 'answered' ? undefined : decision.presentation
     )
+  }
+
+  /**
+   * Finalize the checkpoint of a turn whose question answer cannot reach it.
+   *
+   * A turn that ends on a question skips checkpoint finalization on purpose, so
+   * the answer can continue the same native turn under the same checkpoint.
+   * When the answer cannot reach that turn, the engine sends a new turn instead,
+   * which starts a new checkpoint and replaces the thread's `active_turns` row.
+   * Nothing then points at the old checkpoint: the renderer skips `active`
+   * rows, restart recovery walks the ledger, and the late-claim reopen only
+   * accepts terminal checkpoints, so the turn's file changes disappeared with
+   * no card, no diff, and no undo.
+   */
+  private async settleUnresumableQuestionTurn(sessionId: string): Promise<void> {
+    const session = this.sessionRegistry.get(sessionId)
+    if (!session?.activeTurnId) return
+    this.reassertTurnToolEvidence(session, await this.turnTranscriptMessages(session))
+    await this.finishCheckpoint(sessionId, session, 'completed')
+  }
+
+  /**
+   * The current turn's messages from the driver's own transcript, or none when
+   * the driver cannot be resolved or its transcript is unavailable.
+   */
+  private async turnTranscriptMessages(session: SessionInfo): Promise<AgentMessage[]> {
+    const driver = this.driverForRuntime(session.driverId, session.accountId)
+    if (!driver) return []
+    try {
+      return session.activeTurnUserMessageId && driver.loadMessagesSince
+        ? await driver.loadMessagesSince(
+            session.projectPath,
+            session.sessionId,
+            session.activeTurnUserMessageId
+          )
+        : await driver.loadMessages(session.projectPath, session.sessionId)
+    } catch (error) {
+      Logger.dev('turn transcript re-read failed:', error)
+      return []
+    }
   }
 
   /**
@@ -2982,6 +3044,16 @@ export class ChatEngine {
       .sort((left, right) => left.createdAt - right.createdAt)
   }
 
+  /**
+   * Persist the draft progress of one pending question card.
+   *
+   * A draft save is best-effort, so it must never surface as a failure: clicking
+   * an option, navigating between questions, the custom-answer debounce, and the
+   * card's own unmount flush all race with the request being answered, dismissed,
+   * auto-answered, or retired with its session. When the request is already gone
+   * this answers `null`, which tells the renderer to close the stale card instead
+   * of reporting an error for a card nobody can answer any more.
+   */
   async updateQuestion(
     projectId: string,
     threadId: string,
@@ -2989,12 +3061,16 @@ export class ChatEngine {
     questionIndex: number,
     answers: string[],
     nextQuestionIndex?: number
-  ): Promise<PendingAgentQuestionRequest> {
+  ): Promise<PendingAgentQuestionRequest | null> {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     requestId = validateEntityId(requestId, 'Question request ID', 256)
-    const pending = this.requirePendingQuestion(projectId, threadId, requestId)
+    const pending = this.pendingQuestionForThread(projectId, threadId, requestId)
+    if (!pending) {
+      Logger.dev(`Ignoring progress update for settled question request: ${requestId}`)
+      return null
+    }
     assertQuestionIndex(questionIndex, pending.request.questions.length)
     if (!Array.isArray(answers)) {
       throw new TypeError('Question answers must be an array')
@@ -3010,6 +3086,13 @@ export class ChatEngine {
     if (!question?.multiple && safeAnswers.length > 1) {
       throw new TypeError(`Question answer ${questionIndex + 1} allows exactly one selection`)
     }
+
+    // A resolution is already in flight (the user's own answer, a dismissal, or
+    // the inactivity timer), so the decision is captured and this late save only
+    // has to report the state the main process still holds. It must not rewrite
+    // the request: a resolution that fails is restored and its card stays up, and
+    // the card's own selection must survive that.
+    if (pending.resolving) return structuredClone(pending.request)
 
     pending.request.answers = pending.request.answers.map((answer, index) =>
       index === questionIndex ? safeAnswers : answer
@@ -3032,6 +3115,13 @@ export class ChatEngine {
         pending.request.expiresAt = Date.now() + pending.timeoutMs
         this.schedulePendingQuestion(pending)
       }
+    } else if (pending.request.questions.some(isSecretQuestion)) {
+      // A secret card the user is filling in stays paused, and re-scheduling is
+      // what holds that pause (and what gives the card a full window back once
+      // the user stops interacting). Without it a cleared deadline would sit
+      // there until the next unrelated activity turned it into a fresh
+      // countdown, under a card that still says it is paused.
+      this.schedulePendingQuestion(pending)
     }
     return structuredClone(pending.request)
   }
@@ -4883,9 +4973,36 @@ export class ChatEngine {
     const projects = (await this.projectManager.listProjects()).filter(
       (project) => project.source !== 'ssh'
     )
-    return this.capabilityDiscovery.discoverAll(
-      projects.map((project) => ({ id: project.id, path: project.path }))
-    )
+    const references = projects.map((project) => ({ id: project.id, path: project.path }))
+    const [catalog, piMcp] = await Promise.all([
+      this.capabilityDiscovery.discoverAll(references),
+      this.discoverPiMcpCapabilities(references)
+    ])
+    return { mcp: [...catalog.mcp, ...piMcp], skill: catalog.skill }
+  }
+
+  /**
+   * Pi's own mcp.json servers, one file per agent directory. The legacy
+   * account keeps Pi's harness default; every managed account reads its own
+   * container through `PI_CODING_AGENT_DIR`. They are listed so the Utilities
+   * page can edit them in place, and are deliberately never re-registered in
+   * the app's own MCP bridge: Pi loads them itself, so the user's one
+   * configuration keeps working with or without CodeInOven.
+   */
+  private async discoverPiMcpCapabilities(
+    projects: Array<{ id: string; path: string }>
+  ): Promise<AgentCapabilityEntry[]> {
+    const directories = [join(homedir(), '.pi', 'agent')]
+    try {
+      for (const account of await this.accountRegistry.list('pi')) {
+        const root = this.accountRegistry.environment(account)['PI_CODING_AGENT_DIR']?.trim()
+        if (root) directories.push(root)
+      }
+    } catch {
+      // A failed account listing must not blank the catalog: the harness
+      // default directory still lists the account every user has.
+    }
+    return this.capabilityDiscovery.discoverPiMcp(directories, projects)
   }
 
   /**
@@ -5756,6 +5873,21 @@ export class ChatEngine {
     const services = appServiceRegistry.list()
     const projectNames = new Map<string, string>()
     const threadTitles = new Map<string, string>()
+    // A row with no session owner can still belong to a project: its working
+    // directory names the project whose files it is working in. That is how a
+    // re-parented daemon (the adb fork-server) and an app-wide shared runtime
+    // keep their project once their session, or their session marker, is gone,
+    // instead of listing under the app-wide node with a project path showing
+    // underneath.
+    const directories = await projectDirectories(await this.projectManager.listProjects())
+    const attributedProjectIds = new Map<number, string>()
+    for (const process of processes) {
+      if (process.projectId || !process.cwd) continue
+      const projectId = await projectIdForWorkingDirectory(process.cwd, directories)
+      if (projectId) attributedProjectIds.set(process.pid, projectId)
+    }
+    const ownerProjectId = (row: { pid: number; projectId: string | null }): string | null =>
+      row.projectId ?? attributedProjectIds.get(row.pid) ?? null
     // One resolution pass across both lists, so a project or thread that owns a
     // process and a service is read from the database once.
     const resolveOwner = async (projectId: string | null, threadId: string | null) => {
@@ -5768,13 +5900,16 @@ export class ChatEngine {
         threadTitles.set(threadId, thread?.title ?? threadId)
       }
     }
-    for (const process of processes) await resolveOwner(process.projectId, process.threadId)
+    for (const process of processes) await resolveOwner(ownerProjectId(process), process.threadId)
     for (const service of services) await resolveOwner(service.projectId, service.threadId)
-    const resolvedProcesses = processes.map((process) => ({
-      ...process,
-      ...(process.projectId ? { projectName: projectNames.get(process.projectId) ?? null } : {}),
-      ...(process.threadId ? { threadTitle: threadTitles.get(process.threadId) ?? null } : {})
-    }))
+    const resolvedProcesses = processes.map((process) => {
+      const projectId = ownerProjectId(process)
+      return {
+        ...process,
+        ...(projectId ? { projectId, projectName: projectNames.get(projectId) ?? null } : {}),
+        ...(process.threadId ? { threadTitle: threadTitles.get(process.threadId) ?? null } : {})
+      }
+    })
     const resolvedServices = services.map((service) => ({
       ...service,
       ...(service.projectId ? { projectName: projectNames.get(service.projectId) ?? null } : {}),
@@ -8157,6 +8292,13 @@ export class ChatEngine {
     await this.threadCreation?.awaitReady(threadId)
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 0, 200_000)
+    // A continuation relay re-sends a request the user made earlier, and its
+    // files can be gone from disk by the time the retry runs. A vanished file
+    // drops from the relay so the turn still carries the request; failing it
+    // would leave the user with the same unanswered request.
+    if (isContinuationRelayPrompt(text)) {
+      attachments = await this.relayAttachments(projectId, threadId, attachments)
+    }
     const hasSendableContext =
       text.length > 0 ||
       (attachments?.length ?? 0) > 0 ||
@@ -8876,7 +9018,7 @@ export class ChatEngine {
       transportPromise
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
-    const chatArtifactRoot = this.storage.resolve(chatThreadArtifactDirectory(threadId))
+    const chatWorkspaceRoot = this.storage.resolve(chatThreadWorkspaceDirectory(threadId))
     const generatedArtifactPrompt = artifactInstruction(
       targetThread ?? {
         projectId,
@@ -8885,7 +9027,7 @@ export class ChatEngine {
         featureSlug: undefined
       },
       {
-        chatArtifactRoot,
+        chatWorkspaceRoot,
         chatFileSystemMode: isChatThread && chatFileSystemEnabled
       }
     )
@@ -8904,11 +9046,7 @@ export class ChatEngine {
     const chatSystemPrompt = isChatThread
       ? [
           await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat'),
-          chatFileSystemEnabled
-            ? ''
-            : chatFilesystemBoundaryInstruction(
-                this.storage.resolve(chatThreadArtifactDirectory(threadId))
-              )
+          chatFileSystemEnabled ? '' : chatFilesystemBoundaryInstruction(chatWorkspaceRoot)
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -9378,7 +9516,7 @@ export class ChatEngine {
     if (!Array.isArray(attachments)) {
       throw new TypeError('Temporary chat attachments must be an array')
     }
-    const validatedAttachments = attachments.map((attachment) => {
+    let validatedAttachments = attachments.map((attachment) => {
       const url = validateBoundedString(attachment.url, 'Attachment URL', 1, 20_000)
       const mime = validateBoundedString(attachment.mime, 'Attachment MIME', 1, 512)
       return {
@@ -9389,6 +9527,11 @@ export class ChatEngine {
           : {})
       }
     })
+    // A retried temporary-chat turn re-sends the request's files, and they can
+    // be gone from disk by then; the relay drops what it cannot materialize.
+    if (isContinuationRelayPrompt(text)) {
+      validatedAttachments = await this.relayAttachments(projectId, threadId, validatedAttachments)
+    }
     const selectedTexts = validatedReferences.map((reference) => reference.text).filter(Boolean)
     let context = initialContext
       ? validateBoundedString(initialContext, 'Temporary chat context', 1, 100_000)
@@ -10867,7 +11010,9 @@ export class ChatEngine {
             kind: 'image-descriptor',
             outcome: 'ignored',
             projectId: request.projectId,
-            threadId: request.threadId,
+            // File it on the conversation the card was shown on, which is the
+            // coordinator for a delegated worker, not the worker that ran.
+            threadId: surfaceThreadId,
             entries: [
               {
                 prompt: requestForCard.error,
@@ -12479,10 +12624,13 @@ export class ChatEngine {
     this.activeAchievementAuditorEnsures.delete(`${projectId}:${threadId}`)
     this.activeAchievementAuditRuns.delete(`${projectId}:${threadId}`)
 
-    // The thread's own artifact scratch directory (and its legacy inbox-image
-    // root) is per-thread app data; it goes away with the thread.
+    // The thread's own workspace directory (the directory its session ran in
+    // and the mount root of its file tree) is per-thread app data, as are the
+    // legacy artifact roots older chats wrote to; all of it goes away with the
+    // thread.
     for (const directory of [
-      chatThreadArtifactDirectory(threadId),
+      chatThreadWorkspaceDirectory(threadId),
+      join(LEGACY_CHATS_ARTIFACTS_DIRECTORY, threadId),
       join(LEGACY_CHAT_ARTIFACTS_DIRECTORY, threadId)
     ]) {
       void rm(this.storage.resolve(directory), { recursive: true, force: true }).catch((error) =>
@@ -19135,12 +19283,17 @@ export class ChatEngine {
     }
     const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
     const resumesSpecContract = activeSpec?.status === 'approved' && !thread.auditState
+    const continuation = await this.continuationTurnRequest(
+      thread.projectId,
+      thread.id,
+      resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue'
+    )
     await this.sendPrompt(
       thread.projectId,
       thread.id,
       validateThreadSettings(thread.settings),
-      resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue',
-      [],
+      continuation.text,
+      continuation.attachments,
       resumesSpecContract ? 'implement' : undefined,
       createMessageId(),
       undefined,
@@ -20685,6 +20838,28 @@ export class ChatEngine {
       return this.storage.resolve(assistantDirectory)
     }
 
+    // A standalone (inbox) chat owns `chats-cwd/<threadId>/`: one directory per
+    // conversation, and the very same root its file tree mounts, so a file the
+    // session writes is a file the tree can show. Resolving to the shared
+    // `chats-cwd` root instead puts every chat's scratch in one directory and
+    // leaves that scratch unreachable from the tree the chat displays.
+    if (projectId === INBOX_PROJECT_ID) {
+      const chatDirectory = chatThreadWorkspaceDirectory(threadId)
+      await this.storage.ensureDirectory(chatDirectory)
+      return this.storage.resolve(chatDirectory)
+    }
+
+    // A browser tab's agent chat owns `browser-cwd/<threadId>/`, and the tab's
+    // conversation thread is named after the tab, so one tab owns one directory
+    // for the life of its conversation. Resolving to the shared `browser-cwd`
+    // root instead puts every tab's scratch in one directory, where one tab's
+    // files are visible to the next.
+    if (projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      const browserDirectory = browserThreadWorkspaceDirectory(threadId)
+      await this.storage.ensureDirectory(browserDirectory)
+      return this.storage.resolve(browserDirectory)
+    }
+
     // The scope resolver is authoritative for threads in a scope; a stale
     // persisted directory never wins, and unhealthy managed scopes fail
     // closed instead of silently operating on the project root.
@@ -20708,6 +20883,10 @@ export class ChatEngine {
     if (!project) throw new Error(`Project not found: ${projectId}`)
 
     let projectPath = project.path
+    // A hidden inbox project has no folder of its own. Its project-level work
+    // (quota reads, grading judges, heartbeats) shares this neutral root, while
+    // each chat thread resolves to `chats-cwd/<threadId>/` through
+    // `resolveThreadPath` so conversations never share a directory.
     if (!projectPath && project.hidden && project.id === INBOX_PROJECT_ID) {
       await this.storage.ensureDirectory(CHATS_CWD_DIR)
       projectPath = this.storage.resolve(CHATS_CWD_DIR)
@@ -20720,8 +20899,10 @@ export class ChatEngine {
       projectPath = this.storage.resolve(ASSISTANT_CWD_DIR)
     }
     // The global browser is hidden too, and its tabs are web pages rather than
-    // files: a per-tab agent session runs in a neutral app-storage directory so
-    // it never touches a real project folder.
+    // files: the container's own root is a neutral app-storage directory, and
+    // each tab's agent session narrows it to `browser-cwd/<threadId>` through
+    // `resolveThreadPath` so a conversation never runs against a real project
+    // folder.
     if (!projectPath && project.hidden && project.id === GLOBAL_BROWSER_PROJECT_ID) {
       await this.storage.ensureDirectory(BROWSER_CWD_DIR)
       projectPath = this.storage.resolve(BROWSER_CWD_DIR)
@@ -20817,17 +20998,34 @@ export class ChatEngine {
 
   // ─── Event handling ───────────────────────────────────────────────────────
 
+  /**
+   * Resolve a pending question that this thread still owns, or `null` when the
+   * request has already settled. Operations that must be idempotent (a late
+   * draft save, a dismissal of a card that was auto-answered elsewhere) use this
+   * tolerant lookup, because the renderer's reply and the request's own
+   * resolution travel independently and either order is valid. A request that
+   * belongs to another project or thread is a caller bug and stays an error.
+   */
+  private pendingQuestionForThread(
+    projectId: string,
+    threadId: string,
+    requestId: string
+  ): PendingQuestionInfo | null {
+    const pending = this.pendingQuestions.get(requestId)
+    if (!pending) return null
+    if (pending.request.projectId !== projectId || pending.request.threadId !== threadId) {
+      throw new Error(`Question request does not belong to this thread: ${requestId}`)
+    }
+    return pending
+  }
+
   private requirePendingQuestion(
     projectId: string,
     threadId: string,
     requestId: string
   ): PendingQuestionInfo {
-    const pending = this.pendingQuestions.get(requestId)
-    if (
-      !pending ||
-      pending.request.projectId !== projectId ||
-      pending.request.threadId !== threadId
-    ) {
+    const pending = this.pendingQuestionForThread(projectId, threadId, requestId)
+    if (!pending) {
       throw new Error(`Question request is no longer pending: ${requestId}`)
     }
     if (pending.resolving) {
@@ -20940,6 +21138,21 @@ export class ChatEngine {
     // when they are fetching it. Nothing can invent a secret, so the deadline
     // closes the card rather than answering it.
     if (pending.request.questions.some(isSecretQuestion)) {
+      // A card the user has started filling in is paused instead: the value they
+      // are pasting is never cut off, and no deadline runs under their hands.
+      // The pause lasts while they are interacting with the app; once they are
+      // not, the card gets a full window again so an abandoned request still
+      // closes and settles the tool call waiting on it.
+      if (pending.request.interactedQuestionIndexes.length > 0) {
+        pending.request.expiresAt = undefined
+        if (this.isUserActive()) {
+          pending.timer = setTimeout(
+            () => this.schedulePendingQuestion(pending),
+            ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
+          )
+          return
+        }
+      }
       const secretExpiresAt = pending.request.expiresAt ?? Date.now() + pending.timeoutMs
       pending.request.expiresAt = secretExpiresAt
       pending.timer = setTimeout(
@@ -22895,7 +23108,8 @@ export class ChatEngine {
   /**
    * Send one disposable "ping" completion for a configured Heartbeat, pinned
    * to its exact harness/provider/model   no visible thread, no cheap-model
-   * substitution. Runs in the same inbox scratch directory as standalone chats.
+   * substitution. It owns no thread, so it runs in the shared inbox scratch
+   * root rather than in any chat's own workspace directory.
    */
   private async sendHeartbeatPing(config: HeartbeatConfig): Promise<boolean> {
     const driver = await this.driverForAccount(config.harnessId, config.accountId)
@@ -23376,10 +23590,78 @@ export class ChatEngine {
   }
 
   /**
+   * The request a continuation turn has to carry on the app's own initiative
+   * (the retry chip, an automatic resume after a provider reset, a recovered
+   * thread), plus the prompt that relays it.
+   *
+   * The request the failed turn was answering travels with the nudge. A bare
+   * "Continue" was trusting the harness session to still hold that request, and
+   * nothing guarantees it: a provider pause that leaves the turn held, an
+   * account or harness change, or a released session all leave the agent with a
+   * "Continue" and no request to continue, which reads to the user as their
+   * message being silently dropped. The request's files ride along as send-path
+   * attachments, so a relayed screenshot reaches the agent too.
+   */
+  private async continuationTurnRequest(
+    projectId: string,
+    threadId: string,
+    nudge: string
+  ): Promise<PendingContinuationRequest> {
+    try {
+      const page = await this.threadManager.loadMessagePage(
+        projectId,
+        threadId,
+        undefined,
+        CONTINUATION_REQUEST_PAGE_MESSAGES
+      )
+      const request = pendingContinuationRequest(page.messages)
+      return request
+        ? { text: continuationRequestPrompt(request, nudge), attachments: request.attachments }
+        : { text: nudge, attachments: [] }
+    } catch (error) {
+      // A continuation must still run when the mirror read fails: the harness
+      // session usually holds the request itself.
+      Logger.dev('Continuation request relay skipped:', {
+        projectId,
+        threadId,
+        error: rawErrorMessage(error)
+      })
+      return { text: nudge, attachments: [] }
+    }
+  }
+
+  /**
+   * The attachments a continuation relay can still materialize. A relay
+   * re-sends a request the user made earlier, and its files can be gone from
+   * disk by the time the retry runs; a vanished file drops from the relay, and
+   * the drop is recorded so a half-delivered retry is never silent.
+   */
+  private async relayAttachments(
+    projectId: string,
+    threadId: string,
+    attachments: PromptAttachment[]
+  ): Promise<PromptAttachment[]> {
+    const readable = await readableRelayAttachments(attachments)
+    if (readable.length !== attachments.length) {
+      const kept = new Set(readable)
+      Logger.info('Dropped missing files from a continuation relay', {
+        projectId,
+        threadId,
+        dropped: attachments
+          .filter((attachment) => !kept.has(attachment))
+          .map((attachment) => attachment.filename ?? attachment.url)
+      })
+    }
+    return readable
+  }
+
+  /**
    * Resume a thread whose usage window reset. Sends an internal "Continue"
    * through the normal sendPrompt pipeline (mirroring the manual Retry action)
    * so the agent picks up from its existing session and context. Skipped when
    * the thread is gone, its session moved on, or the harness is already active.
+   * The request the failed turn was answering rides along, because a session
+   * replaced in the meantime holds no memory of it.
    */
   async continueScheduledThread(record: PendingRetryRecord): Promise<void> {
     const projectId = validateEntityId(record.projectId, 'Project ID')
@@ -23424,12 +23706,13 @@ export class ChatEngine {
         fileSystemMode: false
       }
     )
+    const continuation = await this.continuationTurnRequest(projectId, threadId, 'Continue')
     await this.sendPrompt(
       projectId,
       threadId,
       settings,
-      'Continue',
-      [],
+      continuation.text,
+      continuation.attachments,
       undefined,
       createMessageId(),
       undefined,
@@ -23444,8 +23727,9 @@ export class ChatEngine {
   /**
    * The file-access scope for a permission request in a chat session.
    *
-   * Every session gets the thread's own `chats-artifacts/<threadId>` artifact
-   * directory as a pre-authorized scratch path: non-destructive, path-scoped
+   * A conversation that owns an app-storage workspace (a standalone chat's
+   * `chats-cwd/<threadId>`, a browser tab's `browser-cwd/<threadId>`) gets that
+   * workspace as a pre-authorized scratch path: non-destructive, path-scoped
    * file operations inside it never prompt, regardless of permission level or
    * File System mode.
    *
@@ -23467,14 +23751,18 @@ export class ChatEngine {
     restrictToAllowed: boolean
   }> {
     const isChat = info.projectId === INBOX_PROJECT_ID
-    // Assistant tasks are routine-scoped rather than project- or chat-scoped:
-    // their workspace is the routine's own `assistant-cwd/<routineId>/` root
-    // (`info.projectPath`), so they never fall back to a chats artifact
-    // directory for pre-authorized writes.
+    // A chat and a browser tab's agent chat each own an app-storage workspace,
+    // and the directory their session runs in is that workspace, so it is
+    // pre-authorized scratch. An assistant task deliberately gets none: it is
+    // routine-scoped, so its workspace is the routine's own
+    // `assistant-cwd/<routineId>/` root and must never fall back to a chat
+    // workspace directory for pre-authorized writes.
     const isAssistant = info.projectId === ASSISTANT_SPACE_ID
     const scratchPaths = isAssistant
       ? []
-      : [this.storage.resolve(chatThreadArtifactDirectory(info.threadId))]
+      : info.projectId === GLOBAL_BROWSER_PROJECT_ID
+        ? [info.projectPath]
+        : [this.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
     if (!isChat) {
       const skillPaths = this.temporaryChatForSession(info.sessionId)
         ? chatSkillPaths(info.driverId)
@@ -23548,6 +23836,7 @@ export class ChatEngine {
     }
 
     const commands = permissionCommands(request.metadata)
+    const unclassifiedTool = request.metadata['surface']
     const { allowedPaths, scratchPaths, restrictToAllowed } = await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
@@ -23558,7 +23847,10 @@ export class ChatEngine {
     }).evaluate({
       permission: request.permission,
       paths: request.patterns.filter((pattern) => !commands.includes(pattern)),
-      commands
+      commands,
+      ...(typeof unclassifiedTool === 'string' && unclassifiedTool.trim().length > 0
+        ? { unclassifiedTool: unclassifiedTool.trim() }
+        : {})
     })
     if (!policy.approved) {
       policy = {
@@ -24490,6 +24782,7 @@ export class ChatEngine {
         }
       }
       if (!awaitingUser) {
+        this.reassertTurnToolEvidence(info, messages)
         await this.finishCheckpoint(
           sessionId,
           info,
@@ -26425,6 +26718,42 @@ export class ChatEngine {
     return merged
   }
 
+  /**
+   * Re-assert the mutating-tool evidence a settled turn's own transcript
+   * proves. Live part events are the normal source, but they can be missed: a
+   * driver that mirrors parts only once the turn settles, a mid-turn session
+   * re-registration, or a dropped event. Completion reads that evidence to
+   * decide which workspace changes belong to the turn, and an empty set means
+   * "this turn claimed nothing", which records no diff at all and silently
+   * deletes real edits from the card. This only ever widens what completion
+   * considers the turn's own, and every path must still appear in the workspace
+   * diff, so no change is invented.
+   */
+  private reassertTurnToolEvidence(session: SessionInfo, messages: readonly AgentMessage[]): void {
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      for (const part of message.parts) {
+        if (part.type !== 'tool') continue
+        if (UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
+          session.unboundedToolObserved = true
+          continue
+        }
+        const paths = changedPathsFromTool(session.projectPath, part)
+        if (paths.length === 0) continue
+        session.changedPaths ??= new Set()
+        session.preciseChangedPaths ??= new Map()
+        const claimedAt = Date.now()
+        for (const path of paths) {
+          // A path the user saved through the in-app editor during this turn is
+          // the user's edit, exactly as in the live part handler.
+          if (session.userTouchedPaths?.has(path)) continue
+          session.changedPaths.add(path)
+          session.preciseChangedPaths.set(path, claimedAt)
+        }
+      }
+    }
+  }
+
   private async finishCheckpoint(
     sessionId: string,
     info: SessionInfo | undefined,
@@ -26734,6 +27063,13 @@ export class ChatEngine {
     ephemeral?: boolean
   ): void {
     const existing = this.sessionRegistry.get(sessionId)
+    // Naming the very turn the session is already running is a refresh, not a
+    // new turn: keep the attribution that turn has built up. Resetting it here
+    // used to erase the turn's claimed paths and its shell-tool flag, and
+    // completion then recorded no workspace changes at all for a turn that
+    // really did edit files.
+    const sameTurn = activeTurnId !== undefined && existing?.activeTurnId === activeTurnId
+    const continuesTurn = activeTurnId === undefined || sameTurn
     this.sessionRegistry.set(sessionId, {
       sessionId,
       projectId,
@@ -26751,15 +27087,15 @@ export class ChatEngine {
       lastTurnId: activeTurnId ?? existing?.activeTurnId ?? existing?.lastTurnId,
       activeTurnUserMessageId: existing?.activeTurnUserMessageId,
       activeTurnOrigin: existing?.activeTurnOrigin,
-      estimatedContextUsed: activeTurnId ? undefined : existing?.estimatedContextUsed,
+      estimatedContextUsed: continuesTurn ? existing?.estimatedContextUsed : undefined,
       hasReportedTokenUsage: existing?.hasReportedTokenUsage,
-      changedPaths: activeTurnId ? undefined : existing?.changedPaths,
-      preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
-      userTouchedPaths: activeTurnId ? undefined : existing?.userTouchedPaths,
-      openUnboundedTools: activeTurnId ? new Set() : existing?.openUnboundedTools,
-      unboundedToolObserved: activeTurnId ? false : existing?.unboundedToolObserved,
-      unboundedWindowStart: activeTurnId ? undefined : existing?.unboundedWindowStart,
-      pendingWindowScans: activeTurnId ? new Set() : existing?.pendingWindowScans,
+      changedPaths: continuesTurn ? existing?.changedPaths : undefined,
+      preciseChangedPaths: continuesTurn ? existing?.preciseChangedPaths : new Map(),
+      userTouchedPaths: continuesTurn ? existing?.userTouchedPaths : undefined,
+      openUnboundedTools: continuesTurn ? existing?.openUnboundedTools : new Set(),
+      unboundedToolObserved: continuesTurn ? existing?.unboundedToolObserved : false,
+      unboundedWindowStart: continuesTurn ? existing?.unboundedWindowStart : undefined,
+      pendingWindowScans: continuesTurn ? existing?.pendingWindowScans : new Set(),
       ephemeral: ephemeral ?? existing?.ephemeral
     })
     this.agentProcesses.claimSession(sessionId, projectId, threadId)

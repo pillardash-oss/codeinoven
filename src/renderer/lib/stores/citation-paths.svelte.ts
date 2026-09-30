@@ -1,7 +1,7 @@
 import { invoke } from '$lib/ipc.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { isAbsoluteCitationPath } from '$lib/agent-source-citations'
-import { INBOX_PROJECT_ID } from '$shared/types'
+import { CHATS_CWD_DIR, INBOX_PROJECT_ID } from '$shared/types'
 
 /**
  * Shared, reactive cache of file citations confirmed to exist on disk.
@@ -113,8 +113,8 @@ class CitationPathsState {
     ) {
       return
     }
-    // Inbox chats have no project root; absolute artifact citations inside the
-    // open thread's `chats-artifacts/<threadId>/` directory are still probed
+    // Inbox chats have no project root; absolute citations inside the open
+    // thread's `chats-cwd/<threadId>/` workspace directory are still probed
     // externally so they can become clickable links in the conversation.
     if (project.id === INBOX_PROJECT_ID) {
       const threadId =
@@ -122,11 +122,11 @@ class CitationPathsState {
           ? workspaceState.selectedThread.id
           : null
       if (!threadId) return
-      const artifactCandidates = candidates.filter(
+      const workspaceCandidates = candidates.filter(
         (candidate) =>
-          isAbsoluteCitationPath(candidate) && candidate.includes(`/chats-artifacts/${threadId}/`)
+          isAbsoluteCitationPath(candidate) && candidate.includes(`/${CHATS_CWD_DIR}/${threadId}/`)
       )
-      if (artifactCandidates.length > 0) this.ensureExternalChecked(artifactCandidates)
+      if (workspaceCandidates.length > 0) this.ensureExternalChecked(workspaceCandidates)
       return
     }
     const external: string[] = []

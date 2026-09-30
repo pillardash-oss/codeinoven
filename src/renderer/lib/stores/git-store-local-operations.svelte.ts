@@ -1,4 +1,6 @@
+import { SvelteMap } from 'svelte/reactivity'
 import { invoke, invokeGit } from '$lib/ipc.svelte'
+import { gitRemoteIssueOf } from '$lib/ipc-errors'
 import type {
   GitBranchInfo,
   GitCommitInfo,
@@ -13,6 +15,7 @@ import type {
   GitPullStrategy,
   GitRebaseAction,
   GitRemoteInfo,
+  GitRemoteIssue,
   GitRemoteUpdate,
   GitResetMode,
   GitRestoreTarget,
@@ -72,6 +75,19 @@ export class GitLocalOperations {
   error: string | null = $state(null)
   githubPermission: GitHubPermissionRequired | null = $state(null)
   /**
+   * What each project's remote last answered when a round trip did not finish,
+   * keyed by project because that is the granularity a fetch runs at: managed
+   * scopes are worktrees of one repository and share `refs/remotes`.
+   *
+   * A remote the checkout cannot reach, authenticate against, or find is a
+   * state the panel describes in its own notice, never the error banner, and it
+   * survives the refreshes and project switches between the fetch that found it
+   * and the panel open that shows it. The next round trip that finishes clears
+   * it. Reactive, unlike the store's other bookkeeping, because the panel
+   * renders it.
+   */
+  private readonly remoteIssues = new SvelteMap<string, GitRemoteIssue>()
+  /**
    * When true, the file explorer reveals only conflicted files (a mode like the
    * "Last turn" filter, driven from the git panel's Resolve flow and the file
    * tree's Conflicts toggle). Cleared when no conflicts remain.
@@ -88,6 +104,41 @@ export class GitLocalOperations {
   prResolveSession = $state<(PrResolveOptions & { projectId: string }) | null>(null)
 
   constructor(private readonly access: GitLocalOperationAccess) {}
+
+  /** The remote verdict for one project, or null when its last round trip finished. */
+  remoteIssueFor(projectId: string): GitRemoteIssue | null {
+    return this.remoteIssues.get(projectId) ?? null
+  }
+
+  /**
+   * Record what the remote answered: the verdict, or nothing when the round
+   * trip finished. Called by every operation that talks to a remote, so a
+   * notice disappears the moment one of them succeeds again.
+   */
+  private noteRemoteIssue(projectId: string, issue: GitRemoteIssue | null): void {
+    if (issue) this.remoteIssues.set(projectId, issue)
+    else this.remoteIssues.delete(projectId)
+  }
+
+  /**
+   * Report one remote round trip that did not finish.
+   *
+   * A remote verdict is the panel's notice, not an alarm: it is the state the
+   * panel exists to explain, and main already reported it as data so nothing
+   * reached the log. Any other failure keeps the error banner it always had.
+   * Returns the sentence for callers that hand an outcome back to their own UI,
+   * which is what a failed push does.
+   */
+  private failRemoteOperation(projectId: string, reason: unknown, fallback: string): string {
+    const issue = gitRemoteIssueOf(reason)
+    if (issue) {
+      this.noteRemoteIssue(projectId, issue)
+      return issue.message
+    }
+    const message = errorMessage(reason, fallback)
+    this.error = message
+    return message
+  }
 
   /**
    * Publish the state a failed git action left behind, without clearing the
@@ -327,10 +378,14 @@ export class GitLocalOperations {
     this.access.markBusy('push', true)
     this.error = null
     try {
-      await invoke('git:deleteRemoteBranch', ...this.access.scopedGitArgs(projectId, remote, name))
+      await invokeGit(
+        'git:deleteRemoteBranch',
+        ...this.access.scopedGitArgs(projectId, remote, name)
+      )
+      this.noteRemoteIssue(projectId, null)
       await this.access.refresh(projectId)
     } catch (reason) {
-      this.error = errorMessage(reason, 'Remote branch deletion failed')
+      this.failRemoteOperation(projectId, reason, 'Remote branch deletion failed')
     } finally {
       this.access.markBusy('push', false)
     }
@@ -357,7 +412,9 @@ export class GitLocalOperations {
     this.error = null
     this.access.noteFetchAttempt(projectId)
     try {
-      const status = await invoke('git:fetch', ...this.access.scopedGitArgs(projectId))
+      const status = await invokeGit('git:fetch', ...this.access.scopedGitArgs(projectId))
+      // The remote answered, so whatever it last refused no longer stands.
+      this.noteRemoteIssue(projectId, null)
       // This fetch is normally started by the project opening rather than by a
       // click, so the user can have switched to another project while the round
       // trip was in flight. Publishing then would put one project's status in
@@ -369,7 +426,8 @@ export class GitLocalOperations {
       // made against freshly fetched remote refs, not the last panel refresh.
       await this.access.refresh(projectId)
     } catch (reason) {
-      this.error = errorMessage(reason, 'Fetch failed')
+      // Offline, refused, or absent: the panel's notice, not the error banner.
+      this.failRemoteOperation(projectId, reason, 'Fetch failed')
     } finally {
       this.access.markBusy('fetch', false)
     }
@@ -381,13 +439,14 @@ export class GitLocalOperations {
     this.error = null
     this.access.noteFetchAttempt(projectId)
     try {
-      this.status = await invoke(
+      this.status = await invokeGit(
         'git:fetchBranch',
         ...this.access.scopedGitArgs(projectId, remote, branch)
       )
+      this.noteRemoteIssue(projectId, null)
       await this.access.refresh(projectId)
     } catch (reason) {
-      this.error = errorMessage(reason, 'Fetch failed')
+      this.failRemoteOperation(projectId, reason, 'Fetch failed')
     } finally {
       this.access.markBusy('fetch', false)
     }
@@ -401,11 +460,12 @@ export class GitLocalOperations {
     this.access.noteFetchAttempt(projectId)
     try {
       this.status = await invokeGit('git:pull', ...this.access.scopedGitArgs(projectId))
+      this.noteRemoteIssue(projectId, null)
       // A pull moves remote-tracking refs, so re-read branches and their
       // ahead/behind counts instead of leaving the panel showing stale ones.
       await this.access.refresh(projectId)
     } catch (reason) {
-      this.error = errorMessage(reason, 'Pull failed')
+      this.failRemoteOperation(projectId, reason, 'Pull failed')
     } finally {
       this.access.markBusy('pull', false)
     }
@@ -425,6 +485,7 @@ export class GitLocalOperations {
       this.status = scopeBucketId
         ? await invokeGit('git:push', projectId, options, scopeBucketId)
         : await invokeGit('git:push', projectId, options)
+      this.noteRemoteIssue(projectId, null)
       await this.access.refresh(projectId)
       // Pushing changes what GitHub computes for the branch - force a fresh
       // conflict check instead of waiting for the next thread open.
@@ -435,8 +496,10 @@ export class GitLocalOperations {
       // A non-fast-forward rejection is not a failure - the panel turns it into
       // the "pull & push" recovery dialog instead of a scary error banner.
       if (isPushRejected(message)) return { status: 'rejected', message }
-      this.error = message
-      return { status: 'failed', message }
+      return {
+        status: 'failed',
+        message: this.failRemoteOperation(projectId, reason, 'Push failed')
+      }
     } finally {
       this.access.markBusy('push', false)
     }
@@ -461,6 +524,7 @@ export class GitLocalOperations {
       this.status = scopeBucketId
         ? await invokeGit('git:pullIntegrate', projectId, options, scopeBucketId)
         : await invokeGit('git:pullIntegrate', projectId, options)
+      this.noteRemoteIssue(projectId, null)
       // Same reason as pull: a pull moves remote-tracking refs, so the branch
       // list and its ahead/behind counts have to be re-read.
       await this.access.refresh(projectId)
@@ -471,7 +535,7 @@ export class GitLocalOperations {
           : strategy === 'ff-only'
             ? 'Fast-forward pull failed'
             : 'Pull with merge failed'
-      this.error = errorMessage(reason, fallback)
+      this.failRemoteOperation(projectId, reason, fallback)
     } finally {
       this.access.markBusy('pull', false)
     }
@@ -516,6 +580,7 @@ export class GitLocalOperations {
       const result = scopeBucketId
         ? await invokeGit('git:syncWith', projectId, options, scopeBucketId)
         : await invokeGit('git:syncWith', projectId, options)
+      this.noteRemoteIssue(projectId, null)
       if (this.access.scopeFor(projectId) === scopeBucketId) {
         this.status = result.status
         if (result.status.conflicted.length === 0) this.conflictsMode = false
@@ -523,7 +588,8 @@ export class GitLocalOperations {
       return result
     } catch (reason) {
       const toward = options.direction === 'from' ? 'from' : 'to'
-      this.error = errorMessage(
+      this.failRemoteOperation(
+        projectId,
         reason,
         options.strategy === 'rebase'
           ? `Syncing ${toward} that branch with rebase failed`
@@ -680,14 +746,17 @@ export class GitLocalOperations {
     this.access.markBusy('merge', true)
     this.error = null
     try {
-      this.status = await invoke(
+      this.status = await invokeGit(
         'git:preparePrResolve',
         ...this.access.scopedGitArgs(projectId, options)
       )
+      this.noteRemoteIssue(projectId, null)
       this.prResolveSession = { ...options, projectId }
       await this.access.refresh(projectId)
     } catch (reason) {
-      this.error = errorMessage(reason, 'Could not prepare PR conflict resolution')
+      // Preparing the session fetches the PR's head and base, so an offline
+      // device or an unreadable remote lands in the notice, not the banner.
+      this.failRemoteOperation(projectId, reason, 'Could not prepare PR conflict resolution')
     } finally {
       this.access.markBusy('merge', false)
     }
@@ -706,15 +775,18 @@ export class GitLocalOperations {
     this.error = null
     try {
       const { projectId: _sessionProjectId, ...options } = session
-      this.status = await invoke(
+      this.status = await invokeGit(
         'git:finishPrResolve',
         ...this.access.scopedGitArgs(projectId, options)
       )
+      this.noteRemoteIssue(projectId, null)
       this.prResolveSession = null
       await this.access.refresh(projectId)
       return true
     } catch (reason) {
-      this.error = errorMessage(reason, 'Could not finish the PR conflict resolution')
+      // Finishing pushes the resolution back to the PR, so the same remote
+      // verdicts a push reports belong in the notice here too.
+      this.failRemoteOperation(projectId, reason, 'Could not finish the PR conflict resolution')
       return false
     } finally {
       this.access.markBusy('push', false)

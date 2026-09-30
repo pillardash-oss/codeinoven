@@ -13,7 +13,11 @@
 import { app } from 'electron'
 import type { Database } from '../database/database'
 import { flushDraftWrites } from '../chat/draft-commit-gate'
-import { setNotificationService, setPowerWakeService } from '../chat/thread-events'
+import {
+  setBackgroundAttention,
+  setNotificationService,
+  setPowerWakeService
+} from '../chat/thread-events'
 import { instanceRegistry } from '../system/instance-registry'
 import { Logger } from '../system/logger'
 import type { WindowStateService } from '../system/window-state'
@@ -29,6 +33,16 @@ export interface ShutdownContext {
 
 export async function runShutdownPipeline(context: ShutdownContext): Promise<void> {
   const { state, database } = context
+  // This is the single deliberate-shutdown funnel (tray Quit, a confirmed force
+  // close, Cmd+Q with background mode off). Record that the exit is on purpose
+  // before the harness is killed, so the next launch settles any turn left in
+  // flight as a clean app-closed stop instead of a crash failure. A crash or a
+  // power loss never reaches here, so its orphans keep the crash wording.
+  try {
+    await state.cleanShutdownStore?.record()
+  } catch (error) {
+    Logger.error('Clean-shutdown marker write failed during shutdown:', error)
+  }
   // Give the renderer a moment to process window:beforeQuit.
   await new Promise<void>((resolve) => setTimeout(resolve, 500))
 
@@ -57,6 +71,7 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
   setNotificationService(null)
   setPowerWakeService(null)
+  setBackgroundAttention(null)
   try {
     state.powerWakeService?.stop()
   } catch (error) {
@@ -111,10 +126,37 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    // Before the browser's sessions are torn down, keep every running download:
+    // Chromium deletes a running download's file as its session goes away, so its
+    // bytes are paused and moved aside here, and the records that point at them
+    // are written. The next launch offers to resume them.
+    await state.browserDownloads?.prepareForQuit()
+  } catch (error) {
+    Logger.error('Browser downloads could not be kept for a later resume:', error)
+  }
+
+  try {
+    // Commit every open tab's Back/Forward stack before the views are closed.
+    // `dispose()` closes them, which takes each stack with it, so this is the
+    // one write that has to be awaited rather than merely started: the process
+    // is about to stop giving the coalescing clock any time at all.
+    await state.browserService?.flushTabHistory()
+  } catch (error) {
+    Logger.error('Browser tab history could not be committed during shutdown:', error)
+  }
+
+  try {
     state.browserService?.dispose()
     state.browserService = null
   } catch (error) {
     Logger.error('Browser service cleanup failed during shutdown:', error)
+  }
+
+  try {
+    state.browserDownloads?.dispose()
+    state.browserDownloads = null
+  } catch (error) {
+    Logger.error('Browser download cleanup failed during shutdown:', error)
   }
 
   try {

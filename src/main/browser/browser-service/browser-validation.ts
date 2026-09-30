@@ -14,6 +14,7 @@ import type {
   BrowserShortcutChord,
   BrowserSwitcherBindings,
   BrowserSiteDataScope,
+  BrowserTabDestroyReason,
   BrowserTransportCommand,
   BrowserViewBounds
 } from '../../../lib/ipc-contract'
@@ -28,9 +29,86 @@ import {
   MAX_BROWSER_SEARCH_URL_TEMPLATE_LENGTH,
   type BrowserSearchEngine
 } from '../../../lib/browser-search-engines'
+import { MAX_BROWSER_BOX_NAME_LENGTH } from '../../../lib/browser/global-browser-tabs'
 import type { BrowserViewport } from './browser-types'
+import type {
+  BrowserOverlayAck,
+  BrowserStripOverlayAction,
+  BrowserStripOverlayChrome,
+  BrowserStripOverlayInteraction,
+  BrowserStripOverlayRequest,
+  BrowserStripOverlayTab,
+  ToastOverlayInteraction,
+  ToastOverlayInteractionReport,
+  ToastOverlayKind,
+  ToastOverlayRequest,
+  ToastOverlayToast
+} from '../../../lib/browser-overlay'
 
 export const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
+
+/**
+ * The single profile the browser used before jars became per-context.
+ *
+ * Nothing resolves to this partition any more   every context builds its own via
+ * {@link browserPartitionFor}   but a machine that ran that build still has the
+ * whole profile on disk, so it is named here for the sweep to reclaim.
+ */
+export const LEGACY_BROWSER_PARTITION = 'persist:codeinoven-browser'
+
+/** Session partition one browser context runs in, boxed or not. The download
+ *  manager has to reach the same session the browser's tabs use, so the naming
+ *  lives here rather than being spelled out at each caller. */
+export function browserPartitionFor(projectId: string, boxId: string | null = null): string {
+  return boxId === null
+    ? `${BROWSER_PARTITION_PREFIX}${projectId}`
+    : `${BROWSER_PARTITION_PREFIX}${projectId}${BROWSER_BOX_PARTITION_INFIX}${boxId}`
+}
+
+/** Separates one box's jar from the context's own jar inside a partition name. */
+export const BROWSER_BOX_PARTITION_INFIX = ':box:'
+
+/** Ceiling on a box id. The renderer's store mints these, so the shape is an id,
+ *  never a name the user typed. */
+const MAX_BOX_ID_LENGTH = 64
+const BOX_ID_PATTERN = new RegExp(`^[a-zA-Z0-9:._-]{1,${MAX_BOX_ID_LENGTH}}$`, 'u')
+
+/** A box id from the renderer, or null for the context's own jar.
+ *
+ *  Null is deliberately not a special case downstream: it is what every tab that
+ *  predates boxes already is, and it produces today's exact partition string, so
+ *  \"no box whatsoever\" is the same code path rather than a branch of its own. */
+export function validateOptionalBoxId(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value !== 'string' || !BOX_ID_PATTERN.test(value)) {
+    throw new TypeError('Browser box ID is invalid')
+  }
+  return value
+}
+
+/** Whether a partition string belongs to one context's browser, boxed or not.
+ *  Context ids can be prefixes of each other, so this is an exact match plus the
+ *  infix, never a bare prefix test. */
+export function partitionBelongsToProject(partition: string, projectId: string): boolean {
+  const own = browserPartitionFor(projectId)
+  return partition === own || partition.startsWith(`${own}${BROWSER_BOX_PARTITION_INFIX}`)
+}
+
+/**
+ * The box id a partition names, or null for the context's own jar.
+ *
+ * A partition that does not belong to the context also answers null, which is why
+ * callers are expected to filter with {@link partitionBelongsToProject} first: the
+ * two together are how a context-wide operation enumerates its own jars without
+ * ever reaching another context's storage.
+ */
+export function boxIdFromPartition(partition: string, projectId: string): string | null {
+  const own = browserPartitionFor(projectId)
+  const prefix = `${own}${BROWSER_BOX_PARTITION_INFIX}`
+  if (!partition.startsWith(prefix)) return null
+  const boxId = partition.slice(prefix.length)
+  return boxId.length > 0 ? boxId : null
+}
 export const MAX_BROWSER_URL_LENGTH = 8192
 export const MAX_CONSOLE_ENTRIES = 500
 export const MAX_TRACKED_DOWNLOADS = 50
@@ -400,6 +478,16 @@ export function validateTabId(value: unknown): string {
   return value
 }
 
+/** Why a tab is being destroyed. The reason decides whether its stored Back/Forward
+ *  stack survives, and there is no default: an absent reason is a caller that has
+ *  not decided, and guessing here would silently lose or keep the wrong history. */
+export function validateTabDestroyReason(value: unknown): BrowserTabDestroyReason {
+  if (value !== 'closed' && value !== 'hibernated') {
+    throw new TypeError('Browser tab destroy reason must be closed or hibernated')
+  }
+  return value
+}
+
 export function validatePopupWindowId(value: unknown): string {
   if (!isBrowserPopupWindowId(value)) {
     throw new TypeError('Browser popup window ID is invalid')
@@ -534,6 +622,19 @@ export function validateBoundedHost(value: unknown): string {
     throw new TypeError('Browser site menu host is invalid')
   }
   return value
+}
+
+/**
+ * Bound the box label the site-settings confirmation names, so the copy can say
+ * which jar is about to lose its cookies.
+ *
+ * A box name is copy rather than a claim, so this repairs instead of throwing:
+ * an unusable value only costs the confirmation its name. Whitespace is flattened
+ * because the label lands in a single-line dialog detail.
+ */
+export function boundedBoxLabel(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return value.replace(/\s+/gu, ' ').trim().slice(0, MAX_BROWSER_BOX_NAME_LENGTH)
 }
 
 /** Reduce a server-suggested filename to a safe, absolute-path-free basename. */
@@ -775,4 +876,345 @@ export function isSameBounds(a: BrowserViewBounds, b: BrowserViewBounds): boolea
  */
 export function isSameViewport(a: BrowserViewport | undefined | null, b: BrowserViewport): boolean {
   return a !== undefined && a !== null && a.width === b.width && a.height === b.height
+}
+
+/**
+ * The most cards the overlay is ever asked to draw. svelte-sonner keeps three on
+ * screen at once, and the stack is projected whole, so this only bounds a
+ * payload that would otherwise be free to fill a whole window.
+ */
+export const MAX_OVERLAY_TOASTS = 16
+
+/** Characters kept from one projected text field. A toast is a line or two; the
+ *  ceiling is here so a pathological message cannot cross IPC whole. */
+const MAX_OVERLAY_TEXT_LENGTH = 4_000
+
+const OVERLAY_KINDS: ReadonlySet<string> = new Set([
+  'default',
+  'success',
+  'error',
+  'warning',
+  'info',
+  'loading'
+])
+
+function overlayText(value: unknown, limit = MAX_OVERLAY_TEXT_LENGTH): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined
+  return value.slice(0, limit)
+}
+
+function overlayLabel(value: unknown): { label: string } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const label = overlayText((value as Record<string, unknown>)['label'], 120)
+  return label === undefined ? undefined : { label }
+}
+
+const OVERLAY_INTERACTIONS: ReadonlySet<string> = new Set([
+  'action',
+  'cancel',
+  'dismiss',
+  'autoclose'
+])
+
+/**
+ * Validate one interaction the overlay reports for a card it drew.
+ *
+ * The overlay cannot run a handler, so this is only ever a fact about what the
+ * user did. It is checked because it arrives from a window of its own, and a
+ * report naming a toast that no longer exists must be answerable rather than
+ * trusted: the app renderer looks the toast up and drops the report when it has
+ * already gone.
+ */
+export function validateToastOverlayInteraction(value: unknown): ToastOverlayInteractionReport {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('A toast overlay interaction must be an object')
+  }
+  const report = value as Record<string, unknown>
+  const id = report['id']
+  if (typeof id !== 'number' && typeof id !== 'string') {
+    throw new TypeError('A toast overlay interaction must name the toast it belongs to')
+  }
+  const interaction = report['interaction']
+  if (typeof interaction !== 'string' || !OVERLAY_INTERACTIONS.has(interaction)) {
+    throw new TypeError('A toast overlay interaction must name a known interaction')
+  }
+  return { id, interaction: interaction as ToastOverlayInteraction }
+}
+
+/**
+ * Validate the toast stack the app renderer points the overlay at.
+ *
+ * `null` is a real request: nothing covers the toaster's corner any more, so the
+ * overlay takes itself down. Every field is optional in the projection, so a
+ * malformed card is dropped rather than rejected whole: one odd toast must never
+ * cost the renderer its stack.
+ */
+export function validateToastOverlayRequest(value: unknown): ToastOverlayRequest {
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('The toast overlay request must be an object or null')
+  }
+  const stack = value as Record<string, unknown>
+  const rawToasts = stack['toasts']
+  if (!Array.isArray(rawToasts)) {
+    throw new TypeError('The toast overlay request must carry a toast list')
+  }
+  if (rawToasts.length > MAX_OVERLAY_TOASTS) {
+    throw new TypeError('The toast overlay request carries too many toasts')
+  }
+  const toasts: ToastOverlayToast[] = []
+  for (const raw of rawToasts) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const entry = raw as Record<string, unknown>
+    const id = entry['id']
+    if (typeof id !== 'number' && typeof id !== 'string') continue
+    const title = overlayText(entry['title'])
+    if (title === undefined) continue
+    const kind = entry['kind']
+    const duration = entry['duration']
+    toasts.push({
+      id,
+      kind:
+        typeof kind === 'string' && OVERLAY_KINDS.has(kind)
+          ? (kind as ToastOverlayKind)
+          : 'default',
+      title,
+      description: overlayText(entry['description']),
+      duration:
+        typeof duration === 'number' && Number.isFinite(duration) && duration > 0
+          ? Math.min(duration, 60_000)
+          : undefined,
+      style: overlayText(entry['style']),
+      closeButton: entry['closeButton'] === true ? true : undefined,
+      dismissible: typeof entry['dismissible'] === 'boolean' ? entry['dismissible'] : undefined,
+      action: overlayLabel(entry['action']),
+      cancel: overlayLabel(entry['cancel'])
+    })
+  }
+  return {
+    toasts,
+    theme: stack['theme'] === 'dark' ? 'dark' : 'light',
+    // The revision the overlay echoes back once these cards are drawn. A request
+    // without one is not rejected: revision 0 simply never matches what the
+    // renderer waits for, so the stack falls back rather than being trusted.
+    revision: overlayRevision(stack['revision'])
+  }
+}
+
+/** The revision a stack is stamped with, or 0 when it carries none. */
+function overlayRevision(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 0
+}
+
+/**
+ * The most tabs the floating strip is ever asked to draw. The strip is the
+ * browser's whole tab list and nothing else bounds it, so this is the ceiling
+ * that keeps a pathological list from crossing IPC whole.
+ */
+export const MAX_OVERLAY_STRIP_TABS = 256
+
+/** Characters kept from one favicon or custom icon, which arrives as a data URL. */
+const MAX_OVERLAY_ICON_LENGTH = 200_000
+
+/**
+ * Validate the floating tab strip the app renderer points the overlay at.
+ *
+ * `null` is a real request: the panel closed, or no page covers its band any
+ * more, so the overlay takes the strip down. Every field is optional in the
+ * projection, so a malformed tab is dropped rather than rejected whole: one odd
+ * row must never cost the renderer its strip.
+ */
+export function validateBrowserStripOverlayRequest(
+  value: unknown
+): BrowserStripOverlayRequest | null {
+  if (value === null) return null
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('The strip overlay request must be an object or null')
+  }
+  const strip = value as Record<string, unknown>
+  const width = strip['width']
+  const top = strip['top']
+  if (typeof width !== 'number' || !Number.isFinite(width) || width < 0 || width > 10_000) {
+    throw new TypeError('The strip overlay request must carry a plausible width')
+  }
+  if (typeof top !== 'number' || !Number.isFinite(top) || top < 0 || top > 10_000) {
+    throw new TypeError('The strip overlay request must carry a plausible top edge')
+  }
+  const rawTabs = strip['tabs']
+  if (!Array.isArray(rawTabs)) {
+    throw new TypeError('The strip overlay request must carry a tab list')
+  }
+  if (rawTabs.length > MAX_OVERLAY_STRIP_TABS) {
+    throw new TypeError('The strip overlay request carries too many tabs')
+  }
+  const tabs: BrowserStripOverlayTab[] = []
+  for (const raw of rawTabs) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const entry = raw as Record<string, unknown>
+    const id = entry['id']
+    const label = overlayText(entry['label'], 300)
+    if (typeof id !== 'string' || id.length === 0 || id.length > 300 || label === undefined) {
+      continue
+    }
+    tabs.push({
+      id,
+      label,
+      url: overlayText(entry['url'], MAX_BROWSER_URL_LENGTH) ?? '',
+      icon: overlayText(entry['icon'], MAX_OVERLAY_ICON_LENGTH) ?? null,
+      accent: overlayText(entry['accent'], 64) ?? null,
+      active: entry['active'] === true,
+      loading: entry['loading'] === true,
+      pinned: entry['pinned'] === true,
+      hibernated: entry['hibernated'] === true,
+      audible: entry['audible'] === true,
+      muted: entry['muted'] === true
+    })
+  }
+  return {
+    width: Math.round(width),
+    top: Math.round(top),
+    theme: strip['theme'] === 'dark' ? 'dark' : 'light',
+    chrome: validateBrowserStripChrome(strip['chrome']),
+    tabs,
+    // The revision the overlay echoes back once these rows are drawn. A request
+    // without one is not rejected: revision 0 simply never matches what the
+    // renderer waits for, so the strip falls back rather than being trusted.
+    revision: overlayRevision(strip['revision'])
+  }
+}
+
+/**
+ * Validate one interaction the overlay reports for the strip it drew.
+ *
+ * The overlay cannot run a handler, so this is only ever a fact about what the
+ * user did. It arrives from a window of its own, so the tab it names is checked
+ * against the browser's own tab-id shape: a report naming a tab that no longer
+ * exists is answerable rather than trusted, because the app renderer looks the
+ * tab up and drops the report when it has already gone.
+ */
+export function validateBrowserStripInteraction(value: unknown): BrowserStripOverlayInteraction {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('A strip overlay interaction must be an object')
+  }
+  const report = value as Record<string, unknown>
+  const kind = report['kind']
+  if (kind === 'pointer') return { kind: 'pointer', over: report['over'] === true }
+  if (kind === 'action') {
+    return {
+      kind: 'action',
+      action: validateBrowserStripOverlayAction(report['action']),
+      x: overlayPoint(report['x'], 'x'),
+      y: overlayPoint(report['y'], 'y')
+    }
+  }
+  if (kind !== 'select' && kind !== 'close') {
+    throw new TypeError('A strip overlay interaction must name a known kind')
+  }
+  return { kind, tabId: validateTabId(report['tabId']) }
+}
+
+/** The chrome controls the strip's address row can report. */
+const OVERLAY_STRIP_ACTIONS: ReadonlySet<string> = new Set([
+  'back',
+  'forward',
+  'reload',
+  'stop',
+  'open-address',
+  'toggle-bookmark',
+  'open-site-menu',
+  'act-on-store-offer'
+])
+
+function validateBrowserStripOverlayAction(value: unknown): BrowserStripOverlayAction {
+  if (typeof value !== 'string' || !OVERLAY_STRIP_ACTIONS.has(value)) {
+    throw new TypeError('A strip overlay action must name a known control')
+  }
+  return value as BrowserStripOverlayAction
+}
+
+/** A point a native popup should drop from, in the overlay document's own space. */
+function overlayPoint(value: unknown, axis: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100_000) {
+    throw new TypeError(`A strip overlay action must carry a plausible ${axis} coordinate`)
+  }
+  return Math.round(value)
+}
+
+/**
+ * The chrome the strip's address row draws, reduced to what the overlay can read.
+ *
+ * The row mirrors the docked panel's, so the shape is fixed. A malformed chrome
+ * does not reject the strip: the tab rows are the thing that switches pages and
+ * they do not depend on it, so the fields are coerced instead.
+ */
+function validateBrowserStripChrome(value: unknown): BrowserStripOverlayChrome {
+  const chrome =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
+  return {
+    url: overlayText(chrome['url'], MAX_BROWSER_URL_LENGTH) ?? '',
+    secure: chrome['secure'] === true,
+    loading: chrome['loading'] === true,
+    canGoBack: chrome['canGoBack'] === true,
+    canGoForward: chrome['canGoForward'] === true,
+    bookmarked: chrome['bookmarked'] === true,
+    storeOffer: validateBrowserStripStoreOffer(chrome['storeOffer'])
+  }
+}
+
+function validateBrowserStripStoreOffer(value: unknown): BrowserStripOverlayChrome['storeOffer'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const offer = value as Record<string, unknown>
+  const title = overlayText(offer['title'], 300)
+  if (title === undefined) return null
+  return {
+    title,
+    installed: offer['installed'] === true,
+    installing: offer['installing'] === true
+  }
+}
+
+/**
+ * Validate the overlay's confirmation that it drew what it was given.
+ *
+ * The ids are not compared against the request here: main is a relay for this
+ * one, and the renderer that published a revision is the only place that knows
+ * which one it is waiting for. A malformed acknowledgement is refused rather
+ * than passed on, so a broken overlay can never look like a healthy one.
+ *
+ * The stack and the strip are confirmed in one message because they are drawn in
+ * one document: a window that can draw one can draw the other, and the two
+ * subscribers in the app renderer each wait for their own revision field.
+ */
+export function validateToastOverlayAck(value: unknown): BrowserOverlayAck {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('An overlay acknowledgement must be an object')
+  }
+  const ack = value as Record<string, unknown>
+  const rawDrawn = ack['drawn']
+  let drawn: Array<number | string> | undefined
+  if (rawDrawn !== undefined) {
+    if (!Array.isArray(rawDrawn) || rawDrawn.length > MAX_OVERLAY_TOASTS) {
+      throw new TypeError('An overlay acknowledgement must carry the cards it drew')
+    }
+    drawn = []
+    for (const id of rawDrawn) {
+      if (typeof id === 'number' || typeof id === 'string') drawn.push(id)
+    }
+  }
+  return {
+    revision: overlayOptionalRevision(ack['revision']),
+    drawn,
+    stripRevision: overlayOptionalRevision(ack['stripRevision'])
+  }
+}
+
+/** A revision an acknowledgement carries, or undefined when it carries none. */
+function overlayOptionalRevision(value: unknown): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new TypeError('An overlay acknowledgement revision must be a positive integer')
+  }
+  return value
 }

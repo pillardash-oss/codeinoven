@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { SvelteMap } from 'svelte/reactivity'
-  import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { CustomIcon } from '$shared/types'
@@ -58,30 +57,36 @@
       onsubmit={(e: SubmitEvent) => void dialogs.confirmEditProject(e)}
     >
       {#if dialogs.showEditModal}
-        <AppearancePicker
-          name={dialogs.editProjectName}
-          color={dialogs.editProjectColor}
-          iconType={dialogs.editProjectIconType}
-          customSvg={dialogs.editProjectCustomSvg}
-          {customIcons}
-          onAddCustomIcon={addCustomIcon}
-          allowCustomSvg
-          resetPlacement="footer"
-          fallbackIconUrl={dialogs.editProjectCustomSvgSelected
-            ? null
-            : (dialogs.editProjectPendingIcon?.dataUrl ??
-              (dialogs.editProject.icon
-                ? (projectIcons.get(dialogs.editProject.id) ?? null)
-                : null))}
-          onColorChange={(color) => (dialogs.editProjectColor = color)}
-          onIconTypeChange={(iconType) => (dialogs.editProjectIconType = iconType)}
-          onCustomSvgChange={(svg) => {
-            dialogs.editProjectCustomSvg = svg
-            dialogs.editProjectCustomSvgSelected = Boolean(svg)
-          }}
-          onUploadImage={() => void dialogs.changeEditProjectIcon()}
-          onReset={resetProjectAppearance}
-        />
+        <!-- The picker parses a pasted SVG with @xmldom/xmldom, which is far too
+             heavy for the first paint, and it only ever renders while this modal
+             is open. Fetching it here is what keeps the parser out of the entry
+             chunk; this modal is the only eager reader of the picker. -->
+        {#await import('$lib/components/shared/AppearancePicker.svelte') then { default: AppearancePicker }}
+          <AppearancePicker
+            name={dialogs.editProjectName}
+            color={dialogs.editProjectColor}
+            iconType={dialogs.editProjectIconType}
+            customSvg={dialogs.editProjectCustomSvg}
+            {customIcons}
+            onAddCustomIcon={addCustomIcon}
+            allowCustomSvg
+            resetPlacement="footer"
+            fallbackIconUrl={dialogs.editProjectCustomSvgSelected
+              ? null
+              : (dialogs.editProjectPendingIcon?.dataUrl ??
+                (dialogs.editProject.icon
+                  ? (projectIcons.get(dialogs.editProject.id) ?? null)
+                  : null))}
+            onColorChange={(color) => (dialogs.editProjectColor = color)}
+            onIconTypeChange={(iconType) => (dialogs.editProjectIconType = iconType)}
+            onCustomSvgChange={(svg) => {
+              dialogs.editProjectCustomSvg = svg
+              dialogs.editProjectCustomSvgSelected = Boolean(svg)
+            }}
+            onUploadImage={() => void dialogs.changeEditProjectIcon()}
+            onReset={resetProjectAppearance}
+          />
+        {/await}
       {/if}
 
       <!-- Project name -->

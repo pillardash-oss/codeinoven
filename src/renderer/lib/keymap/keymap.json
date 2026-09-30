@@ -62,6 +62,13 @@
           "scenario": "Anywhere in the app."
         },
         {
+          "id": "nav-task-manager",
+          "keys": ["mod", "shift", ","],
+          "label": "Task manager",
+          "description": "Opens the Task Manager with every process and service the app runs, its pid, its owner, and its resource use.",
+          "scenario": "Anywhere in the app."
+        },
+        {
           "id": "nav-command-palette",
           "keys": ["mod", "k"],
           "label": "Command palette",
@@ -614,6 +621,27 @@
           "label": "New browser tab",
           "description": "Opens a new blank browser tab for the current thread.",
           "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-find",
+          "keys": ["mod", "f"],
+          "label": "Find in page",
+          "description": "Opens the find bar over the page, or returns to it with the query selected when it is already open. Enter moves to the next match, Shift+Enter to the previous one, and Escape closes the bar.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-find-next",
+          "keys": ["mod", "g"],
+          "label": "Find next match in page",
+          "description": "Moves to the next match of the page's find bar, and opens the bar on the last query when it is closed. Works with the page focused, which is what makes it usable after clicking into it.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-find-previous",
+          "keys": ["mod", "shift", "g"],
+          "label": "Find previous match in page",
+          "description": "Moves to the previous match of the page's find bar.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
         }
       ]
     },
@@ -827,6 +855,19 @@
           "label": "Close media preview",
           "description": "Closes the attachment or media preview.",
           "scenario": "A media preview is open."
+        }
+      ]
+    },
+    {
+      "id": "application",
+      "label": "Application",
+      "shortcuts": [
+        {
+          "id": "app-quit-direct",
+          "keys": ["mod", "shift", "q"],
+          "label": "Quit CodeInOven",
+          "description": "Quits the app for real, bypassing background mode's park to the menu bar. A turn still running settles as a deliberate close on the next launch.",
+          "scenario": "Anywhere in the app."
         }
       ]
     }

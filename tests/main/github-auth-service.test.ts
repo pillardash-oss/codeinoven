@@ -28,6 +28,21 @@ function mockVault(): SecretVault {
   } as unknown as SecretVault
 }
 
+/**
+ * Vault stub that behaves like the real one: reading returns what was last
+ * written, and removing the credential makes it disappear.
+ */
+function statefulVault(initial: string): SecretVault {
+  let value: string | null = initial
+  const vault = mockVault()
+  vi.mocked(vault.exists).mockImplementation(async () => value !== null)
+  vi.mocked(vault.resolve).mockImplementation(async () => value ?? '')
+  vi.mocked(vault.remove).mockImplementation(async () => {
+    value = null
+  })
+  return vault
+}
+
 describe('GitHubAuthService', () => {
   beforeEach(() => {
     delete process.env['CODEINOVEN_GITHUB_CLIENT_ID']
@@ -198,5 +213,153 @@ describe('GitHubAuthService', () => {
     await service.logout()
 
     expect(vault.remove).toHaveBeenCalledWith('github_oauth_token')
+  })
+
+  it('drops credentials GitHub refuses and reports signed out instead of throwing', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = statefulVault(
+      JSON.stringify({
+        version: 1,
+        accessToken: 'ghu_expired',
+        refreshToken: 'ghr_dead',
+        accessTokenExpiresAt: Date.now() - 1,
+        refreshTokenExpiresAt: Date.now() + 60_000
+      })
+    )
+    // GitHub answers a refresh token it cannot redeem with this generic code,
+    // whether it expired, was already used, or belongs to another app.
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        error: 'incorrect_client_credentials',
+        error_description: 'The client_id and/or client_secret passed are incorrect.'
+      })
+    )
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.status()).resolves.toEqual({ connected: false, configured: true })
+    await expect(service.resolveToken()).resolves.toBeNull()
+
+    expect(vault.remove).toHaveBeenCalledWith('github_oauth_token')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps credentials when a refresh fails transiently and uses the still-valid token', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = statefulVault(
+      JSON.stringify({
+        version: 1,
+        accessToken: 'ghu_valid',
+        refreshToken: 'ghr_live',
+        accessTokenExpiresAt: Date.now() + 60_000,
+        refreshTokenExpiresAt: Date.now() + 60_000
+      })
+    )
+    fetchMock.mockResolvedValueOnce(jsonResponse({ message: 'server error' }, 500))
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.resolveToken(true)).resolves.toBe('ghu_valid')
+
+    expect(vault.remove).not.toHaveBeenCalled()
+  })
+
+  it('recovers when another instance rotated the refresh token first', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = mockVault()
+    vi.mocked(vault.exists).mockResolvedValue(true)
+    vi.mocked(vault.resolve)
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          version: 1,
+          accessToken: 'ghu_stale',
+          refreshToken: 'ghr_used',
+          accessTokenExpiresAt: Date.now() - 1,
+          refreshTokenExpiresAt: Date.now() + 60_000
+        })
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          version: 1,
+          accessToken: 'ghu_rotated',
+          refreshToken: 'ghr_rotated',
+          accessTokenExpiresAt: Date.now() + 60_000,
+          refreshTokenExpiresAt: Date.now() + 60_000
+        })
+      )
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'incorrect_client_credentials' }))
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.resolveToken()).resolves.toBe('ghu_rotated')
+
+    expect(vault.remove).not.toHaveBeenCalled()
+  })
+
+  it('names a client ID change instead of calling GitHub with credentials from another app', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = statefulVault(
+      JSON.stringify({
+        version: 1,
+        clientId: 'Iv1.otherApp',
+        accessToken: 'ghu_other_app',
+        refreshToken: 'ghr_other_app',
+        accessTokenExpiresAt: Date.now() - 1,
+        refreshTokenExpiresAt: Date.now() + 60_000
+      })
+    )
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.resolveToken(true)).resolves.toBeNull()
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(vault.remove).toHaveBeenCalledWith('github_oauth_token')
+  })
+
+  it('drops an expired access token that no refresh token can renew', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = statefulVault(
+      JSON.stringify({
+        version: 1,
+        accessToken: 'ghu_expired',
+        accessTokenExpiresAt: Date.now() - 1
+      })
+    )
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.resolveToken()).resolves.toBeNull()
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(vault.remove).toHaveBeenCalledWith('github_oauth_token')
+  })
+
+  it('discards a malformed stored record and reports signed out', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = statefulVault('{not json')
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.status()).resolves.toEqual({ connected: false, configured: true })
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(vault.remove).toHaveBeenCalledWith('github_oauth_token')
+  })
+
+  it('keeps serving a healthy token after credentials GitHub refused are gone', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = mockVault()
+    vi.mocked(vault.exists).mockResolvedValue(true)
+    vi.mocked(vault.resolve)
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          version: 1,
+          accessToken: 'ghu_expired',
+          refreshToken: 'ghr_dead',
+          accessTokenExpiresAt: Date.now() - 1,
+          refreshTokenExpiresAt: Date.now() + 60_000
+        })
+      )
+      .mockResolvedValue(JSON.stringify({ version: 1, accessToken: 'ghu_fresh' }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'bad_refresh_token' }))
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.resolveToken()).resolves.toBeNull()
+    await expect(service.resolveToken()).resolves.toBe('ghu_fresh')
   })
 })

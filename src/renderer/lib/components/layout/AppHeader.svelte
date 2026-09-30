@@ -5,6 +5,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { browserStore } from '$lib/stores/browser-access.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -352,6 +353,18 @@
     <!-- Git status chip   only when a thread is open in a project view -->
     {#if !chatMode && !onScope && !onBrowser && !onSettings && workspaceState.selectedThread && gitAvailable}
       <AppHeaderGitChip {gitAvailable} />
+    {/if}
+
+    <!-- Pinned extensions   the extension's own popup, one click away while the
+         browser view is the one on screen, and drawn by no other view: a pin is
+         chrome of that view, not of the app. This is browser state, so like the
+         browser centre it is fetched only once the browser's own modules are up,
+         and it draws nothing while no browser tab is running the extension's
+         box. -->
+    {#if onBrowser && browserStore()}
+      {#await import('./AppHeaderPinnedExtensions.svelte') then { default: AppHeaderPinnedExtensions }}
+        <AppHeaderPinnedExtensions />
+      {/await}
     {/if}
 
     <!-- Notification bell   available in all views -->

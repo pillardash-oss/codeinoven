@@ -11,6 +11,7 @@
  */
 import { invoke } from '$lib/ipc.svelte'
 import { messageId as createMessageId } from '$shared/id'
+import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { CHAT_DEFAULT_SETTINGS, DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 import {
@@ -115,6 +116,52 @@ export async function sendThreadMessageHeadless(
     undefined,
     message.taskReferences
   )
+}
+
+/**
+ * Park a message for the next idle transition of its thread.
+ *
+ * The recovery snapshot is the queue, and the module-scope dispatcher delivers
+ * it the moment the thread's agent goes idle, so a message parked here reaches
+ * the agent even when no conversation view is mounted.
+ */
+export function queueThreadMessage(
+  projectId: string,
+  threadId: string,
+  message: HeadlessThreadMessage
+): void {
+  rendererRecovery.setQueuedMessage(projectId, threadId, {
+    text: message.text,
+    attachments: message.attachments ?? [],
+    ...(message.promptContext ? { promptContext: message.promptContext } : {}),
+    promptReferences: message.promptReferences ?? [],
+    projectReferences: message.projectReferences ?? [],
+    taskReferences: message.taskReferences ?? [],
+    startAfterThreads: []
+  })
+}
+
+/**
+ * Deliver a message to a thread that may have no mounted view: send it now when
+ * its agent is idle, and park it behind the running turn when it is not.
+ *
+ * This is what a button outside the conversation asks for. A request the app
+ * synthesizes on the user's behalf (the coordinator's Screen Canvas button is
+ * one) has no business steering work already in flight, so it waits its turn
+ * instead of interrupting it, and answers which of the two happened so the
+ * surface can say so.
+ */
+export async function sendOrQueueThreadMessage(
+  projectId: string,
+  threadId: string,
+  message: HeadlessThreadMessage
+): Promise<'sent' | 'queued'> {
+  if (await threadAgentIsIdle(projectId, threadId)) {
+    await sendThreadMessageHeadless(projectId, threadId, message)
+    return 'sent'
+  }
+  queueThreadMessage(projectId, threadId, message)
+  return 'queued'
 }
 
 /** Whether a thread has reached a terminal state, for start-after scheduling. */

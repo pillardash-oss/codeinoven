@@ -9,7 +9,6 @@ import type {
   BrowserCompositionTab,
   BrowserConsoleEntry,
   BrowserDesignTab,
-  BrowserDownload,
   BrowserLoadError,
   BrowserPermissionRequest,
   BrowserSiteDataScope
@@ -36,6 +35,9 @@ export interface BrowserPageOwner {
   tabId: string
   projectId: string
   threadId: string
+  /** The box the owning tab lives in, so a sibling opened from it lands in the
+   *  same jar. Null for the context's own jar. */
+  boxId: string | null
 }
 
 /** A viewport the page was laid out at, and when that happened. */
@@ -57,15 +59,20 @@ export interface ParkBrowserTabOptions {
   size?: BrowserViewport
   /** Keep the tab the active one, because it is coming straight back. */
   keepActive?: boolean
-  /** Why the tab is being parked. Carried into the dev log so a recorded frame
-   *  of the browser surface can be matched to the moment that produced it. */
-  reason: string
 }
 
 export interface BrowserTab {
   view: WebContentsView
   projectId: string
   threadId: string
+  /**
+   * The box this tab's page lives in, or null for the context's own jar.
+   *
+   * It is fixed for the tab's whole life: a page cannot change cookie jars, so a
+   * show that names a different box for the same tab is refused rather than
+   * silently re-parented onto another jar's storage.
+   */
+  boxId: string | null
   initialNavigationStarted: boolean
   consoleEntries: BrowserConsoleEntry[]
   /**
@@ -148,6 +155,13 @@ export interface PendingBrowserPermission {
   request: BrowserPermissionRequest
   callback: (granted: boolean) => void
   timer: ReturnType<typeof setTimeout>
+  /**
+   * The partition the prompt belongs to: a decision is remembered against the jar
+   * the request came from, not against the context, so a box keeps its own
+   * answers. Held here rather than derived from `request.projectId`, because the
+   * same context can have one jar per box.
+   */
+  partition: string
 }
 
 /** A destructive site-data action offered by the native site-settings menu. */
@@ -181,9 +195,3 @@ export const SITE_MENU_ACTIONS: readonly SiteMenuAction[] = [
       'Remembered camera, microphone and other permission choices for sites visited in this browser will be forgotten.'
   }
 ]
-
-export interface BrowserDownloadRecord {
-  item: Electron.DownloadItem
-  download: BrowserDownload
-  lastEmittedAt: number
-}

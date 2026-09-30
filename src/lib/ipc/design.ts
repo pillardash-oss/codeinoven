@@ -15,6 +15,7 @@
  * that no longer knows it was showing one.
  */
 
+import type { ScreenCanvasFrame } from '../design/screen-canvas'
 import type { WorkRoots } from '../design/work-roots'
 
 /** Which authored-work session a thread is in. */
@@ -127,6 +128,47 @@ export interface DesignOpenResult {
   tabId: string
 }
 
+/**
+ * One screen of a design: an HTML file the preview can be aimed at.
+ *
+ * A design is a product rather than a page, so its screens are its files rather
+ * than its folders. The board reads them to show one picture per screen, and
+ * `entry` is spelled exactly as a preview's own `entry` argument takes it, so the
+ * board opens the screen it is showing without translating anything.
+ */
+export interface DesignScreen {
+  /** File inside the design folder, e.g. `index.html` or `pages/pricing.html`. */
+  entry: string
+  /** Label for the board: the file's path without its extension. */
+  name: string
+  /**
+   * Latest modification time of the file (ms).
+   *
+   * Carried because a picture of a screen is only worth keeping until the screen
+   * changes, and this is what says whether it has.
+   */
+  updatedAt: number
+}
+
+/**
+ * One screen as the board shows it: its name, and a picture when there is one.
+ *
+ * A screen with no picture is still reported. A design whose files are being
+ * written has a screen the app has not rendered yet, and a board that dropped it
+ * would make the design look smaller than it is.
+ */
+export interface DesignScreenShot {
+  /** File inside the design folder, as a preview `entry` spells it. */
+  entry: string
+  /** Label for the board. */
+  name: string
+  /** PNG data URL, or null when this screen has no picture yet. */
+  dataUrl: string | null
+  /** Picture size in CSS pixels, for the board's aspect ratio. 0 with no picture. */
+  width: number
+  height: number
+}
+
 /** A capture of a design, for the coordinator's preview. */
 export interface DesignThumbnail {
   directory: string
@@ -143,4 +185,29 @@ export interface DesignThumbnail {
    * rather than keeping a second one that could disagree with it.
    */
   tabId: string | null
+}
+
+/** The Screen Canvas of one design folder: the page that shows every screen at once. */
+export interface ScreenCanvasState {
+  /** Project-relative folder the canvas lives in, with forward slashes. */
+  directory: string
+  /** Entry file of the canvas, always `canvas.html`. */
+  entry: string
+  /** When the canvas file was last written (ms). */
+  updatedAt: number
+  /** Frames the page declares, in the order it declares them. */
+  frames: ScreenCanvasFrame[]
+  /** Screens the folder holds that no live frame shows, in listing order. */
+  missingScreens: string[]
+  /** Screens written after the canvas was, newest first. */
+  changedScreens: string[]
+  /**
+   * Screens the canvas frames that the folder no longer holds.
+   *
+   * A frame pointing at a deleted file renders an error page, so the board
+   * reports it instead of treating the canvas as current.
+   */
+  orphanFrames: string[]
+  /** Titles of sketch frames still waiting for a real screen. */
+  sketchTitles: string[]
 }

@@ -90,7 +90,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
     description:
-      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. Pass attention "background" to keep it offscreen without pulling the user to it.',
+      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Pass attention "background" to keep it offscreen without pulling the user to it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -126,7 +126,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'snapshot',
     description:
-      'Read the current thread browser page title, URL, visible text, and interactive elements.',
+      'Read the current page\u2019s title, URL, visible text, and interactive elements. In a browser tab\u2019s own assistant conversation the page the user is looking at is attached for reading, so this reads that page until you open one of your own. Every other operation needs a page you opened.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -162,7 +162,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'screenshot',
     description:
-      'Capture the browser page at its current viewport, whether the tab is on screen or parked offscreen, and return it as an image the model can afford. The capture is capped in size and a page unchanged since the previous capture is reported as unchanged rather than sent again; pass {"force":true} to capture it regardless.',
+      'Capture the current page at its viewport, whether the tab is on screen or parked offscreen, and return it as an image the model can afford. In a browser tab\u2019s own assistant conversation the page the user is looking at is attached for reading, so this captures that page. The capture is capped in size and a page unchanged since the previous capture is reported as unchanged rather than sent again; pass {"force":true} to capture it regardless.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -182,7 +182,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'console',
     description:
-      'Read console messages and browser runtime errors from the current project and thread tab.',
+      'Read console messages and browser runtime errors from the page this conversation is attached to: in a browser tab\u2019s own assistant conversation that is the page the user is looking at, until you open one of your own.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   }
 ]
@@ -203,7 +203,7 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
     generateMediaTool(roots),
     {
       name: 'preview',
-      description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab. The folder's own scripts and stylesheets run, so an HTML design renders as written, and the tab is mounted offscreen at a real viewport whether or not the user is looking at it. Aim it at the folder holding the design's entry file.`,
+      description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab. The folder's own scripts and stylesheets run, so an HTML design renders as written, and the tab is mounted offscreen at a real viewport whether or not the user is looking at it. Aim it at the folder holding the design's entry file, and name \`entry\` to turn it to one of that design's screens.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -214,7 +214,7 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
           entry: {
             type: 'string',
             description:
-              'File inside that folder to load, relative to it. Defaults to index.html when that file exists; otherwise the folder listing is shown.'
+              'File inside that folder to load, relative to it, which is how a screen of a multi-screen design is shown: "dashboard.html". Defaults to index.html when that file exists; otherwise the folder listing is shown.'
           },
           attention: {
             type: 'string',

@@ -3,6 +3,7 @@
   import { onDestroy, tick } from 'svelte'
   import ActionSheet from '../ui/ActionSheet.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
+  import { isCodeModeToolName } from '$shared/agent-interactions'
   import type { AgentPart, ThinkingLevel } from '$shared/types'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
@@ -356,6 +357,15 @@
     visibleParts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
   )
 
+  // Code mode is per-part and harness-independent: the driver marks a script
+  // call and every call it made, and the shared predicate covers harnesses
+  // that report their script runner by name alone.
+  const hasCodeMode = $derived(
+    visibleParts.some(
+      (part) => part.type === 'tool' && (part.codeMode === true || isCodeModeToolName(part.tool))
+    )
+  )
+
   // One clock for the whole dropdown list: it ticks only while a worker is
   // actually live, so a finished or restored list shows frozen durations.
   const listClock = new ElapsedTimer()
@@ -394,6 +404,7 @@
     {busy}
     count={visibleParts.length}
     {hasCompaction}
+    {hasCodeMode}
     {subagentCount}
     {activeSubagentCount}
     {subagentParts}

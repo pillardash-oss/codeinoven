@@ -23,5 +23,19 @@ Thumbs.db
 /src/main/**/*.js
 /src/lib/**/*.js
 /src/preload/**/*.js
+# ...except the browser extension compatibility scripts, which are hand-written runtime
+# scripts with no TypeScript source beside them. The extension install path imports
+# them with `?raw`, so ignoring them would leave a fresh checkout able to resolve
+# everything except the files that make four of the five supported extensions start
+# at all.
+!/src/main/browser/extensions/compat/*.js
 /.svelte-check/
 .claude/
+
+# Mac code-signing assets supplied per build rather than committed: the WebAuthn
+# entitlements file is generated from a checked-in base plus a team identifier,
+# and a provisioning profile is a per-team portal artifact that must never be
+# committed even though it holds no private key.
+/build/entitlements.mac.webauthn.plist
+*.provisionprofile
+*.mobileprovision

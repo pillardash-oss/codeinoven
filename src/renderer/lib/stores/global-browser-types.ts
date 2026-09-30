@@ -16,12 +16,14 @@ import type { BrowserAppearance } from '$shared/browser/global-browser-tabs'
 // process validates the same payload. They are re-exported here so every browser
 // surface keeps importing one module for the model's limits.
 export {
+  MAX_BROWSER_BOX_NAME_LENGTH,
   MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH,
   MAX_BROWSER_GROUP_DESCRIPTION_LENGTH,
   MAX_BROWSER_GROUP_ICON_TYPE_LENGTH,
   MAX_BROWSER_GROUP_IMAGE_PATH_LENGTH,
   MAX_BROWSER_GROUP_NAME_LENGTH,
   MAX_BROWSER_TAB_TITLE_LENGTH,
+  MAX_GLOBAL_BROWSER_BOXES,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS
 } from '$shared/browser/global-browser-tabs'
@@ -61,6 +63,76 @@ export interface GlobalBrowserGroup extends BrowserAppearance {
 }
 
 /**
+ * One browser box: a named container for cookies and site data.
+ *
+ * A box is a storage identity, not a window and not a process. Tabs that name
+ * the same box share one Chromium session and therefore one set of logins;
+ * tabs in different boxes are as separate as two different browsers, which is
+ * the whole point. It wears the same appearance vocabulary as a group so the
+ * strip's resolvers, the appearance editor and the icon cache are reused rather
+ * than reinvented.
+ */
+export interface GlobalBrowserBox extends BrowserAppearance {
+  id: string
+  name: string
+}
+
+/**
+ * The box every context has without making one: the jar the browser's own pages
+ * live in.
+ *
+ * Naming it is what lets the boxes panel, the extensions panel and the install
+ * target treat "a box" and "no box" as one question with one answer. The id is a
+ * literal rather than a minted uuid because a stored extension record has to keep
+ * pointing at the same jar across releases.
+ */
+export const DEFAULT_BOX_ID = 'box:default'
+
+/** What the default box is called before the user renames it. */
+export const DEFAULT_BOX_NAME = 'Default'
+
+/** The default box with nothing chosen yet, for a snapshot that predates it. */
+export function defaultBrowserBox(): GlobalBrowserBox {
+  return {
+    id: DEFAULT_BOX_ID,
+    name: DEFAULT_BOX_NAME,
+    color: null,
+    iconType: null,
+    customSvg: null,
+    imagePath: null
+  }
+}
+
+/**
+ * The jar main knows for a box the interface names.
+ *
+ * Main has no notion of a default box: the context's own jar is the absent box id,
+ * which is what a tab with no box already uses. Every conversion between the two
+ * vocabularies goes through here, because a default box id handed to main as-is
+ * would be taken for a box that exists and would mint a partition for it.
+ */
+export function jarIdForBox(boxId: string): string | null {
+  return boxId === DEFAULT_BOX_ID ? null : boxId
+}
+
+/** The same jar as an extension record spells it, where the context's own jar is
+ *  the empty string rather than an absent id. */
+export function extensionJarForBox(boxId: string): string {
+  return jarIdForBox(boxId) ?? ''
+}
+
+/** The box a jar names, for showing a stored jar list as boxes. */
+export function boxIdForJar(jarId: string | null): string {
+  return jarId === null || jarId === '' ? DEFAULT_BOX_ID : jarId
+}
+
+/**
+ * The appearance fields a box carries, named once so the store's create and
+ * update signatures cannot drift from the modal that fills them in.
+ */
+export type BrowserBoxAppearance = BrowserAppearance
+
+/**
  * The appearance fields a group carries, named once so the store's create and
  * update signatures cannot drift from the modal that fills them in.
  */
@@ -83,9 +155,30 @@ export interface GlobalBrowserTab extends BrowserAppearance {
    * on the next load while an unnamed tab keeps tracking the page.
    */
   customTitle: string | null
+  /** The address the tab is showing, normalized, or empty for a blank tab. */
   url: string
+  /**
+   * The page's own icon as a data URL, or null while the app has none for this
+   * tab.
+   *
+   * The icon belongs to the tab's address rather than to the running page, so it
+   * is written down with the tab: the row wears it while the tab is hibernated
+   * and after a restart, before any page loads. A page that reports a different
+   * icon replaces it, a tab that navigates drops it with the address it came from,
+   * and a tab that has none resolves one from its own address (see
+   * `GlobalBrowserState.ensureFavicon`).
+   */
   favicon: string | null
   groupId: string | null
+  /**
+   * The box this tab runs against, or null for the browser's own default jar.
+   *
+   * A tab cannot change jars in place, because cookies do not migrate between
+   * partitions, so this is fixed when the tab is created and carried to the main
+   * process on every `browser:show` and `browser:navigate`. "Reopen in box" is
+   * the only honest way to move a page, and it is a close plus an open.
+   */
+  boxId: string | null
   createdAt: number
   /** Last moment the tab was shown to the user; the hibernation clock reads it. */
   lastUsedAt: number
@@ -94,6 +187,14 @@ export interface GlobalBrowserTab extends BrowserAppearance {
   pinned: boolean
   /** When the tab was pinned, so the pinned block keeps a stable order. */
   pinnedAt: number | null
+  /**
+   * The assistant conversation bound to this tab (a real thread in the reserved
+   * hidden browser project), or null while the tab has never asked the agent
+   * anything. The link is focused on the tab because the conversation's lifetime
+   * is the tab's: it is kept until the tab or the conversation is closed, and a
+   * restart restores both.
+   */
+  assistantThreadId: string | null
 }
 
 /** Whether two load errors describe the same failure. Main sends a fresh object

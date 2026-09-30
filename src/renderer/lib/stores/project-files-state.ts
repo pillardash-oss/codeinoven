@@ -65,7 +65,7 @@ export interface ProjectFilesState {
    *  it is still showing another scope's root after a thread switch. */
   listingMountKey: string | null
   /** Thread whose own workspace directory this project's file tree is mounted
-   *  on: a chat's `chats-artifacts/<threadId>` or an assistant task's
+   *  on: a chat's `chats-cwd/<threadId>` or an assistant task's
    *  `assistant-cwd/<routineId ?? threadId>`; `null` for real projects and
    *  threadless views. */
   mountThreadId: string | null

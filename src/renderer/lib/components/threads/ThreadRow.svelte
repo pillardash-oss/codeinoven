@@ -31,6 +31,7 @@
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { longPress } from '$lib/long-press.svelte'
+  import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -51,7 +52,6 @@
     coordinatorHasUnreadWorkers,
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
-    isThreadWorking,
     isOrchestrationChildThread
   } from '$shared/types'
   import type { Thread } from '$shared/types'
@@ -361,17 +361,11 @@
     coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
   )
 
-  /** Once the run state has been settled by a live session check (a ThreadView
-   *  mounted for this thread, or its session streamed activity), the live busy
-   *  flag is authoritative   a stale persisted `planning`/`executing` status
-   *  must not keep the spinner alive after the turn actually finished. Before
-   *  anything settles (fresh app start), the persisted status is the only
-   *  signal and stands in for genuinely in-flight work. */
-  let isWorking = $derived(
-    (agentRuns.hasSettled(thread.projectId, thread.id)
-      ? agentRuns.isBusy(thread.projectId, thread.id)
-      : Boolean(thread.sessionId) && isThreadWorking(thread)) || delegatedWorkActive
-  )
+  /** Whether the agent is producing work right now. The one live-working rule
+   *  (`isThreadLiveWorking`) keeps a thread parked on the user out of this, so a
+   *  permission, question, or secret card never reads as work in progress   its
+   *  status is the authority until the user answers. */
+  let isWorking = $derived(isThreadLiveWorking(thread) || delegatedWorkActive)
   let isRetryPaused = $derived(thread.status === 'working-paused')
   /** Another CodeInOven instance owns this thread's in-flight turn, so its live
    *  output and its stop control are there rather than here. */
@@ -538,6 +532,10 @@
     if (isForeignRun) return 'Running in another instance'
     if (isRetryPaused || isWorking) return stageLabel
     if (thread.status === 'spec') return 'Spec ready'
+    // A parked thread says what it waits for in the app's own words, and says it
+    // for as long as the status holds   opening or reading the row never
+    // changes it.
+    if (threadState === 'approval') return threadStatusPolicy(thread.status).label
     if (threadState === 'scheduled') return 'Scheduled'
     if (threadState === 'temporary-unread') return 'Temporary chat unread'
     return threadState

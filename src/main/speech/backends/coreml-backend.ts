@@ -146,6 +146,10 @@ export class CoreMlSpeechBackend implements SpeechBackend {
     throw new Error('Core ML does not support speech synthesis. Use MLX or sherpa-onnx TTS models.')
   }
 
+  isResident(): boolean {
+    return this.process !== null
+  }
+
   async dispose(): Promise<void> {
     const child = this.process
     this.process = null

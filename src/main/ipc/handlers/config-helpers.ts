@@ -40,8 +40,10 @@ import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../li
 import { validateMemoryConfig } from '../../chat/memory-service'
 import {
   MAX_BROWSER_HIBERNATION_MINUTES,
+  MAX_BROWSER_HISTORY_LIMIT,
   MAX_MAX_CONFLICT_FILE_BYTES,
   MIN_BROWSER_HIBERNATION_MINUTES,
+  MIN_BROWSER_HISTORY_LIMIT,
   MIN_MAX_CONFLICT_FILE_BYTES,
   MAX_BACKGROUND_WAKE_LEAD_MS,
   MIN_BACKGROUND_WAKE_LEAD_MS,
@@ -189,10 +191,13 @@ const CONFIG_PATCH_FIELDS = new Set([
   'defaultPullStrategy',
   'maxDiffLines',
   'maxConflictFileBytes',
+  'browserHibernationMinutes',
+  'browserHistoryLimit',
   'openLocalhostInCioBrowser',
   'openAllLinksInCioBrowser',
   'backgroundMode',
   'launchAtLogin',
+  'launchAtLoginPrompted',
   'autoRunMissedAssistantRuns',
   'backgroundWakeLeadMs',
   'maxBackgroundWakeHoldMs',
@@ -681,6 +686,15 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.browserHibernationMinutes = value.browserHibernationMinutes
   }
 
+  if ('browserHistoryLimit' in value) {
+    patch.browserHistoryLimit = validateBoundedInteger(
+      value.browserHistoryLimit,
+      'Browser history limit',
+      MIN_BROWSER_HISTORY_LIMIT,
+      MAX_BROWSER_HISTORY_LIMIT
+    )
+  }
+
   if ('maxConflictFileBytes' in value) {
     if (
       typeof value.maxConflictFileBytes !== 'number' ||
@@ -985,6 +999,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('launchAtLogin must be a boolean')
     }
     patch.launchAtLogin = value.launchAtLogin
+  }
+
+  if ('launchAtLoginPrompted' in value) {
+    if (typeof value.launchAtLoginPrompted !== 'boolean') {
+      throw new TypeError('launchAtLoginPrompted must be a boolean')
+    }
+    patch.launchAtLoginPrompted = value.launchAtLoginPrompted
   }
 
   if ('autoRunMissedAssistantRuns' in value) {

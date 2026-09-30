@@ -148,7 +148,8 @@
       </form>
       <p class="text-xs leading-relaxed text-dimmed">
         Approved hosts load in prototype previews immediately. Everything else stays blocked, so
-        inline anything a prototype needs beyond these CDNs.
+        inline anything a prototype needs beyond these CDNs. A host is approved as a whole, so
+        whatever a listed origin serves runs in the preview.
       </p>
     </div>
   {:else}

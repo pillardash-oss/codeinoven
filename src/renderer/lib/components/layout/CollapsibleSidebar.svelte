@@ -59,6 +59,19 @@
       onDragLeave: (event: DragEvent) => void
       onDrop: (event: DragEvent) => void
     }
+    /**
+     * How a native overlay is handling this sidebar's floating panel while a
+     * browser page covers it.
+     *
+     *   - `none`: nothing native is drawing it, so the DOM panel draws and
+     *     publishes its occlusion as it always has;
+     *   - `pending`: the overlay has been asked to draw it. The DOM panel keeps
+     *     drawing   the sliver beside the page stays visible while the overlay's
+     *     window loads   but it must not occlude: publishing here would detach
+     *     the page, and the overlay mirrors the very frame that would vanish;
+     *   - `live`: the overlay is drawing it, so the DOM panel steps aside.
+     */
+    overlayPhase?: 'none' | 'pending' | 'live'
     children: Snippet
   }
 
@@ -76,6 +89,7 @@
     footer,
     scroller = $bindable(null),
     fileDrop = undefined,
+    overlayPhase = 'none',
     children
   }: Props = $props()
 
@@ -191,10 +205,12 @@
       data-region={region}
       aria-label={label}
       style="width: {sidebarState.width}px"
+      class:invisible={overlayPhase === 'live'}
+      class:pointer-events-none={overlayPhase === 'live'}
       transition:fly={{ x: -sidebarState.width, duration: 180 }}
       onmouseenter={onOverlayEnter}
       onmouseleave={onOverlayLeave}
-      {@attach trackBrowserOcclusion}
+      {@attach overlayPhase === 'none' && trackBrowserOcclusion}
     >
       {#if !hideHeader}
         <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">

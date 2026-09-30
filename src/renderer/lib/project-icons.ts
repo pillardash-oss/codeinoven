@@ -2,7 +2,7 @@ import { invoke } from '$lib/ipc.svelte'
 import type { Project } from '$shared/types'
 import { getIconSvgDataUrl, generateInitialsIconSvg } from './project-svg-icons'
 import { pickColorForSeed } from './project-colors'
-import { getCustomSvgDataUrl } from '../../lib/custom-svg'
+import { getCustomSvgDataUrl } from '../../lib/custom-svg-tint'
 
 /** Minimal project shape needed to resolve an icon. */
 export interface ProjectIconSource {

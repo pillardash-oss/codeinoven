@@ -267,6 +267,47 @@ export class CapabilityDiscoveryService {
   }
 
   /**
+   * Pi's own MCP servers, listed so the Utilities page can show and edit them
+   * in place. Pi keeps one `mcp.json` per agent directory rather than the
+   * fixed home-relative path the harness spec table models: the legacy account
+   * reads Pi's own default, and every managed account reads its own container
+   * through `PI_CODING_AGENT_DIR`. A project can additionally carry
+   * `.pi/mcp.json`. These entries are never re-registered in the app's MCP
+   * bridge: Pi loads them itself, so the user keeps one configuration that
+   * works with or without CodeInOven, and the app only reads and edits it on
+   * the user's explicit action.
+   */
+  async discoverPiMcp(
+    agentDirectories: readonly string[],
+    projects: Array<{ id: string; path: string }>
+  ): Promise<AgentCapabilityEntry[]> {
+    const mcp: AgentCapabilityEntry[] = []
+    const seen = new Set<string>()
+    for (const directory of agentDirectories) {
+      const configPath = join(directory, 'mcp.json')
+      if (seen.has(configPath)) continue
+      seen.add(configPath)
+      mcp.push(
+        ...(await this.readMcpConfig(configPath, 'harness', 'mcpServers', { harnessId: 'pi' }))
+      )
+    }
+    for (const project of projects) {
+      mcp.push(
+        ...(await this.readMcpConfig(
+          join(project.path, '.pi', 'mcp.json'),
+          'harness',
+          'mcpServers',
+          {
+            harnessId: 'pi',
+            projectId: project.id
+          }
+        ))
+      )
+    }
+    return mcp
+  }
+
+  /**
    * Skill names installed in harness-specific directories (home and project
    * level), mapped to the harnesses claiming them. Consumers use this to keep
    * harness-exclusive skills out of other harnesses' command menus   a native
@@ -591,27 +632,43 @@ function rewriteJsonMcpEntry(
   if (!containerKey) return null
   const container = parsed[containerKey]
   if (!isRecord(container)) return null
+  // Edit the existing entry in place: harness-only fields the editor does not
+  // model   Pi's `exposure`, `oauth`, `cwd`, `timeout`, a per-tool
+  // `toolExposure`, an explicit `enabled`   must survive a save. Only the
+  // fields this editor owns are replaced, and the transport-specific fields
+  // the new transport does not use are dropped, so switching between stdio
+  // and a URL never leaves contradictory keys behind.
+  const entry: Record<string, unknown> = isRecord(container[serverName])
+    ? { ...container[serverName] }
+    : {}
+  delete entry['command']
+  delete entry['args']
+  delete entry['env']
+  delete entry['url']
+  delete entry['type']
+  delete entry['headers']
   if (content.transport === 'stdio' && content.command) {
-    container[serverName] = {
-      command: content.command,
-      ...(content.args && content.args.length ? { args: content.args } : {}),
-      ...(content.environment && Object.keys(content.environment).length
-        ? { env: content.environment }
-        : {}),
-      ...(format === 'opencode' ? { enabled: content.enabled } : {})
+    entry['command'] = content.command
+    if (content.args && content.args.length) entry['args'] = content.args
+    if (content.environment && Object.keys(content.environment).length) {
+      entry['env'] = content.environment
     }
   } else if (content.transport !== 'stdio' && content.url) {
-    container[serverName] = {
-      type: content.transport === 'sse' ? 'sse' : 'http',
-      url: content.url,
-      ...(content.headers && Object.keys(content.headers).length
-        ? { headers: content.headers }
-        : {}),
-      ...(format === 'opencode' ? { enabled: content.enabled } : {})
+    entry['type'] = content.transport === 'sse' ? 'sse' : 'http'
+    entry['url'] = content.url
+    if (content.headers && Object.keys(content.headers).length) {
+      entry['headers'] = content.headers
     }
   } else {
     return null
   }
+  // OpenCode writes `enabled` directly. In the shared `mcpServers` dialect an
+  // absent key means enabled, so enabling deletes it and disabling writes an
+  // explicit false   which is exactly how Pi itself rewrites the key.
+  if (format === 'opencode') entry['enabled'] = content.enabled
+  else if (content.enabled === false) entry['enabled'] = false
+  else delete entry['enabled']
+  container[serverName] = entry
   return `${JSON.stringify(parsed, null, 2)}\n`
 }
 

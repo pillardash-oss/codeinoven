@@ -43,8 +43,13 @@
     onExplain?: (requestId: string, question: AgentQuestion) => void
     /** Opens a quick chat for the current secret, pausing its timeout. */
     onQuickChat?: (requestId: string, question: AgentQuestion) => void
-    /** Pauses the request countdown while a temporary chat is open. */
-    onPause?: (requestId: string, questionIndex: number) => void
+    /**
+     * Holds the request countdown while the user works on the card: filling the
+     * value in, opening a temporary chat, or writing an alternative. Resolves
+     * once the main process cleared the deadline, and rejects when it could not,
+     * so the card can retry on the next interaction.
+     */
+    onPause?: (requestId: string, questionIndex: number) => Promise<void>
   }
 
   let {
@@ -90,7 +95,14 @@
     subscribeToClock()
     return Math.max(0, request.expiresAt - Date.now())
   })
-  let remainingLabel = $derived(remainingMs === null ? 'No deadline' : formatRemaining(remainingMs))
+  // A secret card carries no deadline only while the main process is holding it:
+  // the user started filling the card in, so nothing counts down under their
+  // hands. Both the label and the tooltip follow what main actually holds.
+  let timerPaused = $derived(remainingMs === null && request.interactedQuestionIndexes.length > 0)
+  let remainingLabel = $derived.by(() => {
+    if (remainingMs !== null) return formatRemaining(remainingMs)
+    return timerPaused ? 'Paused' : 'No deadline'
+  })
   /** Every variable this request asks for, so reuse is stated before it happens. */
   let requestedVariables = $derived(
     request.questions.flatMap((entry) =>
@@ -103,7 +115,31 @@
     return alternativeEditor?.speechEditorTarget(alternativeTargetId) ?? null
   }
 
+  /**
+   * The deadline the user has already paused, so a typed or pasted value costs
+   * one call instead of one call per keystroke. The main process hands the card
+   * a fresh window once the user goes inactive, and the next interaction pauses
+   * that window in turn.
+   */
+  let pausedDeadline: number | null = null
+
+  /**
+   * Hold the countdown the moment the user starts working on the card: a value
+   * must never be cut off mid-paste, and nothing can answer a secret for them.
+   * Best-effort, so the interaction that asked for the pause still happens; the
+   * next interaction retries a pause that did not land.
+   */
+  function pauseCountdown(): void {
+    const deadline = request.expiresAt
+    if (!onPause || working || deadline === undefined || pausedDeadline === deadline) return
+    pausedDeadline = deadline
+    void onPause(request.requestId, currentIndex).catch(() => {
+      if (pausedDeadline === deadline) pausedDeadline = null
+    })
+  }
+
   function showAlternative(): void {
+    pauseCountdown()
     showingAlternative = true
   }
 
@@ -119,7 +155,7 @@
    */
   function openSecretChat(onOpen: (requestId: string, question: AgentQuestion) => void): void {
     if (working) return
-    onPause?.(request.requestId, currentIndex)
+    pauseCountdown()
     onOpen(request.requestId, question)
   }
 
@@ -204,8 +240,10 @@
     <div class="flex shrink-0 items-center gap-1">
       <span
         class="mr-1 flex items-center gap-1 text-[0.6875rem] tabular-nums text-muted"
-        aria-label={`Time remaining: ${remainingLabel}`}
-        title="The card closes when the time runs out; ask the agent again for a new one"
+        aria-label={timerPaused ? 'The countdown is paused' : `Time remaining: ${remainingLabel}`}
+        title={timerPaused
+          ? 'The countdown is paused while you fill this card in'
+          : 'The card closes when the time runs out; ask the agent again for a new one'}
       >
         <Clock size={12} />
         {remainingLabel}
@@ -272,6 +310,7 @@
                 autofocus
                 disabled={working}
                 placeholder="Say what the agent should use instead, or name the variable you already provided…"
+                onValueChange={pauseCountdown}
                 class="w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary disabled:opacity-50"
                 containerClass="min-w-0 flex-1"
                 ariaLabel="Alternative instruction"
@@ -322,6 +361,7 @@
                   disabled={working}
                   placeholder="Paste the value"
                   bind:value={values[currentIndex]}
+                  oninput={pauseCountdown}
                 />
                 <button
                   class="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-40"
@@ -376,9 +416,7 @@
         aria-label="Secrets are stored in your encrypted vault and are never sent to the agent"
       >
         <ShieldCheck size={13} class="shrink-0 text-primary" />
-        <span class="agent-card-footer-note-text min-w-0 truncate"
-          >Secrets are not sent to the agent</span
-        >
+        <span class="agent-card-footer-note-text min-w-0 truncate">Secrets are safe</span>
       </p>
     </div>
     <div class="flex min-w-0 shrink items-center justify-end gap-2">

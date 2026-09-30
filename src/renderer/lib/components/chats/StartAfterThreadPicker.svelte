@@ -1,10 +1,9 @@
 <script lang="ts">
   import { Clock, MessagesSquare } from '@lucide/svelte'
   import type { Thread } from '$shared/types'
-  import { isOrchestrationChildThread, isThreadBusy } from '$shared/types'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { isOrchestrationChildThread } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
-  import { statusBadgeForThread } from '$lib/thread-status-badge'
+  import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
   import type { ActionDefinition, ActionSelection } from '$lib/actions'
 
   interface Props {
@@ -23,10 +22,10 @@
   let loading = $state(false)
   let requestId = 0
 
+  /** The one live-working rule, so a thread parked on the user reads as
+   *  "Needs attention" here instead of as work in progress. */
   function isLiveWorking(thread: Thread): boolean {
-    return agentRuns.hasSettled(thread.projectId, thread.id)
-      ? agentRuns.isBusy(thread.projectId, thread.id)
-      : Boolean(thread.sessionId) && isThreadBusy(thread)
+    return isThreadLiveWorking(thread)
   }
 
   function isCandidate(thread: Thread): boolean {

@@ -11,6 +11,11 @@ import type {
 import type {
   BrowserDevToolsState,
   BrowserDownload,
+  BrowserExtension,
+  BrowserExtensionActivityUpdate,
+  BrowserExtensionProgress,
+  BrowserExtensionSidePanel,
+  BrowserFindResult,
   BrowserInspectorEvent,
   BrowserOpenRequestContext,
   BrowserPageState,
@@ -28,10 +33,25 @@ import type {
 } from './notifications'
 import type { UpdaterStatus } from './updater'
 import type { SkillUpdateStatus } from '../types/utility'
+import type {
+  BrowserOverlayAck,
+  BrowserStripOverlayInteraction,
+  BrowserStripOverlayRequest,
+  ToastOverlayInteractionReport,
+  ToastOverlayRequestStack
+} from '../browser-overlay'
 
 export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
+  /**
+   * The one-time start-at-login offer, raised right after a routine gets its
+   * first how-to: the app asks whether it should start at login so a scheduled
+   * run can fire after a restart. Sent at most once in an install's life, and
+   * only while `launchAtLoginPrompted` is still false, so nothing has to guard
+   * against a second prompt arriving.
+   */
+  'app:startAtLoginPrompt': [] as [],
   'agent:processesChanged': [] as unknown as [projectId: string, threadId: string],
   /** Live agent lifecycle/stream event broadcast to every window. */
   'agent:event': [] as unknown as [event: import('../types').AgentEvent],
@@ -199,10 +219,17 @@ export const IPC_EVENT_CONTRACT = {
   'browser:inspector': [] as unknown as [tabId: string, event: BrowserInspectorEvent],
   /**
    * A browser shortcut the renderer has to carry out, because it owns the tab
-   * strip: focusing the address bar of a tab, or closing or opening a tab. Main
-   * decides the key, the renderer decides what the tab strip does with it.
+   * strip or holds the find bar: focusing the address bar of a tab, closing or
+   * opening a tab, or showing and stepping its find bar. Main decides the key,
+   * the renderer decides what the tab strip or the find bar does with it.
    */
   'browser:panelShortcut': [] as unknown as [tabId: string, action: BrowserPanelShortcutAction],
+  /**
+   * What Chromium's find reported for a tab's page. The page is a native view, so
+   * this is the only place a match count can come from; the find bar draws it and
+   * nothing else.
+   */
+  'browser:findResult': [] as unknown as [result: BrowserFindResult],
   /**
    * A Ctrl+Tab switcher gesture pressed while a native page held the keyboard.
    * Main claimed the chord and handed this renderer the keyboard, so the switcher
@@ -218,6 +245,17 @@ export const IPC_EVENT_CONTRACT = {
    */
   'browser:popupWindows': [] as unknown as [popups: BrowserPopupWindow[]],
   /**
+   * Every extension side panel the rail is hosting, whole, after any change to
+   * one of them: an extension asked for one, it closed, or the tab it belonged to
+   * went away. Like the popup list, it is short enough to publish whole rather
+   * than as deltas.
+   *
+   * `chrome.sidePanel` is compiled out of this runtime, so this is the record an
+   * extension declared through the compatibility shim rather than a surface the
+   * runtime provided.
+   */
+  'browser:extensionSidePanels': [] as unknown as [panels: BrowserExtensionSidePanel[]],
+  /**
    * Delivered to the native permission-prompt popup window (not the main
    * renderer): the page permission awaiting a decision, plus how many requests
    * are queued behind it.
@@ -226,9 +264,63 @@ export const IPC_EVENT_CONTRACT = {
     request: BrowserPermissionRequest,
     context: { queueSize: number; projectLabel: string | null }
   ],
+  /**
+   * The toast stack the native overlay should draw, delivered to the overlay
+   * document rather than to the app renderer. The app window keeps its own copy
+   * of the same state and draws nothing while the overlay is up. Null takes the
+   * stack down without touching the rest of the window.
+   */
+  'browser:overlay:stack': [] as unknown as [stack: ToastOverlayRequestStack | null],
+  /**
+   * The browser's floating tab strip the native overlay should draw, delivered
+   * to the overlay document. Null takes it down; the window itself stays for the
+   * next surface that needs it.
+   */
+  'browser:overlay:strip': [] as unknown as [strip: BrowserStripOverlayRequest | null],
+  /**
+   * One interaction with a toast the overlay drew, delivered back to the app
+   * renderer, which runs the handler that toast holds (open the thread, copy the
+   * details, and so on) and then drops the toast from its own state.
+   */
+  'browser:overlay:event': [] as unknown as [report: ToastOverlayInteractionReport],
+  /**
+   * One interaction with the floating tab strip the overlay drew: a tab picked, a
+   * tab closed, or the pointer entering or leaving the strip's own rectangle
+   * (which is what keeps the floating panel open while it is the overlay's to
+   * draw). The app renderer owns what each one means.
+   */
+  'browser:overlay:stripEvent': [] as unknown as [report: BrowserStripOverlayInteraction],
+  /**
+   * The overlay has drawn what it was given, confirming that a press on a card or
+   * a tab row can still reach the app renderer that owns the handler. The app
+   * renderer holds the content in its own window until this arrives.
+   */
+  'browser:overlay:drawn': [] as unknown as [ack: BrowserOverlayAck],
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
+  /**
+   * The browser's installed extensions, whole, after any change to them: one
+   * installed, removed, or its enablement edited. The list is short, so it is
+   * published whole rather than as deltas, and the rail redraws from it.
+   */
+  'browser:extensions': [] as unknown as [extensions: BrowserExtension[]],
+  /** One step of the install currently running, so a fetch and an unpack report
+   *  where they are instead of the surface freezing on a spinner. */
+  'browser:extensionProgress': [] as unknown as [progress: BrowserExtensionProgress],
+  /**
+   * One extension's action state (badge, icon, title) for one box: for one tab,
+   * or for every tab of the box when `tabId` is null. A `reset` means the
+   * worker restarted and holds none of what it recorded before.
+   */
+  'browser:extensionActivity': [] as unknown as [update: BrowserExtensionActivityUpdate],
   'browser:download': [] as unknown as [download: BrowserDownload],
+  /**
+   * A download the browser dropped from its own list (removed by the user, or
+   * forgotten with the project). It carries no replacement record, so without
+   * this the renderer's mirror of the list keeps a row main no longer has and
+   * nothing can make it go away short of reopening the surface.
+   */
+  'browser:downloadRemoved': [] as unknown as [downloadId: string],
   'speech:progress': [] as unknown as [progress: import('../speech/types').SpeechProgressEvent],
   /**
    * One live stage of a managed-worktree creation/adoption job. The renderer

@@ -39,19 +39,38 @@ export function hasUpcomingWork(state: BootstrapState, database: Database): bool
 }
 
 /**
- * The attention predicate: a thread is parked on approval, or an unattended
- * assistant run settled failed and has not been read. Computed from SQLite so
- * the icon is truthful whether the window is open, windowless, or was restarted
- * overnight.
+ * The attention predicate: does any thread currently hold a problem the user
+ * has not seen?
+ *
+ * The menu bar icon mirrors the thread's own error card, so the user learns a
+ * run broke without opening the app. Three conditions light it:
+ *
+ *   - a thread parked on the user (`awaiting_approval`): a permission, question,
+ *     or secret card, or a reviewable artifact, that cannot proceed on its own.
+ *     This is live state, so it is deliberately *not* gated on `read`: opening
+ *     or reading the thread answers nothing, and the light must stay until the
+ *     status itself changes (the user answers, or the turn resumes);
+ *   - a thread that settled `failed`, until the user reads it   a failure is a
+ *     past event the user acknowledges by reading it, not a state they are
+ *     being asked to act on right now;
+ *   - a thread paused on a provider issue (`working-paused`), which carries the
+ *     visible error card   a usage reset, a connection interruption, a
+ *     provider outage. It is deliberately not gated on `read`: the run is
+ *     blocked until it recovers, and the icon returns to normal when the
+ *     status does (a fired retry, a manual retry, or a new turn).
+ *
+ * Computed from SQLite, never from a renderer, so the icon is truthful whether
+ * the window is open, windowless, or was restarted overnight. The provider
+ * issue records the retry scheduler holds live on a thread that is also
+ * `working-paused`, so the durable thread status is the single source of truth.
  */
 export function computeAttention(database: Database): boolean {
   if (!database.isOpen()) return false
   try {
     const row = database.get<{ cnt: number }>(
       `SELECT COUNT(*) AS cnt FROM threads
-        WHERE read = 0
-          AND (status = 'awaiting_approval'
-               OR (status = 'failed' AND assistant_task_id IS NOT NULL))`
+        WHERE status IN ('working-paused', 'awaiting_approval')
+           OR (read = 0 AND status = 'failed')`
     )
     return (row?.cnt ?? 0) > 0
   } catch (error) {

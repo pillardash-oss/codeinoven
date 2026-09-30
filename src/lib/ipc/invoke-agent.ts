@@ -16,6 +16,7 @@ import type {
   BrainstormDocument,
   BrainstormEntryChoice,
   BrainstormPrototypeFidelity,
+  DraftAttachmentMove,
   EngineeringSpec,
   EngineeringSpecContent,
   HeartbeatConfig,
@@ -249,7 +250,7 @@ export const invokeAgentContract = {
       answers: string[],
       nextQuestionIndex?: number
     ],
-    PendingAgentQuestionRequest
+    PendingAgentQuestionRequest | null
   >,
   'agent:listPermissions': {} as Contract<
     [projectId: string, threadId: string],
@@ -447,6 +448,12 @@ export const invokeAgentContract = {
     [scope: AttachmentStorageScope, source: string],
     string
   >,
+  /**
+   * Adopt everything the welcome composer staged before its chat existed: the
+   * files move into the created chat's own scratch path and the moves come back
+   * so the composer can repoint its attachment chips at them.
+   */
+  'attachment:adoptDraft': {} as Contract<[threadId: string], DraftAttachmentMove[]>,
   'heartbeat:list': {} as Contract<[], HeartbeatConfig[]>,
   'heartbeat:create': {} as Contract<
     [input: Omit<HeartbeatConfig, 'id' | 'lastRun'>],

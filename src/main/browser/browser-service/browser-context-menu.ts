@@ -14,6 +14,7 @@
  */
 
 import type { ContextMenuParams, MenuItemConstructorOptions } from 'electron'
+import type { BrowserExtensionMenuRecord } from '../../../lib/ipc/browser'
 
 /** Longest selected phrase echoed in the "Search ... for" item. */
 const MAX_LABEL_TEXT_LENGTH = 32
@@ -242,7 +243,8 @@ function buildMediaItems(
 export function buildBrowserContextMenuItems(
   params: ContextMenuParams,
   context: BrowserContextMenuContext,
-  actions: BrowserContextMenuActions
+  actions: BrowserContextMenuActions,
+  extensionItems: MenuItemConstructorOptions[] = []
 ): MenuItemConstructorOptions[] {
   const items: MenuItemConstructorOptions[] = []
   const push = (section: MenuItemConstructorOptions[]): void => {
@@ -271,10 +273,97 @@ export function buildBrowserContextMenuItems(
 
   if (items.length > 0) items.push({ type: 'separator' })
   items.push(...buildBrowserPageMenuItems(context, actions, !params.isEditable))
+  // An extension's items sit last but before the app's own inspection, the way a
+  // browser puts contributed items below its built-ins. Nothing changes for a
+  // page no extension contributed to.
+  if (extensionItems.length > 0) {
+    items.push({ type: 'separator' })
+    items.push(...extensionItems)
+  }
   items.push({ type: 'separator' })
   items.push({
     label: 'Inspect Element',
     click: () => actions.inspectElement(params.x, params.y)
   })
   return items
+}
+
+/** One extension's recorded tree, with the id a click has to come back to. */
+export interface BrowserExtensionMenuSection {
+  extensionId: string
+  items: BrowserExtensionMenuRecord[]
+}
+
+/**
+ * Which `chrome.contextMenus` contexts one click belongs to, most specific first.
+ *
+ * `page` is the base case, not a fallback: it is what a click on nothing in
+ * particular is, which is why it is only reported when nothing else is.
+ */
+export function extensionClickContexts(params: ContextMenuParams): string[] {
+  const contexts: string[] = []
+  if (params.isEditable) contexts.push('editable')
+  if (params.selectionText.trim()) contexts.push('selection')
+  if (params.linkURL) contexts.push('link')
+  if (params.mediaType === 'image' && params.srcURL) contexts.push('image')
+  if (params.mediaType === 'video') contexts.push('video')
+  if (params.mediaType === 'audio') contexts.push('audio')
+  if (contexts.length === 0) contexts.push('page')
+  return contexts
+}
+
+/**
+ * The recorded menus of every extension as native items.
+ *
+ * An item is kept when the click is in one of its contexts (`all` always fits);
+ * a parent becomes a submenu, a separator is a separator, and a checkbox or
+ * radio carries its recorded state. A `parentId` cycle is broken rather than
+ * followed, and an item whose parent is missing becomes a root, so nothing an
+ * extension recorded can make the menu unbuildable.
+ */
+export function buildExtensionMenuItems(
+  sections: BrowserExtensionMenuSection[],
+  contexts: string[],
+  onSelect: (section: BrowserExtensionMenuSection, item: BrowserExtensionMenuRecord) => void
+): MenuItemConstructorOptions[] {
+  const output: MenuItemConstructorOptions[] = []
+  for (const section of sections) {
+    const ids = new Set(section.items.map((item) => item.id))
+    const childrenOf = (parentId: string | null): BrowserExtensionMenuRecord[] =>
+      section.items.filter((item) => item.parentId === parentId)
+    const matches = (item: BrowserExtensionMenuRecord): boolean =>
+      item.contexts.length === 0 ||
+      item.contexts.includes('all') ||
+      item.contexts.some((context) => contexts.includes(context))
+    const render = (
+      item: BrowserExtensionMenuRecord,
+      seen: Set<string>
+    ): MenuItemConstructorOptions | null => {
+      if (!matches(item) || seen.has(item.id)) return null
+      const next = new Set(seen)
+      next.add(item.id)
+      if (item.type === 'separator') return { type: 'separator' }
+      const label = item.title || ' '
+      const children = childrenOf(item.id)
+        .map((child) => render(child, next))
+        .filter((child): child is MenuItemConstructorOptions => child !== null)
+      if (children.length > 0) return { label, enabled: item.enabled, submenu: children }
+      if (item.type === 'checkbox' || item.type === 'radio') {
+        return {
+          label,
+          type: item.type,
+          checked: item.checked,
+          enabled: item.enabled,
+          click: () => onSelect(section, item)
+        }
+      }
+      return { label, enabled: item.enabled, click: () => onSelect(section, item) }
+    }
+    const roots = section.items.filter((item) => item.parentId === null || !ids.has(item.parentId))
+    for (const item of roots) {
+      const rendered = render(item, new Set())
+      if (rendered) output.push(rendered)
+    }
+  }
+  return output
 }

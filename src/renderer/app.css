@@ -1,5 +1,10 @@
 @import 'tailwindcss';
 @import '@fontsource-variable/jetbrains-mono';
+/* The toast cards. They are drawn by the app's toaster and, while a browser page
+   covers the corner the toaster sits in, by the native toast overlay in a window
+   of its own. The overlay loads this same stylesheet, so the cards are identical
+   in both and neither host owns their look. */
+@import './lib/components/ui/toaster.css';
 
 /* The workspace context rail animates its own grid track, so the thread beside
    it is widened frame by frame rather than jumping to its final width while the
@@ -198,6 +203,20 @@ body {
 :where(input, textarea, select, [contenteditable]):focus-visible {
   outline: none;
   box-shadow: none;
+}
+
+/* A rail panel that hosts a native page insets its own frame by the band that
+   resizes the rail.
+
+   A native `WebContentsView` is composited above the renderer's DOM, so a page
+   placed over that band takes the pointer meant for the resize handle and the
+   rail can no longer be adjusted at all. The band's width and which edge it sits
+   on are declared by the rail itself (ContextSidebar's `railBandInsets`), so a
+   panel cannot drift from the handle, and a panel rendered outside a rail (the
+   full screen browser) inherits nothing and pays no inset. */
+.native-rail-gutter {
+  margin-left: var(--context-rail-band-left, 0px);
+  margin-top: var(--context-rail-band-top, 0px);
 }
 
 /* Anything clickable gets a pointer — desktop apps should feel deliberate.

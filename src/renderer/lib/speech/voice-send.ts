@@ -19,8 +19,8 @@ import { invoke } from '$lib/ipc.svelte'
 import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import {
+  sendOrQueueThreadMessage,
   sendThreadMessageHeadless,
-  threadAgentIsIdle,
   type HeadlessThreadMessage
 } from '$lib/stores/thread-delivery'
 import { logRendererError } from '$lib/system/renderer-logger'
@@ -106,23 +106,6 @@ function settleDeliveredContent(projectId: string, threadId: string): void {
   notifyComposerReset(projectId, threadId)
 }
 
-/** Park the message for the next idle transition of its thread. */
-function parkForIdleDispatch(
-  projectId: string,
-  threadId: string,
-  content: UnsentComposerContent
-): void {
-  rendererRecovery.setQueuedMessage(projectId, threadId, {
-    text: content.text,
-    attachments: content.attachments,
-    ...(content.promptContext ? { promptContext: content.promptContext } : {}),
-    promptReferences: content.promptReferences,
-    projectReferences: content.projectReferences,
-    taskReferences: content.taskReferences,
-    startAfterThreads: []
-  })
-}
-
 /**
  * Whether the conversation a dictation belongs to still exists. A thread
  * deleted mid-transcription, or a side chat that closed, must keep the
@@ -156,10 +139,10 @@ async function dispatchUnsentContent(
     )
     return null
   }
-  if (direct || (await threadAgentIsIdle(projectId, threadId))) {
+  if (direct) {
     await sendThreadMessageHeadless(projectId, threadId, content)
   } else {
-    parkForIdleDispatch(projectId, threadId, content)
+    await sendOrQueueThreadMessage(projectId, threadId, content)
   }
   settleDeliveredContent(projectId, threadId)
   return content.text

@@ -43,6 +43,38 @@ interface StoredGitHubCredentials {
   refreshToken?: string
   accessTokenExpiresAt?: number
   refreshTokenExpiresAt?: number
+  /**
+   * Client ID these credentials were issued to. GitHub pairs a refresh token
+   * with the app that issued it, so presenting it with another client ID is
+   * refused with the same generic error as an expired refresh token. Recording
+   * the issuer turns that ambiguity into a precise diagnosis.
+   */
+  clientId?: string
+}
+
+/**
+ * OAuth error codes that mean the stored refresh token can never be exchanged
+ * again. A refresh token is single use and belongs to the client ID that issued
+ * it, so it is dead once it has been redeemed (another app instance won the
+ * race, or the app quit before the replacement was persisted), once it expires,
+ * or once it is presented with a different GitHub App. GitHub reports every one
+ * of those cases with the same generic code, so the app must treat them as
+ * terminal and ask the user to sign in again rather than retry forever.
+ */
+const DEAD_REFRESH_TOKEN_ERRORS: ReadonlySet<string> = new Set([
+  'bad_refresh_token',
+  'incorrect_client_credentials'
+])
+
+/** GitHub's token endpoint answered with an OAuth error code. */
+class GitHubOAuthError extends Error {
+  constructor(
+    readonly code: string,
+    readonly description?: string
+  ) {
+    super(`GitHub OAuth error: ${code}${description ? ` ${description}` : ''}`)
+    this.name = 'GitHubOAuthError'
+  }
 }
 
 /**
@@ -55,6 +87,12 @@ interface StoredGitHubCredentials {
  *
  * The token is resolved from `SecretVault` in the main process only and is
  * never serialized into IPC payloads or logs.
+ *
+ * A credential set also holds the refresh token and issuing client ID when the
+ * GitHub App expires user access tokens (GitHub's default). Because a refresh
+ * token that GitHub refuses is terminal, such credentials are dropped once and
+ * reported as signed out, so the sidebar offers sign-in again instead of the
+ * app retrying a dead token on every call.
  */
 export class GitHubAuthService {
   private refreshPromise: Promise<string | null> | null = null
@@ -90,14 +128,29 @@ export class GitHubAuthService {
     return this.clientId.length > 0
   }
 
+  /**
+   * Presence-only status for the Git sidebar. Never rejects: credentials that
+   * cannot be read or can no longer be renewed are reported as signed out so the
+   * UI can offer sign-in again, instead of failing an IPC call every time the
+   * Git panel mounts.
+   */
   async status(): Promise<GitHubAuthStatus> {
     if (!this.configured) return { connected: false, configured: false }
-    const connected = await this.vault.exists(GITHUB_TOKEN_REF)
-    if (!connected) return { connected: false, configured: true }
-    return {
-      connected: true,
-      configured: true,
-      user: await this.fetchUserProfile()
+    try {
+      if (!(await this.vault.exists(GITHUB_TOKEN_REF))) {
+        return { connected: false, configured: true }
+      }
+      // Reading the profile is what renews an expiring access token, so this is
+      // also where credentials that can no longer be renewed are dropped: the
+      // second check reports the resulting signed-out state.
+      const user = await this.fetchUserProfile()
+      const connected = await this.vault.exists(GITHUB_TOKEN_REF)
+      return connected
+        ? { connected, configured: true, user }
+        : { connected: false, configured: true }
+    } catch (failure) {
+      Logger.error('GitHub auth status failed', failure)
+      return { connected: false, configured: true }
     }
   }
 
@@ -206,23 +259,45 @@ export class GitHubAuthService {
     }
   }
 
+  /**
+   * Resolve a usable access token, renewing it when it is close to expiring.
+   *
+   * Never throws: `null` means "no usable credential", which every caller treats
+   * as signed out. Credentials GitHub has definitively refused are discarded once
+   * so the sidebar can offer sign-in again.
+   */
   async resolveToken(forceRefresh = false): Promise<string | null> {
-    if (!(await this.vault.exists(GITHUB_TOKEN_REF))) return null
-    const stored = this.parseCredentials(await this.vault.resolve(GITHUB_TOKEN_REF))
-    if (!stored.refreshToken) return stored.accessToken
+    const stored = await this.readCredentials()
+    if (!stored) return null
 
     const now = Date.now()
-    const shouldRefresh =
-      forceRefresh ||
-      (stored.accessTokenExpiresAt !== undefined &&
-        stored.accessTokenExpiresAt - now <= TOKEN_REFRESH_LEEWAY_MS)
-    if (!shouldRefresh) return stored.accessToken
-    if (stored.refreshTokenExpiresAt !== undefined && stored.refreshTokenExpiresAt <= now) {
+    const accessTokenExpired =
+      stored.accessTokenExpiresAt !== undefined && stored.accessTokenExpiresAt <= now
+    const refreshable =
+      stored.refreshToken !== undefined &&
+      (stored.refreshTokenExpiresAt === undefined || stored.refreshTokenExpiresAt > now)
+
+    if (!refreshable) {
+      // Nothing left that can renew this credential. An expired access token can
+      // only be refused by GitHub, so drop it and report signed out instead of
+      // looping on a token that cannot work.
+      if (accessTokenExpired) {
+        await this.discardCredentials(
+          'the access token has expired and no usable refresh token is left'
+        )
+        return null
+      }
       return stored.accessToken
     }
+
+    const expiringSoon =
+      stored.accessTokenExpiresAt !== undefined &&
+      stored.accessTokenExpiresAt - now <= TOKEN_REFRESH_LEEWAY_MS
+    if (!forceRefresh && !expiringSoon) return stored.accessToken
+
     if (this.refreshPromise) return this.refreshPromise
 
-    const refresh = this.refreshCredentials(stored)
+    const refresh = this.renewCredentials(stored)
     this.refreshPromise = refresh
     try {
       return await refresh
@@ -236,22 +311,122 @@ export class GitHubAuthService {
     await this.vault.remove(GITHUB_TOKEN_REF)
   }
 
-  private async refreshCredentials(stored: StoredGitHubCredentials): Promise<string | null> {
-    if (!stored.refreshToken) return stored.accessToken
+  /**
+   * Exchange the refresh token for a new access token, recovering from the ways
+   * GitHub refuses it. Never throws.
+   */
+  private async renewCredentials(stored: StoredGitHubCredentials): Promise<string | null> {
+    const refreshToken = stored.refreshToken
+    if (!refreshToken) return stored.accessToken
+    if (stored.clientId !== undefined && stored.clientId !== this.clientId) {
+      // GitHub pairs a refresh token with the app that issued it, so this build
+      // can never renew it. Keep using a still-valid access token and name the
+      // real cause once it expires, instead of a generic credentials refusal.
+      Logger.error(
+        `GitHub credentials were issued to client ID ${stored.clientId}, but this build is configured with ${this.clientId}`
+      )
+      if (this.isAccessTokenStillValid(stored)) return stored.accessToken
+      await this.discardCredentials('they belong to a different GitHub App client ID')
+      return null
+    }
+    try {
+      return await this.exchangeRefreshToken(refreshToken)
+    } catch (failure) {
+      if (failure instanceof GitHubOAuthError && DEAD_REFRESH_TOKEN_ERRORS.has(failure.code)) {
+        const rotated = await this.accessTokenAfterRotation(refreshToken)
+        if (rotated) return rotated
+        await this.discardCredentials(`GitHub refused the refresh token (${failure.code})`)
+        return null
+      }
+      // Transient (timeout, HTTP error, offline). Keep the credentials: the
+      // refresh token is normally still valid, so a later call can succeed.
+      Logger.error('GitHub token refresh failed', failure)
+      return this.isAccessTokenStillValid(stored) ? stored.accessToken : null
+    }
+  }
+
+  /** True while the stored access token is still accepted by GitHub. */
+  private isAccessTokenStillValid(stored: StoredGitHubCredentials): boolean {
+    return stored.accessTokenExpiresAt === undefined || stored.accessTokenExpiresAt > Date.now()
+  }
+
+  private async exchangeRefreshToken(refreshToken: string): Promise<string> {
     const response = await this.postJson(ACCESS_TOKEN_URL, {
       client_id: this.clientId,
       grant_type: REFRESH_GRANT_TYPE,
-      refresh_token: stored.refreshToken
+      refresh_token: refreshToken
     })
     const record = response as Record<string, unknown>
     const accessToken = this.readString(record, 'access_token')
     if (!accessToken) {
-      const error = this.readString(record, 'error') ?? 'unknown_error'
-      throw new Error(`GitHub token refresh failed: ${error}`)
+      throw new GitHubOAuthError(
+        this.readString(record, 'error') ?? 'unknown_error',
+        this.readString(record, 'error_description') ?? undefined
+      )
     }
-    await this.saveCredentials(record, stored.refreshToken)
+    await this.saveCredentials(record, refreshToken)
     Logger.info('GitHub OAuth token refreshed')
     return accessToken
+  }
+
+  /**
+   * Recover when another app instance redeemed the refresh token first.
+   *
+   * The guard against reusing a refresh token lives in this process only, so two
+   * instances sharing one vault (a dev run beside the packaged app) can refresh
+   * at the same moment. The loser is refused even though the winner has just
+   * stored a usable replacement, so re-read the vault once before declaring the
+   * credentials dead.
+   */
+  private async accessTokenAfterRotation(previousRefreshToken: string): Promise<string | null> {
+    try {
+      const current = await this.readCredentials()
+      if (!current?.refreshToken || current.refreshToken === previousRefreshToken) return null
+      if (this.isAccessTokenStillValid(current)) return current.accessToken
+      return await this.exchangeRefreshToken(current.refreshToken)
+    } catch (failure) {
+      Logger.error('GitHub token recovery after a rotated refresh token failed', failure)
+      return null
+    }
+  }
+
+  /** Read the stored credentials; malformed records are discarded, never thrown. */
+  private async readCredentials(): Promise<StoredGitHubCredentials | null> {
+    let raw: string
+    try {
+      if (!(await this.vault.exists(GITHUB_TOKEN_REF))) return null
+      raw = await this.vault.resolve(GITHUB_TOKEN_REF)
+    } catch (failure) {
+      // A vault read failure is not proof that the credential is invalid, so
+      // leave it in place and report signed out for this call only.
+      Logger.error('Stored GitHub credentials could not be read', failure)
+      return null
+    }
+    try {
+      return this.parseCredentials(raw)
+    } catch (failure) {
+      await this.discardCredentials('the stored GitHub credentials are malformed', failure)
+      return null
+    }
+  }
+
+  /**
+   * Drop credentials that can no longer authenticate anything: the profile cache
+   * is cleared, the sidebar reports signed out, and the next status call offers
+   * the device flow again instead of repeating a refresh GitHub always refuses.
+   */
+  private async discardCredentials(reason: string, failure?: unknown): Promise<void> {
+    Logger.error(
+      'Discarding unusable GitHub credentials',
+      reason,
+      ...(failure === undefined ? [] : [failure])
+    )
+    this.cachedUser = null
+    try {
+      await this.vault.remove(GITHUB_TOKEN_REF)
+    } catch (removalFailure) {
+      Logger.error('GitHub credential removal failed', removalFailure)
+    }
   }
 
   private async saveCredentials(
@@ -269,6 +444,9 @@ export class GitHubAuthService {
     const credentials: StoredGitHubCredentials = {
       version: 1,
       accessToken,
+      // Record the issuer, so a later client ID change is reported as such
+      // instead of surfacing as a generic credentials refusal.
+      ...(this.clientId ? { clientId: this.clientId } : {}),
       ...(refreshToken ? { refreshToken } : {}),
       ...(expiresIn > 0 ? { accessTokenExpiresAt: now + expiresIn * 1000 } : {}),
       ...(refreshTokenExpiresIn > 0
@@ -286,11 +464,13 @@ export class GitHubAuthService {
       const accessToken = this.readString(record, 'accessToken')
       if (record['version'] !== 1 || !accessToken) throw new Error('Invalid credentials')
       const refreshToken = this.readString(record, 'refreshToken')
+      const clientId = this.readString(record, 'clientId')
       const accessTokenExpiresAt = this.readNumber(record, 'accessTokenExpiresAt')
       const refreshTokenExpiresAt = this.readNumber(record, 'refreshTokenExpiresAt')
       return {
         version: 1,
         accessToken,
+        ...(clientId ? { clientId } : {}),
         ...(refreshToken ? { refreshToken } : {}),
         ...(accessTokenExpiresAt > 0 ? { accessTokenExpiresAt } : {}),
         ...(refreshTokenExpiresAt > 0 ? { refreshTokenExpiresAt } : {})

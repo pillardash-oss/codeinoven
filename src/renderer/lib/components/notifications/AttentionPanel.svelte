@@ -3,10 +3,23 @@
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { formatDateTime } from '$shared/date-time-format'
-  import { describeRelativeTime, type AutoAnswerItem } from '$shared/types'
+  import {
+    describeRelativeTime,
+    type AutoAnswerItem,
+    type AutoAnswerThreadScope
+  } from '$shared/types'
+
+  interface Props {
+    /** The conversation this panel was opened for. */
+    projectId: string
+    threadId: string
+  }
+
+  let { projectId, threadId }: Props = $props()
 
   /** How each kind of auto-resolved gate reads in the panel. */
   const KIND_LABELS: Record<AutoAnswerItem['kind'], string> = {
@@ -18,7 +31,35 @@
 
   let busyId = $state<string | null>(null)
 
-  let unread = $derived(attentionState.unread)
+  /**
+   * What this panel is showing. The gate is keyed to the conversation on screen,
+   * and through it to the assistant task it ran for and the routine that owns
+   * that task, so a decision made on a scheduled run thread is still visible on
+   * the task's own thread.
+   */
+  const scope = $derived.by((): AutoAnswerThreadScope => {
+    const thread = workspaceState.selectedThread
+    const matches = thread !== null && thread.id === threadId && thread.projectId === projectId
+    return {
+      id: threadId,
+      projectId,
+      ...(matches && thread.routineId ? { routineId: thread.routineId } : {}),
+      ...(matches && thread.assistantTaskId ? { assistantTaskId: thread.assistantTaskId } : {})
+    }
+  })
+
+  let unread = $derived(attentionState.unreadFor(scope))
+
+  /**
+   * The panel exists only while its scope has decisions to show. Reading the last
+   * one clears the rail icon (the rail item is keyed to the same scope), so the
+   * panel leaves with it instead of sitting on its empty state. Both dismiss
+   * actions mark their record read before they answer main, so this reflects the
+   * new list immediately.
+   */
+  function closeIfEmpty(): void {
+    if (attentionState.unreadFor(scope).length === 0) contextSidebarState.closeAttention()
+  }
 
   /** The resolved title of the thread the gate belongs to, or a plain fallback
    *  when that thread has since been deleted. */
@@ -55,10 +96,12 @@
 
   function dismiss(item: AutoAnswerItem): void {
     void attentionState.dismiss(item.id)
+    closeIfEmpty()
   }
 
   function dismissAll(): void {
     void attentionState.dismissAll()
+    closeIfEmpty()
   }
 </script>
 
@@ -86,8 +129,8 @@
       <div class="flex h-full min-h-0 flex-col">
         <EmptyState
           icon={TriangleAlert}
-          title="Nothing resolved for you"
-          description="When a question, secret request, image decision, or destructive confirmation is settled without you, it is recorded here so the app never answers silently."
+          title="Nothing resolved for you on this thread"
+          description="When a question, secret request, image decision, or destructive confirmation on this thread is settled without you, it is recorded here so the app never answers silently."
         />
       </div>
     {:else}

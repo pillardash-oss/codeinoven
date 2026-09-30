@@ -2,12 +2,26 @@
   import type { Component, Snippet } from 'svelte'
   import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
+  export interface ContextDockAppearance {
+    /** The accent the identity resolved to, always present: a colour alone draws
+     *  as a filled disc. */
+    color: string
+    /** The identity's own mark as an image data URL, when it has one. */
+    iconUrl?: string | null
+  }
+
   export interface ContextDockItem {
     id: string
     /** Used for both the tooltip and the accessible name. */
     label: string
     /** Omit in favor of `countLabel` for items that show a number instead of an icon. */
     icon?: Component
+    /**
+     * The identity the tool stands for when that identity is the user's own
+     * rather than a fixed concept: the tool draws this in place of `icon`, so the
+     * rail carries the colour and the mark of the thing currently in use.
+     */
+    appearance?: ContextDockAppearance
     /** Renders as plain text instead of `icon`   e.g. the message-history count. */
     countLabel?: string
     active: boolean
@@ -104,6 +118,15 @@
         >
           {#if item.countLabel !== undefined}
             <span class="text-[0.6875rem] font-semibold tabular-nums">{item.countLabel}</span>
+          {:else if item.appearance}
+            {#if item.appearance.iconUrl}
+              <img src={item.appearance.iconUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+            {:else}
+              <span
+                class="h-3.5 w-3.5 rounded-full"
+                style="background-color: {item.appearance.color}"
+              ></span>
+            {/if}
           {:else if Icon}
             <Icon size={16} strokeWidth={1.8} />
           {/if}

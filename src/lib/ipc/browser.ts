@@ -67,6 +67,16 @@ export interface BrowserPopupWindow {
   /** Favicon data URL the popup reported, or null until it declares one. */
   favicon: string | null
   loading: boolean
+  /**
+   * The extension whose own popup this is, or null when a page opened it with
+   * `window.open`.
+   *
+   * An extension's popup has no window to come from, because Electron draws no
+   * toolbar and no action popup for one to hang from: the rail itself is its host.
+   * The id is carried so the rail can name the popup after the extension and draw
+   * the extension's own icon rather than a page title its page may never set.
+   */
+  extensionId: string | null
 }
 
 /** Native browser content rectangle in BrowserWindow density-independent pixels. */
@@ -75,6 +85,31 @@ export interface BrowserViewBounds {
   y: number
   width: number
   height: number
+}
+
+/**
+ * An extension's own side panel, hosted in the rail.
+ *
+ * Electron compiles `chrome.sidePanel` out, so an extension that declares a panel
+ * has no host of its own. The app hosts the extension's own document, loaded from
+ * its own origin in the jar the extension runs in, over the rectangle the rail
+ * measures for it, exactly as it hosts an extension's action popup. This record is
+ * metadata about the panel, never its content.
+ */
+export interface BrowserExtensionSidePanel {
+  extensionId: string
+  /** Display name, so the rail names the panel without a second lookup. */
+  extensionName: string
+  /** The app browser tab this panel belongs to. */
+  appTabId: string
+  /** The project and box the panel's jar belongs to, so the rail scopes it. */
+  projectId: string
+  /** The extension-relative path it asked to show. */
+  path: string
+  /** Absolute `chrome-extension://` address the panel document is loaded from. */
+  url: string
+  /** Title of the panel document, or the extension's name until it sets one. */
+  title: string
 }
 
 /**
@@ -106,6 +141,16 @@ export interface BrowserLoadError {
 /** Navigation state mirrored from an app-scoped browser WebContentsView. */
 export interface BrowserPageState {
   tabId: string
+  /**
+   * The surface the tab belongs to: its project and the thread that owns it.
+   *
+   * A tab's page state is the one report every browser store sees, whichever
+   * surface is showing the tab, so a reader that has to tell a thread browser's
+   * page from the global browser's needs the ownership here rather than having to
+   * look the tab up. `browser-global` is the global browser's own project id.
+   */
+  projectId: string
+  threadId: string
   url: string
   title: string
   /** Favicon data URL reported by the page, or null until the page declares one. */
@@ -327,7 +372,10 @@ export const BROWSER_SHORTCUT_ACTIONS = [
   'toggleDevTools',
   'closeTab',
   'newTab',
-  'toggleNotes'
+  'toggleNotes',
+  'find',
+  'findNext',
+  'findPrevious'
 ] as const
 
 export type BrowserShortcutAction = (typeof BROWSER_SHORTCUT_ACTIONS)[number]
@@ -368,9 +416,62 @@ export interface BrowserSwitcherKey {
 
 /**
  * A browser action the renderer owns, because only the renderer knows the tab
- * strip: focusing the address bar, and closing or opening a tab.
+ * strip or holds the find bar: focusing the address bar, closing or opening a
+ * tab, showing the tab's notes, and find.
  */
-export type BrowserPanelShortcutAction = 'focus-address' | 'close-tab' | 'new-tab' | 'toggle-notes'
+export type BrowserPanelShortcutAction =
+  | 'focus-address'
+  | 'close-tab'
+  | 'new-tab'
+  | 'toggle-notes'
+  | 'find'
+  | 'find-next'
+  | 'find-previous'
+
+/**
+ * One find request for a tab's page.
+ *
+ * The page is a native `WebContentsView`, so the search itself is Chromium's
+ * own and the renderer can only ask for it. `findNext` asks the page to keep the
+ * session it already has and move within it, which is what makes next/previous a
+ * step rather than a fresh search; a new query sends `findNext: false` so the
+ * session restarts at the first match.
+ */
+export interface BrowserFindRequest {
+  /** The text to find. An empty text clears the page's highlight. */
+  text: string
+  /** The direction the session moves in. */
+  forward: boolean
+  /** Continue the existing session instead of starting a new one. */
+  findNext: boolean
+  /** Match the text case-sensitively. */
+  matchCase: boolean
+}
+
+/**
+ * What Chromium's find reported for a tab, as the find bar draws it.
+ *
+ * `matches` is the page's own count of every match and `activeMatchOrdinal` is
+ * the 1-based position of the one the page is scrolled to, so `0/0` is the
+ * honest reading of a page with no match rather than an assumed empty result.
+ */
+export interface BrowserFindResult {
+  tabId: string
+  /** The text this result belongs to, so a bar that has moved on can ignore it. */
+  text: string
+  matches: number
+  activeMatchOrdinal: number
+}
+
+/**
+ * How a find session ends.
+ *
+ * `clearSelection` drops the page's highlight, which is what closing the bar
+ * means; `keepSelection` leaves the highlight on screen, which is what stepping
+ * away from the field means; `activateSelection` leaves it and focuses the
+ * match, which is what a page wants when the bar closes onto its result.
+ */
+export type BrowserFindStopAction = 'clearSelection' | 'keepSelection' | 'activateSelection'
 
 /** Ownership metadata for a browser tab requested by the main process. */
 export interface BrowserOpenRequestContext {
@@ -378,6 +479,12 @@ export interface BrowserOpenRequestContext {
   threadId: string
   requestedTabId?: string
   reveal: boolean
+  /**
+   * The box the created or revealed tab runs in, or null/absent for the
+   * context's own jar. Main resolves it from the owning tab, so the renderer's
+   * row and the session agree about which jar the page lives in.
+   */
+  boxId?: string | null
 }
 
 /** What the permission popup displays for one pending request. Main resolves
@@ -399,6 +506,17 @@ export interface BrowserPermissionRequest {
   permission: string
   mediaTypes: string[]
 }
+
+/**
+ * Why a tab is being destroyed, which decides what happens to its history.
+ *
+ * The same channel serves both outcomes, and they are opposites: `hibernated`
+ * frees the page while the tab itself stays in the strip, so its Back/Forward
+ * stack is written down first; `closed` removes the tab, so its stack goes with
+ * it. Main cannot tell the two apart on its own, so the surface that decided says
+ * which one it is.
+ */
+export type BrowserTabDestroyReason = 'closed' | 'hibernated'
 
 /**
  * How the user answered a browser permission prompt.
@@ -430,15 +548,226 @@ export interface BrowserConsoleEntry {
   sourceId: string
   lineNumber: number
   timestamp: number
+  /**
+   * URL of the frame that logged the message, or null when the event named no
+   * frame (a failed navigation, a renderer that stopped).
+   *
+   * `sourceId` names the script and is not a substitute: it is empty for a
+   * document that has no address of its own, and one page logs from several
+   * frames. Which frame spoke is the whole answer for a message that says
+   * something was refused for "the document" rather than for a script, because
+   * the frame URL is what names that document.
+   */
+  frameUrl: string | null
 }
 
-/** Lifecycle state of a download started by an app-scoped browser tab. */
+/** Lifecycle state of a download started by an app-scoped browser tab.
+ *  `interrupted` covers both a download the server cut short and one the app
+ *  itself stopped keeping (a quit, or a restart that found bytes on disk); a
+ *  `resumable` interrupted download has its bytes kept and can continue, while a
+ *  `cancelled` one discarded them and can only be started again. */
 export type BrowserDownloadState = 'progressing' | 'interrupted' | 'completed' | 'cancelled'
+
+/** Where an installed extension's files came from. */
+export type BrowserExtensionSource = 'webstore' | 'folder'
+
+/**
+ * How the install-time compatibility preamble reached the extension's service
+ * worker.
+ *
+ * Electron compiles out several `chrome.*` namespaces and an extension's worker
+ * has no other injection point, so the preamble is written into the copy the app
+ * owns. Which shape it takes is forced by the manifest: a module worker evaluates
+ * its hoisted imports before any statement in its own body, so it needs a
+ * bootstrap module that imports the preamble first, while a classic worker gets
+ * the preamble prepended.
+ */
+export type BrowserExtensionInjection =
+  'module-bootstrap' | 'prepend-classic' | 'prepend-mv2' | 'none'
+
+/**
+ * One installed browser extension as the renderer sees it.
+ *
+ * Deliberately carries no filesystem paths: the extension store owns where the
+ * files live, and the surface only needs what it draws and what the user can
+ * change. `missingCapabilities` is populated from what the extension itself
+ * reported, so a row can say which capabilities the runtime could not give it
+ * rather than implying it is whole.
+ */
+export interface BrowserExtension {
+  /** The Chromium id, pinned at install so it is the publisher's official one and
+   *  not a hash of wherever the app happened to unpack it. */
+  id: string
+  name: string
+  version: string
+  description: string
+  source: BrowserExtensionSource
+  /** The Web Store id it was fetched by, or null for a folder install. */
+  webstoreId: string | null
+  /** A data URL of the extension's own manifest icon, or null when it declares
+   *  none. The extension supplies the bytes, so it is drawn as an image only. */
+  iconDataUrl: string | null
+  /** Whether it is loaded into any jar at all. */
+  enabled: boolean
+  /**
+   * The jars it runs in: box ids, with the empty string standing for the
+   * context's own jar (no box). A jar it is not listed in never loads it, which is
+   * the whole point of containing an extension per box: an extension costs a
+   * renderer in each jar that loads it. An empty list means installed but loaded
+   * nowhere yet, which is how every install starts.
+   */
+  boxes: string[]
+  /** The popup document the extension declares, or null when it has none. */
+  popupPath: string | null
+  /**
+   * Whether the user pinned it into the browser view's header.
+   *
+   * A pin is a place in that view's chrome, so it is bounded
+   * (`MAX_PINNED_EXTENSIONS`) and it only means something for an extension that
+   * declares a popup: opening that popup is the only thing a pin can do.
+   */
+  pinned: boolean
+  /** Namespaces the runtime lacks that this extension declares or reaches for, so
+   *  the row can state what it cannot do. */
+  missingCapabilities: string[]
+  /** Anything that went wrong without being fatal: an update that could not be
+   *  re-injected, an icon that could not be read, and so on. */
+  warnings: string[]
+  /** Which preamble shape was injected, or 'none'. */
+  injected: BrowserExtensionInjection
+  /** Epoch milliseconds, for ordering the list. */
+  installedAt: number
+}
+
+/** What an install asks for. */
+export interface BrowserExtensionInstallInput {
+  source: BrowserExtensionSource
+  /**
+   * The caller's own id for this install, and the key every progress line for it
+   * carries.
+   *
+   * Installs run two at a time and queue behind each other, so a stream of
+   * unlabelled steps would no longer say which extension it was describing. The
+   * renderer mints this before the call so it can name the install from the
+   * moment the user clicks, rather than waiting for main to read a name out of
+   * the package.
+   */
+  installId: string
+  /** A Web Store id, a Web Store URL, or the folder to install from. */
+  value: string
+  /**
+   * The jars it is loaded into as soon as it is installed: box ids, with the empty
+   * string for the context's own jar.
+   *
+   * Explicit and always a list. An install lands in the jar the user was looking at
+   * and nowhere else, and the other jars are turned on from the extension's own
+   * settings, so no install can load a copy into every box by omission. An empty
+   * list means installed and loaded nowhere yet.
+   */
+  boxes?: string[]
+}
+
+/** One step of an install, so a fetch and an unpack that take seconds are not a
+ *  silent freeze and a failure says which step failed. */
+export interface BrowserExtensionProgress {
+  /** The install this line belongs to, exactly as the caller of
+   *  {@link BrowserExtensionInstallInput} named it. */
+  installId: string
+  /** The Web Store id or folder name the install is for, so a progress line can be
+   *  attributed before the extension has an id. */
+  label: string
+  /** The Web Store id this install is for, or null when it came from a folder.
+   *  The store page's own surfaces match their offer to its install with this. */
+  webstoreId: string | null
+  phase:
+    /** Accepted and waiting for one of the running installs to finish. */
+    | 'queued'
+    | 'resolving'
+    | 'downloading'
+    | 'unpacking'
+    | 'pinning'
+    | 'compat'
+    | 'registering'
+    | 'done'
+    | 'failed'
+  detail: string
+  receivedBytes: number
+  totalBytes: number
+}
+
+/**
+ * One extension's action state for one tab, as the extension itself set it.
+ *
+ * Only the fields the extension actually set are present: a tab's entry is
+ * merged over the extension's own, so an absent field means "inherit", while an
+ * empty string is a badge the extension cleared. It is drawn on the extension's
+ * pin in the browser view's header, which is the toolbar this browser has none
+ * of.
+ */
+export interface BrowserExtensionActivity {
+  badgeText?: string
+  badgeColor?: string
+  /**
+   * The extension's own icon for its action, as a data URL, or null.
+   *
+   * The extension records a `chrome-extension://` address for `setIcon`, and that
+   * address cannot be drawn where this is drawn: the renderer is a different
+   * session with no such extension loaded, and an action icon is not a
+   * web-accessible resource. Main reads the bytes out of the extension's own folder
+   * instead, so what arrives here is already drawable.
+   *
+   * Null covers both "it set no icon" and "the app cannot draw the one it set",
+   * which the pin reads the same way: fall back to the extension's manifest icon.
+   */
+  iconUrl?: string | null
+  title?: string | null
+  /** Epoch milliseconds of the snapshot this entry came from. */
+  updatedAt: number
+}
+
+/**
+ * One action-state change, as it crosses to the renderer.
+ *
+ * `tabId` null is the extension's state for every tab of its box. `reset` means
+ * the worker restarted and forgot everything it had recorded, so the renderer
+ * drops the extension's entries before applying whatever follows.
+ */
+export interface BrowserExtensionActivityUpdate {
+  boxId: string
+  extensionId: string
+  tabId: string | null
+  activity: BrowserExtensionActivity | null
+  reset?: boolean
+}
+
+/**
+ * One menu item as an extension recorded it through `contextMenus.create`.
+ *
+ * The tree is forwarded to the native context menu of the page the extension
+ * runs beside, and a chosen item travels back as `contextMenus.onClicked`.
+ */
+export interface BrowserExtensionMenuRecord {
+  id: string
+  /** The value `create` answered with, so a click carries back exactly what the
+   *  extension compared against. */
+  rawId: string | number
+  parentId: string | null
+  title: string
+  type: string
+  contexts: string[]
+  enabled: boolean
+  checked: boolean
+  documentUrlPatterns: string[]
+  targetUrlPatterns: string[]
+}
 
 /**
  * Metadata for a download started inside the app-scoped browser. Contains no
  * cookies, headers, or page content: only what the download manager needs to
- * render progress and offer cancel/pause/open/reveal actions.
+ * render progress and offer resume/retry/cancel/open/reveal actions.
+ *
+ * Records survive quitting and reopening the app, so this describes a download
+ * the current run never watched as well as one it is downloading right now.
  */
 export interface BrowserDownload {
   id: string
@@ -455,4 +784,14 @@ export interface BrowserDownload {
   paused: boolean
   savePath: string
   error: string
+  /**
+   * Whether the bytes already downloaded are still on disk, so `Resume`
+   * continues this download instead of starting it over. False while a download
+   * is cancelled or finished, and for an interrupted one whose partial file is
+   * gone (deleted by hand, or discarded by a crash).
+   */
+  resumable: boolean
+  /** Epoch milliseconds the download started, so a record kept from an earlier
+   *  run can say when it began rather than looking brand new. */
+  startedAt: number
 }

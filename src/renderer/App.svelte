@@ -16,7 +16,7 @@
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
@@ -32,7 +32,9 @@
   import { workspaceState, threadVisitKey } from '$lib/stores/workspace.svelte'
   import {
     contentThreadFamily,
+    contentViewForThread,
     decideContentViewThread,
+    viewShowsThread,
     type ContentThreadFamily
   } from '$lib/content-view-threads'
   import {
@@ -67,6 +69,7 @@
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
+  import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -116,6 +119,8 @@
   let commandPaletteOpen = $state(false)
   let closeConfirmation = $state<CloseConfirmationPayload | null>(null)
   let instanceRole = $state<InstanceRole | null>(null)
+  /** The one-time start-at-login offer, raised once after the first routine how-to. */
+  let startAtLoginOfferOpen = $state(false)
   const fileSearch = new FileSearchPaletteController()
   const threadSearch = new ThreadSearchPaletteController({
     openThread: (thread) => void openThreadFromSearch(thread)
@@ -353,6 +358,16 @@
     }
   }
 
+  /**
+   * Answer the one-time start-at-login offer. The choice and the flag that keeps
+   * the question from ever being raised again are saved together, so no later
+   * routine setup asks a second time however this one is answered.
+   */
+  function answerStartAtLoginOffer(startAtLogin: boolean): void {
+    startAtLoginOfferOpen = false
+    void updateConfig({ launchAtLogin: startAtLogin, launchAtLoginPrompted: true })
+  }
+
   function setPreference(pref: ThemePreference): void {
     void updateConfig({ theme: pref })
   }
@@ -529,12 +544,21 @@
       navigate(isSettingsSection(tab) ? settingsViewForSection(tab) : 'settings')
     }
     workspaceState.navigateToContent = () => navigate(lastContentView)
+    workspaceState.navigateToBrowser = () => navigate('browser')
     workspaceState.openThreadFromNotification = (thread, project, temporaryChatId) =>
       openThreadFromNotification(thread, project, temporaryChatId)
+    // A thread created or found outside the shell's own navigation (a repeated
+    // conversation, a spun-off passage, a process's thread) has to be shown by
+    // the view that owns its family; only the shell may move the view.
+    workspaceState.navigateToThreadView = (thread) => {
+      if (!viewShowsThread(activeView, thread)) navigate(contentViewForThread(thread))
+    }
     return () => {
       workspaceState.navigateToSettings = null
       workspaceState.navigateToContent = null
+      workspaceState.navigateToBrowser = null
       workspaceState.openThreadFromNotification = null
+      workspaceState.navigateToThreadView = null
     }
   }
 
@@ -1005,6 +1029,9 @@
    * otherwise no longer executing/planning) it drops off the list. Once none
    * remain   and no unsaved files are pending   the close the user already
    * asked for proceeds automatically instead of waiting on a second click.
+   *
+   * A listed download deliberately does not hold that up: closing pauses it and
+   * keeps its bytes for a later resume, so it never needs an answer of its own.
    */
   function settleCloseConfirmationThread(thread: Thread): void {
     const current = closeConfirmation
@@ -1045,7 +1072,10 @@
 
   /** Clean up renderer resources when the main process signals shutdown. */
   function installShutdownSubscription(): () => void {
-    return subscribe('window:beforeQuit', () => {
+    // Guarded like the App installer's own subscriptions: a channel this
+    // window's preload does not expose yet must cost this one subscription, not
+    // the rest of the mount that follows it.
+    return subscribeGuarded('window:beforeQuit', () => {
       // Renderer should release event subscriptions   the main process
       // will dispose services and flush logs 500ms after this signal.
       // The window itself only closes at the end of that pipeline, so latch the
@@ -1069,7 +1099,8 @@
    * too, which is the same value it already holds.
    */
   function installConfigSubscription(): () => void {
-    return subscribe('config:changed', (next) => {
+    // Guarded for the same reason as the shutdown subscription above.
+    return subscribeGuarded('config:changed', (next) => {
       config = next
       appConfigState.sync(next)
       applyTheme()
@@ -1204,6 +1235,15 @@
   /** Global application shortcuts. */
   function onKeydown(e: KeyboardEvent): void {
     const isMac = window.api?.windowInfo?.platform === 'darwin'
+    if (keymapState.matches('app-quit-direct', e)) {
+      // Quit for real, bypassing background mode's park to the menu bar. Main
+      // runs the shutdown pipeline, so a turn still running settles as a
+      // deliberate close on the next launch instead of a crash.
+      e.preventDefault()
+      if (e.repeat) return
+      void invoke('app:quitDirect')
+      return
+    }
     if (keymapState.matches('ui-modal-primary-action', e)) {
       // ⌘/Ctrl+Enter runs the topmost open modal's primary action. The shared
       // LIFO registry (modal-primary-action.svelte.ts) resolves which modal is
@@ -1416,6 +1456,7 @@
       parkWindow,
       setInstanceRole: (role) => (instanceRole = role),
       settleCloseConfirmationThread,
+      showStartAtLoginOffer: () => (startAtLoginOfferOpen = true),
       handleCloseShortcut,
       handleNewTerminalShortcut,
       goBack: () => handleMouseHistoryNavigation('back'),
@@ -1481,14 +1522,6 @@
 <div class="flex h-screen flex-col bg-app">
   <AppHeader {activeView} {goBack} {goForward} {navigation} />
 
-  {#if instanceRole?.role === 'secondary'}
-    <InstanceRoleNotice
-      ownerPid={instanceRole.ownerPid}
-      onOpenOwner={() => void invoke('app:openInstanceOwner')}
-      onQuit={() => void invoke('app:confirmClose')}
-    />
-  {/if}
-
   <div class="flex min-h-0 flex-1">
     <AppViewRail
       options={navigation.headerViewOptions()}
@@ -1519,6 +1552,7 @@
           active={showsContentView}
           scopeViewActive={activeView === 'scope'}
           {navigate}
+          lastProjectViewLanding={() => navigation.projectFamilyLanding()}
           {config}
           {updateConfig}
         />
@@ -1568,6 +1602,18 @@
       {/if}
     </main>
   </div>
+
+  <!-- The instance-role notice sits at the very bottom as a status bar: it is a
+       standing condition, so it reads as chrome rather than as content above
+       the workspace. It moves here so it never pushes the workspace down. -->
+  {#if instanceRole?.role === 'secondary'}
+    <InstanceRoleNotice
+      ownerPid={instanceRole.ownerPid}
+      onOpenOwner={() => void invoke('app:openInstanceOwner')}
+      onTakeOver={() => void invoke('app:transferInstanceControl')}
+      onQuit={() => void invoke('app:confirmClose')}
+    />
+  {/if}
   {#if spotlightScreenId}
     {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
       <CommandPalette {...spotlightPalette} />
@@ -1597,6 +1643,15 @@
         />
       {/await}
     {/key}
+  {/if}
+  {#if startAtLoginOfferOpen}
+    <!-- The one-time start-at-login offer. Raised right after a routine is given
+         its first how-to, so the question is about the runs the user has just
+         set up, and floated above every view because that save happens in the
+         thread the routine belongs to. -->
+    {#await import('$lib/components/layout/StartAtLoginPrompt.svelte') then { default: StartAtLoginPrompt }}
+      <StartAtLoginPrompt open onChoose={answerStartAtLoginOffer} />
+    {/await}
   {/if}
   <Toaster />
   <TextSelectionContextMenu />
@@ -1655,6 +1710,16 @@
         onConfirm={confirmForceClose}
         onConfirmSave={confirmForceCloseSaving}
       />
+    {/await}
+  {/if}
+
+  {#if githubSignIn.open}
+    <!-- The GitHub device-flow sign-in, docked so the user can authorize in a
+         browser   including the app's own   while the panel keeps polling. It
+         floats above every view because the flow outlives the panel it was
+         opened from: the Git sidebar is behind the browser view when it lands. -->
+    {#await import('$lib/components/git/GitHubSignInDock.svelte') then { default: GitHubSignInDock }}
+      <GitHubSignInDock />
     {/await}
   {/if}
 
