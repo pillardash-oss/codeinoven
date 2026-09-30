@@ -8,20 +8,31 @@
     ImageOff,
     LoaderCircle,
     Pencil,
+    Play,
     RefreshCw,
     RotateCcw,
     Volume2,
     VolumeX,
     X
   } from '@lucide/svelte'
-  import { invoke } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { sendOrQueueThreadMessage } from '$lib/stores/thread-delivery'
+  import { logRendererError } from '$lib/system/renderer-logger'
   import { workRootMoveSummary } from '$lib/design-work-root-summary'
+  import { isThreadBusyStatus } from '$shared/thread-status-policy'
+  import {
+    SCREEN_CANVAS_FILE,
+    isScreenCanvasEntry,
+    screenCanvasLiveViewMessage,
+    screenCanvasRequestMessage
+  } from '$shared/design/screen-canvas'
   import type {
     AuthoredWorkKind,
     DesignEntry,
     DesignScreenShot,
+    ScreenCanvasState,
     ThreadDesignState,
     WorkRootState
   } from '$shared/ipc-contract'
@@ -75,6 +86,26 @@
   /** The tab holding the work, so the board can reach its own controls. Empty
    *  until the first capture opens one, and an empty id reads as idle state. */
   let tabId = $state('')
+
+  /**
+   * The design's Screen Canvas: the page that shows every screen at once.
+   *
+   * It is agent work like the screens are, so the board's part is only to say
+   * whether one exists, picture it, ask for it, and say when it has fallen
+   * behind. The frames are main's answer, because the page is a file the board
+   * cannot read for itself.
+   */
+  let canvasState = $state<ScreenCanvasState | null>(null)
+  /** Whether main has answered about the canvas, so the card is not drawn from
+   *  "no canvas yet" before the first read settles. */
+  let canvasRead = $state(false)
+  /** Which canvas request is in flight, or an empty string when none is. */
+  let canvasBusy = $state('')
+  /** The folder the canvas answer belongs to, so a folder switch cannot paint
+   *  the previous folder's canvas card while the new one is being read. */
+  let canvasDirectory = $state('')
+  /** What happened to the last canvas request, in the user's terms. */
+  let canvasNotice = $state('')
 
   /** The session's words and icon: a design session and a video session share this
    *  board, so nothing below hard-codes the word "design". */
@@ -132,6 +163,38 @@
       ''
   )
 
+  /** The screens of the design, without the canvas: the canvas has its own card. */
+  let designScreens = $derived(gallery.filter((screen) => !isScreenCanvasEntry(screen.entry)))
+  /** The canvas's own picture, when the sweep has captured one. */
+  let canvasShot = $derived(gallery.find((screen) => isScreenCanvasEntry(screen.entry)) ?? null)
+  /** How many frames of the canvas are sketches waiting for a real screen. */
+  let canvasSketches = $derived(canvasState?.sketchTitles.length ?? 0)
+  /** What the canvas holds, in one line, or nothing before there is one. */
+  let canvasSummary = $derived.by(() => {
+    const state = canvasState
+    if (state === null) return ''
+    const live = state.frames.filter((frame) => frame.entry !== null).length
+    const parts = [`${live} screen${live === 1 ? '' : 's'}`]
+    const sketches = state.sketchTitles.length
+    if (sketches > 0) parts.push(`${sketches} sketch${sketches === 1 ? '' : 'es'}`)
+    return parts.join(', ')
+  })
+  /** What the canvas is behind on, in one line, or nothing when it is current. */
+  let canvasDrift = $derived.by(() => {
+    const state = canvasState
+    if (state === null) return ''
+    const parts: string[] = []
+    const missing = state.missingScreens.length
+    const changed = state.changedScreens.length
+    const orphaned = state.orphanFrames.length
+    if (missing > 0) parts.push(`${missing} screen${missing === 1 ? '' : 's'} not on it yet`)
+    if (changed > 0) parts.push(`${changed} changed since it was written`)
+    if (orphaned > 0) {
+      parts.push(`${orphaned} frame${orphaned === 1 ? '' : 's'} with no screen left`)
+    }
+    return parts.join(' · ')
+  })
+
   /**
    * The screen in front: the one the thread is on, or the design's first screen.
    *
@@ -139,13 +202,13 @@
    * nothing below treats the two cases differently.
    */
   let featured = $derived(
-    gallery.find((screen) => screen.entry === selected.entry) ?? gallery[0] ?? null
+    designScreens.find((screen) => screen.entry === selected.entry) ?? designScreens[0] ?? null
   )
   /** Every other screen, so the grid shows the whole design and not just its entry. */
-  let rest = $derived(gallery.filter((screen) => screen !== featured))
+  let rest = $derived(designScreens.filter((screen) => screen !== featured))
 
   let refreshLabel = $derived(video ? 'Refresh the composition preview' : 'Refresh the screens')
-  let screensLabel = $derived(`Screens in this design (${gallery.length})`)
+  let screensLabel = $derived(`Screens in this design (${designScreens.length})`)
 
   async function loadState(): Promise<void> {
     try {
@@ -202,6 +265,7 @@
       const state = await loadWorkRoots()
       await loadState()
       await loadGallery()
+      await loadCanvas()
       rootNotice = state ? workRootMoveSummary(state, kind) : ''
       editingRoot = false
     } catch (failure) {
@@ -277,6 +341,7 @@
       await invoke('design:open', projectId, threadId, directory, entry, true)
       await loadState()
       await loadGallery()
+      await loadCanvas()
       error = ''
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'The work could not be opened.'
@@ -285,8 +350,105 @@
     }
   }
 
+  /** Read the design's canvas state, and remember that main answered. */
+  async function loadCanvas(): Promise<void> {
+    const directory = selected.directory
+    if (directory === '') {
+      canvasState = null
+      canvasDirectory = ''
+      canvasRead = true
+      return
+    }
+    // Another folder's answer must not stand in for this one while it is read,
+    // so the card is held back until this folder has its own.
+    if (directory !== canvasDirectory) canvasRead = false
+    try {
+      const state = await invoke('design:canvas', projectId, threadId, directory)
+      // A switch that landed while this read was in flight owns the card now.
+      if (directory !== selected.directory) return
+      canvasState = state
+    } catch (failure) {
+      if (directory !== selected.directory) return
+      // A board that cannot read the canvas still shows the screens, so this is
+      // logged rather than shown, and the card falls back to "none yet".
+      logRendererError('The design canvas state could not be read.', failure)
+      canvasState = null
+    }
+    canvasDirectory = directory
+    canvasRead = true
+  }
+
+  /**
+   * Ask the agent for the canvas, or for the change the user just asked for.
+   *
+   * The request is a message in the thread, sent when the agent is idle and
+   * queued behind a running turn when it is not: the button never steers work in
+   * flight, and what happened is said under it either way.
+   */
+  async function requestCanvas(action: 'create' | 'update' | 'live'): Promise<void> {
+    if (selected.directory === '' || canvasBusy !== '') return
+    canvasBusy = action
+    canvasNotice = ''
+    try {
+      const text =
+        action === 'live'
+          ? screenCanvasLiveViewMessage({
+              directory: selected.directory,
+              sketchTitles: canvasState?.sketchTitles ?? []
+            })
+          : screenCanvasRequestMessage({
+              directory: selected.directory,
+              updating: action === 'update',
+              missingScreens: canvasState?.missingScreens ?? [],
+              changedScreens: canvasState?.changedScreens ?? [],
+              orphanFrames: canvasState?.orphanFrames ?? [],
+              sketchTitles: canvasState?.sketchTitles ?? []
+            })
+      const delivery = await sendOrQueueThreadMessage(projectId, threadId, { text })
+      canvasNotice =
+        delivery === 'queued'
+          ? 'Queued: it will be built when the current turn ends.'
+          : 'Asked the agent to build it.'
+      error = ''
+    } catch (failure) {
+      error = failure instanceof Error ? failure.message : 'The canvas request could not be sent.'
+    } finally {
+      canvasBusy = ''
+    }
+  }
+
+  /** Re-read the canvas once the agent settles, and picture it when it appeared. */
+  async function refreshCanvas(): Promise<void> {
+    const before = canvasState
+    await loadCanvas()
+    const appeared = before === null && canvasState !== null
+    const rewritten =
+      before !== null && canvasState !== null && canvasState.updatedAt !== before.updatedAt
+    if (appeared || rewritten) await loadGallery()
+  }
+
+  /** Refresh the board's own reading of the work: the screens and the canvas. */
+  function refreshBoard(): void {
+    void loadGallery(true)
+    void loadCanvas()
+  }
+
+  $effect(() => {
+    // The agent writes the canvas inside a turn, so the board re-reads when that
+    // turn settles. Nothing polls: a canvas that appeared is pictured then, and
+    // one that was rewritten is read again then.
+    return subscribe('thread:updated', (thread) => {
+      if (thread.id !== threadId || thread.projectId !== projectId) return
+      if (isThreadBusyStatus(thread.status)) return
+      void refreshCanvas()
+    })
+  })
+
   onMount(() => {
-    void loadState().then(() => loadGallery())
+    void loadState().then(async () => {
+      await loadGallery()
+      await loadCanvas()
+    })
     void loadWorkRoots()
   })
 
@@ -386,7 +548,7 @@
           disabled={galleryBusy || selected.directory === ''}
           title={refreshLabel}
           aria-label={refreshLabel}
-          onclick={() => void loadGallery(true)}
+          onclick={refreshBoard}
         >
           {#if galleryBusy}
             <LoaderCircle size={12} class="animate-spin" />
@@ -426,7 +588,120 @@
       </p>
     {/if}
 
-    {#if gallery.length === 0}
+    {#if !video && canvasRead}
+      <div class="mb-3 rounded-lg border border-border bg-elevated/60 px-2 py-2">
+        <div class="flex items-center justify-between gap-2">
+          <span class="flex min-w-0 items-center gap-1.5">
+            <Frame size={12} class="shrink-0 text-accent" />
+            <span class="truncate text-xs font-medium text-foreground">Screen canvas</span>
+          </span>
+          {#if canvasSummary !== ''}
+            <span class="shrink-0 text-[0.625rem] text-dimmed tabular-nums">{canvasSummary}</span>
+          {/if}
+        </div>
+
+        {#if canvasState === null}
+          <p class="mt-1 text-[0.6875rem] text-muted">
+            One page that shows every screen and state at once, so the whole product can be panned,
+            inspected and commented on in one place.
+          </p>
+        {:else if canvasShot?.dataUrl}
+          <button
+            type="button"
+            class="mt-1.5 block w-full overflow-hidden rounded-md border border-border transition-colors hover:border-primary/60"
+            title="Open the screen canvas in the in-app browser"
+            aria-label="Open the screen canvas in the in-app browser"
+            onclick={() => void openWork(selected.directory, SCREEN_CANVAS_FILE)}
+          >
+            <img
+              src={canvasShot.dataUrl}
+              alt="Preview of the design's screen canvas"
+              width={canvasShot.width}
+              height={canvasShot.height}
+              class="block h-auto w-full"
+            />
+          </button>
+        {/if}
+
+        {#if canvasDrift !== ''}
+          <p class="mt-1 text-[0.625rem] text-warning">{canvasDrift}</p>
+        {/if}
+
+        <div class="mt-2 flex flex-wrap items-center gap-1.5">
+          {#if canvasState === null}
+            <button
+              type="button"
+              class="flex h-6 items-center gap-1 rounded-md bg-primary px-2 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
+              disabled={canvasBusy !== '' || selected.directory === ''}
+              title="Ask the agent to create the screen canvas for this design"
+              aria-label="Ask the agent to create the screen canvas for this design"
+              onclick={() => void requestCanvas('create')}
+            >
+              {#if canvasBusy === 'create'}
+                <LoaderCircle size={11} class="animate-spin" />
+              {:else}
+                <Play size={11} />
+              {/if}
+              Create screen canvas
+            </button>
+          {:else}
+            <button
+              type="button"
+              class="flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+              disabled={opening === selected.directory}
+              title="Open the screen canvas in the in-app browser"
+              aria-label="Open the screen canvas in the in-app browser"
+              onclick={() => void openWork(selected.directory, SCREEN_CANVAS_FILE)}
+            >
+              {#if opening === selected.directory}
+                <LoaderCircle size={11} class="animate-spin" />
+              {:else}
+                <ExternalLink size={11} />
+              {/if}
+              Open canvas
+            </button>
+            <button
+              type="button"
+              class="flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+              disabled={canvasBusy !== ''}
+              title="Ask the agent to bring the canvas up to date with the screens"
+              aria-label="Ask the agent to update the screen canvas"
+              onclick={() => void requestCanvas('update')}
+            >
+              {#if canvasBusy === 'update'}
+                <LoaderCircle size={11} class="animate-spin" />
+              {:else}
+                <RefreshCw size={11} />
+              {/if}
+              Update canvas
+            </button>
+            {#if canvasSketches > 0}
+              <button
+                type="button"
+                class="flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                disabled={canvasBusy !== ''}
+                title="Ask the agent to build every sketch on the canvas as a real screen"
+                aria-label="Ask the agent to build the canvas sketches as real screens"
+                onclick={() => void requestCanvas('live')}
+              >
+                {#if canvasBusy === 'live'}
+                  <LoaderCircle size={11} class="animate-spin" />
+                {:else}
+                  <Play size={11} />
+                {/if}
+                Live view ({canvasSketches})
+              </button>
+            {/if}
+          {/if}
+        </div>
+
+        {#if canvasNotice !== ''}
+          <p class="mt-1 text-[0.625rem] text-dimmed">{canvasNotice}</p>
+        {/if}
+      </div>
+    {/if}
+
+    {#if designScreens.length === 0}
       <div
         class="flex aspect-[4/3] w-full flex-col items-center justify-center gap-1.5 rounded-lg border border-border bg-elevated text-dimmed"
       >

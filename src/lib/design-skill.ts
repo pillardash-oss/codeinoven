@@ -129,6 +129,29 @@ Keep one product in one folder. A website and its dashboard split across two fol
 
 The board reads a screen as an \`.html\` file in the design's folder or one folder below it, so \`dashboard.html\` and \`pages/pricing.html\` are both screens and a page two levels down is not one it shows. A file whose name starts with \`_\` is read as a partial (\`_nav.html\`), and a folder or file whose name starts with \`.\` is skipped, so keep fragments, scratch pages and notes under those names and they stay out of the way.
 
+## The Screen Canvas
+
+One canvas per design: \`canvas.html\` beside the screens, the single page that shows the whole product at once. Write it once the first few screens exist, and keep it in step: a screen added, removed or reshaped means its frame changes in the same pass. The coordinator board shows the canvas as soon as it exists, and its button asks for one when the design has none, so a canvas you never write is the whole product the user cannot see.
+
+The page stays thin, because the app serves the runtime and its styles:
+
+\`\`\`html
+<main data-cio-canvas>
+  <section data-cio-frame="index.html" data-cio-title="Landing page"></section>
+  <section data-cio-frame="dashboard.html" data-cio-title="Dashboard, empty" data-cio-caption="No projects yet"></section>
+  <section data-cio-frame="dashboard.html" data-cio-title="Dashboard, phone" data-cio-width="390"></section>
+  <section data-cio-sketch data-cio-title="Invite modal">…the drawing of a state that has no file yet…</section>
+</main>
+<script src="/__cio/canvas.js"></script>
+\`\`\`
+
+- One \`<section data-cio-frame="…">\` per screen and per state of a screen, in reading order. The file is relative to the design folder, spelled exactly as the screen is. \`data-cio-title\` labels the frame and \`data-cio-caption\` adds a line under it, both in the user's words.
+- \`data-cio-width\` is the width the frame renders at, 1440 by default. Use it for a phone or tablet state of the same screen (390, 768) instead of writing a second file. \`data-cio-height\` fixes a frame's height when measuring its content would be wrong, and \`data-cio-columns\` on the canvas root sets how many frames sit side by side (2 by default, at most 4).
+- A \`<section data-cio-sketch>\` holds a state you have drawn but not built: its markup stays as written, so a canvas can exist before its screens do. The board's Live view action later asks you to build each sketch as a real screen, and its frame becomes a \`data-cio-frame\`.
+- The one script tag is the whole integration: the runtime brings its own styles with it, lays the frames out, and adds pan, zoom and a fit control. Never copy a screen's markup into a live frame: the frame loads the file, so the canvas cannot drift from the design.
+
+Cover the product, not the happy path: every screen, and for each one the states that matter (empty, loading, error, a dialog open, filled). A canvas that draws one screen at six widths hides the screens that are missing.
+
 ## Showing the design
 
 Invoke this capability with operation \`preview\`:

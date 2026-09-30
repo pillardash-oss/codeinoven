@@ -12,6 +12,7 @@ import type {
   DesignScreen,
   DesignScreenShot,
   DesignThumbnail,
+  ScreenCanvasState,
   ThreadDesignCurrent,
   ThreadDesignState
 } from '../../lib/ipc/design'
@@ -31,6 +32,7 @@ import { openVideoPreview } from '../video/video-preview-session'
 import { readCompositionManifest } from '../video/video-manifest'
 import { listProjectWorkFolders } from './design-listing'
 import { listDesignScreens } from './design-screens'
+import { readScreenCanvasState } from './screen-canvas-state'
 import { openDesignPreview } from './design-preview-session'
 import { currentWorkRoot, currentWorkRootReports, currentWorkRoots } from './work-roots-state'
 
@@ -212,6 +214,13 @@ export class DesignService {
           typeof rawWidth === 'number' ? rawWidth : 480,
           rawForce === true
         )
+    )
+    ipcMain.handle('design:canvas', async (_event, rawProjectId, rawThreadId, rawDirectory) =>
+      this.screenCanvas(
+        requireId(rawProjectId, 'project id'),
+        requireId(rawThreadId, 'thread id'),
+        rawDirectory
+      )
     )
     // The folders authored work is written into, and what the last change moved.
     // Read rather than pushed, because both surfaces that change a root (the
@@ -592,6 +601,30 @@ export class DesignService {
         })
       }
     }
+  }
+
+  /**
+   * The Screen Canvas of one design folder, if it has one.
+   *
+   * The board asks before it offers to create or update a canvas: the answer
+   * says whether the folder has one, and if so which of its screens are missing
+   * from it or newer than it. The canvas is a file in the folder rather than a
+   * per-thread record, so `threadId` is accepted for symmetry with the other
+   * handlers and read no further.
+   */
+  async screenCanvas(
+    projectId: string,
+    threadId: string,
+    directory: unknown
+  ): Promise<ScreenCanvasState | null> {
+    const project = await requireLocalProjectViaWorker(this.options.database, projectId)
+    const folder = resolveServedFolder(project.path, directory, currentWorkRoot('design'))
+    const screens = await listDesignScreens(folder.absolute)
+    return readScreenCanvasState({
+      folderAbsolute: folder.absolute,
+      directory: folder.display,
+      screens
+    })
   }
 
   /**

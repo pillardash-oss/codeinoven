@@ -2,6 +2,7 @@ import type {
   DesignOpenResult,
   DesignScreenShot,
   DesignThumbnail,
+  ScreenCanvasState,
   ThreadDesignState,
   WorkRootState
 } from './design'
@@ -46,6 +47,20 @@ export const invokeDesignContract = {
   'design:screens': {} as Contract<
     [projectId: string, threadId: string, directory: string, width: number, force: boolean],
     DesignScreenShot[]
+  >,
+  /**
+   * Whether one design folder has a Screen Canvas, what it frames, and which of
+   * its screens are missing from it or newer than it.
+   *
+   * The board asks before it offers a canvas: a design without one gets "Create
+   * Screen Canvas", and one whose canvas is missing a screen or older than one
+   * gets "Update Screen Canvas", with the reason it does. Answered from the
+   * folder's own file, so it stays true across a restart and an edit outside the
+   * app.
+   */
+  'design:canvas': {} as Contract<
+    [projectId: string, threadId: string, directory: string],
+    ScreenCanvasState | null
   >,
   /**
    * The folders designs and videos are written into, and what the last change

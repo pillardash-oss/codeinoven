@@ -15,6 +15,7 @@
  * that no longer knows it was showing one.
  */
 
+import type { ScreenCanvasFrame } from '../design/screen-canvas'
 import type { WorkRoots } from '../design/work-roots'
 
 /** Which authored-work session a thread is in. */
@@ -184,4 +185,29 @@ export interface DesignThumbnail {
    * rather than keeping a second one that could disagree with it.
    */
   tabId: string | null
+}
+
+/** The Screen Canvas of one design folder: the page that shows every screen at once. */
+export interface ScreenCanvasState {
+  /** Project-relative folder the canvas lives in, with forward slashes. */
+  directory: string
+  /** Entry file of the canvas, always `canvas.html`. */
+  entry: string
+  /** When the canvas file was last written (ms). */
+  updatedAt: number
+  /** Frames the page declares, in the order it declares them. */
+  frames: ScreenCanvasFrame[]
+  /** Screens the folder holds that no live frame shows, in listing order. */
+  missingScreens: string[]
+  /** Screens written after the canvas was, newest first. */
+  changedScreens: string[]
+  /**
+   * Screens the canvas frames that the folder no longer holds.
+   *
+   * A frame pointing at a deleted file renders an error page, so the board
+   * reports it instead of treating the canvas as current.
+   */
+  orphanFrames: string[]
+  /** Titles of sketch frames still waiting for a real screen. */
+  sketchTitles: string[]
 }
