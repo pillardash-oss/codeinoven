@@ -335,13 +335,24 @@ export class BrowserExtensionRegistry {
 
   async patch(
     id: string,
-    patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean }
+    patch: {
+      enabled?: boolean
+      boxes?: string[]
+      pinned?: boolean
+      /** Recomputed when the app's own surface changes, which is why it is
+       *  patchable: a namespace the preamble learns to implement is a capability
+       *  an installed extension gets back without being reinstalled. */
+      missingCapabilities?: string[]
+    }
   ): Promise<BrowserExtensionRecord | null> {
     const record = this.records.get(id)
     if (!record) return null
     if (patch.enabled !== undefined) record.enabled = patch.enabled
     if (patch.boxes !== undefined) record.boxes = parseJars(patch.boxes)
     if (patch.pinned !== undefined) record.pinned = patch.pinned
+    if (patch.missingCapabilities !== undefined) {
+      record.missingCapabilities = [...patch.missingCapabilities]
+    }
     await this.persist()
     return record
   }

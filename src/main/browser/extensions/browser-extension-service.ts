@@ -68,6 +68,7 @@ import {
   type BrowserExtensionRecord,
   type BrowserExtensionRegistryPersistence
 } from './browser-extension-registry'
+import { materializeUserScriptFiles } from './browser-extension-user-scripts'
 
 /** How often progress reaches the renderer. A download reports per chunk and the
  *  install worker per phase, so without a gate a large package would send hundreds
@@ -659,6 +660,7 @@ export class BrowserExtensionService {
     const directory = extensionSourceDirectory(this.configRoot, record.id)
     try {
       await this.refreshInstalledPreamble(directory, record)
+      await this.refreshCapabilityReport(record)
       await state.session.extensions.loadExtension(directory, { allowFileAccess: false })
       state.ids.add(record.id)
       this.startBridge(state, record)
@@ -697,6 +699,35 @@ export class BrowserExtensionService {
       // A copy that cannot be refreshed still loads. The preamble is an addition,
       // never a requirement, so this must not become a load failure.
       Logger.dev('Browser extension preamble could not be refreshed:', {
+        extensionId: record.id,
+        error
+      })
+    }
+  }
+
+  /**
+   * Keep an installed extension's capability report current.
+   *
+   * The report is a fact about this app's own surface, and that surface grows: a
+   * namespace the preamble learns to implement (or a bridge that learns to carry)
+   * is a capability the extension gets back. The list is computed at install time,
+   * so without this an extension installed before the fix would keep claiming the
+   * loss for the rest of its life.
+   */
+  private async refreshCapabilityReport(record: BrowserExtensionRecord): Promise<void> {
+    const missing = [...missingExtensionCapabilities(record.declaredPermissions)]
+    const same =
+      missing.length === record.missingCapabilities.length &&
+      missing.every((capability, index) => record.missingCapabilities[index] === capability)
+    if (same) return
+    try {
+      await this.registry.patch(record.id, { missingCapabilities: missing })
+      Logger.dev('Browser extension capability report refreshed:', {
+        extensionId: record.id,
+        missing
+      })
+    } catch (error) {
+      Logger.dev('Browser extension capability report could not be refreshed:', {
         extensionId: record.id,
         error
       })
@@ -783,7 +814,11 @@ export class BrowserExtensionService {
       pageUrl,
       onMailbox: (mail, restarted) => this.onMailbox(state, record.id, mail, restarted),
       onUnavailable: (reason) =>
-        Logger.dev('Browser extension bridge unavailable:', { extensionId: record.id, reason })
+        Logger.dev('Browser extension bridge unavailable:', { extensionId: record.id, reason }),
+      // `chrome.userScripts.register` takes code and this runtime only registers
+      // files, so the preamble asks for the write and waits for the answer.
+      materializeUserScripts: (request) =>
+        materializeUserScriptFiles(extensionSourceDirectory(this.configRoot, record.id), request)
     })
     state.bridges.set(record.id, bridge)
     bridge.start()

@@ -32,6 +32,11 @@
 import { WebContentsView, type Session } from 'electron'
 import type { BrowserExtensionMenuRecord } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
+import {
+  parseUserScriptFileRequest,
+  type UserScriptFileRequest,
+  type UserScriptFileResult
+} from './browser-extension-user-scripts'
 
 /**
  * How often the mailbox is read.
@@ -74,6 +79,13 @@ export interface BrowserExtensionBridgeDeps {
   onMailbox: (mail: BrowserExtensionMailbox, restarted: boolean) => void
   /** The bridge page could not be brought up, so nothing can be delivered. */
   onUnavailable: (reason: string) => void
+  /**
+   * Write the files one `chrome.userScripts.register` asked for into the
+   * extension's own copy. A worker cannot write a file and
+   * `scripting.registerContentScripts` takes paths rather than code, so the
+   * compatibility preamble asks for the write here and waits for the answer.
+   */
+  materializeUserScripts?: (request: UserScriptFileRequest) => Promise<UserScriptFileResult>
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -119,6 +131,8 @@ export class BrowserExtensionBridge {
   private generation = ''
   /** The last sequence number seen in that life. */
   private lastSeq = 0
+  /** The last user-script file request answered, so one is never written twice. */
+  private lastUserScriptRequest = 0
 
   constructor(private readonly deps: BrowserExtensionBridgeDeps) {}
 
@@ -151,7 +165,11 @@ export class BrowserExtensionBridge {
         // A worker that has just been loaded has no notion of a session start;
         // this is the one event that says the jar it runs in is awake.
         this.push({ kind: 'startup' })
-        this.poll = setInterval(() => void this.drain(), MAILBOX_POLL_INTERVAL_MS)
+        this.poll = setInterval(() => {
+          void this.drain()
+          void this.writeUserScriptFiles()
+          void this.reassertUserScripts()
+        }, MAILBOX_POLL_INTERVAL_MS)
       })
       .catch((error: unknown) => {
         clearTimeout(timer)
@@ -223,6 +241,81 @@ export class BrowserExtensionBridge {
       })
     } finally {
       this.draining = false
+    }
+  }
+
+  /**
+   * Answer one `chrome.userScripts` file request.
+   *
+   * The worker cannot be called, so the answer goes back into the same storage
+   * the worker reads, and only a request the app has not already answered is
+   * written: the poll sees the same request until the worker asks for another one.
+   */
+  private async writeUserScriptFiles(): Promise<void> {
+    const materialize = this.deps.materializeUserScripts
+    if (!materialize) return
+    const view = this.view
+    if (!view || this.disposed) return
+    const contents: Electron.WebContents | undefined = view.webContents
+    if (!contents || contents.isDestroyed()) return
+    try {
+      const raw = await contents.executeJavaScript(
+        'globalThis.__cioBridgeDrainWrites ? globalThis.__cioBridgeDrainWrites() : null',
+        true
+      )
+      if (typeof raw !== 'string' || raw === 'null' || raw.length === 0) return
+      const request = parseUserScriptFileRequest(JSON.parse(raw))
+      if (!request || request.request <= this.lastUserScriptRequest) return
+      this.lastUserScriptRequest = request.request
+      const result = await materialize(request)
+      if (result.error) {
+        Logger.dev('Extension user script files could not be written:', {
+          extensionId: this.deps.extensionId,
+          error: result.error
+        })
+      }
+      await contents.executeJavaScript(
+        `globalThis.__cioBridgeWrite && globalThis.__cioBridgeWrite('__cioFileReady', ${JSON.stringify(result)})`,
+        true
+      )
+    } catch (error) {
+      Logger.dev('Extension user script request could not be handled:', {
+        extensionId: this.deps.extensionId,
+        error
+      })
+    }
+  }
+
+  /**
+   * Put back any user script something else removed.
+   *
+   * The compatibility preamble rebuilds `chrome.userScripts` on the scripting
+   * registry, and an extension that clears its own content scripts clears that
+   * whole registry, so its user scripts go with them. The registry the preamble
+   * keeps is the truth and the bridge page replays what is missing; this is the
+   * call that makes it happen while the app is running.
+   */
+  private async reassertUserScripts(): Promise<void> {
+    const view = this.view
+    if (!view || this.disposed) return
+    const contents: Electron.WebContents | undefined = view.webContents
+    if (!contents || contents.isDestroyed()) return
+    try {
+      const outcome = await contents.executeJavaScript(
+        'globalThis.__cioBridgeReassert ? globalThis.__cioBridgeReassert() : "unavailable"',
+        true
+      )
+      if (typeof outcome === 'string' && outcome.startsWith('restored:')) {
+        Logger.dev('Extension user scripts were restored:', {
+          extensionId: this.deps.extensionId,
+          outcome
+        })
+      }
+    } catch (error) {
+      Logger.dev('Extension user scripts could not be checked:', {
+        extensionId: this.deps.extensionId,
+        error
+      })
     }
   }
 

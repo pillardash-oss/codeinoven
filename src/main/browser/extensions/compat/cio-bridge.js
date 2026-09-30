@@ -115,4 +115,138 @@
       // A read that never answers must not leave main's poll hanging forever.
       setTimeout(() => finish(null), 2000)
     })
+
+  /**
+   * The file writes an extension asked for, which is how `chrome.userScripts`
+   * gets code into a file the extension's own copy can register: a worker cannot
+   * write a file, so it asks the app and waits for the answer.
+   */
+  globalThis.__cioBridgeDrainWrites = () =>
+    new Promise((resolve) => {
+      let settled = false
+      const finish = (value) => {
+        if (settled) return
+        settled = true
+        try {
+          resolve(value ? JSON.stringify(value) : 'null')
+        } catch {
+          resolve('null')
+        }
+      }
+      const area = mailboxArea()
+      if (!area) {
+        finish(null)
+        return
+      }
+      try {
+        const returned = area.get('__cioFileRequests', (value) => finish(value && value.__cioFileRequests))
+        if (returned && typeof returned.then === 'function') {
+          returned.then(
+            (value) => finish(value && value.__cioFileRequests),
+            () => finish(null)
+          )
+        }
+      } catch {
+        finish(null)
+      }
+      setTimeout(() => finish(null), 2000)
+    })
+
+  /**
+   * Re-register the user scripts the extension registered, if something removed
+   * them.
+   *
+   * `chrome.userScripts` keeps its own registry in a real browser, so an extension
+   * that clears its content scripts (`chrome.scripting.unregisterContentScripts()`
+   * with no filter, which uBlock Origin Lite does on every re-register) leaves its
+   * user scripts alone. In this runtime the compatibility preamble rebuilds the
+   * namespace on top of the scripting registry, so that same call wipes the user
+   * scripts too. The registry the preamble keeps is the truth, and this replays the
+   * missing entries, which is why it lives in the page rather than the worker: the
+   * page is alive whenever the app's bridge is, even when the worker is asleep.
+   */
+  globalThis.__cioBridgeReassert = () =>
+    new Promise((resolve) => {
+      const scripting = chromeApi.scripting
+      // The registry lives in `local` (it has to outlive a worker restart), while
+      // the mailbox lives in `session`, so this reads the registry's own area.
+      const registryArea = () => {
+        try {
+          if (chromeApi.storage && chromeApi.storage.local) return chromeApi.storage.local
+          if (chromeApi.storage && chromeApi.storage.session) return chromeApi.storage.session
+        } catch {
+          return null
+        }
+        return null
+      }
+      const store = registryArea()
+      if (!store || !scripting || typeof scripting.registerContentScripts !== 'function') {
+        resolve('unavailable')
+        return
+      }
+      const finish = (value) => resolve(value)
+      ;(async () => {
+        try {
+          const bag = await store.get('__cioUserScripts')
+          const entries = bag && Array.isArray(bag.__cioUserScripts) ? bag.__cioUserScripts : []
+          if (entries.length === 0) {
+            finish('empty')
+            return
+          }
+          const present = await scripting.getRegisteredContentScripts()
+          const known = new Set(present.map((entry) => entry && entry.id))
+          const missing = entries.filter(
+            (entry) =>
+              entry &&
+              typeof entry.registrationId === 'string' &&
+              typeof entry.file === 'string' &&
+              known.has(entry.registrationId) === false
+          )
+          if (missing.length === 0) {
+            finish('present')
+            return
+          }
+          await scripting.registerContentScripts(
+            missing.map((entry) => ({
+              id: entry.registrationId,
+              world: entry.runtimeWorld === 'MAIN' ? 'MAIN' : 'ISOLATED',
+              matches: Array.isArray(entry.matches) && entry.matches.length !== 0 ? entry.matches : ['<all_urls>'],
+              ...(Array.isArray(entry.excludeMatches) && entry.excludeMatches.length !== 0
+                ? { excludeMatches: entry.excludeMatches }
+                : {}),
+              ...(entry.allFrames === true ? { allFrames: true } : {}),
+              runAt: typeof entry.runAt === 'string' ? entry.runAt : 'document_start',
+              js: [entry.file]
+            }))
+          )
+          finish('restored:' + missing.length)
+        } catch (error) {
+          finish('error: ' + String(error))
+        }
+      })()
+    })
+
+  /** Main writes the answer to a file request (or any other value) back through
+   *  this, because the worker can only read, never be called. */
+  globalThis.__cioBridgeWrite = (key, value) =>
+    new Promise((resolve) => {
+      const area = mailboxArea()
+      if (!area || typeof area.set !== 'function' || typeof key !== 'string' || !key) {
+        resolve(false)
+        return
+      }
+      try {
+        const returned = area.set({ [key]: value })
+        if (returned && typeof returned.then === 'function') {
+          returned.then(
+            () => resolve(true),
+            () => resolve(false)
+          )
+        } else {
+          resolve(true)
+        }
+      } catch {
+        resolve(false)
+      }
+    })
 })()
