@@ -6,7 +6,10 @@ import { SCREEN_CANVAS_RUNTIME_STYLE_PATH } from '../../lib/design/screen-canvas
  * A canvas is one page per design that declares its frames and loads this
  * script from the app's reserved path. The script turns that page into a
  * pannable, zoomable artboard: it builds the grid, frames each screen in a
- * same-origin iframe, and owns pan and zoom across the whole surface.
+ * same-origin iframe, and owns pan and zoom across the whole surface with the
+ * gestures a canvas is expected to have. The wheel pans, cmd or ctrl with the
+ * wheel zooms at the pointer, and a space-held drag pans anywhere, including on
+ * top of a screen.
  *
  * It is a string function rather than a file because it belongs to the app, not
  * to the design folder. The preview server answers its reserved path on every
@@ -166,6 +169,10 @@ export function screenCanvasRuntimeScript(): string {
     var dragging = false;
     var lastX = 0;
     var lastY = 0;
+    // Space is the hand tool. While it is held the frames stop taking the
+    // pointer, so a drag that starts on a screen pans the canvas instead of
+    // reaching the page inside it.
+    var spaceHeld = false;
     var measureTimer = 0;
     var readout = null;
     var records = [];
@@ -275,6 +282,42 @@ export function screenCanvasRuntimeScript(): string {
       surface.classList.remove('cio-canvas-panning');
     }
 
+    function isTypingTarget(target) {
+      if (!target || !target.tagName) return false;
+      var tag = target.tagName.toLowerCase();
+      return (
+        tag === 'input' ||
+        tag === 'textarea' ||
+        tag === 'select' ||
+        target.isContentEditable === true
+      );
+    }
+
+    function setSpaceHeld(held) {
+      if (held === spaceHeld) return;
+      spaceHeld = held;
+      surface.classList.toggle('cio-canvas-space', held);
+      // The hand is only a hand while the key is down, so releasing space ends
+      // the drag it started.
+      if (!held) endPan();
+    }
+
+    function onSpaceKeyDown(event) {
+      if (event.code !== 'Space' && event.key !== ' ') return;
+      // A screen with a form in it keeps the space bar for typing.
+      if (isTypingTarget(event.target)) return;
+      // The surface itself never scrolls, but the page would still scroll
+      // behind it and a focused toolbar button would read the key as a press.
+      event.preventDefault();
+      setSpaceHeld(true);
+    }
+
+    function onSpaceKeyUp(event) {
+      if (event.code !== 'Space' && event.key !== ' ') return;
+      if (isTypingTarget(event.target)) return;
+      setSpaceHeld(false);
+    }
+
     function applyWheel(input) {
       if (input.zoom) {
         zoomAt(input.clientX, input.clientY, Math.exp(-input.deltaY * WHEEL_ZOOM_RATE));
@@ -303,9 +346,10 @@ export function screenCanvasRuntimeScript(): string {
       }
       var onFrame = event.target && event.target.closest && event.target.closest('.cio-canvas-screen');
       var middle = event.button === 1;
-      // Left drag pans only the background. A left press on a frame belongs to
-      // the frame, so a user can still interact with the screen inside it.
-      if (middle || (event.button === 0 && !onFrame)) {
+      // Left drag pans the background, and pans anywhere at all while space is
+      // held. A left press on a frame without space belongs to the frame, so a
+      // user can still interact with the screen inside it.
+      if (middle || (event.button === 0 && (!onFrame || spaceHeld))) {
         event.preventDefault();
         userAdjusted = true;
         beginPan(event.clientX, event.clientY);
@@ -363,24 +407,63 @@ export function screenCanvasRuntimeScript(): string {
         frameDocument = null;
       }
       if (!frameWindow || !frameDocument) return;
-      // The frame element's window is a proxy whose identity survives a
-      // navigation while the window behind it is replaced, and every listener
-      // goes with it. The document is what says whether this is still the one
-      // the gestures were attached to, so a frame that loads a screen keeps
-      // forwarding wheel and middle drag instead of going deaf after the first
-      // navigation.
-      if (frameDocument === record.document) return;
+      if (frameDocument === record.document && frameWindow === record.window) return;
+      // The frame is attached by detaching first, never by attaching again on
+      // top. A frame's window outlives the document it first held: the blank
+      // document the element starts with and the screen that replaces it share
+      // one window, so attaching on each of them left two sets of listeners on
+      // it and every forwarded gesture ran twice, at double speed. Detaching
+      // what this record owns is right in both directions: a window that is
+      // still the same loses exactly the one set it has, and a window that was
+      // replaced has nothing to lose.
+      detachFrameWindow(record);
       record.document = frameDocument;
+      record.window = frameWindow;
+      var handlers = {
+        wheel: function (event) { onFrameWheel(record, event); },
+        // A key pressed while the pointer is over a screen is delivered to the
+        // frame's own document, so the frames report space as well.
+        keydown: onSpaceKeyDown,
+        keyup: onSpaceKeyUp,
+        pointerdown: function (event) { onFramePointerDown(record, event); },
+        pointermove: function (event) { onFramePointerMove(record, event); },
+        pointerup: endPan,
+        pointercancel: endPan
+      };
+      record.handlers = handlers;
       try {
-        frameWindow.addEventListener('wheel', function (event) { onFrameWheel(record, event); }, {
-          passive: false
-        });
-        frameWindow.addEventListener('pointerdown', function (event) { onFramePointerDown(record, event); }, true);
-        frameWindow.addEventListener('pointermove', function (event) { onFramePointerMove(record, event); }, true);
-        frameWindow.addEventListener('pointerup', endPan, true);
-        frameWindow.addEventListener('pointercancel', endPan, true);
+        frameWindow.addEventListener('wheel', handlers.wheel, { passive: false });
+        frameWindow.addEventListener('keydown', handlers.keydown, true);
+        frameWindow.addEventListener('keyup', handlers.keyup, true);
+        frameWindow.addEventListener('pointerdown', handlers.pointerdown, true);
+        frameWindow.addEventListener('pointermove', handlers.pointermove, true);
+        frameWindow.addEventListener('pointerup', handlers.pointerup, true);
+        frameWindow.addEventListener('pointercancel', handlers.pointercancel, true);
       } catch {
+        detachFrameWindow(record);
         record.document = null;
+      }
+    }
+
+    // The listeners a frame forwards its gestures through, taken off the window
+    // they were put on. A window that is already gone needs no cleanup, and one
+    // that is still there must keep none of them.
+    function detachFrameWindow(record) {
+      var frameWindow = record.window;
+      var handlers = record.handlers;
+      record.window = null;
+      record.handlers = null;
+      if (!frameWindow || !handlers) return;
+      try {
+        frameWindow.removeEventListener('wheel', handlers.wheel);
+        frameWindow.removeEventListener('keydown', handlers.keydown, true);
+        frameWindow.removeEventListener('keyup', handlers.keyup, true);
+        frameWindow.removeEventListener('pointerdown', handlers.pointerdown, true);
+        frameWindow.removeEventListener('pointermove', handlers.pointermove, true);
+        frameWindow.removeEventListener('pointerup', handlers.pointerup, true);
+        frameWindow.removeEventListener('pointercancel', handlers.pointercancel, true);
+      } catch {
+        // A window that refuses the call has nothing of ours left to fire.
       }
     }
 
@@ -517,7 +600,9 @@ export function screenCanvasRuntimeScript(): string {
       var record = {
         frame: frame,
         declaredHeight: declaredHeight,
-        document: null
+        document: null,
+        window: null,
+        handlers: null
       };
       frame.addEventListener('load', function () {
         measureFrame(record);
@@ -593,6 +678,11 @@ export function screenCanvasRuntimeScript(): string {
     document.addEventListener('pointermove', onDocumentPointerMove, true);
     document.addEventListener('pointerup', endPan, true);
     document.addEventListener('pointercancel', endPan, true);
+    document.addEventListener('keydown', onSpaceKeyDown, true);
+    document.addEventListener('keyup', onSpaceKeyUp, true);
+    // A window that loses focus never sends the keyup, and a hand tool left on
+    // would keep the screens unclickable until the key came back.
+    globalThis.addEventListener('blur', function () { setSpaceHeld(false); });
     globalThis.addEventListener('resize', scheduleMeasure);
 
     // Ready is a contract: the app waits for this class before it treats the
@@ -714,6 +804,15 @@ html.cio-canvas-ready body {
   font-family: var(--cio-canvas-font);
   font-size: 14px;
   line-height: 1.5;
+}
+.cio-canvas-surface.cio-canvas-space {
+  cursor: grab;
+}
+/* The hand tool takes the pointer off the screens: a drag that starts on one
+   pans the canvas, and the page inside it stops hovering and clicking for as
+   long as space is held. */
+.cio-canvas-surface.cio-canvas-space .cio-canvas-screen {
+  pointer-events: none;
 }
 .cio-canvas-surface.cio-canvas-panning {
   cursor: grabbing;
