@@ -29,6 +29,7 @@ import {
   MAX_BROWSER_SEARCH_URL_TEMPLATE_LENGTH,
   type BrowserSearchEngine
 } from '../../../lib/browser-search-engines'
+import { MAX_BROWSER_BOX_NAME_LENGTH } from '../../../lib/browser/global-browser-tabs'
 import type { BrowserViewport } from './browser-types'
 import type {
   BrowserOverlayAck,
@@ -621,6 +622,19 @@ export function validateBoundedHost(value: unknown): string {
     throw new TypeError('Browser site menu host is invalid')
   }
   return value
+}
+
+/**
+ * Bound the box label the site-settings confirmation names, so the copy can say
+ * which jar is about to lose its cookies.
+ *
+ * A box name is copy rather than a claim, so this repairs instead of throwing:
+ * an unusable value only costs the confirmation its name. Whitespace is flattened
+ * because the label lands in a single-line dialog detail.
+ */
+export function boundedBoxLabel(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return value.replace(/\s+/gu, ' ').trim().slice(0, MAX_BROWSER_BOX_NAME_LENGTH)
 }
 
 /** Reduce a server-suggested filename to a safe, absolute-path-free basename. */

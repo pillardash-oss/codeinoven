@@ -13,7 +13,10 @@ import { SITE_MENU_ACTIONS, type BrowserTab, type SiteMenuAction } from './brows
 
 export interface BrowserSiteDataDeps {
   window: BrowserWindow
-  sessionForProject: (projectId: string) => Session
+  /** The session for one jar: the project's own jar when `boxId` is null. */
+  sessionForJar: (projectId: string, boxId: string | null) => Session
+  /** Every jar one project holds, its own jar first. */
+  projectJars: (projectId: string) => (string | null)[]
   forEachTab: (visit: (tab: BrowserTab) => void) => void
   /** Dismiss pending permission prompts that belong to a project. */
   dismissPermissions: (projectId: string) => void
@@ -28,7 +31,14 @@ export class BrowserSiteDataService {
   /** Open the OS-native site-settings context menu. Runs in a nested run loop
    *  and composites above the WebContentsView, so the page never has to be
    *  detached for the menu. */
-  showSiteMenu(projectId: string, host: string, x: number, y: number): void {
+  showSiteMenu(
+    projectId: string,
+    host: string,
+    boxId: string | null,
+    boxName: string,
+    x: number,
+    y: number
+  ): void {
     if (this.deps.window.isDestroyed()) return
     const menu = new Menu()
     if (host) menu.append(new MenuItem({ label: host, enabled: false }))
@@ -37,7 +47,7 @@ export class BrowserSiteDataService {
       menu.append(
         new MenuItem({
           label: `${action.label}…`,
-          click: () => this.confirmAndClearSiteData(projectId, action)
+          click: () => this.confirmAndClearSiteData(projectId, boxId, boxName, action)
         })
       )
     }
@@ -55,20 +65,25 @@ export class BrowserSiteDataService {
 
   /** Confirm the destructive site-data action with a parented native dialog
    *  before executing it. */
-  private confirmAndClearSiteData(projectId: string, action: SiteMenuAction): void {
+  private confirmAndClearSiteData(
+    projectId: string,
+    boxId: string | null,
+    boxName: string,
+    action: SiteMenuAction
+  ): void {
     if (this.deps.window.isDestroyed()) return
     void dialog
       .showMessageBox(this.deps.window, {
         type: 'warning',
         message: `${action.label}?`,
-        detail: action.detail,
+        detail: this.scopedDetail(boxId, boxName, action),
         buttons: [action.label, 'Cancel'],
         defaultId: 1,
         cancelId: 1
       })
       .then((result) => {
         if (result.response !== 0) return
-        return this.clearSiteData(projectId, [action.scope]).catch((error: unknown) => {
+        return this.clearMenuJar(projectId, boxId, action).catch((error: unknown) => {
           Logger.error('Browser site data could not be cleared:', error)
           if (this.deps.window.isDestroyed()) return
           void dialog.showMessageBox(this.deps.window, {
@@ -87,25 +102,61 @@ export class BrowserSiteDataService {
       })
   }
 
+  /** Everything the project's browser holds goes, in every jar it owns: boxes
+   *  keep their own storage, so clearing "this browser" has to reach each of
+   *  them rather than only the project's own jar. */
   async clearProjectData(projectId: string): Promise<void> {
     this.deps.dismissPermissions(projectId)
     this.deps.cancelProjectDownloads(projectId)
     this.deps.clearPermissionMemory(projectId)
-    const browserSession = this.deps.sessionForProject(projectId)
-    await Promise.all([browserSession.clearStorageData(), browserSession.clearCache()])
-    await browserSession.closeAllConnections()
-    this.reloadProjectTabs(projectId)
+    const jars = this.deps.projectJars(projectId)
+    await Promise.all(jars.map((boxId) => this.clearJar(projectId, boxId, [])))
+    this.reloadProjectTabs(projectId, jars)
   }
 
   /** Clear only the requested scopes for the project's browser session. Tabs of
    *  the project reload afterwards so cleared state takes effect immediately. */
   async clearSiteData(projectId: string, scopes: BrowserSiteDataScope[]): Promise<void> {
-    if (scopes.includes('permissions')) {
-      this.deps.dismissPermissions(projectId)
-      this.deps.clearPermissionMemory(projectId)
-    }
-    const browserSession = this.deps.sessionForProject(projectId)
+    if (scopes.includes('permissions')) this.forgetPermissions(projectId)
+    const jars = this.deps.projectJars(projectId)
+    await Promise.all(jars.map((boxId) => this.clearJar(projectId, boxId, scopes)))
+    this.reloadProjectTabs(projectId, jars)
+  }
+
+  /**
+   * One action of the site-settings menu, aimed at the jar the padlock was
+   * opened from: a boxed tab clears its own box, and the project's own jar is
+   * what a menu with no box belongs to.
+   */
+  private async clearMenuJar(
+    projectId: string,
+    boxId: string | null,
+    action: SiteMenuAction
+  ): Promise<void> {
+    if (action.scope === 'permissions') this.forgetPermissions(projectId)
+    await this.clearJar(projectId, boxId, [action.scope])
+    this.reloadProjectTabs(projectId, [boxId])
+  }
+
+  /** Forget every remembered permission grant or denial the project holds. */
+  private forgetPermissions(projectId: string): void {
+    this.deps.dismissPermissions(projectId)
+    this.deps.clearPermissionMemory(projectId)
+  }
+
+  /** Empty one jar of the requested scopes, or of everything it holds when no
+   *  scope is named. `permissions` live outside the session and are handled by
+   *  the caller, so it contributes no storage work here. */
+  private async clearJar(
+    projectId: string,
+    boxId: string | null,
+    scopes: readonly BrowserSiteDataScope[]
+  ): Promise<void> {
+    const browserSession = this.deps.sessionForJar(projectId, boxId)
     const work: Promise<unknown>[] = []
+    if (scopes.length === 0) {
+      work.push(browserSession.clearStorageData(), browserSession.clearCache())
+    }
     for (const scope of scopes) {
       if (scope === 'cache') {
         work.push(browserSession.clearCache())
@@ -113,16 +164,24 @@ export class BrowserSiteDataService {
         work.push(browserSession.clearStorageData({ storages: SCOPE_STORAGE_TYPES[scope] }))
       }
     }
-    if (work.length > 0) {
-      await Promise.all(work)
-      await browserSession.closeAllConnections()
-    }
-    this.reloadProjectTabs(projectId)
+    if (work.length === 0) return
+    await Promise.all(work)
+    await browserSession.closeAllConnections()
   }
 
-  private reloadProjectTabs(projectId: string): void {
+  /** The confirmation copy, naming the jar that is about to lose its cookies
+   *  when that jar is one box rather than the project's whole browser. */
+  private scopedDetail(boxId: string | null, boxName: string, action: SiteMenuAction): string {
+    if (boxId === null) return action.detail
+    const jar = boxName === '' ? 'this box' : boxName
+    return `${action.detail} Only ${jar} is cleared; every other box and the project's own browser keep their data.`
+  }
+
+  private reloadProjectTabs(projectId: string, jars: readonly (string | null)[]): void {
     this.deps.forEachTab((tab) => {
-      if (tab.projectId === projectId && tab.initialNavigationStarted) tab.view.webContents.reload()
+      if (tab.projectId !== projectId || !jars.includes(tab.boxId)) return
+      if (!tab.initialNavigationStarted) return
+      tab.view.webContents.reload()
     })
   }
 }

@@ -623,12 +623,12 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
   )
   ipcMain.handle(
     'project:delete',
-    async (_, projectId: string, options?: { deleteFolder?: boolean }) => {
+    async (_, projectId: string, deleteOptions?: { deleteFolder?: boolean }) => {
       // Optional folder erasure runs FIRST and gates the CodeInOven-side
       // removal: if the filesystem delete fails, nothing below executes and
       // the project stays fully intact in CodeInOven (the renderer restores
       // it). Only after the folder is gone does the app data removal begin.
-      if (options?.deleteFolder === true) {
+      if (deleteOptions?.deleteFolder === true) {
         const project = await projectManager.getProject(projectId)
         if (!project?.path || !isAbsolute(project.path)) {
           throw new Error('This project has no local folder on disk to delete')

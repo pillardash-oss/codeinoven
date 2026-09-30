@@ -200,7 +200,9 @@ async function resolveManifestText(
   const defaultLocale =
     typeof manifest['default_locale'] === 'string' ? manifest['default_locale'] : null
   const localesDir = join(extensionDir, '_locales')
-  let candidates: string[] = []
+  // Declared without an initialiser on purpose: the catch below returns, so the
+  // readdir result is the only value this list can ever hold.
+  let candidates: string[]
   try {
     candidates = await readdir(localesDir)
   } catch {

@@ -145,6 +145,7 @@ import {
   SCREENSHOT_JPEG_QUALITY,
   SCREENSHOT_MAX_BYTES,
   ZOOM_STEP,
+  boundedBoxLabel,
   browserContextKey,
   boxIdFromPartition,
   browserPartitionFor,
