@@ -15,10 +15,13 @@ export const invokeDesignContract = {
    */
   'design:state': {} as Contract<[projectId: string, threadId: string], ThreadDesignState>,
   /**
-   * Serve a design folder and show it in this project and thread's browser tab.
-   * With `reveal` the tab is brought to the user; without it the tab loads in
-   * the background, which is how the coordinator gets a thumbnail without
-   * stealing focus.
+   * Serve a design folder or composition and show it in the in-app browser.
+   *
+   * A design's screen opens in a tab of its own, so clicking one canvas never
+   * replaces another canvas's tab: the screen's own tab is navigated when it
+   * exists and opened when it does not. `reveal` brings that tab to the user;
+   * without it the page loads in the background. A composition keeps the
+   * thread's single tab, because its board holds one canvas.
    */
   'design:open': {} as Contract<
     [projectId: string, threadId: string, directory: string, entry: string | null, reveal: boolean],

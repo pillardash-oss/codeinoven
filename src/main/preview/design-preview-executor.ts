@@ -67,7 +67,11 @@ export function createDesignPreviewExecutor(
         entry: input['entry'],
         defaultRoot: currentWorkRoot('design'),
         attention,
-        reveal: false
+        reveal: false,
+        // The agent's own preview moves through the thread's one tab: it is the
+        // work being shown, not the user choosing a canvas, and a tab per screen
+        // here would leave the tag's tab strip full of the agent's steps.
+        tab: 'thread'
       }
     )
     options.record({

@@ -168,6 +168,7 @@ import {
   validateTransportValue,
   validateViewportRequest
 } from './browser-service/browser-validation'
+import { designScreenTabId } from './browser-service/design-screen-tab'
 
 /**
  * Where a renderer-owned shortcut lands. The key is decided in this process,
@@ -1614,6 +1615,62 @@ export class BrowserService {
    *  than from a memo a caller keeps on the side. */
   agentTabFor(projectId: string, threadId: string): string | null {
     return this.agentTabIds.get(browserContextKey(projectId, threadId)) ?? null
+  }
+
+  /**
+   * Open or re-show one design screen in a tab of its own.
+   *
+   * A canvas click is the user choosing a page, and two canvases are two pages:
+   * a tab per screen is what keeps clicking one from replacing another's. The
+   * tab id is derived from the screen's identity rather than minted (see
+   * {@link designScreenTabId}), so the same canvas addresses the same tab every
+   * time: clicked twice it replaces its own page and leaves every other tab
+   * alone, and a tab the user left open across a restart is found again rather
+   * than copied where a freshly minted id would not be.
+   *
+   * The tab is parked offscreen before it loads, exactly as an agent-opened tab
+   * is, so the page runs whether or not it ends up on screen.
+   */
+  async openDesignScreen(input: {
+    projectId: string
+    threadId: string
+    /** Project-relative folder of the design, part of the screen's identity. */
+    directory: string
+    /** Entry file of the screen, normalized, or null for the folder listing. */
+    entry: string | null
+    url: string
+    /** Bring the tab to the user once it is loaded, or leave it in the sidebar. */
+    reveal: boolean
+  }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
+    const tabId = designScreenTabId(input)
+    const reused = this.tabs.has(tabId)
+    const tab = this.ensureTab(tabId, input.projectId, input.threadId)
+    if (!reused) {
+      tab.initialNavigationStarted = true
+      // Mount the tab offscreen before anything else: the page must run whether or
+      // not the user ends up looking at it.
+      this.parkTab(tabId)
+    } else if (this.activeTabId !== tabId && !this.stage.isParked(tab.view)) {
+      // A tab the parked cap evicted has no stage window left, so it is mounted
+      // again before it navigates, exactly as an agent's operation revives one.
+      this.parkTab(tabId)
+    }
+    this.load(tabId, input.url)
+    // The event carries the URL that was asked for rather than whatever the page
+    // holds a moment after a load started, so the sidebar row is named from the
+    // screen the user clicked even before the page commits. It is sent for a
+    // reused tab too, because that is also the only thing that moves the user to
+    // a page the thread already has open. A screen tab is the user's, not the
+    // agent's: nothing here claims the thread's agent tab, so no later preview
+    // replaces this page under them.
+    sendToRenderer(this.window.webContents, 'browser:openRequested', input.url, {
+      projectId: input.projectId,
+      threadId: input.threadId,
+      requestedTabId: tabId,
+      reveal: input.reveal,
+      boxId: tab.boxId
+    })
+    return { tabId, tab: reused ? 'reused' : 'opened' }
   }
 
   /**

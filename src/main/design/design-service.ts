@@ -400,10 +400,13 @@ export class DesignService {
   }
 
   /**
-   * Show a thread's work in its browser tab at the user's request.
+   * Show a thread's work at the user's request.
    *
-   * The folder is validated and the browser opens it in the background, then the
-   * tab is revealed: revealing is one mechanism, not two, so an existing tab and a
+   * A design's screen is opened in a tab of its own, so clicking one canvas never
+   * replaces another canvas's tab (see `BrowserService.openDesignScreen`); a
+   * composition keeps the thread's tab, because its board holds one canvas. The
+   * folder is validated and the browser opens it in the background, then the tab
+   * is revealed: revealing is one mechanism, not two, so an existing tab and a
    * brand-new one behave the same way for the user.
    */
   async open(
@@ -423,7 +426,8 @@ export class DesignService {
       directory,
       entry,
       attention: 'background',
-      reveal
+      reveal,
+      tab: kind === 'design' ? 'screen' : 'thread'
     })
     this.designs.upsert({
       projectId,
@@ -476,6 +480,7 @@ export class DesignService {
       entry,
       attention: 'background',
       reveal: false,
+      tab: 'thread',
       // A board's picture of a composition is a still, so selecting a video thread
       // must not start playback and sound in a tab the user never asked for. The
       // design kind has no timeline to freeze, so it is unaffected.
@@ -683,13 +688,14 @@ export class DesignService {
   }
 
   /**
-   * Serve one folder of authored work and put it in the thread's browser tab.
+   * Serve one folder of authored work and show it in a browser tab.
    *
    * The design path and the video path share every step but the folder resolver
    * and one design-only side effect (marking the tab, which is what arms the
    * element inspector), so the choice lives here rather than in each caller: the
-   * capability's own preview, the board's open and the board's thumbnail all have
-   * to agree about which folder is on screen.
+   * capability's own preview, the board's open and the board's captures all have
+   * to agree about which folder is on screen. Which tab it lands in is the one
+   * thing the callers are allowed to disagree about (see `tab`).
    */
   private async serveWork(input: {
     kind: AuthoredWorkKind
@@ -700,6 +706,15 @@ export class DesignService {
     entry: unknown
     attention: 'focus' | 'background'
     reveal: boolean
+    /**
+     * Which tab the preview may use, design only.
+     *
+     * The board's open is the user choosing a screen, so every screen keeps its
+     * own tab; the capability's own preview and both capture paths share the
+     * thread's. A composition board holds one canvas, so it keeps the thread's
+     * tab and the video path ignores this.
+     */
+    tab: 'thread' | 'screen'
     /**
      * Load a still at this second instead of the moving composition. Video only:
      * a design is shown as it is, and the design path ignores this.
@@ -716,7 +731,8 @@ export class DesignService {
       defaultRoot: currentWorkRoot(input.kind),
       attention: input.attention,
       reveal: input.reveal,
-      posterSeconds: input.posterSeconds
+      posterSeconds: input.posterSeconds,
+      tab: input.tab
     }
     const result =
       input.kind === 'video'
@@ -754,7 +770,8 @@ export class DesignService {
         directory: input.directory,
         entry: input.screen.entry,
         attention: 'background',
-        reveal: false
+        reveal: false,
+        tab: 'thread'
       })
       const browser = this.options.browser()
       if (browser === null || result.tabId === null) return emptyScreenShot(input.screen)
@@ -799,7 +816,8 @@ export class DesignService {
         directory: target.directory,
         entry: target.entry,
         attention: 'background',
-        reveal: false
+        reveal: false,
+        tab: 'thread'
       })
     } catch (error) {
       Logger.dev('The tab could not be put back after picturing a design:', error)
