@@ -105,6 +105,7 @@ import {
   routineHowToUpdateContext
 } from '../../lib/routine-authoring'
 import { isRoutineNextStepsPrompt } from '../../lib/assistant-next-steps'
+import { continuationRequestPrompt, pendingContinuationRequest } from '../../lib/pending-request'
 import { composeRoutineInstruction, routineRunContext } from '../../lib/routine-run'
 import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { RankingQueueHead } from '../database/repositories/model-ranking-snapshot-repo'
@@ -536,6 +537,7 @@ import {
 } from './chat-engine/chat-engine-message-text'
 import {
   BRAINSTORM_GENERATION_TIMEOUT_MS,
+  CONTINUATION_REQUEST_PAGE_MESSAGES,
   COORDINATOR_HANDOFF_QUEUE_DIR,
   CURRENT_SPEC_GENERATION_VERSION,
   DEFAULT_QUESTION_TIMEOUT_MS,
@@ -19191,7 +19193,11 @@ export class ChatEngine {
       thread.projectId,
       thread.id,
       validateThreadSettings(thread.settings),
-      resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue',
+      await this.continuationTurnPrompt(
+        thread.projectId,
+        thread.id,
+        resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue'
+      ),
       [],
       resumesSpecContract ? 'implement' : undefined,
       createMessageId(),
@@ -23474,10 +23480,49 @@ export class ChatEngine {
   }
 
   /**
+   * The prompt a continuation turn sends on the app's own initiative (the retry
+   * chip, an automatic resume after a provider reset, a recovered thread).
+   *
+   * The request the failed turn was answering travels with the nudge. A bare
+   * "Continue" was trusting the harness session to still hold that request, and
+   * nothing guarantees it: a provider pause that leaves the turn held, an
+   * account or harness change, or a released session all leave the agent with a
+   * "Continue" and no request to continue, which reads to the user as their
+   * message being silently dropped.
+   */
+  private async continuationTurnPrompt(
+    projectId: string,
+    threadId: string,
+    nudge: string
+  ): Promise<string> {
+    try {
+      const page = await this.threadManager.loadMessagePage(
+        projectId,
+        threadId,
+        undefined,
+        CONTINUATION_REQUEST_PAGE_MESSAGES
+      )
+      const request = pendingContinuationRequest(page.messages)
+      return request ? continuationRequestPrompt(request, nudge) : nudge
+    } catch (error) {
+      // A continuation must still run when the mirror read fails: the harness
+      // session usually holds the request itself.
+      Logger.dev('Continuation request relay skipped:', {
+        projectId,
+        threadId,
+        error: rawErrorMessage(error)
+      })
+      return nudge
+    }
+  }
+
+  /**
    * Resume a thread whose usage window reset. Sends an internal "Continue"
    * through the normal sendPrompt pipeline (mirroring the manual Retry action)
    * so the agent picks up from its existing session and context. Skipped when
    * the thread is gone, its session moved on, or the harness is already active.
+   * The request the failed turn was answering rides along, because a session
+   * replaced in the meantime holds no memory of it.
    */
   async continueScheduledThread(record: PendingRetryRecord): Promise<void> {
     const projectId = validateEntityId(record.projectId, 'Project ID')
@@ -23526,7 +23571,7 @@ export class ChatEngine {
       projectId,
       threadId,
       settings,
-      'Continue',
+      await this.continuationTurnPrompt(projectId, threadId, 'Continue'),
       [],
       undefined,
       createMessageId(),

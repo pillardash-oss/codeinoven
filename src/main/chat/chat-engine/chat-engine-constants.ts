@@ -76,6 +76,13 @@ export const SYSTEM_LAYER_RESERVE_TOKENS = 2_048
 /** Upper bound given to the recap layer so it takes all remaining headroom. */
 export const MAX_RECAP_TOKENS = 2_000_000
 
+/**
+ * How many trailing mirror messages a continuation turn reads to find the
+ * request it continues. That request is the newest user turn and the answer
+ * that retires it sits beside it, so a short page always reaches both.
+ */
+export const CONTINUATION_REQUEST_PAGE_MESSAGES = 40
+
 /** How long an image-descriptor failure waits for a user decision before auto-ignoring. */
 export const IMAGE_DESCRIPTOR_DECISION_TIMEOUT_MS = 300_000
 

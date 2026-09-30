@@ -284,6 +284,7 @@
   import { APP_NAME } from '$shared/brand'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
+  import { continuationRequestPrompt, pendingContinuationRequest } from '$shared/pending-request'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { LiveGenerationRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -4942,6 +4943,21 @@
     }
   }
 
+  /**
+   * The prompt a retry sends.
+   *
+   * A retry used to send a bare "Continue" and trust the harness session to
+   * still hold the request the failed turn was answering. Nothing guarantees
+   * that: a provider pause, an account change, or a replaced session leaves the
+   * agent with a "Continue" and no request to continue, and the message reads
+   * as delivered while the agent never saw it. Relaying the unanswered request
+   * with the nudge makes the turn answerable on any session.
+   */
+  function retryPrompt(): string {
+    const request = pendingContinuationRequest(messages)
+    return request ? continuationRequestPrompt(request) : 'Continue'
+  }
+
   /** Retry after an error or a paused provider retry   replace the live turn first. */
   async function retryConnection(): Promise<void> {
     if (providerRetrying) return
@@ -4961,7 +4977,7 @@
           providerStatus = null
         }
       }
-      await sendMessage('Continue', [], undefined, true, undefined, [], [], {
+      await sendMessage(retryPrompt(), [], undefined, true, undefined, [], [], {
         action: 'Retry connection'
       })
     } catch (error) {
