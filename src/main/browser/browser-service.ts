@@ -8,6 +8,7 @@ import {
   session,
   webFrameMain,
   WebContentsView,
+  type MenuItemConstructorOptions,
   type Session,
   type WebContents,
   type WebFrameMain
@@ -52,8 +53,15 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
-import type { BrowserExtensionProgress } from '../../lib/ipc/browser'
-import { BrowserExtensionService } from './extensions/browser-extension-service'
+import type {
+  BrowserExtensionActivityUpdate,
+  BrowserExtensionMenuRecord,
+  BrowserExtensionProgress
+} from '../../lib/ipc/browser'
+import {
+  BrowserExtensionService,
+  type BrowserExtensionTabEventName
+} from './extensions/browser-extension-service'
 import {
   validateExtensionId,
   validateExtensionInstallInput,
@@ -76,6 +84,8 @@ import { dialogContextScript } from './browser-service/browser-dialog-context'
 import {
   buildBrowserContextMenuItems,
   buildBrowserPageMenuItems,
+  buildExtensionMenuItems,
+  extensionClickContexts,
   type BrowserContextMenuActions,
   type BrowserContextMenuContext
 } from './browser-service/browser-context-menu'
@@ -243,6 +253,24 @@ interface BrowserMenuPage {
 }
 
 /** The menu's view of one browser tab's own page. */
+/**
+ * One tab as `chrome.tabs` describes it, for the lifecycle events the app
+ * synthesizes into a worker. Only the fields an extension reads in practice are
+ * carried; `index` is always 0 because this browser has one strip and no
+ * reorderable per-window indices of its own.
+ */
+interface BrowserExtensionTabInfo {
+  id: number
+  index: number
+  windowId: number
+  active: boolean
+  pinned: boolean
+  incognito: boolean
+  url: string
+  title: string
+  status: 'loading' | 'complete'
+}
+
 function menuPageFor(tabId: string, tab: BrowserTab): BrowserMenuPage {
   return {
     contents: tab.view.webContents,
@@ -569,6 +597,8 @@ export class BrowserService {
       sessionFor: (projectId, boxId) => this.sessionForProject(projectId, boxId),
       liveJars: () => this.liveJars(),
       reportProgress: (progress) => this.publishExtensionProgress(progress),
+      resolveTabId: (projectId, contentsId) => this.tabIdForContents(projectId, contentsId) ?? null,
+      publishActivity: (update) => this.publishExtensionActivity(update),
       publish: () => this.publishExtensions()
     })
     this.capture = new BrowserCaptureObserver({
@@ -712,11 +742,13 @@ export class BrowserService {
         this.dropPendingPark(tabId)
         // Leaving a tab costs nothing now: the outgoing tab keeps running in an
         // invisible stage window instead of going dead behind the app window.
+        const previousActiveTabId = this.activeTabId
         if (this.activeTabId && this.activeTabId !== tabId) {
           this.parkTab(this.activeTabId)
         }
         this.activeTabId = tabId
         this.activeTabBounds = bounds
+        if (previousActiveTabId !== tabId) this.notifyExtensionActivated(tabId)
         // Remember the frame the page is on screen at. Parking lays the page out at
         // this size from now on, so leaving a tab never resizes the page away from
         // the size the user was reading it at.
@@ -2337,6 +2369,7 @@ export class BrowserService {
       navigationFailure: null
     }
     this.tabs.set(tabId, tab)
+    this.notifyExtensionTab(projectId, boxId, 'onCreated', [this.extensionTabInfo(tabId, tab)])
 
     const publish = (): void => this.publishState(tabId)
     // A key pressed in the page reaches this view's web contents and nothing
@@ -2404,7 +2437,14 @@ export class BrowserService {
     )
     view.webContents.on('devtools-opened', publish)
     view.webContents.on('devtools-closed', publish)
-    view.webContents.on('did-start-loading', publish)
+    view.webContents.on('did-start-loading', () => {
+      publish()
+      this.notifyExtensionTab(tab.projectId, tab.boxId, 'onUpdated', [
+        tab.view.webContents.id,
+        { status: 'loading' },
+        this.extensionTabInfo(tabId, tab)
+      ])
+    })
     view.webContents.on('did-stop-loading', () => {
       publish()
       // The safety net for a mark that resolved while the document was still
@@ -2466,6 +2506,11 @@ export class BrowserService {
       // for an empty one.
       applyBrowserPageBackground(tab.view)
       publish()
+      this.notifyExtensionTab(tab.projectId, tab.boxId, 'onUpdated', [
+        tab.view.webContents.id,
+        { status: 'complete', url },
+        this.extensionTabInfo(tabId, tab)
+      ])
       // Chromium's find does not survive a document, so a session that was live
       // across this navigation is over: the page has no matches to report and the
       // bar must not keep showing the count of the document that just went away.
@@ -2487,8 +2532,22 @@ export class BrowserService {
     view.webContents.on('found-in-page', (_event, result) => {
       this.publishFindResult(tabId, result.requestId, result)
     })
-    view.webContents.on('did-navigate-in-page', publish)
-    view.webContents.on('page-title-updated', publish)
+    view.webContents.on('did-navigate-in-page', (_event, url) => {
+      publish()
+      this.notifyExtensionTab(tab.projectId, tab.boxId, 'onUpdated', [
+        tab.view.webContents.id,
+        { url },
+        this.extensionTabInfo(tabId, tab)
+      ])
+    })
+    view.webContents.on('page-title-updated', (_event, title) => {
+      publish()
+      this.notifyExtensionTab(tab.projectId, tab.boxId, 'onUpdated', [
+        tab.view.webContents.id,
+        { title },
+        this.extensionTabInfo(tabId, tab)
+      ])
+    })
     view.webContents.on('page-favicon-updated', (_event, favicons) => {
       const source = favicons.find((candidate) => candidate.length > 0) ?? null
       if (!source) return
@@ -2509,6 +2568,11 @@ export class BrowserService {
         if (tab.favicon === favicon) return
         tab.favicon = favicon
         publish()
+        this.notifyExtensionTab(tab.projectId, tab.boxId, 'onUpdated', [
+          tab.view.webContents.id,
+          { favIconUrl: source },
+          this.extensionTabInfo(tabId, tab)
+        ])
       })
     })
     view.webContents.on('console-message', (details) => {
@@ -3159,6 +3223,123 @@ export class BrowserService {
     sendToRenderer(this.window.webContents, 'browser:extensions', this.extensions.list())
   }
 
+  /** One extension's action state, published the moment its worker reports it. */
+  private publishExtensionActivity(update: BrowserExtensionActivityUpdate): void {
+    if (this.window.webContents.isDestroyed()) return
+    sendToRenderer(this.window.webContents, 'browser:extensionActivity', update)
+  }
+
+  // ─── Extensions beside a page ──────────────────────────────────────────────
+
+  /**
+   * One tab fact, aimed at the extensions loaded in that tab's jar.
+   *
+   * The runtime delivers no tab lifecycle events of its own, so these are what
+   * an extension's state machine is driven by: a created, updated, activated or
+   * removed tab, in the shapes `chrome.tabs` documents, so a listener written
+   * against the real API runs unmodified.
+   */
+  private notifyExtensionTab(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserExtensionTabEventName,
+    args: unknown[]
+  ): void {
+    this.extensions.onTabEvent(projectId, boxId, name, args)
+  }
+
+  /** A tab became the one on screen: the extension-visible activation event. */
+  private notifyExtensionActivated(tabId: string): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    const contents: WebContents | undefined = tab.view.webContents
+    if (!contents || contents.isDestroyed()) return
+    this.notifyExtensionTab(tab.projectId, tab.boxId, 'onActivated', [
+      { tabId: contents.id, windowId: 0 }
+    ])
+  }
+
+  /** One tab as `chrome.tabs` describes it, for a synthesized event. */
+  private extensionTabInfo(tabId: string, tab: BrowserTab): BrowserExtensionTabInfo {
+    const contents: WebContents | undefined = tab.view.webContents
+    const active = this.activeTabId === tabId
+    if (!contents || contents.isDestroyed()) {
+      return {
+        id: -1,
+        index: 0,
+        windowId: 0,
+        active,
+        pinned: false,
+        incognito: false,
+        url: '',
+        title: '',
+        status: 'complete'
+      }
+    }
+    return {
+      id: contents.id,
+      index: 0,
+      windowId: 0,
+      active,
+      pinned: false,
+      incognito: false,
+      url: contents.getURL(),
+      title: contents.getTitle(),
+      status: contents.isLoading() ? 'loading' : 'complete'
+    }
+  }
+
+  /**
+   * The right-click items every extension in the page's jar contributed.
+   *
+   * Recorded trees are read at click time rather than kept warm, and a chosen
+   * item travels back through its extension's bridge as `contextMenus.onClicked`.
+   */
+  private extensionMenuItems(
+    page: BrowserMenuPage,
+    params: Electron.ContextMenuParams
+  ): MenuItemConstructorOptions[] {
+    const sections = this.extensions.menuRecordsFor(page.owner.projectId, page.owner.boxId)
+    if (sections.length === 0) return []
+    return buildExtensionMenuItems(sections, extensionClickContexts(params), (section, item) => {
+      this.dispatchExtensionMenuClick(page, params, section.extensionId, item)
+    })
+  }
+
+  /** Hand one chosen extension item back to the worker that recorded it. */
+  private dispatchExtensionMenuClick(
+    page: BrowserMenuPage,
+    params: Electron.ContextMenuParams,
+    extensionId: string,
+    item: BrowserExtensionMenuRecord
+  ): void {
+    const contents = page.contents
+    if (contents.isDestroyed()) return
+    const info: Record<string, unknown> = {
+      menuItemId: item.rawId,
+      editable: params.isEditable,
+      pageUrl: contents.getURL(),
+      frameId: 0
+    }
+    if (item.parentId) info['parentMenuItemId'] = item.parentId
+    if (params.linkURL) info['linkUrl'] = params.linkURL
+    if (params.srcURL) info['srcUrl'] = params.srcURL
+    if (params.selectionText.trim()) info['selectionText'] = params.selectionText
+    if (params.mediaType !== 'none') info['mediaType'] = params.mediaType
+    if (item.type === 'checkbox' || item.type === 'radio') {
+      info['wasChecked'] = item.checked
+      info['checked'] = !item.checked
+    }
+    this.extensions.dispatchMenuClick(page.owner.projectId, page.owner.boxId, extensionId, info, {
+      id: contents.id,
+      url: contents.getURL(),
+      title: contents.getTitle(),
+      active: false,
+      windowId: 0,
+      index: 0
+    })
+  }
+
   /**
    * Close extension popups whose extension is no longer there to answer.
    *
@@ -3588,7 +3769,8 @@ export class BrowserService {
       buildBrowserContextMenuItems(
         params,
         this.contextMenuContext(page.contents),
-        this.contextMenuActions(page)
+        this.contextMenuActions(page),
+        this.extensionMenuItems(page, params)
       )
     )
     // The point Electron reports is in the page's own coordinates, and a native
@@ -4306,6 +4488,15 @@ export class BrowserService {
       this.tabHistory.forget(tabId)
     }
     if (!tab) return
+    // The extension-visible removal goes out before the page closes, because the
+    // id it carries is the page's own.
+    const removedContents: WebContents | undefined = tab.view.webContents
+    if (removedContents && !removedContents.isDestroyed()) {
+      this.notifyExtensionTab(tab.projectId, tab.boxId, 'onRemoved', [
+        removedContents.id,
+        { windowId: 0, isWindowClosing: false }
+      ])
+    }
     // A popup window is the tab's own window as far as the user is concerned, so
     // closing the tab closes what its page opened rather than leaving a sign-in
     // stranded behind a tab that no longer exists.

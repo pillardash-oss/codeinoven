@@ -652,6 +652,62 @@ export interface BrowserExtensionProgress {
 }
 
 /**
+ * One extension's action state for one tab, as the extension itself set it.
+ *
+ * Only the fields the extension actually set are present: a tab's entry is
+ * merged over the extension's own, so an absent field means "inherit", while an
+ * empty string is a badge the extension cleared. It is drawn on the extension's
+ * pin in the browser view's header, which is the toolbar this browser has none
+ * of.
+ */
+export interface BrowserExtensionActivity {
+  badgeText?: string
+  badgeColor?: string
+  /** The extension's own icon for its action, or null when it set image data,
+   *  which no URL can reach. */
+  iconUrl?: string | null
+  title?: string | null
+  /** Epoch milliseconds of the snapshot this entry came from. */
+  updatedAt: number
+}
+
+/**
+ * One action-state change, as it crosses to the renderer.
+ *
+ * `tabId` null is the extension's state for every tab of its box. `reset` means
+ * the worker restarted and forgot everything it had recorded, so the renderer
+ * drops the extension's entries before applying whatever follows.
+ */
+export interface BrowserExtensionActivityUpdate {
+  boxId: string
+  extensionId: string
+  tabId: string | null
+  activity: BrowserExtensionActivity | null
+  reset?: boolean
+}
+
+/**
+ * One menu item as an extension recorded it through `contextMenus.create`.
+ *
+ * The tree is forwarded to the native context menu of the page the extension
+ * runs beside, and a chosen item travels back as `contextMenus.onClicked`.
+ */
+export interface BrowserExtensionMenuRecord {
+  id: string
+  /** The value `create` answered with, so a click carries back exactly what the
+   *  extension compared against. */
+  rawId: string | number
+  parentId: string | null
+  title: string
+  type: string
+  contexts: string[]
+  enabled: boolean
+  checked: boolean
+  documentUrlPatterns: string[]
+  targetUrlPatterns: string[]
+}
+
+/**
  * Metadata for a download started inside the app-scoped browser. Contains no
  * cookies, headers, or page content: only what the download manager needs to
  * render progress and offer resume/retry/cancel/open/reveal actions.

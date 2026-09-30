@@ -11,6 +11,7 @@ import type {
 import type {
   BrowserDevToolsState,
   BrowserDownload,
+  BrowserExtensionActivityUpdate,
   BrowserFindResult,
   BrowserInspectorEvent,
   BrowserOpenRequestContext,
@@ -283,6 +284,12 @@ export const IPC_EVENT_CONTRACT = {
   'browser:overlay:drawn': [] as unknown as [ack: BrowserOverlayAck],
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
+  /**
+   * One extension's action state (badge, icon, title) for one box: for one tab,
+   * or for every tab of the box when `tabId` is null. A `reset` means the
+   * worker restarted and holds none of what it recorded before.
+   */
+  'browser:extensionActivity': [] as unknown as [update: BrowserExtensionActivityUpdate],
   'browser:download': [] as unknown as [download: BrowserDownload],
   /**
    * A download the browser dropped from its own list (removed by the user, or

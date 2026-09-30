@@ -24,6 +24,9 @@
    */
 
   const tab = $derived(globalBrowser.activeTab)
+  /** The jar and tab the pins are drawn for, as the activity store keys them. */
+  const jar = $derived(tab?.boxId ?? '')
+  const activeTabId = $derived(tab?.id ?? '')
   /** The pins this box can act on, in the order they were installed. */
   const pinned = $derived(tab ? browserExtensions.pinnedExtensionsInJar(tab.boxId ?? '') : [])
 
@@ -39,6 +42,12 @@
     return openPopupFor(extension.id) === null
       ? `Open the ${extension.name} popup`
       : `Close the ${extension.name} popup`
+  }
+
+  /** Chrome's own shape for a long badge: anything past four characters becomes
+   *  a plus, so the badge cannot outgrow the icon it sits on. */
+  function badgeLabel(text: string): string {
+    return text.length > 4 ? `${text.slice(0, 3)}+` : text
   }
 
   /**
@@ -73,22 +82,34 @@
        spacing is what keeps the row reading as part of it. -->
   <div class="flex items-center gap-1">
     {#each pinned as extension (extension.id)}
+      {@const activity = browserExtensions.activityFor(jar, activeTabId, extension.id)}
+      {@const icon = activity?.iconUrl ?? extension.iconDataUrl}
       <button
         type="button"
-        class="flex h-8 w-8 items-center justify-center transition-colors duration-150 hover:bg-elevated focus-visible:bg-elevated {openPopupFor(
+        class="relative flex h-8 w-8 items-center justify-center transition-colors duration-150 hover:bg-elevated focus-visible:bg-elevated {openPopupFor(
           extension.id
         )
           ? 'bg-elevated text-foreground'
           : 'text-muted hover:text-foreground'}"
-        title={pinLabel(extension)}
+        title={activity?.title ?? pinLabel(extension)}
         aria-label={pinLabel(extension)}
         aria-pressed={openPopupFor(extension.id) !== null}
         onclick={() => void toggle(extension.id)}
       >
-        {#if extension.iconDataUrl}
-          <img src={extension.iconDataUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+        {#if icon}
+          <img src={icon} alt="" class="h-4 w-4 rounded-sm object-contain" />
         {:else}
           <Puzzle size={15} />
+        {/if}
+        {#if activity?.badgeText}
+          <!-- The extension's own badge, in its own colour: the one part of a
+               toolbar this browser does not draw, drawn on the pin instead. -->
+          <span
+            class="pointer-events-none absolute -right-0.5 -bottom-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-[0.625rem] leading-none font-medium text-white"
+            style="background-color: {activity.badgeColor ?? '#d93025'}"
+          >
+            {badgeLabel(activity.badgeText)}
+          </span>
         {/if}
       </button>
     {/each}

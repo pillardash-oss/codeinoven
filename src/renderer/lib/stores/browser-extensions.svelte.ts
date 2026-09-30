@@ -1,11 +1,22 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import type {
   BrowserExtension,
+  BrowserExtensionActivity,
+  BrowserExtensionActivityUpdate,
   BrowserExtensionInjection,
   BrowserExtensionInstallInput,
   BrowserExtensionProgress
 } from '$shared/ipc-contract'
 import { reportError } from './app-errors.svelte'
+
+/** How one extension's action state is keyed in the two activity maps. */
+const ACTIVITY_SEPARATOR = '\u0000'
+function activityKey(boxId: string, extensionId: string): string {
+  return `${boxId}${ACTIVITY_SEPARATOR}${extensionId}`
+}
+function activityTabKey(boxId: string, extensionId: string, tabId: string): string {
+  return `${boxId}${ACTIVITY_SEPARATOR}${extensionId}${ACTIVITY_SEPARATOR}${tabId}`
+}
 
 /**
  * How the install-time compatibility preamble reached an extension's service
@@ -60,6 +71,11 @@ class BrowserExtensionsState {
   /** True while an install is in flight, so the rail can keep the door it was
    *  started from shut and say what is happening. */
   installing = $state(false)
+  /** Action state every tab of a box sees, keyed box + extension. */
+  private activityGlobal: Record<string, BrowserExtensionActivity> = $state({})
+  /** Action state one tab sees, over the extension's own, keyed box + extension
+   *  + tab. */
+  private activityByTab: Record<string, BrowserExtensionActivity> = $state({})
 
   /** Whether {@link start} has wired the runtime. Idempotent. */
   private started = false
@@ -99,6 +115,54 @@ class BrowserExtensionsState {
     )
   }
 
+  /**
+   * The action state one pinned extension wears for one tab.
+   *
+   * The tab's own entry is merged over the extension's wider one field by field,
+   * so an icon the extension set globally survives a badge it set for this tab.
+   * Null when neither said anything, which is what leaves the pin drawing the
+   * manifest icon with no badge.
+   */
+  activityFor(boxId: string, tabId: string, extensionId: string): BrowserExtensionActivity | null {
+    const global = this.activityGlobal[activityKey(boxId, extensionId)]
+    const local = this.activityByTab[activityTabKey(boxId, extensionId, tabId)]
+    if (!global && !local) return null
+    // Both entries carry `updatedAt`, so the merge always has one; the tab's
+    // entry is read last, which is what makes it override the extension's own.
+    return { ...(global ?? {}), ...(local ?? {}) } as BrowserExtensionActivity
+  }
+
+  /**
+   * Apply one activity change from main.
+   *
+   * A reset is a worker that restarted: everything the extension had recorded
+   * for its box is dropped first, because the fresh life holds none of it and
+   * merging into the leftovers would show a badge no extension is wearing.
+   */
+  private applyActivity(update: BrowserExtensionActivityUpdate): void {
+    const globalKey = activityKey(update.boxId, update.extensionId)
+    if (update.reset) {
+      const nextGlobal = { ...this.activityGlobal }
+      const nextTabs = { ...this.activityByTab }
+      delete nextGlobal[globalKey]
+      const prefix = `${update.boxId}${ACTIVITY_SEPARATOR}${update.extensionId}${ACTIVITY_SEPARATOR}`
+      for (const key of Object.keys(nextTabs)) {
+        if (key.startsWith(prefix)) delete nextTabs[key]
+      }
+      this.activityGlobal = nextGlobal
+      this.activityByTab = nextTabs
+    }
+    if (!update.activity) return
+    if (update.tabId === null) {
+      this.activityGlobal = { ...this.activityGlobal, [globalKey]: update.activity }
+      return
+    }
+    this.activityByTab = {
+      ...this.activityByTab,
+      [activityTabKey(update.boxId, update.extensionId, update.tabId)]: update.activity
+    }
+  }
+
   /** Register the runtime's subscriptions and read the installed list once. */
   start(): void {
     if (this.started) return
@@ -114,6 +178,11 @@ class BrowserExtensionsState {
     // step, and the rail draws it until the install resolves.
     subscribe('browser:extensionProgress', (progress) => {
       this.progress = progress
+    })
+    // One extension's action state at a time, as its worker reports it. The pins
+    // read the merge for the tab on screen from these two maps.
+    subscribe('browser:extensionActivity', (update) => {
+      this.applyActivity(update)
     })
     void this.refresh()
   }

@@ -16,6 +16,12 @@
  * password manager whose desktop bridge is the point cannot be made to work here,
  * and saying so is the honest thing to do.
  *
+ * `contextMenus` is deliberately not in the list. The runtime still has no
+ * namespace of its own, but the app's install-time bridge records the tree each
+ * extension creates and renders it in the native context menu, so an extension
+ * that contributes menu items keeps them (what is lost is `onShown`/`onHidden`,
+ * which nothing in this runtime ever fires).
+ *
  * Pure data, shared by the main process (which reports it per install) and the
  * renderer (which explains it), so the two can never disagree.
  */
@@ -23,7 +29,6 @@ export const BROWSER_EXTENSION_ABSENT_CAPABILITIES: readonly string[] = [
   'bookmarks',
   'browsingData',
   'commands',
-  'contextMenus',
   'cookies',
   'debugger',
   'declarativeContent',

@@ -70,6 +70,19 @@ material way, and the difference is deliberate.
   and has no boxes and no extension chrome, shares the project's cookies by design
   but never loads them, so no extension renderer or service worker runs behind a
   thread browser.
+- **An extension's worker is reached through a bridge page, and its state comes
+  back through it.** Electron delivers no tab lifecycle events to an extension and
+  has no API to read its action state, so the install path writes `cio-bridge.html`
+  into the extension's copy beside the compatibility preamble, and
+  `BrowserExtensionBridge` drives it for as long as that extension is loaded in
+  that jar: tab events travel in over a port named `__cio:bridge`, and the worker's
+  recorded action state and context-menu tree travel back through the extension's
+  session storage (`src/main/browser/extensions/browser-extension-bridge.ts`). A
+  worker Chromium has released is started again by the next port post, with a fresh
+  recording and a new generation, and the browser view's header draws each pinned
+  extension's badge, icon and title from what comes back. A port rather than
+  `runtime.sendMessage`, because a message is delivered to every `onMessage`
+  listener the extension has and a real one can throw on it.
 - **A link in the browser view belongs to that browser.** The link context menu offers
   the default browser, a new tab of the app-wide browser and the tab already on screen
   there, and the thread browser's item (which targets a project thread's tab) is not

@@ -39,13 +39,17 @@ import { MAX_PINNED_EXTENSIONS } from '../../../lib/browser/browser-extension-pi
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import type {
   BrowserExtension,
+  BrowserExtensionActivity,
+  BrowserExtensionActivityUpdate,
   BrowserExtensionInstallInput,
+  BrowserExtensionMenuRecord,
   BrowserExtensionProgress
 } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
 import { browserPartitionFor } from '../browser-service/browser-validation'
 import { prepareExtensionSource } from './browser-extension-install-job'
-import { ensureInjectionCurrent } from './browser-extension-inject'
+import { COMPAT_BRIDGE_PAGE_FILE_NAME, ensureInjectionCurrent } from './browser-extension-inject'
+import { BrowserExtensionBridge, type BrowserExtensionMailbox } from './browser-extension-bridge'
 import { extensionIdFromInput, isExtensionId } from './browser-extension-crx'
 import { downloadWebStoreRelease, resolveWebStoreRelease } from './browser-extension-webstore'
 import {
@@ -78,7 +82,19 @@ const DOWNLOADS_DIR = '.downloads'
  *  lookup would also re-trigger the loading path it is trying to undo. */
 interface LoadedJar {
   session: Session
+  projectId: string
+  boxId: string | null
   ids: Set<string>
+  /** One live channel per loaded extension, keyed by extension id. */
+  bridges: Map<string, BrowserExtensionBridge>
+  /** The last mailbox each extension's worker wrote, which is also what the
+   *  native context menu is built from. */
+  mail: Map<string, BrowserExtensionMailbox>
+  /** The worker life the last published activity came from, per extension. */
+  publishedGeneration: Map<string, string>
+  /** Activity already sent to the renderer, so the 500 ms mailbox poll sends a
+   *  change once instead of on every read. Keyed `extensionId\u0000tabId`. */
+  published: Map<string, string>
 }
 
 /**
@@ -93,10 +109,40 @@ export interface BrowserExtensionHost {
   sessionFor(projectId: string, boxId: string | null): Session
   /** Every jar that currently has a live page. */
   liveJars(): { projectId: string; boxId: string | null }[]
+  /** The app tab a browser page belongs to, for action state an extension scoped
+   *  to the tab ids the runtime gave it. */
+  resolveTabId(projectId: string, contentsId: number): string | null
+  /** One extension's action state changed for a tab, or for every tab of its jar
+   *  when the tab is null. */
+  publishActivity(update: BrowserExtensionActivityUpdate): void
   /** Report one install step to the renderer. */
   reportProgress(progress: BrowserExtensionProgress): void
   /** The installed list changed. */
   publish(): void
+}
+
+/** The tab events the app synthesizes, under the extension API's own names. */
+export type BrowserExtensionTabEventName =
+  'onCreated' | 'onUpdated' | 'onRemoved' | 'onActivated' | 'onHighlighted'
+
+/** Action state as an extension recorded it, or null when a patch carries
+ *  nothing the pins can draw. Only the fields the extension actually set are
+ *  carried, so the renderer merges a tab's entry over the extension's own
+ *  instead of reading a missing field as a cleared one. */
+function activityFromPatch(
+  patch: Record<string, unknown>,
+  at: number
+): BrowserExtensionActivity | null {
+  const activity: BrowserExtensionActivity = { updatedAt: at }
+  if (typeof patch['badgeText'] === 'string') activity.badgeText = patch['badgeText']
+  if (typeof patch['badgeColor'] === 'string') activity.badgeColor = patch['badgeColor']
+  if ('iconUrl' in patch) {
+    activity.iconUrl = typeof patch['iconUrl'] === 'string' ? patch['iconUrl'] : null
+  }
+  if ('title' in patch) {
+    activity.title = typeof patch['title'] === 'string' ? patch['title'] : null
+  }
+  return Object.keys(activity).length > 1 ? activity : null
 }
 
 export class BrowserExtensionService {
@@ -263,7 +309,10 @@ export class BrowserExtensionService {
     if (inFlight) await inFlight.catch(() => undefined)
     const state = this.loaded.get(partition)
     if (!state) return
-    for (const id of [...state.ids]) this.removeFromSession(state.session, id)
+    for (const id of [...state.ids]) {
+      this.stopBridge(state, id)
+      this.removeFromSession(state.session, id)
+    }
     this.loaded.delete(partition)
   }
 
@@ -282,7 +331,10 @@ export class BrowserExtensionService {
   async dispose(): Promise<void> {
     this.disposed = true
     for (const [partition, state] of [...this.loaded]) {
-      for (const id of [...state.ids]) this.removeFromSession(state.session, id)
+      for (const id of [...state.ids]) {
+        this.stopBridge(state, id)
+        this.removeFromSession(state.session, id)
+      }
       this.loaded.delete(partition)
     }
     this.loading.clear()
@@ -476,28 +528,31 @@ export class BrowserExtensionService {
     // Only now is a session asked for, which is what creates its profile directory.
     // A jar nobody enables anything in never reaches this line.
     const session = this.host.sessionFor(projectId, boxId)
-    const state = this.loadedFor(partition, session)
-    for (const id of toUnload) this.removeFromSession(session, id)
+    const state = this.loadedFor(partition, session, projectId, boxId)
+    for (const id of toUnload) {
+      this.stopBridge(state, id)
+      this.removeFromSession(session, id)
+    }
     for (const id of toUnload) state.ids.delete(id)
     if (toLoad.length === 0) return
 
     let changed = false
     for (const record of toLoad) {
-      if (await this.loadIntoSession(session, partition, record)) changed = true
+      if (await this.loadIntoSession(state, record)) changed = true
     }
     if (changed) this.host.publish()
   }
 
   private async loadIntoSession(
-    session: Session,
-    partition: string,
+    state: LoadedJar,
     record: BrowserExtensionRecord
   ): Promise<boolean> {
     const directory = extensionSourceDirectory(this.configRoot, record.id)
     try {
       await this.refreshInstalledPreamble(directory, record)
-      await session.extensions.loadExtension(directory, { allowFileAccess: false })
-      this.loadedFor(partition, session).ids.add(record.id)
+      await state.session.extensions.loadExtension(directory, { allowFileAccess: false })
+      state.ids.add(record.id)
+      this.startBridge(state, record)
       // A successful load answers any earlier failure, so the row stops claiming
       // the extension is broken when it is not.
       return this.registry.setLoadWarning(record.id, null)
@@ -550,18 +605,183 @@ export class BrowserExtensionService {
   private async unloadEverywhere(extensionId: string): Promise<void> {
     for (const [partition, state] of [...this.loaded]) {
       if (!state.ids.has(extensionId)) continue
+      this.stopBridge(state, extensionId)
       this.removeFromSession(state.session, extensionId)
       state.ids.delete(extensionId)
       if (state.ids.size === 0) this.loaded.delete(partition)
     }
   }
 
-  private loadedFor(partition: string, session: Session): LoadedJar {
+  private loadedFor(
+    partition: string,
+    session: Session,
+    projectId: string,
+    boxId: string | null
+  ): LoadedJar {
     const existing = this.loaded.get(partition)
     if (existing) return existing
-    const created: LoadedJar = { session, ids: new Set() }
+    const created: LoadedJar = {
+      session,
+      projectId,
+      boxId,
+      ids: new Set(),
+      bridges: new Map(),
+      mail: new Map(),
+      publishedGeneration: new Map(),
+      published: new Map()
+    }
     this.loaded.set(partition, created)
     return created
+  }
+
+  // ─── The bridge into a worker ──────────────────────────────────────────────
+
+  /**
+   * One tab fact, delivered into every extension loaded in that tab's jar.
+   *
+   * The runtime delivers no tab events of its own, so this is where an extension's
+   * state machine is fed: created, updated, activated, highlighted or removed in
+   * the argument shapes `chrome.tabs` documents, so a listener written against the
+   * real API runs unmodified. Nothing crosses into a worker when the jar has no
+   * extension loaded.
+   */
+  onTabEvent(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserExtensionTabEventName,
+    args: unknown[]
+  ): void {
+    const state = this.loaded.get(browserPartitionFor(projectId, boxId))
+    if (!state || state.bridges.size === 0) return
+    for (const bridge of state.bridges.values()) bridge.push({ kind: 'tab', name, args })
+  }
+
+  /** Open the channel into one extension's worker, beside its load. */
+  private startBridge(state: LoadedJar, record: BrowserExtensionRecord): void {
+    if (state.bridges.has(record.id)) return
+    // An extension with no background has no worker to talk to.
+    if (record.injected === 'none') return
+    const loaded = state.session.extensions.getExtension(record.id)
+    const base =
+      loaded && typeof loaded.url === 'string' && loaded.url
+        ? loaded.url
+        : `chrome-extension://${record.id}/`
+    const pageUrl = `${base.endsWith('/') ? base : `${base}/`}${COMPAT_BRIDGE_PAGE_FILE_NAME}`
+    const bridge = new BrowserExtensionBridge({
+      session: state.session,
+      extensionId: record.id,
+      pageUrl,
+      onMailbox: (mail, restarted) => this.onMailbox(state, record.id, mail, restarted),
+      onUnavailable: (reason) =>
+        Logger.dev('Browser extension bridge unavailable:', { extensionId: record.id, reason })
+    })
+    state.bridges.set(record.id, bridge)
+    bridge.start()
+  }
+
+  /** Release one extension's channel and forget everything read through it. */
+  private stopBridge(state: LoadedJar, extensionId: string): void {
+    const bridge = state.bridges.get(extensionId)
+    if (bridge) {
+      bridge.dispose()
+      state.bridges.delete(extensionId)
+    }
+    state.mail.delete(extensionId)
+    state.publishedGeneration.delete(extensionId)
+    for (const key of [...state.published.keys()]) {
+      if (key.startsWith(`${extensionId}\u0000`)) state.published.delete(key)
+    }
+  }
+
+  /**
+   * One snapshot from a worker, turned into what the app draws.
+   *
+   * A restarted worker is a fresh life with no memory of the last one, so its
+   * first snapshot is announced as a reset: the renderer drops every entry it
+   * held for that extension before the new life's entries arrive, instead of
+   * merging a new badge into a dead life's icon.
+   */
+  private onMailbox(
+    state: LoadedJar,
+    extensionId: string,
+    mail: BrowserExtensionMailbox,
+    restarted: boolean
+  ): void {
+    state.mail.set(extensionId, mail)
+    if (restarted) {
+      this.host.publishActivity({
+        boxId: state.boxId ?? '',
+        extensionId,
+        tabId: null,
+        activity: null,
+        reset: true
+      })
+      for (const key of [...state.published.keys()]) {
+        if (key.startsWith(`${extensionId}\u0000`)) state.published.delete(key)
+      }
+    }
+    state.publishedGeneration.set(extensionId, mail.generation)
+    this.publishActivityEntry(state, extensionId, null, mail.actions.global, mail.at)
+    for (const [tabId, patch] of Object.entries(mail.actions.tabs)) {
+      const appTabId = this.host.resolveTabId(state.projectId, Number(tabId))
+      if (!appTabId) continue
+      this.publishActivityEntry(state, extensionId, appTabId, patch, mail.at)
+    }
+  }
+
+  private publishActivityEntry(
+    state: LoadedJar,
+    extensionId: string,
+    tabId: string | null,
+    patch: Record<string, unknown>,
+    at: number
+  ): void {
+    const activity = activityFromPatch(patch, at)
+    if (!activity) return
+    const key = `${extensionId}\u0000${tabId ?? ''}`
+    const serialized = JSON.stringify(activity)
+    if (state.published.get(key) === serialized) return
+    state.published.set(key, serialized)
+    this.host.publishActivity({
+      boxId: state.boxId ?? '',
+      extensionId,
+      tabId,
+      activity
+    })
+  }
+
+  /**
+   * The recorded context menus of every extension a jar runs.
+   *
+   * Read straight from the last mailbox rather than kept in a second structure:
+   * the tree only changes when the extension rebuilds it, and the native menu
+   * asks for it on the one click that needs it.
+   */
+  menuRecordsFor(
+    projectId: string,
+    boxId: string | null
+  ): { extensionId: string; items: BrowserExtensionMenuRecord[] }[] {
+    const state = this.loaded.get(browserPartitionFor(projectId, boxId))
+    if (!state) return []
+    const sections: { extensionId: string; items: BrowserExtensionMenuRecord[] }[] = []
+    for (const record of this.desiredForJar(projectId, boxId)) {
+      const mail = state.mail.get(record.id)
+      if (!mail || mail.menus.length === 0) continue
+      sections.push({ extensionId: record.id, items: mail.menus })
+    }
+    return sections
+  }
+
+  /** A recorded menu item was chosen: hand the click back to the worker. */
+  dispatchMenuClick(
+    projectId: string,
+    boxId: string | null,
+    extensionId: string,
+    info: Record<string, unknown>,
+    tab: Record<string, unknown>
+  ): void {
+    const bridge = this.loaded.get(browserPartitionFor(projectId, boxId))?.bridges.get(extensionId)
+    bridge?.push({ kind: 'menu-click', info, tab })
   }
 
   // ─── Paths and progress ────────────────────────────────────────────────────

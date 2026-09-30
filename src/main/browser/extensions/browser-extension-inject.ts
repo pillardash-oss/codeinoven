@@ -27,13 +27,18 @@
  * installs one from a folder.
  */
 
+/// <reference types="vite/client" />
 import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { BrowserExtensionInjection } from '../../../lib/ipc/browser'
+import bridgePageSource from './compat/cio-bridge.page.html?raw'
+import bridgeScriptSource from './compat/cio-bridge.js?raw'
 
 export const COMPAT_PREAMBLE_FILE_NAME = 'cio-compat-preamble.js'
 export const COMPAT_BOOTSTRAP_FILE_NAME = 'cio-compat-bootstrap.js'
+export const COMPAT_BRIDGE_PAGE_FILE_NAME = 'cio-bridge.html'
+export const COMPAT_BRIDGE_SCRIPT_FILE_NAME = 'cio-bridge.js'
 
 /** Marked in the generated bootstrap so a re-install can tell its own output from
  *  an extension's file. */
@@ -58,6 +63,27 @@ const PREAMBLE_END_MARKER = '// ── CIO compatibility preamble ends here'
  *  where a formatter may drop it. */
 function prependedPreamble(preambleSource: string): string {
   return `${preambleSource.replace(/\s+$/u, '')}\n;\n`
+}
+
+/** Write `contents` only when the file does not already hold them, so refreshing
+ *  an installed copy does not touch mtimes or disk for no change. */
+async function writeIfChanged(path: string, contents: string): Promise<void> {
+  const current = await readFile(path, 'utf8').catch(() => null)
+  if (current === contents) return
+  await writeFile(path, contents)
+}
+
+/**
+ * Write the bridge page the app drives into the extension's own copy.
+ *
+ * The page is what carries tab lifecycle events into the worker and action state
+ * back out (see `browser-extension-bridge.ts`). It is the app's own file, never
+ * the extension's, so an update can rewrite it in an installed copy the same way
+ * `ensureInjectionCurrent` rewrites a stale preamble.
+ */
+async function writeBridgeFiles(extensionDir: string): Promise<void> {
+  await writeIfChanged(join(extensionDir, COMPAT_BRIDGE_PAGE_FILE_NAME), bridgePageSource)
+  await writeIfChanged(join(extensionDir, COMPAT_BRIDGE_SCRIPT_FILE_NAME), bridgeScriptSource)
 }
 
 /**
@@ -157,6 +183,7 @@ export async function injectCompatibilityPreamble(
       )
       background['service_worker'] = COMPAT_BOOTSTRAP_FILE_NAME
       manifest['background'] = background
+      await writeBridgeFiles(extensionDir)
       return { injection: 'module-bootstrap', entry }
     }
     const absolute = join(extensionDir, entry)
@@ -168,6 +195,7 @@ export async function injectCompatibilityPreamble(
         prependedPreamble(preambleSource)
       )
     }
+    await writeBridgeFiles(extensionDir)
     return { injection: 'prepend-classic', entry }
   }
 
@@ -190,6 +218,7 @@ export async function injectCompatibilityPreamble(
         prependedPreamble(preambleSource)
       )
     }
+    await writeBridgeFiles(extensionDir)
     return { injection: 'prepend-mv2', entry }
   }
 
@@ -228,6 +257,10 @@ export async function ensureInjectionCurrent(
       ? serviceWorker
       : scripts.find((candidate): candidate is string => typeof candidate === 'string')
   if (!declared) return 'none'
+
+  // The bridge page travels with the preamble: a copy installed before it existed
+  // gets it here, and an app update reaches both files the same way.
+  await writeBridgeFiles(extensionDir)
 
   const current = prependedPreamble(preambleSource)
   const sidecar = join(extensionDir, COMPAT_PREAMBLE_FILE_NAME)

@@ -125,11 +125,6 @@
   const resolved = () => Promise.resolve(undefined)
 
   // ── Namespaces Electron does not compile in at all ───────────────────────────
-  ensureNamespace(
-    'contextMenus',
-    { create: noop, update: noop, remove: noop, removeAll: () => resolved() },
-    ['onClicked', 'onShown', 'onHidden']
-  )
   ensureNamespace('webNavigation', { getFrame: noop, getAllFrames: noop }, [
     'onBeforeNavigate',
     'onCommitted',
@@ -321,6 +316,426 @@
     'onRuleMatchedDebug4'
   ])
 
+  // ── The app bridge: lifecycle in, state out ─────────────────────────────────
+  // Electron delivers no tab lifecycle events to an extension (measured: zero
+  // `tabs.on*` events across three navigations), and it has no API to read an
+  // extension's action state back. The app supplies both through the bridge page
+  // it writes into this copy beside the preamble: main drives that page with
+  // `executeJavaScript`, the page `runtime.sendMessage`s into this worker, and
+  // everything this worker wants the app to know is written to one storage key
+  // the page reads back on demand. See `browser-extension-bridge.ts`.
+  const BRIDGE_PAGE_MARKER = '/cio-bridge.html'
+
+  const makeRealEvent = () => {
+    const listeners = []
+    return {
+      addListener: (listener) => {
+        if (typeof listener === 'function' && listeners.indexOf(listener) === -1) {
+          listeners.push(listener)
+        }
+      },
+      removeListener: (listener) => {
+        const index = listeners.indexOf(listener)
+        if (index !== -1) listeners.splice(index, 1)
+      },
+      hasListener: (listener) => listeners.indexOf(listener) !== -1,
+      hasListeners: () => listeners.length > 0,
+      __cioCount: () => listeners.length,
+      __cioEmit: (args) => {
+        for (const listener of listeners.slice()) {
+          try {
+            listener(...args)
+          } catch (error) {
+            state.errors.push('event: ' + String(error))
+          }
+        }
+      }
+    }
+  }
+
+  // Tab events are replaced rather than ensured: the runtime has the events but
+  // never fires one, so a listener registered on the native event waits forever.
+  // One dispatcher per event, shared by both roots, so a listener is called
+  // whichever root the extension registered it on.
+  const tabEvents = {}
+  for (const name of ['onCreated', 'onUpdated', 'onRemoved', 'onActivated', 'onHighlighted']) {
+    const dispatcher = makeRealEvent()
+    tabEvents[name] = dispatcher
+    for (const root of roots) {
+      const tabsApi = root && root.tabs
+      if (!tabsApi) continue
+      try {
+        Object.defineProperty(tabsApi, name, {
+          value: dispatcher,
+          configurable: true,
+          writable: true
+        })
+      } catch (error) {
+        state.errors.push(name + ': ' + String(error))
+      }
+    }
+  }
+
+  // The same for the two runtime events the app synthesizes.
+  const runtimeEvents = {}
+  for (const name of ['onStartup', 'onInstalled']) {
+    const dispatcher = makeRealEvent()
+    runtimeEvents[name] = dispatcher
+    for (const root of roots) {
+      const runtimeApi = root && root.runtime
+      if (!runtimeApi) continue
+      try {
+        Object.defineProperty(runtimeApi, name, {
+          value: dispatcher,
+          configurable: true,
+          writable: true
+        })
+      } catch (error) {
+        state.errors.push(name + ': ' + String(error))
+      }
+    }
+  }
+
+  // ── The state the app reads back ────────────────────────────────────────────
+  // A worker that goes idle is released and restarted by the next message, and
+  // the new life's sequence starts over with none of the previous action state.
+  // The generation is what lets the app tell a fresh life from a stale sequence
+  // and reset its own mirror instead of treating the first snapshot as old.
+  const makeGeneration = () => {
+    try {
+      if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+        return globalThis.crypto.randomUUID()
+      }
+    } catch {
+      // No randomUUID in this worker: the timestamp fallback below is enough for
+      // an identifier that only has to differ between worker lives.
+    }
+    return String(Date.now()) + '-' + Math.random().toString(36).slice(2)
+  }
+  state.generation = makeGeneration()
+  const actionState = { global: {}, tabs: {} }
+  const contextMenuItems = new Map()
+  const contextMenuClicked = makeRealEvent()
+  let menuSeq = 0
+  const mailboxStorage = (() => {
+    try {
+      const storage = chromeApi.storage
+      if (!storage) return null
+      if (storage.session && typeof storage.session.set === 'function') return storage.session
+      if (storage.local && typeof storage.local.set === 'function') return storage.local
+    } catch (error) {
+      state.errors.push('mailbox-area: ' + String(error))
+    }
+    return null
+  })()
+  let mailboxTimer = null
+  const writeMailbox = () => {
+    if (!mailboxStorage) return
+    try {
+      state.mailboxSeq = (state.mailboxSeq || 0) + 1
+      const payload = {
+        generation: state.generation,
+        seq: state.mailboxSeq,
+        at: Date.now(),
+        actions: actionState,
+        menus: Array.from(contextMenuItems.values()),
+        menuSeq,
+        bridgeCommands: state.bridgeCommands || 0,
+        commandLog: state.commandLog || [],
+        eventDispatch: state.eventDispatch || {},
+        errors: state.errors.slice(-20)
+      }
+      const returned = mailboxStorage.set({ __cioMailbox: JSON.parse(JSON.stringify(payload)) })
+      if (returned && typeof returned.catch === 'function') returned.catch(() => {})
+    } catch (error) {
+      state.errors.push('mailbox: ' + String(error))
+    }
+  }
+  const scheduleMailbox = () => {
+    if (mailboxTimer) return
+    mailboxTimer = setTimeout(() => {
+      mailboxTimer = null
+      writeMailbox()
+    }, 80)
+  }
+
+  // ── contextMenus, for real ──────────────────────────────────────────────────
+  // A stub that drops `create` leaves an extension's own menu unrenderable, and
+  // one whose `onClicked` cannot store a listener can never be clicked. The tree
+  // is recorded here, read back by the app, rendered in the native context menu,
+  // and the chosen item comes back as a click on the same real event.
+  const normalizeContexts = (value) => {
+    if (typeof value === 'string' && value) return [value]
+    if (Array.isArray(value)) {
+      const list = value.filter((entry) => typeof entry === 'string' && entry)
+      if (list.length > 0) return list
+    }
+    return ['page']
+  }
+  const invokeMenuCallback = (callback) => {
+    if (typeof callback !== 'function') return
+    try {
+      callback()
+    } catch (error) {
+      state.errors.push('menu-callback: ' + String(error))
+    }
+  }
+  let generatedMenuId = 0
+  const contextMenusApi = {
+    create(properties, callback) {
+      const props = properties && typeof properties === 'object' ? properties : {}
+      const hasId = props.id !== undefined && props.id !== null && props.id !== ''
+      const id = hasId ? String(props.id) : 'cio-menu-' + (generatedMenuId += 1)
+      try {
+        contextMenuItems.set(id, {
+          id,
+          // The value `create` answered with, so a click carries back exactly
+          // what the extension compared against.
+          rawId: hasId ? props.id : id,
+          parentId:
+            props.parentId === undefined || props.parentId === null ? null : String(props.parentId),
+          title: typeof props.title === 'string' ? props.title : '',
+          type:
+            ['normal', 'separator', 'checkbox', 'radio'].indexOf(props.type) === -1
+              ? 'normal'
+              : props.type,
+          contexts: normalizeContexts(props.contexts),
+          enabled: props.enabled !== false,
+          checked: props.checked === true,
+          documentUrlPatterns: Array.isArray(props.documentUrlPatterns)
+            ? props.documentUrlPatterns.map(String)
+            : [],
+          targetUrlPatterns: Array.isArray(props.targetUrlPatterns)
+            ? props.targetUrlPatterns.map(String)
+            : []
+        })
+        menuSeq += 1
+        scheduleMailbox()
+      } catch (error) {
+        state.errors.push('menu-create: ' + String(error))
+      }
+      invokeMenuCallback(callback)
+      return id
+    },
+    update(id, properties, callback) {
+      try {
+        const existing = contextMenuItems.get(String(id))
+        if (existing) {
+          const props = properties && typeof properties === 'object' ? properties : {}
+          if (typeof props.title === 'string') existing.title = props.title
+          if (props.enabled !== undefined) existing.enabled = props.enabled !== false
+          if (props.checked !== undefined) existing.checked = props.checked === true
+          if (props.type !== undefined) existing.type = String(props.type)
+          if (props.contexts !== undefined) existing.contexts = normalizeContexts(props.contexts)
+          if (props.parentId !== undefined) {
+            existing.parentId = props.parentId === null ? null : String(props.parentId)
+          }
+          menuSeq += 1
+          scheduleMailbox()
+        }
+      } catch (error) {
+        state.errors.push('menu-update: ' + String(error))
+      }
+      invokeMenuCallback(callback)
+    },
+    remove(id, callback) {
+      try {
+        if (contextMenuItems.delete(String(id))) {
+          menuSeq += 1
+          scheduleMailbox()
+        }
+      } catch (error) {
+        state.errors.push('menu-remove: ' + String(error))
+      }
+      invokeMenuCallback(callback)
+    },
+    removeAll(callback) {
+      try {
+        if (contextMenuItems.size > 0) {
+          contextMenuItems.clear()
+          menuSeq += 1
+          scheduleMailbox()
+        }
+      } catch (error) {
+        state.errors.push('menu-remove-all: ' + String(error))
+      }
+      invokeMenuCallback(callback)
+    },
+    onClicked: contextMenuClicked,
+    onShown: makeRealEvent(),
+    onHidden: makeRealEvent()
+  }
+  for (const root of roots) {
+    try {
+      Object.defineProperty(root, 'contextMenus', {
+        value: contextMenusApi,
+        configurable: true,
+        writable: true
+      })
+    } catch (error) {
+      state.errors.push('contextMenus: ' + String(error))
+    }
+  }
+  state.contextMenus = 'installed'
+
+  // ── action state, recorded ──────────────────────────────────────────────────
+  const normalizeBadgeColor = (color) => {
+    if (typeof color === 'string' && color) return color
+    if (Array.isArray(color) && color.length >= 3) {
+      const alpha = color.length > 3 && typeof color[3] === 'number' ? color[3] : 255
+      return alpha >= 255
+        ? 'rgb(' + color[0] + ',' + color[1] + ',' + color[2] + ')'
+        : 'rgba(' + color[0] + ',' + color[1] + ',' + color[2] + ',' + alpha / 255 + ')'
+    }
+    return null
+  }
+  const resolveIconPath = (path) => {
+    try {
+      if (typeof path === 'string' && path) return chromeApi.runtime.getURL(path)
+      if (path && typeof path === 'object') {
+        const sizes = Object.keys(path)
+          .map((key) => Number(key))
+          .filter((size) => Number.isFinite(size))
+          .sort((left, right) => left - right)
+        if (sizes.length === 0) return null
+        const chosen = sizes.find((size) => size >= 19) ?? sizes[sizes.length - 1]
+        const file = path[chosen] ?? path[String(chosen)]
+        return typeof file === 'string' && file ? chromeApi.runtime.getURL(file) : null
+      }
+    } catch (error) {
+      state.errors.push('icon-path: ' + String(error))
+    }
+    return null
+  }
+  const recordAction = (details, patch) => {
+    const target =
+      !details || details.tabId === undefined || details.tabId === null || details.tabId === -1
+        ? actionState.global
+        : (actionState.tabs[String(details.tabId)] ??
+          (actionState.tabs[String(details.tabId)] = {}))
+    Object.assign(target, patch)
+    scheduleMailbox()
+  }
+  const wrapActionMember = (api, key, build) => {
+    try {
+      if (!Object.prototype.hasOwnProperty.call(api, key) || typeof api[key] !== 'function') {
+        Object.defineProperty(api, key, { value: noop, configurable: true, writable: true })
+        state.installed.push('action.' + key)
+      }
+      const current = api[key]
+      if (typeof current !== 'function' || current.__cioWrapped) return
+      const wrapped = function () {
+        const args = Array.prototype.slice.call(arguments)
+        try {
+          const patch = build(args[0])
+          if (patch) recordAction(args[0], patch)
+        } catch (error) {
+          state.errors.push('action-' + key + ': ' + String(error))
+        }
+        return current.apply(this, args)
+      }
+      wrapped.__cioWrapped = true
+      Object.defineProperty(api, key, { value: wrapped, configurable: true, writable: true })
+    } catch (error) {
+      state.errors.push('action-wrap-' + key + ': ' + String(error))
+    }
+  }
+  const wrapActionApi = (api) => {
+    if (!api || typeof api !== 'object') return
+    wrapActionMember(api, 'setBadgeText', (details) => ({
+      badgeText: details && typeof details.text === 'string' ? details.text : ''
+    }))
+    wrapActionMember(api, 'setBadgeBackgroundColor', (details) => ({
+      badgeColor: normalizeBadgeColor(details && details.color)
+    }))
+    wrapActionMember(api, 'setTitle', (details) => ({
+      title: details && typeof details.title === 'string' ? details.title : null
+    }))
+    wrapActionMember(api, 'setIcon', (details) => ({
+      iconUrl: details && details.imageData ? null : resolveIconPath(details && details.path)
+    }))
+  }
+  for (const root of roots) {
+    wrapActionApi(root.action)
+    // Manifest V2's own namespace, since uBlock Origin classic and an installed
+    // old build are the extensions most likely to carry a badge here.
+    wrapActionApi(root.browserAction)
+  }
+  state.actionRecorder = 'installed'
+
+  // ── the bridge itself ───────────────────────────────────────────────────────
+  const BRIDGE_PORT_NAME = '__cio:bridge'
+  const handleBridgeCommand = (command) => {
+    if (!command || typeof command !== 'object') return
+    state.bridgeCommands = (state.bridgeCommands || 0) + 1
+    // A short log of what actually reached this worker, for the app's own
+    // diagnostics: the alternative is guessing whether an event was delivered.
+    state.commandLog = state.commandLog || []
+    state.commandLog.push(
+      typeof command.name === 'string' ? command.kind + ':' + command.name : String(command.kind)
+    )
+    if (state.commandLog.length > 100) {
+      state.commandLog.splice(0, state.commandLog.length - 100)
+    }
+    if (command.kind === 'tab') {
+      const dispatcher = tabEvents[command.name]
+      if (dispatcher) {
+        // What was delivered and how many listeners were there to receive it: an
+        // event delivered before an extension registered its listener looks
+        // exactly like one it never reacted to, and the two are worth telling
+        // apart when a menu does not appear.
+        const counters = state.eventDispatch || (state.eventDispatch = {})
+        const entry =
+          counters[command.name] ||
+          (counters[command.name] = { delivered: 0, listeners: 0, errors: 0 })
+        entry.delivered += 1
+        entry.listeners = typeof dispatcher.__cioCount === 'function' ? dispatcher.__cioCount() : 0
+        const errorsBefore = state.errors.length
+        dispatcher.__cioEmit(Array.isArray(command.args) ? command.args : [])
+        entry.errors += state.errors.length - errorsBefore
+        // A closed tab's action state goes with the event, so a long session
+        // does not accumulate entries for tabs nobody has.
+        if (command.name === 'onRemoved' && command.args && command.args[0] !== undefined) {
+          delete actionState.tabs[String(command.args[0])]
+        }
+      }
+    } else if (command.kind === 'startup') {
+      state.startupAt = Date.now()
+      runtimeEvents.onStartup.__cioEmit([])
+    } else if (command.kind === 'menu-click') {
+      contextMenuClicked.__cioEmit([command.info || {}, command.tab || null])
+    }
+    scheduleMailbox()
+  }
+  // A port, not a message: `runtime.sendMessage` is delivered to every one of
+  // the extension's own `onMessage` listeners, and a real extension's listener
+  // can throw on a shape it does not know (uBlock Origin Lite's does, measured:
+  // `request.what.includes(':')` on a message with no `what`). A port's traffic
+  // reaches its other end and nothing else, and the connect itself is the one
+  // event the extension could still see.
+  try {
+    const runtime = chromeApi.runtime
+    if (runtime && runtime.onConnect && typeof runtime.onConnect.addListener === 'function') {
+      runtime.onConnect.addListener((port) => {
+        try {
+          if (!port || port.name !== BRIDGE_PORT_NAME) return
+          port.onMessage.addListener((command) => {
+            try {
+              handleBridgeCommand(command)
+            } catch (error) {
+              state.errors.push('bridge: ' + String(error))
+            }
+          })
+          state.bridgeListener = 'installed'
+        } catch (error) {
+          state.errors.push('bridge-port: ' + String(error))
+        }
+      })
+    }
+  } catch (error) {
+    state.errors.push('bridge-listener: ' + String(error))
+  }
+
   // ── The ruleset defect ──────────────────────────────────────────────────────
   // Electron ignores `declarative_net_request.rule_resources[].enabled`, so an
   // ad blocker that ships its lists enabled loads with none of them on. Only the
@@ -440,6 +855,10 @@
       // extension's own TAB-versus-POPUP checks depend on.
       const contextTypeOf = (url) => {
         if (!isOwnPage(url)) return null
+        // The app's own bridge page is not part of the extension's UI, and
+        // reporting it as a context would make an extension believe one of its
+        // own pages is open.
+        if (url.indexOf(BRIDGE_PAGE_MARKER) !== -1) return null
         return popupHref && url === popupHref ? 'POPUP' : 'TAB'
       }
 
