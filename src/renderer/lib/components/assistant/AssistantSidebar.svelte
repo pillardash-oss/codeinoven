@@ -83,7 +83,13 @@
     onAssignTask
   }: Props = $props()
 
-  const expanded = new SvelteSet<string>()
+  /**
+   * The open/fold call the user made on a routine row, keyed by routine id. With
+   * no entry the row follows the automatic rule (see `routineExpanded`); an entry
+   * is the user's own decision and always wins, which is what lets the routine
+   * holding the active thread be folded.
+   */
+  const routineFoldChoice = new SvelteMap<string, boolean>()
   /** Tasks whose full run history the user asked to see. */
   const expandedRuns = new SvelteSet<string>()
   const routineSearchOpen = new SvelteSet<string>()
@@ -256,14 +262,38 @@
     return earliest
   }
 
+  /**
+   * Whether a routine's rows are on screen. The user's own call wins; without
+   * one the routine follows the automatic rule: open while its own inline search
+   * is open, and open while the selected thread is one of its rows, meaning its
+   * task, a run nested under that task, or a run lifted to the routine's own
+   * level, so the row the user is working in stays on screen.
+   *
+   * `siblingRunRows` is passed in because every render call site already resolves
+   * it for the run rows it draws; only a click has to resolve it again.
+   */
+  function routineExpanded(routine: Routine, siblingRunRows: readonly Thread[]): boolean {
+    const choice = routineFoldChoice.get(routine.id)
+    if (choice !== undefined) return choice
+    if (routineSearchOpen.has(routine.id)) return true
+    const selected = selectedThreadId
+    if (!selected) return false
+    return (
+      nestedRoutineTasks(routine.id).some(
+        (task) => task.id === selected || runsFor(task.id).some((run) => run.id === selected)
+      ) || siblingRunRows.some((run) => run.id === selected)
+    )
+  }
+
+  /** Fold or open a routine: the row flips what the user is looking at, and that
+   *  decision outranks the automatic rule from then on. */
   function toggleRoutine(routine: Routine): void {
-    if (expanded.has(routine.id)) expanded.delete(routine.id)
-    else expanded.add(routine.id)
+    routineFoldChoice.set(routine.id, !routineExpanded(routine, siblingRuns(routine)))
   }
 
   function openRoutineSearch(routine: Routine): void {
     routineSearchOpen.add(routine.id)
-    expanded.add(routine.id)
+    routineFoldChoice.set(routine.id, true)
   }
 
   function closeRoutineSearch(routine: Routine): void {
@@ -409,15 +439,10 @@
           {@const searching = routineSearchOpen.has(routine.id)}
           {@const query = routineSearchQueries.get(routine.id) ?? ''}
           {@const siblingRunRows = siblingRuns(routine)}
-          {@const holdsSelected =
-            nestedRoutineTasks(routine.id).some(
-              (task) =>
-                task.id === selectedThreadId ||
-                runsFor(task.id).some((run) => run.id === selectedThreadId)
-            ) || siblingRunRows.some((run) => run.id === selectedThreadId)}
+          {@const isExpanded = routineExpanded(routine, siblingRunRows)}
           <AssistantRoutineRow
             {routine}
-            expanded={expanded.has(routine.id) || searching || holdsSelected}
+            expanded={isExpanded}
             working={routineWorking(routine.id)}
             missed={missedRoutineIds.has(routine.id)}
             runCount={routineRunList.length}
@@ -436,7 +461,7 @@
             {onMoveRoutine}
             onDropTask={onAssignTask}
           />
-          {#if expanded.has(routine.id) || searching || holdsSelected}
+          {#if isExpanded}
             <div class="mb-1 ml-2 border-l border-border pl-1.5">
               {#if searching && query.trim().length > 0 && visibleTasks.length === 0}
                 <p class="px-2 py-1 text-[0.625rem] text-dimmed">No matching tasks</p>
@@ -446,7 +471,9 @@
                     task,
                     routine.color,
                     (selected) => {
-                      expanded.add(routine.id)
+                      // Working inside a routine keeps it open: the user's own
+                      // call, so the automatic rule cannot fold it back.
+                      routineFoldChoice.set(routine.id, true)
                       onOpenTask(selected)
                       onOpenRoutineHowTo(routine)
                     },

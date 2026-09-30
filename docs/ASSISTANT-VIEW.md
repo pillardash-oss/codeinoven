@@ -450,8 +450,14 @@ Routine rows (`AssistantRoutineRow.svelte`) follow the project folder row: the
 icon swaps to a chevron on hover, and hover reveals a search-in-routine control,
 a new-task button, and an ellipsis menu (also opened by right-clicking the row)
 with How to, Edit routine, Pin/Unpin, and Remove. Rows are draggable to reorder, and a
-task dragged onto a routine is grouped into it. The order those rows sit in is the
-user's own: pinned routines lead, then the arrangement a drag leaves behind, then
+task dragged onto a routine is grouped into it. A routine's row folds and opens
+exactly like a project folder: it starts open while it holds the selected thread
+(that routine's task, a run nested under the task, or a run lifted to the
+routine's own level) and while its own inline task search is open, and a fold or
+open the user performs by hand is the decision that wins from then on, so the
+routine holding the active thread can be folded like any other. The order those
+rows sit in is the user's own: pinned routines lead, then the arrangement a drag
+leaves behind, then
 creation with the newest routine on top, so writing a routine's how-to (or any
 other edit) never reshuffles the list. `src/lib/routine-order.ts` holds that one
 comparator, and both the main process's routine list and this sidebar sort
