@@ -104,6 +104,7 @@
     threadSort,
     pinnedThreadSort,
     threadStatusSort,
+    threadStatusSortKey,
     findEmptyNewThread,
     threadVisitKey
   } from '$lib/stores/workspace.svelte'
@@ -195,14 +196,25 @@
   let chatsComposerRestoreKey = $state(0)
 
   // ─── Sidebar focus-follow ────────────────────────────────────────────────
-  // While a thread is selected, the sidebar keeps its row (and thus its
-  // project) in view. A user-initiated scroll of the sidebar suppresses that
-  // until the next thread is selected (or the thread comes back into view).
+  // The active thread owns the sidebar's scroll position. Three things can move
+  // the list, and their precedence is the whole contract:
+  //
+  // 1. The reader's own wheel or touch gesture hands the scroll over: while they
+  //    hold it, background list changes may not move the viewport.
+  // 2. Selecting another thread reveals its row, and so does a row the active
+  //    thread moves by itself (typing an unsent draft sends it to the top).
+  // 3. Switching sidebar mode settles the incoming list on the active thread's
+  //    row, keeping that mode's remembered place when it already shows the row.
   let sidebarScroller: HTMLElement | null = $state(null)
-  let sidebarFocusSuppressed = $state(false)
+  /** The reader has taken over the scroll for the current thread. Cleared when
+   *  they pick another thread, move to another mode, or scroll the active row
+   *  back into view. */
+  let sidebarReaderOwnsScroll = $state(false)
   let lastFocusedThreadId: string | null = null
-  let sidebarSuppressTimer: ReturnType<typeof setTimeout> | undefined
-  const SIDEBAR_FOCUS_RELEASE_MS = 4000
+  /** The slot the active row sat in on the last run of the follow effect, so a
+   *  row the thread moves by itself is followed even while the reader holds the
+   *  scroll. */
+  let lastActiveRowSortKey: number | null = null
 
   function findThreadRow(threadId: string): HTMLElement | null {
     if (typeof document === 'undefined') return null
@@ -243,58 +255,54 @@
     findThreadRow(threadId)?.scrollIntoView({ block: 'nearest' })
   }
 
-  async function revealThreadInSidebar(threadId: string): Promise<void> {
-    const active = selectedThread
-    // In Projects mode the target thread may sit in a collapsed folder and/or
-    // past the per-folder "show more" cutoff. Expand its folder and raise the
-    // row budget so the row actually renders. We intentionally don't gate this
-    // on the current mode: when Ctrl+Tab crosses modes (e.g. Chats → Projects)
-    // the mode prop may not have propagated yet, but expanding is harmless and
-    // ensures the folder is open by the time the scroll step runs. In Threads
-    // mode the flat list always renders every row, so only the scroll applies.
-    if (active && active.projectId !== INBOX_PROJECT_ID) {
-      sidebar.expandedFolders.add(active.projectId)
-      const folderThreads = threadsByProject.get(active.projectId) ?? []
-      const threadIndex = folderThreads.findIndex((candidate) => candidate.id === threadId)
-      if (threadIndex >= 0) {
-        sidebar.ensureRowVisible(active.projectId, threadIndex + 1)
-      }
+  /**
+   * Expand the folder that owns a thread and raise its row budget, so the row
+   * exists in the DOM by the time the reveal measures it. In Projects mode the
+   * target thread may sit in a collapsed folder and/or past the per-folder "show
+   * more" cutoff; in Threads mode the flat list renders every row already, so
+   * this costs nothing but a map lookup and a set insert.
+   */
+  function prepareThreadRow(thread: Thread): void {
+    if (thread.projectId === INBOX_PROJECT_ID) return
+    sidebar.expandedFolders.add(thread.projectId)
+    const folderThreads = threadsByProject.get(thread.projectId) ?? []
+    const threadIndex = folderThreads.findIndex((candidate) => candidate.id === thread.id)
+    if (threadIndex >= 0) {
+      sidebar.ensureRowVisible(thread.projectId, threadIndex + 1)
     }
+  }
+
+  async function revealThreadInSidebar(thread: Thread): Promise<void> {
+    // The row can only be measured once it is rendered, so prepare it first.
+    prepareThreadRow(thread)
     // Flush Svelte's DOM update (folder expansion / mode switch / re-sort), then
-    // wait frames so the browser has final layout, then scroll. Retry over a few
+    // scroll   the first attempt lands before the next paint. Retry over a few
     // frames because the folder's rows can mount a tick later than expected
     // in Projects mode the row only appears once the folder has expanded and the
     // per-folder row budget has grown to include it.
     await tick()
     for (let attempt = 0; attempt < 12; attempt++) {
-      await nextAnimationFrame()
-      scrollThreadRowIntoView(threadId)
-      if (findThreadRow(threadId)) break
+      // The first attempt runs in the same task as the DOM update, before the
+      // next paint, so the incoming list never shows the outgoing mode's scroll
+      // position for a frame. The later frames only serve rows that mount a tick
+      // late (a folder expanding to reveal the row it holds).
+      if (attempt > 0) await nextAnimationFrame()
+      scrollThreadRowIntoView(thread.id)
+      if (findThreadRow(thread.id)) break
     }
   }
 
+  /** A wheel or touch gesture on the sidebar hands its scroll to the reader. */
   function handleSidebarUserScroll(): void {
-    sidebarFocusSuppressed = true
-    // A user taking over the scroll ends the post-mode-change suppression window.
-    sidebarRevealSuppressed = false
-    clearTimeout(sidebarRevealSuppressTimer)
-    clearTimeout(sidebarSuppressTimer)
-    sidebarSuppressTimer = setTimeout(() => {
-      // Release the suppression once the user stops interacting AND the active
-      // thread is back in view, so a brief/accidental scroll doesn't disable
-      // focus-follow for the rest of the session on that thread.
-      const thread = selectedThread
-      if (!thread || !isThreadRowVisible(thread.id)) return
-      sidebarFocusSuppressed = false
-    }, SIDEBAR_FOCUS_RELEASE_MS)
+    sidebarReaderOwnsScroll = true
   }
 
-  // ─── Per-mode sidebar scroll preservation ───────────────────────────────
+  // ─── Per-mode sidebar place ─────────────────────────────────────────────
   // Switching between Projects/Chats/Threads swaps the sidebar content
-  // wholesale, which would otherwise drop the user's place in the thread list.
-  // Keep each mode's scroll position and restore it when the mode comes back,
-  // and briefly suppress the focus-follow reveal so it doesn't yank the
-  // restored scroll back to the selected thread's row.
+  // wholesale. Each mode remembers where the reader left its list, so coming
+  // back restores that place when it still shows the active thread's row; a
+  // remembered place that hides the row is settled onto the row instead, which
+  // is what keeps the thread in charge of the scroll across a view switch.
   const sidebarScrollByMode = new SvelteMap<
     'projects' | 'chats' | 'threads' | 'assistant',
     number
@@ -302,36 +310,58 @@
   // Intentional initial-value capture   the map is keyed by the mode prop.
   // svelte-ignore state_referenced_locally
   let previousMode = mode
-  // Reactive so the focus-follow effect re-runs (and re-reveals the active
-  // thread) the moment the mode-switch suppression window closes. As a plain
-  // `let` the reveal would be skipped forever whenever a mode switch coincided
-  // with the active thread falling out of view.
-  let sidebarRevealSuppressed = $state(false)
-  let sidebarRevealSuppressTimer: ReturnType<typeof setTimeout> | undefined
+  /**
+   * The incoming mode's list has not settled yet. The focus-follow effect leaves
+   * the scroll to the settle below while this is set, because it would measure
+   * the outgoing list's position rather than the place the reader is about to
+   * see.
+   */
+  let sidebarModeSettlePending = $state(false)
+  /**
+   * Which mode switch the pending settle belongs to. A second switch while the
+   * first one is still rendering must not apply the older mode's remembered
+   * place to the newer mode's list.
+   */
+  let sidebarSettleGeneration = 0
 
   // Runs before the DOM swaps: capture the outgoing mode's scrollTop while its
-  // list is still mounted, and open the suppression window for the switch.
+  // list is still mounted, render the incoming mode's row, then settle the
+  // incoming list once it has rendered.
   $effect.pre(() => {
     if (mode === previousMode) return
     const scroller = sidebarScroller
     if (scroller) sidebarScrollByMode.set(previousMode, scroller.scrollTop)
     previousMode = mode
-    sidebarRevealSuppressed = true
-    clearTimeout(sidebarRevealSuppressTimer)
-    sidebarRevealSuppressTimer = setTimeout(() => {
-      sidebarRevealSuppressed = false
-    }, 2000)
+    // A mode switch is the thread's turn to control the scroll: the reader's
+    // place in the list they just left does not follow them into the new one.
+    sidebarReaderOwnsScroll = false
+    sidebarModeSettlePending = true
+    const generation = ++sidebarSettleGeneration
+    // The row of a thread whose folder is collapsed is not in the incoming list
+    // yet. Expanding here, before Svelte renders it, is what lets the settle
+    // place the list on the row before the browser paints the switch.
+    const thread = selectedThread
+    if (thread) prepareThreadRow(thread)
+    void settleSidebarForMode(mode, generation)
   })
 
-  // After the incoming mode's list has rendered, restore its saved scroll.
-  $effect(() => {
-    const saved = sidebarScrollByMode.get(mode)
-    if (saved === undefined) return
-    void tick().then(() => {
-      const scroller = sidebarScroller
-      if (scroller) scroller.scrollTop = saved
-    })
-  })
+  /**
+   * Put the sidebar where the incoming mode's list belongs: the reader's
+   * remembered place for that mode, which the focus-follow effect then settles
+   * onto the active thread's row when that place hides it.
+   */
+  async function settleSidebarForMode(settledMode: typeof mode, generation: number): Promise<void> {
+    // The mode's own list is mounted by the end of this flush, so the remembered
+    // place is written against the list the reader is about to see, never the
+    // one they just left. A microtask is all this waits for, so the follow
+    // effect below is never held off by a window that stopped painting.
+    await tick()
+    if (generation !== sidebarSettleGeneration) return
+    const scroller = sidebarScroller
+    const remembered = sidebarScrollByMode.get(settledMode)
+    if (scroller && remembered !== undefined) scroller.scrollTop = remembered
+    sidebarModeSettlePending = false
+  }
 
   const sidebar = new WorkspaceSidebarController()
 
@@ -2333,10 +2363,11 @@
     })
   })
 
-  // While a thread is selected, keep its row (and project) in focus in the
-  // sidebar. Selection changes expand the owning folder and reset any scroll
-  // suppression; list changes re-reveal the row if background activity pushed
-  // it out of view. The scope-board view is left untouched.
+  // While a thread is selected, its row (and thus its project) stays in view in
+  // the sidebar. Selecting another thread expands the owning folder and reveals
+  // the row; a row the thread moves by itself is followed; background list
+  // changes only reveal while the reader has not taken the scroll over. The
+  // scope-board view is left untouched.
   $effect(() => {
     const thread = selectedThread
     if (!thread) return
@@ -2345,43 +2376,40 @@
     // every background thread update would pay for it. When the workspace comes
     // back, `active` flips and this effect re-runs to restore the reveal.
     if (!active) return
+    // A mode switch settles the incoming list itself, once its own rows are
+    // mounted: this run would measure the position of the list being replaced.
+    if (sidebarModeSettlePending) return
     // Track the sort source arrays so the effect re-runs whenever the sidebar
     // lists reorder (thread updates, project reorders) and re-reveals if needed.
     void allThreads
     void projects
-    if (thread.id !== lastFocusedThreadId) {
-      lastFocusedThreadId = thread.id
-      sidebarFocusSuppressed = false
-      // A deliberate selection of a new thread overrides the mode-switch
-      // suppression window so the chosen thread is always revealed, even right
-      // after navigating across sidebar modes.
-      sidebarRevealSuppressed = false
-      clearTimeout(sidebarRevealSuppressTimer)
-      if (thread.projectId !== INBOX_PROJECT_ID) {
-        sidebar.expandedFolders.add(thread.projectId)
-        // Ensure the folder shows enough rows for the focused thread so its
-        // row is actually rendered, then reveal it once the rows mount.
-        const folderThreads = threadsByProject.get(thread.projectId) ?? []
-        const threadIndex = folderThreads.findIndex((candidate) => candidate.id === thread.id)
-        if (threadIndex >= 0) {
-          sidebar.ensureRowVisible(thread.projectId, threadIndex + 1)
-        }
-        if (!sidebarRevealSuppressed) {
-          void tick().then(() => revealThreadInSidebar(thread.id))
-        }
-      } else if (!sidebarRevealSuppressed) {
-        // Standalone chats (inbox) have no folder to expand   reveal directly
-        // once the mode's list has rendered the row.
-        void tick().then(() => revealThreadInSidebar(thread.id))
-      }
+    // A row moves without its thread changing hands: typing an unsent draft
+    // sends the active row to the top of the list, and clearing it sends the
+    // row back down. Its slot is that movement, and the reader's hold on the
+    // scroll does not survive it   the move is the thread's own doing.
+    const activeRowSortKey = threadStatusSortKey(thread, draftThreadKeys)
+    const selectedNewThread = thread.id !== lastFocusedThreadId
+    const rowMoved = lastActiveRowSortKey !== null && activeRowSortKey !== lastActiveRowSortKey
+    lastFocusedThreadId = thread.id
+    lastActiveRowSortKey = activeRowSortKey
+    if (selectedNewThread) {
+      // Picking a thread ends the reader's hold on the scroll: the one they
+      // chose is what they are looking for now.
+      sidebarReaderOwnsScroll = false
+      prepareThreadRow(thread)
     }
-    if (sidebarFocusSuppressed || sidebarRevealSuppressed) return
     if (isScopeBoardView) return
-    // Steady state: this effect re-runs on every thread update. A row that is
-    // still in view needs no reveal, and the reveal loop costs a DOM query plus
-    // up to twelve animation frames, so check visibility first.
-    if (isThreadRowVisible(thread.id)) return
-    revealThreadInSidebar(thread.id)
+    // A row that is still in view needs no reveal, and the reveal loop costs a
+    // DOM query plus up to twelve animation frames. Seeing the row again also
+    // hands the scroll back to the thread.
+    if (isThreadRowVisible(thread.id)) {
+      sidebarReaderOwnsScroll = false
+      return
+    }
+    // Background changes wait for the reader to hand the scroll back; a new
+    // thread, or a row the thread moved itself, always gets its row into view.
+    if (sidebarReaderOwnsScroll && !selectedNewThread && !rowMoved) return
+    void revealThreadInSidebar(thread)
   })
 
   // Keep the header icon in sync with the active project and icon cache.
@@ -3580,7 +3608,7 @@
     void scopeState.ensureBoardLoaded(thread.projectId)
     if (threadTracksReadStatus(thread)) markThreadReadAfterPaint(thread)
     // Reveal immediately and again once any read-state update re-sorts the list.
-    revealThreadInSidebar(thread.id)
+    revealThreadInSidebar(thread)
   }
 
   // ─── Assistant actions ────────────────────────────────────────────────────
@@ -3899,15 +3927,11 @@
       }
     }
     if (!openedThread) await openThread(thread)
-    // A Ctrl+Tab selection is a deliberate jump to a specific thread. When it
-    // crosses modes (e.g. Chats → Projects) the mode switch opens a suppression
-    // window and restores the incoming mode's saved scroll, which would keep the
-    // chosen thread out of view. Cancel that suppression and reveal the row once
-    // the restore + folder expansion have settled.
-    sidebarRevealSuppressed = false
-    clearTimeout(sidebarRevealSuppressTimer)
-    if (family === 'projects') sidebar.expandedFolders.add(thread.projectId)
-    void tick().then(() => revealThreadInSidebar(thread.id))
+    // A Ctrl+Tab selection is a deliberate jump to a specific thread: the reader
+    // hands the sidebar scroll back here, and the row is revealed once the mode
+    // switch has settled the incoming list.
+    sidebarReaderOwnsScroll = false
+    void tick().then(() => revealThreadInSidebar(thread))
   }
 
   /**
