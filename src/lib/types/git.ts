@@ -331,13 +331,46 @@ export interface GitRefusedOperation {
 }
 
 /**
- * Outcome of a git channel whose expected refusals travel as data instead of a
- * rejected invoke. Electron logs every rejected `ipcMain.handle` call with
- * `console.error`, so a refusal the panel already renders would otherwise be
- * broadcast to the log with its whole cause chain. An unexpected failure still
- * rejects, so it stays visible.
+ * Why a remote round trip did not finish: the device could not reach the other
+ * end at all, the other end refused this checkout's credentials or rights, the
+ * URL points at no repository this account can read, or git named no cause we
+ * recognize. The kind selects the panel's copy and icon, so it is the only
+ * thing the renderer has to act on.
  */
-export type GitInvocation<Value> = { ok: true; value: Value } | GitRefusedOperation
+export type GitRemoteIssueKind = 'offline' | 'denied' | 'missing' | 'unknown'
+
+/**
+ * A remote (github.com and friends) that could not be read: unreachable,
+ * refused, or absent. Expected the way a refusal is expected, so it travels as
+ * data and the panel renders it as a notice rather than an alarm.
+ */
+export interface GitRemoteIssue {
+  kind: GitRemoteIssueKind
+  /** The sentence the panel shows, already naming what to do about it. */
+  message: string
+  /**
+   * git's own line for the failure, collapsed to one bounded line. Kept for the
+   * panel's hover detail, so the cause stays available without the multi-line
+   * stderr blob reaching a log or the notice itself.
+   */
+  detail: string
+}
+
+/** A remote round trip the other end (or the network under it) did not answer. */
+export interface GitRemoteUnavailable {
+  ok: false
+  issue: GitRemoteIssue
+}
+
+/**
+ * Outcome of a git channel whose expected failures travel as data instead of a
+ * rejected invoke. Electron logs every rejected `ipcMain.handle` call with
+ * `console.error`, so a refusal or a remote the checkout cannot use would have
+ * its whole cause chain broadcast to the log for a state the panel already
+ * renders. An unexpected failure still rejects, so it stays visible.
+ */
+export type GitInvocation<Value> =
+  { ok: true; value: Value } | GitRefusedOperation | GitRemoteUnavailable
 
 /** Conflict information reported by a merge/rebase failure. */
 export interface GitConflictFile {

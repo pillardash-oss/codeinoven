@@ -2049,8 +2049,15 @@
     pushRecoverMode = mode
     try {
       await gitState.pullIntegrate(projectId, remote.name, status.branch, mode)
-      // Conflicts hand over to the conflict UI; never auto-push a half-merged tree.
-      if (!gitState.error && gitState.conflicted.length === 0) {
+      // Conflicts hand over to the conflict UI; never auto-push a half-merged
+      // tree, and never push after a pull that never reached the remote either:
+      // the push would fail with the very same verdict, which the panel is
+      // already showing as its notice.
+      if (
+        !gitState.error &&
+        !gitState.remoteIssueFor(projectId) &&
+        gitState.conflicted.length === 0
+      ) {
         await performPush(remote)
       }
     } finally {

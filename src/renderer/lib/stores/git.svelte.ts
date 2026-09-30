@@ -27,6 +27,7 @@ import type {
   Project,
   GitBranchInfo,
   GitRemoteInfo,
+  GitRemoteIssue,
   GitCredentialStatus,
   GitStashEntry,
   GitHubDeploymentDetail,
@@ -335,6 +336,16 @@ export class GitState {
 
   set prResolveSession(value: (PrResolveOptions & { projectId: string }) | null) {
     this.local.prResolveSession = value
+  }
+
+  /**
+   * What a project's remote last answered when a round trip did not finish, or
+   * null when the last one finished. Keyed by project rather than held for the
+   * active one, so a fetch that failed while the user was looking elsewhere is
+   * still there when they come back and open the panel.
+   */
+  remoteIssueFor(projectId: string): GitRemoteIssue | null {
+    return this.local.remoteIssueFor(projectId)
   }
 
   get prPages(): Record<string, { page: PullRequestPage; fetchedAt: number }> {

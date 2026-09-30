@@ -4,6 +4,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState } from '$lib/stores/git.svelte'
   import type { GitFileChange } from '$shared/types'
+  import { REMOTE_ISSUE_ICONS, REMOTE_ISSUE_TITLES } from './git-remote-issue'
   import ScopeHealthNotice from '../scope/ScopeHealthNotice.svelte'
 
   interface Props {
@@ -27,6 +28,18 @@
     integrationActions,
     onRepaired
   }: Props = $props()
+
+  /**
+   * What this project's remote last answered when a round trip did not finish.
+   * Read from the store's per-project record rather than from the failure that
+   * set it, so the notice is there when the panel is opened, however long after
+   * the background fetch that found it, and so it outlives a project switch.
+   */
+  const remoteIssue = $derived(gitState.remoteIssueFor(projectId))
+  const RemoteIssueIcon = $derived(
+    remoteIssue ? REMOTE_ISSUE_ICONS[remoteIssue.kind] : REMOTE_ISSUE_ICONS.unknown
+  )
+  const retrying = $derived(gitState.isBusy('fetch'))
 </script>
 
 {#if gitState.githubPermission}
@@ -57,6 +70,35 @@
     >
       {gitState.error}
     </p>
+  </div>
+{:else if remoteIssue}
+  <!--
+    A remote the checkout cannot reach, authenticate against, or find is the
+    state of the round trip, not a failure of the app: it belongs here, as a
+    notice the user can act on, rather than in the error band above. It sits
+    below that band so a hard failure is never hidden behind a notice, and it
+    outlives the refreshes and project switches that clear an error.
+  -->
+  <div class="mx-2 mt-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2">
+    <div class="flex items-start gap-2">
+      <RemoteIssueIcon size={13} class="mt-0.5 shrink-0 text-warning" />
+      <div class="min-w-0 flex-1">
+        <p class="text-[0.625rem] font-semibold text-foreground">
+          {REMOTE_ISSUE_TITLES[remoteIssue.kind]}
+        </p>
+        <p class="mt-1 text-[0.5625rem] leading-relaxed text-muted" title={remoteIssue.detail}>
+          {remoteIssue.message}
+        </p>
+      </div>
+      <button
+        type="button"
+        class="h-7 shrink-0 rounded-md border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
+        disabled={retrying}
+        onclick={() => void gitState.fetch(projectId)}
+      >
+        {retrying ? 'Retrying...' : 'Try again'}
+      </button>
+    </div>
   </div>
 {/if}
 

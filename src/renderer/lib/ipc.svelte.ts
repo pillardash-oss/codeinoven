@@ -11,9 +11,11 @@ import type {
 import {
   isGitInvocationSuccess,
   isGitRefusedOperation,
+  isGitRemoteUnavailable,
   type GitInvocationValue,
   type GitRefusingChannel
 } from '$shared/ipc-contract'
+import { GitRemoteUnavailableError } from '$lib/ipc-errors'
 import { agentDebug } from '$lib/stores/agent-debug.svelte'
 
 declare global {
@@ -101,6 +103,11 @@ export async function invoke<Channel extends InvokeChannel>(
  * store keeps the failure handling it already has, and this app's logs stay
  * unchanged for a state the UI renders anyway.
  *
+ * A remote the checkout cannot use travels the same way, as `{ ok: false, issue }`,
+ * and is re-thrown as a `GitRemoteUnavailableError` carrying that verdict. The
+ * store that started the round trip decides whether it is a notice or an error,
+ * and either way nothing reaches the log.
+ *
  * Restricted to the channels whose contract result is a `GitInvocation`, so a
  * non-refusing channel cannot be routed through it by mistake.
  */
@@ -110,6 +117,7 @@ export async function invokeGit<Channel extends GitRefusingChannel>(
 ): Promise<GitInvocationValue<InvokeResult<Channel>>> {
   const result: unknown = await invoke(channel, ...args)
   if (isGitRefusedOperation(result)) throw new Error(result.refusal)
+  if (isGitRemoteUnavailable(result)) throw new GitRemoteUnavailableError(result.issue)
   // A channel that honoured its contract returns the `{ ok: true, value }`
   // envelope on success, so the value the caller asked for is one level down.
   if (isGitInvocationSuccess(result)) {
