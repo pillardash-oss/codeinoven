@@ -14,7 +14,8 @@
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
-  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import {
     browserExtensions,
     browserExtensionInjectionLabel
@@ -172,6 +173,78 @@
     return { disabled: false, title: `Pin ${extension.name} to the header` }
   }
 
+  /**
+   * What one row's identity can do about the extension's own popup, and its words.
+   *
+   * An extension's popup opens on the tab in front of the user: a popup belongs to
+   * that tab's jar, and only an extension the box of that tab runs can raise one.
+   * So the identity is a door exactly while it can act and a label carrying the
+   * reason when it cannot, rather than a control that refuses a click. A row whose
+   * extension declares no popup at all stays plain.
+   */
+  function popupAction(extension: BrowserExtension): {
+    open: boolean
+    title: string
+    refusal: string
+  } {
+    if (extension.popupPath === null) return { open: false, title: '', refusal: '' }
+    const tab = globalBrowser.activeTab
+    if (!tab) {
+      return {
+        open: false,
+        title: '',
+        refusal: `Open a browser tab first: ${extension.name} pops up on the tab on screen.`
+      }
+    }
+    const jar = extensionJarForBox(globalBrowser.activeTabBoxId)
+    if (!extension.enabled || !extension.boxes.includes(jar)) {
+      return {
+        open: false,
+        title: '',
+        refusal: `${extension.name} is not loaded in ${boxName(globalBrowser.activeTabBoxId)}. Turn it on for that box to give its popup a home.`
+      }
+    }
+    return {
+      open: true,
+      title:
+        browserPopupWindows.extensionPopupFor(extension.id, tab.id) === null
+          ? `Open the ${extension.name} popup`
+          : `Show the ${extension.name} popup`,
+      refusal: ''
+    }
+  }
+
+  /**
+   * Open one extension's own popup on the tab in front of the user, or bring back
+   * the one it already has open.
+   *
+   * The popup is a popup window like any other: main hosts it, the rail's strip
+   * carries its tab, and the popup panel draws it. Reaching for the extension
+   * again is not a request for a second copy, so an open popup is selected again
+   * rather than reopened, and the rail switches to it either way, which is what
+   * puts the extension's tab in front and fills the panel with its page.
+   */
+  async function openExtensionPopup(extension: BrowserExtension): Promise<void> {
+    const tab = globalBrowser.activeTab
+    if (!tab) return
+    const open = browserPopupWindows.extensionPopupFor(extension.id, tab.id)
+    if (open !== null) {
+      browserPopupWindows.select(open)
+      globalBrowser.showPopupsSidebar()
+      return
+    }
+    const popupId = await browserPopupWindows.openExtension(
+      {
+        projectId: GLOBAL_BROWSER_CONTEXT.projectId,
+        threadId: GLOBAL_BROWSER_CONTEXT.threadId,
+        tabId: tab.id,
+        boxId: tab.boxId
+      },
+      extension.id
+    )
+    if (popupId !== null) globalBrowser.showPopupsSidebar()
+  }
+
   /** The jars a user can choose: the context's own jar (the empty id), then each
    *  box. A jar the extension names but that no longer exists is kept out of this
    *  list, which is why updating the boxes replaces the whole list rather than
@@ -275,6 +348,36 @@
     }
   }
 </script>
+
+{#snippet extensionIdentity(extension: BrowserExtension)}
+  <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+    {#if extension.iconDataUrl}
+      <img src={extension.iconDataUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+    {:else}
+      <Puzzle size={13} class="text-dimmed" />
+    {/if}
+  </span>
+  <span class="flex min-w-0 flex-1 flex-col">
+    <span class="flex min-w-0 items-center gap-1.5">
+      <span class="truncate text-xs text-foreground">{extension.name}</span>
+      <span class="shrink-0 text-[0.625rem] text-dimmed">v{extension.version}</span>
+      {#if extension.missingCapabilities.length > 0 || extension.warnings.length > 0}
+        <span
+          class="shrink-0"
+          role="img"
+          title={issueSummary(extension)}
+          aria-label={issueSummary(extension)}
+        >
+          <AlertTriangle size={12} class="text-warning" />
+        </span>
+      {/if}
+    </span>
+    <span class="truncate text-[0.625rem] text-dimmed">
+      {sourceLabel(extension)}{#if !showChips}
+        · {describeBoxes(extension)}{/if}
+    </span>
+  </span>
+{/snippet}
 
 <div class="flex h-full min-h-0 flex-col">
   <div class="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
@@ -385,37 +488,31 @@
     <ul class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
       {#each shown as extension (extension.id)}
         {@const pin = pinAction(extension)}
+        {@const popup = popupAction(extension)}
         <li>
           <div
             class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-elevated"
           >
-            <span class="flex h-4 w-4 shrink-0 items-center justify-center">
-              {#if extension.iconDataUrl}
-                <img src={extension.iconDataUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
-              {:else}
-                <Puzzle size={13} class="text-dimmed" />
-              {/if}
-            </span>
-            <span class="flex min-w-0 flex-1 flex-col">
-              <span class="flex min-w-0 items-center gap-1.5">
-                <span class="truncate text-xs text-foreground">{extension.name}</span>
-                <span class="shrink-0 text-[0.625rem] text-dimmed">v{extension.version}</span>
-                {#if extension.missingCapabilities.length > 0 || extension.warnings.length > 0}
-                  <span
-                    class="shrink-0"
-                    role="img"
-                    title={issueSummary(extension)}
-                    aria-label={issueSummary(extension)}
-                  >
-                    <AlertTriangle size={12} class="text-warning" />
-                  </span>
-                {/if}
+            {#if popup.open}
+              <!-- The identity is the door: one click on the extension opens its own
+                   popup in the rail, the same gesture a browser's icon takes. -->
+              <button
+                type="button"
+                class="flex min-w-0 flex-1 items-center gap-2 text-left"
+                title={popup.title}
+                aria-label={popup.title}
+                onclick={() => void openExtensionPopup(extension)}
+              >
+                {@render extensionIdentity(extension)}
+              </button>
+            {:else}
+              <span
+                class="flex min-w-0 flex-1 items-center gap-2"
+                title={popup.refusal || undefined}
+              >
+                {@render extensionIdentity(extension)}
               </span>
-              <span class="truncate text-[0.625rem] text-dimmed">
-                {sourceLabel(extension)}{#if !showChips}
-                  · {describeBoxes(extension)}{/if}
-              </span>
-            </span>
+            {/if}
             {#if showChips}
               <BrowserBoxChips jars={extension.boxes} />
             {/if}

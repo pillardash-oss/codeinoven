@@ -1,16 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { AppWindow, Puzzle } from '@lucide/svelte'
+  import { AppWindow } from '@lucide/svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
-  import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { extensionJarForBox } from '$lib/stores/global-browser-types'
 
   /**
    * One popup window's page, filling the rail.
@@ -28,10 +25,11 @@
    * reports that, which takes the window's tab out of the strip with it. An
    * extension's popup is closed the same way, from the rail's own strip.
    *
-   * The one thing the panel adds is the empty state: with no popup to show it lists
-   * the extensions of the box in view whose own popup has no other door, because
-   * Electron draws no toolbar to hang one from. Once a popup is up, the panel is the
-   * frame and nothing else.
+   * The panel exists only while the tab on screen holds a window, because the tool
+   * is only offered then: a window is what it shows, and an extension's own popup
+   * is opened from the extension's own row in the extensions panel or from a
+   * header pin. The empty state below is only the frame or two between the last
+   * window ending and the rail closing after it.
    */
 
   interface Props {
@@ -46,35 +44,6 @@
   let { popupId }: Props = $props()
 
   const popup = $derived(browserPopupWindows.find(popupId))
-
-  /**
-   * The extensions of the box in view that declare a popup.
-   *
-   * An extension's own popup has no toolbar to hang from, so this panel is the
-   * only door it has; offering them when the frame is empty is what makes the tool
-   * useful before anything is open instead of a strip with nothing in it.
-   */
-  const availablePopups = $derived(
-    browserExtensions.popupExtensionsInJar(extensionJarForBox(globalBrowser.activeBox.id))
-  )
-
-  /** Open one extension's popup, or bring back the one it already has open. */
-  async function openPopup(extensionId: string): Promise<void> {
-    const tab = globalBrowser.activeTab
-    if (!tab) return
-    // The tab's own identity travels with the call: a tab the user has only just
-    // opened has no page yet, so main has no record of it, and naming the global
-    // context here is what keeps the popup on the jar this tab lives in.
-    await browserPopupWindows.openExtension(
-      {
-        projectId: GLOBAL_BROWSER_CONTEXT.projectId,
-        threadId: GLOBAL_BROWSER_CONTEXT.threadId,
-        tabId: tab.id,
-        boxId: tab.boxId
-      },
-      extensionId
-    )
-  }
 
   let frameElement = $state<HTMLDivElement>()
   /**
@@ -293,39 +262,6 @@
       data-region="browser-popup-window"
     ></div>
   {/key}
-{:else if availablePopups.length > 0}
-  <div class="flex h-full flex-col justify-center gap-3 p-4" data-region="browser-extension-popups">
-    <div class="space-y-1">
-      <p class="text-xs font-medium text-foreground">Extension popups</p>
-      <p class="text-[0.625rem] leading-relaxed text-dimmed">
-        An extension's own popup has no toolbar here, so it opens in this panel and keeps its own
-        tab above.
-      </p>
-    </div>
-    <ul class="space-y-0.5">
-      {#each availablePopups as extension (extension.id)}
-        <li>
-          <button
-            type="button"
-            class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
-            title={`Open ${extension.name}`}
-            aria-label={`Open ${extension.name}`}
-            onclick={() => void openPopup(extension.id)}
-          >
-            <span class="flex h-4 w-4 shrink-0 items-center justify-center">
-              {#if extension.iconDataUrl}
-                <img src={extension.iconDataUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
-              {:else}
-                <Puzzle size={13} class="text-dimmed" />
-              {/if}
-            </span>
-            <span class="min-w-0 flex-1 truncate text-xs text-foreground">{extension.name}</span>
-            <span class="shrink-0 text-[0.625rem] text-dimmed">Open</span>
-          </button>
-        </li>
-      {/each}
-    </ul>
-  </div>
 {:else}
   <EmptyState
     icon={AppWindow}

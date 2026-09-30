@@ -17,13 +17,12 @@
   import GitHubSignInBrowserDock from '$lib/components/git/GitHubSignInBrowserDock.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { DEFAULT_BOX_ID, extensionJarForBox } from '$lib/stores/global-browser-types'
+  import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { storeExtensionOffer } from '$lib/stores/browser-extension-store-offer'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
-  import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { motionDuration } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
@@ -113,12 +112,11 @@
    * The browser view's tools for the context rail.
    *
    * The rail is constant, exactly as it is in every other view: the window's
-   * right edge always carries the context tools. The browser's own tools come
-   * first   downloads, then the popup windows the page opened, with the
-   * extensions and profiles that belong beside them still to be built   and the
-   * tab on screen's own tools follow. Downloads and popups belong to the profile
-   * and the page rather than to a thread, and downloads are what keep the rail
-   * here with the strip empty.
+   * right edge always carries the context tools. Downloads, history, bookmarks,
+   * boxes and extensions belong to the profile, so they stay reachable with the
+   * strip empty. The popup windows the page opened are offered only while the
+   * tab on screen actually holds one, because a window is what the tool shows;
+   * the tab's own note and agent conversation follow.
    */
   const dockGroups = $derived.by((): ContextDockItem[][] => {
     const tab = activeTab
@@ -126,14 +124,10 @@
     const hasAgent = tab ? globalBrowser.agentChatFor(tab.id) !== null : false
     /** The popup windows this tab's page opened. A popup that ends leaves the list
      *  and takes the rail's panel with it when it was the last, so the tool is only
-     *  offered while there is a window for it to show. */
+     *  offered while there is a window for it to show. An extension's own popup is
+     *  one of these once it is up; before that it is opened from the extension's row
+     *  in the extensions panel or from a header pin, never from an empty tool. */
     const popupWindows = tab ? browserPopupWindows.forTab(tab.id) : []
-    /** The extension popups the box in view can open. An extension's own popup has
-     *  no toolbar to hang from, so this is what offers the tool before anything is
-     *  open rather than only after. */
-    const availableExtensionPopups = browserExtensions.popupExtensionsInJar(
-      extensionJarForBox(globalBrowser.activeBox.id)
-    )
     const browserTools: ContextDockItem[] = [
       {
         id: 'downloads',
@@ -201,16 +195,14 @@
           : undefined,
         onSelect: () => globalBrowser.toggleExtensionsSidebar()
       },
-      ...(tab !== null && (popupWindows.length > 0 || availableExtensionPopups.length > 0)
+      ...(popupWindows.length > 0
         ? [
             {
               id: 'popups',
               label:
-                popupWindows.length === 0
-                  ? 'Extension popups'
-                  : popupWindows.length === 1
-                    ? 'Popup window'
-                    : `Popup windows (${popupWindows.length})`,
+                popupWindows.length === 1
+                  ? 'Popup window'
+                  : `Popup windows (${popupWindows.length})`,
               icon: AppWindow,
               active: globalBrowser.popupsSidebarShown,
               onSelect: () => globalBrowser.togglePopupsSidebar()
