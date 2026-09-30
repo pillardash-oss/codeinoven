@@ -3,7 +3,7 @@ import {
   webstoreExtensionIdFromUrl,
   webstoreExtensionNameFromTitle
 } from '$shared/browser/browser-webstore'
-import { browserExtensions } from './browser-extensions.svelte'
+import { browserExtensions, type BrowserExtensionInstall } from './browser-extensions.svelte'
 import { globalBrowser } from './global-browser.svelte'
 import { DEFAULT_BOX_NAME, extensionJarForBox } from './global-browser-types'
 
@@ -34,6 +34,28 @@ export interface StoreExtensionOffer {
   /** The box the page runs in, which is where the install would land: browsing
    *  the store inside a box is how the user says which box should have it. */
   boxName: string
+  /**
+   * This extension's own install, queued or running, or null when none is.
+   *
+   * Per extension rather than one flag for the browser: installs queue now, so
+   * the page's chip and the panel's offer row both have to say whether this
+   * particular offer has been taken, and a second install of something else must
+   * not read as this one being under way.
+   */
+  install: BrowserExtensionInstall | null
+}
+
+/**
+ * What this offer's install is doing, in two words, or null when nothing is in
+ * flight for it.
+ *
+ * One wording for the page's chip and the panel's own row, so a queued install
+ * cannot read as a running one in one place and not in the other. The queue is
+ * real: main runs two installs at a time, so a third waits its turn.
+ */
+export function storeOfferInstallVerb(offer: StoreExtensionOffer): string | null {
+  if (!offer.install) return null
+  return offer.install.phase === 'queued' ? 'Waiting to install' : 'Installing'
 }
 
 /** The offer the page on screen makes, or null when it makes none. */
@@ -47,7 +69,8 @@ export function storeExtensionOffer(): StoreExtensionOffer | null {
     name: webstoreExtensionNameFromTitle(tab.title),
     installed:
       browserExtensions.extensions.find((extension) => extension.webstoreId === id) ?? null,
-    boxName: globalBrowser.boxById(globalBrowser.activeTabBoxId)?.name ?? DEFAULT_BOX_NAME
+    boxName: globalBrowser.boxById(globalBrowser.activeTabBoxId)?.name ?? DEFAULT_BOX_NAME,
+    install: browserExtensions.installForWebstoreId(id)
   }
 }
 
@@ -55,14 +78,21 @@ export function storeExtensionOffer(): StoreExtensionOffer | null {
  * Install the extension the page on screen offers, into the box that page runs
  * in. The rail is revealed first, because an install started from the page has
  * no dialog of its own and the rail is where its progress and its result show.
+ *
+ * Nothing here waits for another install: it queues behind whatever is running and
+ * the page's offer row says so. The store page's name is handed over, because this
+ * is the one moment anything knows what the extension is called.
  */
 export async function installStoreExtensionOffer(): Promise<void> {
   const offer = storeExtensionOffer()
-  if (!offer || offer.installed || browserExtensions.installing) return
+  if (!offer || offer.installed || offer.install) return
   globalBrowser.showExtensionsSidebar()
-  await browserExtensions.install({
-    source: 'webstore',
-    value: offer.id,
-    boxes: [extensionJarForBox(globalBrowser.activeTabBoxId)]
-  })
+  await browserExtensions.install(
+    {
+      source: 'webstore',
+      value: offer.id,
+      boxes: [extensionJarForBox(globalBrowser.activeTabBoxId)]
+    },
+    offer.name
+  )
 }

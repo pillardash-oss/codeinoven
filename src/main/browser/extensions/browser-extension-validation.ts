@@ -13,6 +13,14 @@ import { isExtensionId } from './browser-extension-crx'
 /** A Web Store id, a store URL, or an absolute folder path. */
 const MAX_INSTALL_VALUE_LENGTH = 4_096
 
+/** A caller's id for one install.
+ *
+ * A UUID and nothing else: it is echoed back on every progress line and compared
+ * for uniqueness among the live installs, so it has to be a shape this side can
+ * recognise rather than a free string a caller could reuse to impersonate
+ * another install's progress. */
+const INSTALL_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu
+
 /** A box id, matching what the partition builder accepts. */
 const BOX_ID_PATTERN = /^box:[A-Za-z0-9:._-]{1,240}$/u
 const MAX_BOXES_PER_PATCH = 200
@@ -43,12 +51,22 @@ export function validateExtensionInstallInput(value: unknown): BrowserExtensionI
   }
   const rawBoxes = record['boxes']
   return {
+    installId: validateInstallId(record['installId']),
     source,
     value: trimmed,
     // Absent means the extension is installed and loaded nowhere. It never means
     // every jar, which is the shape this field exists to make impossible.
     boxes: rawBoxes === undefined ? [] : parseJarList(rawBoxes)
   }
+}
+
+/** The caller's id for one install, checked before it can be used to attribute a
+ *  progress line. */
+export function validateInstallId(value: unknown): string {
+  if (typeof value !== 'string' || !INSTALL_ID_PATTERN.test(value)) {
+    throw new TypeError('Browser extension install id is invalid')
+  }
+  return value
 }
 
 /**

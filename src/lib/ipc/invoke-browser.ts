@@ -325,9 +325,13 @@ export const invokeBrowserContract = {
   /** The browser's installed extensions, whole. Short enough to publish as one
    *  list rather than as deltas, and the rail draws every row from it. */
   'browser:extensions': {} as Contract<[], BrowserExtension[]>,
-  /** Install an extension by Web Store id or from an unpacked folder. Resolves
-   *  once it is on disk and registered; `browser:extensionProgress` reports each
-   *  step while it runs, because a 30 MB fetch and unpack is not instant. */
+  /** Install an extension by Web Store id or from an unpacked folder.
+   *
+   * Two run at a time and the rest queue, so this resolves when *this* install is
+   * on disk and registered, however many were in front of it. Every step of it
+   * arrives on `browser:extensionProgress` meanwhile, keyed by the `installId` the
+   * caller put in the input, because two installs reporting at once would
+   * otherwise be indistinguishable. */
   'browser:extensionInstall': {} as Contract<
     [input: BrowserExtensionInstallInput],
     BrowserExtension

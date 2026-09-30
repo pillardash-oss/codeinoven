@@ -1,4 +1,5 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { webstoreExtensionIdFromInput } from '$shared/browser/browser-webstore'
 import type {
   BrowserExtension,
   BrowserExtensionActivity,
@@ -42,6 +43,46 @@ export function browserExtensionInjectionLabel(injected: BrowserExtensionInjecti
 }
 
 /**
+ * One install the panel is following: queued, running, or the frame before it
+ * resolves.
+ *
+ * Built from main's progress lines, plus the name the click knew. A store page
+ * names its extension before anything has been downloaded, and that name is what
+ * the user is looking for in the list, so it is kept rather than replaced by the
+ * id main would otherwise have to show.
+ */
+export interface BrowserExtensionInstall {
+  /** The install's own id, minted by the store and sent with it, so every
+   *  progress line can be attributed to the click that asked for it. */
+  installId: string
+  /** What to call it on screen, or null when nobody knows a name yet. */
+  name: string | null
+  /** The Web Store id this install is for, or null when it came from a folder. */
+  webstoreId: string | null
+  /** The Web Store id or folder path main is working from. */
+  label: string
+  phase: BrowserExtensionProgress['phase']
+  detail: string
+  receivedBytes: number
+  totalBytes: number
+}
+
+/**
+ * What to call a folder install before its manifest has been read.
+ *
+ * The folder's own name is what the user picked and recognises; the full path is
+ * not something the panel can show at a glance.
+ */
+function installFolderName(input: Omit<BrowserExtensionInstallInput, 'installId'>): string | null {
+  if (input.source !== 'folder') return null
+  const segments = input.value
+    .trim()
+    .split(/[\\/]/u)
+    .filter((segment) => segment.length > 0)
+  return segments[segments.length - 1] ?? null
+}
+
+/**
  * The browser's installed extensions, as the rail draws them.
  *
  * Main owns the extension store: it fetches, unpacks, pins and registers each
@@ -65,12 +106,16 @@ class BrowserExtensionsState {
   /** True once the first read has answered, so the panel can tell "none
    *  installed" from "not read yet". */
   loaded = $state(false)
-  /** The install currently running, or null. Main reports one at a time, and
-   *  the extensions rail draws where the current one is. */
-  progress: BrowserExtensionProgress | null = $state(null)
-  /** True while an install is in flight, so the rail can keep the door it was
-   *  started from shut and say what is happening. */
-  installing = $state(false)
+  /**
+   * Every install that is queued or running, oldest first.
+   *
+   * A list rather than one line, because installs overlap: two run at once and the
+   * rest wait, so a single line would have to decide which of them it was
+   * describing. It also names each one here before main has read anything out of a
+   * package, which is what lets the click and its progress be the same thing from
+   * the first frame.
+   */
+  installs: BrowserExtensionInstall[] = $state([])
   /** Action state every tab of a box sees, keyed box + extension. */
   private activityGlobal: Record<string, BrowserExtensionActivity> = $state({})
   /** Action state one tab sees, over the extension's own, keyed box + extension
@@ -95,6 +140,24 @@ class BrowserExtensionsState {
    *  own rule. */
   get pinnedCount(): number {
     return this.extensions.filter((extension) => extension.pinned).length
+  }
+
+  /** True while any install is queued or running, which is what the rail's own
+   *  door and the panel's menu read to stay out of the way. */
+  get installing(): boolean {
+    return this.installs.length > 0
+  }
+
+  /**
+   * The install for one Web Store extension, or null when none is in flight.
+   *
+   * A store page's chip and the panel's offer row both read this, so they agree on
+   * whether the offer has already been taken. Matched on the Web Store id rather
+   * than on who clicked, because the page stays open while the install runs and the
+   * chip has to keep saying so across a renderer reload that never saw the click.
+   */
+  installForWebstoreId(webstoreId: string): BrowserExtensionInstall | null {
+    return this.installs.find((install) => install.webstoreId === webstoreId) ?? null
   }
 
   /**
@@ -163,6 +226,33 @@ class BrowserExtensionsState {
     }
   }
 
+  /**
+   * Apply one install's progress line.
+   *
+   * The entry is upserted rather than looked up, because main can be running an
+   * install this renderer never asked for: a reload mid-install loses the click
+   * that started it, and the rail still has to say what is happening. A terminal
+   * line ends the entry, so a card can never outlive the install it describes.
+   */
+  private applyProgress(progress: BrowserExtensionProgress): void {
+    if (progress.phase === 'done' || progress.phase === 'failed') {
+      this.installs = this.installs.filter((install) => install.installId !== progress.installId)
+      return
+    }
+    const existing = this.installs.find((install) => install.installId === progress.installId)
+    if (!existing) {
+      this.installs = [...this.installs, { ...progress, name: null }]
+      return
+    }
+    // The local entry knows what the user clicked, which main cannot know until it
+    // has read the package: the name a store page gave the extension.
+    this.installs = this.installs.map((install) =>
+      install.installId === progress.installId
+        ? { ...install, ...progress, name: install.name }
+        : install
+    )
+  }
+
   /** Register the runtime's subscriptions and read the installed list once. */
   start(): void {
     if (this.started) return
@@ -174,10 +264,10 @@ class BrowserExtensionsState {
       this.extensions = extensions
       this.loaded = true
     })
-    // One install at a time, so a single progress line is enough: it names the
-    // step, and the rail draws it until the install resolves.
+    // One line per install, and installs overlap: the panel lists what is queued
+    // and what is running from these.
     subscribe('browser:extensionProgress', (progress) => {
-      this.progress = progress
+      this.applyProgress(progress)
     })
     // One extension's action state at a time, as its worker reports it. The pins
     // read the merge for the tab on screen from these two maps.
@@ -216,15 +306,37 @@ class BrowserExtensionsState {
   /**
    * Install an extension by Web Store id or URL, or from an unpacked folder.
    *
-   * Resolves with the installed record, or null when it failed. The progress
-   * line is cleared before the install starts and again when it ends, so the rail
-   * never shows a stale phase from a previous attempt.
+   * Resolves with the installed record, or null when it failed. The install is
+   * named and listed here before it is sent, so the panel's list and the store
+   * page's chip can attribute it from the frame the user clicked in rather than
+   * waiting for main to read a name out of the package.
+   *
+   * It queues: main runs two at a time, so this answers when this install is done,
+   * however many were in front of it, and its progress arrives meanwhile.
    */
-  async install(input: BrowserExtensionInstallInput): Promise<BrowserExtension | null> {
-    this.installing = true
-    this.progress = null
+  async install(
+    input: Omit<BrowserExtensionInstallInput, 'installId'>,
+    name: string | null = null
+  ): Promise<BrowserExtension | null> {
+    const installId = crypto.randomUUID()
+    const label = input.value.trim()
+    this.installs = [
+      ...this.installs,
+      {
+        installId,
+        name: name ?? installFolderName(input),
+        // The page's offer matches on this, so it is resolved the same way main
+        // resolves it rather than assumed from the source.
+        webstoreId: input.source === 'webstore' ? webstoreExtensionIdFromInput(label) : null,
+        label,
+        phase: 'queued',
+        detail: 'Starting',
+        receivedBytes: 0,
+        totalBytes: 0
+      }
+    ]
     try {
-      const extension = await invoke('browser:extensionInstall', input)
+      const extension = await invoke('browser:extensionInstall', { ...input, installId })
       this.apply(extension)
       this.loaded = true
       return extension
@@ -232,8 +344,7 @@ class BrowserExtensionsState {
       reportError(error, 'The extension could not be installed.')
       return null
     } finally {
-      this.installing = false
-      this.progress = null
+      this.installs = this.installs.filter((install) => install.installId !== installId)
     }
   }
 

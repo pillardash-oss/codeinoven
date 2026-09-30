@@ -7,6 +7,7 @@ import {
   TOAST_STACK_TOP,
   type BrowserStripOverlayChrome,
   type BrowserStripOverlayTab,
+  type BrowserStripStoreOffer,
   type ToastOverlayInteractionReport,
   type ToastOverlayKind,
   type ToastOverlayStack,
@@ -18,8 +19,11 @@ import { openMemoryProposal } from './stores/memory-proposal-open'
 import { globalBrowser } from './stores/global-browser.svelte'
 import { browserTabLabel } from './stores/global-browser-types'
 import { browserBookmarks } from './stores/browser-bookmarks.svelte'
-import { browserExtensions } from './stores/browser-extensions.svelte'
-import { storeExtensionOffer } from './stores/browser-extension-store-offer'
+import {
+  storeExtensionOffer,
+  storeOfferInstallVerb,
+  type StoreExtensionOffer
+} from './stores/browser-extension-store-offer'
 import { browserTabAccent, browserTabIconUrl } from './components/browser/browser-tab-appearance'
 
 /**
@@ -208,17 +212,32 @@ export function projectStripChrome(): BrowserStripOverlayChrome {
     canGoBack: runtime?.canGoBack ?? false,
     canGoForward: runtime?.canGoForward ?? false,
     bookmarked: address !== '' && browserBookmarks.isBookmarked(address),
-    storeOffer: offer
-      ? {
-          title: offer.installed
-            ? `${offer.name ?? 'This extension'} is installed. Open the extensions panel.`
-            : browserExtensions.installing
-              ? `Installing ${offer.name ?? 'the extension'}`
-              : `Install ${offer.name ?? 'this extension'} in ${offer.boxName}`,
-          installed: offer.installed !== null,
-          installing: browserExtensions.installing
-        }
-      : null
+    storeOffer: offer ? storeOfferChrome(offer) : null
+  }
+}
+
+/**
+ * The store page's chip, as the overlay draws it.
+ *
+ * It answers for this one offer, never for the browser: installs queue, so another
+ * extension downloading behind this page leaves the chip a door rather than a
+ * spinner.
+ */
+function storeOfferChrome(offer: StoreExtensionOffer): BrowserStripStoreOffer {
+  if (offer.installed) {
+    return {
+      title: `${offer.name ?? 'This extension'} is installed. Open the extensions panel.`,
+      installed: true,
+      installing: false
+    }
+  }
+  const verb = storeOfferInstallVerb(offer)
+  return {
+    title: verb
+      ? `${verb} ${offer.name ?? 'the extension'}`
+      : `Install ${offer.name ?? 'this extension'} in ${offer.boxName}`,
+    installed: false,
+    installing: offer.install !== null
   }
 }
 

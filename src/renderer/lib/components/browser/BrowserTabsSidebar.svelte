@@ -34,10 +34,10 @@
     DEFAULT_BOX_NAME,
     type GlobalBrowserTab
   } from '$lib/stores/global-browser-types'
-  import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import {
     installStoreExtensionOffer,
-    storeExtensionOffer
+    storeExtensionOffer,
+    storeOfferInstallVerb
   } from '$lib/stores/browser-extension-store-offer'
   import BrowserTabRow from './BrowserTabRow.svelte'
   import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'
@@ -103,13 +103,18 @@
    * decides when the affordance exists.
    */
   const storeOffer = $derived(storeExtensionOffer())
-  const storeOfferTitle = $derived(
-    browserExtensions.installing
-      ? `Installing ${storeOffer?.name ?? 'the extension'}`
-      : storeOffer?.installed
-        ? `${storeOffer.name ?? 'This extension'} is installed. Open the extensions panel.`
-        : `Install ${storeOffer?.name ?? 'this extension'} in ${storeOffer?.boxName ?? 'this box'}`
-  )
+  const storeOfferTitle = $derived.by(() => {
+    if (!storeOffer) return 'Open the extensions panel'
+    const verb = storeOfferInstallVerb(storeOffer)
+    if (verb) return `${verb} ${storeOffer.name ?? 'the extension'}`
+    if (storeOffer.installed) {
+      return `${storeOffer.name ?? 'This extension'} is installed. Open the extensions panel.`
+    }
+    return `Install ${storeOffer.name ?? 'this extension'} in ${storeOffer.boxName}`
+  })
+  /** This offer's own install, if it has one. Only this extension's install makes
+   *  the chip busy: another extension downloading behind it must not. */
+  const storeOfferInstall = $derived(storeOffer?.install ?? null)
 
   /** Install the offer, or open the rail on what is already installed. */
   function actOnStoreOffer(): void {
@@ -467,12 +472,12 @@
               'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay disabled:opacity-60',
               storeOffer.installed ? 'text-success' : 'text-primary'
             ]}
-            disabled={browserExtensions.installing && !storeOffer.installed}
+            disabled={storeOfferInstall !== null && !storeOffer.installed}
             title={storeOfferTitle}
             aria-label={storeOfferTitle}
             onclick={actOnStoreOffer}
           >
-            {#if browserExtensions.installing && !storeOffer.installed}
+            {#if storeOfferInstall !== null && !storeOffer.installed}
               <Loader2 size={12} class="animate-spin" />
             {:else if storeOffer.installed}
               <Check size={12} />

@@ -22,7 +22,8 @@
   } from '$lib/stores/browser-extensions.svelte'
   import {
     installStoreExtensionOffer,
-    storeExtensionOffer
+    storeExtensionOffer,
+    storeOfferInstallVerb
   } from '$lib/stores/browser-extension-store-offer'
   import type { BrowserExtension } from '$shared/ipc-contract'
   import { WEBSTORE_HOME_URL } from '$shared/browser/browser-webstore'
@@ -74,6 +75,13 @@
     const offer = storeExtensionOffer()
     return offer && !offer.installed ? offer : null
   })
+
+  /** What this offer's install is doing, or null when it has none in flight. Only
+   *  this extension's own install makes its row busy: installing something else
+   *  leaves this one a door, because a click here queues rather than waits. */
+  const offerInstallVerb = $derived(
+    installableStoreOffer ? storeOfferInstallVerb(installableStoreOffer) : null
+  )
 
   /** The value the picker uses for every extension rather than one box's. */
   const ALL_BOXES_SELECTION = 'all'
@@ -290,7 +298,6 @@
    * gone by the time the files have been read.
    */
   async function installFromFolder(): Promise<void> {
-    if (browserExtensions.installing) return
     const box = installBox
     const folder = await browserExtensions.pickFolder()
     if (!folder) return
@@ -388,12 +395,11 @@
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
         class={[
-          'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+          'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors',
           installableStoreOffer
             ? 'text-muted hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground'
             : 'bg-primary text-on-primary hover:bg-primary-hover data-[state=open]:bg-primary-hover'
         ]}
-        disabled={browserExtensions.installing}
         title="Install an extension"
         aria-label="Install an extension"
       >
@@ -449,14 +455,15 @@
       <button
         type="button"
         class="flex w-full items-center gap-2 rounded-lg bg-primary px-2.5 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-        disabled={browserExtensions.installing}
-        title={`Install ${installableStoreOffer.name ?? 'this extension'} in ${installableStoreOffer.boxName}`}
-        aria-label={`Install ${installableStoreOffer.name ?? 'this extension'} in ${installableStoreOffer.boxName}`}
+        disabled={installableStoreOffer.install !== null}
+        title={`${offerInstallVerb ?? 'Install'} ${installableStoreOffer.name ?? 'this extension'} in ${installableStoreOffer.boxName}`}
+        aria-label={`${offerInstallVerb ?? 'Install'} ${installableStoreOffer.name ?? 'this extension'} in ${installableStoreOffer.boxName}`}
         onclick={() => void installStoreExtensionOffer()}
       >
         <Puzzle size={13} class="shrink-0" />
         <span class="min-w-0 truncate"
-          >Install {installableStoreOffer.name ?? 'this extension'}</span
+          >{offerInstallVerb ?? 'Install'}
+          {installableStoreOffer.name ?? 'this extension'}</span
         >
       </button>
       <p class="mt-1.5 text-[0.625rem] leading-relaxed text-dimmed">
@@ -465,14 +472,15 @@
     </div>
   {/if}
 
-  {#if browserExtensions.progress}
-    <!-- An install can start from the browser chrome on a store page, where the
-         install menu was never opened, so the rail reports it. -->
-    <div class="shrink-0 border-b border-border px-3 py-2">
-      <BrowserExtensionInstallProgress
-        progress={browserExtensions.progress}
-        installing={browserExtensions.installing}
-      />
+  {#if browserExtensions.installs.length > 0}
+    <!-- Installs overlap, so this lists every one of them: the two running and
+         whatever is waiting behind them. An install can also start from the
+         browser chrome on a store page, where this panel's menu was never opened,
+         so this is the only place either of them is reported. -->
+    <div class="flex shrink-0 flex-col gap-2 border-b border-border px-3 py-2">
+      {#each browserExtensions.installs as install (install.installId)}
+        <BrowserExtensionInstallProgress {install} />
+      {/each}
     </div>
   {/if}
 

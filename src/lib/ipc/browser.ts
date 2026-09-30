@@ -617,6 +617,17 @@ export interface BrowserExtension {
 /** What an install asks for. */
 export interface BrowserExtensionInstallInput {
   source: BrowserExtensionSource
+  /**
+   * The caller's own id for this install, and the key every progress line for it
+   * carries.
+   *
+   * Installs run two at a time and queue behind each other, so a stream of
+   * unlabelled steps would no longer say which extension it was describing. The
+   * renderer mints this before the call so it can name the install from the
+   * moment the user clicks, rather than waiting for main to read a name out of
+   * the package.
+   */
+  installId: string
   /** A Web Store id, a Web Store URL, or the folder to install from. */
   value: string
   /**
@@ -634,10 +645,18 @@ export interface BrowserExtensionInstallInput {
 /** One step of an install, so a fetch and an unpack that take seconds are not a
  *  silent freeze and a failure says which step failed. */
 export interface BrowserExtensionProgress {
+  /** The install this line belongs to, exactly as the caller of
+   *  {@link BrowserExtensionInstallInput} named it. */
+  installId: string
   /** The Web Store id or folder name the install is for, so a progress line can be
    *  attributed before the extension has an id. */
   label: string
+  /** The Web Store id this install is for, or null when it came from a folder.
+   *  The store page's own surfaces match their offer to its install with this. */
+  webstoreId: string | null
   phase:
+    /** Accepted and waiting for one of the running installs to finish. */
+    | 'queued'
     | 'resolving'
     | 'downloading'
     | 'unpacking'

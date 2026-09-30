@@ -74,9 +74,39 @@ import {
  *  of events that all say the same thing. */
 const PROGRESS_INTERVAL_MS = 200
 
+/** How many installs run at once, and therefore how many downloads.
+ *
+ * Two is the point of the queue rather than a random number: a user installing
+ * two extensions should not have to wait for the first to finish before the
+ * second is even accepted, while a third download would only split the same
+ * connection and disk between them. Everything else waits its turn. */
+const MAX_CONCURRENT_INSTALLS = 2
+
 /** Directories inside the store root that are not extensions. */
 const STAGING_DIR = '.staging'
 const DOWNLOADS_DIR = '.downloads'
+
+/** The identity of one install, attached to every progress line it produces.
+ *
+ * Resolved once, when the install is accepted, so no two lines about the same
+ * install can disagree about what they are describing. */
+interface InstallContext {
+  /** The caller's id for this install, which is what ties a line to its click. */
+  installId: string
+  /** The Web Store id or folder path the install is for, named before the
+   *  extension has an id of its own. */
+  label: string
+  /** The Web Store id this install is for, or null when it came from a folder. */
+  webstoreId: string | null
+}
+
+/** One accepted install that may not have started yet. */
+interface QueuedInstall {
+  input: BrowserExtensionInstallInput
+  context: InstallContext
+  resolve: (extension: BrowserExtension) => void
+  reject: (error: unknown) => void
+}
 
 /** One jar with extensions loaded in it. The session is held, not looked up on
  *  demand: unloading must never be what creates a partition directory, and a
@@ -159,13 +189,25 @@ export class BrowserExtensionService {
   private readonly loaded = new Map<string, LoadedJar>()
   /** partition -> an in-flight reconcile, so two shows cannot race a load. */
   private readonly loading = new Map<string, Promise<void>>()
-  private installing = false
+  /** Installs accepted but not started, oldest first. */
+  private readonly installQueue: QueuedInstall[] = []
+  /** How many installs are running right now. Never more than
+   *  {@link MAX_CONCURRENT_INSTALLS}. */
+  private runningInstalls = 0
+  /** Every install that is queued or running, so a caller cannot name one that is
+   *  already in flight and have its progress attributed to it. */
+  private readonly installIds = new Set<string>()
+  /** Per-install progress gating, keyed by install id: two installs reporting at
+   *  the same moment must not suppress each other's lines the way one shared
+   *  clock would. */
+  private readonly installProgress = new Map<
+    string,
+    { at: number; phase: BrowserExtensionProgress['phase'] }
+  >()
   /** Icons an extension set on its action, by absolute path. Shared across jars:
    *  the bytes belong to the extension's own folder, not to a session. */
   private readonly actionIcons = new Map<string, string | null>()
   private disposed = false
-  private lastProgressAt = 0
-  private lastPhase: BrowserExtensionProgress['phase'] | null = null
 
   constructor(
     private readonly configRoot: string,
@@ -206,19 +248,64 @@ export class BrowserExtensionService {
   }
 
   /**
-   * Install one extension.
+   * Install one extension, or queue it behind the installs already running.
    *
-   * Installs are serialized: the staging folder, the download folder and the
-   * progress stream are all singular, and two concurrent installs would report
-   * each other's steps and race the same paths.
+   * Two run at once and everything else waits. Nothing is shared between them: the
+   * staging folder, the downloaded file and the progress lines are all the
+   * install's own, so the slot is the only thing a queue has to hand out. The
+   * promise answers when this install finishes, however long the queue in front of
+   * it was, and its progress arrives on the event stream meanwhile.
    */
   async install(input: BrowserExtensionInstallInput): Promise<BrowserExtension> {
-    if (this.installing) throw new Error('Another extension is still installing')
-    this.installing = true
+    if (this.disposed) throw new Error('The browser is shutting down')
+    if (this.installIds.has(input.installId)) {
+      throw new Error('That install is already running')
+    }
+    const context: InstallContext = {
+      installId: input.installId,
+      label: input.value.trim() || 'extension',
+      // Resolved here rather than after the download so the very first line about
+      // this install can be matched to the store page that asked for it.
+      webstoreId: input.source === 'webstore' ? extensionIdFromInput(input.value) : null
+    }
+    this.installIds.add(context.installId)
+    return new Promise<BrowserExtension>((resolve, reject) => {
+      this.installQueue.push({ input, context, resolve, reject })
+      // Reported before anything starts, so a queued install shows up in the panel
+      // in the same breath as the click that asked for it.
+      this.report(context, {
+        phase: 'queued',
+        detail: `Waiting for the ${this.runningInstalls === 1 ? 'install' : 'installs'} already running`
+      })
+      this.startQueuedInstalls()
+    })
+  }
+
+  /** Hand the free slots to the installs waiting for them. */
+  private startQueuedInstalls(): void {
+    while (this.runningInstalls < MAX_CONCURRENT_INSTALLS) {
+      const job = this.installQueue.shift()
+      if (!job) return
+      this.runningInstalls += 1
+      void this.runQueuedInstall(job)
+    }
+  }
+
+  /** Run one install, answer its caller, then release its slot for the next. */
+  private async runQueuedInstall(job: QueuedInstall): Promise<void> {
     try {
-      return await this.runInstall(input)
+      job.resolve(await this.runInstall(job.input, job.context))
+    } catch (error: unknown) {
+      const reason = error instanceof Error && error.message ? error.message : String(error)
+      // A failure is a phase, not just a rejected promise: an install started from
+      // the browser chrome has a progress line and no dialog of its own to fail in.
+      this.report(job.context, { phase: 'failed', detail: reason })
+      job.reject(error)
     } finally {
-      this.installing = false
+      this.runningInstalls -= 1
+      this.installIds.delete(job.context.installId)
+      this.installProgress.delete(job.context.installId)
+      this.startQueuedInstalls()
     }
   }
 
@@ -341,6 +428,12 @@ export class BrowserExtensionService {
    *  is going away. */
   async dispose(): Promise<void> {
     this.disposed = true
+    // An install still waiting for a slot will never get one once the window is
+    // going away, so its caller is answered instead of left pending forever.
+    for (const job of this.installQueue.splice(0)) {
+      this.installIds.delete(job.context.installId)
+      job.reject(new Error('The browser closed before the install started'))
+    }
     for (const [partition, state] of [...this.loaded]) {
       for (const id of [...state.ids]) {
         this.stopBridge(state, id)
@@ -353,9 +446,11 @@ export class BrowserExtensionService {
 
   // ─── Install ───────────────────────────────────────────────────────────────
 
-  private async runInstall(input: BrowserExtensionInstallInput): Promise<BrowserExtension> {
-    const label = input.value.trim() || 'extension'
-    this.report({ label, phase: 'resolving', detail: 'Finding the extension' })
+  private async runInstall(
+    input: BrowserExtensionInstallInput,
+    context: InstallContext
+  ): Promise<BrowserExtension> {
+    this.report(context, { phase: 'resolving', detail: 'Finding the extension' })
 
     const stagingRoot = join(this.storeRoot(), STAGING_DIR, randomUUID())
     const stagingSource = join(stagingRoot, BROWSER_EXTENSION_SOURCE_DIR)
@@ -369,16 +464,17 @@ export class BrowserExtensionService {
         if (!webstoreId) throw new Error('That is not a Chrome Web Store id or link')
         const release = await resolveWebStoreRelease(webstoreId)
         await mkdir(this.downloadRoot(), { recursive: true })
-        crxPath = join(this.downloadRoot(), `${webstoreId}.crx`)
-        this.report({
-          label,
+        // Named for the install rather than for the id: two installs of the same
+        // extension may be in flight, and one finishing must not delete bytes the
+        // other is still reading.
+        crxPath = join(this.downloadRoot(), `${webstoreId}-${randomUUID()}.crx`)
+        this.report(context, {
           phase: 'downloading',
           detail: `Downloading version ${release.version}`,
           totalBytes: release.size
         })
         await downloadWebStoreRelease(release, crxPath, (progress) => {
-          this.report({
-            label,
+          this.report(context, {
             phase: 'downloading',
             detail: `Downloading version ${release.version}`,
             receivedBytes: progress.receivedBytes,
@@ -398,8 +494,7 @@ export class BrowserExtensionService {
           preamble: preambleSource
         },
         (progress) => {
-          this.report({
-            label,
+          this.report(context, {
             phase: progress.phase,
             detail: progress.detail,
             receivedBytes: progress.receivedBytes,
@@ -412,7 +507,7 @@ export class BrowserExtensionService {
         throw new Error('The extension did not produce a usable identity')
       }
       const id = result.id
-      this.report({ label, phase: 'registering', detail: 'Installing' })
+      this.report(context, { phase: 'registering', detail: 'Installing' })
 
       // Move the prepared tree to its final home. A rename, not a copy: it is the
       // same filesystem and the source folder may be tens of megabytes.
@@ -464,7 +559,7 @@ export class BrowserExtensionService {
         installedAt: Date.now()
       }
       await this.registry.upsert(record)
-      this.report({ label, phase: 'done', detail: `Installed ${result.name}` })
+      this.report(context, { phase: 'done', detail: `Installed ${result.name}` })
       await this.reconcileLiveJars()
       this.host.publish()
       return toExtensionView(record, [])
@@ -869,21 +964,33 @@ export class BrowserExtensionService {
   }
 
   /** Gate progress so a long download cannot flood the renderer, while a phase
-   *  change always goes through immediately: the phase is what the user reads. */
-  private report(progress: {
-    label: string
-    phase: BrowserExtensionProgress['phase']
-    detail: string
-    receivedBytes?: number
-    totalBytes?: number
-  }): void {
+   *  change always goes through immediately: the phase is what the user reads.
+   *
+   * The gate is per install rather than one shared clock, because installs now
+   * overlap: a shared one would let the install that reported last swallow the
+   * other's lines entirely, and the panel would show one install frozen while two
+   * were running. */
+  private report(
+    context: InstallContext,
+    progress: {
+      phase: BrowserExtensionProgress['phase']
+      detail: string
+      receivedBytes?: number
+      totalBytes?: number
+    }
+  ): void {
     const now = Date.now()
-    const phaseChanged = progress.phase !== this.lastPhase
-    if (!phaseChanged && now - this.lastProgressAt < PROGRESS_INTERVAL_MS) return
-    this.lastProgressAt = now
-    this.lastPhase = progress.phase
+    const previous = this.installProgress.get(context.installId)
+    if (!previous || previous.phase !== progress.phase) {
+      this.installProgress.set(context.installId, { at: now, phase: progress.phase })
+    } else {
+      if (now - previous.at < PROGRESS_INTERVAL_MS) return
+      previous.at = now
+    }
     this.host.reportProgress({
-      label: progress.label,
+      installId: context.installId,
+      label: context.label,
+      webstoreId: context.webstoreId,
       phase: progress.phase,
       detail: progress.detail,
       receivedBytes: progress.receivedBytes ?? 0,

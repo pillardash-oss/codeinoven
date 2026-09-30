@@ -201,7 +201,16 @@ export interface BrowserStripOverlayChrome {
    * The extension a Web Store page offers to install, when there is one, and
    * whether that install is already done or in flight. Null on every other page.
    */
-  storeOffer: { title: string; installed: boolean; installing: boolean } | null
+  storeOffer: BrowserStripStoreOffer | null
+}
+
+/** The store page's install affordance, as the strip's chrome row draws it. */
+export interface BrowserStripStoreOffer {
+  title: string
+  /** The extension is installed, so the chip opens the panel instead. */
+  installed: boolean
+  /** This extension's own install is queued or running. */
+  installing: boolean
 }
 
 /** A control on the strip's chrome row. */
