@@ -17,6 +17,21 @@ export function browserAppearanceHasIcon(entity: {
 }
 
 /**
+ * Whether the user styled an identity at all: a colour, a library icon, a pasted
+ * SVG or a picked image. An entity wearing none of them has no identity to show,
+ * which is what lets the rail keep its own glyph for a box nobody styled while
+ * still wearing the icon and colour of one that was.
+ */
+export function browserAppearanceIsCustomised(entity: {
+  color: string | null
+  iconType: string | null
+  customSvg: string | null
+  imagePath: string | null
+}): boolean {
+  return Boolean(entity.color || entity.iconType || entity.customSvg || entity.imagePath)
+}
+
+/**
  * The accent of anything wearing the browser appearance vocabulary, a group or a
  * box: its own hex colour, or a deterministic one so a colourless identity still
  * has a stable accent. Shared so the two cannot drift into different palettes.

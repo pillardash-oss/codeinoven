@@ -292,6 +292,13 @@ export class GlobalBrowserState {
       }
     }
     this.hydrated = true
+    // A box's icon is a file on disk, so its bytes are read once, here rather than
+    // by whichever surface happens to show a box first: the rail, a tab row and
+    // the boxes panel all draw the same icon, and none of them should have to wait
+    // for another to be opened before it can.
+    for (const box of this.boxes) {
+      if (box.imagePath) void this.ensureBoxIconLoaded(box.id)
+    }
     try {
       // Nothing to write when the durable file already holds the whole list.
       if (!stored || legacy) await saveStoredGlobalBrowserTabs(this.snapshot())
@@ -1337,6 +1344,7 @@ export class GlobalBrowserState {
       }
     ])
     this.persist()
+    if (appearance.imagePath) void this.ensureBoxIconLoaded(id)
     return id
   }
 

@@ -27,26 +27,14 @@
   const boxes = $derived(globalBrowser.boxes)
   const activeBoxId = $derived(globalBrowser.activeTabBoxId)
 
-  // A box's icon is a file on disk, so its bytes are read once and cached; this
-  // keeps the panel's icons current without every row reading a file itself.
-  $effect(() => {
-    for (const box of globalBrowser.boxes) {
-      if (box.imagePath && !globalBrowser.boxIconUrls.has(box.id)) {
-        void globalBrowser.ensureBoxIconLoaded(box.id)
-      }
-    }
-  })
-
-  function hasAppearance(box: (typeof boxes)[number]): boolean {
-    return Boolean(box.color || box.iconType || box.customSvg || box.imagePath)
-  }
-
   function accent(box: (typeof boxes)[number]): string {
     return browserAppearanceAccent(box)
   }
 
+  /** A box's mark, resolved the way every other identity in the app resolves one:
+   *  its picked icon, or its initials on its own colour. A box therefore always
+   *  has a mark of its own, so a list of boxes never reads as one generic tool. */
   function iconUrl(box: (typeof boxes)[number]): string | null {
-    if (!hasAppearance(box)) return null
     return browserAppearanceIconUrl(box, globalBrowser.boxIconUrl(box.id))
   }
 </script>
@@ -88,9 +76,6 @@
             <span class="flex h-4 w-4 shrink-0 items-center justify-center">
               {#if url}
                 <img src={url} alt="" class="h-4 w-4 rounded-sm object-contain" />
-              {:else}
-                <span class="h-2.5 w-2.5 rounded-full" style="background-color: {accent(box)}"
-                ></span>
               {/if}
             </span>
             <span class="flex min-w-0 flex-1 flex-col">

@@ -17,6 +17,7 @@
   import GitHubSignInBrowserDock from '$lib/components/git/GitHubSignInBrowserDock.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
@@ -25,6 +26,11 @@
   import { motionDuration } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
+  import {
+    browserAppearanceAccent,
+    browserAppearanceIconUrl,
+    browserAppearanceIsCustomised
+  } from './browser-group-appearance'
   import BrowserTabSearchButton from './BrowserTabSearchButton.svelte'
   import BrowserNewTabButton from './BrowserNewTabButton.svelte'
   import BrowserTabsSidebar from './BrowserTabsSidebar.svelte'
@@ -64,6 +70,34 @@
    *  because it is the number a user checks before opening the panel to find the
    *  one that is misbehaving. */
   const extensionCount = $derived(browserExtensions.count)
+
+  /**
+   * The box the page on screen lives in, and the identity its tool wears.
+   *
+   * A box is a named identity rather than a fixed concept, so the rail shows the
+   * one in use. Like a project, a box always has a mark: the icon the user picked
+   * for it, or its initials on its own colour, resolved by the same resolver every
+   * other identity in the app uses. Two boxes therefore never read as one generic
+   * tool, which is what tells a user at a glance that the page on screen is not in
+   * their default box.
+   *
+   * The box nobody styled keeps the tool's own glyph and colour. It is the jar the
+   * browser's own pages live in, so wearing its identity would say nothing, and
+   * the first run of the browser would lose the rail's only handle on the tool.
+   */
+  const activeBox = $derived(globalBrowser.activeBox)
+  const activeBoxNamed = $derived(
+    activeBox.id !== DEFAULT_BOX_ID || browserAppearanceIsCustomised(activeBox)
+  )
+  const boxesAppearance = $derived(
+    activeBoxNamed
+      ? {
+          color: browserAppearanceAccent(activeBox),
+          iconUrl: browserAppearanceIconUrl(activeBox, globalBrowser.boxIconUrl(activeBox.id))
+        }
+      : undefined
+  )
+  const boxesLabel = $derived(activeBoxNamed ? `Boxes: ${activeBox.name}` : 'Boxes')
 
   /**
    * The browser view's tools for the context rail.
@@ -121,11 +155,14 @@
       // tool a user needs: a box is made before a tab is opened inside it.
       //
       // No badge and no count on the label: a rail indicator reads as a
-      // notification, and how many boxes exist is not one.
+      // notification, and how many boxes exist is not one. The tool instead wears
+      // the active box's own icon and colour, and names it in the tooltip, which
+      // is the identity a user needs here rather than a number.
       {
         id: 'boxes',
-        label: 'Boxes',
+        label: boxesLabel,
         icon: Boxes,
+        appearance: boxesAppearance,
         active: globalBrowser.boxesSidebarShown,
         onSelect: () => globalBrowser.toggleBoxesSidebar()
       },
