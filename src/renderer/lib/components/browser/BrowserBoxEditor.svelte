@@ -142,9 +142,10 @@
     deleting = true
     try {
       // Remove the row first: it closes the box's tabs, so nothing is left
-      // holding the partition when the erase below runs.
+      // holding the partition when the erase below runs. The erase is the forgetting
+      // one: the row is gone for good, so its whole profile directory goes with it.
       globalBrowser.deleteBox(target.id)
-      if (eraseData) await globalBrowser.clearBoxData(target.id)
+      if (eraseData) await globalBrowser.forgetBox(target.id)
       confirmDelete = false
       onDeleted?.()
     } finally {

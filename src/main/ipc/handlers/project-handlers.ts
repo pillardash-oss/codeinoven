@@ -11,6 +11,7 @@ import { openWithService } from '../../system/open-with-service'
 import { broadcastAutoAnswersChanged } from '../../scheduler/assistant-events'
 import { sendToRenderer } from '../renderer-delivery'
 import { ScopeToolService } from '../../workspaces/scope-tool-service'
+import { removeProjectBrowserProfiles } from '../../browser/browser-service/browser-profile-store'
 import type { ScopeToolServiceOptions } from '../../workspaces/scope-tool-service'
 import { AssignmentWorkerScopeService } from '../../workspaces/assignment-worker-scope-service'
 import {
@@ -668,6 +669,14 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
           `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
         )
       }
+      // The project's browser goes with the project, before its threads are torn
+      // down: the browser service owns the live tabs and the session that holds
+      // the profile open, and a profile can be gigabytes of cache that nothing
+      // could reach once the project row is gone. A launch with no browser (no
+      // window yet) still removes the profiles; that is all there is to do.
+      const browser = options.browser?.() ?? null
+      if (browser) await browser.forgetProject(projectId)
+      else await removeProjectBrowserProfiles(projectId)
       // Delete every thread through the same path as `thread:delete` (session
       // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
       // project deletion can never fall behind that logic or leave orphans.

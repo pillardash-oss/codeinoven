@@ -106,6 +106,10 @@ import type {
   PendingBrowserPermission
 } from './browser-service/browser-types'
 import { BrowserTabStage } from './browser-service/browser-stage'
+import {
+  listProjectBrowserProfiles,
+  removeBrowserProfiles
+} from './browser-service/browser-profile-store'
 import { applyBrowserPageBackground } from './browser-service/browser-page-background'
 import {
   AGENT_REVEAL_GRACE_MS,
@@ -1086,12 +1090,7 @@ export class BrowserService {
       )
     })
     replaceHandler('browser:destroyProject', (_event, rawProjectId) => {
-      const projectId = validateProjectId(rawProjectId)
-      for (const [tabId, tab] of this.tabs) {
-        if (tab.projectId === projectId) this.destroy(tabId, 'closed')
-      }
-      this.tabHistory.forgetScopes((record) => record.projectId === projectId)
-      this.downloads.forgetProject(projectId)
+      this.dropProjectTabs(validateProjectId(rawProjectId))
     })
     replaceHandler('browser:getDownloads', (_event, rawProjectId) => {
       const projectId = validateProjectId(rawProjectId)
@@ -2938,16 +2937,103 @@ export class BrowserService {
 
   /**
    * A box was deleted. Everything about it goes: its extensions are released and
-   * dropped from every extension's jar list, then its storage and its remembered
-   * permissions are erased.
+   * dropped from every extension's jar list, its storage and its remembered
+   * permissions are erased, and the Chromium profile directory behind the
+   * partition is removed.
    *
    * A box's id is minted per creation, so a box made again after this is a new jar
    * with no relationship to the one that was removed, which is why nothing is kept.
+   * The directory has to go explicitly: clearing a session empties a profile
+   * without removing the directory that holds it, so a deleted box would otherwise
+   * keep its cache on disk forever.
    */
   async forgetBox(projectId: string, boxId: string): Promise<void> {
     const partition = browserPartitionFor(projectId, boxId)
     await this.extensions.forgetBox(projectId, boxId)
     await this.clearJarStorage(partition)
+    this.configuredSessions.delete(partition)
+    await removeBrowserProfiles(
+      (await listProjectBrowserProfiles(projectId)).filter(
+        (profile) => profile.partition === partition
+      )
+    )
+  }
+
+  /**
+   * A project was deleted, so its browser goes with it.
+   *
+   * This is the one path that removes a project's whole browser: its tabs are
+   * destroyed, every jar it had open settles its connections and empties its
+   * storage, the remembered decisions and stored Back/Forward stacks go, and the
+   * Chromium profile directories are then removed from disk. None of it can be
+   * reached again, because a project id is minted per project.
+   *
+   * Erasing a context that still exists is a different action: that one keeps its
+   * session and clears only what the user asked to clear, so the profile comes back
+   * empty rather than gone.
+   */
+  async forgetProject(projectId: string): Promise<string[]> {
+    await this.extensions.whenReady()
+    this.dropProjectTabs(projectId)
+    // Settle the jars that have a live session *before* their directories go: an
+    // open database or a connection still in flight would otherwise keep writing
+    // into a profile that is being removed underneath it.
+    for (const partition of this.projectPartitions(projectId)) {
+      await this.settleJar(partition)
+      this.configuredSessions.delete(partition)
+    }
+    const profiles = await listProjectBrowserProfiles(projectId)
+    // The persisted decision ledger is keyed by partition, so every profile that is
+    // about to go is forgotten by name, not only the jars with a live session.
+    this.clearProjectPermissionMemory(
+      projectId,
+      profiles.map((profile) => profile.partition)
+    )
+    const removed = await removeBrowserProfiles(profiles)
+    if (removed.length > 0) {
+      Logger.info('Removed the browser profiles of a deleted project', { projectId, removed })
+    }
+    return removed
+  }
+
+  /**
+   * Tear down everything one project's browser holds in this window: its tabs, the
+   * stored stacks they own, and the download records named after it.
+   *
+   * Shared by the renderer's `browser:destroyProject` (a workspace closed) and by
+   * `forgetProject` (the project itself is gone), so a closed workspace and a
+   * deleted project can never leave different remnants behind.
+   */
+  private dropProjectTabs(projectId: string): void {
+    for (const [tabId, tab] of [...this.tabs]) {
+      if (tab.projectId === projectId) this.destroy(tabId, 'closed')
+    }
+    this.tabHistory.forgetScopes((record) => record.projectId === projectId)
+    this.downloads.forgetProject(projectId)
+  }
+
+  /** Every jar of one project that this window currently holds a session for. */
+  private projectPartitions(projectId: string): string[] {
+    return [...this.configuredSessions].filter((partition) =>
+      partitionBelongsToProject(partition, projectId)
+    )
+  }
+
+  /**
+   * Close a jar's connections and empty its storage and cache, so removing the
+   * directory behind it does not race a write already in flight. A jar that cannot
+   * be settled is reported and still removed: its profile is unreachable either way,
+   * and a failure here must not strand gigabytes.
+   */
+  private async settleJar(partition: string): Promise<void> {
+    try {
+      const browserSession = session.fromPartition(partition)
+      await browserSession.closeAllConnections()
+      await browserSession.clearStorageData()
+      await browserSession.clearCache()
+    } catch (error: unknown) {
+      Logger.error(`Browser profile "${partition}" could not be emptied before removal:`, error)
+    }
   }
 
   /** Erase one jar's storage, cache and remembered permission decisions. */
@@ -3203,8 +3289,11 @@ export class BrowserService {
   /** Forget every remembered permission grant or denial for a context, in every
    *  jar that context has open: boxes keep their own answers, so "forget this
    *  site's permissions" has to reach each of them rather than only the default. */
-  private clearProjectPermissionMemory(projectId: string): void {
-    const partitions = new Set<string>([browserPartitionFor(projectId)])
+  private clearProjectPermissionMemory(
+    projectId: string,
+    extraPartitions: readonly string[] = []
+  ): void {
+    const partitions = new Set<string>([browserPartitionFor(projectId), ...extraPartitions])
     for (const partition of this.configuredSessions) {
       if (partitionBelongsToProject(partition, projectId)) partitions.add(partition)
     }

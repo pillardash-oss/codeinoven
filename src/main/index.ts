@@ -31,7 +31,7 @@ import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
 import { createBootstrapState } from './bootstrap/bootstrap-state'
-import { configureLinuxElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
+import { configureElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
 import { createSplashWindow, closeSplash } from './bootstrap/splash-window'
 import { isCloseShortcut, isNewTerminalShortcut } from './bootstrap/keyboard-shortcuts'
 import {
@@ -64,7 +64,7 @@ app.setName(APP_NAME)
 // inherits is rewritten here, before the first window exists.
 app.userAgentFallback = brandUserAgent(app.userAgentFallback, __CODEINOVEN_APP_VERSION__)
 
-configureLinuxElectronDataRoot()
+configureElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
 // per-window preferences below remain explicit so future windows inherit the
 // secure expectation even when reviewed in isolation.

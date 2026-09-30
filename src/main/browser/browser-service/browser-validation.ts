@@ -46,6 +46,15 @@ import type {
 
 export const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
 
+/**
+ * The single profile the browser used before jars became per-context.
+ *
+ * Nothing resolves to this partition any more   every context builds its own via
+ * {@link browserPartitionFor}   but a machine that ran that build still has the
+ * whole profile on disk, so it is named here for the sweep to reclaim.
+ */
+export const LEGACY_BROWSER_PARTITION = 'persist:codeinoven-browser'
+
 /** Session partition one browser context runs in, boxed or not. The download
  *  manager has to reach the same session the browser's tabs use, so the naming
  *  lives here rather than being spelled out at each caller. */
@@ -82,6 +91,22 @@ export function validateOptionalBoxId(value: unknown): string | null {
 export function partitionBelongsToProject(partition: string, projectId: string): boolean {
   const own = browserPartitionFor(projectId)
   return partition === own || partition.startsWith(`${own}${BROWSER_BOX_PARTITION_INFIX}`)
+}
+
+/**
+ * The box id a partition names, or null for the context's own jar.
+ *
+ * A partition that does not belong to the context also answers null, which is why
+ * callers are expected to filter with {@link partitionBelongsToProject} first: the
+ * two together are how a context-wide operation enumerates its own jars without
+ * ever reaching another context's storage.
+ */
+export function boxIdFromPartition(partition: string, projectId: string): string | null {
+  const own = browserPartitionFor(projectId)
+  const prefix = `${own}${BROWSER_BOX_PARTITION_INFIX}`
+  if (!partition.startsWith(prefix)) return null
+  const boxId = partition.slice(prefix.length)
+  return boxId.length > 0 ? boxId : null
 }
 export const MAX_BROWSER_URL_LENGTH = 8192
 export const MAX_CONSOLE_ENTRIES = 500

@@ -347,6 +347,10 @@ export const invokeBrowserContract = {
   /** Erase one box's cookies, site data and cache, and forget the permission
    *  decisions it remembered. This is the destructive half of deleting a box. */
   'browser:clearBoxData': {} as Contract<[projectId: string, boxId: string], void>,
+  /** A box was deleted: erase it the way `browser:clearBoxData` does, and remove
+   *  the Chromium profile directory behind it. Nothing can name a deleted box's
+   *  jar again, so the whole profile goes rather than being emptied in place. */
+  'browser:forgetBox': {} as Contract<[projectId: string, boxId: string], void>,
   'browser:clearSiteData': {} as Contract<
     [projectId: string, scopes: BrowserSiteDataScope[]],
     void

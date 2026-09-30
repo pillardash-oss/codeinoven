@@ -667,6 +667,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   registerIpcHandlers(storage, database, state.updaterService, state.chatEngine, {
     projectManager,
     projectFilesService,
+    browser: () => state.browserService,
     vault,
     githubAuthService,
     skillUpdates: skillUpdateService,
@@ -970,5 +971,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         .then(({ sweepOrphanProjectArtifacts }) => sweepOrphanProjectArtifacts(storage, database))
         .catch((error: unknown) => Logger.dev('Orphan artifact sweep failed:', error))
     }, 20_000)
+
+    // Reclaim the Chromium profiles no live project owns, the same way the sweep
+    // above reclaims directory trees under the config root: a deleted project's
+    // browser survives as a profile directory that can hold gigabytes. Delayed and
+    // bounded for the same reason, and it declines to run at all while a sibling
+    // instance is alive, because a sibling's live browser is not this one's to take
+    // away.
+    setTimeout(() => {
+      void import('../browser/browser-service/browser-profile-store')
+        .then(({ sweepUnclaimedBrowserProfiles }) => sweepUnclaimedBrowserProfiles(database))
+        .catch((error: unknown) => Logger.dev('Browser profile sweep failed:', error))
+    }, 25_000)
   })()
 }

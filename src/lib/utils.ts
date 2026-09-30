@@ -151,6 +151,21 @@ function isUnpackagedElectronLaunch(): boolean {
  * harness sets it, so a stray environment variable can never repoint a user's
  * real data root.
  */
+export function getCanonicalConfigRoot(): string {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? '~'
+  return join(home, '.config', ORG_SLUG, APP_SLUG)
+}
+
+/**
+ * Get the app config root path.
+ *
+ * An absolute `CODEINOVEN_CONFIG_ROOT` redirects the whole app-owned data root.
+ * It is honored by unpackaged launches (so several worktrees can run `bun dev`
+ * against isolated data) and by the packaged-startup smoke harness that proves
+ * a first run from an empty root. A shipped app ignores it unless the smoke
+ * harness sets it, so a stray environment variable can never repoint a user's
+ * real data root.
+ */
 export function getConfigRoot(): string {
   const configuredRoot = process.env['CODEINOVEN_CONFIG_ROOT']
   const isPackagedSmoke = Boolean(process.env['CODEINOVEN_PACKAGED_SMOKE_OUTPUT'])
@@ -161,8 +176,7 @@ export function getConfigRoot(): string {
   ) {
     return configuredRoot
   }
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? '~'
-  return join(home, '.config', ORG_SLUG, APP_SLUG)
+  return getCanonicalConfigRoot()
 }
 
 /**

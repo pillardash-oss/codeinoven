@@ -53,6 +53,7 @@ import type { RoutineManager } from '../../../lib/engines/routine-manager'
 import type { RoutineSchedulerService } from '../../scheduler/routine-scheduler-service'
 import type { AutoAnswerStore } from '../../system/auto-answer-store'
 import type { PrivilegedIpcValidator } from '../ipc-validation'
+import type { BrowserService } from '../../browser/browser-service'
 import type { AttachmentStorageScope } from '../../../lib/types'
 
 export interface RegisterIpcHandlersOptions {
@@ -95,6 +96,13 @@ export interface RegisterIpcHandlersOptions {
    */
   vault?: SecretVault
   githubAuthService?: GitHubAuthService
+  /**
+   * The live browser service, or null before the first window and after the last
+   * one. The service is rebuilt with every window, so a handler that needs it reads
+   * it through this getter instead of capturing an instance that may already have
+   * been torn down.
+   */
+  browser?: () => BrowserService | null
   /**
    * Background skill updater, owned by the composition root because it rides
    * the app-update check cycle rather than a scheduler of its own.

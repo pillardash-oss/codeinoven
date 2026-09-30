@@ -1437,6 +1437,19 @@ export class GlobalBrowserState {
     }
   }
 
+  /** A box was deleted: erase it and take its Chromium profile with it. Nothing can
+   *  name a deleted box's jar again, so leaving the profile in place would strand
+   *  its cache on disk. Best-effort with a report, exactly like `clearBoxData`: the
+   *  user asked for the data to be gone, and a silent failure would leave them
+   *  believing it is. */
+  async forgetBox(boxId: string): Promise<void> {
+    try {
+      await invoke('browser:forgetBox', GLOBAL_BROWSER_CONTEXT.projectId, boxId)
+    } catch (error) {
+      reportError(error, 'The box\u2019s data could not be erased.')
+    }
+  }
+
   // ─── Page state ───────────────────────────────────────────────────────
 
   /**
