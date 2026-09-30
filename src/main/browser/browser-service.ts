@@ -51,6 +51,14 @@ import { boundedBrowserTabHistory } from '../../lib/browser/browser-tab-history'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
+import { getConfigRoot } from '../../lib/utils'
+import type { BrowserExtensionProgress } from '../../lib/ipc/browser'
+import { BrowserExtensionService } from './extensions/browser-extension-service'
+import {
+  validateExtensionId,
+  validateExtensionInstallInput,
+  validateExtensionUpdatePatch
+} from './extensions/browser-extension-validation'
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { ToastOverlayWindow } from './toast-overlay-window'
@@ -117,6 +125,7 @@ import {
   SCREENSHOT_MAX_BYTES,
   ZOOM_STEP,
   browserContextKey,
+  boxIdFromPartition,
   browserPartitionFor,
   isAllowedPopupWindowUrl,
   isSameBounds,
@@ -413,8 +422,7 @@ export class BrowserService {
    *  never moved is the difference between an instant switch and a hitch. */
   private displayedTab: { tabId: string; bounds: BrowserViewBounds } | null = null
   /**
-   * Hides the renderer asked for, with the handle waiting out their grace window
-   * and the moment each one arrived.
+   * Hides the renderer asked for, with the handle waiting out their grace window.
    *
    * A surface switch unmounts one panel and mounts the next for the same tab, and
    * the renderer's own visibility answer is recomputed every frame, so it flaps:
@@ -423,13 +431,9 @@ export class BrowserService {
    * the page feels, and a re-attach a few milliseconds later is a flicker of a
    * page nothing asked to move. So a hide waits `RENDERER_PARK_GRACE_MS` for a
    * show to cancel it, and a hide nothing contradicts still parks, a few frames
-   * after the decision that produced it. The arrival time is kept so a cancelled
-   * park can report how long the answer it acted on lasted.
+   * after the decision that produced it.
    */
-  private readonly pendingParks = new Map<
-    string,
-    { handle: ReturnType<typeof setTimeout>; at: number }
-  >()
+  private readonly pendingParks = new Map<string, ReturnType<typeof setTimeout>>()
   /** The dialog-context label already installed in each tab's current document.
    *  The shim is idempotent per document, so a repeat is a script evaluation
    *  per frame for no change. Cleared when a new document commits. */
@@ -498,6 +502,14 @@ export class BrowserService {
   /** The frame each mounted popup view was last placed at, so a move is reported
    *  as a move rather than as another placement. */
   private readonly popupViewFrames = new Map<WebContentsView, BrowserViewBounds>()
+  /**
+   * Installed extensions, and which jars load them.
+   *
+   * Built with the service because reading the registry is one small file, and
+   * nothing actually loads an extension until a jar asks for a page: the cost of
+   * the feature is per live jar, not per app launch.
+   */
+  private readonly extensions: BrowserExtensionService
 
   constructor(
     private readonly window: BrowserWindow,
@@ -519,13 +531,21 @@ export class BrowserService {
     )
     this.siteData = new BrowserSiteDataService({
       window,
-      sessionForProject: (projectId) => this.sessionForProject(projectId),
+      sessionForJar: (projectId, boxId) => this.sessionForProject(projectId, boxId),
+      projectJars: (projectId) => this.projectJars(projectId),
       forEachTab: (visit) => {
         for (const tab of this.tabs.values()) visit(tab)
       },
       dismissPermissions: (projectId) => this.dismissProjectPermissions(projectId),
       clearPermissionMemory: (projectId) => this.clearProjectPermissionMemory(projectId),
       cancelProjectDownloads: (projectId) => this.downloads.cancelProject(projectId)
+    })
+    this.extensions = new BrowserExtensionService(getConfigRoot(), permissionPersistence, {
+      window: () => (this.window.isDestroyed() ? null : this.window),
+      sessionFor: (projectId, boxId) => this.sessionForProject(projectId, boxId),
+      liveJars: () => this.liveJars(),
+      reportProgress: (progress) => this.publishExtensionProgress(progress),
+      publish: () => this.publishExtensions()
     })
     this.capture = new BrowserCaptureObserver({
       // A capture change is a tab-level fact the user must see, so it is
@@ -665,11 +685,11 @@ export class BrowserService {
         // or a visibility answer that flapped, not a departure: dropping the
         // deferred park keeps the page where it is instead of parking it and
         // re-parenting it straight back, which is the flicker the user sees.
-        this.cancelPendingPark(tabId)
+        this.dropPendingPark(tabId)
         // Leaving a tab costs nothing now: the outgoing tab keeps running in an
         // invisible stage window instead of going dead behind the app window.
         if (this.activeTabId && this.activeTabId !== tabId) {
-          this.parkTab(this.activeTabId, { reason: 'another tab took the view' })
+          this.parkTab(this.activeTabId)
         }
         this.activeTabId = tabId
         this.activeTabBounds = bounds
@@ -690,8 +710,7 @@ export class BrowserService {
           if (!this.stage.isParked(tab.view)) {
             this.parkTab(tabId, {
               size: { width: bounds.width, height: bounds.height },
-              keepActive: true,
-              reason: 'toast on screen'
+              keepActive: true
             })
           }
         } else {
@@ -723,7 +742,7 @@ export class BrowserService {
       // Deferred by one tick, so a panel that unmounts because the same tab is
       // moving to another surface (the sidebar handing the tab to the full screen
       // browser) does not park a view that is about to be shown again.
-      this.schedulePark(tabId, 'the renderer left this surface')
+      this.schedulePark(tabId)
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
     })
@@ -918,7 +937,39 @@ export class BrowserService {
       const projectId = validateProjectId(rawProjectId)
       const boxId = validateOptionalBoxId(rawBoxId)
       if (!boxId) throw new TypeError('Browser box ID is required')
+      await this.extensions.whenReady()
       await this.clearBoxData(projectId, boxId)
+    })
+    /** A box was deleted, so everything about it goes, its extensions included. */
+    replaceHandler('browser:forgetBox', async (_event, rawProjectId, rawBoxId) => {
+      const projectId = validateProjectId(rawProjectId)
+      const boxId = validateOptionalBoxId(rawBoxId)
+      if (!boxId) throw new TypeError('Browser box ID is required')
+      await this.extensions.whenReady()
+      await this.forgetBox(projectId, boxId)
+    })
+    replaceHandler('browser:extensions', async () => {
+      await this.extensions.whenReady()
+      return this.extensions.list()
+    })
+    replaceHandler('browser:extensionInstall', async (_event, rawInput) => {
+      await this.extensions.whenReady()
+      return this.extensions.install(validateExtensionInstallInput(rawInput))
+    })
+    replaceHandler('browser:extensionUninstall', async (_event, rawExtensionId) => {
+      await this.extensions.whenReady()
+      await this.extensions.uninstall(validateExtensionId(rawExtensionId))
+    })
+    replaceHandler('browser:extensionUpdate', async (_event, rawExtensionId, rawPatch) => {
+      await this.extensions.whenReady()
+      return this.extensions.update(
+        validateExtensionId(rawExtensionId),
+        validateExtensionUpdatePatch(rawPatch)
+      )
+    })
+    replaceHandler('browser:extensionPickFolder', async () => {
+      await this.extensions.whenReady()
+      return this.extensions.pickFolder()
     })
     replaceHandler('browser:clearSiteData', (_event, rawProjectId, rawScopes) => {
       const projectId = validateProjectId(rawProjectId)
@@ -927,15 +978,23 @@ export class BrowserService {
         Logger.error('Browser site data could not be cleared:', error)
       })
     })
-    replaceHandler('browser:siteMenu', (_event, rawProjectId, rawHost, rawX, rawY) => {
-      const projectId = validateProjectId(rawProjectId)
-      const host = validateBoundedHost(rawHost)
-      const x = validateSiteMenuPoint(rawX, 'x coordinate')
-      const y = validateSiteMenuPoint(rawY, 'y coordinate')
-      // Native popup menus run a nested run loop; detach from the invoke reply
-      // so the renderer's call resolves immediately.
-      setImmediate(() => this.siteData.showSiteMenu(projectId, host, x, y))
-    })
+    replaceHandler(
+      'browser:siteMenu',
+      (_event, rawProjectId, rawHost, rawBoxId, rawBoxName, rawX, rawY) => {
+        const projectId = validateProjectId(rawProjectId)
+        const host = validateBoundedHost(rawHost)
+        // The padlock clears the jar it was opened from, so the jar comes with it.
+        const boxId = validateOptionalBoxId(rawBoxId)
+        // Only used to name the jar in the confirmation, so it is bounded here and
+        // nothing else is claimed about it.
+        const boxName = boundedBoxLabel(rawBoxName)
+        const x = validateSiteMenuPoint(rawX, 'x coordinate')
+        const y = validateSiteMenuPoint(rawY, 'y coordinate')
+        // Native popup menus run a nested run loop; detach from the invoke reply
+        // so the renderer's call resolves immediately.
+        setImmediate(() => this.siteData.showSiteMenu(projectId, host, boxId, boxName, x, y))
+      }
+    )
     replaceHandler('browser:pageMenu', (_event, rawTabId, rawX, rawY) => {
       const tabId = validateTabId(rawTabId)
       const x = validateSiteMenuPoint(rawX, 'x coordinate')
@@ -1028,7 +1087,7 @@ export class BrowserService {
     this.toastVisible = false
     this.activeTabBounds = null
     this.displayedTab = null
-    for (const pending of this.pendingParks.values()) clearTimeout(pending.handle)
+    for (const handle of this.pendingParks.values()) clearTimeout(handle)
     this.pendingParks.clear()
     this.injectedDialogLabels.clear()
     this.parkedOrder.length = 0
@@ -1052,6 +1111,10 @@ export class BrowserService {
     // records, the live items and the bytes.
     this.downloads.setTabResolver(null)
     this.configuredSessions.clear()
+    // Extensions are unloaded from every jar before the sessions go: a loaded
+    // extension holds a renderer and an open file inside a partition this service
+    // is about to stop tracking.
+    void this.extensions.dispose()
     this.permissionGrants.clear()
     this.permissionDenies.clear()
     this.playheads.clear()
@@ -1226,7 +1289,7 @@ export class BrowserService {
       tab.initialNavigationStarted = true
       // Mount the tab offscreen before anything else: the page must run whether
       // or not the user ends up looking at it.
-      this.parkTab(tabId, { reason: 'agent opened a tab in the background' })
+      this.parkTab(tabId)
       this.load(tabId, url)
       this.agentTabIds.set(contextKey, tabId)
       // An opportunistic reveal is skipped once the user has shown twice that
@@ -1280,7 +1343,7 @@ export class BrowserService {
     // touched by that bookkeeping.
     if (!attached) {
       if (this.activeTabId !== tabId && !this.stage.isParked(tab.view)) {
-        this.parkTab(tabId, { reason: 'agent operation on a tab that was not on screen' })
+        this.parkTab(tabId)
       } else {
         this.touchParkedTab(tabId)
       }
@@ -2139,6 +2202,11 @@ export class BrowserService {
 
     const browserSession = this.sessionForProject(projectId, boxId)
 
+    // Extension loading is deliberately off the tab-creation path: `ensureTab` is
+    // synchronous and creating a page must not wait on disk. The extension service
+    // is single-flight per jar, so a burst of shows loads each extension once.
+    void this.extensions.ensureJarLoaded(projectId, boxId)
+
     const view = new WebContentsView({
       webPreferences: {
         session: browserSession,
@@ -2438,7 +2506,7 @@ export class BrowserService {
       if (popup) return popup
     }
     try {
-      this.openNewTabFor(owner, validateBrowserUrl(details.url), 'a popup opened in the background')
+      this.openNewTabFor(owner, validateBrowserUrl(details.url))
     } catch (error: unknown) {
       Logger.error('Browser popup rejected unsafe URL:', error)
     }
@@ -2498,30 +2566,23 @@ export class BrowserService {
       mount: (view, bounds) => {
         if (this.window.isDestroyed()) return
         try {
-          const previous = this.popupViewFrames.get(view)
           this.popupViewFrames.set(view, bounds)
           if (this.mountedPopupViews.has(view)) {
-            // Already on screen: only a moved frame needs a native call, so the
-            // rail's own resize reports cost one comparison each.
+            // Already on screen: re-asserting the frame is a native call, which is
+            // still cheaper than the re-parent a repeat would otherwise cost.
             view.setBounds(bounds)
-            if (previous && !isSameBounds(previous, bounds)) {
-              Logger.dev('Browser popup window moved', { from: previous, to: bounds })
-            }
             return
           }
           this.stage.release(view)
           this.window.contentView.addChildView(view)
           this.mountedPopupViews.add(view)
           view.setBounds(bounds)
-          Logger.dev('Browser popup window placed', { bounds })
         } catch (error: unknown) {
           Logger.error('Browser popup window could not be placed:', error)
         }
       },
       unmount: (view, viewport) => {
-        if (this.detachPopupView(view)) {
-          Logger.dev('Browser popup window parked', { viewport })
-        }
+        this.detachPopupView(view)
         this.stage.park(view, viewport)
       },
       discard: (view) => {
@@ -2708,19 +2769,96 @@ export class BrowserService {
    */
   async clearBoxData(projectId: string, boxId: string): Promise<void> {
     const partition = browserPartitionFor(projectId, boxId)
+    // Unload first, then reload: an extension holds open files and a running
+    // service worker inside the storage being erased, and reloading the jar's tabs
+    // then runs it again against the clean store.
+    await this.extensions.onJarEmptied(projectId, boxId)
+    await this.clearJarStorage(partition)
+    await this.extensions.ensureJarLoaded(projectId, boxId)
+  }
+
+  /**
+   * A box was deleted. Everything about it goes: its extensions are released and
+   * dropped from every extension's jar list, then its storage and its remembered
+   * permissions are erased.
+   *
+   * A box's id is minted per creation, so a box made again after this is a new jar
+   * with no relationship to the one that was removed, which is why nothing is kept.
+   */
+  async forgetBox(projectId: string, boxId: string): Promise<void> {
+    const partition = browserPartitionFor(projectId, boxId)
+    await this.extensions.forgetBox(projectId, boxId)
+    await this.clearJarStorage(partition)
+  }
+
+  /** Erase one jar's storage, cache and remembered permission decisions. */
+  private async clearJarStorage(partition: string): Promise<void> {
     const browserSession = session.fromPartition(partition)
     await browserSession.clearStorageData()
     await browserSession.clearCache()
     await browserSession.closeAllConnections()
     await this.permissionMemory.forget(partition, this.permissionLedgers())
-    // The box's own tabs reload so the cleared state takes effect now rather
-    // than at the next navigation: an in-memory session would otherwise keep
-    // answering as the account whose cookies were just erased.
+    // The jar's own tabs reload so the cleared state takes effect now rather than
+    // at the next navigation: an in-memory session would otherwise keep answering
+    // as the account whose cookies were just erased.
     for (const tab of this.tabs.values()) {
-      if (tab.projectId !== projectId || tab.boxId !== boxId) continue
+      if (browserPartitionFor(tab.projectId, tab.boxId) !== partition) continue
       if (!tab.initialNavigationStarted || tab.view.webContents.isDestroyed()) continue
       tab.view.webContents.reload()
     }
+  }
+
+  /**
+   * Every jar that currently has a live page, so the extension service can aim a
+   * load at the jars that exist rather than at every jar the user ever made.
+   */
+  private liveJars(): { projectId: string; boxId: string | null }[] {
+    const jars: { projectId: string; boxId: string | null }[] = []
+    for (const tab of this.tabs.values()) {
+      if (tab.view.webContents.isDestroyed()) continue
+      if (jars.some((jar) => jar.projectId === tab.projectId && jar.boxId === tab.boxId)) continue
+      jars.push({ projectId: tab.projectId, boxId: tab.boxId })
+    }
+    return jars
+  }
+
+  /** Whether one jar still has a page alive. A hibernated tab has none, which is
+   *  what makes hibernation the point at which an extension can be released. */
+  private jarHasLiveTab(projectId: string, boxId: string | null): boolean {
+    for (const tab of this.tabs.values()) {
+      if (tab.projectId !== projectId || tab.boxId !== boxId) continue
+      if (!tab.view.webContents.isDestroyed()) return true
+    }
+    return false
+  }
+
+  /**
+   * Every jar one context holds a session for, the context's own jar first.
+   *
+   * The own jar is always listed even before a session exists for it, because a
+   * context-wide clear has always meant "this browser" and must keep meaning it;
+   * the boxes are added from the sessions that exist, so clearing never creates a
+   * partition directory for a box nobody used.
+   */
+  private projectJars(projectId: string): (string | null)[] {
+    const jars: (string | null)[] = [null]
+    for (const partition of this.configuredSessions) {
+      if (!partitionBelongsToProject(partition, projectId)) continue
+      const boxId = boxIdFromPartition(partition, projectId)
+      if (!boxId || jars.includes(boxId)) continue
+      jars.push(boxId)
+    }
+    return jars
+  }
+
+  private publishExtensions(): void {
+    if (this.window.webContents.isDestroyed()) return
+    sendToRenderer(this.window.webContents, 'browser:extensions', this.extensions.list())
+  }
+
+  private publishExtensionProgress(progress: BrowserExtensionProgress): void {
+    if (this.window.webContents.isDestroyed()) return
+    sendToRenderer(this.window.webContents, 'browser:extensionProgress', progress)
   }
 
   private sessionForProject(projectId: string, boxId: string | null = null): Session {
@@ -3158,7 +3296,7 @@ export class BrowserService {
       contents.isDestroyed() || this.window.isDestroyed() ? null : contents
     const openInNewTab = (url: string): void => {
       try {
-        this.openNewTabFor(owner, validateBrowserUrl(url), 'a context-menu link')
+        this.openNewTabFor(owner, validateBrowserUrl(url))
       } catch (error: unknown) {
         Logger.error('Browser context menu refused a link:', error)
       }
@@ -3217,13 +3355,13 @@ export class BrowserService {
    * that open an address in a new tab, so every new tab is parked, loaded and
    * announced the same way.
    */
-  private openNewTabFor(owner: BrowserPageOwner, url: string, reason: string): void {
+  private openNewTabFor(owner: BrowserPageOwner, url: string): void {
     const tabId = `browser:${crypto.randomUUID()}`
     // A new sibling inherits the box it was opened from: a popup or a link
     // belongs beside the page that produced it, in the same jar.
     const tab = this.ensureTab(tabId, owner.projectId, owner.threadId, owner.boxId)
     tab.initialNavigationStarted = true
-    this.parkTab(tabId, { reason })
+    this.parkTab(tabId)
     this.load(tabId, url)
     sendToRenderer(this.window.webContents, 'browser:openRequested', url, {
       projectId: owner.projectId,
@@ -3263,7 +3401,7 @@ export class BrowserService {
       page.owner.boxId
     )
     sourceTab.initialNavigationStarted = true
-    this.parkTab(tabId, { reason: 'the user opened a page source' })
+    this.parkTab(tabId)
     this.navigateTo(tabId, target)
     sendToRenderer(this.window.webContents, 'browser:openRequested', target, {
       projectId: page.owner.projectId,
@@ -3279,7 +3417,7 @@ export class BrowserService {
     const url = buildBrowserSearchUrl(this.contextMenuSearchEngine, query)
     if (!url) return
     try {
-      this.openNewTabFor(owner, validateBrowserUrl(url), 'a context-menu web search')
+      this.openNewTabFor(owner, validateBrowserUrl(url))
     } catch (error: unknown) {
       Logger.error('Browser context menu could not run a search:', error)
     }
@@ -3482,7 +3620,7 @@ export class BrowserService {
     const parented = new Set(this.window.contentView.children)
     for (const [tabId, tab] of this.tabs) {
       if (parented.has(tab.view)) {
-        this.parkTab(tabId, { reason: 'the renderer reloaded or crashed' })
+        this.parkTab(tabId)
       }
     }
   }
@@ -3513,41 +3651,25 @@ export class BrowserService {
    * nothing asked to move. A hide no show ever contradicts still parks, a few
    * frames after the decision that produced it.
    */
-  private schedulePark(tabId: string, reason: string): void {
+  private schedulePark(tabId: string): void {
     if (this.pendingParks.has(tabId)) return
     const handle = setTimeout(() => {
       this.pendingParks.delete(tabId)
-      this.parkTab(tabId, { reason })
+      this.parkTab(tabId)
     }, RENDERER_PARK_GRACE_MS)
-    this.pendingParks.set(tabId, { handle, at: Date.now() })
-  }
-
-  /** Drop a deferred hide, because the tab is being shown again after all. */
-  private cancelPendingPark(tabId: string): void {
-    const pending = this.dropPendingPark(tabId)
-    if (pending === null) return
-    // Dev-only, and deliberately one line per cancelled hide: it is the record
-    // that the page never left the screen, and that the hide which would have
-    // taken it off was the renderer's own answer flapping rather than a surface
-    // change the user made.
-    Logger.dev('Browser view park cancelled', {
-      tabId,
-      afterMs: Date.now() - pending.at
-    })
+    this.pendingParks.set(tabId, handle)
   }
 
   /**
-   * Forget a deferred hide silently, for the two callers whose park is settled
-   * some other way: the park itself, and the tab being destroyed. Their cancelled
-   * timer is bookkeeping, and logging it as a cancelled park would read as a page
-   * that stayed on screen when it is about to leave.
+   * Forget a deferred hide, because the tab is being shown again after all, or
+   * because its park is settled some other way: the park itself, and the tab
+   * being destroyed.
    */
-  private dropPendingPark(tabId: string): { at: number } | null {
-    const pending = this.pendingParks.get(tabId)
-    if (pending === undefined) return null
-    clearTimeout(pending.handle)
+  private dropPendingPark(tabId: string): void {
+    const handle = this.pendingParks.get(tabId)
+    if (handle === undefined) return
+    clearTimeout(handle)
     this.pendingParks.delete(tabId)
-    return pending
   }
 
   /**
@@ -3556,11 +3678,9 @@ export class BrowserService {
    *
    * The page is laid out at `options.size` when a caller has one to insist on
    * (the toast case, which must preserve the frame the user is looking at), and at
-   * the tab's own parked viewport otherwise. Every park carries a reason and is
-   * logged at dev level: a recorded frame of the browser surface can then be
-   * matched to the moment that produced it.
+   * the tab's own parked viewport otherwise.
    */
-  private parkTab(tabId: string, options: ParkBrowserTabOptions): void {
+  private parkTab(tabId: string, options: ParkBrowserTabOptions = {}): void {
     // The park this timer was going to do is happening now, so it is spent.
     this.dropPendingPark(tabId)
     const tab = this.tabs.get(tabId)
@@ -3658,8 +3778,7 @@ export class BrowserService {
     }
     // A view the stage was holding is off the window, so the page has already been
     // told the pointer left it and needs the pointer position again once it is
-    // back. Recorded before the release, which is what clears the parked state.
-    const wasParked = this.stage.isParked(tab.view)
+    // back.
     this.stage.release(tab.view)
     this.forgetParked(tabId)
     this.window.contentView.addChildView(tab.view)
@@ -3675,9 +3794,6 @@ export class BrowserService {
     // attach, not only a stage re-attach, or `cursor: pointer` never comes back
     // until the user physically moves the mouse.
     this.primePagePointer(tab, bounds)
-    if (wasParked) {
-      Logger.dev('Browser view re-attached', { tabId, bounds })
-    }
     // A page that just landed is on screen now, so a switch that was waiting for
     // it takes the keyboard here.
     this.takePendingPageFocus(tabId)
@@ -3836,8 +3952,7 @@ export class BrowserService {
       // for a moment and the page must come back at the size the user left it at.
       this.parkTab(this.activeTabId, {
         size: this.activeTabBounds ?? this.parkedViewportFor(tab),
-        keepActive: true,
-        reason: 'toast on screen'
+        keepActive: true
       })
       return
     }
@@ -3889,6 +4004,12 @@ export class BrowserService {
     this.stage.release(tab.view)
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)
+    // The jar's extensions are released the moment nothing is left showing them:
+    // an extension held loaded for a box with no page is a renderer held for
+    // nothing, which is exactly what containing an extension per box is for.
+    if (!this.jarHasLiveTab(tab.projectId, tab.boxId)) {
+      void this.extensions.onJarEmptied(tab.projectId, tab.boxId)
+    }
     for (const [contextKey, agentTabId] of this.agentTabIds) {
       if (agentTabId === tabId) this.agentTabIds.delete(contextKey)
     }

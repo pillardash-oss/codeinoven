@@ -59,9 +59,6 @@ export interface ParkBrowserTabOptions {
   size?: BrowserViewport
   /** Keep the tab the active one, because it is coming straight back. */
   keepActive?: boolean
-  /** Why the tab is being parked. Carried into the dev log so a recorded frame
-   *  of the browser surface can be matched to the moment that produced it. */
-  reason: string
 }
 
 export interface BrowserTab {
