@@ -1,6 +1,5 @@
 <script lang="ts">
   import { Check } from '@lucide/svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -14,15 +13,22 @@
   import type { CustomIcon } from '$shared/types'
 
   interface Props {
-    /** The saved page being edited. The modal is mounted fresh per edit. */
+    /** The saved page this editor changes. The fold mounts it fresh per edit. */
     bookmarkId: string
-    onClose: () => void
+    /** Called once the edit landed, so the fold can close. */
+    onSaved: () => void
   }
 
-  let { bookmarkId, onClose }: Props = $props()
+  let { bookmarkId, onSaved }: Props = $props()
 
   /**
    * The saved page's editor: its title, its address, and its icon.
+   *
+   * It is embedded in the bookmarks panel as a fold on the bookmark's own row,
+   * drawn without a shell of its own, for the same reason the box editor is: an
+   * editing surface should not cover the thing it edits. The fold owns the
+   * disclosure and this owns the draft, the Save and the one error a refused save
+   * reports back.
    *
    * A bookmark is quick access the user keeps, not a page the browser recorded, so
    * everything about it is theirs to change. The address goes back to the store as
@@ -34,9 +40,9 @@
    * fallback. Choosing one replaces it.
    */
 
-  // Read once at construction and never again: the modal is mounted fresh for each
-  // edit, so the draft it holds is the bookmark as the user opened it. If it is
-  // removed underneath, saving becomes a no-op.
+  // Read once at construction and never again: the fold mounts the editor fresh
+  // for each edit, so the draft it holds is the bookmark as the user opened it. A
+  // save against a bookmark removed underneath is a no-op.
   const existing =
     browserBookmarks.bookmarks.find((candidate) => candidate.id === bookmarkId) ?? null
 
@@ -100,10 +106,7 @@
   }
 
   function save(): void {
-    if (!existing) {
-      onClose()
-      return
-    }
+    if (!existing) return
     const imagePath = resolveAppearanceImagePath({
       currentImagePath: iconCleared ? null : existing.imagePath,
       currentIconType: existing.iconType,
@@ -123,24 +126,30 @@
       saveError = rejected
       return
     }
-    onClose()
+    onSaved()
   }
 
-  function saveOnEnter(event: KeyboardEvent): void {
-    if (event.key !== 'Enter') return
+  /** Enter in either field saves, and Cmd/Ctrl+Enter saves from anywhere in the
+   *  editor. The two handlers never overlap, so one save can never fire twice. */
+  function onFieldKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' || event.metaKey || event.ctrlKey) return
+    event.preventDefault()
+    save()
+  }
+
+  function onEditorKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
     event.preventDefault()
     save()
   }
 </script>
 
-<Modal
-  open
-  title="Edit bookmark"
-  description="Rename this saved page, change its address, or give it an icon of its own."
-  {onClose}
-  size="md"
-  contentClass="space-y-4 overflow-y-auto p-6"
->
+<!--
+  The editor itself is not interactive; its fields and buttons are. The chord sits
+  on the container so Cmd/Ctrl+Enter saves from whichever field the user is in.
+-->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="space-y-4" onkeydown={onEditorKeydown}>
   <AppearancePicker
     name={title.trim() || (existing?.title ?? '')}
     {iconType}
@@ -176,7 +185,7 @@
       autocomplete="off"
       bind:value={title}
       oninput={() => (saveError = null)}
-      onkeydown={saveOnEnter}
+      onkeydown={onFieldKeydown}
     />
     <span class="mt-1 block text-[0.6875rem] text-dimmed">
       Leave blank to name it after its site.
@@ -193,7 +202,7 @@
       autocomplete="off"
       bind:value={url}
       oninput={() => (saveError = null)}
-      onkeydown={saveOnEnter}
+      onkeydown={onFieldKeydown}
     />
     <span class="mt-1 block text-[0.6875rem] text-dimmed">
       The page the bookmark opens. Changing it takes the page's own icon with it.
@@ -204,40 +213,25 @@
     <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{saveError}</p>
   {/if}
 
-  {#snippet footer()}
-    <div class="flex w-full items-center gap-2">
-      <div class="ml-auto flex items-center gap-2">
-        {#if hasAppearance}
-          <button
-            type="button"
-            class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
-            title="Reset the icon to the page's own"
-            data-modal-dismiss
-            onclick={resetAppearance}
-          >
-            Reset
-          </button>
-        {/if}
-        <button
-          type="button"
-          class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-          title="Close without saving"
-          data-modal-dismiss
-          onclick={onClose}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-          title="Save this bookmark"
-          data-modal-primary
-          onclick={save}
-        >
-          <Check size={14} />
-          Save
-        </button>
-      </div>
-    </div>
-  {/snippet}
-</Modal>
+  <div class="flex items-center justify-end gap-1">
+    {#if hasAppearance}
+      <button
+        type="button"
+        class="rounded-lg px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
+        title="Reset the icon to the page's own"
+        onclick={resetAppearance}
+      >
+        Reset
+      </button>
+    {/if}
+    <button
+      type="button"
+      class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      title="Save this bookmark"
+      onclick={save}
+    >
+      <Check size={13} />
+      Save
+    </button>
+  </div>
+</div>

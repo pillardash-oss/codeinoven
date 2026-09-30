@@ -18,17 +18,24 @@
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import BrowserLibraryRow from './BrowserLibraryRow.svelte'
-  import BrowserBookmarkModal from './BrowserBookmarkModal.svelte'
+  import BrowserBookmarkEditor from './BrowserBookmarkEditor.svelte'
   import { browserBookmarkIconUrl } from './browser-bookmark-appearance'
 
   /**
    * The saved pages, docked in the browser's right rail.
    *
    * A saved page is quick access the user keeps, so this panel is where it is
-   * shaped: a row opens the page in the tab on screen, and its menu renames,
-   * re-addresses, re-icons, reorders and removes it. The row carries the same
-   * affordances in both directions: right-clicking anywhere on it opens the menu,
-   * and the ellipsis does that same thing in one click.
+   * shaped: a row opens the page in the tab on screen, and its own controls
+   * rename, re-address, re-icon, reorder and remove it. Editing is a fold on the
+   * row rather than a dialog, the same shape the boxes and extensions tools use,
+   * so the list stays in view while the fields are read; the editor is mounted
+   * fresh per fold, which is what makes an unsaved draft go when the fold closes,
+   * and a row whose editor is open stops being a drag handle so its fields can be
+   * selected with the mouse.
+   *
+   * The row carries the same affordances in both directions: right-clicking
+   * anywhere on it opens the menu, and the ellipsis does that same thing in one
+   * click.
    *
    * It belongs to the person rather than to a tab, so the panel works with the
    * strip empty as well as with a page on screen.
@@ -40,8 +47,9 @@
   let query = $state('')
   /** The bookmark the user asked to remove, held while the confirmation is up. */
   let removingId = $state<string | null>(null)
-  /** The bookmark whose editor is open, or null while it is closed. */
-  let editingId = $state<string | null>(null)
+  /** The saved page whose editor is folded open on its row, or null. One at a
+   *  time, so two drafts can never both claim the fold. */
+  let expandedId = $state<string | null>(null)
   /** The row whose menu is open. One menu serves the whole list, so the open row is
    *  identified rather than held, which is also what lets the row's own context
    *  menu open it. */
@@ -77,6 +85,11 @@
   function openMenu(event: MouseEvent, id: string): void {
     event.preventDefault()
     menuOpenId = id
+  }
+
+  /** Fold a row's editor open, or close it when it is already the one on screen. */
+  function toggleExpanded(id: string): void {
+    expandedId = expandedId === id ? null : id
   }
 
   function onDragStart(event: DragEvent, bookmark: BrowserBookmark): void {
@@ -175,9 +188,10 @@
     <ul class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
       {#each matching as bookmark (bookmark.id)}
         {@const rowIndex = matching.indexOf(bookmark)}
+        {@const expanded = expandedId === bookmark.id}
         <li
           class="relative"
-          draggable="true"
+          draggable={!expanded}
           ondragstart={(event: DragEvent) => onDragStart(event, bookmark)}
           ondragover={(event: DragEvent) => onDragOver(event, bookmark)}
           ondragleave={() => {
@@ -231,7 +245,7 @@
                     </p>
                     <DropdownMenu.Item
                       class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                      onSelect={() => (editingId = bookmark.id)}
+                      onSelect={() => (expandedId = bookmark.id)}
                     >
                       <Pencil size={13} class="shrink-0 text-muted" />
                       Edit bookmark
@@ -263,8 +277,39 @@
                   </DropdownMenu.Content>
                 </DropdownMenu.Portal>
               </DropdownMenu.Root>
+              <button
+                type="button"
+                class={[
+                  'flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100',
+                  expanded ? 'opacity-100' : 'opacity-0'
+                ]}
+                title={expanded
+                  ? `Hide the editor for ${bookmark.title}`
+                  : `Edit ${bookmark.title}`}
+                aria-label={expanded
+                  ? `Hide the editor for ${bookmark.title}`
+                  : `Edit ${bookmark.title}`}
+                aria-expanded={expanded}
+                aria-controls="bookmark-editor-{bookmark.id}"
+                onclick={() => toggleExpanded(bookmark.id)}
+              >
+                <ChevronDown size={13} class={expanded ? 'rotate-180' : ''} />
+              </button>
             {/snippet}
           </BrowserLibraryRow>
+
+          {#if expanded}
+            <!-- A right-click inside the editor belongs to its fields, not to the row's
+                 options menu. -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              id="bookmark-editor-{bookmark.id}"
+              class="mb-1 rounded-lg border p-3"
+              oncontextmenu={(event: MouseEvent) => event.stopPropagation()}
+            >
+              <BrowserBookmarkEditor bookmarkId={bookmark.id} onSaved={() => (expandedId = null)} />
+            </div>
+          {/if}
           {#if dropTargetId === bookmark.id && dropPosition === 'after'}
             <span class="pointer-events-none absolute inset-x-1 bottom-0 h-0.5 rounded bg-primary"
             ></span>
@@ -289,10 +334,6 @@
     <Globe size={12} class="text-dimmed" />
   {/if}
 {/snippet}
-
-{#if editingId !== null}
-  <BrowserBookmarkModal bookmarkId={editingId} onClose={() => (editingId = null)} />
-{/if}
 
 <ConfirmDialog
   open={removingId !== null}
