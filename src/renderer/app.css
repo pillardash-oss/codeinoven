@@ -205,6 +205,20 @@ body {
   box-shadow: none;
 }
 
+/* A rail panel that hosts a native page insets its own frame by the band that
+   resizes the rail.
+
+   A native `WebContentsView` is composited above the renderer's DOM, so a page
+   placed over that band takes the pointer meant for the resize handle and the
+   rail can no longer be adjusted at all. The band's width and which edge it sits
+   on are declared by the rail itself (ContextSidebar's `railBandInsets`), so a
+   panel cannot drift from the handle, and a panel rendered outside a rail (the
+   full screen browser) inherits nothing and pays no inset. */
+.native-rail-gutter {
+  margin-left: var(--context-rail-band-left, 0px);
+  margin-top: var(--context-rail-band-top, 0px);
+}
+
 /* Anything clickable gets a pointer — desktop apps should feel deliberate.
    Zero-specificity (:where) inside the base layer so cursor-* utilities and
    disabled: variants still win. */

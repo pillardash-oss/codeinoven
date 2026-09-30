@@ -119,12 +119,18 @@ class BrowserPopupWindowsState {
    * strip.
    */
   async openExtension(
-    projectId: string,
-    tabId: string,
+    owner: { projectId: string; threadId: string; tabId: string; boxId: string | null },
     extensionId: string
   ): Promise<string | null> {
     try {
-      const popupId = await invoke('browser:openExtensionPopup', projectId, tabId, extensionId)
+      const popupId = await invoke(
+        'browser:openExtensionPopup',
+        owner.projectId,
+        owner.tabId,
+        owner.threadId,
+        owner.boxId,
+        extensionId
+      )
       this.select(popupId)
       return popupId
     } catch (error: unknown) {

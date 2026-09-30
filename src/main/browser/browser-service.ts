@@ -767,12 +767,16 @@ export class BrowserService {
      * Open an extension's own action popup, which the app hosts because Electron
      * draws no toolbar and no action popup for one to hang from.
      */
-    replaceHandler('browser:openExtensionPopup', (_event, rawProjectId, rawTabId, rawExtensionId) =>
-      this.openExtensionPopup(
-        validateProjectId(rawProjectId),
-        validateTabId(rawTabId),
-        validateExtensionId(rawExtensionId)
-      )
+    replaceHandler(
+      'browser:openExtensionPopup',
+      (_event, rawProjectId, rawTabId, rawThreadId, rawBoxId, rawExtensionId) =>
+        this.openExtensionPopup(
+          validateProjectId(rawProjectId),
+          validateTabId(rawTabId),
+          validateThreadId(rawThreadId),
+          validateOptionalBoxId(rawBoxId),
+          validateExtensionId(rawExtensionId)
+        )
     )
     replaceHandler('browser:setToastVisible', (_event, rawVisible) => {
       this.setToastVisible(rawVisible === true)
@@ -2584,16 +2588,21 @@ export class BrowserService {
    * The page is bound to the jar the extension runs in, because an extension page
    * resolves only inside the session that loaded the extension, and it is then a
    * popup like any other: the rail places it, gives it the keyboard and closes it.
+   *
+   * The tab is taken from the caller's own record rather than assumed to exist:
+   * the renderer makes a tab the moment the user asks for one, and its page is
+   * only shown once there is an address to load, so a tab the user just opened has
+   * no record here yet. Refusing it would leave the popup unopenable on exactly the
+   * blank tab a user reaches for an extension on, which is what this did before.
    */
   private async openExtensionPopup(
     projectId: string,
     tabId: string,
+    threadId: string,
+    boxId: string | null,
     extensionId: string
   ): Promise<string> {
-    const tab = this.tabs.get(tabId)
-    if (!tab || tab.projectId !== projectId) {
-      throw new Error('An extension popup needs an open tab of its own project')
-    }
+    const tab = this.ensureTab(tabId, projectId, threadId, boxId)
     // One popup per extension per tab: asking again is the user coming back to the
     // popup they already have, not asking for a second copy of it.
     const existing = this.popupWindows.extensionPopupFor(extensionId, tabId)

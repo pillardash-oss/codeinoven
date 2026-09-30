@@ -1,9 +1,9 @@
 <script lang="ts">
   import { Puzzle } from '@lucide/svelte'
-  import { GLOBAL_BROWSER_PROJECT_ID, type BrowserExtension } from '$shared/ipc-contract'
+  import type { BrowserExtension } from '$shared/ipc-contract'
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
-  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
 
   /**
@@ -57,8 +57,12 @@
     }
     workspaceState.navigateToBrowser?.()
     const popupId = await browserPopupWindows.openExtension(
-      GLOBAL_BROWSER_PROJECT_ID,
-      current.id,
+      {
+        projectId: GLOBAL_BROWSER_CONTEXT.projectId,
+        threadId: GLOBAL_BROWSER_CONTEXT.threadId,
+        tabId: current.id,
+        boxId: current.boxId
+      },
       extensionId
     )
     if (popupId !== null) globalBrowser.showPopupsSidebar()

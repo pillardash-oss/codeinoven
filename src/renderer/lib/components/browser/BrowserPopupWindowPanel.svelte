@@ -8,7 +8,7 @@
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
-  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
   import { extensionJarForBox } from '$lib/stores/global-browser-types'
 
   /**
@@ -61,7 +61,18 @@
   async function openPopup(extensionId: string): Promise<void> {
     const tab = globalBrowser.activeTab
     if (!tab) return
-    await browserPopupWindows.openExtension(GLOBAL_BROWSER_PROJECT_ID, tab.id, extensionId)
+    // The tab's own identity travels with the call: a tab the user has only just
+    // opened has no page yet, so main has no record of it, and naming the global
+    // context here is what keeps the popup on the jar this tab lives in.
+    await browserPopupWindows.openExtension(
+      {
+        projectId: GLOBAL_BROWSER_CONTEXT.projectId,
+        threadId: GLOBAL_BROWSER_CONTEXT.threadId,
+        tabId: tab.id,
+        boxId: tab.boxId
+      },
+      extensionId
+    )
   }
 
   let frameElement = $state<HTMLDivElement>()
@@ -235,10 +246,15 @@
   <!-- Keyed by popup, so switching windows tears one placement down and builds the
        next instead of moving a page that is already on screen. -->
   {#key popupId}
+    <!-- `.native-rail-gutter` keeps this frame clear of the rail's resize band: the
+         page is a native view composited above the DOM, so a frame reaching the
+         band would swallow the drag that adjusts the rail. The frame is sized by
+         its own box rather than `w-full`, because a full width plus a left margin
+         would run past the rail's edge. -->
     <div
       {@attach attachFrame(popupId)}
       {@attach frameVisible && manageNativeView(popupId)}
-      class="relative h-full w-full bg-app"
+      class="native-rail-gutter relative h-full bg-app"
       data-region="browser-popup-window"
     ></div>
   {/key}

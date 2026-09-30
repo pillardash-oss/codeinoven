@@ -627,7 +627,7 @@
   <div
     {@attach attachContentElement}
     data-native-browser-content
-    class="min-h-0 min-w-0 flex-1 bg-surface"
+    class="native-rail-gutter min-h-0 min-w-0 flex-1 bg-surface"
     role={pageState.loadError ? undefined : 'document'}
     aria-label={pageState.loadError
       ? undefined

@@ -307,6 +307,24 @@
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   }
+
+  /**
+   * The band's own width, and the two insets a panel has to leave clear for it.
+   *
+   * The band is the only way the rail's width or the dock's height can be
+   * changed, so nothing may cover it. A panel that hosts a native page is the
+   * one thing that can: a `WebContentsView` is composited above the renderer's
+   * DOM, so a page placed over the band takes the pointer and the rail stops
+   * being adjustable (measured: the popup's page covered 5.6px of the 6px band,
+   * and only the strip above it stayed grabbable). Those panels inset their own
+   * frame by `.native-rail-gutter`, which reads these two values, so the width
+   * and the edge are stated once, here, and a panel cannot drift from it.
+   */
+  const railBandInsets = $derived(
+    `--context-rail-band: 0.375rem; --context-rail-band-left: ${
+      placement === 'bottom' ? '0px' : 'var(--context-rail-band)'
+    }; --context-rail-band-top: ${placement === 'bottom' ? 'var(--context-rail-band)' : '0px'}`
+  )
 </script>
 
 <aside
@@ -315,11 +333,14 @@
   aria-label="Context sidebar"
   data-region="context-sidebar"
   data-placement={placement}
+  style={railBandInsets}
 >
   <div
     class="absolute z-10 transition-colors hover:bg-primary/20 {placement === 'bottom'
-      ? 'inset-x-0 top-0 h-1.5 cursor-row-resize'
-      : 'inset-y-0 left-0 w-1.5 cursor-col-resize'} {resizing ? 'bg-primary/30' : ''}"
+      ? 'inset-x-0 top-0 h-[var(--context-rail-band)] cursor-row-resize'
+      : 'inset-y-0 left-0 w-[var(--context-rail-band)] cursor-col-resize'} {resizing
+      ? 'bg-primary/30'
+      : ''}"
     role="separator"
     aria-label="Resize context sidebar"
     aria-orientation={placement === 'bottom' ? 'horizontal' : 'vertical'}

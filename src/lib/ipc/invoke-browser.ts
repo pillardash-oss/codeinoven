@@ -121,9 +121,15 @@ export const invokeBrowserContract = {
    *
    * Answers the popup's id, which is the popup already open when that extension
    * already has one in this tab.
+   *
+   * The tab's own project, thread and box travel with the call rather than being
+   * inferred: a tab the user just opened has no page yet, so main has no record of
+   * it, and the popup has to be hosted on the jar that tab lives in. The rail is
+   * shared by the global browser and by a project's, so a caller naming the global
+   * project for a project tab would be refused.
    */
   'browser:openExtensionPopup': {} as Contract<
-    [projectId: string, tabId: string, extensionId: string],
+    [projectId: string, tabId: string, threadId: string, boxId: string | null, extensionId: string],
     string
   >,
   /**
