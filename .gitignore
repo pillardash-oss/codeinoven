@@ -23,12 +23,12 @@ Thumbs.db
 /src/main/**/*.js
 /src/lib/**/*.js
 /src/preload/**/*.js
-# ...except the browser extension compatibility preamble, which is a hand-written
-# runtime script with no TypeScript source beside it. The extension install path
-# imports it with `?raw`, so ignoring it would leave a fresh checkout able to
-# resolve everything except the one file that makes four of the five supported
-# extensions start at all.
-!/src/main/browser/extensions/compat/cio-compat-preamble.js
+# ...except the browser extension compatibility scripts, which are hand-written runtime
+# scripts with no TypeScript source beside them. The extension install path imports
+# them with `?raw`, so ignoring them would leave a fresh checkout able to resolve
+# everything except the files that make four of the five supported extensions start
+# at all.
+!/src/main/browser/extensions/compat/*.js
 /.svelte-check/
 .claude/
 

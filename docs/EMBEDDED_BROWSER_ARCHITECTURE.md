@@ -83,6 +83,19 @@ material way, and the difference is deliberate.
   extension's badge, icon and title from what comes back. A port rather than
   `runtime.sendMessage`, because a message is delivered to every `onMessage`
   listener the extension has and a real one can throw on it.
+- **An extension's own popup is told which tab it is acting on.** The app hosts an
+  action's popup in a rail popup and gives it the keyboard on first show, so the
+  runtime answered the page's `chrome.tabs.query({ active: true })` with the popup's
+  own document   which a password manager reads as the website the user is on, and
+  reports as "Site doesn't match" naming the extension's id. The tab facts a tab's
+  pages receive are therefore pushed into the extension's own documents as well as
+  into its worker: `compat/cio-page-tabs.js` wraps `tabs.query` on both roots in the
+  page's world (never listing an extension surface as a tab, and reporting the page
+  behind the popup as the active one, with the `WebContents` id a message must use),
+  answers `tabs.getCurrent` with `undefined` as Chromium does in a popup, and leaves
+  `url`/`title` out when the extension may not read them. The snapshot comes from
+  `browser-extension-page-tabs.ts`, pushed on every `onUpdated`/`onActivated` fact and
+  on each document the popup arrives with.
 - **A link in the browser view belongs to that browser.** The link context menu offers
   the default browser, a new tab of the app-wide browser and the tab already on screen
   there, and the thread browser's item (which targets a project thread's tab) is not

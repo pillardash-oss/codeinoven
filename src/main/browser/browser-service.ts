@@ -227,6 +227,10 @@ import {
   type TabMarkRecogniser
 } from './browser-service/browser-tab-mark'
 import {
+  extensionPageTabsScript,
+  type BrowserExtensionPageTab
+} from './extensions/browser-extension-page-tabs'
+import {
   BrowserFindSessions,
   browserFindResultFor,
   validateBrowserFindRequest,
@@ -2369,7 +2373,9 @@ export class BrowserService {
       navigationFailure: null
     }
     this.tabs.set(tabId, tab)
-    this.notifyExtensionTab(projectId, boxId, 'onCreated', [this.extensionTabInfo(tabId, tab)])
+    this.notifyExtensionTab(tabId, projectId, boxId, 'onCreated', [
+      this.extensionTabInfo(tabId, tab)
+    ])
 
     const publish = (): void => this.publishState(tabId)
     // A key pressed in the page reaches this view's web contents and nothing
@@ -2439,7 +2445,7 @@ export class BrowserService {
     view.webContents.on('devtools-closed', publish)
     view.webContents.on('did-start-loading', () => {
       publish()
-      this.notifyExtensionTab(tab.projectId, tab.boxId, 'onUpdated', [
+      this.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onUpdated', [
         tab.view.webContents.id,
         { status: 'loading' },
         this.extensionTabInfo(tabId, tab)
@@ -2506,7 +2512,7 @@ export class BrowserService {
       // for an empty one.
       applyBrowserPageBackground(tab.view)
       publish()
-      this.notifyExtensionTab(tab.projectId, tab.boxId, 'onUpdated', [
+      this.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onUpdated', [
         tab.view.webContents.id,
         { status: 'complete', url },
         this.extensionTabInfo(tabId, tab)
@@ -2534,7 +2540,7 @@ export class BrowserService {
     })
     view.webContents.on('did-navigate-in-page', (_event, url) => {
       publish()
-      this.notifyExtensionTab(tab.projectId, tab.boxId, 'onUpdated', [
+      this.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onUpdated', [
         tab.view.webContents.id,
         { url },
         this.extensionTabInfo(tabId, tab)
@@ -2542,7 +2548,7 @@ export class BrowserService {
     })
     view.webContents.on('page-title-updated', (_event, title) => {
       publish()
-      this.notifyExtensionTab(tab.projectId, tab.boxId, 'onUpdated', [
+      this.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onUpdated', [
         tab.view.webContents.id,
         { title },
         this.extensionTabInfo(tabId, tab)
@@ -2568,7 +2574,7 @@ export class BrowserService {
         if (tab.favicon === favicon) return
         tab.favicon = favicon
         publish()
-        this.notifyExtensionTab(tab.projectId, tab.boxId, 'onUpdated', [
+        this.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onUpdated', [
           tab.view.webContents.id,
           { favIconUrl: source },
           this.extensionTabInfo(tabId, tab)
@@ -2773,6 +2779,9 @@ export class BrowserService {
       view,
       viewport: null
     })
+    // The wrappers that answer this page's `chrome.tabs.query` live in its
+    // document, so every document it arrives with is told which tab it acts on.
+    view.webContents.on('did-finish-load', () => this.reportExtensionPageTabs(tabId))
     try {
       await view.webContents.loadURL(url)
     } catch (error: unknown) {
@@ -3238,14 +3247,74 @@ export class BrowserService {
    * an extension's state machine is driven by: a created, updated, activated or
    * removed tab, in the shapes `chrome.tabs` documents, so a listener written
    * against the real API runs unmodified.
+   *
+   * One fact reaches two kinds of listener, which is why the tab is named rather
+   * than left to the arguments: the worker's state machine, through those argument
+   * shapes, and the extension's own pages, because a popup the app hosts for an
+   * extension is a document that asks the same question the worker is being told
+   * the answer to (see `reportExtensionPageTabs`).
    */
   private notifyExtensionTab(
+    tabId: string,
     projectId: string,
     boxId: string | null,
     name: BrowserExtensionTabEventName,
     args: unknown[]
   ): void {
     this.extensions.onTabEvent(projectId, boxId, name, args)
+    // The two facts an extension's own page acts on are the address and title of
+    // the page it is acting on and whether that page is the one on screen. The rest
+    // of the lifecycle either concerns the tab's jar or belongs to a tab that is
+    // going away, and a tab that goes away takes its own popups with it.
+    if (name === 'onUpdated' || name === 'onActivated') this.reportExtensionPageTabs(tabId)
+  }
+
+  /**
+   * Tell every extension page one tab owns which tab it is acting on.
+   *
+   * An extension's action popup is hosted by the app in a rail popup, and it is a
+   * `WebContents` among the pages, so the runtime answers its `chrome.tabs.query`
+   * from focus   and the popup is the focused view by design. A query for "the tab I
+   * am acting on" therefore came back as the popup's own document, which Bitwarden
+   * reads as the site the user is on ("Site doesn't match", `CURRENT WEBSITE
+   * nngceckbapebfimnlniiiahkandclblb`), so the app pushes the tab it knows instead.
+   * See `browser-extension-page-tabs.ts`.
+   */
+  private reportExtensionPageTabs(tabId: string): void {
+    for (const contents of this.popupWindows.extensionPagesForTab(tabId)) {
+      this.pushExtensionPageTab(tabId, contents)
+    }
+  }
+
+  /**
+   * One extension page, told the tab it is acting on.
+   *
+   * The tab is reported with the page's own `WebContents` id and address, which is
+   * what makes an autofill flow correct rather than merely quiet: the extension
+   * messages that id, and the message lands in the page's content script.
+   */
+  private pushExtensionPageTab(tabId: string, contents: WebContents): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    const page: WebContents | undefined = tab.view.webContents
+    if (!page || page.isDestroyed() || contents.isDestroyed()) return
+    const snapshot: BrowserExtensionPageTab = {
+      id: page.id,
+      url: page.getURL(),
+      title: page.getTitle(),
+      active: this.activeTabId === tabId,
+      loading: page.isLoading(),
+      audible: page.isCurrentlyAudible(),
+      muted: page.isAudioMuted()
+    }
+    void contents
+      .executeJavaScript(extensionPageTabsScript(snapshot), true)
+      .catch((error: unknown) => {
+        Logger.dev('An extension page could not be told which tab it acts on', {
+          tabId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      })
   }
 
   /** A tab became the one on screen: the extension-visible activation event. */
@@ -3254,7 +3323,7 @@ export class BrowserService {
     if (!tab) return
     const contents: WebContents | undefined = tab.view.webContents
     if (!contents || contents.isDestroyed()) return
-    this.notifyExtensionTab(tab.projectId, tab.boxId, 'onActivated', [
+    this.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onActivated', [
       { tabId: contents.id, windowId: 0 }
     ])
   }
@@ -4492,7 +4561,7 @@ export class BrowserService {
     // id it carries is the page's own.
     const removedContents: WebContents | undefined = tab.view.webContents
     if (removedContents && !removedContents.isDestroyed()) {
-      this.notifyExtensionTab(tab.projectId, tab.boxId, 'onRemoved', [
+      this.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onRemoved', [
         removedContents.id,
         { windowId: 0, isWindowClosing: false }
       ])

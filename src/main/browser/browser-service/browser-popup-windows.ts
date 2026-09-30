@@ -257,6 +257,24 @@ export class BrowserPopupWindows {
   }
 
   /**
+   * The pages of an extension's own popups that one tab is acting through.
+   *
+   * An extension's popup is a document of the extension, running beside the page it
+   * was opened over, and the tab it belongs to is the tab it acts on; the caller is
+   * the app telling that document which tab that is. A window a page opened is not
+   * one of these: it belongs to the extension that opened it, not to this tab.
+   */
+  extensionPagesForTab(tabId: string): WebContents[] {
+    const pages: WebContents[] = []
+    for (const record of this.popups.values()) {
+      if (record.extensionId === null || record.tabId !== tabId) continue
+      const page = pageOf(record)
+      if (page && !page.isDestroyed()) pages.push(page)
+    }
+    return pages
+  }
+
+  /**
    * The tab that owns the page a `WebContents` belongs to, for the reports that
    * arrive with a contents and need a tab: a permission the page asks for, a file
    * it downloads.
