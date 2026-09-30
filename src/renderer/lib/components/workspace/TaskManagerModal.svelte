@@ -7,7 +7,7 @@
     Cpu,
     Check,
     ChevronDown,
-    ExternalLink,
+    GlobeCode,
     MemoryStick,
     MessagesSquare,
     Network,
@@ -578,6 +578,17 @@
     return { projectId, threadId: created.id }
   }
 
+  /**
+   * Open a process's listening port in the browser of the conversation that
+   * owns it.
+   *
+   * The app lands on the owning thread first. A tab belongs to a conversation,
+   * and the reveal that opens the browser dock only reaches the conversation
+   * that is on screen, so opening a page for a process in another project, chat,
+   * or routine run without moving first created a tab nobody could see. Landing
+   * first is also what makes the browser belong to the right owner: a run of a
+   * routine shares the routine's browser, a chat owns its own.
+   */
   async function openInBrowser(process: TaskManagerProcess): Promise<void> {
     if (process.ports.length === 0) return
     error = ''
@@ -587,14 +598,21 @@
         error = `No project available to open ${process.pid}.`
         return
       }
-      const url = `http://localhost:${process.ports[0]}`
+      const [thread, project] = await Promise.all([
+        invoke('thread:get', target.projectId, target.threadId),
+        invoke('project:get', target.projectId)
+      ])
+      if (thread && project) {
+        workspaceState.openThreadInOwningView(thread, project)
+      }
       contextSidebarState.openBrowserForContext(
-        url,
+        `http://localhost:${process.ports[0]}`,
         target.projectId,
         target.threadId,
         undefined,
         true
       )
+      onClose()
     } catch (openError) {
       error = openError instanceof Error ? openError.message : 'Could not open the process.'
     }
@@ -975,12 +993,12 @@
                 title={process.ports.length === 0
                   ? 'No port detected'
                   : process.projectId
-                    ? 'Open in in-app browser'
+                    ? 'Open in thread browser'
                     : 'No project associated with this process'}
-                aria-label={`Open ${processName(process.command)} in the in-app browser`}
+                aria-label={`Open ${processName(process.command)} in the thread browser`}
                 onclick={() => void openInBrowser(process)}
               >
-                <ExternalLink size={15} />
+                <GlobeCode size={15} />
               </button>
               <button
                 type="button"
