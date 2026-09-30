@@ -1173,11 +1173,81 @@
       iconUrl: details && details.imageData ? null : resolveIconPath(details && details.path)
     }))
   }
+  /**
+   * A toolbar namespace built from nothing, for the extension that gets neither
+   * of the runtime's two names for one.
+   */
+  const synthesizeActionNamespace = (root, name) => {
+    const api = {}
+    for (const member of [
+      'setBadgeText',
+      'setBadgeBackgroundColor',
+      'getBadgeText',
+      'getBadgeBackgroundColor',
+      'setTitle',
+      'getTitle',
+      'setIcon',
+      'setPopup',
+      'getPopup',
+      'enable',
+      'disable',
+      'openPopup'
+    ]) {
+      api[member] = noop
+    }
+    // The event a toolbar click arrives on, so a listener has somewhere to go.
+    api.onClicked = makeRealEvent()
+    try {
+      Object.defineProperty(root, name, {
+        value: api,
+        configurable: true,
+        writable: true,
+        enumerable: true
+      })
+      return api
+    } catch (error) {
+      state.errors.push(name + ': ' + String(error))
+      return null
+    }
+  }
   for (const root of roots) {
-    wrapActionApi(root.action)
-    // Manifest V2's own namespace, since uBlock Origin classic and an installed
-    // old build are the extensions most likely to carry a badge here.
-    wrapActionApi(root.browserAction)
+    if (!root) continue
+    const actionApi = root.action && typeof root.action === 'object' ? root.action : null
+    // Manifest V2 reaches its toolbar through `browserAction`, and an MV2 extension
+    // gets neither name here: the runtime compiles in only MV3's `action`, and
+    // exposes it only to an MV3 extension. A missing namespace there is not a
+    // missing badge, it is an extension that dies on its own startup path
+    // (measured: uBlock Origin classic throws on
+    // `chrome.browserAction.setBadgeBackgroundColor`). So one is always provided:
+    // the runtime's own `action` when there is one, and otherwise a namespace built
+    // from the members this file already knows how to record.
+    let browserActionApi =
+      root.browserAction && typeof root.browserAction === 'object' ? root.browserAction : null
+    if (!browserActionApi) {
+      if (actionApi) {
+        browserActionApi = actionApi
+        try {
+          Object.defineProperty(root, 'browserAction', {
+            value: actionApi,
+            configurable: true,
+            writable: true,
+            enumerable: true
+          })
+        } catch (error) {
+          state.errors.push('browserAction: ' + String(error))
+        }
+      } else {
+        browserActionApi = synthesizeActionNamespace(root, 'browserAction')
+      }
+      state.browserActionAlias = (state.browserActionAlias || 0) + 1
+    }
+    if (actionApi) wrapActionApi(actionApi)
+    // Only a namespace that is genuinely its own object is wrapped separately: on
+    // the alias above it is the same object, and wrapping it twice would record one
+    // badge call as two.
+    if (browserActionApi && browserActionApi !== actionApi) {
+      wrapActionApi(browserActionApi)
+    }
   }
   state.actionRecorder = 'installed'
 
