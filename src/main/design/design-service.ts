@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs'
 import { isAbsolute, relative, sep } from 'node:path'
+import { isScreenCanvasEntry } from '../../lib/design/screen-canvas'
 import {
   DEFAULT_WORK_ROOTS,
   authoredWorkKindOf,
@@ -533,7 +534,12 @@ export class DesignService {
   ): Promise<DesignScreenShot[]> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
     const folder = resolveServedFolder(project.path, directory, currentWorkRoot('design'))
-    const screens = await listDesignScreens(folder.absolute)
+    // The Screen Canvas is the board's own strip rather than a screen: it has no
+    // picture, and loading it in the sweep would load every frame's page a second
+    // time inside the very tab the sweep is using.
+    const screens = (await listDesignScreens(folder.absolute)).filter(
+      (screen) => !isScreenCanvasEntry(screen.entry)
+    )
     const shotWidth = Math.min(
       MAX_THUMBNAIL_WIDTH,
       Math.max(MIN_THUMBNAIL_WIDTH, Math.round(width))

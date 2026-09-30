@@ -2,9 +2,10 @@
   import { onMount } from 'svelte'
   import {
     Check,
-    ExternalLink,
+    Ellipsis,
     Film,
     Frame,
+    GlobeCode,
     ImageOff,
     LoaderCircle,
     Pencil,
@@ -15,6 +16,7 @@
     VolumeX,
     X
   } from '@lucide/svelte'
+  import { DropdownMenu } from 'bits-ui'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
@@ -24,7 +26,6 @@
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
   import {
     SCREEN_CANVAS_FILE,
-    isScreenCanvasEntry,
     screenCanvasLiveViewMessage,
     screenCanvasRequestMessage
   } from '$shared/design/screen-canvas'
@@ -43,14 +44,19 @@
    *
    * A session's work is a folder of HTML, and the user's question after a restart is
    * "where did my design go?" or "where did my video go?". This panel answers it: the
-   * folder in use, a picture of every screen it holds, every folder of that kind the
-   * project holds, and one button that brings its browser tab forward. A design session
-   * and a video session share the board, so the words come from the kind and nothing
-   * else does.
+   * folder in use, a preview of every screen it holds, and the controls that move
+   * between designs, bring one on screen, or ask the agent for more.
    *
-   * A design is a product rather than a page, so the pictures are one per screen of the
-   * folder in use. That is what makes a website and its dashboard visible together,
-   * where a single picture of the design showed the entry file and hid the rest.
+   * The panel is a header plus one scrolling surface, and the scrolling surface is
+   * only ever the screens. Everything that is a control or a status lives in the
+   * header: the design in front, its design tabs when the project holds more than
+   * one, the Screen Canvas strip, and the menu that owns the save path. A board whose
+   * settings scroll away with the work makes the user hunt for a button they were
+   * just looking at.
+   *
+   * A design is a product rather than a page, so the previews are one per screen of
+   * the folder in front, all the same size: a picture is a picture of a screen, not
+   * the screen itself, and the one in front is marked rather than enlarged.
    *
    * It loads its own state rather than receiving it through props, because the work
    * outlives the turn that made it: there is no live turn to hand it anything, and a
@@ -67,9 +73,10 @@
   /**
    * How wide a screen is pictured at.
    *
-   * One size for every card, featured or not, so the pictures are taken once and
-   * shown at whatever size the grid gives them: a second size would be a second sweep
-   * of page loads for the same screens.
+   * One size for every card, so the pictures are taken once and shown at whatever
+   * size the grid gives them: a second size would be a second sweep of page loads
+   * for the same screens. The capture is the parked tab's viewport, so every picture
+   * has the same shape and the cards line up.
    */
   const SCREEN_SHOT_WIDTH = 520
 
@@ -81,28 +88,40 @@
   )
   let gallery = $state<DesignScreenShot[]>([])
   let galleryBusy = $state(false)
-  let opening = $state('')
+  /** The design preview in flight, so its own button shows the wait. */
+  let opening = $state(false)
+  /** The canvas open in flight, kept apart from the design preview so opening one
+   *  never spins the other's button. */
+  let openingCanvas = $state(false)
   let error = $state('')
   /** The tab holding the work, so the board can reach its own controls. Empty
    *  until the first capture opens one, and an empty id reads as idle state. */
   let tabId = $state('')
 
   /**
+   * The folder the user is looking at, when it is not the thread's own.
+   *
+   * A design tab is a view change, not a preview: picking another design shows its
+   * screens here and leaves the browser alone, and the thread's own folder takes the
+   * board back the moment the agent or a preview moves it.
+   */
+  let viewedDirectory = $state('')
+
+  /**
    * The design's Screen Canvas: the page that shows every screen at once.
    *
    * It is agent work like the screens are, so the board's part is only to say
-   * whether one exists, picture it, ask for it, and say when it has fallen
-   * behind. The frames are main's answer, because the page is a file the board
-   * cannot read for itself.
+   * whether one exists, ask for it, and say when it has fallen behind. The frames
+   * are main's answer, because the page is a file the board cannot read for itself.
    */
   let canvasState = $state<ScreenCanvasState | null>(null)
-  /** Whether main has answered about the canvas, so the card is not drawn from
+  /** Whether main has answered about the canvas, so the strip is not drawn from
    *  "no canvas yet" before the first read settles. */
   let canvasRead = $state(false)
   /** Which canvas request is in flight, or an empty string when none is. */
   let canvasBusy = $state('')
   /** The folder the canvas answer belongs to, so a folder switch cannot paint
-   *  the previous folder's canvas card while the new one is being read. */
+   *  the previous folder's canvas strip while the new one is being read. */
   let canvasDirectory = $state('')
   /** What happened to the last canvas request, in the user's terms. */
   let canvasNotice = $state('')
@@ -116,11 +135,11 @@
   let WorkIcon = $derived(video ? Film : Frame)
 
   /**
-   * Where this kind of work is written, and the two controls that change it.
+   * Where this kind of work is written, and the controls that change it.
    *
    * The folder is a setting rather than a constant, so the board is also the
    * place a user points it at a folder Git tracks: they are looking at the work,
-   * so moving it is one button rather than a detour through Settings. Main owns
+   * so moving it is one menu item rather than a detour through Settings. Main owns
    * the value and reports what the move did, which is why the draft is saved
    * through the same channel the settings card uses.
    */
@@ -150,23 +169,25 @@
     tabRuntime.muted ? `Unmute the ${noun} preview` : `Mute the ${noun} preview`
   )
 
-  /** The folder being shown: the thread's own, or the newest one it can open. */
+  /** Every folder of this kind the project holds, newest first. */
+  let items = $derived(designState?.items ?? [])
+  /** The folder in front: the one the user picked, else the thread's own. */
   let selected = $derived.by(() => {
     const current = designState?.current ?? null
-    const directory = current?.directory ?? designState?.defaultDirectory ?? ''
-    return { directory, entry: current?.entry ?? null }
+    const picked =
+      viewedDirectory !== '' && items.some((item) => item.directory === viewedDirectory)
+        ? viewedDirectory
+        : ''
+    const directory =
+      picked !== '' ? picked : (current?.directory ?? designState?.defaultDirectory ?? '')
+    return { directory, entry: current?.directory === directory ? current.entry : null }
   })
-  let items = $derived(designState?.items ?? [])
   let selectedName = $derived(
     items.find((item) => item.directory === selected.directory)?.name ??
       selected.directory.split('/').at(-1) ??
       ''
   )
 
-  /** The screens of the design, without the canvas: the canvas has its own card. */
-  let designScreens = $derived(gallery.filter((screen) => !isScreenCanvasEntry(screen.entry)))
-  /** The canvas's own picture, when the sweep has captured one. */
-  let canvasShot = $derived(gallery.find((screen) => isScreenCanvasEntry(screen.entry)) ?? null)
   /** How many frames of the canvas are sketches waiting for a real screen. */
   let canvasSketches = $derived(canvasState?.sketchTitles.length ?? 0)
   /** What the canvas holds, in one line, or nothing before there is one. */
@@ -195,24 +216,19 @@
     return parts.join(' · ')
   })
 
-  /**
-   * The screen in front: the one the thread is on, or the design's first screen.
-   *
-   * A design with one screen, and a composition, are the same board with one card, so
-   * nothing below treats the two cases differently.
-   */
-  let featured = $derived(
-    designScreens.find((screen) => screen.entry === selected.entry) ?? designScreens[0] ?? null
-  )
-  /** Every other screen, so the grid shows the whole design and not just its entry. */
-  let rest = $derived(designScreens.filter((screen) => screen !== featured))
-
   let refreshLabel = $derived(video ? 'Refresh the composition preview' : 'Refresh the screens')
-  let screensLabel = $derived(`Screens in this design (${designScreens.length})`)
+  let screensLabel = $derived(
+    video ? 'Composition preview' : `Screens in this design (${gallery.length})`
+  )
 
   async function loadState(): Promise<void> {
+    const before = designState?.current?.directory ?? ''
     try {
       designState = await invoke('design:state', projectId, threadId)
+      const current = designState.current?.directory ?? ''
+      // The thread's own folder is the truth: when the agent, or a preview, moves
+      // it, the board follows rather than staying on a tab the user picked earlier.
+      if (current !== before && current !== viewedDirectory) viewedDirectory = ''
       error = ''
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'The work state could not be read.'
@@ -282,7 +298,8 @@
    * the whole design looks like and a screen at a time would be one round trip and one
    * page load per card. Main captures them the same way it captures one: in the
    * thread's browser tab, off screen, and it puts the tab back where it found it when
-   * the sweep is done.
+   * the sweep is done. The Screen Canvas is not among them: it is the board's own
+   * strip, and it has no picture.
    *
    * A composition has no screens, so its single picture keeps coming from the one
    * thumbnail call, which is also what reports the tab the mute button drives.
@@ -331,12 +348,20 @@
     }
   }
 
+  /** Show another design of this project on the board. A view change, not a preview. */
+  function selectDesign(directory: string): void {
+    if (directory === '' || directory === selected.directory) return
+    viewedDirectory = directory
+    gallery = []
+    void loadGallery()
+    void loadCanvas()
+  }
+
   /** Serve the work and bring its tab to the user. Main reveals it; the
    *  workspace opens and focuses the sidebar tab from that event, so this panel
    *  never has to know how the browser is laid out. */
   async function openWork(directory: string, entry: string | null): Promise<void> {
     if (directory === '') return
-    opening = directory
     try {
       await invoke('design:open', projectId, threadId, directory, entry, true)
       await loadState()
@@ -345,8 +370,28 @@
       error = ''
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'The work could not be opened.'
+    }
+  }
+
+  /** Preview one screen, or the design's own entry file. */
+  async function openPreview(entry: string | null): Promise<void> {
+    if (opening || openingCanvas) return
+    opening = true
+    try {
+      await openWork(selected.directory, entry)
     } finally {
-      opening = ''
+      opening = false
+    }
+  }
+
+  /** Bring the Screen Canvas forward, in its own tab. */
+  async function openCanvas(): Promise<void> {
+    if (opening || openingCanvas) return
+    openingCanvas = true
+    try {
+      await openWork(selected.directory, SCREEN_CANVAS_FILE)
+    } finally {
+      openingCanvas = false
     }
   }
 
@@ -360,17 +405,17 @@
       return
     }
     // Another folder's answer must not stand in for this one while it is read,
-    // so the card is held back until this folder has its own.
+    // so the strip is held back until this folder has its own.
     if (directory !== canvasDirectory) canvasRead = false
     try {
       const state = await invoke('design:canvas', projectId, threadId, directory)
-      // A switch that landed while this read was in flight owns the card now.
+      // A switch that landed while this read was in flight owns the strip now.
       if (directory !== selected.directory) return
       canvasState = state
     } catch (failure) {
       if (directory !== selected.directory) return
       // A board that cannot read the canvas still shows the screens, so this is
-      // logged rather than shown, and the card falls back to "none yet".
+      // logged rather than shown, and the strip falls back to "not made yet".
       logRendererError('The design canvas state could not be read.', failure)
       canvasState = null
     }
@@ -435,8 +480,8 @@
 
   $effect(() => {
     // The agent writes the canvas inside a turn, so the board re-reads when that
-    // turn settles. Nothing polls: a canvas that appeared is pictured then, and
-    // one that was rewritten is read again then.
+    // turn settles. Nothing polls: a canvas that appeared is read then, and one
+    // that was rewritten is read again then.
     return subscribe('thread:updated', (thread) => {
       if (thread.id !== threadId || thread.projectId !== projectId) return
       if (isThreadBusyStatus(thread.status)) return
@@ -464,18 +509,19 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
-  {#snippet screenCard(screen: DesignScreenShot, isFeatured: boolean)}
+  {#snippet screenCard(screen: DesignScreenShot, full: boolean)}
     {@const cardLabel = video
       ? `Open the ${noun} in the in-app browser`
       : `Open the ${noun} screen ${screen.name} in the in-app browser`}
+    {@const onScreen = !video && screen.entry === selected.entry}
     <button
       type="button"
-      class="group relative block overflow-hidden rounded-lg border border-border bg-elevated transition-colors hover:border-primary/60 {isFeatured
+      class="group relative block overflow-hidden rounded-md border bg-elevated transition-colors hover:border-primary/60 {full
         ? 'col-span-2'
-        : ''}"
+        : ''} {onScreen ? 'border-accent/60' : 'border-border'}"
       title={cardLabel}
       aria-label={cardLabel}
-      onclick={() => void openWork(selected.directory, screen.entry)}
+      onclick={() => void openPreview(screen.entry)}
     >
       {#if screen.dataUrl}
         <img
@@ -483,53 +529,54 @@
           alt={video
             ? `Preview of the ${noun} ${selectedName}`
             : `Preview of the ${noun} screen ${screen.name}`}
-          width={screen.width}
-          height={screen.height}
-          class="block h-auto w-full"
+          class="block max-h-44 w-full object-cover object-top"
         />
       {:else}
         <span
-          class="flex aspect-[4/3] w-full flex-col items-center justify-center gap-1.5 text-dimmed"
+          class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
         >
-          {#if galleryBusy && isFeatured}
-            <LoaderCircle size={18} class="animate-spin" />
-            <span class="text-[0.6875rem]">Capturing the {noun}…</span>
+          {#if galleryBusy}
+            <LoaderCircle size={14} class="animate-spin" />
+            <span class="text-[0.625rem]">Capturing…</span>
           {:else}
-            <ImageOff size={isFeatured ? 18 : 14} />
-            <span class="px-3 text-center text-[0.6875rem]">
-              {galleryBusy ? 'Capturing…' : 'No preview of this screen yet.'}
-            </span>
+            <ImageOff size={14} />
+            <span class="px-2 text-center text-[0.625rem]">No preview yet.</span>
           {/if}
         </span>
       {/if}
       <span
-        class="absolute inset-x-0 bottom-0 flex items-center bg-gradient-to-t from-black/55 to-transparent px-2 pt-4 pb-1.5"
+        class="absolute inset-x-0 bottom-0 flex items-center bg-gradient-to-t from-black/60 to-transparent px-1.5 pt-3 pb-1"
       >
-        <span class="truncate text-[0.6875rem] font-medium text-white">{screen.name}</span>
+        <span class="truncate text-[0.625rem] font-medium text-white">{screen.name}</span>
       </span>
       <span
         class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
       >
-        <span class="text-[0.6875rem] font-medium text-white">Open in the in-app browser</span>
+        <span class="text-[0.625rem] font-medium text-white">Open in the in-app browser</span>
       </span>
     </button>
   {/snippet}
 
-  <header class="shrink-0 border-b border-border px-3 py-2">
-    <div class="flex items-center justify-between gap-2">
-      <span class="flex min-w-0 items-center gap-1.5">
-        <WorkIcon size={13} class="shrink-0 text-accent" />
-        <span class="truncate text-xs font-semibold text-foreground">
-          {selectedName === '' ? nounTitle : selectedName}
-        </span>
+  <header class="shrink-0 border-b border-border">
+    <div class="flex items-center gap-1.5 px-2.5 py-1.5">
+      <WorkIcon size={13} class="shrink-0 text-accent" />
+      <span class="truncate text-xs font-semibold text-foreground" title={selected.directory}>
+        {selectedName === '' ? nounTitle : selectedName}
       </span>
-      <span class="flex shrink-0 items-center gap-1">
+      {#if !video && gallery.length > 0}
+        <span
+          class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+        >
+          {gallery.length}
+        </span>
+      {/if}
+      <span class="ml-auto flex shrink-0 items-center gap-0.5">
         {#if video && tabId !== ''}
           <button
             type="button"
-            class="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-elevated hover:text-foreground {tabRuntime.muted
+            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground {tabRuntime.muted
               ? 'text-accent'
-              : 'text-dimmed'}"
+              : ''}"
             aria-pressed={tabRuntime.muted}
             title={muteLabel}
             aria-label={muteLabel}
@@ -556,78 +603,152 @@
             <RefreshCw size={12} />
           {/if}
         </button>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+            title={`${nounTitle} options`}
+            aria-label={`${nounTitle} options`}
+          >
+            <Ellipsis size={13} />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="end"
+              sideOffset={4}
+              collisionPadding={8}
+              class="z-50 w-56 rounded-xl border border-border bg-surface p-1 shadow-lg"
+            >
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={refreshBoard}
+              >
+                <RefreshCw size={13} class="shrink-0 text-muted" />
+                {refreshLabel}
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator class="my-1 h-px bg-border" />
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={beginEditRoot}
+              >
+                <Pencil size={13} class="shrink-0 text-muted" />
+                Change save path
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                disabled={rootIsDefault || rootBusy}
+                onSelect={() => void applyRoot(defaultRoot)}
+              >
+                <RotateCcw size={13} class="shrink-0 text-muted" />
+                Reset save path to default
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
         <button
           type="button"
-          class="flex h-6 items-center gap-1 rounded-md bg-primary px-2 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
-          disabled={opening !== '' || selected.directory === ''}
+          class="ml-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
+          disabled={opening || selected.directory === ''}
           title={`Show this ${noun} in the in-app browser`}
           aria-label={`Show this ${noun} in the in-app browser`}
-          onclick={() => void openWork(selected.directory, selected.entry)}
+          onclick={() => void openPreview(selected.entry)}
         >
-          {#if opening !== ''}
-            <LoaderCircle size={11} class="animate-spin" />
+          {#if opening}
+            <LoaderCircle size={12} class="animate-spin" />
           {:else}
-            <ExternalLink size={11} />
+            <GlobeCode size={12} />
           {/if}
-          Preview {noun}
         </button>
       </span>
     </div>
-    <p class="mt-1 truncate text-[0.6875rem] text-muted" title={selected.directory}>
-      {selected.directory === '' ? `No ${noun} yet` : selected.directory}
-    </p>
-  </header>
 
-  <div class="min-h-0 flex-1 overflow-y-auto px-3 py-2">
-    {#if error !== ''}
-      <p
-        class="mb-2 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
-        role="alert"
+    {#if editingRoot}
+      <div class="flex items-center gap-1 border-t border-border/60 px-2.5 py-1.5">
+        <input
+          class="h-6 min-w-0 flex-1 rounded-md border border-border bg-elevated px-1.5 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
+          bind:value={rootDraft}
+          placeholder={defaultRoot}
+          aria-label={`Folder new ${noun}s are saved in, relative to the project`}
+          onkeydown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              cancelEditRoot()
+              return
+            }
+            if (event.key !== 'Enter') return
+            event.preventDefault()
+            void applyRoot(rootDraft.trim())
+          }}
+        />
+        <button
+          type="button"
+          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-elevated disabled:opacity-40"
+          disabled={rootBusy || rootDraft.trim() === ''}
+          title={`Save this ${noun} folder`}
+          aria-label={`Save this ${noun} folder`}
+          onclick={() => void applyRoot(rootDraft.trim())}
+        >
+          {#if rootBusy}
+            <LoaderCircle size={11} class="animate-spin" />
+          {:else}
+            <Check size={12} />
+          {/if}
+        </button>
+        <button
+          type="button"
+          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          title="Cancel"
+          aria-label="Cancel changing the save path"
+          onclick={cancelEditRoot}
+        >
+          <X size={12} />
+        </button>
+      </div>
+    {:else if items.length > 1}
+      <div
+        class="flex items-center gap-1 overflow-x-auto border-t border-border/60 px-2 py-1"
+        aria-label={listLabel}
       >
-        {error}
-      </p>
+        {#each items as item (item.directory)}
+          {@const active = item.directory === selected.directory}
+          {@const updated = updatedLabel(item)}
+          <button
+            type="button"
+            class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] transition-colors {active
+              ? 'bg-accent/10 font-medium text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            title={item.hasEntry
+              ? updated === ''
+                ? item.name
+                : `${item.name}, updated ${updated}`
+              : `${item.name}, no index.html`}
+            aria-current={active ? 'true' : undefined}
+            onclick={() => selectDesign(item.directory)}
+          >
+            <WorkIcon size={10} class={active ? 'shrink-0 text-accent' : 'shrink-0 text-dimmed'} />
+            <span class="max-w-32 truncate">{item.name}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+
+    {#if rootError !== ''}
+      <p class="px-2.5 pb-1.5 text-[0.6875rem] text-danger" role="alert">{rootError}</p>
+    {:else if rootNotice !== ''}
+      <p class="px-2.5 pb-1.5 text-[0.6875rem] text-muted">{rootNotice}</p>
     {/if}
 
     {#if !video && canvasRead}
-      <div class="mb-3 rounded-lg border border-border bg-elevated/60 px-2 py-2">
-        <div class="flex items-center justify-between gap-2">
-          <span class="flex min-w-0 items-center gap-1.5">
-            <Frame size={12} class="shrink-0 text-accent" />
-            <span class="truncate text-xs font-medium text-foreground">Screen canvas</span>
+      <div class="border-t border-border/60 px-2.5 py-1.5">
+        <div class="flex items-center gap-1.5">
+          <Frame size={11} class="shrink-0 text-accent" />
+          <span class="truncate text-[0.6875rem] font-medium text-foreground">Screen canvas</span>
+          <span class="ml-auto shrink-0 text-[0.625rem] text-dimmed tabular-nums">
+            {canvasState === null ? 'not made yet' : canvasSummary}
           </span>
-          {#if canvasSummary !== ''}
-            <span class="shrink-0 text-[0.625rem] text-dimmed tabular-nums">{canvasSummary}</span>
-          {/if}
         </div>
 
-        {#if canvasState === null}
-          <p class="mt-1 text-[0.6875rem] text-muted">
-            One page that shows every screen and state at once, so the whole product can be panned,
-            inspected and commented on in one place.
-          </p>
-        {:else if canvasShot?.dataUrl}
-          <button
-            type="button"
-            class="mt-1.5 block w-full overflow-hidden rounded-md border border-border transition-colors hover:border-primary/60"
-            title="Open the screen canvas in the in-app browser"
-            aria-label="Open the screen canvas in the in-app browser"
-            onclick={() => void openWork(selected.directory, SCREEN_CANVAS_FILE)}
-          >
-            <img
-              src={canvasShot.dataUrl}
-              alt="Preview of the design's screen canvas"
-              width={canvasShot.width}
-              height={canvasShot.height}
-              class="block h-auto w-full"
-            />
-          </button>
-        {/if}
-
-        {#if canvasDrift !== ''}
-          <p class="mt-1 text-[0.625rem] text-warning">{canvasDrift}</p>
-        {/if}
-
-        <div class="mt-2 flex flex-wrap items-center gap-1.5">
+        <div class="mt-1 flex flex-wrap items-center gap-1">
           {#if canvasState === null}
             <button
               type="button"
@@ -642,23 +763,26 @@
               {:else}
                 <Play size={11} />
               {/if}
-              Create screen canvas
+              Create
             </button>
+            <span class="text-[0.625rem] text-muted">
+              Every screen and state on one pannable page.
+            </span>
           {:else}
             <button
               type="button"
               class="flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-              disabled={opening === selected.directory}
+              disabled={openingCanvas}
               title="Open the screen canvas in the in-app browser"
               aria-label="Open the screen canvas in the in-app browser"
-              onclick={() => void openWork(selected.directory, SCREEN_CANVAS_FILE)}
+              onclick={() => void openCanvas()}
             >
-              {#if opening === selected.directory}
+              {#if openingCanvas}
                 <LoaderCircle size={11} class="animate-spin" />
               {:else}
-                <ExternalLink size={11} />
+                <GlobeCode size={11} />
               {/if}
-              Open canvas
+              Open
             </button>
             <button
               type="button"
@@ -673,7 +797,7 @@
               {:else}
                 <RefreshCw size={11} />
               {/if}
-              Update canvas
+              Update
             </button>
             {#if canvasSketches > 0}
               <button
@@ -695,21 +819,35 @@
           {/if}
         </div>
 
+        {#if canvasDrift !== ''}
+          <p class="mt-1 text-[0.625rem] text-warning">{canvasDrift}</p>
+        {/if}
         {#if canvasNotice !== ''}
           <p class="mt-1 text-[0.625rem] text-dimmed">{canvasNotice}</p>
         {/if}
       </div>
     {/if}
+  </header>
 
-    {#if designScreens.length === 0}
+  <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+    {#if error !== ''}
+      <p
+        class="mb-2 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
+        role="alert"
+      >
+        {error}
+      </p>
+    {/if}
+
+    {#if gallery.length === 0}
       <div
-        class="flex aspect-[4/3] w-full flex-col items-center justify-center gap-1.5 rounded-lg border border-border bg-elevated text-dimmed"
+        class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
       >
         {#if galleryBusy}
-          <LoaderCircle size={18} class="animate-spin" />
+          <LoaderCircle size={16} class="animate-spin" />
           <span class="text-[0.6875rem]">Capturing the {noun}…</span>
         {:else}
-          <ImageOff size={18} />
+          <ImageOff size={16} />
           <span class="px-4 text-center text-[0.6875rem]">
             {items.length === 0
               ? `The agent has not written a ${noun} yet. It will appear here when it does.`
@@ -720,158 +858,11 @@
         {/if}
       </div>
     {:else}
-      {#if !video}
-        <p class="px-1 pb-1 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
-          {screensLabel}
-        </p>
-      {/if}
-      <div class="grid grid-cols-2 gap-2">
-        {#if featured}
-          {@render screenCard(featured, true)}
-        {/if}
-        {#each rest as screen (screen.entry)}
-          {@render screenCard(screen, false)}
+      <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
+        {#each gallery as screen (screen.entry)}
+          {@render screenCard(screen, video)}
         {/each}
       </div>
     {/if}
-
-    <div class="mt-3">
-      <p class="px-1 pb-1 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
-        {listLabel} ({items.length})
-      </p>
-      {#if items.length === 0}
-        <p class="px-1 py-1 text-[0.6875rem] text-muted">
-          Nothing under <code>{workRoot}</code> for this project yet.
-        </p>
-      {:else}
-        <ul class="flex flex-col">
-          {#each items as item (item.directory)}
-            {@const isSelected = item.directory === selected.directory}
-            <li>
-              <button
-                type="button"
-                class="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-colors {isSelected
-                  ? 'bg-accent/10'
-                  : 'hover:bg-elevated'}"
-                title={item.hasEntry
-                  ? `Open ${item.name} in the in-app browser`
-                  : `Open the folder listing for ${item.name}`}
-                aria-label={`Open ${item.name} in the in-app browser`}
-                aria-current={isSelected}
-                onclick={() => void openWork(item.directory, null)}
-              >
-                <WorkIcon size={12} class="shrink-0 {isSelected ? 'text-accent' : 'text-dimmed'}" />
-                <span
-                  class="min-w-0 flex-1 truncate text-xs {isSelected
-                    ? 'font-medium text-foreground'
-                    : 'text-muted'}"
-                >
-                  {item.name}
-                </span>
-                {#if !item.hasEntry}
-                  <span class="shrink-0 text-[0.625rem] text-dimmed">no index.html</span>
-                {/if}
-                <span class="shrink-0 text-[0.625rem] text-dimmed tabular-nums">
-                  {updatedLabel(item)}
-                </span>
-                {#if opening === item.directory}
-                  <LoaderCircle size={11} class="shrink-0 animate-spin text-accent" />
-                {/if}
-              </button>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </div>
-
-    <div class="mt-3 rounded-lg border border-border px-2 py-2">
-      <div class="flex items-center justify-between gap-2">
-        <span class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
-          Save path
-        </span>
-        <span class="flex shrink-0 items-center gap-1">
-          {#if !editingRoot}
-            <button
-              type="button"
-              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-              disabled={rootBusy || workRoot === ''}
-              title={`Change where new ${noun}s are saved`}
-              aria-label={`Change where new ${noun}s are saved`}
-              onclick={beginEditRoot}
-            >
-              <Pencil size={11} />
-            </button>
-          {/if}
-          <button
-            type="button"
-            class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-            disabled={rootBusy || rootIsDefault || defaultRoot === ''}
-            title={`Put new ${noun}s back in ${defaultRoot || '.cio'}, and move the ones already there`}
-            aria-label={`Reset the ${noun} save path to the default`}
-            onclick={() => void applyRoot(defaultRoot)}
-          >
-            {#if rootBusy}
-              <LoaderCircle size={11} class="animate-spin" />
-            {:else}
-              <RotateCcw size={11} />
-            {/if}
-          </button>
-        </span>
-      </div>
-
-      {#if editingRoot}
-        <div class="mt-1 flex items-center gap-1">
-          <input
-            class="h-6 min-w-0 flex-1 rounded-md border border-border bg-elevated px-1.5 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
-            bind:value={rootDraft}
-            placeholder={defaultRoot}
-            aria-label={`Folder new ${noun}s are saved in, relative to the project`}
-            onkeydown={(event) => {
-              if (event.key === 'Escape') {
-                event.preventDefault()
-                cancelEditRoot()
-                return
-              }
-              if (event.key !== 'Enter') return
-              event.preventDefault()
-              void applyRoot(rootDraft.trim())
-            }}
-          />
-          <button
-            type="button"
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-elevated disabled:opacity-40"
-            disabled={rootBusy || rootDraft.trim() === ''}
-            title={`Save this ${noun} folder`}
-            aria-label={`Save this ${noun} folder`}
-            onclick={() => void applyRoot(rootDraft.trim())}
-          >
-            {#if rootBusy}
-              <LoaderCircle size={11} class="animate-spin" />
-            {:else}
-              <Check size={12} />
-            {/if}
-          </button>
-          <button
-            type="button"
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-            title="Cancel"
-            aria-label="Cancel changing the save path"
-            onclick={cancelEditRoot}
-          >
-            <X size={12} />
-          </button>
-        </div>
-      {:else}
-        <p class="mt-0.5 truncate font-mono text-[0.6875rem] text-muted" title={workRoot}>
-          {workRoot === '' ? 'Reading the folder...' : workRoot}
-        </p>
-      {/if}
-
-      {#if rootError !== ''}
-        <p class="mt-1 text-[0.6875rem] text-danger" role="alert">{rootError}</p>
-      {:else if rootNotice !== ''}
-        <p class="mt-1 text-[0.6875rem] text-muted">{rootNotice}</p>
-      {/if}
-    </div>
   </div>
 </div>
