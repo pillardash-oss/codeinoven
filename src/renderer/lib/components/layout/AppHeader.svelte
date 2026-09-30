@@ -355,11 +355,13 @@
       <AppHeaderGitChip {gitAvailable} />
     {/if}
 
-    <!-- Pinned extensions   the extension's own popup, one click away from any
-         view. This is browser state, so like the browser centre below it is fetched
-         only once the browser's own modules are up, and it draws nothing while no
-         browser tab is running the extension's box. -->
-    {#if browserStore()}
+    <!-- Pinned extensions   the extension's own popup, one click away while the
+         browser view is the one on screen, and drawn by no other view: a pin is
+         chrome of that view, not of the app. This is browser state, so like the
+         browser centre it is fetched only once the browser's own modules are up,
+         and it draws nothing while no browser tab is running the extension's
+         box. -->
+    {#if onBrowser && browserStore()}
       {#await import('./AppHeaderPinnedExtensions.svelte') then { default: AppHeaderPinnedExtensions }}
         <AppHeaderPinnedExtensions />
       {/await}

@@ -4,15 +4,16 @@
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
 
   /**
-   * The extensions the user pinned, worn by the app header for the box on screen.
+   * The extensions the user pinned, worn by the header while the browser view is
+   * the one on screen, and mounted by no other view.
    *
    * This is what a browser's toolbar is for, without the toolbar: one click opens
-   * the extension's own popup from anywhere in the app. Electron draws no toolbar
-   * and no action popup, so the popup opens in the browser's rail instead, and the
-   * header is what keeps it one click away from every view.
+   * the extension's own popup. Electron draws no toolbar and no action popup, so
+   * the popup opens in the browser's rail instead. A pin is chrome of the browser
+   * view, so leaving that view puts the pins away with the rest of its chrome and
+   * no other view has to know a pin exists.
    *
    * A pin is only shown while it can act. The extension has to run in the box the
    * browser's tab on screen lives in, because that is the jar its popup opens in
@@ -43,9 +44,8 @@
   /**
    * Open a pinned extension's popup in the rail, or close the one it already has.
    *
-   * The popup is hosted by the rail, and the rail belongs to the browser view, so
-   * the click reveals the browser first and opens the popup inside it rather than
-   * opening something the user cannot see.
+   * The popup is hosted by the rail, which is chrome of this same view, so all the
+   * click has to do is make sure that tool is the one showing.
    */
   async function toggle(extensionId: string): Promise<void> {
     const current = tab
@@ -55,7 +55,6 @@
       browserPopupWindows.close(open)
       return
     }
-    workspaceState.navigateToBrowser?.()
     const popupId = await browserPopupWindows.openExtension(
       {
         projectId: GLOBAL_BROWSER_CONTEXT.projectId,

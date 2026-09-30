@@ -88,8 +88,9 @@ export interface BrowserExtensionRecord {
   /** The Web Store id it was fetched by, or null for a folder install. */
   webstoreId: string | null
   popupPath: string | null
-  /** Whether the user pinned it into the app header. A pin is bounded and needs a
-   *  popup to open, which is what the service enforces before it is written. */
+  /** Whether the user pinned it into the browser view's header. A pin is bounded
+   *  and needs a popup to open, which is what the service enforces before it is
+   *  written. */
   pinned: boolean
   iconDataUrl: string | null
   declaredPermissions: string[]

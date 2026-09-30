@@ -168,10 +168,10 @@ export class BrowserExtensionService {
   }
 
   /** Enable or disable one extension, choose the jars it runs in, or pin it into
-   *  the app header.
+   *  the browser view's header.
    *
    * The pin rules live here rather than in the panel, because a pin is a place in
-   * the app's own chrome: only a header's worth of them exists
+   * that view's chrome: only a header's worth of them exists
    * (`MAX_PINNED_EXTENSIONS`), and a pin only means something for an extension
    * that declares a popup, since opening that popup is the only thing a pin does. */
   async update(

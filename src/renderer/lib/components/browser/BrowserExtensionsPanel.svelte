@@ -152,10 +152,11 @@
   /**
    * What one row's pin control says and whether it can be used.
    *
-   * A pin is a place in the app header whose only job is opening the extension's
-   * popup, so an extension that declares none has nothing to pin, and the header
-   * holds `MAX_PINNED_EXTENSIONS` of them. The cap is stated in the control's own
-   * words rather than left to a refusal, which is what the user reads first.
+   * A pin is a place in the browser view's header whose only job is opening the
+   * extension's popup, so an extension that declares none has nothing to pin, and
+   * the header holds `MAX_PINNED_EXTENSIONS` of them. The cap is stated in the
+   * control's own words rather than left to a refusal, which is what the user
+   * reads first.
    */
   function pinAction(extension: BrowserExtension): { disabled: boolean; title: string } {
     if (extension.pinned) return { disabled: false, title: `Unpin ${extension.name}` }

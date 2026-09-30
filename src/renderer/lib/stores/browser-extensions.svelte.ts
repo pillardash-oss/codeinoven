@@ -91,7 +91,8 @@ class BrowserExtensionsState {
     )
   }
 
-  /** How many extensions are pinned into the app header, for the cap's own rule. */
+  /** How many extensions are pinned into the browser view's header, for the cap's
+   *  own rule. */
   get pinnedCount(): number {
     return this.extensions.filter((extension) => extension.pinned).length
   }
@@ -99,10 +100,10 @@ class BrowserExtensionsState {
   /**
    * The pinned extensions of one jar, which is the header's whole list.
    *
-   * A pin is a place in the app's own chrome, so it is shown while the box on
-   * screen runs the extension and steps aside for every other box. An extension
-   * that is disabled or loaded nowhere is not running in that jar, so it is not
-   * pinned into anything either.
+   * A pin is a place in the browser view's chrome and is drawn by no other view,
+   * so it is shown while the box on screen runs the extension and steps aside for
+   * every other box. An extension that is disabled or loaded nowhere is not
+   * running in that jar, so it is not pinned into anything either.
    */
   pinnedExtensionsInJar(jar: string): BrowserExtension[] {
     return this.extensions.filter(
@@ -200,8 +201,8 @@ class BrowserExtensionsState {
     await this.patch(extensionId, { enabled }, 'The extension could not be updated.')
   }
 
-  /** Pin or unpin one extension, for the place it takes in the app header. Both
-   *  pin rules are main's, so a refusal arrives as the error it is. */
+  /** Pin or unpin one extension, for the place it takes in the browser view's
+   *  header. Both pin rules are main's, so a refusal arrives as the error it is. */
   async setPinned(extensionId: string, pinned: boolean): Promise<void> {
     await this.patch(extensionId, { pinned }, 'The extension could not be pinned.')
   }

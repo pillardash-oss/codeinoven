@@ -334,10 +334,10 @@ export const invokeBrowserContract = {
   >,
   'browser:extensionUninstall': {} as Contract<[extensionId: string], void>,
   /** Enable or disable one extension, choose the jars it runs in, or pin it into
-   *  the app header. `boxes` is the whole replacement list, never a delta, and it
-   *  is always explicit: a jar left out of it never loads the extension. A pin is
-   *  refused past `MAX_PINNED_EXTENSIONS`, and for an extension with no popup to
-   *  open. */
+   *  the browser view's header. `boxes` is the whole replacement list, never a
+   *  delta, and it is always explicit: a jar left out of it never loads the
+   *  extension. A pin is refused past `MAX_PINNED_EXTENSIONS`, and for an
+   *  extension with no popup to open. */
   'browser:extensionUpdate': {} as Contract<
     [extensionId: string, patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean }],
     BrowserExtension
