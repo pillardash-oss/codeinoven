@@ -115,13 +115,18 @@ import {
   BrowserPermissionMemory,
   type PermissionMemoryPersistence
 } from './browser-service/browser-permission-memory'
-import type {
-  BrowserPageOwner,
-  BrowserTab,
-  BrowserViewport,
-  ParkBrowserTabOptions,
-  PendingBrowserPermission
+import {
+  type BrowserPageOwner,
+  type BrowserTab,
+  type BrowserViewport,
+  type ParkBrowserTabOptions,
+  type PendingBrowserPermission
 } from './browser-service/browser-types'
+import {
+  isAbortedNavigation,
+  RESTORE_SETTLE_TIMEOUT_MS,
+  restoreNeedsFallbackLoad
+} from './browser-service/browser-navigation-outcome'
 import { BrowserTabStage } from './browser-service/browser-stage'
 import {
   listProjectBrowserProfiles,
@@ -244,6 +249,7 @@ import {
   validateBrowserFindRequest,
   validateBrowserFindStopAction
 } from './browser-service/browser-find'
+import { BrowserLoadWaits } from './browser-service/browser-load-wait'
 import {
   COMPOSITION_TRANSPORT_GLOBAL,
   compositionTransportCommandScript,
@@ -445,6 +451,13 @@ export class BrowserService {
    * rather than briefly overwriting the count on screen.
    */
   private readonly findSessions = new BrowserFindSessions()
+  /**
+   * The page-load waits every capture path shares.
+   *
+   * Held by the service so one page's listeners are one pair no matter how many
+   * callers are waiting on it; see `BrowserLoadWaits` for why that matters.
+   */
+  private readonly loadWaits = new BrowserLoadWaits()
   /**
    * The tab whose surface holds the keyboard, or null while none does.
    *
@@ -731,14 +744,46 @@ export class BrowserService {
     if (contents.isDestroyed()) return false
     void contents.navigationHistory
       .restore({ entries: record.entries.map((entry) => ({ ...entry })), index: record.index })
-      .catch((error: unknown) => {
-        // A stack whose pages no longer load is not a reason to leave the tab
-        // blank: the address it was on is the whole of what is left to try.
-        Logger.dev('Browser tab history could not be restored:', { tabId, error })
-        if (contents.isDestroyed()) return
-        if (fallbackUrl) this.load(tabId, fallbackUrl)
-      })
+      .catch(
+        (error: unknown) => void this.recoverFromFailedRestore(tabId, contents, fallbackUrl, error)
+      )
     return true
+  }
+
+  /**
+   * What a tab does when its stored stack did not come back.
+   *
+   * The rejection arrives while the page is still settling   Chromium reports a
+   * failure before it commits the document the failure ends on   so the page is
+   * given its moment first (bounded; see `RESTORE_SETTLE_TIMEOUT_MS`). Judging it
+   * earlier reads a load that is dying as a page that is arriving, and the
+   * recovery then does nothing; loading over a page that really is arriving is
+   * the other half of the same mistake, a second navigation racing the first.
+   *
+   * Once the page has settled, `restoreNeedsFallbackLoad` decides: a page that is
+   * still loading or that is already on the tab's address is left alone, and
+   * anything else gets that address, which is the whole of what is left to try.
+   */
+  private async recoverFromFailedRestore(
+    tabId: string,
+    contents: WebContents,
+    fallbackUrl: string,
+    error: unknown
+  ): Promise<void> {
+    if (contents.isDestroyed()) return
+    await this.loadWaits.wait(contents, RESTORE_SETTLE_TIMEOUT_MS)
+    if (contents.isDestroyed()) return
+    const page = { loading: contents.isLoading(), url: contents.getURL() }
+    if (!restoreNeedsFallbackLoad(page, fallbackUrl)) {
+      Logger.dev('Browser tab history restore left the page where the stack put it:', {
+        tabId,
+        error,
+        page
+      })
+      return
+    }
+    Logger.dev('Browser tab history could not be restored:', { tabId, error, page })
+    if (fallbackUrl) this.load(tabId, fallbackUrl)
   }
 
   /**
@@ -1804,29 +1849,18 @@ export class BrowserService {
    *
    * A capture taken mid-navigation shows a half-painted page, and a page that
    * never finishes (a hung script, an unreachable host) must not hold the caller
-   * forever, so the wait ends on stop, failure, or the deadline.
+   * forever, so the wait ends on stop, failure, or the deadline. The wait itself
+   * belongs to the page rather than to this call: a board sweep, a frame capture
+   * and a refresh of the same tab are three callers on one `WebContents`, and
+   * `BrowserLoadWaits` holds one listener pair for all of them (see that module
+   * for why a pair per caller is worse than it looks).
    */
   async waitForTabLoad(tabId: string, timeoutMs = 8_000): Promise<void> {
     const tab = this.tabs.get(tabId)
     if (!tab) return
-    const contents = tab.view.webContents
-    if (contents.isDestroyed() || !contents.isLoading()) return
-    await new Promise<void>((resolve) => {
-      let settled = false
-      const finish = (): void => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        contents.removeListener('did-stop-loading', finish)
-        contents.removeListener('did-fail-load', finish)
-        resolve()
-      }
-      // Declared after `finish` closes over it: the deadline cannot fire before
-      // this line runs, so the reference is always initialised.
-      const timer = setTimeout(finish, timeoutMs)
-      contents.once('did-stop-loading', finish)
-      contents.once('did-fail-load', finish)
-    })
+    const contents: WebContents | undefined = tab.view.webContents
+    if (!contents) return
+    await this.loadWaits.wait(contents, timeoutMs)
   }
 
   /**
@@ -2697,9 +2731,10 @@ export class BrowserService {
     view.webContents.on(
       'did-fail-load',
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-        // -3 is ERR_ABORTED, which a redirect or a cancelled load produces and is
-        // not a failure worth a page of its own.
-        if (!isMainFrame || errorCode === -3) return
+        // An aborted load is a navigation that was superseded (a redirect, or a
+        // load the app replaced), never a page worth an error card: the policy and
+        // the restore recovery share `isAbortedNavigation` so they cannot disagree.
+        if (!isMainFrame || isAbortedNavigation(errorCode)) return
         // The failed navigation can still commit an error document, which has no
         // shim of its own, so the record of what is installed must not survive it.
         this.injectedDialogLabels.delete(tabId)

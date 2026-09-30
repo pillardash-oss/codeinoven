@@ -229,7 +229,10 @@ async function resolveManifestText(
   return value
 }
 
-function stringArray(value: unknown): string[] {
+/** The strings of a manifest array, with anything that is not a string dropped:
+ *  an untrusted manifest's list is read rather than trusted. Exported because
+ *  `browser-extension-manifest` reads the same permission arrays. */
+export function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === 'string')
     : []

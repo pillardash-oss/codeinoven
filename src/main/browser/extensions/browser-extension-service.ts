@@ -66,6 +66,7 @@ import {
   readActionIconDataUrl,
   readManifestObject
 } from './browser-extension-source'
+import { stripInstalledManifestPermissions } from './browser-extension-manifest'
 import {
   BROWSER_EXTENSION_SOURCE_DIR,
   BROWSER_EXTENSION_STORE_DIR,
@@ -735,6 +736,7 @@ export class BrowserExtensionService {
     try {
       await this.refreshInstalledPreamble(directory, record)
       await this.refreshCapabilityReport(record)
+      await this.makeManifestLoadable(directory)
       await state.session.extensions.loadExtension(directory, { allowFileAccess: false })
       state.ids.add(record.id)
       this.startBridge(state, record)
@@ -805,6 +807,35 @@ export class BrowserExtensionService {
         extensionId: record.id,
         error
       })
+    }
+  }
+
+  /**
+   * Hand Chromium words it knows.
+   *
+   * A manifest that declares a permission this runtime has never had is loaded
+   * anyway, but Chromium announces every such name on stderr, so a jar holding a
+   * real extension printed a block of "Permission 'x' is unknown" warnings on
+   * every launch. The copy's permissions are trimmed to what this runtime can be
+   * handed, here rather than only at install, so a copy unpacked before this rule
+   * existed stops warning on its next load too. Nothing the extension can do is
+   * lost   Chromium granted nothing for those names, and the app's own shims do not
+   * read the manifest at all   while what the extension declared stays in this
+   * app's own record (see `browser-extension-manifest`).
+   */
+  private async makeManifestLoadable(directory: string): Promise<void> {
+    try {
+      const removed = await stripInstalledManifestPermissions(directory)
+      if (removed.length > 0) {
+        Logger.dev('Browser extension manifest trimmed to the permissions this runtime knows:', {
+          directory,
+          removed
+        })
+      }
+    } catch (error) {
+      // A copy whose manifest cannot be rewritten still loads, and still warns,
+      // which is worse than quiet and far better than not loading at all.
+      Logger.dev('Browser extension manifest could not be trimmed:', { directory, error })
     }
   }
 
