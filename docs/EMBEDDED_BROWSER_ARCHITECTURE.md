@@ -63,6 +63,13 @@ material way, and the difference is deliberate.
   `page: "user"`. Everything that changes a page (open, navigate, click, type, reload,
   viewport) still needs a page the agent opened itself, so an answer can never move the
   page the user is reading.
+- **Extensions belong to the global browser.** An extension record names that
+  context's own jar (the empty jar id) and its boxes, and only jars of that context
+  are reconciled (`src/main/browser/extensions/browser-extension-service.ts`). A
+  project's browser, which is the light one a conversation opens with `/browser`
+  and has no boxes and no extension chrome, shares the project's cookies by design
+  but never loads them, so no extension renderer or service worker runs behind a
+  thread browser.
 - **A link in the browser view belongs to that browser.** The link context menu offers
   the default browser, a new tab of the app-wide browser and the tab already on screen
   there, and the thread browser's item (which targets a project thread's tab) is not

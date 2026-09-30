@@ -2,7 +2,7 @@
  * Browser extensions: what is installed, and which jars load them.
  *
  * An extension is a piece of third-party code the app runs inside a box's session,
- * so three rules shape this service:
+ * so four rules shape this service:
  *
  *   1. **Installation is an app-owned folder, never the user's.** The package is
  *      unpacked into `browser/extensions/<id>/source` and every load points there,
@@ -12,7 +12,13 @@
  *      cross-session extension, so each box that enables one gets its own copy with
  *      its own storage. That is the point of containing an extension: two boxes can
  *      run different extensions, or the same one with separate state.
- *   3. **It costs a renderer per jar it lives in, so it is unloaded the moment its
+ *   3. **The jars are the global browser's.** Only that context's jars are
+ *      reconciled: the panel that installs an extension, the boxes it can be placed
+ *      in and the pins in the header all belong to that browser. A project's browser,
+ *      which is the light one a conversation opens beside itself with no boxes and
+ *      no extension chrome, never loads one, so no third-party code or extension
+ *      renderer sits behind a thread browser.
+ *   4. **It costs a renderer per jar it lives in, so it is unloaded the moment its
  *      jar has no live page.** An extension left loaded for a box the user closed
  *      is a renderer held for nothing.
  *
@@ -30,6 +36,7 @@ import { dialog, type BrowserWindow, type Session } from 'electron'
 import preambleSource from './compat/cio-compat-preamble.js?raw'
 import { missingExtensionCapabilities } from '../../../lib/browser/browser-extension-capabilities'
 import { MAX_PINNED_EXTENSIONS } from '../../../lib/browser/browser-extension-pins'
+import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import type {
   BrowserExtension,
   BrowserExtensionInstallInput,
@@ -433,14 +440,33 @@ export class BrowserExtensionService {
     }
   }
 
+  /**
+   * The extensions one jar should be running, given what is installed.
+   *
+   * Only the global browser's context has jars that extensions may live in. An
+   * extension is third-party code that browser runs, and the panel that installs it,
+   * the boxes it can be placed in and the pins in the header are all that browser's,
+   * so a project's browser (the light one a conversation opens beside itself, with
+   * no boxes and no extension chrome) must never load one.
+   *
+   * The empty jar id is what makes this a rule rather than a filter: it names "the
+   * context's own jar", which read without the context matches every project's jar
+   * too, so a record placed in "No box" would otherwise put an extension renderer,
+   * its service worker and its load warnings behind every thread browser.
+   */
+  private desiredForJar(projectId: string, boxId: string | null): BrowserExtensionRecord[] {
+    if (projectId !== GLOBAL_BROWSER_PROJECT_ID) return []
+    return this.registry
+      .list()
+      .filter((record) => record.enabled && extensionRunsInJar(record, boxId))
+  }
+
   private async reconcileJar(
     projectId: string,
     boxId: string | null,
     partition: string
   ): Promise<void> {
-    const desired = this.registry
-      .list()
-      .filter((record) => record.enabled && extensionRunsInJar(record, boxId))
+    const desired = this.desiredForJar(projectId, boxId)
     const desiredIds = new Set(desired.map((record) => record.id))
     const current = this.loaded.get(partition)?.ids ?? new Set<string>()
     const toUnload = [...current].filter((id) => !desiredIds.has(id))
