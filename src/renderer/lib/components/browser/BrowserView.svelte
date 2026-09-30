@@ -21,7 +21,7 @@
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
-  import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
+  import { storeExtensionOffer } from '$lib/stores/browser-extension-store-offer'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { motionDuration } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -66,10 +66,19 @@
     browserDownloads.unfinishedCount(GLOBAL_BROWSER_PROJECT_ID)
   )
 
-  /** How many extensions the profile has installed. The rail carries the count
-   *  because it is the number a user checks before opening the panel to find the
-   *  one that is misbehaving. */
-  const extensionCount = $derived(browserExtensions.count)
+  /**
+   * The offer the page on screen makes, when it is an extension's store page for
+   * something this profile does not have yet.
+   *
+   * That is the rail's one indicator on the extensions tool: it says there is an
+   * install here for the user to take, which is the only thing the tool can hand
+   * them from the page they are looking at. How many extensions are installed is
+   * not an indicator, so the tool states no count.
+   */
+  const installableStoreOffer = $derived.by(() => {
+    const offer = storeExtensionOffer()
+    return offer && !offer.installed ? offer : null
+  })
 
   /**
    * The box the page on screen lives in, and the identity its tool wears.
@@ -169,12 +178,20 @@
       // Extensions belong to the profile like boxes and downloads do, and they are
       // the tool that comes first of the three: installing an extension is what
       // puts something on disk for a box to contain.
+      //
+      // The rail carries one indicator here and only one: an extension on a store
+      // page that this profile does not have yet, which is the single thing the
+      // tool can hand the user to install. How many are installed is not an
+      // indicator, so the tool states no count.
       {
         id: 'extensions',
-        label: extensionCount > 0 ? `Extensions (${extensionCount})` : 'Extensions',
+        label: 'Extensions',
         icon: Puzzle,
         active: globalBrowser.extensionsSidebarShown,
-        countBadge: extensionCount > 0 ? String(extensionCount) : undefined,
+        badge: installableStoreOffer ? 'attention' : undefined,
+        badgeTitle: installableStoreOffer
+          ? `Install ${installableStoreOffer.name ?? 'the extension'} from the store page you are on`
+          : undefined,
         onSelect: () => globalBrowser.toggleExtensionsSidebar()
       },
       ...(popupWindows.length > 0

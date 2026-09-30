@@ -4,12 +4,15 @@
   import {
     ArrowLeft,
     ArrowRight,
+    Check,
     Globe,
+    Loader2,
     Lock,
     LockOpen,
     Pin,
     PinOff,
     Plus,
+    Puzzle,
     RotateCw,
     Search,
     Settings2,
@@ -27,6 +30,11 @@
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { projectStripTabs } from '$lib/browser-overlay-bridge'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
+  import {
+    installStoreExtensionOffer,
+    storeExtensionOffer
+  } from '$lib/stores/browser-extension-store-offer'
   import BrowserTabRow from './BrowserTabRow.svelte'
   import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'
   import BrowserGroupModal from './BrowserGroupModal.svelte'
@@ -81,6 +89,33 @@
   /** Whether the page on screen is already saved, which is what the star beside
    *  the address reads and toggles. */
   const bookmarked = $derived(browserBookmarks.isBookmarked(address))
+
+  /**
+   * The extension the page on screen is, when it is a Chrome Web Store page.
+   *
+   * The store cannot install anything in this app: its "Add to Chrome" button is
+   * Chrome's inline-install API, which Electron does not implement, so it sits
+   * disabled. The app therefore offers the install itself, and this is what
+   * decides when the affordance exists.
+   */
+  const storeOffer = $derived(storeExtensionOffer())
+  const storeOfferTitle = $derived(
+    browserExtensions.installing
+      ? `Installing ${storeOffer?.name ?? 'the extension'}`
+      : storeOffer?.installed
+        ? `${storeOffer.name ?? 'This extension'} is installed. Open the extensions panel.`
+        : `Install ${storeOffer?.name ?? 'this extension'} in ${storeOffer?.boxName ?? 'this box'}`
+  )
+
+  /** Install the offer, or open the rail on what is already installed. */
+  function actOnStoreOffer(): void {
+    if (!storeOffer) return
+    if (storeOffer.installed) {
+      globalBrowser.showExtensionsSidebar()
+      return
+    }
+    void installStoreExtensionOffer()
+  }
 
   const groups = $derived(globalBrowser.orderedGroups)
 
@@ -205,6 +240,7 @@
     globalBrowser.moveToGroup(dragged, groupId)
     globalBrowser.endDrag()
   }
+
   // ─── The floating panel above a live page ─────────────────────────────────
   /**
    * While the browser's sidebar is collapsed, hovering the left edge reveals it
@@ -380,6 +416,31 @@
         >
           {address === '' ? 'Search or enter an address' : address}
         </button>
+        {#if storeOffer}
+          <!-- The install the store's own button cannot offer: "Add to Chrome" is
+               Chrome's inline-install API, which this runtime does not
+               implement. Icon only, because the rail and the panel carry the
+               words. -->
+          <button
+            type="button"
+            class={[
+              'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay disabled:opacity-60',
+              storeOffer.installed ? 'text-success' : 'text-primary'
+            ]}
+            disabled={browserExtensions.installing && !storeOffer.installed}
+            title={storeOfferTitle}
+            aria-label={storeOfferTitle}
+            onclick={actOnStoreOffer}
+          >
+            {#if browserExtensions.installing && !storeOffer.installed}
+              <Loader2 size={12} class="animate-spin" />
+            {:else if storeOffer.installed}
+              <Check size={12} />
+            {:else}
+              <Puzzle size={12} />
+            {/if}
+          </button>
+        {/if}
         <button
           type="button"
           class={[

@@ -1,16 +1,21 @@
 <script lang="ts">
-  import { AlertTriangle, Plus, Puzzle, Settings2, Trash2 } from '@lucide/svelte'
+  import { AlertTriangle, ChevronDown, Plus, Puzzle, Trash2 } from '@lucide/svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import {
     browserExtensions,
     browserExtensionInjectionLabel
   } from '$lib/stores/browser-extensions.svelte'
+  import {
+    installStoreExtensionOffer,
+    storeExtensionOffer
+  } from '$lib/stores/browser-extension-store-offer'
   import type { BrowserExtension } from '$shared/ipc-contract'
+  import { WEBSTORE_HOME_URL } from '$shared/browser/browser-webstore'
   import BrowserExtensionInstallModal from './BrowserExtensionInstallModal.svelte'
+  import BrowserExtensionInstallProgress from './BrowserExtensionInstallProgress.svelte'
   import BrowserBoxChips from './BrowserBoxChips.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
@@ -18,7 +23,8 @@
     DEFAULT_BOX_ID,
     DEFAULT_BOX_NAME,
     defaultBrowserBox,
-    extensionJarForBox
+    extensionJarForBox,
+    jarIdForBox
   } from '$lib/stores/global-browser-types'
 
   /**
@@ -27,18 +33,34 @@
    * An extension belongs to the browser profile rather than to a page, so this
    * panel is present with the strip empty, exactly like boxes, downloads and the
    * library panels. A row says what the extension is, where it runs and whether
-   * it is loaded; its settings open the detail view, where the boxes it runs in,
-   * its compatibility notes and uninstalling all live.
+   * it is loaded, and it folds open in place for the rest: the boxes it runs in,
+   * its compatibility notes and uninstalling. A fold rather than a dialog,
+   * because these are the row's own settings and the list stays in view while
+   * they are read.
    */
 
   let installOpen = $state(false)
-  /** The extension whose detail view is open, or null. */
-  let detailId = $state<string | null>(null)
+  /** The extension whose settings are folded open on its row, or null. */
+  let expandedId = $state<string | null>(null)
   /** The extension the uninstall confirmation is for, or null. */
   let uninstallTarget = $state<BrowserExtension | null>(null)
   let uninstalling = $state(false)
 
   const extensions = $derived(browserExtensions.extensions)
+
+  /**
+   * The offer the store page on screen makes, when it is one this profile does
+   * not have yet.
+   *
+   * The rail's indicator promises exactly this, so the panel answers it at the
+   * top: the user clicked through to install what they were looking at, not to
+   * fill in a form. Once installed the offer is gone, because there is nothing
+   * left to install and the row is already in the list below.
+   */
+  const installableStoreOffer = $derived.by(() => {
+    const offer = storeExtensionOffer()
+    return offer && !offer.installed ? offer : null
+  })
 
   /** The value the picker uses for every extension rather than one box's. */
   const ALL_BOXES_SELECTION = 'all'
@@ -84,9 +106,6 @@
   /** Whether each row has to say which boxes it runs in, which is only useful when
    *  more than one box is on screen. */
   const showChips = $derived(scopedBox === null)
-  const detailExtension = $derived(
-    detailId ? (extensions.find((extension) => extension.id === detailId) ?? null) : null
-  )
 
   /** What the source column calls where the extension's files came from. */
   function sourceLabel(extension: BrowserExtension): string {
@@ -145,13 +164,22 @@
     void browserExtensions.setBoxes(extension.id, next)
   }
 
+  /** Open the store in the box this panel is on, which is where the install for
+   *  any extension's page happens: the dialog leaves first, so the tab behind it
+   *  and the rail are what the user sees next. */
+  function browseStore(): void {
+    installOpen = false
+    globalBrowser.open(WEBSTORE_HOME_URL, null, jarIdForBox(installBox.id))
+    globalBrowser.showExtensionsSidebar()
+  }
+
   async function uninstall(): Promise<void> {
     const target = uninstallTarget
     if (!target) return
     uninstalling = true
     try {
       await browserExtensions.uninstall(target.id)
-      if (detailId === target.id) detailId = null
+      if (expandedId === target.id) expandedId = null
       uninstallTarget = null
     } finally {
       uninstalling = false
@@ -176,6 +204,38 @@
       Install extension
     </button>
   </div>
+
+  {#if installableStoreOffer}
+    <div class="shrink-0 border-b border-border px-3 py-2">
+      <button
+        type="button"
+        class="flex w-full items-center gap-2 rounded-lg bg-primary px-2.5 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        disabled={browserExtensions.installing}
+        title={`Install ${installableStoreOffer.name ?? 'this extension'} in ${installableStoreOffer.boxName}`}
+        aria-label={`Install ${installableStoreOffer.name ?? 'this extension'} in ${installableStoreOffer.boxName}`}
+        onclick={() => void installStoreExtensionOffer()}
+      >
+        <Puzzle size={13} class="shrink-0" />
+        <span class="min-w-0 truncate"
+          >Install {installableStoreOffer.name ?? 'this extension'}</span
+        >
+      </button>
+      <p class="mt-1.5 text-[0.625rem] leading-relaxed text-dimmed">
+        The extension on the store page you are on. It lands in {installableStoreOffer.boxName}.
+      </p>
+    </div>
+  {/if}
+
+  {#if browserExtensions.progress}
+    <!-- An install can start from the browser chrome on a store page, where no
+         dialog is open, so the rail reports it. -->
+    <div class="shrink-0 border-b border-border px-3 py-2">
+      <BrowserExtensionInstallProgress
+        progress={browserExtensions.progress}
+        installing={browserExtensions.installing}
+      />
+    </div>
+  {/if}
 
   <div class="shrink-0 border-b border-border px-3 py-2">
     <EnumSelect
@@ -243,14 +303,122 @@
             />
             <button
               type="button"
-              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
-              title={`Settings for ${extension.name}`}
-              aria-label={`Settings for ${extension.name}`}
-              onclick={() => (detailId = extension.id)}
+              class={[
+                'flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100',
+                expandedId === extension.id ? 'opacity-100' : 'opacity-0'
+              ]}
+              title={expandedId === extension.id
+                ? `Hide ${extension.name} settings`
+                : `Settings for ${extension.name}`}
+              aria-label={expandedId === extension.id
+                ? `Hide ${extension.name} settings`
+                : `Settings for ${extension.name}`}
+              aria-expanded={expandedId === extension.id}
+              aria-controls="extension-settings-{extension.id}"
+              onclick={() => (expandedId = expandedId === extension.id ? null : extension.id)}
             >
-              <Settings2 size={13} />
+              <ChevronDown size={13} class={expandedId === extension.id ? 'rotate-180' : ''} />
             </button>
           </div>
+
+          {#if expandedId === extension.id}
+            <div
+              id="extension-settings-{extension.id}"
+              class="mb-1 space-y-2.5 rounded-lg border px-3 py-2.5"
+            >
+              <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="text-xs text-foreground">
+                    {extension.enabled ? 'Enabled' : 'Disabled'}
+                  </p>
+                  <p class="mt-0.5 text-[0.625rem] leading-relaxed text-dimmed">
+                    A disabled extension is installed but loaded nowhere.
+                  </p>
+                </div>
+                <Switch
+                  checked={extension.enabled}
+                  title={extension.enabled
+                    ? `Disable ${extension.name}`
+                    : `Enable ${extension.name}`}
+                  aria-label={extension.enabled
+                    ? `Disable ${extension.name}`
+                    : `Enable ${extension.name}`}
+                  onchange={(next) => void browserExtensions.setEnabled(extension.id, next)}
+                />
+              </div>
+
+              <div class="space-y-1.5">
+                <p class="text-xs text-foreground">Run in</p>
+                <p class="text-[0.625rem] leading-relaxed text-dimmed">
+                  Only the boxes you turn on load it, and each keeps its own storage. A box you make
+                  later stays off until you turn it on here.
+                </p>
+                <div class="space-y-0.5 rounded-lg border p-1">
+                  {#each jarChoices() as jar (jar.id)}
+                    <div class="flex items-center justify-between gap-3 px-2 py-1">
+                      <p class="truncate text-[0.6875rem] text-foreground">{jar.name}</p>
+                      <Switch
+                        checked={runsInBox(extension, jar.id)}
+                        title={`Run in ${jar.name}`}
+                        aria-label={`Run in ${jar.name}`}
+                        onchange={(next) => toggleBox(extension, jar.id, next)}
+                      />
+                    </div>
+                  {/each}
+                </div>
+              </div>
+
+              <p class="text-[0.625rem] leading-relaxed text-dimmed">
+                Version {extension.version} · {extension.popupPath ? 'Has a popup' : 'No popup'}
+              </p>
+
+              <p
+                class="rounded-lg border bg-elevated/50 px-2.5 py-2 text-[0.625rem] leading-relaxed text-dimmed"
+              >
+                {browserExtensionInjectionLabel(extension.injected)}
+              </p>
+
+              {#if extension.missingCapabilities.length > 0}
+                <div class="rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2">
+                  <div class="flex items-center gap-1.5">
+                    <AlertTriangle size={12} class="shrink-0 text-warning" />
+                    <p class="text-[0.6875rem] font-medium text-foreground">
+                      {extension.missingCapabilities.length === 1
+                        ? 'One capability is unavailable'
+                        : `${extension.missingCapabilities.length} capabilities are unavailable`}
+                    </p>
+                  </div>
+                  <ul class="mt-1 space-y-0.5 pl-4 text-[0.625rem] leading-relaxed text-muted">
+                    {#each extension.missingCapabilities as capability (capability)}
+                      <li class="list-disc">{capability}</li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+
+              {#if extension.warnings.length > 0}
+                <div class="rounded-lg border bg-elevated/50 px-2.5 py-2">
+                  <p class="text-[0.6875rem] font-medium text-foreground">Warnings</p>
+                  <ul class="mt-1 space-y-0.5 pl-4 text-[0.625rem] leading-relaxed text-muted">
+                    {#each extension.warnings as warning (warning)}
+                      <li class="list-disc">{warning}</li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+
+              <button
+                type="button"
+                class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-danger transition-colors hover:bg-danger/10"
+                title={`Uninstall ${extension.name}`}
+                aria-label={`Uninstall ${extension.name}`}
+                onclick={() => (uninstallTarget = extension)}
+              >
+                <Trash2 size={13} />
+                Uninstall
+              </button>
+            </div>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -262,125 +430,6 @@
     </p>
   {/if}
 </div>
-
-{#if detailExtension}
-  <Modal
-    open
-    title={detailExtension.name}
-    description={`Settings for the ${detailExtension.name} extension.`}
-    onClose={() => (detailId = null)}
-    size="md"
-    contentClass="space-y-4 overflow-y-auto p-6"
-  >
-    <div class="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
-      <div class="min-w-0">
-        <p class="text-sm text-foreground">{detailExtension.enabled ? 'Enabled' : 'Disabled'}</p>
-        <p class="mt-0.5 text-[0.6875rem] text-dimmed">
-          A disabled extension is installed but loaded nowhere.
-        </p>
-      </div>
-      <Switch
-        checked={detailExtension.enabled}
-        title={detailExtension.enabled
-          ? `Disable ${detailExtension.name}`
-          : `Enable ${detailExtension.name}`}
-        aria-label={detailExtension.enabled
-          ? `Disable ${detailExtension.name}`
-          : `Enable ${detailExtension.name}`}
-        onchange={(next) => void browserExtensions.setEnabled(detailExtension.id, next)}
-      />
-    </div>
-
-    <div class="space-y-2">
-      <div class="min-w-0">
-        <p class="text-sm text-foreground">Run in</p>
-        <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-dimmed">
-          Only the jars you turn on load it, and each keeps its own storage. A jar left off costs no
-          memory, and a box you make later stays off until you turn it on here.
-        </p>
-      </div>
-
-      <div class="space-y-0.5 rounded-lg border p-1">
-        {#each jarChoices() as jar (jar.id)}
-          <div class="flex items-center justify-between gap-3 px-2 py-1.5">
-            <p class="truncate text-xs text-foreground">{jar.name}</p>
-            <Switch
-              checked={runsInBox(detailExtension, jar.id)}
-              title={`Run in ${jar.name}`}
-              aria-label={`Run in ${jar.name}`}
-              onchange={(next) => toggleBox(detailExtension, jar.id, next)}
-            />
-          </div>
-        {/each}
-      </div>
-    </div>
-
-    <div class="space-y-1">
-      <p class="text-xs font-medium text-muted">Version {detailExtension.version}</p>
-      <p class="text-[0.6875rem] text-dimmed">
-        {sourceLabel(detailExtension)} · {detailExtension.popupPath ? 'Has a popup' : 'No popup'}
-      </p>
-    </div>
-
-    <p
-      class="rounded-lg border bg-elevated/50 px-3 py-2.5 text-[0.6875rem] leading-relaxed text-dimmed"
-    >
-      {browserExtensionInjectionLabel(detailExtension.injected)}
-    </p>
-
-    {#if detailExtension.missingCapabilities.length > 0}
-      <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5">
-        <div class="flex items-center gap-1.5">
-          <AlertTriangle size={13} class="shrink-0 text-warning" />
-          <p class="text-xs font-medium text-foreground">
-            {detailExtension.missingCapabilities.length === 1
-              ? 'One capability is unavailable'
-              : `${detailExtension.missingCapabilities.length} capabilities are unavailable`}
-          </p>
-        </div>
-        <ul class="mt-1.5 space-y-0.5 pl-5 text-[0.6875rem] leading-relaxed text-muted">
-          {#each detailExtension.missingCapabilities as capability (capability)}
-            <li class="list-disc">{capability}</li>
-          {/each}
-        </ul>
-      </div>
-    {/if}
-
-    {#if detailExtension.warnings.length > 0}
-      <div class="rounded-lg border bg-elevated/50 px-3 py-2.5">
-        <p class="text-xs font-medium text-foreground">Warnings</p>
-        <ul class="mt-1.5 space-y-0.5 pl-5 text-[0.6875rem] leading-relaxed text-muted">
-          {#each detailExtension.warnings as warning (warning)}
-            <li class="list-disc">{warning}</li>
-          {/each}
-        </ul>
-      </div>
-    {/if}
-
-    {#snippet footer()}
-      <div class="flex w-full items-center gap-2">
-        <button
-          type="button"
-          class="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
-          title={`Uninstall ${detailExtension.name}`}
-          aria-label={`Uninstall ${detailExtension.name}`}
-          onclick={() => (uninstallTarget = detailExtension)}
-        >
-          <Trash2 size={14} />
-          Uninstall
-        </button>
-        <button
-          type="button"
-          class="ml-auto rounded-lg border bg-elevated px-3 py-2 text-sm font-medium transition-colors hover:bg-overlay"
-          title="Close settings"
-          onclick={() => (detailId = null)}
-        >
-          Close
-        </button>
-      </div>
-    {/snippet}
-  </Modal>
-{/if}
 
 {#if uninstallTarget}
   <ConfirmDialog
@@ -404,6 +453,7 @@
     open
     boxes={[extensionJarForBox(installBox.id)]}
     boxName={installBox.name}
+    onBrowseStore={browseStore}
     onClose={() => (installOpen = false)}
   />
 {/if}
