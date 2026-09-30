@@ -4033,21 +4033,28 @@
     workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
   }
 
+  /** Register a thread that arrived from another view, then hand it to the shell
+   *  so it lands in the view that owns it with its composer focused. A chat
+   *  continued into a project, an assistant task handed off, and a side chat
+   *  promoted to a thread all arrive while a view of another family is on screen,
+   *  so selecting the thread without moving used to leave it open invisibly. */
+  function openCreatedThread(thread: Thread): void {
+    upsertThreadInList(thread)
+    scopeState.updateThread(thread)
+    workspaceState.openThreadInOwningView(
+      thread,
+      projects.find((p) => p.id === thread.projectId) ?? null
+    )
+  }
+
   /** A chat was continued into a project   register the thread and open it there. */
   function handleContinuedInProject(forked: Thread): void {
-    upsertThreadInList(forked)
-    scopeState.updateThread(forked)
-    if (forked.projectId === INBOX_PROJECT_ID) navigate('chats')
-    else if (mode === 'chats') navigate('projects')
-    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+    openCreatedThread(forked)
   }
 
   /** An assistant task was forked to a project: open it in the projects view. */
   function handleAssistantHandoff(forked: Thread): void {
-    upsertThreadInList(forked)
-    scopeState.updateThread(forked)
-    navigate('projects')
-    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+    openCreatedThread(forked)
   }
 
   /** Register a freshly added project without landing in a new thread   used by
@@ -4076,11 +4083,7 @@
       tab.settings
     )
     contextSidebarState.close(tab.id)
-    upsertThreadInList(converted)
-    scopeState.updateThread(converted)
-    if (converted.projectId === INBOX_PROJECT_ID) navigate('chats')
-    else if (mode === 'chats') navigate('projects')
-    workspaceState.openThread(converted, projects.find((p) => p.id === converted.projectId) ?? null)
+    openCreatedThread(converted)
   }
 
   loadData()

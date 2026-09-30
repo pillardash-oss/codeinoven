@@ -140,6 +140,18 @@ class WorkspaceState {
    */
   openThreadFromNotification:
     ((thread: Thread, project: Project, temporaryChatId?: string) => Promise<void>) | null = null
+  /**
+   * Move the shell to the content view that owns a thread's family, when it is
+   * not already there. Registered by App.svelte, because only the shell changes
+   * the view, so a module that creates or finds a thread can put it on screen
+   * without owning navigation (a quoted passage spun into its own thread, the
+   * task manager jumping to a process's thread, a conversation handed off into
+   * a project's thread list).
+   *
+   * A no-op when the view already owns the family, so a project thread opened
+   * from Projects or Threads never moves the user off it.
+   */
+  navigateToThreadView: ((thread: Thread) => void) | null = null
 
   // ─── Sources (fed by ThreadView) ───────────────────────────────────────
   sources: AgentSource[] = $state([])
@@ -261,6 +273,25 @@ class WorkspaceState {
     scheduleDeferredWork('workspace:sourceProcessCount', () => {
       void this.refreshSourceProcessCount(thread.projectId, thread.id)
     })
+  }
+
+  /**
+   * Open a thread in the view that owns its family, with the composer focused:
+   * a chat lands in Chats, an assistant task in Assistant, a project thread in
+   * Projects (or Threads, if that is where the user already is).
+   *
+   * Every surface that continues or spins off a conversation goes through here,
+   * because opening a thread without moving was how a hand-off from Assistant or
+   * Chats selected a thread no visible view could show: the thread was live, and
+   * the user was left staring at the view they were already on.
+   */
+  openThreadInOwningView(thread: Thread, project: Project | null): void {
+    // The view move comes first: landing on the target view reconciles which
+    // thread it shows (the family's remembered one), and the thread being opened
+    // is the deliberate selection that overrides that reconciliation.
+    this.navigateToThreadView?.(thread)
+    this.openThread(thread, project)
+    this.requestFocusComposer()
   }
 
   /** The project's active scope bucket: the open thread's bucket when it belongs

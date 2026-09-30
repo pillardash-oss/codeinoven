@@ -32,7 +32,9 @@
   import { workspaceState, threadVisitKey } from '$lib/stores/workspace.svelte'
   import {
     contentThreadFamily,
+    contentViewForThread,
     decideContentViewThread,
+    viewShowsThread,
     type ContentThreadFamily
   } from '$lib/content-view-threads'
   import {
@@ -533,11 +535,18 @@
     workspaceState.navigateToBrowser = () => navigate('browser')
     workspaceState.openThreadFromNotification = (thread, project, temporaryChatId) =>
       openThreadFromNotification(thread, project, temporaryChatId)
+    // A thread created or found outside the shell's own navigation (a repeated
+    // conversation, a spun-off passage, a process's thread) has to be shown by
+    // the view that owns its family; only the shell may move the view.
+    workspaceState.navigateToThreadView = (thread) => {
+      if (!viewShowsThread(activeView, thread)) navigate(contentViewForThread(thread))
+    }
     return () => {
       workspaceState.navigateToSettings = null
       workspaceState.navigateToContent = null
       workspaceState.navigateToBrowser = null
       workspaceState.openThreadFromNotification = null
+      workspaceState.navigateToThreadView = null
     }
   }
 

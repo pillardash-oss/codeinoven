@@ -53,7 +53,10 @@ export function openPassageInNewThread(projectId: string, threadId: string, pass
         scopeBucketId: thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
       })
       rendererRecovery.setDraft(created.projectId, created.id, quotedPassageDraft(passage))
-      workspaceState.openThread(created, project)
+      // The thread the passage becomes has to be on screen and ready to type
+      // into: a draft nobody can see, in a view that cannot show it, is the
+      // whole point of the action lost.
+      workspaceState.openThreadInOwningView(created, project)
     } catch (error) {
       reportError(error, 'The new thread could not be created.')
     }

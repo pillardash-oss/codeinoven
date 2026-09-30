@@ -549,7 +549,10 @@
         invoke('project:get', target.projectId)
       ])
       if (thread && project) {
-        workspaceState.openThread(thread, project)
+        // Landing in the view that owns the thread is the point of the action:
+        // a process can belong to a chat or an assistant task, and selecting it
+        // without moving left the user on a view that could not show it.
+        workspaceState.openThreadInOwningView(thread, project)
       }
       onClose()
     } catch (navigateError) {
