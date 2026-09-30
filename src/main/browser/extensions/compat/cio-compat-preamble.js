@@ -140,7 +140,13 @@
     for (const root of roots) ensureNamespaceOnRoot(root, name, members, events)
   }
 
-  const resolved = () => Promise.resolve(undefined)
+  /**
+   * A placeholder answer for a namespace this runtime has no truth for: the API's
+   * empty shape, handed back both ways. An extension may await it or pass a
+   * callback, and the two are used interchangeably in the wild, so a place that
+   * answers only one way hangs the other silently.
+   */
+  const answering = (value) => (...args) => answerWith(args[args.length - 1], value)
 
   // ── Namespaces Electron does not compile in at all ───────────────────────────
   ensureNamespace('webNavigation', { getFrame: noop, getAllFrames: noop }, [
@@ -160,7 +166,7 @@
       get: noop,
       getCurrent: noop,
       getLastFocused: noop,
-      getAll: () => resolved([]),
+      getAll: answering([]),
       create: noop,
       remove: noop,
       update: noop,
@@ -169,33 +175,33 @@
     },
     ['onCreated', 'onRemoved', 'onFocusChanged', 'onBoundsChanged']
   )
-  ensureNamespace('commands', { getAll: () => resolved([]), update: noop }, ['onCommand'])
+  ensureNamespace('commands', { getAll: answering([]), update: noop }, ['onCommand'])
   ensureNamespace(
     'notifications',
     {
-      create: () => resolved('cio-notification'),
-      update: () => resolved(true),
-      clear: () => resolved(true),
-      getAll: () => resolved({}),
-      getPermissionLevel: () => resolved('granted')
+      create: answering('cio-notification'),
+      update: answering(true),
+      clear: answering(true),
+      getAll: answering({}),
+      getPermissionLevel: answering('granted')
     },
     ['onClicked', 'onClosed', 'onButtonClicked', 'onPermissionLevelChanged']
   )
   ensureNamespace(
     'permissions',
     {
-      contains: () => resolved(false),
-      request: () => resolved(false),
-      remove: () => resolved(false),
-      getAll: () => resolved({})
+      contains: answering(false),
+      request: answering(false),
+      remove: answering(false),
+      getAll: answering({})
     },
     ['onAdded', 'onRemoved']
   )
   ensureNamespace(
     'history',
     {
-      search: () => resolved([]),
-      getVisits: () => resolved([]),
+      search: answering([]),
+      getVisits: answering([]),
       addUrl: noop,
       deleteUrl: noop,
       deleteRange: noop,
@@ -206,7 +212,7 @@
   ensureNamespace(
     'bookmarks',
     {
-      search: () => resolved([]),
+      search: answering([]),
       get: noop,
       getTree: noop,
       getSubTree: noop,
@@ -217,14 +223,14 @@
   )
   ensureNamespace(
     'downloads',
-    { download: noop, search: () => resolved([]), pause: noop, resume: noop, cancel: noop },
+    { download: noop, search: answering([]), pause: noop, resume: noop, cancel: noop },
     ['onCreated', 'onChanged', 'onErased', 'onDeterminingFilename']
   )
   ensureNamespace(
     'identity',
     {
       getAuthToken: noop,
-      getProfileUserInfo: () => resolved({}),
+      getProfileUserInfo: answering({}),
       launchWebAuthFlow: noop,
       getRedirectURL: (path) => String(path || '')
     },
@@ -232,24 +238,24 @@
   )
   ensureNamespace(
     'sidePanel',
-    { setPanelBehavior: noop, setOptions: noop, getOptions: () => resolved({}), open: noop },
+    { setPanelBehavior: noop, setOptions: noop, getOptions: answering({}), open: noop },
     ['onOpened', 'onClosed']
   )
   ensureNamespace(
     'browsingData',
-    { remove: noop, removeCache: noop, removeCookies: noop, settings: () => resolved({}) },
+    { remove: noop, removeCache: noop, removeCookies: noop, settings: answering({}) },
     []
   )
-  ensureNamespace('sessions', { getRecentlyClosed: () => resolved([]), restore: noop }, [
+  ensureNamespace('sessions', { getRecentlyClosed: answering([]), restore: noop }, [
     'onChanged'
   ])
-  ensureNamespace('topSites', { get: () => resolved([]) }, ['onUpdated'])
-  ensureNamespace('search', { query: noop, get: () => resolved([]) }, [])
+  ensureNamespace('topSites', { get: answering([]) }, ['onUpdated'])
+  ensureNamespace('search', { query: noop, get: answering([]) }, [])
   ensureNamespace(
     'fontSettings',
     {
-      getFontList: () => resolved({}),
-      getDefaultFontSize: () => resolved(16),
+      getFontList: answering({}),
+      getDefaultFontSize: answering(16),
       setDefaultFontSize: noop,
       getFont: noop,
       setFont: noop
@@ -258,7 +264,7 @@
   )
   ensureNamespace(
     'tabGroups',
-    { query: () => resolved([]), get: noop, update: noop, TAB_GROUP_ID_NONE: -1 },
+    { query: answering([]), get: noop, update: noop, TAB_GROUP_ID_NONE: -1 },
     ['onCreated', 'onUpdated', 'onRemoved', 'onMoved']
   )
   ensureNamespace('omnibox', { setDefaultSuggestion: noop }, [
