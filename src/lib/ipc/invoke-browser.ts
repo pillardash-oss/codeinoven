@@ -111,6 +111,22 @@ export const invokeBrowserContract = {
   /** The popup windows the browser is holding for one project. */
   'browser:getPopupWindows': {} as Contract<[projectId: string], BrowserPopupWindow[]>,
   /**
+   * Open an extension's own action popup in the rail.
+   *
+   * Electron draws no toolbar and no action popup, so an extension's declared
+   * `action.default_popup` has no host of its own; the app hosts it in the rail
+   * instead, bound to the jar the extension runs in. From then on it is a popup
+   * like any other: the channels above place it, give it the keyboard and close
+   * it, and the rail draws it as a tab of its own.
+   *
+   * Answers the popup's id, which is the popup already open when that extension
+   * already has one in this tab.
+   */
+  'browser:openExtensionPopup': {} as Contract<
+    [projectId: string, tabId: string, extensionId: string],
+    string
+  >,
+  /**
    * Park the active browser page because a toast could not be shown over it.
    *
    * `browser:setToastOverlay` is the normal path: the stack moves into a child

@@ -763,6 +763,17 @@ export class BrowserService {
     replaceHandler('browser:getPopupWindows', (_event, rawProjectId) =>
       this.popupWindows.list(validateProjectId(rawProjectId))
     )
+    /**
+     * Open an extension's own action popup, which the app hosts because Electron
+     * draws no toolbar and no action popup for one to hang from.
+     */
+    replaceHandler('browser:openExtensionPopup', (_event, rawProjectId, rawTabId, rawExtensionId) =>
+      this.openExtensionPopup(
+        validateProjectId(rawProjectId),
+        validateTabId(rawTabId),
+        validateExtensionId(rawExtensionId)
+      )
+    )
     replaceHandler('browser:setToastVisible', (_event, rawVisible) => {
       this.setToastVisible(rawVisible === true)
     })
@@ -2566,6 +2577,64 @@ export class BrowserService {
   }
 
   /**
+   * Open an extension's own popup in the rail.
+   *
+   * Electron draws no toolbar and no action popup, so an extension's declared
+   * `action.default_popup` has no host of its own: this is the app supplying one.
+   * The page is bound to the jar the extension runs in, because an extension page
+   * resolves only inside the session that loaded the extension, and it is then a
+   * popup like any other: the rail places it, gives it the keyboard and closes it.
+   */
+  private async openExtensionPopup(
+    projectId: string,
+    tabId: string,
+    extensionId: string
+  ): Promise<string> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.projectId !== projectId) {
+      throw new Error('An extension popup needs an open tab of its own project')
+    }
+    // One popup per extension per tab: asking again is the user coming back to the
+    // popup they already have, not asking for a second copy of it.
+    const existing = this.popupWindows.extensionPopupFor(extensionId, tabId)
+    if (existing) return existing
+    if (this.popupWindows.countForTab(tabId) >= MAX_POPUP_WINDOWS_PER_TAB) {
+      throw new Error('This tab already holds the popups it may host')
+    }
+    const url = this.extensions.popupUrlFor(extensionId, tab.boxId)
+    if (!url) throw new Error('That extension offers no popup in this box')
+    // The extension has to be loaded in the jar before its own page can resolve: a
+    // jar is loaded on demand and does not wait for a popup.
+    await this.extensions.ensureJarLoaded(projectId, tab.boxId)
+    const view = new WebContentsView({
+      webPreferences: {
+        session: this.sessionForProject(projectId, tab.boxId),
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        webSecurity: true,
+        devTools: true
+      }
+    })
+    const popupId = this.popupWindows.hostExtension({
+      owner: { tabId, projectId, threadId: tab.threadId, boxId: tab.boxId },
+      extensionId,
+      url,
+      view,
+      viewport: null
+    })
+    try {
+      await view.webContents.loadURL(url)
+    } catch (error: unknown) {
+      // A page that could not load is not a popup: without this the rail would keep
+      // a tab that can never show anything.
+      this.popupWindows.close(popupId, 'its page could not be loaded')
+      throw error
+    }
+    return popupId
+  }
+
+  /**
    * The view plumbing popup windows run on.
    *
    * The registry owns popup lifetimes; every native call a view needs stays here,
@@ -2655,9 +2724,29 @@ export class BrowserService {
       this.showPopupWindowContextMenu(record, params)
     })
     contents.on('will-navigate', (event, url) => {
-      if (!isAllowedPopupWindowUrl(url)) event.preventDefault()
+      if (!this.isAllowedPopupNavigation(record, url)) event.preventDefault()
     })
     this.installWindowOpenPolicy(record.view, popupPageOwner(record))
+  }
+
+  /**
+   * Whether a popup's page may navigate itself to an address.
+   *
+   * A page's popup is held to what every page is held to: http or https, plus the
+   * blank document it legitimately starts at. An extension's own popup is a
+   * `chrome-extension:` document, so the extension's own files are allowed on top
+   * of that; a navigation anywhere else would be the popup leaving the extension
+   * that owns it.
+   */
+  private isAllowedPopupNavigation(record: BrowserPopupWindowRecord, url: string): boolean {
+    if (isAllowedPopupWindowUrl(url)) return true
+    if (record.extensionId === null) return false
+    try {
+      const parsed = new URL(url)
+      return parsed.protocol === 'chrome-extension:' && parsed.host === record.extensionId
+    } catch {
+      return false
+    }
   }
 
   /** Install the landing policy for the windows a page opens. */
@@ -2863,8 +2952,31 @@ export class BrowserService {
   }
 
   private publishExtensions(): void {
+    this.reconcileExtensionPopups()
     if (this.window.webContents.isDestroyed()) return
     sendToRenderer(this.window.webContents, 'browser:extensions', this.extensions.list())
+  }
+
+  /**
+   * Close extension popups whose extension is no longer there to answer.
+   *
+   * An extension's popup hosts the extension's own page in the jar that runs it, so
+   * an extension that was uninstalled, disabled, or taken out of that box leaves a
+   * page behind that nothing can talk to. The installed list is published on every
+   * change to it, which makes that the one place that sees all of them.
+   */
+  private reconcileExtensionPopups(): void {
+    const jarsByExtension = new Map<string, Set<string>>()
+    for (const extension of this.extensions.list()) {
+      if (!extension.enabled) continue
+      jarsByExtension.set(extension.id, new Set(extension.boxes))
+    }
+    this.popupWindows.closeWhere((record) => {
+      if (record.extensionId === null) return false
+      const jars = jarsByExtension.get(record.extensionId)
+      if (!jars) return true
+      return !jars.has(record.boxId ?? '')
+    }, 'its extension was unloaded')
   }
 
   private publishExtensionProgress(progress: BrowserExtensionProgress): void {

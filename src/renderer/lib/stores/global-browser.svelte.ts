@@ -34,6 +34,7 @@ import {
   type BrowserAssistantChat
 } from './browser-assistant.svelte'
 import { browserPopupWindows } from './browser-popup-windows.svelte'
+import { browserExtensions } from './browser-extensions.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { sidebarState } from './sidebar.svelte'
 import { defaultSettingsFor } from './thread-settings.svelte'
@@ -63,6 +64,7 @@ import {
   isSameBrowserLoadError,
   DEFAULT_BOX_ID,
   boxIdForJar,
+  extensionJarForBox,
   defaultBrowserBox,
   isTabIdlePastWindow,
   type BrowserBoxAppearance,
@@ -381,12 +383,20 @@ export class GlobalBrowserState {
     this.closePopupsWithNoWindows()
   }
 
-  /** Close the popup tool once the tab on screen has no popup windows left. */
+  /** Close the popup tool once the tab on screen has nothing left to show: no popup
+   *  of its own open, and no extension popup to open. An extension's popup has no
+   *  toolbar to hang from, so the tool carrying its door must stay while the door
+   *  is all there is. */
   private closePopupsWithNoWindows(): void {
     if (!this.contextSidebarVisible) return
     if (this.contextSidebarTool !== 'popups') return
     const tab = this.activeTab
     if (tab && browserPopupWindows.forTab(tab.id).length > 0) return
+    if (
+      tab &&
+      browserExtensions.popupExtensionsInJar(extensionJarForBox(this.activeTabBoxId)).length > 0
+    )
+      return
     this.contextSidebarVisible = false
   }
 

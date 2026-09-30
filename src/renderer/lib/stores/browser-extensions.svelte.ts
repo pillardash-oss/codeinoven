@@ -75,6 +75,22 @@ class BrowserExtensionsState {
     return this.extensions.filter((extension) => extension.enabled).length
   }
 
+  /**
+   * The enabled extensions of one jar that declare a popup.
+   *
+   * A popup is the only part of an extension the user reaches from the rail, and
+   * Electron draws no toolbar for it, so the rail is its host. An extension that
+   * is disabled, loaded nowhere, or declares no popup has none to offer. The jar
+   * is the vocabulary extension records use, where the context's own jar is the
+   * empty string.
+   */
+  popupExtensionsInJar(jar: string): BrowserExtension[] {
+    return this.extensions.filter(
+      (extension) =>
+        extension.enabled && extension.popupPath !== null && extension.boxes.includes(jar)
+    )
+  }
+
   /** Register the runtime's subscriptions and read the installed list once. */
   start(): void {
     if (this.started) return

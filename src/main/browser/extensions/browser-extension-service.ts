@@ -39,7 +39,7 @@ import { browserPartitionFor } from '../browser-service/browser-validation'
 import { prepareExtensionSource } from './browser-extension-install-job'
 import { extensionIdFromInput, isExtensionId } from './browser-extension-crx'
 import { downloadWebStoreRelease, resolveWebStoreRelease } from './browser-extension-webstore'
-import { EXTENSION_MANIFEST_NAME } from './browser-extension-source'
+import { EXTENSION_MANIFEST_NAME, extensionPopupUrl } from './browser-extension-source'
 import {
   BROWSER_EXTENSION_SOURCE_DIR,
   BROWSER_EXTENSION_STORE_DIR,
@@ -121,6 +121,21 @@ export class BrowserExtensionService {
   /** The installed extensions, as the renderer draws them. */
   list(): BrowserExtension[] {
     return this.registry.list().map((record) => toExtensionView(record, []))
+  }
+
+  /**
+   * The popup document one installed extension declares, as an address, when it
+   * is enabled and runs in the jar asked for.
+   *
+   * Null for everything else, which is what every caller checks before it can
+   * host one: an extension the jar does not run is not loaded there, so its own
+   * page would have no extension behind it.
+   */
+  popupUrlFor(extensionId: string, boxId: string | null): string | null {
+    const record = this.registry.get(extensionId)
+    if (!record || !record.enabled) return null
+    if (!extensionRunsInJar(record, boxId)) return null
+    return extensionPopupUrl(record.id, record.popupPath)
   }
 
   /**

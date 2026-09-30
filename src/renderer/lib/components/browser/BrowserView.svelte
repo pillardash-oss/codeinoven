@@ -17,12 +17,13 @@
   import GitHubSignInBrowserDock from '$lib/components/git/GitHubSignInBrowserDock.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
+  import { DEFAULT_BOX_ID, extensionJarForBox } from '$lib/stores/global-browser-types'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { storeExtensionOffer } from '$lib/stores/browser-extension-store-offer'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
+  import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { motionDuration } from '$lib/motion'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
@@ -127,6 +128,12 @@
      *  and takes the rail's panel with it when it was the last, so the tool is only
      *  offered while there is a window for it to show. */
     const popupWindows = tab ? browserPopupWindows.forTab(tab.id) : []
+    /** The extension popups the box in view can open. An extension's own popup has
+     *  no toolbar to hang from, so this is what offers the tool before anything is
+     *  open rather than only after. */
+    const availableExtensionPopups = browserExtensions.popupExtensionsInJar(
+      extensionJarForBox(globalBrowser.activeBox.id)
+    )
     const browserTools: ContextDockItem[] = [
       {
         id: 'downloads',
@@ -194,14 +201,16 @@
           : undefined,
         onSelect: () => globalBrowser.toggleExtensionsSidebar()
       },
-      ...(popupWindows.length > 0
+      ...(tab !== null && (popupWindows.length > 0 || availableExtensionPopups.length > 0)
         ? [
             {
               id: 'popups',
               label:
-                popupWindows.length === 1
-                  ? 'Popup window'
-                  : `Popup windows (${popupWindows.length})`,
+                popupWindows.length === 0
+                  ? 'Extension popups'
+                  : popupWindows.length === 1
+                    ? 'Popup window'
+                    : `Popup windows (${popupWindows.length})`,
               icon: AppWindow,
               active: globalBrowser.popupsSidebarShown,
               onSelect: () => globalBrowser.togglePopupsSidebar()

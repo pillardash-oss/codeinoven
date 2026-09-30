@@ -270,6 +270,28 @@ function popupPathOf(manifest: Record<string, unknown>): string | null {
   return null
 }
 
+/**
+ * The address of an extension's declared popup document, or null when the
+ * declaration cannot name a document inside the extension's own files.
+ *
+ * The path is resolved against the extension's own origin rather than joined by
+ * hand, and the result has to still be that origin: a manifest that declares an
+ * absolute URL, or a path that climbs out of the extension's root, gets no popup
+ * rather than a navigation. The host is compared rather than the origin because
+ * a `chrome-extension:` URL's origin is opaque.
+ */
+export function extensionPopupUrl(id: string, popupPath: string | null): string | null {
+  if (!popupPath) return null
+  let resolved: URL
+  try {
+    resolved = new URL(popupPath, `chrome-extension://${id}/`)
+  } catch {
+    return null
+  }
+  if (resolved.protocol !== 'chrome-extension:' || resolved.host !== id) return null
+  return resolved.href
+}
+
 function backgroundOf(manifest: Record<string, unknown>): ManifestRecord['background'] {
   const background = asRecord(manifest['background'])
   const serviceWorker = background['service_worker']

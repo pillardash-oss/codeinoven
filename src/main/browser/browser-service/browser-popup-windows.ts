@@ -49,6 +49,15 @@ export interface BrowserPopupWindowRecord {
   /** The box the owning tab lives in. A popup keeps its opener's jar, so this is
    *  carried rather than re-derived from the context. */
   boxId: string | null
+  /**
+   * The extension whose own popup this is, or null when a page opened it with
+   * `window.open`.
+   *
+   * An extension's popup is hosted by the rail rather than by a window it opened,
+   * so its page belongs to that extension's own origin, and the only navigation it
+   * may make outside its own files is the one every page may make.
+   */
+  extensionId: string | null
   view: WebContentsView
   url: string
   title: string
@@ -147,6 +156,7 @@ export class BrowserPopupWindows {
       projectId: context.owner.projectId,
       threadId: context.owner.threadId,
       boxId: context.owner.boxId,
+      extensionId: null,
       view: this.viewFor(contents),
       url: context.url,
       title: contents.getTitle(),
@@ -170,6 +180,56 @@ export class BrowserPopupWindows {
     return contents
   }
 
+  /**
+   * Host an extension's own action popup, which no page opened.
+   *
+   * A `window.open` popup arrives as a `WebContents` Chromium created for it; an
+   * extension's popup has no such thing to adopt, because Electron draws no
+   * toolbar and no action popup for one to come from. So the caller creates the
+   * view bound to the jar the extension runs in and this takes it on the same
+   * terms as any other popup: parked offscreen until the rail places it, tracked
+   * while it runs, and out of the list when its page ends.
+   */
+  hostExtension(context: {
+    owner: BrowserPageOwner
+    extensionId: string
+    url: string
+    view: WebContentsView
+    viewport: BrowserViewport | null
+  }): string {
+    const record: BrowserPopupWindowRecord = {
+      id: `popup:${crypto.randomUUID()}`,
+      tabId: context.owner.tabId,
+      projectId: context.owner.projectId,
+      threadId: context.owner.threadId,
+      boxId: context.owner.boxId,
+      extensionId: context.extensionId,
+      view: context.view,
+      url: context.url,
+      title: '',
+      favicon: null,
+      loading: true,
+      displayedBounds: null,
+      requestedViewport: isUsableViewport(context.viewport)
+        ? context.viewport
+        : { width: 480, height: 720 }
+    }
+    // The extension's own document, so it gets its own surface the same way a
+    // page does, and its title and favicon arrive through the usual tracking.
+    applyBrowserPageBackground(record.view)
+    this.popups.set(record.id, record)
+    this.track(record)
+    this.viewHost.wire(record)
+    this.viewHost.unmount(record.view, record.requestedViewport)
+    Logger.dev('Browser extension popup opened', {
+      popupId: record.id,
+      tabId: record.tabId,
+      extensionId: context.extensionId
+    })
+    this.viewHost.changed()
+    return record.id
+  }
+
   /** Every live popup window, newest last, optionally for one project. */
   list(projectId?: string): BrowserPopupWindow[] {
     const popups: BrowserPopupWindow[] = []
@@ -182,7 +242,8 @@ export class BrowserPopupWindows {
         url: record.url,
         title: record.title,
         favicon: record.favicon,
-        loading: record.loading
+        loading: record.loading,
+        extensionId: record.extensionId
       })
     }
     return popups
@@ -210,6 +271,19 @@ export class BrowserPopupWindows {
 
   has(id: string): boolean {
     return this.popups.has(id)
+  }
+
+  /**
+   * The popup one extension already has open in one tab, if it has one.
+   *
+   * Opening the same extension again is the user coming back to its popup, not
+   * asking for a second copy of it, so the caller places this one instead.
+   */
+  extensionPopupFor(extensionId: string, tabId: string): string | null {
+    for (const record of this.popups.values()) {
+      if (record.extensionId === extensionId && record.tabId === tabId) return record.id
+    }
+    return null
   }
 
   /**
@@ -273,6 +347,19 @@ export class BrowserPopupWindows {
   closeForTab(tabId: string, reason: string): void {
     for (const record of [...this.popups.values()]) {
       if (record.tabId === tabId) this.close(record.id, reason)
+    }
+  }
+
+  /**
+   * Close every popup a condition names, for the world changing under one.
+   *
+   * An extension popup's page belongs to an extension that can be uninstalled or
+   * taken out of a box while the popup is on screen, and a page whose extension is
+   * gone has nothing left to talk to.
+   */
+  closeWhere(matches: (record: BrowserPopupWindowRecord) => boolean, reason: string): void {
+    for (const record of [...this.popups.values()]) {
+      if (matches(record)) this.close(record.id, reason)
     }
   }
 

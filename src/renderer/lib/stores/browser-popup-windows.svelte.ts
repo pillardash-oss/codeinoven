@@ -1,7 +1,8 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import type { BrowserPopupWindow, BrowserViewBounds } from '$shared/ipc-contract'
+import type { BrowserExtension, BrowserPopupWindow, BrowserViewBounds } from '$shared/ipc-contract'
 import type { BrowserPopupWindowContextTab } from './context-sidebar-types'
+import { browserExtensions } from './browser-extensions.svelte'
 import { reportError } from './app-errors.svelte'
 
 /**
@@ -84,15 +85,52 @@ class BrowserPopupWindowsState {
    *
    * The tab is the popup: the rail's strip is the list of windows and a popup
    * that ends simply stops appearing here, so no surface has to prune the strip.
+   * An extension's popup is named after the extension and wears its icon, because
+   * that page is the extension's own UI and the title it sets is not its name.
    */
   tabsFor(tabId: string): BrowserPopupWindowContextTab[] {
-    return this.forTab(tabId).map((popup) => ({
-      id: popup.id,
-      kind: 'popup-window',
-      title: popup.title || popup.url || 'Popup window',
-      openerTabId: popup.tabId,
-      favicon: popup.favicon ?? undefined
-    }))
+    return this.forTab(tabId).map((popup) => {
+      const extension = this.extensionFor(popup)
+      return {
+        id: popup.id,
+        kind: 'popup-window' as const,
+        title: extension?.name ?? (popup.title || popup.url || 'Popup window'),
+        openerTabId: popup.tabId,
+        favicon: extension?.iconDataUrl ?? popup.favicon ?? undefined
+      }
+    })
+  }
+
+  /** The extension one extension-popup belongs to, or null for a page's popup. */
+  private extensionFor(popup: BrowserPopupWindow): BrowserExtension | null {
+    if (popup.extensionId === null) return null
+    return (
+      browserExtensions.extensions.find((extension) => extension.id === popup.extensionId) ?? null
+    )
+  }
+
+  /**
+   * Open one extension's own popup in the rail.
+   *
+   * An extension's action popup has no toolbar to hang from here, so the rail is
+   * its host. Main answers with the popup's id, which is the popup already open
+   * when that extension already has one in this tab, and the rail then draws it
+   * like any other popup: a tab of its own, placed by the panel, closed from the
+   * strip.
+   */
+  async openExtension(
+    projectId: string,
+    tabId: string,
+    extensionId: string
+  ): Promise<string | null> {
+    try {
+      const popupId = await invoke('browser:openExtensionPopup', projectId, tabId, extensionId)
+      this.select(popupId)
+      return popupId
+    } catch (error: unknown) {
+      reportError(error, 'That extension popup could not be opened.')
+      return null
+    }
   }
 
   /** One popup by id, or null once it is gone. */

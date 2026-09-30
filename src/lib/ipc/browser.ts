@@ -67,6 +67,16 @@ export interface BrowserPopupWindow {
   /** Favicon data URL the popup reported, or null until it declares one. */
   favicon: string | null
   loading: boolean
+  /**
+   * The extension whose own popup this is, or null when a page opened it with
+   * `window.open`.
+   *
+   * An extension's popup has no window to come from, because Electron draws no
+   * toolbar and no action popup for one to hang from: the rail itself is its host.
+   * The id is carried so the rail can name the popup after the extension and draw
+   * the extension's own icon rather than a page title its page may never set.
+   */
+  extensionId: string | null
 }
 
 /** Native browser content rectangle in BrowserWindow density-independent pixels. */
