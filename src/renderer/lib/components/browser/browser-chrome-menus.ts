@@ -67,10 +67,40 @@ export function browserSiteHost(url: string): string {
 export function openBrowserSiteMenu(
   projectId: string,
   host: string,
-  anchor: HTMLElement
+  anchor: HTMLElement,
+  boxId: string | null = null,
+  boxName = ''
 ): Promise<boolean> {
   const { x, y } = anchorBelow(anchor)
-  return invoke('browser:siteMenu', projectId, host, x, y).then(
+  return openBrowserSiteMenuAt(projectId, host, x, y, boxId, boxName)
+}
+
+/**
+ * The same menu at a point, for a surface that is not the app window.
+ *
+ * The native overlay that draws the floating browser strip lives in a window of
+ * its own, so its chrome buttons have no element here to measure. The caller
+ * translates the overlay document's point into this window's content space and
+ * hands it over directly, along with the box whose jar the clearing actions
+ * belong to.
+ */
+export function openBrowserSiteMenuAt(
+  projectId: string,
+  host: string,
+  x: number,
+  y: number,
+  boxId: string | null = null,
+  boxName = ''
+): Promise<boolean> {
+  return invoke(
+    'browser:siteMenu',
+    projectId,
+    host,
+    boxId,
+    boxName,
+    Math.max(0, Math.round(x)),
+    Math.max(0, Math.round(y))
+  ).then(
     () => true,
     () => false
   )

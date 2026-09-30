@@ -1,12 +1,22 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   OVERLAY_ACK_TIMEOUT_MS,
+  TOAST_OVERLAY_TOP,
   type BrowserOverlayAck,
+  type BrowserStripOverlayAction,
   type BrowserStripOverlayInteraction,
   type BrowserStripOverlayStrip
 } from '$shared/browser-overlay'
+import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 import { logRendererError } from '$lib/system/renderer-logger'
 import { globalBrowser } from './global-browser.svelte'
+import { browserTabLabel, DEFAULT_BOX_NAME } from './global-browser-types'
+import { browserBookmarks } from './browser-bookmarks.svelte'
+import { installStoreExtensionOffer, storeExtensionOffer } from './browser-extension-store-offer'
+import {
+  browserSiteHost,
+  openBrowserSiteMenuAt
+} from '$lib/components/browser/browser-chrome-menus'
 import { sidebarState } from './sidebar.svelte'
 
 /**
@@ -243,11 +253,67 @@ class BrowserStripOverlayState {
       this.scheduleClose()
       return
     }
+    if (report.kind === 'action') {
+      this.runAction(report.action, report.x, report.y)
+      return
+    }
     if (report.kind === 'select') {
       globalBrowser.switchTo(report.tabId)
       return
     }
     globalBrowser.close(report.tabId)
+  }
+
+  /**
+   * Run a chrome control the overlay's address row reported.
+   *
+   * The overlay holds no handlers, so every press is looked up against the live
+   * active tab here, exactly as a tab row's is: a tab that has gone since the row
+   * was drawn makes the action a no-op rather than an error.
+   */
+  private runAction(action: BrowserStripOverlayAction, x: number, y: number): void {
+    const tab = globalBrowser.activeTab
+    if (!tab) return
+    switch (action) {
+      case 'back':
+        void invoke('browser:goBack', tab.id).catch(() => {})
+        return
+      case 'forward':
+        void invoke('browser:goForward', tab.id).catch(() => {})
+        return
+      case 'reload':
+        void invoke('browser:reload', tab.id).catch(() => {})
+        return
+      case 'stop':
+        void invoke('browser:stop', tab.id).catch(() => {})
+        return
+      case 'open-address':
+        globalBrowser.openAddressSpotlight()
+        return
+      case 'toggle-bookmark':
+        if (tab.url !== '') browserBookmarks.toggle(tab.url, browserTabLabel(tab), tab.favicon)
+        return
+      case 'open-site-menu':
+        // The overlay document's own point, translated into the app window's
+        // content space: the overlay window starts TOAST_OVERLAY_TOP below it.
+        // The box comes along because the padlock clears the jar it was opened
+        // from, which for the global browser is the active tab's own box.
+        void openBrowserSiteMenuAt(
+          GLOBAL_BROWSER_PROJECT_ID,
+          browserSiteHost(tab.url),
+          x,
+          y + TOAST_OVERLAY_TOP,
+          globalBrowser.activeTabBoxId,
+          globalBrowser.boxById(globalBrowser.activeTabBoxId)?.name ?? DEFAULT_BOX_NAME
+        )
+        return
+      case 'act-on-store-offer': {
+        const offer = storeExtensionOffer()
+        if (!offer) return
+        if (offer.installed) globalBrowser.showExtensionsSidebar()
+        else void installStoreExtensionOffer()
+      }
+    }
   }
 
   /** Close the panel once the pointer has left the strip, after the same grace

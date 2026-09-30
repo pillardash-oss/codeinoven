@@ -97,12 +97,14 @@
 
   /** Report one thing the user did to the strip, or where the pointer is in it. */
   function reportStrip(interaction: BrowserStripOverlayInteraction): void {
-    // Presses are logged for the same reason the cards' presses are: a row that
-    // seems to do nothing is the case worth having a record of.
+    // Presses are logged for the same reason the cards' presses are: a row or a
+    // control that seems to do nothing is the case worth having a record of.
     if (interaction.kind === 'select' || interaction.kind === 'close') {
       logRendererDev(
         `The browser overlay reported a ${interaction.kind} press on tab ${interaction.tabId}`
       )
+    } else if (interaction.kind === 'action') {
+      logRendererDev(`The browser overlay reported a ${interaction.action} press`)
     }
     void invoke('browser:overlayStripInteract', interaction).catch(() => {})
   }
@@ -380,5 +382,6 @@
     {strip}
     onSelect={(tabId) => reportStrip({ kind: 'select', tabId })}
     onClose={(tabId) => reportStrip({ kind: 'close', tabId })}
+    onAction={(action, x, y) => reportStrip({ kind: 'action', action, x, y })}
   />
 {/if}

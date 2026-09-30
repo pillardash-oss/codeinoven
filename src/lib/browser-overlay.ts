@@ -179,6 +179,42 @@ export type ToastOverlayRequest = ToastOverlayRequestStack | null
  * the globe fallback; the overlay document cannot ask the main process for an
  * icon, so whatever it draws has to arrive ready to render.
  */
+/**
+ * The page's chrome, reduced to what the strip above it can show.
+ *
+ * The address is read-only text here, exactly as it is in the docked panel: the
+ * control opens the address spotlight, where the address is replaced and the
+ * pages already visited are offered, so no editable copy of it crosses the
+ * boundary. Every control's handler stays in the app renderer; the overlay
+ * reports the press and the renderer runs the original.
+ */
+export interface BrowserStripOverlayChrome {
+  /** The page's address, empty on a blank tab. */
+  url: string
+  /** https, so the row shows a closed padlock instead of an open one. */
+  secure: boolean
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+  bookmarked: boolean
+  /**
+   * The extension a Web Store page offers to install, when there is one, and
+   * whether that install is already done or in flight. Null on every other page.
+   */
+  storeOffer: { title: string; installed: boolean; installing: boolean } | null
+}
+
+/** A control on the strip's chrome row. */
+export type BrowserStripOverlayAction =
+  | 'back'
+  | 'forward'
+  | 'reload'
+  | 'stop'
+  | 'open-address'
+  | 'toggle-bookmark'
+  | 'open-site-menu'
+  | 'act-on-store-offer'
+
 export interface BrowserStripOverlayTab {
   id: string
   label: string
@@ -208,6 +244,8 @@ export interface BrowserStripOverlayStrip {
   width: number
   top: number
   theme: 'light' | 'dark'
+  /** The address row above the tab list, mirroring the docked panel's chrome. */
+  chrome: BrowserStripOverlayChrome
   tabs: BrowserStripOverlayTab[]
 }
 
@@ -233,6 +271,12 @@ export type BrowserStripOverlayInteraction =
   /** The pointer entered or left the strip's own rectangle, which is what opens
    *  and closes the floating panel while the overlay is the one drawing it. */
   | { kind: 'pointer'; over: boolean }
+  /**
+   * A chrome control was pressed. `x`/`y` are the point, in the overlay
+   * document's own client coordinates, a native popup should drop from, which is
+   * what a site-settings menu needs and no other action reads.
+   */
+  | { kind: 'action'; action: BrowserStripOverlayAction; x: number; y: number }
 
 /**
  * Everything the overlay is drawing at one moment, for the document's pull.

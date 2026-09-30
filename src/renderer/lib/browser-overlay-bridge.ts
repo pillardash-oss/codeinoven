@@ -5,6 +5,7 @@ import {
   TOAST_CARD_WIDTH,
   TOAST_STACK_RIGHT,
   TOAST_STACK_TOP,
+  type BrowserStripOverlayChrome,
   type BrowserStripOverlayTab,
   type ToastOverlayInteractionReport,
   type ToastOverlayKind,
@@ -15,6 +16,9 @@ import MemoryToastComponent from './components/ui/MemoryToast.svelte'
 import { openMemoryProposal } from './stores/memory-proposal-open'
 import { globalBrowser } from './stores/global-browser.svelte'
 import { browserTabLabel } from './stores/global-browser-types'
+import { browserBookmarks } from './stores/browser-bookmarks.svelte'
+import { browserExtensions } from './stores/browser-extensions.svelte'
+import { storeExtensionOffer } from './stores/browser-extension-store-offer'
 import { browserTabAccent, browserTabIconUrl } from './components/browser/browser-tab-appearance'
 
 /**
@@ -182,6 +186,39 @@ export function projectStripTabs(): BrowserStripOverlayTab[] {
       muted: runtime.muted
     }
   })
+}
+
+/**
+ * The address row above the strip, projected for the overlay.
+ *
+ * The docked panel reads the same store values, so the row the overlay draws and
+ * the row the app window draws say the same thing down to the bookmark star. The
+ * page on screen is the active tab, which is the tab the strip's rows mark too.
+ */
+export function projectStripChrome(): BrowserStripOverlayChrome {
+  const tab = globalBrowser.activeTab
+  const address = tab?.url ?? ''
+  const runtime = tab ? globalBrowser.runtimeFor(tab.id) : null
+  const offer = storeExtensionOffer()
+  return {
+    url: address,
+    secure: address.startsWith('https:'),
+    loading: runtime?.loading ?? false,
+    canGoBack: runtime?.canGoBack ?? false,
+    canGoForward: runtime?.canGoForward ?? false,
+    bookmarked: address !== '' && browserBookmarks.isBookmarked(address),
+    storeOffer: offer
+      ? {
+          title: offer.installed
+            ? `${offer.name ?? 'This extension'} is installed. Open the extensions panel.`
+            : browserExtensions.installing
+              ? `Installing ${offer.name ?? 'the extension'}`
+              : `Install ${offer.name ?? 'this extension'} in ${offer.boxName}`,
+          installed: offer.installed !== null,
+          installing: browserExtensions.installing
+        }
+      : null
+  }
 }
 
 /**

@@ -28,8 +28,12 @@
   import { browserStripOverlay } from '$lib/stores/browser-strip-overlay.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
-  import { projectStripTabs } from '$lib/browser-overlay-bridge'
-  import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import { projectStripChrome, projectStripTabs } from '$lib/browser-overlay-bridge'
+  import {
+    browserTabLabel,
+    DEFAULT_BOX_NAME,
+    type GlobalBrowserTab
+  } from '$lib/stores/global-browser-types'
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import {
     installStoreExtensionOffer,
@@ -216,7 +220,13 @@
     if (!(button instanceof HTMLElement)) return
     const host = browserSiteHost(tab.url)
     siteMenuOpen = true
-    void openBrowserSiteMenu(GLOBAL_BROWSER_PROJECT_ID, host, button).then((opened) => {
+    void openBrowserSiteMenu(
+      GLOBAL_BROWSER_PROJECT_ID,
+      host,
+      button,
+      globalBrowser.activeTabBoxId,
+      globalBrowser.boxById(globalBrowser.activeTabBoxId)?.name ?? DEFAULT_BOX_NAME
+    ).then((opened) => {
       if (!opened) siteMenuOpen = false
     })
   }
@@ -279,15 +289,44 @@
 
   const floating = $derived(!sidebarState.docked && sidebarState.hoverOpen)
   const pageCoversStrip = $derived(browserVisibility.overlapsNative(stripBand))
-  const overlayWanted = $derived(floating && pageCoversStrip && !browserStripOverlay.unavailable)
+  /** Whether the overlay may be used for the floating panel at all: the panel has
+   *  to be floating, and the window has to be able to hear and draw it. */
+  const overlayAvailable = $derived(floating && !browserStripOverlay.unavailable)
+  /**
+   * Whether the strip belongs in the overlay right now.
+   *
+   * `pageCoversStrip` alone is not enough. A tab switch remounts the page frame
+   * (`BrowserView` keys `BrowserWorkspace` by tab), and the new frame only
+   * publishes its rectangle after a `tick`, so the coverage reading dips false
+   * for a flush. Releasing the strip on that dip both flashed the panel and let
+   * the DOM panel publish an occlusion over the page frame the switch was about
+   * to attach, which parked the new page and left the panel showing. Keeping the
+   * overlay while it is already live bridges the dip; a genuine full-window
+   * surface (a modal) is the signal that actually ends the handover.
+   */
+  const overlayWanted = $derived(
+    overlayAvailable &&
+      (pageCoversStrip || browserStripOverlay.live) &&
+      !browserVisibility.hasFullWindowSurface
+  )
 
   /**
    * What the sidebar is told about its floating panel: `none` leaves everything
    * to the DOM panel, `pending` means the overlay is loading so the panel must
    * keep drawing but must not occlude, and `live` means the overlay owns it.
+   *
+   * While the panel floats and the overlay is usable the DOM panel never falls
+   * back to `none`, even when no page covers its band this instant. Publishing an
+   * occlusion there is what detached the page and left the overlay mirroring a
+   * frame that no longer existed; `pending` keeps the panel drawable without
+   * occluding, so the page can always attach underneath it.
    */
   const stripPhase = $derived<'none' | 'pending' | 'live'>(
-    !overlayWanted ? 'none' : browserStripOverlay.live ? 'live' : 'pending'
+    overlayAvailable && !browserVisibility.hasFullWindowSurface
+      ? browserStripOverlay.live
+        ? 'live'
+        : 'pending'
+      : 'none'
   )
 
   $effect(() => {
@@ -299,6 +338,7 @@
       width: sidebarState.width,
       top: stripTop,
       theme: browserStripOverlay.theme,
+      chrome: projectStripChrome(),
       tabs: projectStripTabs()
     })
   })

@@ -32,6 +32,8 @@ import {
 import type { BrowserViewport } from './browser-types'
 import type {
   BrowserOverlayAck,
+  BrowserStripOverlayAction,
+  BrowserStripOverlayChrome,
   BrowserStripOverlayInteraction,
   BrowserStripOverlayRequest,
   BrowserStripOverlayTab,
@@ -1033,6 +1035,7 @@ export function validateBrowserStripOverlayRequest(
     width: Math.round(width),
     top: Math.round(top),
     theme: strip['theme'] === 'dark' ? 'dark' : 'light',
+    chrome: validateBrowserStripChrome(strip['chrome']),
     tabs,
     // The revision the overlay echoes back once these rows are drawn. A request
     // without one is not rejected: revision 0 simply never matches what the
@@ -1057,10 +1060,80 @@ export function validateBrowserStripInteraction(value: unknown): BrowserStripOve
   const report = value as Record<string, unknown>
   const kind = report['kind']
   if (kind === 'pointer') return { kind: 'pointer', over: report['over'] === true }
+  if (kind === 'action') {
+    return {
+      kind: 'action',
+      action: validateBrowserStripOverlayAction(report['action']),
+      x: overlayPoint(report['x'], 'x'),
+      y: overlayPoint(report['y'], 'y')
+    }
+  }
   if (kind !== 'select' && kind !== 'close') {
     throw new TypeError('A strip overlay interaction must name a known kind')
   }
   return { kind, tabId: validateTabId(report['tabId']) }
+}
+
+/** The chrome controls the strip's address row can report. */
+const OVERLAY_STRIP_ACTIONS: ReadonlySet<string> = new Set([
+  'back',
+  'forward',
+  'reload',
+  'stop',
+  'open-address',
+  'toggle-bookmark',
+  'open-site-menu',
+  'act-on-store-offer'
+])
+
+function validateBrowserStripOverlayAction(value: unknown): BrowserStripOverlayAction {
+  if (typeof value !== 'string' || !OVERLAY_STRIP_ACTIONS.has(value)) {
+    throw new TypeError('A strip overlay action must name a known control')
+  }
+  return value as BrowserStripOverlayAction
+}
+
+/** A point a native popup should drop from, in the overlay document's own space. */
+function overlayPoint(value: unknown, axis: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100_000) {
+    throw new TypeError(`A strip overlay action must carry a plausible ${axis} coordinate`)
+  }
+  return Math.round(value)
+}
+
+/**
+ * The chrome the strip's address row draws, reduced to what the overlay can read.
+ *
+ * The row mirrors the docked panel's, so the shape is fixed. A malformed chrome
+ * does not reject the strip: the tab rows are the thing that switches pages and
+ * they do not depend on it, so the fields are coerced instead.
+ */
+function validateBrowserStripChrome(value: unknown): BrowserStripOverlayChrome {
+  const chrome =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
+  return {
+    url: overlayText(chrome['url'], MAX_BROWSER_URL_LENGTH) ?? '',
+    secure: chrome['secure'] === true,
+    loading: chrome['loading'] === true,
+    canGoBack: chrome['canGoBack'] === true,
+    canGoForward: chrome['canGoForward'] === true,
+    bookmarked: chrome['bookmarked'] === true,
+    storeOffer: validateBrowserStripStoreOffer(chrome['storeOffer'])
+  }
+}
+
+function validateBrowserStripStoreOffer(value: unknown): BrowserStripOverlayChrome['storeOffer'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const offer = value as Record<string, unknown>
+  const title = overlayText(offer['title'], 300)
+  if (title === undefined) return null
+  return {
+    title,
+    installed: offer['installed'] === true,
+    installing: offer['installing'] === true
+  }
 }
 
 /**

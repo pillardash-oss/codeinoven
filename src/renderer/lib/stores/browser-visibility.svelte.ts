@@ -161,6 +161,23 @@ class BrowserVisibilityState {
   }
 
   /**
+   * Whether a full-window DOM surface is on screen over the browser: a modal, a
+   * sheet, the command palette, or the thread switcher.
+   *
+   * The same reason `hideReasonFor` carries, exposed for a surface that has to
+   * decide whether it may keep drawing above a page. `workspace-inactive` is
+   * excluded for the same reason it is excluded there: the workspace shell stays
+   * mounted and hidden while the browser's own top-level view is the active one,
+   * so it says nothing about a full-window surface being up.
+   */
+  get hasFullWindowSurface(): boolean {
+    for (const reason of this.blocks.values()) {
+      if (reason !== 'workspace-inactive') return true
+    }
+    return false
+  }
+
+  /**
    * Whether any on-screen native view overlaps `bounds`.
    *
    * The question a DOM surface asks before drawing somewhere: a page is opaque
