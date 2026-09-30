@@ -1259,6 +1259,16 @@
 
   // ── the bridge itself ───────────────────────────────────────────────────────
   const BRIDGE_PORT_NAME = '__cio:bridge'
+  /**
+   * The tab the app says is on screen, as the runtime's own tab ids.
+   *
+   * The app is the only one who knows this: its browser view lives in no window the
+   * runtime tracks, so `chrome.tabs.query` answers from a focus that never lands on
+   * the tab the user is looking at, and every tab it reports reads as inactive.
+   * What it announces is the truth, and it announces it twice over: an activation
+   * names the tab, and every tab it describes carries the flag as it knows it.
+   */
+  const tabActivity = { activeTabId: null }
   const handleBridgeCommand = (command) => {
     if (!command || typeof command !== 'object') return
     state.bridgeCommands = (state.bridgeCommands || 0) + 1
@@ -1287,9 +1297,24 @@
       entry.errors += state.errors.length - errorsBefore
     }
     if (command.kind === 'tab') {
+      const args = Array.isArray(command.args) ? command.args : []
+      if (command.name === 'onActivated') {
+        if (args[0] && typeof args[0].tabId === 'number') tabActivity.activeTabId = args[0].tabId
+      } else if (command.name === 'onCreated' || command.name === 'onHighlighted') {
+        if (args[0] && typeof args[0] === 'object' && args[0].active === true && typeof args[0].id === 'number') {
+          tabActivity.activeTabId = args[0].id
+        }
+      } else if (command.name === 'onUpdated') {
+        const info = args[2]
+        if (info && typeof info === 'object' && info.active === true && typeof info.id === 'number') {
+          tabActivity.activeTabId = info.id
+        }
+      } else if (command.name === 'onRemoved') {
+        if (args[0] === tabActivity.activeTabId) tabActivity.activeTabId = null
+      }
       const dispatcher = tabEvents[command.name]
       if (dispatcher) {
-        emitRecorded(command.name, dispatcher, Array.isArray(command.args) ? command.args : [])
+        emitRecorded(command.name, dispatcher, args)
         // A closed tab's action state goes with the event, so a long session
         // does not accumulate entries for tabs nobody has.
         if (command.name === 'onRemoved' && command.args && command.args[0] !== undefined) {
@@ -1611,6 +1636,96 @@
     }
   } catch (error) {
     state.errors.push('contexts: ' + String(error))
+  }
+
+  // ── the tab that is on screen, for a query that asks ────────────────────────
+  //
+  // `chrome.tabs.query` is answered from the runtime's own focus state, and the
+  // app's browser view is in no window the runtime tracks: a query for the active
+  // tab comes back empty while a tab is plainly on screen, and every tab the
+  // runtime describes reads as inactive. The app says which tab is on screen (see
+  // tabActivity), so the answer is corrected from that.
+  //
+  // Only the activity half is repaired. A query that filters on the address, the
+  // title, the status or anything else is answered by the runtime and passed on as
+  // it is, because correcting a filter this shim cannot evaluate would mean
+  // inventing tabs the caller never asked for.
+  try {
+    if (state.tabsActivityRepair !== 'installed') {
+      /** Every tab as the app's own answer, with the flag the runtime cannot see. */
+      const withActivity = (tabs) => {
+        const list = []
+        for (const tab of Array.isArray(tabs) ? tabs : []) {
+          if (!tab || typeof tab !== 'object' || Array.isArray(tab)) {
+            list.push(tab)
+            continue
+          }
+          list.push(Object.assign({}, tab, { active: tab.id === tabActivity.activeTabId }))
+        }
+        return list
+      }
+      let repairedOn = 0
+      for (const root of roots) {
+        const tabsApi = root && root.tabs
+        if (!tabsApi || typeof tabsApi !== 'object') continue
+        const nativeQuery = typeof tabsApi.query === 'function' ? tabsApi.query.bind(tabsApi) : null
+        if (!nativeQuery) continue
+        const nativeGet = typeof tabsApi.get === 'function' ? tabsApi.get.bind(tabsApi) : null
+        try {
+          const answerQuery = (list, query, callback) => {
+            if (!query || query.active !== true) return answerWith(callback, list)
+            const active = list.filter((tab) => tab && tab.active === true)
+            if (active.length > 0 || tabActivity.activeTabId === null || !nativeGet) {
+              return answerWith(callback, active)
+            }
+            // The runtime answered without the tab the app names, so the tab is
+            // asked for by that id: this is the case an extension sees as "there is
+            // no current tab" while the user is reading one.
+            return Promise.resolve(nativeGet(tabActivity.activeTabId))
+              .then((tab) => answerWith(callback, withActivity([tab]).filter((entry) => entry && entry.active === true)))
+              .catch((error) => {
+                state.errors.push('tabs-active: ' + String(error))
+                return answerWith(callback, active)
+              })
+          }
+          const queryRepaired = (...args) => {
+            const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+            const callArgs = callback ? args.slice(0, -1) : args
+            const query = callArgs[0] && typeof callArgs[0] === 'object' ? callArgs[0] : {}
+            let pending
+            try {
+              pending = nativeQuery(...callArgs)
+            } catch (error) {
+              state.errors.push('tabs-query: ' + String(error))
+              pending = Promise.resolve([])
+            }
+            return Promise.resolve(pending).then((tabs) => answerQuery(withActivity(tabs), query, callback))
+          }
+          Object.defineProperty(tabsApi, 'query', {
+            value: queryRepaired,
+            configurable: true,
+            writable: true
+          })
+          if (nativeGet) {
+            const getRepaired = (id, callback) => {
+              const answered = typeof callback === 'function' ? callback : null
+              return Promise.resolve(nativeGet(id)).then((tab) => answerWith(answered, withActivity([tab])[0]))
+            }
+            Object.defineProperty(tabsApi, 'get', {
+              value: getRepaired,
+              configurable: true,
+              writable: true
+            })
+          }
+          repairedOn += 1
+        } catch (error) {
+          state.errors.push('tabs-activity: ' + String(error))
+        }
+      }
+      state.tabsActivityRepair = repairedOn > 0 ? 'installed' : 'not-installed'
+    }
+  } catch (error) {
+    state.errors.push('tabs-activity-outer: ' + String(error))
   }
 
   // ── userScripts, for real ───────────────────────────────────────────────────
