@@ -1,32 +1,49 @@
 <script lang="ts">
   import { Check, Trash2 } from '@lucide/svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { DEFAULT_BOX_ID, MAX_BROWSER_BOX_NAME_LENGTH } from '$lib/stores/global-browser-types'
+  import {
+    DEFAULT_BOX_ID,
+    MAX_BROWSER_BOX_NAME_LENGTH,
+    jarIdForBox,
+    type GlobalBrowserBox
+  } from '$lib/stores/global-browser-types'
   import { resolveAppearanceImagePath } from './browser-group-appearance'
   import type { CustomIcon } from '$shared/types'
 
+  /**
+   * The box editor: the one form for making and changing a box, drawn without a
+   * shell of its own.
+   *
+   * It is embedded twice, on the boxes panel's create page and folded open on a
+   * box's own row, so both surfaces edit the same fields through one source
+   * rather than two forms that drift apart. The panel owns the page, the chevron
+   * back and the fold; this component owns the draft, the Save, and the box's
+   * destructive halves, each behind its confirmation.
+   */
+
   interface Props {
-    /** The box being edited, or null to create a new one. */
-    boxId: string | null
-    onClose: () => void
+    /** The box this editor changes, or null when it is making a new one. */
+    box: GlobalBrowserBox | null
+    /** Called once the box was created or updated. */
+    onSaved?: (boxId: string) => void
+    /** Called once the box was deleted, so its row can go with it. */
+    onDeleted?: () => void
   }
 
-  let { boxId, onClose }: Props = $props()
+  let { box, onSaved, onDeleted }: Props = $props()
 
-  // Read once at construction and never again: the modal is mounted fresh for
-  // each edit, so the draft it holds is the box as the user opened it. If the box
-  // disappears underneath (deleted elsewhere), saving becomes a no-op.
+  // Read once at construction: the editor is mounted fresh for each box it opens
+  // on, so the draft below is the box as the user opened it and nothing the store
+  // does later can overwrite their edits.
   // svelte-ignore state_referenced_locally
-  const existing = boxId ? globalBrowser.boxById(boxId) : null
+  const existing = box
   // The default box is the jar the browser's own pages live in, so it is the one
-  // box that cannot be removed; its editor shows no Delete affordance at all.
-  // svelte-ignore state_referenced_locally
-  const isDefaultBox = boxId === DEFAULT_BOX_ID
+  // box that cannot be removed; its editor draws no Delete affordance at all.
+  const isDefaultBox = existing?.id === DEFAULT_BOX_ID
 
   let customIcons = $state<CustomIcon[]>([])
 
@@ -58,7 +75,7 @@
   let clearing = $state(false)
 
   /** How many tabs close with the box, so the confirmation can say the cost. */
-  const tabCount = $derived(existing ? globalBrowser.tabCountInBox(existing.id) : 0)
+  const tabCount = $derived(existing ? globalBrowser.tabCountInBox(jarIdForBox(existing.id)) : 0)
   const storedImageUrl = $derived(existing ? globalBrowser.boxIconUrl(existing.id) : null)
   const previewIconUrl = $derived(pendingIcon?.dataUrl ?? storedImageUrl)
   const hasAppearance = $derived(
@@ -108,28 +125,28 @@
     }
     if (existing) {
       globalBrowser.updateBox(existing.id, { name, ...appearance })
-    } else {
-      const id = globalBrowser.createBox(name, appearance)
-      void globalBrowser.ensureBoxIconLoaded(id)
+      onSaved?.(existing.id)
+      return
     }
-    onClose()
+    const id = globalBrowser.createBox(name, appearance)
+    void globalBrowser.ensureBoxIconLoaded(id)
+    onSaved?.(id)
   }
 
   async function deleteBox(): Promise<void> {
-    const box = existing
-    if (!box) {
+    const target = existing
+    if (!target) {
       confirmDelete = false
-      onClose()
       return
     }
     deleting = true
     try {
       // Remove the row first: it closes the box's tabs, so nothing is left
       // holding the partition when the erase below runs.
-      globalBrowser.deleteBox(box.id)
-      if (eraseData) await globalBrowser.clearBoxData(box.id)
+      globalBrowser.deleteBox(target.id)
+      if (eraseData) await globalBrowser.clearBoxData(target.id)
       confirmDelete = false
-      onClose()
+      onDeleted?.()
     } finally {
       deleting = false
     }
@@ -138,29 +155,48 @@
   /** Erase this box's cookies and site data without deleting the box: the
    *  signed-out reset for a jar the user wants to keep. */
   async function clearData(): Promise<void> {
-    const box = existing
-    if (!box) {
+    const target = existing
+    if (!target) {
       confirmClear = false
       return
     }
     clearing = true
     try {
-      await globalBrowser.clearBoxData(box.id)
+      await globalBrowser.clearBoxData(target.id)
       confirmClear = false
     } finally {
       clearing = false
     }
   }
+
+  /** Enter in the name field saves, and Cmd/Ctrl+Enter saves from anywhere in the
+   *  editor. The two handlers never overlap, so one save can never fire twice. */
+  function onNameFieldKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' || event.metaKey || event.ctrlKey) return
+    event.preventDefault()
+    save()
+  }
+
+  function onEditorKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+    event.preventDefault()
+    save()
+  }
+
+  /** The create page's own field takes focus when it opens. An attachment rather
+   *  than an action, and a fold on an existing box never steals focus. */
+  function focusNameWhenCreating(node: HTMLInputElement): void {
+    if (existing) return
+    node.focus({ preventScroll: true })
+  }
 </script>
 
-<Modal
-  open
-  title={existing ? 'Edit box' : 'New box'}
-  description="A box is its own cookies and site data, so it holds its own sign-ins. Tabs in the same box share them; tabs in different boxes do not."
-  {onClose}
-  size="md"
-  contentClass="space-y-4 overflow-y-auto p-6"
->
+<!--
+  The editor itself is not interactive; its fields and buttons are. The chord sits
+  on the container so Cmd/Ctrl+Enter saves from whichever field the user is in.
+-->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="space-y-4" onkeydown={onEditorKeydown}>
   <AppearancePicker
     {name}
     {color}
@@ -189,28 +225,17 @@
       placeholder="Work"
       maxlength={MAX_BROWSER_BOX_NAME_LENGTH}
       bind:value={name}
-      onkeydown={(event: KeyboardEvent) => {
-        if (event.key === 'Enter') {
-          event.preventDefault()
-          save()
-        }
-      }}
+      onkeydown={onNameFieldKeydown}
+      {@attach focusNameWhenCreating}
     />
   </label>
 
-  <p
-    class="rounded-lg border bg-elevated/50 px-3 py-2.5 text-[0.6875rem] leading-relaxed text-dimmed"
-  >
-    Sign in to the same site in two boxes to stay signed in as two accounts at once. A tab cannot
-    change boxes in place; open it again in the box you want.
-  </p>
-
-  {#snippet footer()}
-    <div class="flex w-full items-center gap-2">
+  <div class="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
+    <div class="flex items-center gap-1">
       {#if existing}
         <button
           type="button"
-          class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+          class="rounded-lg px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated"
           title="Erase this box's cookies and site data, keeping the box"
           onclick={() => (confirmClear = true)}
         >
@@ -220,47 +245,39 @@
       {#if existing && !isDefaultBox}
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+          class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
           title="Delete this box. Its tabs close."
           onclick={() => (confirmDelete = true)}
         >
-          <Trash2 size={14} />
+          <Trash2 size={13} />
           Delete
         </button>
       {/if}
-      <div class="ml-auto flex items-center gap-2">
-        {#if hasAppearance}
-          <button
-            type="button"
-            class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
-            title="Reset appearance"
-            onclick={resetAppearance}
-          >
-            Reset
-          </button>
-        {/if}
-        <button
-          type="button"
-          class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-          title="Close without saving"
-          onclick={onClose}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-          disabled={!canSave}
-          title={existing ? 'Save this box' : 'Create this box'}
-          onclick={save}
-        >
-          <Check size={14} />
-          {existing ? 'Save' : 'Create'}
-        </button>
-      </div>
     </div>
-  {/snippet}
-</Modal>
+    <div class="flex items-center gap-1">
+      {#if hasAppearance}
+        <button
+          type="button"
+          class="rounded-lg px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
+          title="Reset appearance"
+          onclick={resetAppearance}
+        >
+          Reset
+        </button>
+      {/if}
+      <button
+        type="button"
+        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        disabled={!canSave}
+        title={existing ? 'Save this box' : 'Create this box'}
+        onclick={save}
+      >
+        <Check size={13} />
+        {existing ? 'Save' : 'Create'}
+      </button>
+    </div>
+  </div>
+</div>
 
 {#if confirmClear}
   <ConfirmDialog
