@@ -62,6 +62,13 @@
           "scenario": "Anywhere in the app."
         },
         {
+          "id": "nav-task-manager",
+          "keys": ["mod", "shift", ","],
+          "label": "Task manager",
+          "description": "Opens the Task Manager with every process and service the app runs, its pid, its owner, and its resource use.",
+          "scenario": "Anywhere in the app."
+        },
+        {
           "id": "nav-command-palette",
           "keys": ["mod", "k"],
           "label": "Command palette",

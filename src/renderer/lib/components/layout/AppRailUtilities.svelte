@@ -37,6 +37,7 @@
   }
 
   const settingsShortcut = $derived(keymapState.keysFor('nav-settings'))
+  const taskManagerShortcut = $derived(keymapState.keysFor('nav-task-manager'))
 
   const updateControl = $derived.by((): UpdateControl => {
     const status = updaterState.status
@@ -124,6 +125,21 @@
     }
     navigate('settings-about')
   }
+
+  /**
+   * The Task Manager's chord. The rail owns the surface and its open flag, so
+   * its shortcut lives here with them instead of in the header's view table;
+   * the trigger itself still comes from the keymap registry. Reopening an open
+   * surface is a no-op, and the chunk is warmed first so a cold open does not
+   * pay the module fetch on the chord.
+   */
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (event.repeat || event.isComposing) return
+    if (!keymapState.matches('nav-task-manager', event)) return
+    event.preventDefault()
+    preloadTaskManagerChunk()
+    taskManagerOpen = true
+  }
 </script>
 
 <!--
@@ -132,6 +148,8 @@
   manager, settings), moved here so they stay reachable on every view and while
   the sidebar is collapsed.
 -->
+<svelte:window onkeydown={handleWindowKeydown} />
+
 <div class="mt-auto flex flex-col items-center gap-0.5">
   <AppRailButton
     label={updateControl.label}
@@ -146,6 +164,7 @@
   <AppRailButton
     label="Task manager: running processes"
     icon={Plug}
+    shortcut={taskManagerShortcut}
     onHover={preloadTaskManagerChunk}
     onSelect={() => (taskManagerOpen = true)}
   />
