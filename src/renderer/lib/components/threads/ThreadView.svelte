@@ -1549,8 +1549,7 @@
         description: "Open this thread's browser, or start a new tab to begin browsing",
         category: 'command',
         source: applicationActionSource,
-        keywords: ['browser', 'web', 'browse', 'tab', 'page', 'site', 'address', 'url'],
-        slashCommand: true
+        keywords: ['browser', 'web', 'browse', 'tab', 'page', 'site', 'address', 'url']
       })
     }
 
@@ -6594,12 +6593,6 @@
   }
 
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
-    // Opening the conversation's browser is a UI action, not a harness command:
-    // it stays available while a run is in flight, exactly like the rail toggle.
-    if (commandId === 'command:browser') {
-      openThreadBrowser()
-      return
-    }
     if (busy || commandExecuting) return
     if (commandId === 'command:save-how-to') {
       await saveRoutineHowTo()
@@ -6720,11 +6713,18 @@
       return
     }
 
-    // App-owned slash commands (/browser, /cio-utility, /cio-design, /cio-video
-    // and capability skills) route through the same handler the composer's
-    // submit path uses.
+    // The conversation's own browser runs the moment it is chosen, exactly like
+    // quick chat: it takes no arguments, so there is never anything to type
+    // after it, and it is a rail gesture rather than a harness command.
+    if (action.id === 'command:browser') {
+      openThreadBrowser()
+      return
+    }
+
+    // App-owned slash commands (/cio-utility, /cio-design, /cio-video and
+    // capability skills) route through the same handler the composer's submit
+    // path uses.
     if (
-      action.id === 'command:browser' ||
       action.id === 'command:cio-utility' ||
       action.id === 'command:cio-design' ||
       action.id === 'command:cio-video' ||
