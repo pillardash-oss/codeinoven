@@ -28,7 +28,7 @@
   import { browserStripOverlay } from '$lib/stores/browser-strip-overlay.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
-  import { projectStripChrome, projectStripTabs } from '$lib/browser-overlay-bridge'
+  import { projectStripChrome, projectStripTabs } from '$lib/browser-strip-overlay-bridge'
   import {
     browserTabLabel,
     DEFAULT_BOX_NAME,

@@ -5,9 +5,6 @@ import {
   TOAST_CARD_WIDTH,
   TOAST_STACK_RIGHT,
   TOAST_STACK_TOP,
-  type BrowserStripOverlayChrome,
-  type BrowserStripOverlayTab,
-  type BrowserStripStoreOffer,
   type ToastOverlayInteractionReport,
   type ToastOverlayKind,
   type ToastOverlayStack,
@@ -16,25 +13,17 @@ import {
 import MemoryToastComponent from './components/ui/MemoryToast.svelte'
 import { logRendererDev } from './system/renderer-logger'
 import { openMemoryProposal } from './stores/memory-proposal-open'
-import { globalBrowser } from './stores/global-browser.svelte'
-import { browserTabLabel } from './stores/global-browser-types'
-import { browserBookmarks } from './stores/browser-bookmarks.svelte'
-import {
-  storeExtensionOffer,
-  storeOfferInstallVerb,
-  type StoreExtensionOffer
-} from './stores/browser-extension-store-offer'
-import { browserTabAccent, browserTabIconUrl } from './components/browser/browser-tab-appearance'
 
 /**
  * The app renderer's side of the native browser overlay.
  *
- * svelte-sonner holds the toast stack in this renderer, and the browser store
- * holds the tab strip, and the overlay window that draws either over a browser
- * page cannot see that state. This module is the whole translation in both
- * directions: live state becomes the narrow, serializable projections the
- * overlay renders, and an interaction the overlay reports becomes the handler
- * call the original surface carries.
+ * svelte-sonner holds the toast stack in this renderer, and the overlay window
+ * that draws it over a browser page cannot see that state. This module is the
+ * whole translation in both directions: live toast state becomes the narrow,
+ * serializable projections the overlay renders, and an interaction the overlay
+ * reports becomes the handler call the original surface carries. The floating
+ * tab strip's own projections live in `browser-strip-overlay-bridge`, which the
+ * docked strip imports, so this module stays free of the browser store.
  *
  * Nothing here wraps a toast call. The stack projection is read off the live
  * state (`toast.getActiveToasts()`), so all 110 call sites across the app,
@@ -159,86 +148,6 @@ export function projectStack(
     if (card) projected.push(card)
   }
   return { toasts: projected, theme }
-}
-
-/**
- * The floating tab strip, projected for the overlay.
- *
- * One flat list, pinned tabs first and the rest in the store's own order. The
- * floating panel exists to switch tabs, so a row carries what a user picks a tab
- * by   its icon, its name and the page's live state   and nothing the docked
- * panel's own tools need: no group headers, no search, no notes, no per-tab
- * menus. Those live in the docked strip, which is where they stay available.
- *
- * `icon` prefers the tab's own custom icon over the page's favicon, exactly as
- * the docked row does, so a tab the user dressed looks the same in both.
- */
-export function projectStripTabs(): BrowserStripOverlayTab[] {
-  const ordered = [...globalBrowser.pinnedTabs, ...globalBrowser.tabs.filter((tab) => !tab.pinned)]
-  return ordered.map((tab) => {
-    const runtime = globalBrowser.runtimeFor(tab.id)
-    return {
-      id: tab.id,
-      label: browserTabLabel(tab),
-      url: tab.url,
-      icon: browserTabIconUrl(tab, globalBrowser.tabIconUrl(tab.id)) ?? tab.favicon,
-      accent: browserTabAccent(tab),
-      active: globalBrowser.activeTabId === tab.id,
-      loading: runtime.loading,
-      pinned: tab.pinned,
-      hibernated: tab.hibernated,
-      audible: runtime.audible,
-      muted: runtime.muted
-    }
-  })
-}
-
-/**
- * The address row above the strip, projected for the overlay.
- *
- * The docked panel reads the same store values, so the row the overlay draws and
- * the row the app window draws say the same thing down to the bookmark star. The
- * page on screen is the active tab, which is the tab the strip's rows mark too.
- */
-export function projectStripChrome(): BrowserStripOverlayChrome {
-  const tab = globalBrowser.activeTab
-  const address = tab?.url ?? ''
-  const runtime = tab ? globalBrowser.runtimeFor(tab.id) : null
-  const offer = storeExtensionOffer()
-  return {
-    url: address,
-    secure: address.startsWith('https:'),
-    loading: runtime?.loading ?? false,
-    canGoBack: runtime?.canGoBack ?? false,
-    canGoForward: runtime?.canGoForward ?? false,
-    bookmarked: address !== '' && browserBookmarks.isBookmarked(address),
-    storeOffer: offer ? storeOfferChrome(offer) : null
-  }
-}
-
-/**
- * The store page's chip, as the overlay draws it.
- *
- * It answers for this one offer, never for the browser: installs queue, so another
- * extension downloading behind this page leaves the chip a door rather than a
- * spinner.
- */
-function storeOfferChrome(offer: StoreExtensionOffer): BrowserStripStoreOffer {
-  if (offer.installed) {
-    return {
-      title: `${offer.name ?? 'This extension'} is installed. Open the extensions panel.`,
-      installed: true,
-      installing: false
-    }
-  }
-  const verb = storeOfferInstallVerb(offer)
-  return {
-    title: verb
-      ? `${verb} ${offer.name ?? 'the extension'}`
-      : `Install ${offer.name ?? 'this extension'} in ${offer.boxName}`,
-    installed: false,
-    installing: offer.install !== null
-  }
 }
 
 /**
