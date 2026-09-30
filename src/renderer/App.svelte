@@ -16,7 +16,7 @@
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
@@ -1072,7 +1072,10 @@
 
   /** Clean up renderer resources when the main process signals shutdown. */
   function installShutdownSubscription(): () => void {
-    return subscribe('window:beforeQuit', () => {
+    // Guarded like the App installer's own subscriptions: a channel this
+    // window's preload does not expose yet must cost this one subscription, not
+    // the rest of the mount that follows it.
+    return subscribeGuarded('window:beforeQuit', () => {
       // Renderer should release event subscriptions   the main process
       // will dispose services and flush logs 500ms after this signal.
       // The window itself only closes at the end of that pipeline, so latch the
@@ -1096,7 +1099,8 @@
    * too, which is the same value it already holds.
    */
   function installConfigSubscription(): () => void {
-    return subscribe('config:changed', (next) => {
+    // Guarded for the same reason as the shutdown subscription above.
+    return subscribeGuarded('config:changed', (next) => {
       config = next
       appConfigState.sync(next)
       applyTheme()

@@ -17,6 +17,7 @@ import {
 } from '$shared/ipc-contract'
 import { GitRemoteUnavailableError } from '$lib/ipc-errors'
 import { agentDebug } from '$lib/stores/agent-debug.svelte'
+import { logRendererError } from '$lib/system/renderer-logger'
 
 declare global {
   interface Window {
@@ -135,4 +136,35 @@ export function subscribe<Channel extends EventChannel>(
   callback: (...args: EventArgs<Channel>) => void
 ): () => void {
   return window.api.on(channel, callback)
+}
+
+/**
+ * Subscribe to an IPC event channel without letting one unknown channel take the
+ * caller, and everything the caller does after it, down with it.
+ *
+ * `subscribe` throws for a channel this window's preload does not expose, which
+ * is the right answer on its own: the preload is a built artifact that only
+ * changes when the app restarts, while this bundle is hot-reloaded on every
+ * save, so right after a channel is added the two can disagree and the mistake
+ * has to be visible. A caller that wires a whole subsystem, though, must not
+ * lose the rest of its wiring to that one disagreement: left unguarded, the
+ * throw aborts the caller, and every subscription after it is simply never made
+ * while the app keeps running, so the symptom looks nothing like the cause.
+ * Here the channel is named in the log, what it carries stays off until the
+ * window reloads against a preload that knows it, and every other channel is
+ * subscribed as usual.
+ */
+export function subscribeGuarded<Channel extends EventChannel>(
+  channel: Channel,
+  callback: (...args: EventArgs<Channel>) => void
+): () => void {
+  try {
+    return window.api.on(channel, callback)
+  } catch (error) {
+    logRendererError(
+      `This window's bridge does not expose "${channel}", so what it carries stays off until the window reloads against a matching build.`,
+      error
+    )
+    return () => {}
+  }
 }

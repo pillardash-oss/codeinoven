@@ -1,5 +1,5 @@
 import { toast } from 'svelte-sonner'
-import { invoke, subscribe } from '$lib/ipc.svelte'
+import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { playInAppAlert } from '$lib/notification-sound'
 import {
@@ -168,13 +168,13 @@ function showAgentNotification(
  * cleanup that unsubscribes them all.
  */
 export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => void {
-  const unsubscribeClick = subscribe('notification:threadClicked', (payload) => {
+  const unsubscribeClick = subscribeGuarded('notification:threadClicked', (payload) => {
     void openNotificationThread(payload, deps)
   })
-  const unsubscribeShow = subscribe('notification:show', (payload) =>
+  const unsubscribeShow = subscribeGuarded('notification:show', (payload) =>
     showAgentNotification(payload, deps)
   )
-  const unsubscribeConfirmClose = subscribe('window:confirmClose', (payload) => {
+  const unsubscribeConfirmClose = subscribeGuarded('window:confirmClose', (payload) => {
     // The renderer owns the unsaved-file editor state, so it computes the
     // pending files here. Downloads arrive with the payload: main is the one
     // download owner, and its list is already the truth. With nothing pending
@@ -193,16 +193,16 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
       park
     })
   })
-  const unsubscribeInstanceRole = subscribe('app:instanceRole', (role) => {
+  const unsubscribeInstanceRole = subscribeGuarded('app:instanceRole', (role) => {
     deps.setInstanceRole(role)
   })
   // The one-time start-at-login offer. Main raises it once in an install's life,
   // right after a routine gets its first how-to, and only while
   // `launchAtLoginPrompted` is unanswered, so this only ever asks once.
-  const unsubscribeStartAtLoginOffer = subscribe('app:startAtLoginPrompt', () => {
+  const unsubscribeStartAtLoginOffer = subscribeGuarded('app:startAtLoginPrompt', () => {
     deps.showStartAtLoginOffer()
   })
-  const unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
+  const unsubscribeThreadUpdated = subscribeGuarded('thread:updated', (...args: unknown[]) => {
     const thread = args[0] as Thread
     // Once a real title exists the draft-derived label is no longer needed.
     if (thread.title !== DEFAULT_THREAD_TITLE) {
@@ -217,7 +217,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     }
     deps.settleCloseConfirmationThread(thread)
   })
-  const unsubscribeThreadDeleted = subscribe('thread:deleted', (projectId, threadId) => {
+  const unsubscribeThreadDeleted = subscribeGuarded('thread:deleted', (projectId, threadId) => {
     scopeState.removeThread(threadId)
     notificationPanelState.dismissForThread(projectId, threadId)
     temporaryChatUnread.clearThread(projectId, threadId)
@@ -226,32 +226,32 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // An agent created, renamed, archived, deleted, synced or merged a scope:
   // reload the board it changed so the user sees the worktree it made instead
   // of a stale snapshot.
-  const unsubscribeScopeBoardChanged = subscribe('scope:boardChanged', (event) => {
+  const unsubscribeScopeBoardChanged = subscribeGuarded('scope:boardChanged', (event) => {
     void scopeState.handleBoardChangedEvent(event)
   })
   // A destructive scope action an agent asked for waits on this dialog; its
   // answer is what releases the agent's parked tool call.
-  const unsubscribeScopeConfirmation = subscribe('scope:agentConfirmation', (request) => {
+  const unsubscribeScopeConfirmation = subscribeGuarded('scope:agentConfirmation', (request) => {
     scopeConfirmations.enqueue(request)
   })
   // Listen from app start (not from the first local job): an agent-run
   // worktree has no renderer-owned job until its first progress event.
   scopeJobs.listen()
-  const unsubscribeCloseShortcut = subscribe('window:closeShortcut', () => {
+  const unsubscribeCloseShortcut = subscribeGuarded('window:closeShortcut', () => {
     deps.handleCloseShortcut()
   })
-  const unsubscribeNewTerminalShortcut = subscribe('window:newTerminalShortcut', () => {
+  const unsubscribeNewTerminalShortcut = subscribeGuarded('window:newTerminalShortcut', () => {
     deps.handleNewTerminalShortcut()
   })
-  const unsubscribeHistoryBack = subscribe('window:historyBack', () => {
+  const unsubscribeHistoryBack = subscribeGuarded('window:historyBack', () => {
     void deps.goBack()
   })
-  const unsubscribeHistoryForward = subscribe('window:historyForward', () => {
+  const unsubscribeHistoryForward = subscribeGuarded('window:historyForward', () => {
     void deps.goForward()
   })
   // OS hand-offs that arrive after mount; the queue drain below covers the
   // paths that were already waiting when the renderer started.
-  const unsubscribeOpenedPaths = subscribe('openWith:paths', (paths: OpenedPath[]) => {
+  const unsubscribeOpenedPaths = subscribeGuarded('openWith:paths', (paths: OpenedPath[]) => {
     void deps.handleOpenedPaths(paths)
   })
   void invoke('openWith:consumePending')
