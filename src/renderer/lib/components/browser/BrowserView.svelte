@@ -247,6 +247,30 @@
   const railShown = $derived(globalBrowser.contextSidebarShown || globalBrowser.notificationsShown)
 
   /**
+   * True while the user drags the rail's edge, so the track skips its width
+   * transition for the duration of the drag.
+   *
+   * The workspace rail already does this, and it is what keeps a hosted page
+   * glued to its frame: while the track eases behind every pointer move the
+   * frame travels after the pointer, and a native page placed over it chases
+   * the frame and can settle where the frame no longer is.
+   */
+  let railDragging = $state(false)
+  let railDragTimer: ReturnType<typeof setTimeout> | undefined
+  const railTrackDuration = $derived(
+    railDragging ? '0ms' : `${motionDuration(railShown ? 200 : 160)}ms`
+  )
+
+  /** Move the rail: a drag writes the width straight through, everything else
+   *  is the open/close transition above. */
+  function handleRailWidthChange(width: number): void {
+    railDragging = true
+    clearTimeout(railDragTimer)
+    railDragTimer = setTimeout(() => (railDragging = false), motionDuration(160))
+    contextSidebarState.setWidth(width)
+  }
+
+  /**
    * The view's quick actions, rendered beside the view switcher exactly like
    * every other view's: search the tab strip, then open a tab. Creating a group
    * stays a tab's own context-menu action, so it is deliberately absent here.
@@ -319,6 +343,7 @@
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', handlePanelShortcut)
     return () => {
       unsubscribePanelShortcut()
+      clearTimeout(railDragTimer)
     }
   })
 </script>
@@ -377,10 +402,13 @@
   <div
     class="context-rail flex h-full min-h-0 shrink-0 overflow-hidden"
     style:width="{railShown ? contextSidebarState.width : 0}px"
-    style:transition-duration="{motionDuration(railShown ? 200 : 160)}ms"
+    style:transition-duration={railTrackDuration}
   >
     {#if railShown}
-      <BrowserContextSidebar onClose={() => globalBrowser.toggleContextSidebar()} />
+      <BrowserContextSidebar
+        onClose={() => globalBrowser.toggleContextSidebar()}
+        onWidthChange={handleRailWidthChange}
+      />
     {/if}
   </div>
 

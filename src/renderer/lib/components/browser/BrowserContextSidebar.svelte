@@ -22,9 +22,15 @@
 
   interface Props {
     onClose: () => void
+    /** Receives the rail's width for every pointer move. The view that owns the
+     *  rail's track passes its own handler, because it also owns the track's
+     *  transition: a drag has to track the pointer exactly, and a hosted native
+     *  page must not chase an easing frame. */
+    onWidthChange?: (width: number) => void
   }
 
-  let { onClose }: Props = $props()
+  let { onClose, onWidthChange = (width: number) => contextSidebarState.setWidth(width) }: Props =
+    $props()
 
   /**
    * The browser view's right rail.
@@ -421,7 +427,7 @@
     onSelect={selectTool}
     onClose={closeTab}
     onCloseAllPopupWindows={closeAllPopups}
-    onWidthChange={(width) => contextSidebarState.setWidth(width)}
+    {onWidthChange}
     onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
     onTerminalPlacementChange={() => {}}
   />

@@ -8,6 +8,7 @@
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
   import { extensionJarForBox } from '$lib/stores/global-browser-types'
 
@@ -153,24 +154,32 @@
     }
   }
 
+  /**
+   * Re-place the page whenever the rail's width changes.
+   *
+   * The rail is laid out from the store, and every change also moves the frame:
+   * a move without a size change is the one thing a ResizeObserver cannot see,
+   * and the rail's own width is the single input every such move flows from.
+   * Reading it here places the page on the frame the rail has just settled on
+   * instead of whenever an observer callback happens to land.
+   */
+  $effect(() => {
+    void contextSidebarState.width
+    if (!frameElement) return
+    void tick().then(() => placePopup(popupId).catch(() => {}))
+  })
+
   const attachFrame = (shownId: string): Attachment<HTMLDivElement> => {
     return (element) => {
       frameElement = element
-      // Keep the page aligned with the frame it is placed over.
-      const observer = new ResizeObserver(() => {
-        void placePopup(shownId).catch(() => {})
-      })
-      observer.observe(element)
-
-      // Follow the frame while it moves.
-      //
-      // The rail opens by growing its own width, and while it does the panel moves
-      // without changing size, which is the one thing a ResizeObserver cannot see:
-      // without this the page would be placed at the frame the panel had mid-open
-      // and sit a rail's width to the right of it, off the window. The loop
-      // re-measures until the rectangle holds still, and is bounded so a frame that
-      // never settles cannot leave a loop running.
+      // Keep the page aligned with the frame it is placed over, and keep the
+      // follow alive across changes: a rail that is still easing into its width
+      // moves the frame after the last observer callback, and a page left at a
+      // rectangle a drag passed through would sit where the frame no longer is.
+      // Every resize restarts the tail, so the page ends on the rectangle the
+      // rail settled on.
       let following = true
+      let followScheduled = false
       let lastKey = ''
       let stableFrames = 0
       let frames = 0
@@ -187,20 +196,46 @@
         }
         frames += 1
         if (stableFrames < 3 && frames < 180) requestAnimationFrame(follow)
+        else followScheduled = false
       }
+      /**
+       * Follow the frame until it holds still: called on mount, after every
+       * resize and when the window becomes visible again. A call while a follow
+       * is already running is ignored, so a drag that fires an observer callback
+       * per frame keeps one bounded loop rather than a pile of them. The loop is
+       * the tail for motion a transition keeps producing; it is never the only
+       * path that places a page, because a window the compositor throttles does
+       * not run animation frames at all.
+       */
+      const followUntilSettled = (): void => {
+        if (!following || followScheduled) return
+        followScheduled = true
+        stableFrames = 0
+        frames = 0
+        requestAnimationFrame(follow)
+      }
+      const observer = new ResizeObserver(() => {
+        // Place on this change right now   a callback does not wait on an
+        // animation frame   and follow whatever the rail's transition keeps
+        // moving afterwards.
+        void placePopup(shownId).catch(() => {})
+        followUntilSettled()
+      })
+      observer.observe(element)
       const keepUp = (): void => {
         void placePopup(shownId).catch(() => {})
+        followUntilSettled()
       }
       const restartFollow = (): void => {
         if (document.visibilityState !== 'visible') return
         // A rail opening while the window was in the background resumes its opening
         // when the window comes back, so the frame has to be followed again.
-        stableFrames = 0
-        frames = 0
-        void tick().then(() => requestAnimationFrame(follow))
-        keepUp()
+        void tick().then(() => {
+          void placePopup(shownId).catch(() => {})
+          followUntilSettled()
+        })
       }
-      requestAnimationFrame(follow)
+      followUntilSettled()
       window.addEventListener('resize', keepUp)
       document.addEventListener('visibilitychange', restartFollow)
       return () => {
