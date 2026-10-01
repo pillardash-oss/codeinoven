@@ -1,6 +1,17 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import { Loader2, Plus } from '@lucide/svelte'
+  import { onMount, onDestroy } from 'svelte'
+  import {
+    Loader2,
+    Plus,
+    CheckCircle2,
+    AlertCircle,
+    Circle,
+    Cpu,
+    MemoryStick,
+    HardDrive,
+    Monitor,
+    Terminal
+  } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     LOCAL_OVEN_ID,
@@ -9,9 +20,13 @@
     type OvenIcon,
     type OvenState,
     type OvenProbe,
+    type OvenConnectionStatus,
     type SaveOvenInput
   } from '$shared/ovens'
   import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
+  import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
+  import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
+  import SettingsEntry from '../shared/SettingsEntry.svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
@@ -20,6 +35,11 @@
 
   const fieldClass = 'w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground'
   let ovenState = $state.raw<OvenState | null>(null)
+  let health = $state<Record<string, OvenConnectionStatus>>({})
+  let folded = $state<Record<string, boolean>>({})
+  let checking = $state('')
+  let refreshGeneration = 0
+  let connectionResult = $state<OvenConnectionStatus | null>(null)
   let probes = $state<Record<string, OvenProbe>>({})
   let busy = $state('')
   let error = $state('')
@@ -49,6 +69,15 @@
   async function load(): Promise<void> {
     try {
       ovenState = await invoke('oven:state')
+      folded = Object.fromEntries(ovenState.ovens.map((oven) => [oven.id, folded[oven.id] ?? true]))
+      for (const oven of ovenState.ovens) {
+        if (
+          oven.connectionStatus &&
+          oven.connectionStatus.checkedAt >= (health[oven.id]?.checkedAt ?? 0)
+        )
+          health = { ...health, [oven.id]: oven.connectionStatus }
+      }
+      void refreshHealth(ovenState)
     } catch (failure) {
       error = message(failure)
     }
@@ -57,8 +86,46 @@
     void load()
   })
 
+  onDestroy(() => {
+    refreshGeneration++
+  })
+  async function refreshHealth(state: OvenState): Promise<void> {
+    const generation = ++refreshGeneration
+    // Two entries per batch, one request at a time; no parallel SSH processes.
+    for (let offset = 0; offset < state.ovens.length; offset += 2) {
+      for (const oven of state.ovens.slice(offset, offset + 2)) {
+        if (generation !== refreshGeneration) return
+        checking = oven.id
+        try {
+          const result = await invoke('oven:connectionHealth', oven.id)
+          if (generation !== refreshGeneration) return
+          health = {
+            ...health,
+            [oven.id]: { ...result, specs: result.specs ?? health[oven.id]?.specs }
+          }
+        } catch (failure) {
+          if (generation !== refreshGeneration) return
+          health = {
+            ...health,
+            [oven.id]: {
+              state: 'disconnected',
+              checkedAt: Date.now(),
+              error: message(failure),
+              specs: health[oven.id]?.specs
+            }
+          }
+        }
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 100))
+    }
+    if (generation === refreshGeneration) checking = ''
+  }
+  function bytes(value: number): string {
+    return (value / 1024 ** 3).toFixed(1) + ' GiB'
+  }
   function openEditor(oven?: Oven): void {
     editing = oven ?? null
+    connectionResult = null
     name = oven?.name ?? ''
     icon = oven?.icon ?? 'server'
     customSvg = oven?.customSvg
@@ -85,7 +152,7 @@
   }
 
   function closeEditor(): void {
-    if (busy === 'save') return
+    if (busy) return
     editorOpen = false
     privateKey = ''
     passphrase = ''
@@ -93,6 +160,44 @@
     showPassword = false
     showPassphrase = false
     publicKey = ''
+  }
+
+  function draftInput(): SaveOvenInput {
+    return {
+      ...(editing ? { id: editing.id } : {}),
+      name,
+      icon,
+      ...(customSvg ? { customSvg } : {}),
+      color,
+      connection: {
+        ...parseOvenAddress(address),
+        authentication,
+        ...(authentication === 'identity' ? { identityFile } : {})
+      },
+      ...(privateKey.trim() ? { privateKey } : {}),
+      ...(passphrase ? { passphrase } : {}),
+      ...(authentication === 'password' && password ? { password } : {}),
+      ...(publicKey.trim() ? { publicKey } : {})
+    }
+  }
+  async function testConnection(): Promise<void> {
+    if (busy) return
+    busy = 'test'
+    modalError = ''
+    connectionResult = null
+    try {
+      if (authentication === 'identity')
+        identityFile = await invoke('oven:validateIdentity', identityFile)
+      connectionResult = await invoke('oven:testConnection', {
+        ...draftInput(),
+        name: name.trim() || 'Connection test'
+      })
+      if (editing) health = { ...health, [editing.id]: connectionResult }
+    } catch (failure) {
+      modalError = message(failure)
+    } finally {
+      busy = ''
+    }
   }
 
   async function save(): Promise<void> {
@@ -104,23 +209,10 @@
         identityFile = await invoke('oven:validateIdentity', identityFile)
         identityValidation = 'Private-key file validated.'
       }
-      const input: SaveOvenInput = {
-        ...(editing ? { id: editing.id } : {}),
-        name,
-        icon,
-        ...(customSvg ? { customSvg } : {}),
-        color,
-        connection: {
-          ...parseOvenAddress(address),
-          authentication,
-          ...(authentication === 'identity' ? { identityFile } : {})
-        },
-        ...(privateKey.trim() ? { privateKey } : {}),
-        ...(passphrase ? { passphrase } : {}),
-        ...(authentication === 'password' && password ? { password } : {}),
-        ...(publicKey.trim() ? { publicKey } : {})
-      }
-      await invoke('oven:save', input)
+      const input = draftInput()
+      const saved = await invoke('oven:save', input)
+      if (connectionResult?.state === 'connected')
+        health = { ...health, [saved.id]: connectionResult }
       privateKey = ''
       passphrase = ''
       password = ''
@@ -162,14 +254,12 @@
     }
   }
 
-  async function connect(oven: Oven, install = false): Promise<void> {
+  async function connect(oven: Oven): Promise<void> {
     if (busy) return
     busy = oven.id
     error = ''
     try {
-      const probe = install
-        ? await invoke('oven:install', oven.id)
-        : await invoke('oven:probe', oven.id)
+      const probe = await invoke('oven:install', oven.id)
       probes = { ...probes, [oven.id]: probe }
     } catch (failure) {
       error = `${oven.name}: ${message(failure)}`
@@ -215,11 +305,13 @@
       <Loader2 size={14} class="animate-spin" /> Loading Ovens
     </p>
   {:else}
-    <div class="divide-y rounded-xl border">
+    <div class="space-y-3">
       {#each ovenState.ovens as oven (oven.id)}
         {@const probe = probes[oven.id]}
-        <div class="space-y-3 p-4">
-          <div class="flex flex-wrap items-center justify-between gap-3">
+        {@const checkingNow = checking === oven.id}
+        {@const state = health[oven.id]?.state}
+        <SettingsEntry expanded={!folded[oven.id]}>
+          <div class="grid grid-cols-1 items-center gap-3 lg:grid-cols-[minmax(0,1fr)_10rem_auto]">
             <div class="flex min-w-0 items-center gap-3">
               <img
                 src={oven.customSvg
@@ -235,12 +327,36 @@
                       class="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">Default</span
                     >{/if}
                 </div>
-                <p class="mt-0.5 truncate text-xs text-muted">
-                  {oven.kind === 'local'
-                    ? 'This computer'
-                    : `${oven.connection?.user ? `${oven.connection.user}@` : ''}${oven.connection?.host}:${oven.connection?.port} · SSH`}
-                </p>
               </div>
+            </div>
+            <div class="min-w-0">
+              <SettingsStatusBadge
+                label={checkingNow
+                  ? 'Checking…'
+                  : state === 'connected'
+                    ? 'Connected'
+                    : state === 'disconnected'
+                      ? 'Disconnected'
+                      : 'Not checked'}
+                classes={checkingNow
+                  ? 'border-info/30 bg-info/10 text-info'
+                  : state === 'connected'
+                    ? 'border-success/30 bg-success/10 text-success'
+                    : state === 'disconnected'
+                      ? 'border-danger/30 bg-danger/10 text-danger'
+                      : 'border-border bg-elevated text-dimmed'}
+              >
+                {#if checkingNow}<Loader2
+                    size={12}
+                    class="shrink-0 animate-spin"
+                  />{:else if state === 'connected'}<CheckCircle2
+                    size={12}
+                    class="shrink-0"
+                  />{:else if state === 'disconnected'}<AlertCircle
+                    size={12}
+                    class="shrink-0"
+                  />{:else}<Circle size={12} class="shrink-0" />{/if}
+              </SettingsStatusBadge>
             </div>
             <div class="flex flex-wrap items-center gap-2">
               {#if busy === oven.id}<Loader2 size={14} class="animate-spin text-muted" />{/if}
@@ -260,13 +376,7 @@
                   type="button"
                   class="rounded-lg border px-2.5 py-1.5 text-xs hover:bg-elevated disabled:opacity-50"
                   disabled={Boolean(busy)}
-                  onclick={() => void connect(oven)}>Probe</button
-                >
-                <button
-                  type="button"
-                  class="rounded-lg border px-2.5 py-1.5 text-xs hover:bg-elevated disabled:opacity-50"
-                  disabled={Boolean(busy)}
-                  onclick={() => void connect(oven, true)}>Set up service</button
+                  onclick={() => void connect(oven)}>Set up service</button
                 >
                 <button
                   type="button"
@@ -279,23 +389,111 @@
                   onclick={() => (pendingRemoval = oven)}>Remove</button
                 >
               {/if}
+              <SettingsDisclosure
+                expanded={!folded[oven.id]}
+                title={`${folded[oven.id] ? 'Show' : 'Hide'} ${oven.name} details`}
+                onclick={() => (folded[oven.id] = !folded[oven.id])}
+              />
             </div>
           </div>
-          {#if probe}
-            <div class="space-y-1 pl-8 text-xs text-muted">
-              <p>
-                {probe.platform} · {probe.architecture} · Node {probe.nodeVersion} · {probe.activeRuns}
-                active runs
+          {#if !folded[oven.id]}
+            <div class="mt-3 space-y-3 border-t border-border pt-3">
+              <p class="mt-0.5 truncate text-xs text-muted">
+                {oven.kind === 'local'
+                  ? 'This computer'
+                  : `${oven.connection?.user ? `${oven.connection.user}@` : ''}${oven.connection?.host}:${oven.connection?.port} · SSH`}
               </p>
-              <p>
-                Installed harnesses: {probe.harnesses
-                  .filter((harness) => harness.path)
-                  .map((harness) => harness.command)
-                  .join(', ') || 'None found'}
-              </p>
+              {#if health[oven.id]?.specs}
+                {@const specs = health[oven.id].specs!}
+                {@const usedPercent =
+                  specs.diskBytes > 0
+                    ? Math.max(
+                        0,
+                        Math.min(100, (1 - specs.diskAvailableBytes / specs.diskBytes) * 100)
+                      )
+                    : 0}
+                <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <div class="space-y-1.5">
+                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                      <Monitor size={14} />System
+                    </dt>
+                    <dd class="text-sm font-medium text-foreground">
+                      {specs.platform.toLowerCase() === 'darwin'
+                        ? 'macOS'
+                        : specs.platform === 'win32'
+                          ? 'Windows'
+                          : specs.platform}
+                    </dd>
+                    <dd class="text-xs text-muted">{specs.hostname}</dd>
+                  </div>
+                  <div class="space-y-1.5">
+                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                      <Cpu size={14} />Processor
+                    </dt>
+                    <dd class="text-sm font-medium text-foreground">
+                      {specs.cpuCount} logical cores
+                    </dd>
+                    <dd class="text-xs text-muted">
+                      {['arm64', 'aarch64'].includes(specs.architecture)
+                        ? 'ARM64'
+                        : ['x64', 'x86_64'].includes(specs.architecture)
+                          ? 'x86-64'
+                          : specs.architecture}
+                    </dd>
+                  </div>
+                  <div class="space-y-1.5">
+                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                      <MemoryStick size={14} />Memory
+                    </dt>
+                    <dd class="text-sm font-medium text-foreground">{bytes(specs.memoryBytes)}</dd>
+                    <dd class="text-xs text-muted">Total RAM</dd>
+                  </div>
+                  <div class="space-y-1.5">
+                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                      <HardDrive size={14} />Storage
+                    </dt>
+                    <dd class="text-sm font-medium text-foreground">{bytes(specs.diskBytes)}</dd>
+                    <dd class="text-xs text-muted">{bytes(specs.diskAvailableBytes)} available</dd>
+                    <dd
+                      class="h-1 overflow-hidden rounded-full bg-elevated"
+                      title={usedPercent.toFixed(0) + '% storage used'}
+                    >
+                      <div
+                        class="h-full rounded-full bg-primary"
+                        style:width={usedPercent + '%'}
+                      ></div>
+                    </dd>
+                  </div>
+                </dl>
+                <div class="flex flex-wrap items-center gap-2 text-xs text-muted">
+                  <Terminal size={14} /><span>Service runtime</span><span
+                    class="font-medium text-foreground"
+                    >{specs.nodeVersion
+                      ? 'Node.js ' + specs.nodeVersion.replace(/^v/, '')
+                      : 'Not installed'}</span
+                  >
+                </div>
+              {/if}
+              {#if health[oven.id]?.error}<p class="text-xs text-danger" role="status">
+                  {health[oven.id].error}
+                </p>{/if}
+              {#if probe}
+                <div class="space-y-1 pl-8 text-xs text-muted">
+                  <p>
+                    {probe.platform} · {probe.architecture} · Node {probe.nodeVersion} · {probe.activeRuns}
+                    active runs
+                  </p>
+                  <p>
+                    Installed harnesses: {probe.harnesses
+                      .filter((harness) => harness.path)
+                      .map((harness) => harness.command)
+                      .join(', ') || 'None found'}
+                  </p>
+                </div>
+              {/if}
             </div>
           {/if}
-        </div>
+        </SettingsEntry>
       {/each}
     </div>
     <p class="mt-4 text-xs text-dimmed">
@@ -473,13 +671,30 @@
       {#if authentication !== 'password'}The matching public key must already be authorized on the
         Oven.{/if}
     </p>
+    {#if connectionResult}<p
+        class="text-xs"
+        class:text-success={connectionResult.state === 'connected'}
+        class:text-danger={connectionResult.state === 'disconnected'}
+        role="status"
+      >
+        {connectionResult.state === 'connected'
+          ? 'Connected successfully.'
+          : connectionResult.error}
+      </p>{/if}
   </form>
   {#snippet footer()}
     <button
       type="button"
+      class="mr-auto flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-elevated disabled:opacity-50"
+      disabled={Boolean(busy)}
+      onclick={() => void testConnection()}
+      >{#if busy === 'test'}<Loader2 size={14} class="animate-spin" />{/if}Test connection</button
+    >
+    <button
+      type="button"
       data-modal-dismiss
       class="rounded-lg border px-3 py-2 text-sm hover:bg-elevated"
-      disabled={busy === 'save'}
+      disabled={Boolean(busy)}
       onclick={closeEditor}>Cancel</button
     >
     <button

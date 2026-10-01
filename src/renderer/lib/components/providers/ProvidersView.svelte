@@ -1,4 +1,7 @@
 <script lang="ts">
+  import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
+  import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
+  import SettingsEntry from '../shared/SettingsEntry.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { copyText } from '$lib/copy-text'
   import { invoke } from '$lib/ipc.svelte'
@@ -21,7 +24,6 @@
     AlertTriangle,
     Check,
     CheckCircle2,
-    ChevronDown,
     Circle,
     Clock,
     Copy,
@@ -38,7 +40,7 @@
   import { onMount } from 'svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { fade, slide } from 'svelte/transition'
+  import { slide } from 'svelte/transition'
   import type { MenuItem } from '../shared/ThreadDropdown.svelte'
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -733,11 +735,7 @@
       {#each filteredProviders as provider (provider.id)}
         {@const badge = badgeFor(provider)}
         {@const expanded = expandedSettings[provider.id] === true}
-        <div
-          class="rounded-xl border bg-surface p-4 transition-colors {expanded
-            ? 'border-l-[3px] border-l-primary'
-            : ''}"
-        >
+        <SettingsEntry {expanded}>
           <div class="grid grid-cols-[13rem_10rem_11rem_minmax(0,1fr)_auto] items-center gap-3">
             <div class="flex min-w-0 items-center gap-3">
               <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-elevated">
@@ -753,14 +751,9 @@
 
             <div class="min-w-0">
               {#key provider.status}
-                <span
-                  class="inline-flex max-w-full items-center gap-1.5 truncate rounded-lg border px-2.5 py-1 text-[0.6875rem] font-medium {badge.classes}"
-                  in:fade={{ duration: 150 }}
-                  title={badge.label}
-                >
+                <SettingsStatusBadge label={badge.label} classes={badge.classes}>
                   <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
-                  <span class="truncate">{badge.label}</span>
-                </span>
+                </SettingsStatusBadge>
               {/key}
             </div>
 
@@ -905,20 +898,11 @@
               />
 
               {#if hasDisclosure(provider)}
-                <button
-                  type="button"
-                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  aria-expanded={expanded}
-                  title="{expanded ? 'Hide' : 'Show'} {provider.name} {provider.status === 'error'
-                    ? 'details'
-                    : 'settings'}"
+                <SettingsDisclosure
+                  {expanded}
+                  title={`${expanded ? 'Hide' : 'Show'} ${provider.name} ${provider.status === 'error' ? 'details' : 'settings'}`}
                   onclick={() => toggleSettings(provider.id)}
-                >
-                  <ChevronDown
-                    size={14}
-                    class="shrink-0 transition-transform {expanded ? 'rotate-180' : ''}"
-                  />
-                </button>
+                />
               {/if}
             </div>
           </div>
@@ -1004,7 +988,7 @@
               {/if}
             </div>
           {/if}
-        </div>
+        </SettingsEntry>
       {:else}
         <div class="rounded-xl border border-dashed p-6 text-center text-xs text-dimmed">
           {#if searchQuery || statusFilter !== 'all'}

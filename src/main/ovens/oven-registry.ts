@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { LOCAL_OVEN_ID, type Oven, type OvenState, type SaveOvenInput } from '../../lib/ovens'
 import type { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
+import type { OvenConnectionStatus } from '../../lib/ovens'
 
 interface StoredOven extends Omit<
   Oven,
@@ -54,6 +55,15 @@ export class OvenRegistry {
     const oven = (await this.read()).ovens.find((item) => item.id === id)
     if (!oven) throw new Error('This Oven no longer exists.')
     return oven
+  }
+
+  async recordConnectionHealth(id: string, status: OvenConnectionStatus): Promise<void> {
+    await this.mutate(async (registry) => {
+      const oven = registry.ovens.find((item) => item.id === id)
+      if (!oven || (oven.connectionStatus?.checkedAt ?? 0) > status.checkedAt) return
+      oven.connectionStatus = { ...status, specs: status.specs ?? oven.connectionStatus?.specs }
+      await this.storage.write(REGISTRY_PATH, registry)
+    })
   }
 
   async save(input: SaveOvenInput): Promise<Oven> {

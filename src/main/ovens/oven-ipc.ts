@@ -1,6 +1,7 @@
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { OvenRegistry } from './oven-registry'
 import { OvenService } from './oven-service'
+import { inspectOvenConnection, testDraftConnection, localOvenConnection } from './oven-connection'
 import { ovenId, validateSaveOven, validateIdentityPath } from './oven-validation'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { SecretVault } from '../storage/secret-vault'
@@ -21,6 +22,16 @@ export function registerOvenIpc(
   const service = new OvenService(registry)
   const transfers = new OvenTransfers(service)
   const previews = new OvenPreview(service)
+  ipcMain.handle('oven:testConnection', (_event, raw: unknown) =>
+    testDraftConnection(registry, validateSaveOven(raw))
+  )
+  ipcMain.handle('oven:connectionHealth', async (_event, raw: unknown) => {
+    const id = ovenId(raw)
+    if (id === LOCAL_OVEN_ID) return localOvenConnection()
+    const result = await inspectOvenConnection(service.ssh, id)
+    await registry.recordConnectionHealth(id, result)
+    return result
+  })
   app.once('before-quit', () => previews.dispose())
   ipcMain.handle('oven:state', () => registry.state())
   ipcMain.handle('oven:validateIdentity', (_event, raw: unknown) => validateIdentityPath(raw))

@@ -24,6 +24,7 @@ export interface Oven {
   hasPassphrase: boolean
   hasPublicKey: boolean
   hasPassword?: boolean
+  connectionStatus?: OvenConnectionStatus
   createdAt: number
   updatedAt: number
 }
@@ -46,6 +47,23 @@ export interface OvenState {
   ovens: Oven[]
   defaultOvenId: string
   secureStorageAvailable: boolean
+}
+
+export interface OvenConnectionStatus {
+  state: 'connected' | 'disconnected'
+  checkedAt: number
+  latencyMs?: number
+  error?: string
+  specs?: {
+    hostname: string
+    platform: string
+    architecture: string
+    cpuCount: number
+    memoryBytes: number
+    diskBytes: number
+    diskAvailableBytes: number
+    nodeVersion: string | null
+  }
 }
 
 export interface OvenProbe {

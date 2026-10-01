@@ -9,10 +9,13 @@ import type {
   OvenTransferInput,
   OvenTransferReview
 } from '../ovens'
+import type { OvenConnectionStatus } from '../ovens'
 import type { Contract } from './contract-helpers'
 import type { Thread } from '../types'
 
 export const invokeOvenContract = {
+  'oven:testConnection': {} as Contract<[input: SaveOvenInput], OvenConnectionStatus>,
+  'oven:connectionHealth': {} as Contract<[id: string], OvenConnectionStatus>,
   'oven:validateIdentity': {} as Contract<[path: string], string>,
   'oven:state': {} as Contract<[], OvenState>,
   'oven:save': {} as Contract<[input: SaveOvenInput], Oven>,
