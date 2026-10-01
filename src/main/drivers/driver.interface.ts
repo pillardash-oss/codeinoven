@@ -268,6 +268,16 @@ export interface SendPromptOptions {
   agent?: string
   /** Injected system prompt when Engineering is enabled. */
   systemPrompt?: string
+  /**
+   * Restored conversation history for a rebuilt session (fork, account or
+   * harness switch, edited/deleted history, lost session). It is delivered in
+   * the USER channel as its own delimited message, never the system prompt,
+   * because the replay mixes the user's words, tool output, and file content.
+   * The driver must add it at send time only and never persist it into the
+   * mirror's transport, so the next recap is built from a transcript that
+   * cannot already contain one.
+   */
+  historyRecap?: string
   /** Exact harness tool IDs allowed for this turn; omitted to use harness defaults. */
   allowedTools?: string[]
   /** Force the response through the harness's validated structured-output tool. */

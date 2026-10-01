@@ -9091,8 +9091,7 @@ export class ChatEngine {
           imageDescriptorNote,
           behaviorPrompt: promptBehavior,
           utilityInstructions,
-          routineInstruction,
-          historyRecap: ''
+          routineInstruction
         })
       : composeTurnSystemPrompt({
           chatPrompt: chatSystemPrompt,
@@ -9102,8 +9101,7 @@ export class ChatEngine {
           behaviorPrompt: promptBehavior,
           utilityInstructions,
           routineInstruction,
-          behaviorMode,
-          historyRecap: ''
+          behaviorMode
         })
     // The single production budget/composition decision: build the raw recap,
     // then let composeBudgetedSend cap the hidden + recap layers against the one
@@ -9313,8 +9311,7 @@ export class ChatEngine {
             imageDescriptorNote,
             behaviorPrompt,
             utilityInstructions,
-            routineInstruction,
-            historyRecap
+            routineInstruction
           }),
           allowedTools:
             activeBrainstormSession && driverId === 'opencode'
@@ -9328,6 +9325,7 @@ export class ChatEngine {
           ...(revisionStructuredOutput === undefined
             ? {}
             : { structuredOutput: revisionStructuredOutput }),
+          ...(historyRecap ? { historyRecap } : {}),
           userMessageId: messageId
         }
         await driver.sendPrompt(projectPath, prompt)
@@ -9410,8 +9408,7 @@ export class ChatEngine {
             behaviorPrompt,
             utilityInstructions,
             routineInstruction,
-            behaviorMode,
-            historyRecap
+            behaviorMode
           }) || undefined,
         allowedTools:
           isChatThread &&
@@ -9428,6 +9425,7 @@ export class ChatEngine {
             : isChatThread
               ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
               : undefined,
+        ...(historyRecap ? { historyRecap } : {}),
         userMessageId: messageId
       })
       if (utilitySetupRequested || isChatThread || isAssistantTask) {

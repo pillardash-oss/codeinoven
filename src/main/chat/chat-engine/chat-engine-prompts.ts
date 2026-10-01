@@ -644,6 +644,10 @@ export function formatOpenAnnotations(
  * planning or implementation instruction exactly once; mermaid and question
  * instructions are injected here for the conversational modes (`chat` and
  * `assistant`), where no app layer supplies them.
+ *
+ * The restored history recap is deliberately NOT a layer here: it rides the
+ * user channel through `SendPromptOptions.historyRecap`, so the system role is
+ * never the carrier of replayed conversation content.
  */
 export function composeTurnSystemPrompt(input: {
   chatPrompt: string
@@ -660,7 +664,6 @@ export function composeTurnSystemPrompt(input: {
    */
   routineInstruction?: string
   behaviorMode: 'implement' | 'brainstorm' | 'chat' | 'assistant'
-  historyRecap: string
 }): string {
   // A chat and an assistant task are both non-engineering conversations, so
   // both carry the mermaid rules and the question-tool instruction; a project
@@ -675,8 +678,7 @@ export function composeTurnSystemPrompt(input: {
     input.utilityInstructions,
     input.routineInstruction,
     conversational ? MERMAID_OUTPUT_INSTRUCTION : undefined,
-    conversational ? QUESTION_TOOL_INSTRUCTION : undefined,
-    input.historyRecap
+    conversational ? QUESTION_TOOL_INSTRUCTION : undefined
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -699,7 +701,6 @@ export function composeBrainstormSystemPrompt(input: {
   utilityInstructions: string
   /** The routine contract, when the planning turn belongs to a routine thread. */
   routineInstruction?: string
-  historyRecap: string
 }): string {
   const prdTurnPrompt = input.prdDiscussionPrompt ?? ''
   const assignmentTurnPrompt = input.assignmentDiscussionPrompt ?? ''
@@ -720,8 +721,7 @@ export function composeBrainstormSystemPrompt(input: {
     input.imageDescriptorNote,
     input.behaviorPrompt,
     input.utilityInstructions,
-    input.routineInstruction,
-    input.historyRecap
+    input.routineInstruction
   ]
     .filter(Boolean)
     .join('\n\n')

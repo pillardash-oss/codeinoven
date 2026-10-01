@@ -58,6 +58,10 @@ export interface CioCoreToolsExtensionOptions {
   gatewayHandoffPath: string
   /** Absolute path of the per-session system-prompt handoff file. */
   systemPromptPath: string
+  /** Absolute path of the per-session restored-history handoff file. The
+   *  extension's `context` hook injects its content as its own leading user
+   *  message, so a rebuilt session's replay never rides the system prompt. */
+  historyRecapPath: string
   /** Absolute path of the per-session allowed-tools handoff file. Empty array
    *  (the seed) means every pi built-in tool is available. */
   allowedToolsPath: string
@@ -211,6 +215,7 @@ __CIO_STRIP_BUILTINS__  })
 `
       .replace('__HANDOFF_PATH__', JSON.stringify(options.gatewayHandoffPath).slice(1, -1))
       .replace('__CIO_SYSTEM_PROMPT_PATH__', JSON.stringify(options.systemPromptPath).slice(1, -1))
+      .replace('__CIO_HISTORY_RECAP_PATH__', JSON.stringify(options.historyRecapPath).slice(1, -1))
       .replace('__CIO_ALLOWED_TOOLS_PATH__', JSON.stringify(options.allowedToolsPath).slice(1, -1))
       .replace(
         '__CIO_OVERSIZED_FLAG_PATH__',

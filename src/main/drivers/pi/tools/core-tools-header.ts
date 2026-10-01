@@ -32,6 +32,7 @@ import { Type } from 'typebox'
 const CIO_PERMISSION_MARKER = 'cio-permission:'
 const CIO_QUESTION_MARKER = 'cio-question:'
 const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
+const CIO_HISTORY_RECAP_PATH = '__CIO_HISTORY_RECAP_PATH__'
 const CIO_ALLOWED_TOOLS_PATH = '__CIO_ALLOWED_TOOLS_PATH__'
 
 // The tools pi bundles itself. When the driver hands this session a tool
@@ -144,6 +145,30 @@ function loadCioSystemPrompt() {
   try {
     return readFileSync(CIO_SYSTEM_PROMPT_PATH, 'utf8').trim()
   } catch {
+    return ''
+  }
+}
+
+// The driver rewrites this file per turn with the restored history replay for
+// a rebuilt session (fork, account/harness switch, edited or deleted history).
+// The context hook returns it as its own leading user message so it lands in
+// the user channel   the replay mixes the user's words, tool output, and file
+// content, so the system role would grant all of it system authority. An empty
+// file means no replay this turn. The context hook runs before every LLM call
+// in an agent loop, so the read is cached by mtime: a large replay is read once
+// per turn instead of once per tool-loop iteration.
+let cachedHistoryRecapMtimeMs = -1
+let cachedHistoryRecap = ''
+function loadCioHistoryRecap() {
+  try {
+    const info = statSync(CIO_HISTORY_RECAP_PATH)
+    if (info.mtimeMs === cachedHistoryRecapMtimeMs) return cachedHistoryRecap
+    cachedHistoryRecapMtimeMs = info.mtimeMs
+    cachedHistoryRecap = readFileSync(CIO_HISTORY_RECAP_PATH, 'utf8').trim()
+    return cachedHistoryRecap
+  } catch {
+    cachedHistoryRecapMtimeMs = -1
+    cachedHistoryRecap = ''
     return ''
   }
 }

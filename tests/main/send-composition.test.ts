@@ -37,7 +37,7 @@ function modelBudget(): number {
   }).availableInputTokens
 }
 
-function implementSystemBase(recap: string): string {
+function implementSystemBase(): string {
   return composeTurnSystemPrompt({
     chatPrompt: 'You are the CodeInOven engineering agent.',
     memoryInstruction: 'Treat these as user preferences.',
@@ -45,15 +45,14 @@ function implementSystemBase(recap: string): string {
     assignmentCoordinatorSystemPrompt: 'The coordinator thread controls this assignment.',
     behaviorPrompt: 'Implement only the approved specification.',
     utilityInstructions: 'Tools are available for the current project.',
-    behaviorMode: 'implement',
-    historyRecap: recap
+    behaviorMode: 'implement'
   })
 }
 
 describe('production send-composition budget (composeBudgetedSend)', () => {
   it('caps large recap + hidden layers so the composed turn fits the budget', () => {
     const available = modelBudget()
-    const systemBase = implementSystemBase('')
+    const systemBase = implementSystemBase()
     const composition = composeBudgetedSend({
       availableInputTokens: available,
       userText: 'Implement the login form with validation.',
@@ -62,19 +61,24 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
       recapText: 'h'.repeat(80_000),
       systemReserveTokens: 2_048
     })
-    const finalSystem = implementSystemBase(composition.recapText)
-    // driverText already contains the hidden context + user message; the final
-    // system prompt already contains the recap.
-    const total = estimateTextTokens(finalSystem) + estimateTextTokens(composition.driverText)
+    // The recap is delivered in the user channel (the driver's
+    // `historyRecap` field), never the system prompt, but it still counts
+    // against the one aggregate budget with the driver text and system base.
+    const total =
+      estimateTextTokens(systemBase) +
+      estimateTextTokens(composition.driverText) +
+      estimateTextTokens(composition.recapText)
     expect(total).toBeLessThanOrEqual(available)
     expect(composition.driverText).toContain('Implement the login form with validation.')
     expect(composition.recapText.length).toBeLessThan(80_000)
     expect(composition.hiddenText.length).toBeLessThanOrEqual(50_000)
+    // The recap must never be a system-prompt layer.
+    expect(systemBase).not.toContain(composition.recapText)
   })
 
   it('caps the hidden orchestration context first when headroom is tight', () => {
     const available = modelBudget()
-    const systemBase = implementSystemBase('')
+    const systemBase = implementSystemBase()
     const composition = composeBudgetedSend({
       availableInputTokens: available,
       userText: 'u'.repeat(4_000),
@@ -92,7 +96,7 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
 
   it('rejects deterministically when fixed user + system layers exceed the budget', () => {
     const available = modelBudget()
-    const hugeSystem = implementSystemBase('').repeat(500)
+    const hugeSystem = implementSystemBase().repeat(500)
     expect(() =>
       composeBudgetedSend({
         availableInputTokens: available,
@@ -113,8 +117,7 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
       memoryInstruction: 'Treat these as user preferences.',
       imageDescriptorNote: '',
       behaviorPrompt: 'Generate the engineering specification.',
-      utilityInstructions: '',
-      historyRecap: ''
+      utilityInstructions: ''
     })
     const composition = composeBudgetedSend({
       availableInputTokens: available,
@@ -130,10 +133,12 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
       memoryInstruction: 'Treat these as user preferences.',
       imageDescriptorNote: '',
       behaviorPrompt: 'Generate the engineering specification.',
-      utilityInstructions: '',
-      historyRecap: composition.recapText
+      utilityInstructions: ''
     })
-    const total = estimateTextTokens(finalSystem) + estimateTextTokens(composition.driverText)
+    const total =
+      estimateTextTokens(finalSystem) +
+      estimateTextTokens(composition.driverText) +
+      estimateTextTokens(composition.recapText)
     expect(total).toBeLessThanOrEqual(available)
   })
 
@@ -148,8 +153,7 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
       behaviorPrompt: '',
       utilityInstructions: 'CodeInOven utility contract (run)',
       routineInstruction: contract,
-      behaviorMode: 'chat',
-      historyRecap: ''
+      behaviorMode: 'chat'
     })
     expect(systemBase).toContain(contract)
     // The user message stays the user's own words: a contract appended here
@@ -166,7 +170,7 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
   })
 
   it('omits the routine layer when no routine thread applies', () => {
-    const withoutRoutine = implementSystemBase('')
+    const withoutRoutine = implementSystemBase()
     expect(withoutRoutine).not.toContain('install_bundle')
   })
 })

@@ -78,6 +78,21 @@ export function piCoreToolsEventsSource(): string {
     return { systemPrompt: extra ? base + '\\n\\n' + extra : base }
   })
 
+  // Rebuilt sessions (fork, account or harness switch, edited or deleted
+  // history, lost session) have no native transcript. The driver publishes the
+  // restored replay each turn; deliver it as its own leading user message so it
+  // lands in the user channel   the replay mixes the user's words, tool output,
+  // and file content, and the system role would grant it system authority.
+  // Request-local: Pi restores the conversation afterward, so the replay is
+  // never persisted or summarized, and the next recap cannot nest inside one.
+  pi.on('context', (event) => {
+    const recap = loadCioHistoryRecap()
+    if (!recap) return undefined
+    return {
+      messages: [{ role: 'user', content: recap, timestamp: Date.now() }, ...event.messages]
+    }
+  })
+
   // Permission gate: destructive tool calls require an explicit permission
   // card. The confirm dialog's message carries the structured payload behind
   // the shared marker; the CodeInOven driver upgrades it into a real

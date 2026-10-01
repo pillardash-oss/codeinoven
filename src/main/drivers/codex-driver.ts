@@ -24,6 +24,7 @@ import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment } from './cli-environment'
+import { prependHistoryRecap } from './history-recap-prompt'
 import { attachmentReference } from './attachment-reference'
 import type {
   GenerateTitleOptions,
@@ -399,7 +400,10 @@ export class CodexDriver extends PersistentCliDriver {
       const turnParams: Record<string, unknown> = {
         threadId: nativeThreadId,
         clientUserMessageId: options.userMessageId,
-        input: await this.codexInput(options.text, options.attachments),
+        input: await this.codexInput(
+          prependHistoryRecap(options.text, options.historyRecap),
+          options.attachments
+        ),
         cwd: projectPath,
         approvalPolicy: codexApprovalPolicy(
           options.readOnly === true,
@@ -1801,7 +1805,7 @@ export class CodexDriver extends PersistentCliDriver {
     const promptBody = [
       inlineSvg,
       ...attachmentPrompts,
-      composePrompt(options.systemPrompt, options.text)
+      composePrompt(options.systemPrompt, prependHistoryRecap(options.text, options.historyRecap))
     ]
       .filter(Boolean)
       .join('\n\n')

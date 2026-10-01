@@ -30,6 +30,7 @@ import type { IsolatedSessionDriver, IsolatedSessionHandle } from './isolated-se
 import { QuestionRequestGoneError } from './driver.interface'
 import { Logger } from '../system/logger'
 import { buildProcessEnvironment } from './cli-environment'
+import { prependHistoryRecap } from './history-recap-prompt'
 import { readOpenCodeAccountUsage } from './opencode-account-usage'
 import { runHarnessCommand } from './harness-runtime'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -360,7 +361,10 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       // session, not to the prompt, so each turn re-states the settings it runs
       // under before delivering its input.
       await this.applyTurnSettings(handle, projectPath, opts)
-      const payload = await buildOpenCodeV2PromptPayload(opts.text, opts.attachments)
+      const payload = await buildOpenCodeV2PromptPayload(
+        prependHistoryRecap(opts.text, opts.historyRecap),
+        opts.attachments
+      )
       if (opts.systemPrompt) {
         // V2's prompt body has no `system` field. A synthetic inbox item parked
         // ahead of the prompt is the only channel for context the user did not
