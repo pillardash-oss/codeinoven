@@ -11,6 +11,7 @@
     type OvenProbe,
     type SaveOvenInput
   } from '$shared/ovens'
+  import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
@@ -37,6 +38,8 @@
   let privateKey = $state('')
   let passphrase = $state('')
   let password = $state('')
+  let showPassword = $state(false)
+  let showPassphrase = $state(false)
   let publicKey = $state('')
   let pendingRemoval = $state<Oven | null>(null)
 
@@ -74,6 +77,8 @@
     privateKey = ''
     passphrase = ''
     password = ''
+    showPassword = false
+    showPassphrase = false
     publicKey = ''
     modalError = ''
     editorOpen = true
@@ -85,6 +90,8 @@
     privateKey = ''
     passphrase = ''
     password = ''
+    showPassword = false
+    showPassphrase = false
     publicKey = ''
   }
 
@@ -117,6 +124,8 @@
       privateKey = ''
       passphrase = ''
       password = ''
+      showPassword = false
+      showPassphrase = false
       publicKey = ''
       await load()
       editorOpen = false
@@ -377,14 +386,23 @@
     {#if authentication === 'password'}
       <label class="block space-y-1 text-xs font-medium text-muted"
         >SSH account password {editing?.hasPassword ? '(saved, leave blank to keep)' : ''}
-        <input
-          class={fieldClass}
-          type="password"
-          bind:value={password}
-          autocomplete="new-password"
-          required={!editing?.hasPassword}
-          placeholder="Password for your SSH user"
-        />
+        <div class="relative">
+          <input
+            class={`${fieldClass} pr-10`}
+            type={showPassword ? 'text' : 'password'}
+            bind:value={password}
+            autocomplete="new-password"
+            required={!editing?.hasPassword}
+            placeholder="Password for your SSH user"
+          />
+          <div class="absolute inset-y-0 right-1 flex items-center">
+            <SecretVisibilityButton
+              revealed={showPassword}
+              title={showPassword ? 'Hide password' : 'Show password'}
+              onclick={() => (showPassword = !showPassword)}
+            />
+          </div>
+        </div>
       </label>
       <p class="text-xs text-dimmed">
         Your password is encrypted in the secret vault and used when connecting.
@@ -421,12 +439,22 @@
           placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label
       >
       <label class="block space-y-1 text-xs font-medium text-muted"
-        >Passphrase, optional {editing?.hasPassphrase ? '(stored, leave blank to keep)' : ''}<input
-          class={fieldClass}
-          type="password"
-          bind:value={passphrase}
-          autocomplete="new-password"
-        /></label
+        >Passphrase, optional {editing?.hasPassphrase ? '(stored, leave blank to keep)' : ''}
+        <div class="relative">
+          <input
+            class={`${fieldClass} pr-10`}
+            type={showPassphrase ? 'text' : 'password'}
+            bind:value={passphrase}
+            autocomplete="new-password"
+          />
+          <div class="absolute inset-y-0 right-1 flex items-center">
+            <SecretVisibilityButton
+              revealed={showPassphrase}
+              title={showPassphrase ? 'Hide passphrase' : 'Show passphrase'}
+              onclick={() => (showPassphrase = !showPassphrase)}
+            />
+          </div>
+        </div></label
       >
     {/if}
     {#if authentication !== 'password'}

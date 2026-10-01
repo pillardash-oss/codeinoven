@@ -3,8 +3,6 @@
     ChevronLeft,
     ChevronRight,
     Clock,
-    Eye,
-    EyeOff,
     KeyRound,
     Loader2,
     ShieldCheck,
@@ -20,6 +18,7 @@
   import { formatRemaining } from '../shared/card-timer'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
   import AgentCardChatActions from './AgentCardChatActions.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type {
@@ -377,21 +376,14 @@
                   oninput={pauseCountdown}
                   onkeydown={handleValueKeydown}
                 />
-                <button
-                  class="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-40"
-                  type="button"
-                  disabled={working}
-                  aria-pressed={currentRevealed}
-                  title={currentRevealed ? 'Hide the value' : 'Show the value'}
-                  aria-label={currentRevealed ? 'Hide the value' : 'Show the value'}
-                  onclick={toggleReveal}
-                >
-                  {#if currentRevealed}
-                    <EyeOff size={14} />
-                  {:else}
-                    <Eye size={14} />
-                  {/if}
-                </button>
+                <div class="absolute top-1/2 right-1 -translate-y-1/2">
+                  <SecretVisibilityButton
+                    revealed={currentRevealed}
+                    disabled={working}
+                    title={currentRevealed ? 'Hide the value' : 'Show the value'}
+                    onclick={toggleReveal}
+                  />
+                </div>
               </div>
               {#if question.secretEnvironmentVariable}
                 <p class="text-xs text-dimmed">

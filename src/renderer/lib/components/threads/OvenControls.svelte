@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Server, FolderOpen } from '@lucide/svelte'
+  import { Server, FolderOpen, ChevronDown } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { Thread, ThreadSettings } from '$shared/types'
   import type { OvenState } from '$shared/ovens'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import PickerMenuShell from '../shared/PickerMenuShell.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { isTypeableKey } from '../shared/model-picker-helpers'
   import OvenWorkspace from './OvenWorkspace.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
@@ -21,11 +24,34 @@
   let workspace = $state(false)
   let selected = $state(LOCAL_OVEN_ID)
   let root = $state('')
-  let harness = $state('codex')
-  let provider = $state('')
-  let model = $state('')
   let saving = $state(false)
   let error = $state('')
+  let query = $state('')
+  let menuEl: HTMLDivElement | undefined = $state(undefined)
+  let searchInput: HTMLInputElement | undefined
+  let visibleOvens = $derived(
+    (ovens?.ovens ?? []).filter((oven) =>
+      oven.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
+    )
+  )
+  function rowKeydown(event: KeyboardEvent, index: number): void {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const next = Math.max(
+        0,
+        Math.min(visibleOvens.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))
+      )
+      menuEl?.querySelectorAll<HTMLButtonElement>('[data-oven-row]')[next]?.focus()
+    } else if (keymapState.matches('palette-close', event)) {
+      event.stopPropagation()
+      editor = false
+    } else if (isTypeableKey(event)) {
+      event.preventDefault()
+      query += event.key
+      searchInput?.focus()
+    }
+  }
+
   let current = $derived(
     ovens?.ovens.find((oven) => oven.id === (settings.ovenId ?? LOCAL_OVEN_ID))
   )
@@ -50,11 +76,10 @@
   })
 
   export async function openPicker(): Promise<void> {
+    if (busy || saving) return
+    query = ''
     selected = settings.ovenId ?? LOCAL_OVEN_ID
     root = settings.ovenPath ?? ''
-    harness = settings.harnessId
-    provider = settings.providerId
-    model = settings.modelId
     error = ''
     try {
       ovens = await invoke('oven:state')
@@ -68,19 +93,7 @@
     saving = true
     error = ''
     try {
-      // Persist the settings first because a new thread can still have its initial
-      // model only in the composer. The selection endpoint owns the busy guard.
-      const nextSettings =
-        selected === LOCAL_OVEN_ID
-          ? settings
-          : {
-              ...settings,
-              harnessId: harness,
-              providerId: provider.trim(),
-              modelId: model.trim(),
-              accountId: harness === settings.harnessId ? settings.accountId : undefined
-            }
-      await invoke('thread:updateSettings', thread.projectId, thread.id, nextSettings)
+      await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
       const updated = await invoke(
         'oven:selectThread',
         thread.projectId,
@@ -103,6 +116,8 @@
     type="button"
     class="flex items-center gap-1.5 rounded-md px-2 py-1 hover:bg-elevated disabled:opacity-50"
     title="Choose the Oven for this chat"
+    aria-haspopup="menu"
+    aria-expanded={editor}
     disabled={busy || saving}
     onclick={() => void openPicker()}
   >
@@ -117,7 +132,7 @@
     {:else}<Server size={12} />{/if}<span
       >{current?.name ??
         (settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID ? 'Oven unavailable' : 'Local')}</span
-    >
+    ><ChevronDown size={10} />
   </button>
   {#if settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID}
     <button
@@ -137,115 +152,59 @@
       aria-label="Close Oven picker"
       onclick={() => (editor = false)}
     ></button>
-    <div
-      class="absolute bottom-full right-0 z-40 mb-2 max-h-[70vh] w-80 overflow-auto rounded-xl border bg-surface p-3 shadow-lg"
-      role="dialog"
-      tabindex="-1"
-      aria-label="Choose Oven"
-      onkeydown={(event) => {
-        if (event.key === 'Escape') editor = false
-      }}
-    >
-      <form
-        id="oven-selection"
-        class="space-y-4"
-        onsubmit={(event) => {
-          event.preventDefault()
-          void select()
+    <div class="absolute bottom-full right-0 z-40 mb-1.5">
+      <PickerMenuShell
+        bind:query
+        bind:menuEl
+        label="Choose Oven"
+        placeholder="Search Ovens…"
+        autofocusSearch
+        onSearchInput={(input) => (searchInput = input)}
+        onSearchKeydown={(event) => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault()
+            menuEl?.querySelector<HTMLButtonElement>('[data-oven-row]')?.focus()
+          }
+          if (keymapState.matches('palette-close', event)) {
+            event.stopPropagation()
+            editor = false
+          }
         }}
       >
-        <div class="space-y-1" role="menu" aria-label="Ovens">
-          {#each ovens?.ovens ?? [] as oven (oven.id)}
-            <button
-              type="button"
-              role="menuitem"
-              class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated"
-              disabled={busy || saving}
-              onclick={() => {
-                root = oven.id === settings.ovenId ? (settings.ovenPath ?? '') : ''
-                selected = oven.id
-                void select()
-              }}
+        {#each visibleOvens as oven, index (oven.id)}
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={oven.id === (settings.ovenId ?? LOCAL_OVEN_ID)}
+            data-oven-row={oven.id}
+            onkeydown={(event) => rowKeydown(event, index)}
+            class="mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none disabled:opacity-50"
+            disabled={busy || saving}
+            title={`Use ${oven.name}`}
+            onclick={() => {
+              root = oven.id === settings.ovenId ? (settings.ovenPath ?? '') : ''
+              selected = oven.id
+              void select()
+            }}
+          >
+            <img
+              class="h-3 w-3 shrink-0"
+              alt=""
+              src={oven.customSvg
+                ? getCustomSvgDataUrl(oven.customSvg, oven.color)
+                : getIconSvgDataUrl(oven.icon, oven.color)}
+            />
+            <span class="min-w-0 flex-1 truncate">{oven.name}</span>
+            <span class="shrink-0 text-[0.625rem] text-dimmed"
+              >{oven.id === LOCAL_OVEN_ID ? 'Local' : 'SSH'}</span
             >
-              <img
-                class="h-4 w-4"
-                alt=""
-                src={oven.customSvg
-                  ? getCustomSvgDataUrl(oven.customSvg, oven.color)
-                  : getIconSvgDataUrl(oven.icon, oven.color)}
-              />
-              <span>{oven.name}</span>
-              <span class="ml-auto text-xs text-muted"
-                >{oven.id === LOCAL_OVEN_ID ? 'This computer' : 'SSH'}</span
-              >
-            </button>
-          {/each}
-        </div>
-        {#if selected !== LOCAL_OVEN_ID}
-          <label class="block space-y-1 text-xs text-muted"
-            >Harness on Oven
-            <select
-              class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
-              bind:value={harness}
-              onchange={() => {
-                provider = ''
-                model = ''
-              }}
-            >
-              <option value="codex">Codex</option>
-              <option value="claude-code">Claude Code</option>
-              <option value="opencode">OpenCode</option>
-              <option value="pi">Pi</option>
-              <option value="muse">Muse</option>
-              <option value="cline">Cline</option>
-            </select>
-          </label>
-          <label class="block space-y-1 text-xs text-muted"
-            >Provider, optional
-            <input
-              class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
-              bind:value={provider}
-              placeholder="Use the Oven's configured provider"
-            />
-          </label>
-          <label class="block space-y-1 text-xs text-muted"
-            >Model, optional
-            <input
-              class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
-              bind:value={model}
-              placeholder="Use the Oven's configured model"
-            />
-          </label>
-          <label class="block space-y-1 text-xs text-muted"
-            >Workspace on this Oven
-            <input
-              class="w-full rounded-lg border bg-elevated px-3 py-2 font-mono text-sm text-foreground"
-              bind:value={root}
-              placeholder="~/projects/my-repo"
-            />
-          </label>
-          <p class="text-xs text-dimmed">
-            Leave empty for a workspace owned by this chat. Files move only through an explicit
-            transfer.
-          </p>
-        {/if}
-        {#if error}<p class="text-xs text-danger" role="alert">{error}</p>{/if}
-      </form>
-      <div class="mt-3 flex justify-end gap-2">
-        <button
-          type="button"
-          class="rounded-lg px-3 py-2 text-sm hover:bg-elevated"
-          disabled={saving}
-          onclick={() => (editor = false)}>Cancel</button
-        >
-        <button
-          type="submit"
-          form="oven-selection"
-          data-modal-primary
-          class="rounded-lg bg-primary px-4 py-2 text-sm text-on-primary"
-          disabled={saving || busy}>{saving ? 'Selecting…' : 'Use Oven'}</button
-        >
-      </div>
+          </button>
+        {/each}
+        {#if !visibleOvens.length}<p class="px-2.5 py-2 text-xs text-dimmed">
+            No matching Ovens.
+          </p>{/if}
+        {#if error}<p class="px-2.5 py-2 text-xs text-danger" role="alert">{error}</p>{/if}
+      </PickerMenuShell>
     </div>
   {/if}
 </div>
@@ -259,9 +218,6 @@
     {ovens}
     onUseRoot={async (path) => {
       selected = settings.ovenId ?? LOCAL_OVEN_ID
-      harness = settings.harnessId
-      provider = settings.providerId
-      model = settings.modelId
       root = path
       await select()
       if (error) throw new Error(error)
