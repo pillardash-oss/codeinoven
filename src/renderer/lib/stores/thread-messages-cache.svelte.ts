@@ -393,6 +393,10 @@ export class ThreadMessagesCache {
   #publish(key: string, structural = false): void {
     const entry = this.#threads.get(key)
     if (!entry) return
+    // Content-only stream events share one frame-aligned publish. Replace the
+    // message array once here so Svelte sees the content change without making
+    // every incoming token copy the full transcript.
+    if (!structural) entry.messages = [...entry.messages]
     entry.revision += 1
     this.threads.set(key, { ...entry })
     // Every structural mutation path replaces `entry.messages` with a fresh
