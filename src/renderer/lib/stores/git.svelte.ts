@@ -1456,6 +1456,21 @@ export class GitState {
     return this.deployments.rerunWorkflowRun(projectId, owner, repo, runId, mode)
   }
 
+  /**
+   * Cancel a queued or in-progress workflow run, then drop the cached views so
+   * the run is read again as it settles into `cancelled` instead of showing the
+   * stale active state. Returns false when GitHub refused (the reason lands in
+   * `error`).
+   */
+  cancelWorkflowRun(
+    projectId: string,
+    owner: string,
+    repo: string,
+    runId: number
+  ): Promise<boolean> {
+    return this.deployments.cancelWorkflowRun(projectId, owner, repo, runId)
+  }
+
   startGitHubDeviceFlow() {
     return this.github.startGitHubDeviceFlow()
   }

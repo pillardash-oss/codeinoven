@@ -496,4 +496,28 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
       )
     }
   )
+
+  ipcMain.handle(
+    'deployment:cancelRun',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, runId: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to cancel workflow runs')
+      const target = {
+        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+        repo: validateBoundedString(repo, 'Deployment repository', 1, 128)
+      }
+      return runGitHubMutation(
+        target.owner,
+        target.repo,
+        async () => {
+          await provider.cancelWorkflowRun({
+            ...target,
+            runId: validateBoundedInteger(runId, 'Workflow run ID', 1, MAX_GITHUB_NUMERIC_ID)
+          })
+          return null
+        },
+        'Actions read and write access'
+      )
+    }
+  )
 }

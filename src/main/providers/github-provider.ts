@@ -1204,6 +1204,17 @@ export class GitHubProvider implements GitProvider {
     })
   }
 
+  /**
+   * Cancel a queued or in-progress workflow run. GitHub accepts the request and
+   * answers with 202; the run settles into `cancelled` asynchronously, so callers
+   * re-read the run rather than trusting the mutation's return.
+   */
+  async cancelWorkflowRun(input: { owner: string; repo: string; runId: number }): Promise<void> {
+    await this.request(`${this.repoPath(input)}/actions/runs/${input.runId}/cancel`, {
+      method: 'POST'
+    })
+  }
+
   /** Resolve the Actions run behind a deployment: from a status URL first, then by head sha. */
   private async resolveDeploymentRun(
     input: { owner: string; repo: string },
