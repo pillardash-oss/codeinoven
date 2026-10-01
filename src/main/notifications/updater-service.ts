@@ -1,5 +1,6 @@
 import electronUpdater from 'electron-updater'
 import { BrowserWindow, app } from 'electron'
+import os from 'node:os'
 import { Logger } from '../system/logger'
 import type { UpdaterStatus, UpdaterChangelog } from '../../lib/ipc-contract'
 import type { ReleaseChannel } from '../../lib/download-mirror'
@@ -7,6 +8,21 @@ import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { markBackgroundRelaunch } from './updater-relaunch'
 import {
+  INSTALL_ATTEMPT_LIMIT,
+  INSTALL_DISPATCH_FILE,
+  INSTALL_FAILURE_FILE,
+  nextFailureState,
+  nextInstallPermitted,
+  purgeAbandonedInstallStaging,
+  readMacBundleIdentifier,
+  resolveDispatchOutcome,
+  suppressedInstallReason,
+  type InstallDispatch,
+  type InstallFailureState,
+  type StagingSweepContext
+} from './updater-install-recovery'
+import {
+  getAppCacheDir,
   resolveUpdaterCacheLocation,
   seedUpdaterCache,
   selectUpdateArtifact,
@@ -77,6 +93,16 @@ export class UpdaterService {
    */
   private updateQuitHooks: { begin: () => void; end: () => void } | null = null
   /**
+   * Installs of the current version that were handed to the platform installer
+   * and never applied. A macOS ShipIt signature rejection produces no error
+   * event, so the failure is only observable as "we relaunched on the old
+   * version"; see `reconcileInstallDispatch`. The record bounds how many times
+   * the automatic path may try the same build.
+   */
+  private installFailure: InstallFailureState | null = null
+  /** True between handing the payload to the platform installer and its exit. */
+  private installDispatched = false
+  /**
    * Runs at the start of every update-check cycle (startup, periodic, explicit).
    * Skill freshness rides this cadence instead of running a timer of its own.
    */
@@ -112,9 +138,14 @@ export class UpdaterService {
         version: info.version,
         files: info.files
       }
+      // A different version than the one that failed starts with a clean slate.
+      if (this.installFailure !== null && this.installFailure.version !== info.version) {
+        void this.clearInstallFailure()
+      }
       this.updateState({
         state: 'available',
-        availableVersion: info.version
+        availableVersion: info.version,
+        blockedReason: undefined
       })
       void this.handleAutoDownload()
     })
@@ -124,7 +155,7 @@ export class UpdaterService {
       this.pendingUpdateInfo = null
       this.forceUpdateInBackground = false
       this.updateQuitHooks?.end()
-      this.updateState({ state: 'idle' })
+      this.updateState({ state: 'idle', blockedReason: undefined })
     })
 
     autoUpdater.on('download-progress', (progress) => {
@@ -148,6 +179,14 @@ export class UpdaterService {
     autoUpdater.on('error', (error) => {
       Logger.error('Updater error:', error.message)
       this.forceUpdateInBackground = false
+      // An install that fails inside the process never reaches the platform
+      // installer, so record it here instead of waiting for the relaunch to
+      // reveal it: macOS ShipIt, the NSIS installer, and the AppImage runtime
+      // all fail silently from our side.
+      if (this.installDispatched) {
+        this.installDispatched = false
+        void this.recordInstallFailure(this._status.availableVersion)
+      }
       // An install that failed before it could quit must not leave the park gate
       // disabled: the app has to stay parkable in the menu bar.
       this.updateQuitHooks?.end()
@@ -219,8 +258,11 @@ export class UpdaterService {
 
   start(): void {
     if (this.timer || !this._status.canAutoUpdate) return
-    void this.resumePendingInstall()
-    void this.checkForUpdates()
+    void (async () => {
+      await this.reconcileInstallDispatch()
+      await this.resumePendingInstall()
+      await this.checkForUpdates()
+    })()
     this.timer = setInterval(() => {
       void this.checkForUpdates()
     }, UPDATE_CHECK_INTERVAL_MS)
@@ -487,7 +529,11 @@ export class UpdaterService {
    */
   quitAndInstall(): void {
     if (this._status.state !== 'downloaded') return
+    // Clicking through the guard is the user overriding it, so the attempts for
+    // this version start over rather than resuming at the limit.
+    void this.clearInstallFailure()
     this.installApproved = true
+    this.updateState({ blockedReason: undefined })
     void this.persistPendingInstall()
     void this.installWhenIdle()
   }
@@ -520,11 +566,30 @@ export class UpdaterService {
       await this.installWhenIdle()
       return
     }
+    // A menu bar "Check for Updates" is a direct request and always wins over
+    // the guard; so does an explicit install, which reaches `installWhenIdle`
+    // without passing through here at all.
     if (!this.forceUpdateInBackground) {
       const config = await this.storage.getConfig()
       if (!config.autoInstallUpdates) return
+      if (!this.installPermittedForTarget()) return
     }
     await this.installWhenIdle()
+  }
+
+  /**
+   * Whether the unattended path may hand the offered version to the platform
+   * installer. A version whose install already failed keeps the update visible
+   * and installable by hand; it just stops being retried on every launch.
+   */
+  private installPermittedForTarget(): boolean {
+    const version = this._status.availableVersion
+    if (!version) return true
+    if (nextInstallPermitted(this.installFailure, version, Date.now())) return true
+    const reason = suppressedInstallReason(this.installFailure, version)
+    Logger.error(`Updater: automatic install suppressed   ${reason ?? ''}`)
+    this.updateState({ state: 'downloaded', blockedReason: reason ?? undefined })
+    return false
   }
 
   /** Resume an install that was pending when the previous launch shut down. */
@@ -534,7 +599,9 @@ export class UpdaterService {
       if (!pending?.pending) return
       this.installPending = true
       this.installApproved = pending.approved === true
-      if (this._status.state === 'downloaded') {
+      // The resume is unattended, so a version that already failed stays out.
+      if (!this.forceUpdateInBackground && this._status.state === 'downloaded') {
+        if (!this.installPermittedForTarget()) return
         this.performDeferredInstall()
       }
     } catch (error: unknown) {
@@ -550,6 +617,106 @@ export class UpdaterService {
       })
     } catch (error: unknown) {
       Logger.error('Updater: failed to persist pending install', error)
+    }
+  }
+
+  /**
+   * Settle the install we handed to the platform installer on the previous
+   * launch. macOS validates the staged bundle's signature after the app is
+   * already gone, so a rejected install comes back as a silent relaunch on the
+   * old version with no error event anywhere. Comparing the recorded dispatch
+   * with the version now running is the only signal that works on all three
+   * platforms, and it is what stops the relaunch storm: a failure is counted,
+   * the abandoned staging is swept, and the automatic path stops re-arming the
+   * same build.
+   */
+  private async reconcileInstallDispatch(): Promise<void> {
+    try {
+      const dispatch = await this.storage.read<InstallDispatch>(INSTALL_DISPATCH_FILE)
+      const failure = await this.storage.read<InstallFailureState>(INSTALL_FAILURE_FILE)
+      const outcome = resolveDispatchOutcome(dispatch, app.getVersion())
+      if (outcome.outcome === 'applied') {
+        await this.storage.remove(INSTALL_DISPATCH_FILE)
+        if (dispatch !== null) {
+          Logger.dev(`Updater: install of ${outcome.version} applied`)
+        }
+        await this.clearInstallFailure()
+        return
+      }
+      if (outcome.outcome === 'none') {
+        this.installFailure = failure
+        return
+      }
+      const record = nextFailureState(failure, outcome.version, outcome.dispatchedAt)
+      this.installFailure = record
+      await this.storage.remove(INSTALL_DISPATCH_FILE)
+      await this.storage.write(INSTALL_FAILURE_FILE, record)
+      Logger.error(
+        `Updater: install of ${outcome.version} did not apply (attempt ${record.attempts} of ${INSTALL_ATTEMPT_LIMIT})`
+      )
+      await this.purgeStaging(record.attempts >= INSTALL_ATTEMPT_LIMIT)
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to reconcile the previous install', error)
+    }
+  }
+
+  /**
+   * Count an install that failed in-process and sweep the staging it left.
+   * The dispatch record is cleared as well: the failure is already known, so
+   * the next launch has nothing left to reconcile and must not count it twice.
+   */
+  private async recordInstallFailure(version: string | undefined): Promise<void> {
+    if (!version) return
+    const record = nextFailureState(this.installFailure, version, Date.now())
+    this.installFailure = record
+    Logger.error(
+      `Updater: install of ${version} failed (attempt ${record.attempts} of ${INSTALL_ATTEMPT_LIMIT})`
+    )
+    try {
+      await this.storage.remove(INSTALL_DISPATCH_FILE)
+      await this.storage.write(INSTALL_FAILURE_FILE, record)
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to persist the install failure record', error)
+    }
+    await this.purgeStaging(record.attempts >= INSTALL_ATTEMPT_LIMIT)
+  }
+
+  private async clearInstallFailure(): Promise<void> {
+    if (this.installFailure === null) return
+    this.installFailure = null
+    try {
+      await this.storage.remove(INSTALL_FAILURE_FILE)
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to clear the install failure record', error)
+    }
+  }
+
+  /**
+   * Drop the staging the platform's installer abandoned, and once the attempts
+   * for this build are used up also the cached payload, so the next retry
+   * fetches fresh bytes instead of replaying the artifact that was rejected.
+   */
+  private async purgeStaging(dropPendingPayload: boolean): Promise<void> {
+    const cacheLocation = resolveUpdaterCacheLocation()
+    let bundleId: string | null = null
+    if (process.platform === 'darwin') {
+      bundleId = await readMacBundleIdentifier(process.resourcesPath)
+      if (bundleId === null) {
+        Logger.dev('Updater: no bundle identifier resolved, skipping ShipIt staging sweep')
+      }
+    }
+    const context: StagingSweepContext = {
+      platform: process.platform,
+      tmpDir: os.tmpdir(),
+      cacheHome: getAppCacheDir(process.platform, os.homedir()),
+      updaterCacheDir: cacheLocation?.cacheDir ?? null,
+      bundleId,
+      appName: app.getName().toLowerCase()
+    }
+    try {
+      await purgeAbandonedInstallStaging(context, { dropPendingPayload })
+    } catch (error: unknown) {
+      Logger.error('Updater: staging sweep failed', error)
     }
   }
 
@@ -603,11 +770,27 @@ export class UpdaterService {
     this.installPending = false
     this.installApproved = false
     this.updateState({ state: 'idle' })
+    // The install runs in a process that outlives us (ShipIt, the NSIS
+    // installer, the AppImage runtime) and reports nothing back, so record what
+    // we handed over. `reconcileInstallDispatch` reads it on the next launch to
+    // learn whether the update actually landed.
+    const targetVersion = this._status.availableVersion
     void this.storage
       .write(PENDING_INSTALL_FILE, { pending: false, approved: false })
       .catch((error: unknown) => {
         Logger.error('Updater: failed to clear pending install', error)
       })
+    if (targetVersion) {
+      this.installDispatched = true
+      void this.storage
+        .write(INSTALL_DISPATCH_FILE, {
+          version: targetVersion,
+          dispatchedAt: Date.now()
+        } satisfies InstallDispatch)
+        .catch((error: unknown) => {
+          Logger.error('Updater: failed to record the install dispatch', error)
+        })
+    }
     // A background update installs silently and, when nothing was on screen,
     // leaves a marker so the relaunched app comes back in the menu bar instead
     // of throwing a window at the user.

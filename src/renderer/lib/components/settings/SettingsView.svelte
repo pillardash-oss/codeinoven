@@ -1350,6 +1350,12 @@
                 Update <strong>{updaterState.status.availableVersion}</strong> ready to install
               </span>
             </div>
+            {#if updaterState.status.blockedReason}
+              <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">
+                <AlertCircle size={13} class="shrink-0" />
+                <span>{updaterState.status.blockedReason}</span>
+              </div>
+            {/if}
           {:else if updaterState.status.state === 'waiting'}
             <div class="mb-3 flex items-center gap-2 text-xs text-accent">
               <Clock size={13} />
