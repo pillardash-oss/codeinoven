@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   clipboard,
   dialog,
+  ipcMain as electronIpcMain,
   Menu,
   screen,
   session,
@@ -15,7 +16,8 @@ import {
 } from 'electron'
 import type { Database } from '../database/database'
 import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Project, Thread } from '../../lib/types'
@@ -240,9 +242,13 @@ import {
   type TabMarkRecogniser
 } from './browser-service/browser-tab-mark'
 import {
+  EXTENSION_PAGE_TABS_CHANNEL,
+  EXTENSION_PAGE_TABS_PRELOAD_FILE,
+  extensionPageTabsPreloadSource,
   extensionPageTabsScript,
   type BrowserExtensionPageTab
 } from './extensions/browser-extension-page-tabs'
+import { BROWSER_EXTENSION_STORE_DIR } from './extensions/browser-extension-registry'
 import {
   BrowserFindSessions,
   browserFindResultFor,
@@ -643,7 +649,11 @@ export class BrowserService {
       tabReplay: (projectId, boxId) => this.extensionTabReplay(projectId, boxId),
       publishActivity: (update) => this.publishExtensionActivity(update),
       publish: () => this.publishExtensions(),
-      openSidePanel: (request) => this.openExtensionSidePanel(request),
+      openSidePanel: (request) => {
+        void this.openExtensionSidePanel(request).catch((error: unknown) => {
+          Logger.error('An extension side panel could not be opened:', error)
+        })
+      },
       closeSidePanel: (extensionId, extensionTabId) =>
         this.sidePanels.closeForExtension(extensionId, extensionTabId, 'the extension closed it')
     })
@@ -800,6 +810,23 @@ export class BrowserService {
 
   register(): void {
     this.guardAgainstStrandedView()
+    // The page-tabs preload is asked for on every document an extension surface
+    // loads, before that page's own scripts exist, so the channel is synchronous
+    // and deliberately raw: a trusted-IPC registration refuses any sender that is
+    // not the app's own renderer, and an extension page is exactly the sender this
+    // answers. The frame check below is that validation, and only a document the
+    // app hosts for an extension can be told anything about a tab.
+    electronIpcMain.removeAllListeners(EXTENSION_PAGE_TABS_CHANNEL)
+    electronIpcMain.on(EXTENSION_PAGE_TABS_CHANNEL, (event, protocol) => {
+      const frame = event.senderFrame
+      event.returnValue =
+        protocol === 'chrome-extension:' && frame && frame.url.startsWith('chrome-extension://')
+          ? this.extensionPageTabForContents(event.sender.id)
+          : null
+    })
+    // Started here so the file exists long before the first extension popup or
+    // panel is created; every path that can wait for it does.
+    void this.ensureExtensionPageTabsPreload()
     replaceHandler(
       'browser:show',
       (_event, rawTabId, rawProjectId, rawThreadId, rawInitialUrl, rawBounds, rawBoxId) => {
@@ -2907,7 +2934,7 @@ export class BrowserService {
       tab.view.webContents.id
     )
     if (actionPanel) {
-      this.openExtensionSidePanel({
+      await this.openExtensionSidePanel({
         projectId,
         boxId: tab.boxId,
         extensionId,
@@ -2930,9 +2957,16 @@ export class BrowserService {
     // The extension has to be loaded in the jar before its own page can resolve: a
     // jar is loaded on demand and does not wait for a popup.
     await this.extensions.ensureJarLoaded(projectId, tab.boxId)
+    // The wrappers that answer this page's `chrome.tabs.query` must be in the
+    // document before the extension's own bundle reads them: a popup decides which
+    // site it is on as it starts, so a push that arrives after `did-finish-load`
+    // lands once the decision was already made from focus. See
+    // `browser-extension-page-tabs.ts`.
+    const preload = await this.ensureExtensionPageTabsPreload()
     const view = new WebContentsView({
       webPreferences: {
         session: this.sessionForProject(projectId, tab.boxId),
+        preload: preload ?? undefined,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -2949,6 +2983,8 @@ export class BrowserService {
     })
     // The wrappers that answer this page's `chrome.tabs.query` live in its
     // document, so every document it arrives with is told which tab it acts on.
+    // The preload above already answered the first document; this is what keeps the
+    // answer current as the page navigates and as the tab behind it changes.
     view.webContents.on('did-finish-load', () => this.reportExtensionPageTabs(tabId))
     try {
       await view.webContents.loadURL(url)
@@ -3109,7 +3145,9 @@ export class BrowserService {
    * document is loaded in the jar the extension runs in, which is the only session
    * its own files resolve in.
    */
-  private openExtensionSidePanel(request: BrowserExtensionSidePanelOpenRequest): void {
+  private async openExtensionSidePanel(
+    request: BrowserExtensionSidePanelOpenRequest
+  ): Promise<void> {
     const appTabId =
       request.extensionTabId === null
         ? this.activeTabIdInProject(request.projectId)
@@ -3131,6 +3169,13 @@ export class BrowserService {
       boxId: request.boxId,
       appTabId,
       extensionTabId: request.extensionTabId ?? tab.view.webContents.id,
+      // Awaited, not read as a field: the panel's document is the extension's own,
+      // so it decides which site it is on as its bundle starts, exactly like an
+      // action popup. Reading the field would hand the first panel of a session a
+      // null preload and leave it with the late push, which is the defect the
+      // preload exists to remove. Null only when the write itself failed, and the
+      // panel then still opens on the push rather than not opening at all.
+      preload: await this.ensureExtensionPageTabsPreload(),
       path: request.path,
       url: request.url
     })
@@ -3584,18 +3629,35 @@ export class BrowserService {
   }
 
   /**
-   * One extension page, told the tab it is acting on.
+   * The tab one extension page acts on, for the preload that asks before the
+   * page's own scripts exist.
    *
-   * The tab is reported with the page's own `WebContents` id and address, which is
-   * what makes an autofill flow correct rather than merely quiet: the extension
-   * messages that id, and the message lands in the page's content script.
+   * Only a `WebContents` this app hosts for an extension can be answered at all:
+   * the two registries below are the app's own record of which tab each extension
+   * surface belongs to, so a document the app is not hosting gets nothing rather
+   * than a guess.
    */
-  private pushExtensionPageTab(tabId: string, contents: WebContents): void {
+  private extensionPageTabForContents(contentsId: number): BrowserExtensionPageTab | null {
+    const tabId =
+      this.popupWindows.tabIdForContents(contentsId) ??
+      this.sidePanels.tabIdForContents(contentsId)
+    if (!tabId) return null
+    return this.extensionPageTabSnapshot(tabId)
+  }
+
+  /**
+   * The page behind an extension surface, as the extension should see it.
+   *
+   * One builder, because two callers need the same answer at different moments:
+   * the preload asks for it before the popup's first script runs, and a push sends
+   * it again whenever the page it describes changes or moves.
+   */
+  private extensionPageTabSnapshot(tabId: string): BrowserExtensionPageTab | null {
     const tab = this.tabs.get(tabId)
-    if (!tab) return
+    if (!tab) return null
     const page: WebContents | undefined = tab.view.webContents
-    if (!page || page.isDestroyed() || contents.isDestroyed()) return
-    const snapshot: BrowserExtensionPageTab = {
+    if (!page || page.isDestroyed()) return null
+    return {
       id: page.id,
       url: page.getURL(),
       title: page.getTitle(),
@@ -3604,6 +3666,19 @@ export class BrowserService {
       audible: page.isCurrentlyAudible(),
       muted: page.isAudioMuted()
     }
+  }
+
+  /**
+   * One extension page, told the tab it is acting on.
+   *
+   * The tab is reported with the page's own `WebContents` id and address, which is
+   * what makes an autofill flow correct rather than merely quiet: the extension
+   * messages that id, and the message lands in the page's content script.
+   */
+  private pushExtensionPageTab(tabId: string, contents: WebContents): void {
+    if (contents.isDestroyed()) return
+    const snapshot = this.extensionPageTabSnapshot(tabId)
+    if (!snapshot) return
     void contents
       .executeJavaScript(extensionPageTabsScript(snapshot), true)
       .catch((error: unknown) => {
@@ -3612,6 +3687,46 @@ export class BrowserService {
           error: error instanceof Error ? error.message : String(error)
         })
       })
+  }
+
+  // ─── The preload that lands in time ────────────────────────────────────────
+
+  /** Where the page-tabs preload was written, or null before it has been, or if
+   *  it could not be written at all. */
+  private extensionPageTabsPreload: string | null = null
+
+  /** The one write, shared by every caller that needs the preload. */
+  private extensionPageTabsPreloadWrite: Promise<string | null> | null = null
+
+  /**
+   * Write the preload an extension page is created with, once per run.
+   *
+   * It has to exist on disk before the first extension surface is created, because
+   * `webPreferences.preload` is a path and a view cannot be built without one, so
+   * the write is started when the service registers and every caller that can wait
+   * does. The content is generated from the same wrapper source main pushes, so the
+   * preload and the push can never describe the page differently.
+   */
+  private ensureExtensionPageTabsPreload(): Promise<string | null> {
+    this.extensionPageTabsPreloadWrite ??= this.writeExtensionPageTabsPreload()
+    return this.extensionPageTabsPreloadWrite
+  }
+
+  private async writeExtensionPageTabsPreload(): Promise<string | null> {
+    const file = join(
+      getConfigRoot(),
+      BROWSER_EXTENSION_STORE_DIR,
+      EXTENSION_PAGE_TABS_PRELOAD_FILE
+    )
+    try {
+      await mkdir(dirname(file), { recursive: true })
+      await writeFile(file, extensionPageTabsPreloadSource(), 'utf8')
+      this.extensionPageTabsPreload = file
+      return file
+    } catch (error: unknown) {
+      Logger.error('The extension page-tabs preload could not be written:', error)
+      return null
+    }
   }
 
   /**
