@@ -370,6 +370,9 @@ export class CodexDriver extends PersistentCliDriver {
       const threadResult = session.nativeSessionId
         ? await this.appServerRequest(host, 'thread/resume', {
             threadId: session.nativeSessionId,
+            // The app keeps its own transcript. Fetching unused native turns
+            // can fail when Codex's history projection schema is unavailable.
+            excludeTurns: true,
             dynamicTools,
             developerInstructions
           })
@@ -1858,6 +1861,7 @@ export class CodexDriver extends PersistentCliDriver {
     // it turns the "thread not found" rejection into a real compaction run.
     await this.appServerRequest(host, 'thread/resume', {
       threadId: nativeThreadId,
+      excludeTurns: true,
       developerInstructions: null
     })
     await new Promise<void>((resolve, reject) => {
@@ -2041,7 +2045,10 @@ export class CodexDriver extends PersistentCliDriver {
       this.contextUsageByThreadId.set(nativeThreadId, { host, resolve, timer })
     })
     try {
-      await this.appServerRequest(host, 'thread/resume', { threadId: nativeThreadId })
+      await this.appServerRequest(host, 'thread/resume', {
+        threadId: nativeThreadId,
+        excludeTurns: true
+      })
     } catch (error) {
       const waiter = this.contextUsageByThreadId.get(nativeThreadId)
       if (waiter) clearTimeout(waiter.timer)
