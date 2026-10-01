@@ -64,6 +64,7 @@ export type GitOperation =
   | 'deployment-run-detail'
   | 'deployment-log'
   | 'deployment-rerun'
+  | 'deployment-cancel'
 
 /** How long a cached PR page or bundle is served without refetching. */
 export const PR_CACHE_TTL_MS = 60_000

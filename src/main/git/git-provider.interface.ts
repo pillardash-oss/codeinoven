@@ -279,6 +279,11 @@ export interface GitProvider {
     mode: WorkflowRerunMode
   }): Promise<void>
   /**
+   * Cancel a queued or in-progress workflow run, stopping its running jobs and
+   * skipping the rest. Needs `actions: write`, so a read-only grant answers 403.
+   */
+  cancelWorkflowRun(input: { owner: string; repo: string; runId: number }): Promise<void>
+  /**
    * Resolve `owner/repo` from a remote URL so PR calls can target the right
    * repository without asking the user for an extra identity.
    */

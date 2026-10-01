@@ -247,6 +247,37 @@ export class GitDeploymentCache {
   }
 
   /**
+   * Cancel a queued or in-progress workflow run, then drop the cached views so
+   * the run is read again as it settles into `cancelled` instead of showing the
+   * stale active state. Returns false when GitHub refused (the reason lands in
+   * `error`).
+   */
+  async cancelWorkflowRun(
+    projectId: string,
+    owner: string,
+    repo: string,
+    runId: number
+  ): Promise<boolean> {
+    this.markBusy('deployment-cancel', true)
+    this.setError(null)
+    this.setGitHubPermission(null)
+    try {
+      const result = await invoke('deployment:cancelRun', projectId, owner, repo, runId)
+      if (result.status === 'permission_required') {
+        this.setGitHubPermission(result)
+        return false
+      }
+      this.invalidateWorkflowRun(owner, repo, runId)
+      return true
+    } catch (reason) {
+      this.setError(errorMessage(reason, 'The workflow run could not be cancelled'))
+      return false
+    } finally {
+      this.markBusy('deployment-cancel', false)
+    }
+  }
+
+  /**
    * Forget everything a re-run invalidates for one run: the run detail, its job
    * logs (a re-run replaces them), the deployment that owns it, and the overview
    * list that shows its state. The deployment is matched by dropping the whole

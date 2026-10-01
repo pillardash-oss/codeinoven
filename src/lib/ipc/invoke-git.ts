@@ -56,6 +56,7 @@ import type {
   PullRequestReviewResult,
   RepositoryMentionUser,
   ThreadSettings,
+  WorkflowCancelResult,
   WorkflowRerunMode,
   WorkflowRerunResult
 } from '../types'
@@ -434,6 +435,15 @@ export const invokeGitContract = {
   'deployment:rerunRun': {} as Contract<
     [projectId: string, owner: string, repo: string, runId: number, mode: WorkflowRerunMode],
     WorkflowRerunResult
+  >,
+  /**
+   * Cancel a queued or in-progress workflow run, which stops its running jobs
+   * and skips the rest. Returns the mutation envelope so a read-only grant
+   * surfaces its permission prompt instead of a bare failure.
+   */
+  'deployment:cancelRun': {} as Contract<
+    [projectId: string, owner: string, repo: string, runId: number],
+    WorkflowCancelResult
   >,
   /**
    * Read a project's cloud deployment config, or null when none exists. The

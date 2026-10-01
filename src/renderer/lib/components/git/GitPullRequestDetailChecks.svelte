@@ -4,6 +4,7 @@
   import { gitState } from '$lib/stores/git.svelte'
   import type { GitHubDeploymentJobLog, PullRequestCheck, PullRequestChecks } from '$shared/types'
   import GitJobLogView from './GitJobLogView.svelte'
+  import CancelRunButton from './CancelRunButton.svelte'
   import RerunRunMenu from './RerunRunMenu.svelte'
   import { jobForCheck } from './pr-check-job'
   import {
@@ -173,6 +174,19 @@
             hasFailedJobs
             compact
             onRerun={() => void onRefresh()}
+          />
+        {/if}
+        {#if !checkFailed(check) && runId !== null}
+          <!-- A running check is a job in flight, and GitHub exposes no per-job
+               cancel, so skipping it means cancelling the run that owns it. The
+               control renders only while the check is queued or in progress. -->
+          <CancelRunButton
+            {projectId}
+            {identity}
+            {runId}
+            runStatus={check.status}
+            compact
+            onCancelled={() => void onRefresh()}
           />
         {/if}
         {#if check.url}

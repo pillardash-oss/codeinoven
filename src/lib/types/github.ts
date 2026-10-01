@@ -855,3 +855,10 @@ export type WorkflowRerunMode = 'all' | 'failed'
 
 /** A workflow re-run answers with an empty body, so the result carries no value. */
 export type WorkflowRerunResult = GitHubMutationResult<null>
+
+/**
+ * A workflow-run cancel answers with an empty body, so the result carries no
+ * value. GitHub has no per-job cancel endpoint: a job is skipped by cancelling
+ * the run that owns it.
+ */
+export type WorkflowCancelResult = GitHubMutationResult<null>
