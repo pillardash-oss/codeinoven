@@ -79,6 +79,11 @@ export const invokeAssistantContract = {
    * evicted or deleted still shows what happened.
    */
   'assistant:listBackgroundRuns': {} as Contract<[], BackgroundRun[]>,
+  /**
+   * Acknowledge one unattended run, removing its durable ledger entry so it
+   * leaves the "While you were away" surface and every routine history.
+   */
+  'assistant:dismissBackgroundRun': {} as Contract<[id: string], void>,
   'assistant:dismissMissedRun': {} as Contract<[id: string], void>,
   /**
    * Gates the app resolved without the user (a question whose timer answered

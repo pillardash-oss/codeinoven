@@ -201,6 +201,18 @@ export class RoutineRepo {
   }
 
   /**
+   * One routine, read on the worker's connection. Interaction paths (a settled
+   * run's notification naming its routine, say) use this instead of `get`, so a
+   * synchronous read never holds the Electron main thread.
+   */
+  async getViaWorker(id: string): Promise<Routine | null> {
+    const result = await this.db.queryViaWorker('SELECT * FROM routines WHERE id = ?', [id], 1)
+    if (!result.ok) return null
+    const row = (result.rows as unknown as RoutineRow[])[0]
+    return row ? rowToRoutine(row) : null
+  }
+
+  /**
    * Every routine, in a stable storage order. Sidebar order is applied on top
    * of this by `RoutineManager.listRoutines` through the shared comparator, so
    * this one never has to agree with the sidebar about anything but being

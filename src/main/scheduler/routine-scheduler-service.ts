@@ -154,6 +154,15 @@ export class RoutineSchedulerService {
   }
 
   /**
+   * Acknowledge one unattended run: drop its ledger entry and push the fresh
+   * list, so the "While you were away" surface and every routine history lose
+   * the row. A no-op for an id the ledger does not hold.
+   */
+  dismissBackgroundRun(id: string): void {
+    if (this.deps.backgroundLedger?.dismiss(id)) this.notifyChange()
+  }
+
+  /**
    * Forget everything the scheduler holds for a routine that is being removed:
    * its pending missed runs, which would otherwise keep badging until the next
    * launch, and the in-flight run bookkeeping of its tasks.

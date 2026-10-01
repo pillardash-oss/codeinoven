@@ -9,10 +9,12 @@ import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { AssignmentRepo } from '../database/repositories/assignment-repo'
+import { RoutineRepo } from '../database/repositories/routine-repo'
 import {
   ASSISTANT_SPACE_ID,
   GLOBAL_BROWSER_PROJECT_ID,
   INBOX_PROJECT_ID,
+  isAssistantSetupThread,
   isOrchestrationChildThread,
   type Thread,
   type ThreadStatus
@@ -115,6 +117,7 @@ export class NotificationService {
   private readonly projectRepo: ProjectRepo
   private readonly threadRepo: ThreadRepo
   private readonly assignmentRepo: AssignmentRepo
+  private readonly routineRepo: RoutineRepo
   private readonly onThreadClicked: ThreadClickedHandler
   private readonly lastObservedStatus = new Map<string, ThreadStatus>()
   private readonly activeNotifications = new Map<string, Notification>()
@@ -142,6 +145,7 @@ export class NotificationService {
     this.projectRepo = new ProjectRepo(db)
     this.threadRepo = new ThreadRepo(db)
     this.assignmentRepo = new AssignmentRepo(db)
+    this.routineRepo = new RoutineRepo(db)
     this.onThreadClicked = onThreadClicked
 
     // Register IPC handlers eagerly: the renderer's settings panel can query
@@ -558,7 +562,7 @@ export class NotificationService {
 
     if (this.lastObservedStatus.get(threadKey) !== thread.status) return
 
-    const payload = this.notificationPayload(
+    const payload = await this.notificationPayload(
       thread,
       projectName || APP_NAME,
       projectColor,
@@ -884,19 +888,43 @@ export class NotificationService {
     return 'project'
   }
 
-  private notificationPayload(
+  /**
+   * The routine name a completed assistant run reports for, or an empty string
+   * when the thread is not a routine's run/task (a routine-less task or the
+   * authoring thread). Read through the worker so naming a notification never
+   * holds the main thread on a synchronous SQLite read.
+   */
+  private async assistantRoutineName(thread: Thread): Promise<string> {
+    if (!thread.routineId || isAssistantSetupThread(thread)) return ''
+    try {
+      return (await this.routineRepo.getViaWorker(thread.routineId))?.name.trim() ?? ''
+    } catch (error) {
+      Logger.dev('Notification routine name resolution failed:', error)
+      return ''
+    }
+  }
+
+  private async notificationPayload(
     thread: Thread,
     projectName: string,
     projectColor: string | undefined,
     source: NotificationSource
-  ): AgentNotificationPayload {
+  ): Promise<AgentNotificationPayload> {
     const kind: AgentNotificationKind =
       threadStatusPolicy(thread.status).notificationKind ?? 'error'
     const isAssistant = source === 'assistant'
     const displayName = source === 'chat' ? 'Chat' : isAssistant ? 'Assistant' : projectName
+    // A completed routine run produces a written report, so its notification
+    // names that report and whose routine it is instead of a bare "Assistant
+    // Done". The routine's name is the run's identity the user actually
+    // recognises, so it becomes the body, right under the title.
+    const routineName =
+      isAssistant && kind === 'completed' ? await this.assistantRoutineName(thread) : ''
     const title =
       kind === 'completed'
-        ? `${displayName} Done`
+        ? routineName
+          ? 'Routine report ready'
+          : `${displayName} Done`
         : kind === 'attention'
           ? `${displayName} needs attention`
           : kind === 'spec'
@@ -919,9 +947,11 @@ export class NotificationService {
     // the project it "finished in" would read as a project thread.
     const body =
       kind === 'completed'
-        ? isAssistant
-          ? `${thread.title} finished.`
-          : `${thread.title} finished in ${projectName}.`
+        ? routineName
+          ? routineName
+          : isAssistant
+            ? `${thread.title} finished.`
+            : `${thread.title} finished in ${projectName}.`
         : kind === 'attention'
           ? isAssistant
             ? `${thread.title} is waiting for your input.`

@@ -11,6 +11,7 @@ import {
 import { routineFirstHowToSave } from '../../../lib/types'
 import {
   broadcastAutoAnswersChanged,
+  broadcastBackgroundRunsChanged,
   broadcastMissedRunsChanged,
   broadcastRoutinesChanged
 } from '../../scheduler/assistant-events'
@@ -403,6 +404,15 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   // table, so a run whose thread was evicted or deleted still reports what
   // happened on the "While you were away" surfaces.
   ipcMain.handle('assistant:listBackgroundRuns', () => requireScheduler().listBackgroundRuns())
+
+  // Acknowledge one unattended run so it leaves the "While you were away"
+  // surface for good. The ledger owns the durable removal; the fresh list is
+  // pushed so every open panel and routine history updates together.
+  ipcMain.handle('assistant:dismissBackgroundRun', (_, id: unknown) => {
+    const scheduler = requireScheduler()
+    scheduler.dismissBackgroundRun(requireString(id, 'Background run ID').slice(0, 300))
+    broadcastBackgroundRunsChanged(scheduler.listBackgroundRuns())
+  })
 
   ipcMain.handle('assistant:listAutoAnswers', () => ctx.autoAnswerStore?.list() ?? [])
 
