@@ -22,6 +22,9 @@
   let workspace = $state(false)
   let selected = $state(LOCAL_OVEN_ID)
   let root = $state('')
+  let harness = $state('codex')
+  let provider = $state('')
+  let model = $state('')
   let saving = $state(false)
   let error = $state('')
   let current = $derived(
@@ -50,6 +53,9 @@
   async function openEditor(): Promise<void> {
     selected = settings.ovenId ?? LOCAL_OVEN_ID
     root = settings.ovenPath ?? ''
+    harness = settings.harnessId
+    provider = settings.providerId
+    model = settings.modelId
     error = ''
     try {
       ovens = await invoke('oven:state')
@@ -65,7 +71,17 @@
     try {
       // Persist the settings first because a new thread can still have its initial
       // model only in the composer. The selection endpoint owns the busy guard.
-      await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
+      const nextSettings =
+        selected === LOCAL_OVEN_ID
+          ? settings
+          : {
+              ...settings,
+              harnessId: harness,
+              providerId: provider.trim(),
+              modelId: model.trim(),
+              accountId: harness === settings.harnessId ? settings.accountId : undefined
+            }
+      await invoke('thread:updateSettings', thread.projectId, thread.id, nextSettings)
       const updated = await invoke(
         'oven:selectThread',
         thread.projectId,
@@ -143,6 +159,40 @@
     </label>
     {#if selected !== LOCAL_OVEN_ID}
       <label class="block space-y-1 text-xs text-muted"
+        >Harness on Oven
+        <select
+          class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
+          bind:value={harness}
+          onchange={() => {
+            provider = ''
+            model = ''
+          }}
+        >
+          <option value="codex">Codex</option>
+          <option value="claude-code">Claude Code</option>
+          <option value="opencode">OpenCode</option>
+          <option value="pi">Pi</option>
+          <option value="muse">Muse</option>
+          <option value="cline">Cline</option>
+        </select>
+      </label>
+      <label class="block space-y-1 text-xs text-muted"
+        >Provider, optional
+        <input
+          class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
+          bind:value={provider}
+          placeholder="Use the Oven's configured provider"
+        />
+      </label>
+      <label class="block space-y-1 text-xs text-muted"
+        >Model, optional
+        <input
+          class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
+          bind:value={model}
+          placeholder="Use the Oven's configured model"
+        />
+      </label>
+      <label class="block space-y-1 text-xs text-muted"
         >Workspace on this Oven
         <input
           class="w-full rounded-lg border bg-elevated px-3 py-2 font-mono text-sm text-foreground"
@@ -183,6 +233,9 @@
     {ovens}
     onUseRoot={async (path) => {
       selected = settings.ovenId ?? LOCAL_OVEN_ID
+      harness = settings.harnessId
+      provider = settings.providerId
+      model = settings.modelId
       root = path
       await select()
       if (error) throw new Error(error)

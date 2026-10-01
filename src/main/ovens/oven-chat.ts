@@ -158,6 +158,7 @@ export class OvenChat {
         settings.accountId
       )
       const environment = await syncOvenAccount(this.service, this.accounts, ovenId, account)
+      if (settings.harnessId === 'cline') environment.CLINE_SESSION_BACKEND_MODE = 'local'
       const previous = await this.storage.read<Binding>(this.path(thread))
       const messages = await this.threads.loadMessages(thread.projectId, thread.id)
       const userId = userMessageId || randomUUID()
@@ -399,7 +400,7 @@ export class OvenChat {
             String(full),
             '-c',
             session.projectPathHash,
-            prompt
+            /\s/u.test(prompt) ? prompt : `${prompt}\n`
           ],
           closeInput: true
         }
@@ -767,6 +768,33 @@ export class OvenChat {
         ))
     )
       throw new Error('Invalid question answers.')
+    if (live.binding.settings.harnessId !== 'claude-code') {
+      // These headless CLIs resume a question through a continuation turn, rather
+      // than Claude's stdin control protocol. Preserve the resolution on replay.
+      live.questions.delete(requestId)
+      live.binding.resolved = [...(live.binding.resolved ?? []), requestId]
+      await this.storage.write(this.path(thread), live.binding)
+      this.publish({
+        type: 'question.resolved',
+        sessionId: live.binding.session.id,
+        requestId,
+        resolution: answers ? 'answered' : 'dismissed',
+        ...(answers ? { answers } : {})
+      })
+      await this.stop(thread)
+      const continuation = answers
+        ? question.questions
+            .map((item, index) => `${item.prompt}\n${answers[index].join(', ')}`)
+            .join('\n\n')
+        : 'The user dismissed the question. Continue without that answer or explain why the task cannot continue.'
+      await this.send(
+        thread,
+        live.binding.settings,
+        `The user responded to the earlier question through CodeInOven:\n${continuation}\nContinue from this response without repeating the same question.`,
+        []
+      )
+      return
+    }
     const input = question.metadata?.input as Record<string, unknown> | undefined
     const updatedInput = {
       ...input,

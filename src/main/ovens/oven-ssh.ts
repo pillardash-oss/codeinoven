@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createServer, type Socket } from 'node:net'
 import { mkdir, mkdtemp, writeFile, rm, readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
@@ -7,6 +8,13 @@ import type { OvenRegistry } from './oven-registry'
 type OvenSshRegistry = Pick<OvenRegistry, 'require'> & {
   storage: Pick<OvenRegistry['storage'], 'resolve'>
   vault: Pick<OvenRegistry['vault'], 'resolve'>
+}
+
+export interface OvenSshInvocation {
+  executable: string
+  args: string[]
+  env: NodeJS.ProcessEnv
+  dispose: () => Promise<void>
 }
 
 /** SSH always invokes a remote shell. Quote each argument at that boundary. */
@@ -32,6 +40,38 @@ export class OvenSsh {
       })
     this.tail = result
     return result
+  }
+
+  /** Bound SSH direct TCP channels. Each channel streams with backpressure. */
+  async tunnel(id: string, remotePort: number): Promise<{ port: number; close: () => void }> {
+    if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535)
+      throw new Error('Choose a valid development-server port.')
+    this.initialized ??= this.cleanStaleCredentials()
+    await this.initialized
+    const sockets = new Set<Socket>()
+    const server = createServer((socket) => {
+      if (sockets.size >= 4) {
+        socket.destroy()
+        return
+      }
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
+      void this.run(id, '', '', 0, { socket, remotePort }).catch(() => socket.destroy())
+    })
+    server.maxConnections = 4
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('The SSH tunnel could not open.')
+    return {
+      port: address.port,
+      close: () => {
+        for (const socket of sockets) socket.destroy()
+        server.close()
+      }
+    }
   }
 
   /** Reclaim private identity files left by a crash without touching a live connection. */
@@ -63,12 +103,15 @@ export class OvenSsh {
     }
   }
 
-  private async run(
+  /** Prepare one SSH launch, sharing auth and cleanup with terminals and actions. */
+  async prepare(
     id: string,
-    command: string,
-    input: string,
-    timeoutMs: number
-  ): Promise<string> {
+    command: string | undefined,
+    tty = false,
+    directPort?: number
+  ): Promise<OvenSshInvocation> {
+    this.initialized ??= this.cleanStaleCredentials()
+    await this.initialized
     const oven = await this.registry.require(id)
     const connection = oven.connection
     if (!connection) throw new Error('This Oven has no SSH connection.')
@@ -76,7 +119,7 @@ export class OvenSsh {
     const executable = resolveExecutablePath('ssh', env)
     if (!executable) throw new Error('Install OpenSSH on this computer to connect to Ovens.')
     const args = [
-      '-T',
+      tty ? '-tt' : '-T',
       '-p',
       String(connection.port),
       '-o',
@@ -130,13 +173,47 @@ export class OvenSsh {
           env['CIO_OVEN_KEY_PASSPHRASE'] = await this.registry.vault.resolve(oven.passphraseRef)
         }
       }
+      if (directPort !== undefined) args.push('-W', `127.0.0.1:${directPort}`)
       args.push(
         '-o',
         `BatchMode=${env['SSH_ASKPASS'] ? 'no' : 'yes'}`,
         '--',
         connection.host,
-        command
+        ...(command === undefined ? [] : [command])
       )
+      return {
+        executable,
+        args,
+        env,
+        dispose: async () => {
+          delete env['CIO_OVEN_KEY_PASSPHRASE']
+          if (scratch) await rm(scratch, { recursive: true, force: true })
+        }
+      }
+    } catch (error) {
+      delete env['CIO_OVEN_KEY_PASSPHRASE']
+      if (scratch) await rm(scratch, { recursive: true, force: true })
+      throw error
+    }
+  }
+
+  private async run(
+    id: string,
+    command: string,
+    input: string,
+    timeoutMs: number,
+    channel?: { socket: Socket; remotePort: number }
+  ): Promise<string> {
+    if (channel?.socket.destroyed) throw new Error('The preview connection closed.')
+    const prepared = await this.prepare(
+      id,
+      channel ? undefined : command,
+      false,
+      channel?.remotePort
+    )
+    const { executable, args, env } = prepared
+    try {
+      if (channel?.socket.destroyed) throw new Error('The preview connection closed.')
       return await new Promise<string>((resolve, reject) => {
         const child = spawn(executable, args, {
           env,
@@ -148,10 +225,13 @@ export class OvenSsh {
         let failure: Error | undefined
         let timedOut = false
         let sshIssue = 'Check authentication and trust this host with OpenSSH before reconnecting.'
-        const timer = setTimeout(() => {
-          timedOut = true
-          child.kill('SIGKILL')
-        }, timeoutMs)
+        const timer =
+          timeoutMs > 0
+            ? setTimeout(() => {
+                timedOut = true
+                child.kill('SIGKILL')
+              }, timeoutMs)
+            : undefined
         const capture = (chunk: Buffer): void => {
           bytes += chunk.length
           if (bytes > 2 * 1024 * 1024) {
@@ -161,7 +241,12 @@ export class OvenSsh {
           }
           output += chunk.toString('utf8')
         }
-        child.stdout.on('data', capture)
+        if (channel) {
+          channel.socket.pipe(child.stdin)
+          child.stdout.pipe(channel.socket)
+          channel.socket.once('close', () => child.kill('SIGTERM'))
+          channel.socket.once('error', () => child.kill('SIGTERM'))
+        } else child.stdout.on('data', capture)
         // Recognize failures without echoing server/config stderr or credential paths.
         child.stderr.on('data', (chunk: Buffer) => {
           const text = chunk.toString('utf8')
@@ -200,11 +285,10 @@ export class OvenSsh {
             reject(new Error(`SSH connection failed (${code ?? 'disconnected'}). ${sshIssue}`))
           else resolve(output)
         })
-        child.stdin.end(input)
+        if (!channel) child.stdin.end(input)
       })
     } finally {
-      delete env['CIO_OVEN_KEY_PASSPHRASE']
-      if (scratch) await rm(scratch, { recursive: true, force: true })
+      await prepared.dispose()
     }
   }
 }

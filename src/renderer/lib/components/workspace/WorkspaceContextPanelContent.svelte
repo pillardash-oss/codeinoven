@@ -35,6 +35,7 @@
     terminalFullscreenTabId: string | null
     browserFullscreenTabId: string | null
     activeProject: Project | null
+    selectedThread?: Thread | null
     projectIcons: SvelteMap<string, string>
     browser: WorkspaceBrowserController
     coordinator: ReturnType<typeof coordinatorDockState.forThread>
@@ -55,6 +56,7 @@
     terminalFullscreenTabId,
     browserFullscreenTabId,
     activeProject,
+    selectedThread = null,
     projectIcons,
     browser,
     coordinator,
@@ -96,6 +98,16 @@
    * cannot ride a translate: the box it reports as the view's bounds would move
    * with the transform. It fades instead, which leaves its geometry alone.
    */
+  let remoteThread = $derived(
+    selectedThread?.settings?.ovenId &&
+      selectedThread.settings.ovenId !== 'local' &&
+      activeContextTab &&
+      'projectId' in activeContextTab &&
+      activeContextTab.projectId === selectedThread.projectId
+      ? selectedThread
+      : null
+  )
+
   let activePanelIsBrowser = $derived(activeContextTab?.kind === 'browser')
 
   /** The thread whose own workspace the file tree mounts. Only a chat or an
@@ -148,7 +160,7 @@
   })
 </script>
 
-{#if gitPanelProjectId}
+{#if gitPanelProjectId && !remoteThread}
   {#key gitPanelProjectId}
     {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
       <div class="h-full" style:display={activeContextTab?.kind === 'git' ? 'block' : 'none'}>
@@ -178,7 +190,13 @@
         in:fly={panelReveal(activePanelIsBrowser)}
         out:fly={panelReveal(true)}
       >
-        {#if activeContextTab.kind === 'files'}
+        {#if remoteThread && ['files', 'git', 'diff'].includes(activeContextTab.kind)}
+          {#key `${remoteThread.id}:${remoteThread.settings?.ovenId}:${remoteThread.settings?.ovenPath}`}
+            {#await import('../threads/OvenWorkspacePanel.svelte') then { default: OvenWorkspacePanel }}
+              <OvenWorkspacePanel thread={remoteThread} />
+            {/await}
+          {/key}
+        {:else if activeContextTab.kind === 'files'}
           {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
             <ProjectFilesPanel
               projectId={activeContextTab.projectId}

@@ -744,6 +744,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       import('../notifications/notification-service')
     ])
 
+    const { ovenTerminalLaunch } = await import('../ovens/oven-terminal')
     state.ptyService = new PtyService(
       storage,
       database,
@@ -762,7 +763,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         // User typed in a project terminal   open a user-activity window so
         // their shell-driven edits are excluded from concurrent agent turns.
         state.chatEngine?.recordUserTerminalInput(projectId, projectPath)
-      }
+      },
+      ovenTerminalLaunch(storage, vault, database)
     )
     // A probe that changes a harness's install state (new install, version
     // bump) invalidates cached provider catalogs so the model picker reflects

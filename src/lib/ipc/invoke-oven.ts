@@ -23,6 +23,7 @@ export const invokeOvenContract = {
   'oven:workspace': {} as Contract<[id: string, input: OvenWorkspaceRequest], OvenWorkspaceResult>,
   'oven:reviewTransfer': {} as Contract<[input: OvenTransferInput], OvenTransferReview>,
   'oven:transfer': {} as Contract<[reviewId: string], OvenTransferReview>,
+  'oven:previewPort': {} as Contract<[id: string, port: number], string>,
   'oven:preview': {} as Contract<[id: string, root: string], string>,
   'oven:selectThread': {} as Contract<
     [projectId: string, threadId: string, id: string, root?: string],

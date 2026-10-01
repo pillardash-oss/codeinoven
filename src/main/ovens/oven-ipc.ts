@@ -47,6 +47,11 @@ export function registerOvenIpc(
     })
   })
   ipcMain.handle('oven:transfer', (_event, raw: unknown) => transfers.execute(ovenId(raw)))
+  ipcMain.handle('oven:previewPort', (_event, raw: unknown, port: unknown) => {
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535)
+      throw new Error('Choose a valid server port.')
+    return previews.openPort(ovenId(raw), port)
+  })
   ipcMain.handle('oven:preview', (_event, raw: unknown, root: unknown) => {
     if (typeof root !== 'string' || root.length > 4096)
       throw new Error('Invalid preview directory.')
@@ -70,12 +75,17 @@ export function registerOvenIpc(
       const binding = await storage.read<{ finished: boolean; ovenId: string; runId: string }>(
         `ovens/threads/${projectId}/${id}.json`
       )
-      if (
-        binding &&
-        !binding.finished &&
-        (await service.events(binding.ovenId, binding.runId, 0)).run.status === 'running'
-      )
-        throw new Error('The Oven is still working on this chat. Finish or stop its turn first.')
+      if (binding && !binding.finished) {
+        try {
+          if ((await service.events(binding.ovenId, binding.runId, 0)).run.status === 'running')
+            throw new Error(
+              'The Oven is still working on this chat. Finish or stop its turn first.'
+            )
+        } catch (error) {
+          if (!(error instanceof Error && error.message === 'The remote run does not exist.'))
+            throw error
+        }
+      }
       if (oven !== LOCAL_OVEN_ID) await registry.require(oven)
       await threads.clearSessionId(projectId, id)
       return threads.updateSettings(projectId, id, {

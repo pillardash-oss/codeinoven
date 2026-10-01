@@ -10,6 +10,7 @@
 
   interface Props {
     open: boolean
+    embedded?: boolean
     ovenId: string
     root: string
     thread: Thread
@@ -17,7 +18,8 @@
     onClose: () => void
     onUseRoot: (root: string) => Promise<void>
   }
-  let { open, ovenId, root, thread, ovens, onClose, onUseRoot }: Props = $props()
+  let { open, embedded = false, ovenId, root, thread, ovens, onClose, onUseRoot }: Props = $props()
+  const uid = $props.id()
   let workspaceRoot = $state('')
   let path = $state('')
   let files = $state.raw<OvenFile[]>([])
@@ -28,6 +30,7 @@
   let busy = $state(false)
   let error = $state('')
   let preview = $state('')
+  let previewPort = $state(5173)
   let source = $state(LOCAL_OVEN_ID)
   let sourceRoot = $state('')
   let target = $state('')
@@ -150,7 +153,7 @@
   }
 </script>
 
-<Modal {open} title="Oven workspace" {onClose} size="xl">
+{#snippet workspaceBody()}
   <div class="space-y-4">
     <form
       class="flex gap-2"
@@ -217,6 +220,28 @@
           })}>Create preview link</button
       >
     </div>
+    <form
+      class="flex items-center gap-2"
+      onsubmit={(event) => {
+        event.preventDefault()
+        void run(async () => {
+          preview = await invoke('oven:previewPort', ovenId, previewPort)
+        })
+      }}
+    >
+      <label class="text-xs text-muted" for={`${uid}-preview-port`}>Server port</label>
+      <input
+        id={`${uid}-preview-port`}
+        type="number"
+        min="1"
+        max="65535"
+        class="w-24 rounded-lg border bg-elevated px-2 py-1 text-xs"
+        bind:value={previewPort}
+      />
+      <button type="submit" class="rounded-lg border px-3 py-1.5 text-xs" disabled={busy}
+        >Preview running app</button
+      >
+    </form>
     {#if preview}<a
         href={preview}
         target="_blank"
@@ -350,13 +375,21 @@
     {#if busy}<p class="text-xs text-muted" role="status">Working on the Oven…</p>{/if}
     {#if error}<p class="text-xs text-danger" role="alert">{error}</p>{/if}
   </div>
-  {#snippet footer()}<button
-      type="button"
-      data-modal-primary
-      class="rounded-lg bg-primary px-4 py-2 text-sm text-on-primary"
-      onclick={onClose}>Close</button
-    >{/snippet}
-</Modal>
+{/snippet}
+
+{#if embedded}
+  <div class="h-full overflow-y-auto p-3">{@render workspaceBody()}</div>
+{:else}
+  <Modal {open} title="Oven workspace" {onClose} size="xl">
+    {@render workspaceBody()}
+    {#snippet footer()}<button
+        type="button"
+        data-modal-primary
+        class="rounded-lg bg-primary px-4 py-2 text-sm text-on-primary"
+        onclick={onClose}>Close</button
+      >{/snippet}
+  </Modal>
+{/if}
 
 <ConfirmDialog
   open={confirmSave}
