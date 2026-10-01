@@ -489,6 +489,12 @@ export class PiDriver extends PersistentCliDriver {
           toolcall: true,
           ...(numberValue(model['contextWindow'])
             ? { contextWindow: numberValue(model['contextWindow']) }
+            : {}),
+          // Pi's model record names the response limit `maxTokens`; surfacing it
+          // lets the app reserve the model's real completion budget instead of
+          // its small default when it composes a turn.
+          ...(numberValue(model['maxTokens'])
+            ? { maxOutputTokens: numberValue(model['maxTokens']) }
             : {})
         })
         byProvider.set(providerId, list)

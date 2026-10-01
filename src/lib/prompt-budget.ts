@@ -8,30 +8,37 @@
  */
 
 /**
- * Maximum share of the aggregate input allowance the history recap may take.
- *
- * A rebuilt (fresh-session) turn   a fork, harness switch, or model handoff  
- * replays prior history as a recap. When that recap is allowed to fill the
- * whole input allowance, the very first turn lands the native session at ~95%
- * of the context window, so the harness's own auto-compaction fires on almost
- * every subsequent turn (each compaction is an expensive summarize request
- * that drains provider usage). Capping the recap leaves real conversational
- * headroom before the harness's compaction threshold is reached.
+ * Share of the usable input at which the app checkpoints a session. Mirrors
+ * `COMPACT_WINDOW_SHARE` in the Pi compaction extension: the checkpoint fires
+ * once the request reaches this much of what the provider actually accepts
+ * (the model window minus the reserved completion budget).
  */
-export const RECAP_MAX_INPUT_RATIO = 0.6
+export const COMPACT_LINE_SHARE = 0.85
 
 /**
- * Absolute ceiling on the restored history recap, in tokens, independent of
- * the selected model's context window.
+ * Maximum share of the checkpoint line the restored history recap may take.
  *
- * The ratio cap alone scales with the window, so on a large-window model the
- * recap can still land at hundreds of thousands of tokens and start the first
- * turn of a rebuilt session near its checkpoint line (the trigger then fires on
- * nearly every request). This ceiling keeps the replay useful for continuity
- * across an account switch, a harness switch, or an edited history without
- * letting it dominate the prompt.
+ * A rebuilt (fresh-session) turn   a fork, account switch, harness switch, or
+ * an edited history   replays prior history as a recap. The recap must leave
+ * real conversational headroom below the checkpoint line, so it is capped at
+ * this share of that line: on a model whose checkpoint line is 100 tokens the
+ * recap may take 60. The value is proportional, never a fixed token count, so
+ * it stays correct on both a small-window and a 1M-window model.
  */
-export const RECAP_ABSOLUTE_MAX_TOKENS = 60_000
+export const RECAP_MAX_LINE_SHARE = 0.6
+
+/** Tokens at which the app checkpoints a session for the given usable input. */
+export function compactionLineTokens(availableInputTokens: number): number {
+  return Math.floor(Math.max(0, availableInputTokens) * COMPACT_LINE_SHARE)
+}
+
+/**
+ * Most tokens the restored history recap may occupy: `RECAP_MAX_LINE_SHARE` of
+ * the checkpoint line, so the replay can never itself reach the trigger.
+ */
+export function recapTokenBudget(availableInputTokens: number): number {
+  return Math.floor(compactionLineTokens(availableInputTokens) * RECAP_MAX_LINE_SHARE)
+}
 
 /** Fallback context window when the selected model reports none. */
 export const DEFAULT_PROMPT_BUDGET = {
@@ -206,8 +213,7 @@ export function budgetTurnLayers(
   const recapTokens = Math.min(
     Math.max(0, layers.recapTokens),
     remaining,
-    Math.floor(availableInputTokens * RECAP_MAX_INPUT_RATIO),
-    RECAP_ABSOLUTE_MAX_TOKENS
+    recapTokenBudget(availableInputTokens)
   )
   return {
     hiddenTokens,

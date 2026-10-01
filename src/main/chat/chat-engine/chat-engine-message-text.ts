@@ -7,7 +7,7 @@ import type {
   PromptProjectReference,
   PromptReference
 } from '../../../lib/types'
-import { truncateToTokenBudget } from '../../../lib/prompt-budget'
+import { estimateTextTokens, truncateToTokenBudget } from '../../../lib/prompt-budget'
 import type { MermaidValidationFailure } from '../mermaid-output-validator'
 
 export const QUESTION_ANSWER_MESSAGE_PREFIX = 'question-answer-'
@@ -290,15 +290,20 @@ export function formatHistoryRecap(
         : messages.slice(latestCompactionIndex)
   const transcript = formatConversationTranscript(relevantMessages, { includeHidden: true })
   if (!transcript) return ''
+  const prefix = 'This thread continues an earlier conversation. Transcript restored from history:'
+  const trailer = 'Continue seamlessly from that context.'
   // Character-bound callers (temporary chats) still get a generous token
   // budget   50k keeps most of a long coding thread intact instead of the
-  // tail-only slice that starved temporary chats of anchor context.
-  const budgetedTranscript = truncateToTokenBudget(transcript, options.maxInputTokens ?? 50_000)
-  return [
-    'This thread continues an earlier conversation. Transcript restored from history:',
-    budgetedTranscript,
-    'Continue seamlessly from that context.'
-  ].join('\n\n')
+  // tail-only slice that starved temporary chats of anchor context. The
+  // wrapper is reserved before the transcript so the continuation instruction
+  // always survives: truncating the assembled recap later would otherwise cut
+  // the trailer off with the tail.
+  const wrapperTokens = estimateTextTokens(prefix) + estimateTextTokens(trailer) + 2
+  const budgetedTranscript = truncateToTokenBudget(
+    transcript,
+    Math.max(0, (options.maxInputTokens ?? 50_000) - wrapperTokens)
+  )
+  return [prefix, budgetedTranscript, trailer].join('\n\n')
 }
 
 export function assistantText(message: AgentMessage): string {
