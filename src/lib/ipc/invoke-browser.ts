@@ -24,6 +24,7 @@ import type { Contract } from './contract-helpers'
 import type { BrowserSearchEngine } from '../browser-search-engines'
 import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
 import type { BrowserBookmarksSnapshot, BrowserHistorySnapshot } from '../browser/browser-library'
+import type { BrowserBoxMenuChoice, BrowserBoxMenuInput } from '../browser/browser-box-menu'
 import type {
   BrowserOverlayAck,
   BrowserOverlaySnapshot,
@@ -118,7 +119,10 @@ export const invokeBrowserContract = {
    */
   'browser:closeExtensionSidePanel': {} as Contract<[extensionId: string], void>,
   /** The extension side panels the rail is hosting for one project. */
-  'browser:getExtensionSidePanels': {} as Contract<[projectId: string], BrowserExtensionSidePanel[]>,
+  'browser:getExtensionSidePanels': {} as Contract<
+    [projectId: string],
+    BrowserExtensionSidePanel[]
+  >,
   /**
    * Place a popup window's page over the frame the rail measured for it. The
    * popup is a native view like a tab's page is, so the rail's rectangle is
@@ -414,6 +418,19 @@ export const invokeBrowserContract = {
    *  point (window-content coordinates in density-independent pixels). Each
    *  entry carries its live actions (pause/resume/cancel/open/reveal). */
   'browser:downloadsMenu': {} as Contract<[projectId: string, x: number, y: number], void>,
+  /**
+   * Open the thread browser's native box menu, anchored at the given point
+   * (window-content coordinates in density-independent pixels).
+   *
+   * The profile's boxes are the renderer's, so they travel with the call; main
+   * only turns them into OS menu items and names the one that was picked. The
+   * reply is null when the menu was dismissed, and a chosen `null` box is the
+   * conversation scope's own jar.
+   */
+  'browser:boxMenu': {} as Contract<
+    [input: BrowserBoxMenuInput, x: number, y: number],
+    BrowserBoxMenuChoice | null
+  >,
   'browser:resolvePermission': {} as Contract<
     [requestId: string, decision: BrowserPermissionDecision],
     void

@@ -30,6 +30,11 @@ import {
   type BrowserSearchEngine
 } from '../../../lib/browser-search-engines'
 import { MAX_BROWSER_BOX_NAME_LENGTH } from '../../../lib/browser/global-browser-tabs'
+import {
+  MAX_BROWSER_BOX_MENU_ENTRIES,
+  type BrowserBoxMenuEntry,
+  type BrowserBoxMenuInput
+} from '../../../lib/browser/browser-box-menu'
 import type { BrowserViewport } from './browser-types'
 import type {
   BrowserOverlayAck,
@@ -622,6 +627,44 @@ export function validateBoundedHost(value: unknown): string {
     throw new TypeError('Browser site menu host is invalid')
   }
   return value
+}
+
+/**
+ * Validate the whole input of the thread browser's box menu.
+ *
+ * The profile's boxes are the renderer's list, so the entries arrive over IPC
+ * and are checked here rather than trusted: an id has to be a legal box id and a
+ * name is bounded, exactly as the site menu bounds the box name it is handed.
+ * Duplicate ids collapse, so a profile that somehow offered one box twice cannot
+ * put the same jar on the menu twice.
+ */
+export function validateBrowserBoxMenuInput(value: unknown): BrowserBoxMenuInput {
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('Browser box menu input is invalid')
+  }
+  const record = value as Record<string, unknown>
+  const rawBoxes = record['boxes']
+  if (!Array.isArray(rawBoxes) || rawBoxes.length > MAX_BROWSER_BOX_MENU_ENTRIES) {
+    throw new TypeError('Browser box menu boxes are invalid')
+  }
+  const boxes: BrowserBoxMenuEntry[] = []
+  const seen = new Set<string>()
+  for (const raw of rawBoxes) {
+    if (typeof raw !== 'object' || raw === null) {
+      throw new TypeError('Browser box menu box is invalid')
+    }
+    const entry = raw as Record<string, unknown>
+    const id = validateOptionalBoxId(entry['id'])
+    if (id === null) throw new TypeError('Browser box menu box ID is invalid')
+    if (seen.has(id)) continue
+    seen.add(id)
+    boxes.push({ id, name: boundedBoxLabel(entry['name']) || 'Untitled box' })
+  }
+  return {
+    scopeLabel: boundedBoxLabel(record['scopeLabel']) || 'This conversation',
+    boxes,
+    currentBoxId: validateOptionalBoxId(record['currentBoxId'])
+  }
 }
 
 /**

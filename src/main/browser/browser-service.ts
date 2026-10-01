@@ -79,6 +79,7 @@ import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
 import { BrowserDownloadManager } from './browser-service/browser-downloads'
+import { showBrowserBoxMenu } from './browser-service/browser-box-menu'
 import { BrowserTabHistoryStore } from './browser-tab-history-store'
 import { BrowserClosedTabHistory } from './browser-closed-tab-history'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
@@ -168,6 +169,7 @@ import {
   validateAttention,
   validateBounds,
   validateBoundedHost,
+  validateBrowserBoxMenuInput,
   validateBrowserSearchEngine,
   validateBrowserShortcutBindings,
   validateBrowserStripInteraction,
@@ -1255,6 +1257,15 @@ export class BrowserService {
       const x = validateSiteMenuPoint(rawX, 'x coordinate')
       const y = validateSiteMenuPoint(rawY, 'y coordinate')
       setImmediate(() => this.downloads.showMenu(projectId, x, y))
+    })
+    replaceHandler('browser:boxMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserBoxMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      // Unlike the menus above, this one's answer is the invoke's reply: the
+      // caller reopens the tab in the box it names, so the popup's promise is
+      // what carries the choice back.
+      return showBrowserBoxMenu(this.window, input, x, y)
     })
     replaceHandler('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
