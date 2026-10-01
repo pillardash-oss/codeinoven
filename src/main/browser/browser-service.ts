@@ -3689,8 +3689,7 @@ export class BrowserService {
    */
   private extensionPageTabForContents(contentsId: number): BrowserExtensionPageTab | null {
     const tabId =
-      this.popupWindows.tabIdForContents(contentsId) ??
-      this.sidePanels.tabIdForContents(contentsId)
+      this.popupWindows.tabIdForContents(contentsId) ?? this.sidePanels.tabIdForContents(contentsId)
     if (!tabId) return null
     return this.extensionPageTabSnapshot(tabId)
   }
