@@ -263,6 +263,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
   )
   state.updaterService = new UpdaterService(storage)
+  // An update install owns its quit: background mode would otherwise park on the
+  // `app.quit()` the updater triggers and the update would never apply. The flag
+  // is cleared again if the install cannot proceed, so the app stays parkable.
+  state.updaterService.attachUpdateQuitHooks({
+    begin: () => {
+      state.quitForUpdate = true
+    },
+    end: () => {
+      state.quitForUpdate = false
+    }
+  })
   // The menu bar's "Check for Updates" drives the whole silent cycle. Wired here,
   // where the updater is born, so the tray item is live the moment the updater is.
   state.backgroundLifecycle?.setUpdater({

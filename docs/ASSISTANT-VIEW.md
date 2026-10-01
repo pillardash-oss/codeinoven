@@ -291,6 +291,16 @@ Cmd+Q so a routine still fires on time. It is on by default
   recorded so the app never decides silently (see **Auto-resolved gates**). A
   permission gate has no timer, so it parks durably and flips the icon; nothing
   proceeds until the user answers.
+- **Restart to update is a real quit.** `autoUpdater.quitAndInstall()` restarts
+  the app to apply a downloaded update, and background mode must not swallow that
+  restart. The install brackets the quit through
+  `UpdaterService.attachUpdateQuitHooks`, which raises `state.quitForUpdate` for
+  the duration, so neither the closing window nor `before-quit` parks. The flag
+  is consumed by the first `before-quit` and cleared if the install fails, so a
+  restart the user declines (unsaved files, a working thread) leaves the app
+  parkable again on the next close. An install that happened windowless leaves
+  the background-relaunch marker, so the next launch comes back into the menu bar
+  rather than onto the screen.
 - **Sleep.** A machine that is asleep cannot run work. Inside
   `backgroundWakeLeadMs` before a due run the app holds
   `prevent-app-suspension`, capped by `maxBackgroundWakeHoldMs` so a
