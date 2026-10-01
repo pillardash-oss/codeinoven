@@ -12,6 +12,8 @@
   } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
+  import { formatKeyCombo } from '$lib/keymap/keymap'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
@@ -78,6 +80,9 @@
   let filledCount = $derived(request.questions.filter((_, index) => entryAnswered(index)).length)
   let allFilled = $derived(filledCount === total)
   let currentAnswered = $derived(entryAnswered(currentIndex))
+  // The send key resolved through the user's keymap overrides, so the Next and
+  // Submit buttons advertise whichever combination actually advances the card.
+  let advanceShortcutLabel = $derived(formatKeyCombo(keymapState.keysFor('chat-send')))
   // The request carries its own deadline, so the countdown is the same one the
   // main process is running: the card closes when it reaches zero. Time is an
   // external system, so it is subscribed to rather than tracked in an effect.
@@ -150,7 +155,8 @@
 
   /**
    * Move to the next entry, or submit when the current one is the last. Used by
-   * the footer button and by Cmd/Ctrl+Enter in the alternative editor.
+   * the footer button, by Cmd/Ctrl+Enter in the alternative editor, and by the
+   * same combination in the value field.
    */
   function advance(): void {
     if (working || !currentAnswered) return
@@ -159,6 +165,19 @@
       return
     }
     void handleSubmit()
+  }
+
+  /**
+   * The value field's own send shortcut, read from the keymap like every other
+   * keyboard action in the app: the same key that advances the question card
+   * moves to the next secret here, and submits on the last one, so a whole
+   * request can be answered from the keyboard. A plain input has no editor to
+   * route it, so the field reports it itself.
+   */
+  function handleValueKeydown(event: KeyboardEvent): void {
+    if (event.isComposing || !keymapState.matches('chat-send', event)) return
+    event.preventDefault()
+    advance()
   }
 
   function toggleReveal(): void {
@@ -356,6 +375,7 @@
                   placeholder="Paste the value"
                   bind:value={values[currentIndex]}
                   oninput={pauseCountdown}
+                  onkeydown={handleValueKeydown}
                 />
                 <button
                   class="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-40"
@@ -429,6 +449,7 @@
           class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           disabled={working || !currentAnswered}
           onclick={advance}
+          title={advanceShortcutLabel ? `Next secret (${advanceShortcutLabel})` : 'Next secret'}
         >
           Next
           <ChevronRight size={13} />
@@ -438,6 +459,9 @@
           class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           disabled={working || !allFilled}
           onclick={() => void handleSubmit()}
+          title={advanceShortcutLabel
+            ? `Store the secret and answer the agent (${advanceShortcutLabel})`
+            : 'Store the secret and answer the agent'}
         >
           {#if working}
             <Loader2 size={13} class="animate-spin" />
