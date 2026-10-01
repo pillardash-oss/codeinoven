@@ -372,6 +372,7 @@ import { ModelPricingService } from '../providers/model-pricing-service'
 import { OpenUsageClient, openUsageProviderCandidates } from '../usage/openusage-client'
 import { CustomProviderUsageClient } from '../providers/custom-provider-usage-client'
 import {
+  RECAP_ABSOLUTE_MAX_TOKENS,
   budgetTurnLayers,
   composeBudgetedSend,
   computePromptBudget,
@@ -11933,7 +11934,10 @@ export class ChatEngine {
       thread?.settings?.modelId,
       projectId
     )
-    const budget = maxInputTokens ?? fallbackBudget
+    // The replay is capped by the aggregate composition ceiling as well as the
+    // window-derived allowance, so a rebuilt session on a large-window model
+    // never materializes a recap far past what the turn will actually send.
+    const budget = Math.min(maxInputTokens ?? fallbackBudget, RECAP_ABSOLUTE_MAX_TOKENS)
 
     // A native resumed session already owns its history. Check that fact before
     // reading the mirror so every ordinary follow-up remains O(1) with respect

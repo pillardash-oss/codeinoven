@@ -2006,6 +2006,25 @@ export class PiDriver extends PersistentCliDriver {
             this.emit(failure)
             continue
           }
+          // The app's own checkpoint aborts the live run before it compacts
+          // (Pi's `compact` RPC settles the session first), so Pi records that
+          // abort as an aborted/error assistant completion. That failure is the
+          // app's doing, never a provider fault: carrying it to the engine would
+          // paint an error card over a turn the continuation is about to finish.
+          // Strip the error and drop the empty stub, exactly as the
+          // silent-continue path does, so the resume is the only visible result.
+          if (
+            event.type === 'message.completed' &&
+            event.error &&
+            (this.turnStates.get(session.id)?.compacting === true ||
+              this.pageCompactions.has(session.id))
+          ) {
+            const { error, ...clean } = event
+            void error
+            this.applyEventToSession(session, clean)
+            this.dropMirroredEmptyAssistant(session)
+            continue
+          }
           this.applyEventToSession(session, event)
           this.emit({ ...event, sessionId: session.id })
         }

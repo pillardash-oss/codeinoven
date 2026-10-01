@@ -20,6 +20,19 @@
  */
 export const RECAP_MAX_INPUT_RATIO = 0.6
 
+/**
+ * Absolute ceiling on the restored history recap, in tokens, independent of
+ * the selected model's context window.
+ *
+ * The ratio cap alone scales with the window, so on a large-window model the
+ * recap can still land at hundreds of thousands of tokens and start the first
+ * turn of a rebuilt session near its checkpoint line (the trigger then fires on
+ * nearly every request). This ceiling keeps the replay useful for continuity
+ * across an account switch, a harness switch, or an edited history without
+ * letting it dominate the prompt.
+ */
+export const RECAP_ABSOLUTE_MAX_TOKENS = 60_000
+
 /** Fallback context window when the selected model reports none. */
 export const DEFAULT_PROMPT_BUDGET = {
   contextWindowTokens: 128_000,
@@ -193,7 +206,8 @@ export function budgetTurnLayers(
   const recapTokens = Math.min(
     Math.max(0, layers.recapTokens),
     remaining,
-    Math.floor(availableInputTokens * RECAP_MAX_INPUT_RATIO)
+    Math.floor(availableInputTokens * RECAP_MAX_INPUT_RATIO),
+    RECAP_ABSOLUTE_MAX_TOKENS
   )
   return {
     hiddenTokens,
