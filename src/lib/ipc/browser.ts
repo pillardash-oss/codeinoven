@@ -372,6 +372,7 @@ export const BROWSER_SHORTCUT_ACTIONS = [
   'toggleDevTools',
   'closeTab',
   'newTab',
+  'reopenTab',
   'toggleNotes',
   'find',
   'findNext',
@@ -416,13 +417,14 @@ export interface BrowserSwitcherKey {
 
 /**
  * A browser action the renderer owns, because only the renderer knows the tab
- * strip or holds the find bar: focusing the address bar, closing or opening a
- * tab, showing the tab's notes, and find.
+ * strip or holds the find bar: focusing the address bar, closing, opening or
+ * reopening a tab, showing the tab's notes, and find.
  */
 export type BrowserPanelShortcutAction =
   | 'focus-address'
   | 'close-tab'
   | 'new-tab'
+  | 'reopen-tab'
   | 'toggle-notes'
   | 'find'
   | 'find-next'

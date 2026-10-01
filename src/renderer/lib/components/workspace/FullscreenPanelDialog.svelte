@@ -18,6 +18,10 @@
     /** Leading glyph for a tab that shows no indicator. Omit for a surface
      *  whose tabs are plain sections and carry no icon. */
     icon?: Snippet
+    /** Per-tab leading glyph, drawn instead of `icon` for a tab that shows no
+     *  indicator. The thread browser uses it to wear each tab's own favicon;
+     *  a surface whose tabs share one glyph keeps `icon`. */
+    tabIcon?: Snippet<[{ id: string; title: string }]>
     /** Per-tab overlay painted over the tab's own icon slot, used for the
      *  browser's live audio and capture indicators. Callers whose tabs never
      *  carry an indicator leave it, and `indicatorCount`, unset. */
@@ -38,6 +42,16 @@
      *  keep the native view detached; the browser surface would blank itself if
      *  it did, because the view it suppresses is the page it is showing. */
     hostsBrowserView?: boolean
+    /** Paint the dimmed scrim behind this surface. On by default, and always
+     *  off when `hostsBrowserView` is set, because there the scrim can never be
+     *  seen.
+     *
+     *  Off for any surface whose body is a full-window child that keeps
+     *  repainting: the browser's page, the terminal's renderer. The opaque body
+     *  already hides the scrim, and its full-window `backdrop-blur` composites
+     *  under that child on every frame, which starves the GPU and makes the
+     *  content tear under load. */
+    scrim?: boolean
   }
 
   let {
@@ -46,13 +60,15 @@
     newLabel,
     minimizeLabel,
     icon,
+    tabIcon,
     tabIndicator,
     onNew,
     onMinimize,
     onSelect,
     onCloseTab,
     children,
-    hostsBrowserView = false
+    hostsBrowserView = false,
+    scrim = true
   }: Props = $props()
 
   let stripElement = $state<HTMLDivElement>()
@@ -117,6 +133,7 @@
   panelClass="bg-app"
   trapFocus={false}
   escapeCloses={false}
+  scrim={scrim && !hostsBrowserView}
   blocksBrowserView={!hostsBrowserView}
 >
   <div
@@ -144,6 +161,8 @@
                   class="shrink-0 {browserTabIndicatorSlotClass(indicatorCount)}"
                   aria-hidden="true"
                 ></span>
+              {:else if tabIcon}
+                {@render tabIcon({ id: tab.id, title: tab.title })}
               {:else if icon}
                 {@render icon()}
               {/if}

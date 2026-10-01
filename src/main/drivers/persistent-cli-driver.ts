@@ -17,6 +17,7 @@ import type {
 import { Logger } from '../system/logger'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment, OWNED_SESSION_MARKER } from './cli-environment'
+import { prependHistoryRecap } from './history-recap-prompt'
 import { describeHarnessExit, prepareHarnessInvocation } from './harness-runtime'
 import { spawnInUtilityHost } from './harness-utility-host'
 import type {
@@ -467,7 +468,13 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       }
     }
 
-    const invocation = await this.buildTurnCommand(projectPath, session, opts)
+    const invocation = await this.buildTurnCommand(projectPath, session, {
+      ...opts,
+      // The restored recap rides the text handed to the harness, not the
+      // session's message list below: the message list feeds the mirror, and a
+      // persisted recap would be replayed into the next recap.
+      text: prependHistoryRecap(opts.text, opts.historyRecap)
+    })
     const runtime = this.utilityRuntime(session.id)
     const invocationArgs = runtime
       ? [

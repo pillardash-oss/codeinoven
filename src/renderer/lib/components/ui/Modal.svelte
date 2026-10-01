@@ -147,6 +147,17 @@
      *  calls `preventDefault()` and takes over. Only the topmost layer is ever
      *  called, so a popover opened inside the panel still closes on its own. */
     onEscapeKeydown?: (event: KeyboardEvent) => void
+    /** Draw the dimmed scrim behind the panel. On by default.
+     *
+     *  Off for a full screen surface that covers the window with an opaque
+     *  panel over continuously repainting content (the browser's native view,
+     *  the terminal's renderer). There the scrim is invisible, and its
+     *  full-window `backdrop-blur` is a second GPU-composited layer under the
+     *  content that keeps painting. On a surface painting hard (a site's own
+     *  modal, an animation, a video, a terminal being scrolled) that extra
+     *  layer starves the compositor and the content visibly tears, which is why
+     *  the same content is smooth in the narrow sidebar and torn at full size. */
+    scrim?: boolean
     /** Detach the browser's native view while this modal is open.
      *
      *  The native view floats above every DOM surface, so a modal that does not
@@ -183,6 +194,7 @@
     trapFocus = true,
     escapeCloses = true,
     onEscapeKeydown,
+    scrim = true,
     blocksBrowserView = true,
     claimInitialFocus,
     onCloseAutoFocus,
@@ -248,7 +260,9 @@
 
 <Dialog.Root {open} onOpenChange={(next) => !next && onClose()}>
   <Dialog.Portal>
-    <Dialog.Overlay class={OVERLAY_CLASS} />
+    {#if scrim}
+      <Dialog.Overlay class={OVERLAY_CLASS} />
+    {/if}
     <div class="pointer-events-none fixed inset-0 z-60 flex {alignment}">
       <Dialog.Content
         bind:ref={panelEl}

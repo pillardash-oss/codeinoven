@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_PROMPT_BUDGET,
-  RECAP_MAX_INPUT_RATIO,
   budgetTurnLayers,
   computePromptBudget,
   estimateTextTokens,
+  recapTokenBudget,
   truncateToTokenBudget
 } from '../../src/lib/prompt-budget'
 
@@ -91,19 +91,21 @@ describe('budgetTurnLayers (final-composition contract)', () => {
     expect(layers.totalTokens).toBeLessThanOrEqual(budget.availableInputTokens)
     expect(layers.totalTokens).toBe(26_000)
     // The recap takes only the headroom left after user + system + hidden,
-    // capped at 60% of the aggregate allowance so a handoff turn always leaves
-    // conversational headroom before the harness's compaction threshold.
+    // capped at its share of the checkpoint line so a rebuilt turn always
+    // leaves conversational headroom below the compaction trigger.
     expect(layers.recapTokens).toBe(8_000)
     expect(layers.hiddenTokens).toBe(8_000)
   })
 
-  it('caps the recap at 60% of the aggregate allowance even with headroom left', () => {
+  it('caps the recap at 60% of the checkpoint line even with headroom left', () => {
     const available = 100_000
     const layers = budgetTurnLayers(
       { userTokens: 1_000, systemTokens: 1_000, hiddenTokens: 0, recapTokens: 200_000 },
       available
     )
-    expect(layers.recapTokens).toBe(Math.floor(available * RECAP_MAX_INPUT_RATIO))
+    expect(layers.recapTokens).toBe(recapTokenBudget(available))
+    // The recap stays strictly below the checkpoint line, never a fixed count.
+    expect(layers.recapTokens).toBeLessThan(Math.floor(available * 0.85))
     expect(layers.totalTokens).toBeLessThanOrEqual(available)
   })
 

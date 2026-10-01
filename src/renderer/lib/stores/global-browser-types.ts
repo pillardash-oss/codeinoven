@@ -27,6 +27,7 @@ export {
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS
 } from '$shared/browser/global-browser-tabs'
+export { isBrowserBoxId } from '$shared/browser/global-browser-tabs'
 export type { BrowserAppearance } from '$shared/browser/global-browser-tabs'
 
 /** Live runtime state of one global tab, keyed by tab id. */
@@ -195,6 +196,31 @@ export interface GlobalBrowserTab extends BrowserAppearance {
    * restart restores both.
    */
   assistantThreadId: string | null
+}
+
+/**
+ * How many closed tabs this session keeps for a reopen.
+ *
+ * The reopen stack is a convenience, not a record: quitting empties it, and a
+ * browser only needs to remember far enough back for a person to undo a
+ * handful of mistaken closes. The bound mirrors the main process's own closed
+ * history set, so the two never disagree about which tab is still reopenable.
+ */
+export const MAX_REOPENED_BROWSER_TABS = 20
+
+/** One tab closed this session, kept so it can be reopened.
+ *
+ * The tab is stored whole (with its strip position) because reopening restores
+ * it, not merely its address: the label, colour, icon, group and box all come
+ * back the way the user arranged them. It is deliberately never written to the
+ * durable tab list   a restart forgets the reopen stack, exactly as a browser
+ * does.
+ */
+export interface ClosedGlobalBrowserTab {
+  /** The tab as it was, so a reopen restores it rather than a bare address. */
+  tab: GlobalBrowserTab
+  /** The position it held in the strip, clamped when the strip has shrunk. */
+  index: number
 }
 
 /** Whether two load errors describe the same failure. Main sends a fresh object

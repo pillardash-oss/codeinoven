@@ -234,7 +234,9 @@ the app's clock for Assistant View.
 - **Dismiss vs Run Now.** `assistant:dismissMissedRun` acknowledges a record
   without running it; `assistant:runMissedRunNow` creates a fresh run thread,
   dispatches the run on it, settles the record on success, and returns the run so
-  the caller can open it. Neither is automatic.
+  the caller can open it. Neither is automatic. An unattended run recorded in the
+  ledger is acknowledged separately by `assistant:dismissBackgroundRun`, which
+  drops the durable entry from every "While you were away" surface.
 
 ## Background mode (menu bar)
 
@@ -352,9 +354,13 @@ default:
   app was closed when the machine simply slept through the window;
 - the **While you were away** section of the same Assistants tab, which lists the
   recent unattended runs straight from the ledger (outcome, why it ran, when it
-  settled, any persisted failure, and how many gates it answered for you), and a
-  routine profile's **Run history** list in the how-to panel. A run whose thread
-  was later deleted still shows, as non-clickable evidence.
+  settled, any persisted failure, and how many gates it answered for you), with a
+  per-entry **Dismiss** (`assistant:dismissBackgroundRun`) that removes the
+  durable ledger entry, and a routine profile's **Run history** list in the
+  how-to panel. A run whose thread was later deleted still shows, as
+  non-clickable evidence. Dismissing a run is the user acknowledging evidence
+  they no longer need: the row leaves every surface and does not return on the
+  next launch.
 
 ## Auto-resolved gates (attention rail)
 
@@ -390,6 +396,14 @@ main process tags a run thread's notification with `source: 'assistant'`
 (`notificationSource` in `src/main/notifications/notification-service.ts`), so
 the panel routes it to the Assistants tab instead of Projects and the card names
 its own status (done, needs attention, spec ready, error).
+
+A completed run of a **routine** names the report rather than the space: the
+notification reads **Routine report ready** with the routine's own name beneath
+it (the body), so the entry says what is ready and whose it is instead of a bare
+**Assistant Done**. The routine name is resolved from the run's `routineId`
+(`RoutineRepo.getViaWorker`), read on the worker so naming a notification never
+holds the main thread. A routine-less task and the Getting started authoring
+thread keep the generic assistant copy.
 
 The assistant is a surface with its own accent colour, the colour stored on the
 hidden assistant space project (the payload's `projectColor`, `#ec4899` by

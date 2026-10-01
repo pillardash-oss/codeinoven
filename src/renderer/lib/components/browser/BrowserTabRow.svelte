@@ -14,6 +14,7 @@
     Pencil,
     Pin,
     PinOff,
+    RotateCcw,
     StickyNote,
     Volume2,
     VolumeX,
@@ -442,6 +443,15 @@
           </ContextMenu.Portal>
         </ContextMenu.Sub>
       {/if}
+      <ContextMenu.Separator class="my-1 h-px bg-border" />
+      <ContextMenu.Item
+        class={itemClass}
+        disabled={!globalBrowser.canReopenClosedTab}
+        onSelect={() => globalBrowser.reopenLastClosedTab()}
+      >
+        <RotateCcw size={13} class="shrink-0 text-muted" />
+        Reopen closed tab
+      </ContextMenu.Item>
       <ContextMenu.Separator class="my-1 h-px bg-border" />
       <ContextMenu.Item
         class="{itemClass} text-danger data-[highlighted]:bg-danger/10"

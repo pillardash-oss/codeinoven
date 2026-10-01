@@ -158,6 +158,9 @@
   function toggleFolder(projectId: string): void {
     if (sidebar.expandedFolders.has(projectId)) {
       sidebar.expandedFolders.delete(projectId)
+      // Folding resets the folder's row budget so re-expanding shows the
+      // default page, exactly as if the user had clicked "Show less".
+      sidebar.showLessThreads(projectId)
       rendererRecovery.toggleCollapsedFolder(projectId)
     } else {
       sidebar.expandedFolders.add(projectId)

@@ -12,6 +12,7 @@
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import BrowserAddressBar from './BrowserAddressBar.svelte'
+  import BrowserBoxButton from './BrowserBoxButton.svelte'
   import BrowserCompositionTransport from './BrowserCompositionTransport.svelte'
   import BrowserCommentEditor from './BrowserCommentEditor.svelte'
   import BrowserFindBar from './BrowserFindBar.svelte'
@@ -52,9 +53,16 @@
   interface Props {
     tab: BrowserContextTab
     fullscreen?: boolean
+    /**
+     * Reported with the replacement tab id when this tab is reopened in another
+     * box. A surface that tracks the tab by its own id (the full screen overlay)
+     * follows it here; the sidebar needs no callback because the store already
+     * moved its active tab.
+     */
+    onTabReplaced?: (tabId: string) => void
   }
 
-  let { tab, fullscreen = false }: Props = $props()
+  let { tab, fullscreen = false, onTabReplaced }: Props = $props()
 
   /** The surface this instance renders on. A fullscreen instance outranks every
    *  sidebar instance, so the store resolves which one owns the single native
@@ -75,6 +83,8 @@
   const tabInitialUrl = tab.url
   // svelte-ignore state_referenced_locally
   const tabInitialTitle = tab.title
+  // svelte-ignore state_referenced_locally
+  const tabBoxId = tab.boxId
 
   /** This page's entry in the store's list of native rectangles on screen. Keyed
    *  by surface as well as tab: the full screen dialog and a sidebar panel can
@@ -321,7 +331,17 @@
     if (pageState.loadError) return
     try {
       const currentUrl = untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl)
-      pageState = await invoke('browser:show', tabId, tabProjectId, tabThreadId, currentUrl, bounds)
+      pageState = await invoke(
+        'browser:show',
+        tabId,
+        tabProjectId,
+        tabThreadId,
+        currentUrl,
+        bounds,
+        // The tab's box, so a page the user opened in a shared box runs against
+        // that jar rather than the scope's own.
+        tabBoxId
+      )
       // The store's answer can change while that call is in flight: another
       // surface may claim the view, an overlay may appear, or the sidebar may
       // move on. Only one native view can exist at a time, so a stale attach
@@ -341,7 +361,7 @@
   function navigate(url: string): void {
     address = url
     contextSidebarState.updateBrowserTab(tabId, url)
-    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url).catch(() => {})
+    void invoke('browser:navigate', tabId, tabProjectId, tabThreadId, url, tabBoxId).catch(() => {})
   }
 
   function applyPageState(next: BrowserPageState): void {
@@ -534,6 +554,16 @@
       {siteMenuOpen}
       onOpenSiteMenu={openSiteMenu}
       onNavigate={navigate}
+    />
+    <BrowserBoxButton
+      projectId={tabProjectId}
+      threadId={tabThreadId}
+      boxId={tabBoxId}
+      labelled={fullscreen}
+      onChange={(boxId) => {
+        const replacementId = contextSidebarState.setBrowserTabBox(tabId, boxId)
+        if (replacementId) onTabReplaced?.(replacementId)
+      }}
     />
     <button
       type="button"

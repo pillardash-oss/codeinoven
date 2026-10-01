@@ -59,6 +59,7 @@ import {
   MAX_GLOBAL_BROWSER_BOXES,
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS,
+  MAX_REOPENED_BROWSER_TABS,
   browserTabLabel,
   browserTabTitleForUrl,
   isBlankBrowserAddress,
@@ -69,6 +70,7 @@ import {
   isTabIdlePastWindow,
   type BrowserBoxAppearance,
   type BrowserGroupAppearance,
+  type ClosedGlobalBrowserTab,
   type GlobalBrowserBox,
   type GlobalBrowserGroup,
   type GlobalBrowserRuntime,
@@ -100,6 +102,14 @@ function withDefaultBox(boxes: GlobalBrowserBox[]): GlobalBrowserBox[] {
 
 export class GlobalBrowserState {
   tabs: GlobalBrowserTab[] = $state([])
+  /**
+   * Tabs closed this session, most recently closed last.
+   *
+   * This is the app's reopen stack (Cmd/Ctrl+Shift+T). It exists only in
+   * memory: nothing writes it to the durable tab list, so quitting the app
+   * clears it, exactly as a browser's own reopen history is cleared.
+   */
+  private closedTabs: ClosedGlobalBrowserTab[] = $state([])
   groups: GlobalBrowserGroup[] = $state([])
   /** The profile's boxes: named cookie jars sharing the browser's one set of
    *  extensions. A box owns no tab; the tabs that name it do, and a box nobody
@@ -1234,18 +1244,29 @@ export class GlobalBrowserState {
     if (!tab || tab.boxId === boxId) return null
     const url = tab.url
     const groupId = tab.groupId
-    this.close(tabId)
+    // Not a reopenable close: the page is deliberately coming back in another
+    // box, so recording it would offer the user a tab that never left.
+    this.close(tabId, { recordForReopen: false })
     return this.createTab(url, groupId, boxId)
   }
 
-  /** Close a tab and land on its neighbour in the strip. */
-  close(tabId: string): void {
+  /**
+   * Close a tab and land on its neighbour in the strip.
+   *
+   * A close the user asked for is remembered so `reopenLastClosedTab` can undo
+   * it, which is what `recordForReopen` opts a caller out of. A close that is
+   * really a replacement (a reopen in another box) or an eviction has no tab to
+   * bring back, so recording it would only push a phantom onto the reopen stack.
+   */
+  close(tabId: string, options: { recordForReopen?: boolean } = {}): void {
     const index = this.tabs.findIndex((tab) => tab.id === tabId)
     if (index < 0) return
+    const closing = this.tabs[index]
+    if (options.recordForReopen !== false) this.rememberClosedTab(closing, index)
     // The tab can never be switched to again, so its Ctrl+Tab visit goes with it
     // instead of holding a slot in the recency list.
     recentVisits.forgetBrowserTab(tabId)
-    const closedThreadId = this.tabs[index]?.assistantThreadId ?? null
+    const closedThreadId = closing.assistantThreadId
     const remaining = this.tabs.filter((tab) => tab.id !== tabId)
     this.tabs = remaining
     this.runtime.delete(tabId)
@@ -1262,9 +1283,9 @@ export class GlobalBrowserState {
       this.contextSidebarVisible = false
     }
     this.persist()
-    // The tab is closed, not released: its row is gone from the strip, so its
-    // Back/Forward stack goes with it rather than waiting for a tab that will
-    // never come back to claim it.
+    // The tab's row is gone from the strip, so main destroys the view but keeps
+    // its Back/Forward stack in the session's reopen set, which is what lets a
+    // reopen put the page back on the entry it was left on.
     void invoke('browser:destroy', tabId, 'closed').catch(() => {})
     // A tab's note is keyed by the tab id, so closing the tab is what removes
     // it   exactly the way deleting a thread removes its note.
@@ -1275,6 +1296,66 @@ export class GlobalBrowserState {
     // closing the tab closes the conversation it owns, because the conversation
     // exists for that page and is unreachable without it.
     this.closeAssistantChatFor(tabId, closedThreadId)
+  }
+
+  /**
+   * Remember a tab just closed so it can be reopened.
+   *
+   * The tab is cloned, so later edits to the strip cannot reach back into the
+   * stack, and the oldest entry falls off the end once the cap is reached. This
+   * stack is memory-only by design: nothing here is written to the durable tab
+   * list, so quitting the app forgets it exactly as a browser does.
+   */
+  private rememberClosedTab(tab: GlobalBrowserTab, index: number): void {
+    const entry: ClosedGlobalBrowserTab = { tab: { ...tab }, index }
+    const next = [...this.closedTabs, entry]
+    this.closedTabs = next.slice(Math.max(0, next.length - MAX_REOPENED_BROWSER_TABS))
+  }
+
+  /** Whether anything is left to reopen this session. */
+  get canReopenClosedTab(): boolean {
+    return this.closedTabs.length > 0
+  }
+
+  /**
+   * Reopen the most recently closed tab, in the strip position it held.
+   *
+   * This is the app's own "Reopen closed tab": like a browser's, it restores the
+   * tab and its Back/Forward history, and it is gone once the app is quit. The
+   * tab keeps its id so main can hand its stored stack back to the page, its
+   * conversation is not restored (that thread was deleted with the tab), and a
+   * group or box that has since been removed is cleared rather than left as a
+   * dangling reference. Returns the reopened tab id, or null when there is
+   * nothing to reopen.
+   */
+  reopenLastClosedTab(): string | null {
+    const entry = this.closedTabs[this.closedTabs.length - 1]
+    if (!entry) return null
+    this.closedTabs = this.closedTabs.slice(0, -1)
+    const restored: GlobalBrowserTab = {
+      ...entry.tab,
+      groupId:
+        entry.tab.groupId !== null && this.groups.some((group) => group.id === entry.tab.groupId)
+          ? entry.tab.groupId
+          : null,
+      boxId:
+        entry.tab.boxId !== null && this.boxes.some((box) => box.id === entry.tab.boxId)
+          ? entry.tab.boxId
+          : null,
+      // The tab's conversation was deleted with it, so a reopened tab starts
+      // with none and asks the agent again if it wants one.
+      assistantThreadId: null,
+      // It is being put back on screen, so any hibernation the close found it in
+      // no longer applies: the page is created fresh as the surface shows it.
+      hibernated: false,
+      lastUsedAt: Date.now()
+    }
+    const ordered = [...this.tabs]
+    ordered.splice(Math.min(entry.index, ordered.length), 0, restored)
+    this.tabs = ordered
+    this.setActiveTab(restored.id)
+    this.persist()
+    return restored.id
   }
 
   /**
@@ -1559,7 +1640,8 @@ export class GlobalBrowserState {
     if (id === DEFAULT_BOX_ID) return
     if (!this.boxes.some((box) => box.id === id)) return
     for (const tab of this.tabs.filter((candidate) => candidate.boxId === id)) {
-      this.close(tab.id)
+      // The box is being removed, so a reopen would have no jar to restore into.
+      this.close(tab.id, { recordForReopen: false })
     }
     this.boxes = this.boxes.filter((box) => box.id !== id)
     this.boxIconUrls.delete(id)
@@ -1739,7 +1821,7 @@ export class GlobalBrowserState {
       [...this.tabs]
         .filter((tab) => tab.id !== this.activeTabId)
         .sort((a, b) => a.lastUsedAt - b.lastUsedAt)[0]
-    if (victim) this.close(victim.id)
+    if (victim) this.close(victim.id, { recordForReopen: false })
     if (this.tabs.length >= MAX_GLOBAL_BROWSER_TABS) {
       // Nothing left that may be closed without touching the active tab.
       reportError(new Error('Browser tab limit reached'), 'Too many browser tabs are open.')

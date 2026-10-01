@@ -395,6 +395,10 @@ export class PiDriver extends PersistentCliDriver {
    * or duplicated content.
    */
   private cioSystemPromptPaths = new Map<string, string>()
+  /** Storage-relative restored-history handoff file per session. The driver
+   *  rewrites it each turn; the extension's `context` hook injects it as its
+   *  own leading user message, so the replay never rides the system prompt. */
+  private cioHistoryRecapPaths = new Map<string, string>()
   /** Storage-relative allowed-tools handoff file per session, rewritten per turn
    *  so the extension's tool gate reflects the current File-System setting. */
   private cioAllowedToolsPaths = new Map<string, string>()
@@ -489,6 +493,12 @@ export class PiDriver extends PersistentCliDriver {
           toolcall: true,
           ...(numberValue(model['contextWindow'])
             ? { contextWindow: numberValue(model['contextWindow']) }
+            : {}),
+          // Pi's model record names the response limit `maxTokens`; surfacing it
+          // lets the app reserve the model's real completion budget instead of
+          // its small default when it composes a turn.
+          ...(numberValue(model['maxTokens'])
+            ? { maxOutputTokens: numberValue(model['maxTokens']) }
             : {})
         })
         byProvider.set(providerId, list)
@@ -895,6 +905,7 @@ export class PiDriver extends PersistentCliDriver {
     if (options.systemPrompt) {
       await this.publishCioSystemPrompt(session.id, options.systemPrompt)
     }
+    await this.publishCioHistoryRecap(session.id, options.historyRecap ?? '')
     // Publish every turn: an empty list clears a previous restriction, so a
     // mid-session File-System toggle takes effect without a session restart.
     await this.publishCioAllowedTools(session.id, options.allowedTools)
@@ -1456,6 +1467,7 @@ export class PiDriver extends PersistentCliDriver {
     this.pendingGatewayEndpoints.clear()
     this.cioCoreToolsExtensionPaths.clear()
     this.cioSystemPromptPaths.clear()
+    this.cioHistoryRecapPaths.clear()
     super.dispose()
   }
 
@@ -2004,6 +2016,25 @@ export class PiDriver extends PersistentCliDriver {
             const failure: SessionAgentEvent = { ...clean, error: state.lastError }
             this.applyEventToSession(session, failure)
             this.emit(failure)
+            continue
+          }
+          // The app's own checkpoint aborts the live run before it compacts
+          // (Pi's `compact` RPC settles the session first), so Pi records that
+          // abort as an aborted/error assistant completion. That failure is the
+          // app's doing, never a provider fault: carrying it to the engine would
+          // paint an error card over a turn the continuation is about to finish.
+          // Strip the error and drop the empty stub, exactly as the
+          // silent-continue path does, so the resume is the only visible result.
+          if (
+            event.type === 'message.completed' &&
+            event.error &&
+            (this.turnStates.get(session.id)?.compacting === true ||
+              this.pageCompactions.has(session.id))
+          ) {
+            const { error, ...clean } = event
+            void error
+            this.applyEventToSession(session, clean)
+            this.dropMirroredEmptyAssistant(session)
             continue
           }
           this.applyEventToSession(session, event)
@@ -2961,6 +2992,7 @@ export class PiDriver extends PersistentCliDriver {
       const directory = cioCoreToolsDirectory(sessionId)
       const handoffRelative = join(directory, 'gateway-handoff.json')
       const systemPromptRelative = join(directory, 'system-prompt.txt')
+      const historyRecapRelative = join(directory, 'history-recap.txt')
       const allowedToolsRelative = join(directory, 'allowed-tools.json')
       const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
       const stopFlagRelative = join(directory, 'stop-request.json')
@@ -2971,6 +3003,7 @@ export class PiDriver extends PersistentCliDriver {
       // error until the first direct-gateway turn publishes the real { url, token }.
       await this.storage.writeRaw(handoffRelative, JSON.stringify({ url: '', token: '' }))
       await this.storage.writeRaw(systemPromptRelative, '')
+      await this.storage.writeRaw(historyRecapRelative, '')
       await this.storage.writeRaw(allowedToolsRelative, '[]')
       await this.storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
       await this.storage.writeRaw(stopFlagRelative, JSON.stringify(emptyStopRequest()))
@@ -2986,6 +3019,7 @@ export class PiDriver extends PersistentCliDriver {
           questionCap,
           gatewayHandoffPath: this.storage.resolve(handoffRelative),
           systemPromptPath: this.storage.resolve(systemPromptRelative),
+          historyRecapPath: this.storage.resolve(historyRecapRelative),
           allowedToolsPath: this.storage.resolve(allowedToolsRelative),
           oversizedFlagPath: this.storage.resolve(oversizedFlagRelative),
           stopFlagPath: this.storage.resolve(stopFlagRelative),
@@ -3003,6 +3037,7 @@ export class PiDriver extends PersistentCliDriver {
       )
       this.gatewayHandoffPaths.set(sessionId, handoffRelative)
       this.cioSystemPromptPaths.set(sessionId, systemPromptRelative)
+      this.cioHistoryRecapPaths.set(sessionId, historyRecapRelative)
       this.cioAllowedToolsPaths.set(sessionId, allowedToolsRelative)
       this.cioOversizedFlagPaths.set(sessionId, oversizedFlagRelative)
       this.cioStopFlagPaths.set(sessionId, stopFlagRelative)
@@ -3035,6 +3070,22 @@ export class PiDriver extends PersistentCliDriver {
       await this.storage.writeRaw(path, systemPrompt)
     } catch (error) {
       Logger.dev('Pi core-tools system-prompt handoff update failed:', error)
+    }
+  }
+
+  /** Rewrite the session's restored-history handoff file. The extension's
+   *  `context` hook reads it before every LLM call and injects its content as
+   *  its own leading user message; an empty file clears the injection. Every
+   *  turn publishes (including an empty recap) so a later turn can never
+   *  inherit a stale replay. Never blocks the turn when the extension was not
+   *  materialized. */
+  private async publishCioHistoryRecap(sessionId: string, recap: string): Promise<void> {
+    const path = this.cioHistoryRecapPaths.get(sessionId)
+    if (!path) return
+    try {
+      await this.storage.writeRaw(path, recap.trim())
+    } catch (error) {
+      Logger.dev('Pi core-tools history-recap handoff update failed:', error)
     }
   }
 

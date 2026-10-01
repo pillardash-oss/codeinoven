@@ -376,6 +376,7 @@ import {
   composeBudgetedSend,
   computePromptBudget,
   estimateTextTokens,
+  recapTokenBudget,
   truncateToTokenBudget
 } from '../../lib/prompt-budget'
 import { decideModelSwitchCompaction } from '../../lib/model-switch-compaction'
@@ -9090,8 +9091,7 @@ export class ChatEngine {
           imageDescriptorNote,
           behaviorPrompt: promptBehavior,
           utilityInstructions,
-          routineInstruction,
-          historyRecap: ''
+          routineInstruction
         })
       : composeTurnSystemPrompt({
           chatPrompt: chatSystemPrompt,
@@ -9101,8 +9101,7 @@ export class ChatEngine {
           behaviorPrompt: promptBehavior,
           utilityInstructions,
           routineInstruction,
-          behaviorMode,
-          historyRecap: ''
+          behaviorMode
         })
     // The single production budget/composition decision: build the raw recap,
     // then let composeBudgetedSend cap the hidden + recap layers against the one
@@ -9312,8 +9311,7 @@ export class ChatEngine {
             imageDescriptorNote,
             behaviorPrompt,
             utilityInstructions,
-            routineInstruction,
-            historyRecap
+            routineInstruction
           }),
           allowedTools:
             activeBrainstormSession && driverId === 'opencode'
@@ -9327,6 +9325,7 @@ export class ChatEngine {
           ...(revisionStructuredOutput === undefined
             ? {}
             : { structuredOutput: revisionStructuredOutput }),
+          ...(historyRecap ? { historyRecap } : {}),
           userMessageId: messageId
         }
         await driver.sendPrompt(projectPath, prompt)
@@ -9409,8 +9408,7 @@ export class ChatEngine {
             behaviorPrompt,
             utilityInstructions,
             routineInstruction,
-            behaviorMode,
-            historyRecap
+            behaviorMode
           }) || undefined,
         allowedTools:
           isChatThread &&
@@ -9427,6 +9425,7 @@ export class ChatEngine {
             : isChatThread
               ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
               : undefined,
+        ...(historyRecap ? { historyRecap } : {}),
         userMessageId: messageId
       })
       if (utilitySetupRequested || isChatThread || isAssistantTask) {
@@ -11933,7 +11932,10 @@ export class ChatEngine {
       thread?.settings?.modelId,
       projectId
     )
-    const budget = maxInputTokens ?? fallbackBudget
+    // The replay is capped by the checkpoint line as well as any caller's own
+    // allowance, so a rebuilt session on a large-window model never
+    // materializes a recap far past what the turn will actually send.
+    const budget = Math.min(maxInputTokens ?? fallbackBudget, recapTokenBudget(fallbackBudget))
 
     // A native resumed session already owns its history. Check that fact before
     // reading the mirror so every ordinary follow-up remains O(1) with respect
@@ -12052,9 +12054,13 @@ export class ChatEngine {
   }
 
   /**
-   * Input budget for the history recap derived from the selected model's
-   * context window with reserved output and tool headroom. Falls back to the
-   * default window when the model is unknown or the catalog is unavailable.
+   * Input budget for the selected model: its context window minus the output
+   * and tool headroom once. The reserved output is the model's own maximum
+   * output when the catalog reports it, because a provider bills that
+   * completion against the same window   reserving the app's small default for
+   * a model that can emit hundreds of thousands of tokens would let the request
+   * grow past what the provider accepts. Falls back to the default window when
+   * the model is unknown or the catalog is unavailable.
    */
   private selectedModelInputBudget(
     providerId: string | undefined,
@@ -12062,6 +12068,7 @@ export class ChatEngine {
     projectId: string
   ): number {
     let contextWindow: number | undefined
+    let maxOutputTokens: number | undefined
     if (providerId && modelId) {
       try {
         const cached = this.providerCache.get(projectId)
@@ -12069,11 +12076,22 @@ export class ChatEngine {
           ?.flatMap((catalog) => catalog.models)
           .find((model) => model.providerId === providerId && model.id === modelId)
         contextWindow = model?.contextWindow
+        maxOutputTokens = model?.maxOutputTokens
       } catch {
         // Catalog unavailable   fall back to the default window.
       }
     }
-    return computePromptBudget({ contextWindow }).availableInputTokens
+    // Never let a corrupt catalog record reserve so much output that no input
+    // fits: a reserve above half the window is implausible, so the default
+    // applies instead.
+    const reportedWindow = contextWindow ?? 0
+    const outputTokens =
+      maxOutputTokens !== undefined &&
+      reportedWindow > 0 &&
+      maxOutputTokens < reportedWindow / 2
+        ? maxOutputTokens
+        : undefined
+    return computePromptBudget({ contextWindow, outputTokens }).availableInputTokens
   }
 
   /**

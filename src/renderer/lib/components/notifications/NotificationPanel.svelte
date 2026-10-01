@@ -235,6 +235,15 @@
     }
   }
 
+  /** Acknowledge one unattended run so it leaves the "While you were away" list. */
+  async function dismissBackgroundRun(id: string): Promise<void> {
+    try {
+      await assistantRoutines.dismissBackgroundRun(id)
+    } catch {
+      // Main pushes the fresh ledger list; a failure simply leaves the row.
+    }
+  }
+
   async function runMissedRunNow(id: string): Promise<void> {
     busyId = id
     try {
@@ -695,48 +704,66 @@
                 <div class="space-y-px" aria-label={`${group.label} unattended runs`}>
                   {#each group.runs as run (run.runThreadId)}
                     {@const active = busyId === run.runThreadId}
-                    <button
-                      type="button"
-                      class="flex w-full cursor-pointer items-start gap-2 border-l-2 bg-surface px-3 py-2.5 text-left transition-colors hover:bg-elevated {active
-                        ? 'opacity-60 pointer-events-none'
+                    <div
+                      class="group flex items-stretch border-l-2 bg-surface transition-colors hover:bg-elevated {active
+                        ? 'pointer-events-none opacity-60'
                         : ''}"
-                      style="border-color: {STATUS_TONE_COLORS[backgroundRunTone(run.outcome)]}"
-                      title="Open this run"
-                      aria-label="Open unattended run for {backgroundRunTitle(run)}"
-                      onclick={() => void openMissedRun(run.runThreadId)}
+                      style="border-left-color: {STATUS_TONE_COLORS[
+                        backgroundRunTone(run.outcome)
+                      ]}"
                     >
-                      <div class="flex w-2 shrink-0 pt-1">
-                        <StatusBadge
-                          tone={backgroundRunTone(run.outcome)}
-                          title={backgroundRunOutcomeLabel(run.outcome)}
-                        />
-                      </div>
-                      <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-2">
-                          <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                            >{backgroundRunTitle(run)}</span
-                          >
-                          <span class="shrink-0 text-[0.625rem] text-dimmed"
-                            >{formatTime(run.settledAt ?? run.startedAt)}</span
-                          >
+                      <button
+                        type="button"
+                        class="flex min-w-0 flex-1 cursor-pointer items-start gap-2 px-3 py-2.5 text-left"
+                        title="Open this run"
+                        aria-label="Open unattended run for {backgroundRunTitle(run)}"
+                        onclick={() => void openMissedRun(run.runThreadId)}
+                      >
+                        <div class="flex w-2 shrink-0 pt-1">
+                          <StatusBadge
+                            tone={backgroundRunTone(run.outcome)}
+                            title={backgroundRunOutcomeLabel(run.outcome)}
+                          />
                         </div>
-                        <p class="mt-0.5 text-[0.625rem] text-muted">
-                          {backgroundRunOutcomeLabel(run.outcome)} · {backgroundRunReasonText(
-                            run.reason
-                          )}
-                        </p>
-                        {#if run.outcome === 'failed' && run.errorSummary}
-                          <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-danger">
-                            {run.errorSummary}
+                        <div class="min-w-0 flex-1">
+                          <div class="flex items-center gap-2">
+                            <span class="truncate text-[0.6875rem] font-medium text-foreground"
+                              >{backgroundRunTitle(run)}</span
+                            >
+                            <span class="shrink-0 text-[0.625rem] text-dimmed"
+                              >{formatTime(run.settledAt ?? run.startedAt)}</span
+                            >
+                          </div>
+                          <p class="mt-0.5 text-[0.625rem] text-muted">
+                            {backgroundRunOutcomeLabel(run.outcome)} · {backgroundRunReasonText(
+                              run.reason
+                            )}
                           </p>
-                        {/if}
-                        {#if run.autoAnswered > 0}
-                          <p class="mt-0.5 text-[0.625rem] text-dimmed">
-                            {run.autoAnswered} decision{run.autoAnswered === 1 ? '' : 's'} answered automatically
-                          </p>
-                        {/if}
+                          {#if run.outcome === 'failed' && run.errorSummary}
+                            <p class="mt-0.5 line-clamp-2 text-[0.625rem] text-danger">
+                              {run.errorSummary}
+                            </p>
+                          {/if}
+                          {#if run.autoAnswered > 0}
+                            <p class="mt-0.5 text-[0.625rem] text-dimmed">
+                              {run.autoAnswered} decision{run.autoAnswered === 1 ? '' : 's'} answered
+                              automatically
+                            </p>
+                          {/if}
+                        </div>
+                      </button>
+                      <div class="flex shrink-0 items-start px-1.5 pt-2">
+                        <button
+                          type="button"
+                          class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                          aria-label="Dismiss unattended run for {backgroundRunTitle(run)}"
+                          title="Dismiss"
+                          onclick={() => void dismissBackgroundRun(run.runThreadId)}
+                        >
+                          <X size={11} />
+                        </button>
                       </div>
-                    </button>
+                    </div>
                   {/each}
                 </div>
               </div>

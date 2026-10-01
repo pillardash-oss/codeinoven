@@ -309,6 +309,10 @@
       globalBrowser.openNewTabAddress()
       return
     }
+    if (action === 'reopen-tab') {
+      globalBrowser.reopenLastClosedTab()
+      return
+    }
     if (action === 'toggle-notes') {
       globalBrowser.toggleContextSidebar()
       return

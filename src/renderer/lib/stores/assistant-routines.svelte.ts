@@ -338,6 +338,16 @@ class AssistantRoutinesState {
     await invoke('assistant:dismissMissedRun', id)
   }
 
+  /**
+   * Acknowledge one unattended run. The ledger removal is durable and main
+   * pushes the fresh list; the local filter makes the row leave the panel at
+   * once, without waiting for the push to land.
+   */
+  async dismissBackgroundRun(id: string): Promise<void> {
+    await invoke('assistant:dismissBackgroundRun', id)
+    this.backgroundRuns = this.backgroundRuns.filter((run) => run.runThreadId !== id)
+  }
+
   async runMissedRunNow(id: string): Promise<Thread | null> {
     return invoke('assistant:runMissedRunNow', id)
   }

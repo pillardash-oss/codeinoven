@@ -80,6 +80,14 @@ class ContextSidebarState {
    */
   private threadBrowserScopeResolver: ((projectId: string, threadId: string) => string) | null =
     null
+  /**
+   * How the sidebar names a conversation scope's own box. The workspace owns the
+   * only list of projects, routines and threads, so it registers this one
+   * resolver; until then a scope's box is named generically.
+   */
+  private threadBrowserScopeLabelResolver = $state<
+    ((projectId: string, threadId: string) => string) | null
+  >(null)
   width = $state(480)
   terminalHeight = $state(320)
   terminalPlacement = $state<TerminalPlacement>(loadTerminalPlacement())
@@ -135,6 +143,18 @@ class ContextSidebarState {
       this.threadBrowserScopeResolver?.(projectId, threadId) ??
       conversationScopeId(projectId, threadId, null)
     )
+  }
+
+  /** Register the workspace's scope-to-name resolver (see
+   *  `threadBrowserScopeLabelResolver`). */
+  setThreadBrowserScopeLabelResolver(
+    resolver: (projectId: string, threadId: string) => string
+  ): void {
+    this.threadBrowserScopeLabelResolver = resolver
+  }
+
+  private threadBrowserScopeLabel(projectId: string, threadId: string): string {
+    return this.threadBrowserScopeLabelResolver?.(projectId, threadId) ?? 'This conversation'
   }
 
   get tabs(): ContextSidebarTab[] {
@@ -560,6 +580,31 @@ class ContextSidebarState {
     reveal = false
   ): string {
     return this.browser.openForContext(url, projectId, threadId, requestedTabId, reveal)
+  }
+
+  /** The label of a conversation scope's own box, for the thread browser's box
+   *  control: a project's name, a routine's name, or a chat's title. */
+  browserScopeBoxLabel(projectId: string, threadId: string): string {
+    return this.threadBrowserScopeLabel(projectId, threadId)
+  }
+
+  /**
+   * Reopen one thread-browser tab in another box, applying the choice to the
+   * conversation's later tabs too. Null names the scope's own jar. Returns the
+   * replacement tab id, or null when the tab is gone or already in that box.
+   */
+  setBrowserTabBox(tabId: string, boxId: string | null): string | null {
+    return this.browser.reopenInBox(tabId, boxId)
+  }
+
+  /**
+   * Reopen the most recently closed browser tab of the conversation on screen,
+   * restoring its Back/Forward history. Session-scoped: quitting the app clears
+   * what can be reopened. Returns the reopened tab id, or null when this
+   * conversation has nothing to reopen.
+   */
+  reopenClosedBrowserTab(): string | null {
+    return this.browser.reopenLastClosedTab()
   }
 
   /**

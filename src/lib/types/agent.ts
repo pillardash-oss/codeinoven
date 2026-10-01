@@ -162,6 +162,10 @@ export interface ProviderModel {
   toolcall: boolean
   /** Maximum tokens the provider allows in one model context. */
   contextWindow?: number
+  /** Maximum tokens the model can generate in one response, when the provider
+   *  reports it. A provider bills this completion against the same context
+   *  window, so the app reserves it when budgeting a turn. */
+  maxOutputTokens?: number
   /** True when the harness exposes a fast-inference tier for this model. */
   fastSupported?: boolean
 }
