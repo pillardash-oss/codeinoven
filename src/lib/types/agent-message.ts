@@ -82,15 +82,24 @@ export interface PendingAgentQuestionRequest extends AgentQuestionRequest {
 export type AgentQuestionResolution = 'answered' | 'dismissed' | 'timed_out'
 
 /**
- * One secret value the user pasted into a `cio_ask_secret` card. The value is
+ * One entry of a `cio_ask_secret` submission. Each requested secret is answered
+ * on its own: with a pasted value, or with an instruction that lets the app
+ * reuse a value the device already holds for it. The value, when present, is
  * transient: it is consumed by the main process (vault + harness environment)
  * and never persisted in the thread transcript or returned to the renderer.
  */
-export interface AgentSecretSubmission {
-  /** Id of the secret question the value answers. */
-  secretId: string
-  value: string
-}
+export type AgentSecretSubmission =
+  | {
+      /** Id of the secret question the value answers. */
+      secretId: string
+      value: string
+    }
+  | {
+      /** Id of the secret question the instruction answers. */
+      secretId: string
+      /** What the agent should use or do instead of a pasted value. */
+      alternative: string
+    }
 
 /** A renderable piece of an agent message. */
 export type AgentPart =

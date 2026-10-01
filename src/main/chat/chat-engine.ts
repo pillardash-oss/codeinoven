@@ -2317,11 +2317,6 @@ export class ChatEngine {
       ) => this.answerSecret(projectId, threadId, requestId, secrets)
     )
     ipcMain.handle(
-      'agent:answerSecretAlternative',
-      (_, projectId: string, threadId: string, requestId: string, alternative: string) =>
-        this.answerSecretAlternative(projectId, threadId, requestId, alternative)
-    )
-    ipcMain.handle(
       'agent:dismissQuestion',
       (_, projectId: string, threadId: string, requestId: string) =>
         this.dismissQuestion(projectId, threadId, requestId)
@@ -2559,10 +2554,12 @@ export class ChatEngine {
   }
 
   /**
-   * Store the secrets a user pasted into a `cio_ask_secret` card and settle the
-   * gateway tool call that asked for them. The values never reach the transcript
-   * or the model: the card is resolved with a placeholder, and the tool answers
-   * with the variable names only.
+   * Store the secrets a user answered into a `cio_ask_secret` card and settle
+   * the gateway tool call that asked for them. Each secret is answered on its
+   * own, either with a pasted value or with an instruction that lets the app
+   * reuse a value the device already holds, so one card can mix the two. Values
+   * never reach the transcript or the model: the card is resolved with a
+   * placeholder, and the tool answers with the variable names only.
    */
   async answerSecret(
     projectId: string,
@@ -2577,74 +2574,47 @@ export class ChatEngine {
     const pending = this.requirePendingQuestion(projectId, threadId, requestId)
     const submissions = validateSecretSubmissions(secrets, pending.request.questions)
     const stored: AgentStoredSecret[] = []
+    const unresolved: string[] = []
+    const instructions: string[] = []
     for (const submission of submissions) {
       const question = pending.request.questions.find(
         (candidate) => candidate.secretId === submission.secretId
       )
       const environmentVariable = question?.secretEnvironmentVariable
       if (!question || !environmentVariable) continue
-      stored.push(
-        await this.agentSecrets.store({
-          secretId: submission.secretId,
-          environmentVariable,
-          value: submission.value,
-          label: question.header ?? question.prompt,
-          ...(question.secretUtilityId ? { utilityId: question.secretUtilityId } : {}),
-          threadId
-        })
+      const label = question.header ?? question.prompt
+      const utilityId = question.secretUtilityId
+      if ('value' in submission) {
+        stored.push(
+          await this.agentSecrets.store({
+            secretId: submission.secretId,
+            environmentVariable,
+            value: submission.value,
+            label,
+            ...(utilityId ? { utilityId } : {}),
+            threadId
+          })
+        )
+        continue
+      }
+      // An instruction instead of a value: the name the user wrote is only a
+      // candidate. The value is still adopted under the variable the agent
+      // asked for, and a name with nothing stored behind it is reported back so
+      // the agent can adapt instead of asking for the same value again.
+      const instruction = validateBoundedString(
+        submission.alternative,
+        'Alternative instruction',
+        1,
+        20_000
       )
-    }
-    const answers = pending.request.questions.map(() => [SECRET_ANSWER_PLACEHOLDER])
-    await this.resolvePendingQuestion(pending, 'answered', answers, async () => {
-      pending.settleSecret?.({
-        status: stored.length > 0 ? 'set' : 'dismissed',
-        secrets: stored
-      })
-    })
-  }
-
-  /**
-   * Settle a `cio_ask_secret` card with an instruction instead of a pasted value.
-   *
-   * The user is answering the request without handing over a value: typically the
-   * value already exists somewhere on this device and they no longer have it at
-   * hand. Every requested name is therefore resolved from state the user already
-   * stored (this thread, a credential bound to an installed utility, or another
-   * thread), adopted by this thread so later turns re-expose it, and settled on
-   * the waiting tool call together with the user's own words. Names with nothing
-   * stored behind them are reported back so the agent can adapt instead of asking
-   * for the same value again.
-   */
-  async answerSecretAlternative(
-    projectId: string,
-    threadId: string,
-    requestId: string,
-    alternative: string
-  ): Promise<void> {
-    this.touchUserActivity()
-    projectId = validateEntityId(projectId, 'Project ID')
-    threadId = validateEntityId(threadId, 'Thread ID')
-    requestId = validateEntityId(requestId, 'Question request ID', 256)
-    const instruction = validateBoundedString(alternative, 'Alternative instruction', 1, 20_000)
-    const pending = this.requirePendingQuestion(projectId, threadId, requestId)
-    const secretQuestions = pending.request.questions.filter(isSecretQuestion)
-    if (secretQuestions.length === 0) throw new TypeError('This request is not a secret request')
-    // Only names the user actually wrote are treated as extra candidates: the
-    // value is still adopted under the variable the agent asked for.
-    const candidateNames = alternativeSecretNames(instruction)
-    const stored: AgentStoredSecret[] = []
-    const unresolved: string[] = []
-    for (const question of secretQuestions) {
-      const environmentVariable = question.secretEnvironmentVariable
-      const secretId = question.secretId
-      if (!environmentVariable || !secretId) continue
+      instructions.push(instruction)
       const reused = await this.agentSecrets.reuse({
-        secretId,
+        secretId: submission.secretId,
         environmentVariable,
-        label: question.header ?? question.prompt,
+        label,
         threadId,
-        ...(question.secretUtilityId ? { utilityId: question.secretUtilityId } : {}),
-        candidateNames
+        ...(utilityId ? { utilityId } : {}),
+        candidateNames: alternativeSecretNames(instruction)
       })
       if (reused) stored.push(reused)
       else unresolved.push(environmentVariable)
@@ -2652,9 +2622,9 @@ export class ChatEngine {
     const answers = pending.request.questions.map(() => [SECRET_ANSWER_PLACEHOLDER])
     await this.resolvePendingQuestion(pending, 'answered', answers, async () => {
       pending.settleSecret?.({
-        status: 'alternative',
+        status: instructions.length > 0 ? 'alternative' : stored.length > 0 ? 'set' : 'dismissed',
         secrets: stored,
-        alternative: instruction,
+        ...(instructions.length > 0 ? { alternative: instructions.join('\n\n') } : {}),
         ...(unresolved.length > 0 ? { unresolved } : {})
       })
     })
