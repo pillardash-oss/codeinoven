@@ -4,7 +4,11 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import type { GlobalBrowserBox } from '$lib/stores/global-browser-types'
-  import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
+  import {
+    browserAppearanceAccent,
+    browserAppearanceHasIcon,
+    browserAppearanceIconUrl
+  } from './browser-group-appearance'
 
   /**
    * The thread browser's box control.
@@ -39,6 +43,17 @@
   const current = $derived(boxId ? globalBrowser.boxById(boxId) : null)
   const currentName = $derived(current?.name ?? scopeLabel)
   const currentAccent = $derived(current ? browserAppearanceAccent(current) : null)
+  /**
+   * The chosen box's own icon, worn in place of the generic box glyph so the
+   * trigger shows which jar is in use at a glance. Null for the scope's own jar
+   * (which has no appearance to draw) and for a box that was only given a colour,
+   * which falls back to an accent dot exactly like the tab row's box badge.
+   */
+  const currentIcon = $derived(
+    current && browserAppearanceHasIcon(current)
+      ? browserAppearanceIconUrl(current, globalBrowser.boxIconUrl(current.id))
+      : null
+  )
 
   const itemClass =
     'flex cursor-pointer items-start gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated'
@@ -58,7 +73,14 @@
     aria-label={`Box: ${currentName}. Choose which box this tab and new tabs use`}
     title={`Box: ${currentName}`}
   >
-    <Boxes size={13} style={currentAccent ? `color: ${currentAccent}` : undefined} />
+    {#if current && currentIcon}
+      <img src={currentIcon} alt="" class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain" />
+    {:else if current}
+      <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background-color: {currentAccent}"
+      ></span>
+    {:else}
+      <Boxes size={13} />
+    {/if}
     {#if labelled}
       <span class="max-w-32 truncate">{currentName}</span>
       <ChevronDown size={12} />
