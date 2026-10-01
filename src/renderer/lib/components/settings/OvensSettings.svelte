@@ -311,7 +311,7 @@
         {@const checkingNow = checking === oven.id}
         {@const state = health[oven.id]?.state}
         <SettingsEntry expanded={!folded[oven.id]}>
-          <div class="grid grid-cols-1 items-center gap-3 lg:grid-cols-[minmax(0,1fr)_10rem_auto]">
+          <div class="grid grid-cols-1 items-center gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
             <div class="flex min-w-0 items-center gap-3">
               <img
                 src={oven.customSvg
@@ -321,42 +321,40 @@
                 class="h-5 w-5"
               />
               <div class="min-w-0">
-                <div class="flex items-center gap-2">
+                <div class="flex flex-wrap items-center gap-2">
                   <span class="truncate text-sm font-semibold">{oven.name}</span>
                   {#if ovenState.defaultOvenId === oven.id}<span
                       class="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">Default</span
                     >{/if}
+                  <SettingsStatusBadge
+                    label={checkingNow
+                      ? 'Checking…'
+                      : state === 'connected'
+                        ? 'Connected'
+                        : state === 'disconnected'
+                          ? 'Disconnected'
+                          : 'Not checked'}
+                    classes={checkingNow
+                      ? 'border-info/30 bg-info/10 text-info'
+                      : state === 'connected'
+                        ? 'border-success/30 bg-success/10 text-success'
+                        : state === 'disconnected'
+                          ? 'border-danger/30 bg-danger/10 text-danger'
+                          : 'border-border bg-elevated text-dimmed'}
+                  >
+                    {#if checkingNow}<Loader2
+                        size={12}
+                        class="shrink-0 animate-spin"
+                      />{:else if state === 'connected'}<CheckCircle2
+                        size={12}
+                        class="shrink-0"
+                      />{:else if state === 'disconnected'}<AlertCircle
+                        size={12}
+                        class="shrink-0"
+                      />{:else}<Circle size={12} class="shrink-0" />{/if}
+                  </SettingsStatusBadge>
                 </div>
               </div>
-            </div>
-            <div class="min-w-0">
-              <SettingsStatusBadge
-                label={checkingNow
-                  ? 'Checking…'
-                  : state === 'connected'
-                    ? 'Connected'
-                    : state === 'disconnected'
-                      ? 'Disconnected'
-                      : 'Not checked'}
-                classes={checkingNow
-                  ? 'border-info/30 bg-info/10 text-info'
-                  : state === 'connected'
-                    ? 'border-success/30 bg-success/10 text-success'
-                    : state === 'disconnected'
-                      ? 'border-danger/30 bg-danger/10 text-danger'
-                      : 'border-border bg-elevated text-dimmed'}
-              >
-                {#if checkingNow}<Loader2
-                    size={12}
-                    class="shrink-0 animate-spin"
-                  />{:else if state === 'connected'}<CheckCircle2
-                    size={12}
-                    class="shrink-0"
-                  />{:else if state === 'disconnected'}<AlertCircle
-                    size={12}
-                    class="shrink-0"
-                  />{:else}<Circle size={12} class="shrink-0" />{/if}
-              </SettingsStatusBadge>
             </div>
             <div class="flex flex-wrap items-center gap-2">
               {#if busy === oven.id}<Loader2 size={14} class="animate-spin text-muted" />{/if}
