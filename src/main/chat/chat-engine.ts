@@ -47,6 +47,7 @@ import { ClineDriver } from '../drivers/cline-driver'
 import { AntigravityDriver } from '../drivers/antigravity-driver'
 import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
+import { OvenChat } from '../ovens/oven-chat'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import { formatTime } from '../../lib/date-time-format'
@@ -758,6 +759,7 @@ interface UserTerminalWindow {
 }
 
 export class ChatEngine {
+  private readonly ovenChat: OvenChat
   /** Close deadline: an untouched conversation is graded after this much inactivity. */
   private static readonly RANKING_INACTIVITY_CLOSE_MS = 24 * 60 * 60_000
 
@@ -1548,6 +1550,25 @@ export class ChatEngine {
     })
     this.baseUrlProviders = new BaseUrlProviderService(storage)
     this.accountRegistry = new HarnessAccountRegistry(storage)
+    this.ovenChat = new OvenChat(
+      storage,
+      this.secretVault,
+      this.threadManager,
+      this.accountRegistry,
+      (event) => {
+        if (event.type === 'session.status') this.sessionStatuses.set(event.sessionId, event.status)
+        if (event.type === 'session.idle')
+          this.sessionStatuses.set(event.sessionId, { state: 'idle' })
+        if (event.type === 'message.part.updated' || event.type === 'message.part.delta') {
+          const owner = this.sessionRegistry.get(event.sessionId)
+          if (owner)
+            void this.persistTurnStreamEvent(owner, event).catch((error: unknown) =>
+              Logger.dev('Oven working trace write failed', error)
+            )
+        }
+        this.broadcast(event)
+      }
+    )
     this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
     this.brainstormAlignmentNotes = new BrainstormAlignmentNotes(storage)
     this.routineAuthoringCheckpoints = new RoutineAuthoringCheckpoints(storage)
@@ -2501,6 +2522,12 @@ export class ChatEngine {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    const ovenThread = await this.threadManager.getThread(projectId, threadId)
+    if (ovenThread && this.ovenChat.remote(ovenThread)) {
+      await this.ovenChat.answer(ovenThread, requestId, answers)
+      return
+    }
+
     requestId = validateEntityId(requestId, 'Question request ID', 256)
     const pending = this.requirePendingQuestion(projectId, threadId, requestId)
     const safeAnswers = validateQuestionAnswers(answers, pending.request.questions)
@@ -2757,6 +2784,12 @@ export class ChatEngine {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    const ovenThread = await this.threadManager.getThread(projectId, threadId)
+    if (ovenThread && this.ovenChat.remote(ovenThread)) {
+      await this.ovenChat.answer(ovenThread, requestId, null)
+      return
+    }
+
     requestId = validateEntityId(requestId, 'Question request ID', 256)
     const pending = this.pendingQuestions.get(requestId)
     if (
@@ -2962,6 +2995,9 @@ export class ChatEngine {
   async listQuestions(projectId: string, threadId: string): Promise<PendingAgentQuestionRequest[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    const ovenThread = await this.threadManager.getThread(projectId, threadId)
+    if (ovenThread && this.ovenChat.remote(ovenThread)) return this.ovenChat.questions(ovenThread)
+
     await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.sessionId) return []
@@ -3164,6 +3200,7 @@ export class ChatEngine {
 
   /** Kill all pooled driver resources (called on app quit). */
   async dispose(): Promise<void> {
+    this.ovenChat.dispose()
     if (this.streamBroadcastTimer) {
       clearTimeout(this.streamBroadcastTimer)
       this.streamBroadcastTimer = null
@@ -4996,6 +5033,10 @@ export class ChatEngine {
     try {
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread) return false
+      if (this.ovenChat.remote(thread)) {
+        await this.ensureSession(projectId, threadId)
+        return true
+      }
       const driverId = thread.settings?.harnessId || DEFAULT_HARNESS
       if (driverId === 'opencode' && this.openCodeDriverIsV2) return false
       const account = await this.accountRegistry.resolveForProvider(
@@ -5028,6 +5069,29 @@ export class ChatEngine {
     await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
+    if (this.ovenChat.remote(thread)) {
+      const sessionId = thread.sessionId?.startsWith('oven-')
+        ? thread.sessionId
+        : `oven-${randomUUID()}`
+      if (sessionId !== thread.sessionId)
+        await this.threadManager.setSessionId(
+          projectId,
+          threadId,
+          sessionId,
+          thread.settings?.harnessId,
+          thread.settings?.accountId
+        )
+      this.registerSession(
+        sessionId,
+        projectId,
+        threadId,
+        thread.settings?.ovenPath ?? '',
+        thread.settings?.permissionLevel ?? 'auto_review',
+        thread.settings?.harnessId ?? DEFAULT_HARNESS
+      )
+      await this.ovenChat.restore(thread)
+      return sessionId
+    }
 
     const driverId = requestedDriverId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
     const account = await this.accountRegistry.resolveForProvider(
@@ -5403,6 +5467,7 @@ export class ChatEngine {
     await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return []
+    if (this.ovenChat.remote(thread)) return this.ovenChat.messages(thread)
     if (!thread.sessionId) {
       const messages = await this.threadManager.loadMessages(projectId, threadId)
       const projectPath = await this.resolveProjectPath(projectId)
@@ -6737,6 +6802,13 @@ export class ChatEngine {
     await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return null
+    if (this.ovenChat.remote(thread)) {
+      await this.ovenChat.restore(thread)
+      return thread.sessionId
+        ? (this.sessionStatuses.get(thread.sessionId) ?? { state: 'idle' })
+        : null
+    }
+
     if (!thread.sessionId) {
       return thread.status === 'working-paused'
         ? this.restoredRetryWaitStatus(thread, threadId)
@@ -7679,6 +7751,24 @@ export class ChatEngine {
     const messageId = validateEntityId(userMessageId, 'Message ID', 256)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
+    if (this.ovenChat.remote(thread)) {
+      await this.ovenChat.stop(thread)
+      return this.sendPrompt(
+        projectId,
+        threadId,
+        thread.settings!,
+        text,
+        attachments,
+        undefined,
+        messageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        'user',
+        presentation,
+        taskReferences
+      )
+    }
     const brainstormKey = `${projectId}:${threadId}`
     const activeBrainstorm = this.activeBrainstormSessions.get(brainstormKey)
     const activeSessionId = activeBrainstorm?.sessionId ?? thread.sessionId
@@ -8263,6 +8353,42 @@ export class ChatEngine {
     await this.threadCreation?.awaitReady(threadId)
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 0, 200_000)
+    const ovenThread = await this.threadManager.getThread(projectId, threadId)
+    if (ovenThread && this.ovenChat.remote(ovenThread, settings)) {
+      await this.threadManager.updateSettings(projectId, threadId, settings)
+      const sessionId = await this.ensureSession(projectId, threadId)
+      this.registerSession(
+        sessionId,
+        projectId,
+        threadId,
+        settings.ovenPath ?? '',
+        settings.permissionLevel,
+        settings.harnessId
+      )
+      const remoteContext = [
+        promptContext ? validateBoundedString(promptContext, 'Prompt context', 1, 100_000) : '',
+        ...validatePromptReferences(promptReferences).map(
+          (reference) =>
+            `${reference.label}:\n${reference.text}${reference.comment ? `\nUser comment: ${reference.comment}` : ''}`
+        ),
+        ...(projectReferences ?? []).map(
+          (reference) =>
+            `Workspace reference: ${validateBoundedString(reference.path, 'Reference path', 1, 4096)}`
+        )
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+      const bound = await this.threadManager.getThread(projectId, threadId)
+      return this.ovenChat.send(
+        bound ?? ovenThread,
+        settings,
+        text,
+        attachments,
+        userMessageId,
+        remoteContext
+      )
+    }
+
     // A continuation relay re-sends a request the user made earlier, and its
     // files can be gone from disk by the time the retry runs. A vanished file
     // drops from the relay so the turn still carries the request; failing it
@@ -12056,9 +12182,7 @@ export class ChatEngine {
     // applies instead.
     const reportedWindow = contextWindow ?? 0
     const outputTokens =
-      maxOutputTokens !== undefined &&
-      reportedWindow > 0 &&
-      maxOutputTokens < reportedWindow / 2
+      maxOutputTokens !== undefined && reportedWindow > 0 && maxOutputTokens < reportedWindow / 2
         ? maxOutputTokens
         : undefined
     return computePromptBudget({ contextWindow, outputTokens }).availableInputTokens
@@ -12081,6 +12205,12 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
+    if (thread && this.ovenChat.remote(thread)) {
+      await this.threadManager.markStoppedByUser(projectId, threadId)
+      await this.ovenChat.stop(thread)
+      return
+    }
+
     // Latch the stop immediately so a failure that arrives mid-teardown cannot
     // re-track an auto-retry between this point and the status write below. A
     // transfer deliberately skips the latch: the run continues elsewhere.
@@ -12547,6 +12677,21 @@ export class ChatEngine {
     // anything else: neither may outlive the file.
     await this.forgetThreadStream(projectId, threadId)
 
+    if (await this.ovenChat.release(projectId, threadId)) {
+      let localSession = false
+      for (const [sessionId, owner] of this.sessionRegistry) {
+        if (owner.projectId === projectId && owner.threadId === threadId) {
+          if (!sessionId.startsWith('oven-')) {
+            localSession = true
+            continue
+          }
+          this.sessionRegistry.delete(sessionId)
+          this.sessionStatuses.delete(sessionId)
+        }
+      }
+      if (!localSession) return
+    }
+
     const tearDownSession = async (
       sessionId: string,
       info?: { driverId?: string; projectPath?: string; accountId?: string }
@@ -12685,6 +12830,7 @@ export class ChatEngine {
     if (alternativeInstruction !== undefined && reply !== 'reject') {
       throw new TypeError('An alternative instruction must reject the requested action')
     }
+    if (await this.ovenChat.permission(projectId, requestId, reply, alternativeInstruction)) return
     const pending = this.pendingPermissions.get(requestId)
     if (!pending || pending.session.projectId !== projectId) {
       Logger.dev(`Ignoring reply for resolved permission request: ${requestId}`)
@@ -12826,6 +12972,9 @@ export class ChatEngine {
   async listPermissions(projectId: string, threadId: string): Promise<PermissionRequest[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    const ovenThread = await this.threadManager.getThread(projectId, threadId)
+    if (ovenThread && this.ovenChat.remote(ovenThread)) return this.ovenChat.permissions(ovenThread)
+
     return [...this.pendingPermissions.values()]
       .filter((pending) => {
         if (pending.session.projectId !== projectId) return false
@@ -19220,9 +19369,13 @@ export class ChatEngine {
    */
   async resumeRecoveredThreads(recovered: Thread[]): Promise<void> {
     const config = await this.storage.getConfig()
-    if (config.resumeWorkOnRestart === false) return
     for (const thread of recovered) {
       try {
+        if (this.ovenChat.remote(thread)) {
+          await this.ensureSession(thread.projectId, thread.id)
+          continue
+        }
+        if (config.resumeWorkOnRestart === false) continue
         await this.resumeThreadFromPersistedSession(thread)
       } catch (error) {
         // Leave the thread in its interrupted state; the user can still Retry manually.

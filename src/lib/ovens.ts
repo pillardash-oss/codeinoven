@@ -86,6 +86,67 @@ export interface StartOvenRunInput {
 
 export const OVEN_HARNESS_COMMANDS = ['codex', 'claude', 'opencode', 'muse', 'pi', 'cline'] as const
 
+export interface OvenFile {
+  path: string
+  kind: 'file' | 'directory' | 'symlink'
+  size: number
+  modifiedAt: number
+  mode: number
+  target?: string
+}
+
+export type OvenWorkspaceRequest =
+  | { operation: 'ensure'; root: string }
+  | { operation: 'reserve'; root: string }
+  | { operation: 'list'; root: string; path: string; after?: string }
+  | { operation: 'read'; root: string; path: string; offset: number }
+  | {
+      operation: 'write'
+      root: string
+      path: string
+      offset: number
+      data: string
+      exclusive?: boolean
+      mode?: number
+    }
+  | { operation: 'mkdir'; root: string; path: string }
+  | { operation: 'symlink'; root: string; path: string; target: string }
+  | { operation: 'stat'; root: string; path: string }
+  | {
+      operation: 'replace'
+      root: string
+      path: string
+      staged: string
+      mode: number
+      expectedData?: string
+    }
+  | { operation: 'git'; root: string; action: 'status' | 'diff' | 'log' }
+  | { operation: 'clone'; root: string; url: string }
+
+export interface OvenWorkspaceResult {
+  root: string
+  files?: OvenFile[]
+  after?: string
+  data?: string
+  size?: number
+  text?: string
+  file?: OvenFile
+}
+
+export interface OvenTransferInput {
+  sourceOvenId: string
+  sourceRoot: string
+  targetOvenId: string
+  targetRoot: string
+}
+
+export interface OvenTransferReview extends OvenTransferInput {
+  id: string
+  files: number
+  bytes: number
+  expiresAt: number
+}
+
 /** Accept the familiar SSH form without ever accepting arbitrary CLI options. */
 export function parseOvenAddress(value: string): Pick<OvenConnection, 'host' | 'user' | 'port'> {
   const address = value.trim().replace(/^ssh\s+/u, '')

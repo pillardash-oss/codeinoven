@@ -134,6 +134,7 @@
     saveIndependentAuditIntent,
     clearIndependentAuditIntent
   } from '$lib/stores/lifecycle-intent'
+  import OvenControls from './OvenControls.svelte'
   import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
     initialSettingsFor,
@@ -13125,6 +13126,9 @@
                 {#if foreignRunActive}
                   <ForeignRunCard projectId={thread.projectId} threadId={thread.id} />
                 {:else}
+                  {#if !controller}
+                    <OvenControls {thread} {settings} {busy} onSettingsChange={updateSettings} />
+                  {/if}
                   {#key composerRestoreKey}
                     <ChatComposer
                       bind:this={composer}

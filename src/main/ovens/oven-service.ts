@@ -9,6 +9,7 @@ import {
   type OvenRunEvent,
   type StartOvenRunInput
 } from '../../lib/ovens'
+import type { OvenWorkspaceRequest, OvenWorkspaceResult } from '../../lib/ovens'
 import { OvenSsh, sshQuote } from './oven-ssh'
 import type { OvenRegistry } from './oven-registry'
 
@@ -61,6 +62,26 @@ export class OvenService {
 
   async stop(id: string, runId: string): Promise<void> {
     this.decode(await this.request(id, { method: 'stop', runId }))
+  }
+
+  async workspace(id: string, input: OvenWorkspaceRequest): Promise<OvenWorkspaceResult> {
+    return this.decode(await this.request(id, { method: 'workspace', input }))
+  }
+
+  async putFile(id: string, root: string, path: string, data: Buffer, mode = 0o600): Promise<void> {
+    const staged = `${path}.${randomUUID()}.next`
+    for (let offset = 0; offset < data.length || offset === 0; offset += 128 * 1024) {
+      await this.workspace(id, {
+        operation: 'write',
+        root,
+        path: staged,
+        offset,
+        data: data.subarray(offset, offset + 128 * 1024).toString('base64'),
+        exclusive: offset === 0,
+        mode
+      })
+    }
+    await this.workspace(id, { operation: 'replace', root, path, staged, mode })
   }
 
   private request(id: string, input: Record<string, unknown>): Promise<string> {

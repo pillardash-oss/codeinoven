@@ -8,6 +8,7 @@ import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { once } from 'node:events'
 import type { OvenProbe, OvenRun, OvenRunEvent } from '../../../lib/ovens'
+import { ovenWorkspace } from './oven-workspace'
 
 const PROTOCOL = 1
 const revision = process.env['CODEINOVEN_OVEN_REVISION'] ?? 'development'
@@ -23,6 +24,13 @@ const MAX_REQUEST = 1024 * 1024
 const MAX_RUNS = 64
 const MAX_ACTIVE = 4
 const MAX_JOURNAL = 64 * 1024 * 1024
+
+function stopChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+  if (process.platform !== 'win32' && child.pid) {
+    try { process.kill(-child.pid, signal); return } catch { /* Process group already exited. */ }
+  }
+  child.kill(signal)
+}
 
 interface Job {
   run: OvenRun
@@ -92,7 +100,7 @@ function journal(job: Job, stream: OvenRunEvent['stream'], text: string): void {
   const size = Buffer.byteLength(line)
   if (job.bytes + size > MAX_JOURNAL || job.queuedBytes + size > MAX_REQUEST) {
     job.run.status = 'failed'
-    job.child?.kill('SIGTERM')
+    if (job.child) stopChild(job.child, 'SIGTERM')
     return
   }
   job.bytes += size
@@ -177,6 +185,7 @@ async function start(raw: unknown): Promise<OvenRun> {
     const child = spawn(path, value.args as string[], {
       cwd: run.cwd,
       env,
+      detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe']
     })
     job.child = child
@@ -243,6 +252,7 @@ async function dispatch(raw: unknown): Promise<unknown> {
   if (request.protocolVersion !== PROTOCOL) throw new Error('Oven protocol version mismatch.')
   if (request.method === 'probe') return probe()
   if (request.method === 'runs') return [...jobs.values()].map((job) => job.run)
+  if (request.method === 'workspace') return ovenWorkspace(request.input)
   if (request.method === 'shutdown') {
     if ([...jobs.values()].some((job) => job.child))
       throw new Error('Finish or stop active runs before updating the Oven service.')
@@ -256,10 +266,10 @@ async function dispatch(raw: unknown): Promise<unknown> {
   if (request.method === 'stop') {
     if (job.child) {
       job.run.status = 'stopped'
-      job.child.kill('SIGTERM')
+      stopChild(job.child, 'SIGTERM')
       const child = job.child
       const timer = setTimeout(() => {
-        if (job.child === child) child.kill('SIGKILL')
+        if (job.child === child) stopChild(child, 'SIGKILL')
       }, 5000)
       timer.unref()
     }

@@ -198,6 +198,17 @@
             </div>
             <div class="flex flex-wrap items-center gap-2">
               {#if busy === oven.id}<Loader2 size={14} class="animate-spin text-muted" />{/if}
+              {#if ovenState.defaultOvenId !== oven.id}
+                <button
+                  type="button"
+                  class="rounded-lg border px-2.5 py-1.5 text-xs hover:bg-elevated"
+                  disabled={Boolean(busy)}
+                  onclick={() =>
+                    void invoke('oven:setDefault', oven.id)
+                      .then((next) => (ovenState = next))
+                      .catch((failure: unknown) => (error = message(failure)))}>Set default</button
+                >
+              {/if}
               {#if oven.id !== LOCAL_OVEN_ID}
                 <button
                   type="button"

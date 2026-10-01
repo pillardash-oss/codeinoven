@@ -1,3 +1,4 @@
+import { isThreadBusyStatus } from '../thread-status-policy'
 import { rm } from 'fs/promises'
 import { generateId } from '../utils'
 import { threadOwnedDirectories } from '../thread-storage-paths'
@@ -1159,6 +1160,11 @@ export class ThreadManager {
     settings: ThreadSettings
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
+    const ovenChanged =
+      (existing.settings?.ovenId ?? 'local') !== (settings.ovenId ?? 'local') ||
+      existing.settings?.ovenPath !== settings.ovenPath
+    if (ovenChanged && isThreadBusyStatus(existing.status))
+      throw new Error('Stop or finish the active turn before changing Ovens.')
 
     // The independent audit owns the thread's workflow: engineering modes are
     // locked out for the thread's lifetime once it is enabled.

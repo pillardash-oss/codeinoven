@@ -1,0 +1,192 @@
+<script lang="ts">
+  import { onMount } from 'svelte'
+  import { Server, FolderOpen } from '@lucide/svelte'
+  import { invoke } from '$lib/ipc.svelte'
+  import type { Thread, ThreadSettings } from '$shared/types'
+  import type { OvenState } from '$shared/ovens'
+  import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import Modal from '../ui/Modal.svelte'
+  import OvenWorkspace from './OvenWorkspace.svelte'
+  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
+
+  interface Props {
+    thread: Thread
+    settings: ThreadSettings
+    busy: boolean
+    onSettingsChange: (settings: ThreadSettings) => void
+  }
+  let { thread, settings, busy, onSettingsChange }: Props = $props()
+  let ovens = $state.raw<OvenState | null>(null)
+  let editor = $state(false)
+  let workspace = $state(false)
+  let selected = $state(LOCAL_OVEN_ID)
+  let root = $state('')
+  let saving = $state(false)
+  let error = $state('')
+  let current = $derived(
+    ovens?.ovens.find((oven) => oven.id === (settings.ovenId ?? LOCAL_OVEN_ID))
+  )
+
+  onMount(() => {
+    void invoke('oven:state')
+      .then((result) => {
+        ovens = result
+        if (
+          !settings.ovenId &&
+          !thread.sessionId &&
+          thread.status === 'created' &&
+          result.defaultOvenId !== LOCAL_OVEN_ID
+        ) {
+          onSettingsChange({ ...settings, ovenId: result.defaultOvenId, ovenPath: undefined })
+        }
+      })
+      .catch(
+        (failure: unknown) =>
+          (error = failure instanceof Error ? failure.message : 'Could not load Ovens.')
+      )
+  })
+
+  async function openEditor(): Promise<void> {
+    selected = settings.ovenId ?? LOCAL_OVEN_ID
+    root = settings.ovenPath ?? ''
+    error = ''
+    try {
+      ovens = await invoke('oven:state')
+      editor = true
+    } catch (failure) {
+      error = failure instanceof Error ? failure.message : 'Could not load Ovens.'
+    }
+  }
+
+  async function select(): Promise<void> {
+    saving = true
+    error = ''
+    try {
+      // Persist the settings first because a new thread can still have its initial
+      // model only in the composer. The selection endpoint owns the busy guard.
+      await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
+      const updated = await invoke(
+        'oven:selectThread',
+        thread.projectId,
+        thread.id,
+        selected,
+        root || undefined
+      )
+      if (updated.settings) onSettingsChange(updated.settings)
+      editor = false
+    } catch (failure) {
+      error = failure instanceof Error ? failure.message : 'Could not select this Oven.'
+    } finally {
+      saving = false
+    }
+  }
+</script>
+
+<div class="flex flex-wrap items-center gap-2 px-1 py-1 text-xs text-muted">
+  <button
+    type="button"
+    class="flex items-center gap-1.5 rounded-md px-2 py-1 hover:bg-elevated disabled:opacity-50"
+    title="Choose the Oven for this chat"
+    disabled={busy || saving}
+    onclick={() => void openEditor()}
+  >
+    {#if current}
+      <img
+        class="h-3 w-3"
+        alt=""
+        src={current.customSvg
+          ? getCustomSvgDataUrl(current.customSvg, current.color)
+          : getIconSvgDataUrl(current.icon, current.color)}
+      />
+    {:else}<Server size={12} />{/if}<span
+      >{current?.name ??
+        (settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID ? 'Oven unavailable' : 'Local')}</span
+    >
+  </button>
+  {#if settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID}
+    <button
+      type="button"
+      class="flex items-center gap-1.5 rounded-md px-2 py-1 hover:bg-elevated"
+      title="Open the workspace on this Oven"
+      onclick={() => (workspace = true)}><FolderOpen size={12} /> Workspace</button
+    >
+  {/if}
+  {#if error && !editor}<span class="text-danger" role="alert">{error}</span>{/if}
+</div>
+
+<Modal
+  open={editor}
+  title="Choose Oven"
+  onClose={() => {
+    if (!saving) editor = false
+  }}
+>
+  <form
+    id="oven-selection"
+    class="space-y-4"
+    onsubmit={(event) => {
+      event.preventDefault()
+      void select()
+    }}
+  >
+    <label class="block space-y-1 text-xs text-muted"
+      >Oven
+      <select
+        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
+        bind:value={selected}
+      >
+        {#each ovens?.ovens ?? [] as oven (oven.id)}<option value={oven.id}
+            >{oven.name}{oven.id === LOCAL_OVEN_ID ? ' · This computer' : ' · SSH'}</option
+          >{/each}
+      </select>
+    </label>
+    {#if selected !== LOCAL_OVEN_ID}
+      <label class="block space-y-1 text-xs text-muted"
+        >Workspace on this Oven
+        <input
+          class="w-full rounded-lg border bg-elevated px-3 py-2 font-mono text-sm text-foreground"
+          bind:value={root}
+          placeholder="~/projects/my-repo"
+        />
+      </label>
+      <p class="text-xs text-dimmed">
+        Leave empty for a workspace owned by this chat. Files move only through an explicit
+        transfer.
+      </p>
+    {/if}
+    {#if error}<p class="text-xs text-danger" role="alert">{error}</p>{/if}
+  </form>
+  {#snippet footer()}
+    <button
+      type="button"
+      class="rounded-lg px-3 py-2 text-sm hover:bg-elevated"
+      disabled={saving}
+      onclick={() => (editor = false)}>Cancel</button
+    >
+    <button
+      type="submit"
+      form="oven-selection"
+      data-modal-primary
+      class="rounded-lg bg-primary px-4 py-2 text-sm text-on-primary"
+      disabled={saving || busy}>{saving ? 'Selecting…' : 'Use Oven'}</button
+    >
+  {/snippet}
+</Modal>
+
+{#if workspace && settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID}
+  <OvenWorkspace
+    open={workspace}
+    ovenId={settings.ovenId}
+    root={settings.ovenPath ?? ''}
+    {thread}
+    {ovens}
+    onUseRoot={async (path) => {
+      selected = settings.ovenId ?? LOCAL_OVEN_ID
+      root = path
+      await select()
+      if (error) throw new Error(error)
+    }}
+    onClose={() => (workspace = false)}
+  />
+{/if}
