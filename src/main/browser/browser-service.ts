@@ -885,7 +885,7 @@ export class BrowserService {
     void this.ensureExtensionPageTabsPreload()
     replaceHandler(
       'browser:show',
-      (_event, rawTabId, rawProjectId, rawThreadId, rawInitialUrl, rawBounds, rawBoxId) => {
+      async (_event, rawTabId, rawProjectId, rawThreadId, rawInitialUrl, rawBounds, rawBoxId) => {
         const tabId = validateTabId(rawTabId)
         const projectId = validateProjectId(rawProjectId)
         const threadId = validateThreadId(rawThreadId)
@@ -894,6 +894,13 @@ export class BrowserService {
         // Absent on every call that predates boxes, and on every agent-driven
         // tab, which is what makes "no box whatsoever" the same code path.
         const boxId = validateOptionalBoxId(rawBoxId)
+        // The first document must not outrun extensions in its jar. If a page
+        // navigates before Chromium has loaded an extension, its manifest content
+        // scripts never get a receiver in that document, and later calls such as
+        // Bitwarden's tabs.sendMessage fail until the page is reloaded. ensureTab
+        // remains synchronous; this IPC path waits for the same single-flight load
+        // before it creates and navigates a page.
+        await this.extensions.ensureJarLoaded(projectId, boxId)
         const tab = this.ensureTab(tabId, projectId, threadId, boxId)
 
         // A show that lands inside the grace window of a hide is a surface switch
@@ -4426,10 +4433,23 @@ export class BrowserService {
   private navigateTo(tabId: string, url: string): void {
     const tab = this.tabs.get(tabId)
     if (!tab || tab.view.webContents.isDestroyed()) return
-    void tab.view.webContents.loadURL(url).catch((error: unknown) => {
-      Logger.dev('Browser navigation did not complete:', { tabId, url, error })
-      this.publishState(tabId)
-    })
+    const contents = tab.view.webContents
+    void this.extensions
+      .ensureJarLoaded(tab.projectId, tab.boxId)
+      .catch((error: unknown) => {
+        // An extension load failure must not prevent the page itself from opening.
+        Logger.dev('Browser extensions could not be prepared before navigation:', {
+          tabId,
+          error
+        })
+      })
+      .then(() => {
+        if (this.tabs.get(tabId) !== tab || contents.isDestroyed()) return
+        void contents.loadURL(url).catch((error: unknown) => {
+          Logger.dev('Browser navigation did not complete:', { tabId, url, error })
+          this.publishState(tabId)
+        })
+      })
   }
 
   /** Open the page-level context menu anchored at a point (the toolbar's page
