@@ -57,6 +57,7 @@ import {
   DOWNLOAD_EVENT_INTERVAL_MS,
   MAX_BROWSER_URL_LENGTH,
   MAX_TRACKED_DOWNLOADS,
+  boxIdFromPartition,
   browserPartitionFor,
   safeBasename
 } from './browser-validation'
@@ -80,6 +81,11 @@ const ADOPTION_TIMEOUT_MS = 10_000
  *  record that outlives it. */
 interface TrackedDownload {
   download: BrowserDownload
+  /** The box this download's page ran in, while this run knows it: a resume or a
+   *  retry has to be issued through the same jar, and a shared box jar is not the
+   *  project's own. Null for the context's own jar, and after a restart, when the
+   *  durable record cannot say which box the page was in. */
+  boxId: string | null
   /** The live Chromium download, or null once it finished and after a restart. */
   item: DownloadItem | null
   /** Every URL the download was redirected through, which is what a resume needs. */
@@ -110,6 +116,13 @@ interface PendingAdoption {
   timer: ReturnType<typeof setTimeout>
 }
 
+/** The tab behind a page that started a download: its project, and the box its
+ *  jar belongs to. Null for a page no live tab owns. */
+export interface BrowserDownloadOwner {
+  projectId: string
+  boxId: string | null
+}
+
 export interface BrowserDownloadManagerDeps {
   persistence: DownloadPersistence
   /** The window that currently shows the app, or null while none does. */
@@ -118,6 +131,9 @@ export interface BrowserDownloadManagerDeps {
    *  Replaced by `setTabResolver` whenever a browser service is attached, because
    *  the tabs belong to the window that was rebuilt. */
   findTabId?: (projectId: string, contentsId: number) => string | undefined
+  /** The tab behind a page, whatever project or box it belongs to. Replaced by
+   *  `setOwnerResolver` on attach, for the same reason as `findTabId` above. */
+  findOwnerTab?: (contentsId: number) => BrowserDownloadOwner | null
 }
 
 export class BrowserDownloadManager {
@@ -131,6 +147,7 @@ export class BrowserDownloadManager {
    *  is in flight is never cleared by the write that missed it. */
   private readonly removedRecords = new Set<string>()
   private findTabId: ((projectId: string, contentsId: number) => string | undefined) | null
+  private findOwnerTab: ((contentsId: number) => BrowserDownloadOwner | null) | null
   private hydrated = false
   private persistTimer: ReturnType<typeof setTimeout> | null = null
   private persisting = false
@@ -139,6 +156,7 @@ export class BrowserDownloadManager {
   constructor(private readonly deps: BrowserDownloadManagerDeps) {
     this.store = new BrowserDownloadStore(deps.persistence)
     this.findTabId = deps.findTabId ?? null
+    this.findOwnerTab = deps.findOwnerTab ?? null
   }
 
   /** Point tab lookup at the browser service that owns the current window's
@@ -147,6 +165,13 @@ export class BrowserDownloadManager {
     resolver: ((projectId: string, contentsId: number) => string | undefined) | null
   ): void {
     this.findTabId = resolver
+  }
+
+  /** Point the owner lookup at that same service, so a download is recorded
+   *  against the project whose tab started it, and resumed through the jar that
+   *  page ran in, rather than against whichever context opened the jar first. */
+  setOwnerResolver(resolver: ((contentsId: number) => BrowserDownloadOwner | null) | null): void {
+    this.findOwnerTab = resolver
   }
 
   /**
@@ -210,6 +235,9 @@ export class BrowserDownloadManager {
           resumable: recovered.resumable,
           startedAt: record.startedAt
         },
+        // The durable record cannot name the box a page was in, so a resumed
+        // download from an earlier run goes through the project's own jar.
+        boxId: null,
         item: null,
         urlChain: record.urlChain,
         lastModified: record.lastModified,
@@ -221,14 +249,30 @@ export class BrowserDownloadManager {
     if (changed) await this.persist()
   }
 
-  /** Watch one project's browser session for downloads. One registration per
-   *  partition, however many times the window that uses it is rebuilt. */
-  watchSession(projectId: string, browserSession: Session): void {
-    const partition = browserPartitionFor(projectId)
+  /**
+   * Register the download listener for one session.
+   *
+   * Keyed by the session's partition, not by a project: a box's jar is one
+   * session shared by every context that picked that box, so the second context
+   * to open it must not add a listener that would record the same download twice.
+   * `projectId` is the fallback owner, used when a download's page cannot be
+   * traced back to a tab.
+   */
+  watchSession(projectId: string, browserSession: Session, partition: string): void {
     if (this.watchedPartitions.has(partition)) return
     this.watchedPartitions.add(partition)
+    // The fallback owner for a download whose page cannot be traced back to a tab:
+    // the jar's own box, when the session is a box's, so a resume still reaches
+    // the right jar.
+    const jarBoxId = boxIdFromPartition(partition)
     browserSession.on('will-download', (_event, item, contents) => {
-      this.handleDownload(projectId, item, contents?.id)
+      const owner = contents ? (this.findOwnerTab?.(contents.id) ?? null) : null
+      this.handleDownload(
+        owner?.projectId ?? projectId,
+        item,
+        contents?.id,
+        owner?.boxId ?? jarBoxId
+      )
     })
   }
 
@@ -312,7 +356,7 @@ export class BrowserDownloadManager {
     this.watchAdoption(`retry:${url}`, record, previous)
     this.emit(downloadId, true)
     this.schedulePersist()
-    this.sessionFor(projectId).downloadURL(url)
+    this.sessionFor(projectId, record.boxId).downloadURL(url)
   }
 
   cancel(downloadId: string): void {
@@ -488,7 +532,12 @@ export class BrowserDownloadManager {
 
   /** Route a `will-download` into the record it belongs to: a resume or retry the
    *  manager asked for, or a download the user just started. */
-  private handleDownload(projectId: string, item: DownloadItem, contentsId?: number): void {
+  private handleDownload(
+    projectId: string,
+    item: DownloadItem,
+    contentsId?: number,
+    boxId: string | null = null
+  ): void {
     const url = item.getURL().slice(0, MAX_BROWSER_URL_LENGTH)
     const savePath = item.getSavePath()
     const resumed = savePath.length > 0 ? this.takeAdoption(`resume:${savePath}`) : null
@@ -526,6 +575,9 @@ export class BrowserDownloadManager {
 
     const id = retry?.id ?? crypto.randomUUID()
     const record: TrackedDownload = {
+      // A retry keeps the jar the download was started in, which is not the
+      // context's own jar when the page ran in one of the profile's boxes.
+      boxId: boxId ?? (retry ? (this.downloads.get(retry.id)?.boxId ?? null) : null),
       download: {
         id,
         tabId: contentsId === undefined ? '' : (this.findTabId?.(projectId, contentsId) ?? ''),
@@ -794,7 +846,7 @@ export class BrowserDownloadManager {
     this.emit(downloadId, true)
     this.schedulePersist()
     try {
-      this.sessionFor(projectId).createInterruptedDownload({
+      this.sessionFor(projectId, record.boxId).createInterruptedDownload({
         path: savePath,
         urlChain: record.urlChain,
         mimeType,
@@ -901,9 +953,10 @@ export class BrowserDownloadManager {
    *  to be issued through, so the download listener is registered here as well as
    *  when a tab first reaches the session: a download recovered from an earlier
    *  run can be resumed before any browser tab exists in this one. */
-  private sessionFor(projectId: string): Session {
-    const browserSession = session.fromPartition(browserPartitionFor(projectId))
-    this.watchSession(projectId, browserSession)
+  private sessionFor(projectId: string, boxId: string | null = null): Session {
+    const partition = browserPartitionFor(projectId, boxId)
+    const browserSession = session.fromPartition(partition)
+    this.watchSession(projectId, browserSession, partition)
     return browserSession
   }
 

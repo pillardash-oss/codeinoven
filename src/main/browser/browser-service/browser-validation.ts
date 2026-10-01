@@ -4,6 +4,7 @@
  * validators before the service touches it.
  */
 
+import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/types'
 import type {
   BrowserInspectorMarker,
   BrowserInspectorTheme,
@@ -63,15 +64,28 @@ export const LEGACY_BROWSER_PARTITION = 'persist:codeinoven-browser'
 
 /** Session partition one browser context runs in, boxed or not. The download
  *  manager has to reach the same session the browser's tabs use, so the naming
- *  lives here rather than being spelled out at each caller. */
+ *  lives here rather than being spelled out at each caller.
+ *
+ *  A context's own jar is named by its project id. A box's jar is named by the
+ *  box instead, under the reserved global context id: a box is one identity of
+ *  the profile, so every context that picks it joins the one Chromium profile
+ *  the global browser made it in, cookies, cache and extensions included. */
 export function browserPartitionFor(projectId: string, boxId: string | null = null): string {
-  return boxId === null
-    ? `${BROWSER_PARTITION_PREFIX}${projectId}`
-    : `${BROWSER_PARTITION_PREFIX}${projectId}${BROWSER_BOX_PARTITION_INFIX}${boxId}`
+  return boxId === null ? `${BROWSER_PARTITION_PREFIX}${projectId}` : browserBoxPartitionFor(boxId)
 }
 
-/** Separates one box's jar from the context's own jar inside a partition name. */
-export const BROWSER_BOX_PARTITION_INFIX = ':box:'
+/** The namespace the profile's shared box jars live in. It is the global
+ *  browser's, because a box is made there and every other context that picks one
+ *  joins the jar that box already has. A box id carries its own `box:` prefix, so
+ *  a box's partition spells `box` twice: the namespace, then the id. */
+export const BROWSER_BOX_PARTITION_PREFIX = `${BROWSER_PARTITION_PREFIX}${GLOBAL_BROWSER_PROJECT_ID}:box:`
+
+/** The partition of one shared box jar. A box belongs to the profile rather than
+ *  to a context, so this takes no project id: every context that picks that box
+ *  resolves to the one jar here. */
+export function browserBoxPartitionFor(boxId: string): string {
+  return `${BROWSER_BOX_PARTITION_PREFIX}${boxId}`
+}
 
 /** Ceiling on a box id. The renderer's store mints these, so the shape is an id,
  *  never a name the user typed. */
@@ -91,27 +105,26 @@ export function validateOptionalBoxId(value: unknown): string | null {
   return value
 }
 
-/** Whether a partition string belongs to one context's browser, boxed or not.
- *  Context ids can be prefixes of each other, so this is an exact match plus the
- *  infix, never a bare prefix test. */
+/** Whether a partition is one of the profile's shared box jars. */
+export function isBrowserBoxPartition(partition: string): boolean {
+  return partition.startsWith(BROWSER_BOX_PARTITION_PREFIX)
+}
+
+/** Whether a partition is one context's own jar. A box jar is shared by every
+ *  context that picks that box, so it belongs to no single context. */
 export function partitionBelongsToProject(partition: string, projectId: string): boolean {
-  const own = browserPartitionFor(projectId)
-  return partition === own || partition.startsWith(`${own}${BROWSER_BOX_PARTITION_INFIX}`)
+  return partition === browserPartitionFor(projectId)
 }
 
 /**
- * The box id a partition names, or null for the context's own jar.
+ * The box id a partition names, or null for a context's own jar.
  *
- * A partition that does not belong to the context also answers null, which is why
- * callers are expected to filter with {@link partitionBelongsToProject} first: the
- * two together are how a context-wide operation enumerates its own jars without
- * ever reaching another context's storage.
+ * A partition that is not a box jar answers null, which is what lets a caller
+ * sweep the sessions of a window and keep only the ones a box owns.
  */
-export function boxIdFromPartition(partition: string, projectId: string): string | null {
-  const own = browserPartitionFor(projectId)
-  const prefix = `${own}${BROWSER_BOX_PARTITION_INFIX}`
-  if (!partition.startsWith(prefix)) return null
-  const boxId = partition.slice(prefix.length)
+export function boxIdFromPartition(partition: string): string | null {
+  if (!isBrowserBoxPartition(partition)) return null
+  const boxId = partition.slice(BROWSER_BOX_PARTITION_PREFIX.length)
   return boxId.length > 0 ? boxId : null
 }
 export const MAX_BROWSER_URL_LENGTH = 8192

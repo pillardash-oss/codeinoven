@@ -12,12 +12,14 @@
  *      cross-session extension, so each box that enables one gets its own copy with
  *      its own storage. That is the point of containing an extension: two boxes can
  *      run different extensions, or the same one with separate state.
- *   3. **The jars are the global browser's.** Only that context's jars are
- *      reconciled: the panel that installs an extension, the boxes it can be placed
- *      in and the pins in the header all belong to that browser. A project's browser,
- *      which is the light one a conversation opens beside itself with no boxes and
- *      no extension chrome, never loads one, so no third-party code or extension
- *      renderer sits behind a thread browser.
+ *   3. **The extensions follow the jar, and only the global browser's jars carry
+ *      them.** The panel that installs an extension, the boxes it can be placed in
+ *      and the pins in the header all belong to that browser. A box is one identity
+ *      of the profile, so its extension set is the box's and it stays loaded while
+ *      any context is using that box. A project's own jar, the light browser a
+ *      conversation opens beside itself, never loads one, so no extension renderer
+ *      runs behind a thread browser that is not already using one of the user's
+ *      boxes.
  *   4. **It costs a renderer per jar it lives in, so it is unloaded the moment its
  *      jar has no live page.** An extension left loaded for a box the user closed
  *      is a renderer held for nothing.
@@ -680,19 +682,25 @@ export class BrowserExtensionService {
   /**
    * The extensions one jar should be running, given what is installed.
    *
-   * Only the global browser's context has jars that extensions may live in. An
-   * extension is third-party code that browser runs, and the panel that installs it,
-   * the boxes it can be placed in and the pins in the header are all that browser's,
-   * so a project's browser (the light one a conversation opens beside itself, with
-   * no boxes and no extension chrome) must never load one.
+   * The global browser's own jar and the profile's boxes are the jars an extension
+   * may live in. A box's set is the box's, not the caller's: a box is one identity
+   * of the profile, so the extensions the user placed in it are loaded while any
+   * context uses that box. That is also what keeps a shared jar intact: answering
+   * "nothing" for a project's boxed tab would unload the extensions the personal
+   * browser is running in the very same session.
    *
-   * The empty jar id is what makes this a rule rather than a filter: it names "the
+   * A project's own jar loads none. An extension is third-party code that browser
+   * runs, and the panel that installs it, the boxes it can be placed in and the pins
+   * in the header are all the global browser's, so the light browser a conversation
+   * opens beside itself stays free of them.
+   *
+   * The empty jar id is what makes that a rule rather than a filter: it names "the
    * context's own jar", which read without the context matches every project's jar
    * too, so a record placed in "No box" would otherwise put an extension renderer,
    * its service worker and its load warnings behind every thread browser.
    */
   private desiredForJar(projectId: string, boxId: string | null): BrowserExtensionRecord[] {
-    if (projectId !== GLOBAL_BROWSER_PROJECT_ID) return []
+    if (boxId === null && projectId !== GLOBAL_BROWSER_PROJECT_ID) return []
     return this.registry
       .list()
       .filter((record) => record.enabled && extensionRunsInJar(record, boxId))

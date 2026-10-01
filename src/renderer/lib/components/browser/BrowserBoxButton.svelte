@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Boxes, ChevronDown } from '@lucide/svelte'
+  import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
@@ -63,17 +64,28 @@
   let menuOpen = $state(false)
 
   /**
-   * The boxes the menu offers.
+   * The boxes the menu offers, read at the click rather than derived up front.
+   *
+   * The list belongs to the global browser's store, so it is asked for through the
+   * access seam: that is what wires the store and waits for the stored tab list
+   * even when this button is the first thing in the window to reach for the
+   * browser. A thread browser with no boxes on offer would look broken rather than
+   * empty.
    *
    * The profile's default box is left out: its jar is the global browser's own
    * context, which a thread browser tab cannot join, and `jarIdForBox` reads its
    * id as the scope's own jar   the menu's first entry already. Offering it would
    * put two rows on the menu that mean the same jar.
    */
-  const menuBoxes = $derived(globalBrowser.boxes.filter((box) => box.id !== DEFAULT_BOX_ID))
+  async function menuBoxes(): Promise<{ id: string; name: string }[]> {
+    const browser = await loadBrowser()
+    return browser.boxes
+      .filter((box) => box.id !== DEFAULT_BOX_ID)
+      .map((box) => ({ id: box.id, name: box.name }))
+  }
 
   async function openMenu(anchor: HTMLElement): Promise<void> {
-    const boxes = menuBoxes.map((box) => ({ id: box.id, name: box.name }))
+    const boxes = await menuBoxes()
     menuOpen = true
     // The call answers when the popup closes, so the trigger's expanded state
     // lasts exactly as long as the menu does. It never rejects, which is why the

@@ -78,7 +78,10 @@ import {
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
-import { BrowserDownloadManager } from './browser-service/browser-downloads'
+import {
+  BrowserDownloadManager,
+  type BrowserDownloadOwner
+} from './browser-service/browser-downloads'
 import { showBrowserBoxMenu } from './browser-service/browser-box-menu'
 import { BrowserTabHistoryStore } from './browser-tab-history-store'
 import { BrowserClosedTabHistory } from './browser-closed-tab-history'
@@ -136,6 +139,7 @@ import {
 } from './browser-service/browser-navigation-outcome'
 import { BrowserTabStage } from './browser-service/browser-stage'
 import {
+  listBrowserProfilesForPartition,
   listProjectBrowserProfiles,
   removeBrowserProfiles
 } from './browser-service/browser-profile-store'
@@ -163,7 +167,6 @@ import {
   browserPartitionFor,
   isAllowedPopupWindowUrl,
   isSameBounds,
-  partitionBelongsToProject,
   popupWindowViewport,
   safeBasename,
   validateAttention,
@@ -645,6 +648,7 @@ export class BrowserService {
     this.downloads.setTabResolver((projectId, contentsId) =>
       this.tabIdForContents(projectId, contentsId)
     )
+    this.downloads.setOwnerResolver((contentsId) => this.ownerTabForContents(contentsId))
     this.siteData = new BrowserSiteDataService({
       window,
       sessionForJar: (projectId, boxId) => this.sessionForProject(projectId, boxId),
@@ -661,7 +665,10 @@ export class BrowserService {
       sessionFor: (projectId, boxId) => this.sessionForProject(projectId, boxId),
       liveJars: () => this.liveJars(),
       reportProgress: (progress) => this.publishExtensionProgress(progress),
-      resolveTabId: (projectId, contentsId) => this.tabIdForContents(projectId, contentsId) ?? null,
+      // Resolved by the page itself rather than by the jar's first owner: a box's
+      // session serves every context that picked it, so a tab fact about a page in
+      // it has to name that page's own tab.
+      resolveTabId: (_projectId, contentsId) => this.tabForContents(contentsId)?.id ?? null,
       tabReplay: (projectId, boxId) => this.extensionTabReplay(projectId, boxId),
       publishActivity: (update) => this.publishExtensionActivity(update),
       publish: () => this.publishExtensions(),
@@ -3395,13 +3402,40 @@ export class BrowserService {
    * something on screen.
    */
   private tabIdForContents(projectId: string, contentsId: number): string | undefined {
-    for (const [tabId, tab] of this.tabs) {
-      if (tab.projectId === projectId && tab.view.webContents.id === contentsId) return tabId
+    const owner = this.tabForContents(contentsId)
+    return owner && owner.tab.projectId === projectId ? owner.id : undefined
+  }
+
+  /**
+   * The tab a page belongs to, whichever project owns it.
+   *
+   * A box's jar is shared, so the context that configured a session is not
+   * necessarily the context a page in it belongs to: anything that has to name the
+   * tab behind a page (a permission prompt, a download row) resolves it here and
+   * reads the tab's own project.
+   */
+  private tabForContents(contentsId: number): { id: string; tab: BrowserTab } | null {
+    for (const [id, tab] of this.tabs) {
+      if (tab.view.webContents.id === contentsId) return { id, tab }
     }
     const ownerTabId = this.popupWindows.tabIdForContents(contentsId)
-    if (!ownerTabId) return undefined
-    const owner = this.tabs.get(ownerTabId)
-    return owner && owner.projectId === projectId ? ownerTabId : undefined
+    if (!ownerTabId) return null
+    const tab = this.tabs.get(ownerTabId)
+    return tab ? { id: ownerTabId, tab } : null
+  }
+
+  /**
+   * The tab behind a page, as the download manager reads it: which project owns
+   *  the tab, and which box its jar belongs to.
+   *
+   * A boxed tab runs in a jar the profile owns, but the page is still a
+   * conversation's tab, so a download reported against it belongs to the project
+   * the user was browsing rather than to whichever context opened the jar first,
+   * and a resume has to be issued through that same jar.
+   */
+  private ownerTabForContents(contentsId: number): BrowserDownloadOwner | null {
+    const owner = this.tabForContents(contentsId)
+    return owner ? { projectId: owner.tab.projectId, boxId: owner.tab.boxId } : null
   }
 
   private requireTab(tabId: string): BrowserTab {
@@ -3483,11 +3517,7 @@ export class BrowserService {
     await this.extensions.forgetBox(projectId, boxId)
     await this.clearJarStorage(partition)
     this.configuredSessions.delete(partition)
-    await removeBrowserProfiles(
-      (await listProjectBrowserProfiles(projectId)).filter(
-        (profile) => profile.partition === partition
-      )
-    )
+    await removeBrowserProfiles(await listBrowserProfilesForPartition(partition))
   }
 
   /**
@@ -3544,11 +3574,12 @@ export class BrowserService {
     this.downloads.forgetProject(projectId)
   }
 
-  /** Every jar of one project that this window currently holds a session for. */
+  /** Every jar of one project that this window currently holds a session for.
+   *  Only the project's own jar: a box's jar is the profile's, shared by every
+   *  context that picked that box, so a project's removal never touches one. */
   private projectPartitions(projectId: string): string[] {
-    return [...this.configuredSessions].filter((partition) =>
-      partitionBelongsToProject(partition, projectId)
-    )
+    const own = browserPartitionFor(projectId)
+    return [...this.configuredSessions].filter((partition) => partition === own)
   }
 
   /**
@@ -3588,12 +3619,19 @@ export class BrowserService {
   /**
    * Every jar that currently has a live page, so the extension service can aim a
    * load at the jars that exist rather than at every jar the user ever made.
+   *
+   *  Listed by jar, not by tab owner: a box's session is one jar however many
+   *  contexts have a tab in it, so the global browser and a project browsing the
+   *  same box contribute one entry.
    */
   private liveJars(): { projectId: string; boxId: string | null }[] {
     const jars: { projectId: string; boxId: string | null }[] = []
+    const partitions = new Set<string>()
     for (const tab of this.tabs.values()) {
       if (tab.view.webContents.isDestroyed()) continue
-      if (jars.some((jar) => jar.projectId === tab.projectId && jar.boxId === tab.boxId)) continue
+      const partition = browserPartitionFor(tab.projectId, tab.boxId)
+      if (partitions.has(partition)) continue
+      partitions.add(partition)
       jars.push({ projectId: tab.projectId, boxId: tab.boxId })
     }
     return jars
@@ -3602,26 +3640,31 @@ export class BrowserService {
   /** Whether one jar still has a page alive. A hibernated tab has none, which is
    *  what makes hibernation the point at which an extension can be released. */
   private jarHasLiveTab(projectId: string, boxId: string | null): boolean {
+    // Asked about the jar rather than about its owner: a box's jar is shared, so
+    // the global browser reading a page in it is enough to keep its extensions
+    // loaded even as a project's tab in the same box closes.
+    const partition = browserPartitionFor(projectId, boxId)
     for (const tab of this.tabs.values()) {
-      if (tab.projectId !== projectId || tab.boxId !== boxId) continue
+      if (browserPartitionFor(tab.projectId, tab.boxId) !== partition) continue
       if (!tab.view.webContents.isDestroyed()) return true
     }
     return false
   }
 
-  /**
-   * Every jar one context holds a session for, the context's own jar first.
+  /** Every jar one context holds a session for, the context's own jar first.
    *
-   * The own jar is always listed even before a session exists for it, because a
-   * context-wide clear has always meant "this browser" and must keep meaning it;
-   * the boxes are added from the sessions that exist, so clearing never creates a
-   * partition directory for a box nobody used.
-   */
+   *  The own jar is always listed even before a session exists for it, because a
+   *  context-wide clear has always meant "this browser" and must keep meaning it.
+   *  The global browser's boxes are listed too: that is where boxes are made and
+   *  where they are managed, so clearing the personal browser still takes its own
+   *  boxes with it. A project's clear lists only its own jar, because a box is
+   *  shared by every context that picked it and one project must not wipe an
+   *  identity the personal browser and other projects are signed into. */
   private projectJars(projectId: string): (string | null)[] {
     const jars: (string | null)[] = [null]
+    if (projectId !== GLOBAL_BROWSER_PROJECT_ID) return jars
     for (const partition of this.configuredSessions) {
-      if (!partitionBelongsToProject(partition, projectId)) continue
-      const boxId = boxIdFromPartition(partition, projectId)
+      const boxId = boxIdFromPartition(partition)
       if (!boxId || jars.includes(boxId)) continue
       jars.push(boxId)
     }
@@ -3873,9 +3916,13 @@ export class BrowserService {
    * cannot resolve would be a lie the extension then acts on.
    */
   private extensionTabReplay(projectId: string, boxId: string | null): BrowserExtensionTabReplay[] {
+    // By jar, not by owner: a box's session is one jar however many contexts have
+    // a tab in it, and an extension loaded there must be told about every page it
+    // can see, including ones a conversation opened rather than the global browser.
+    const partition = browserPartitionFor(projectId, boxId)
     const live: { tabId: string; tab: BrowserTab; contents: WebContents }[] = []
     for (const [tabId, tab] of this.tabs) {
-      if (tab.projectId !== projectId || tab.boxId !== boxId) continue
+      if (browserPartitionFor(tab.projectId, tab.boxId) !== partition) continue
       const contents: WebContents | undefined = tab.view.webContents
       if (!contents || contents.isDestroyed()) continue
       live.push({ tabId, tab, contents })
@@ -4038,8 +4085,10 @@ export class BrowserService {
     const browserSession = session.fromPartition(partition)
     // Downloads are tracked for the session, not for the window: the window can be
     // parked and rebuilt while a download keeps running, so the manager that owns
-    // them registers here once and keeps them across that rebuild.
-    this.downloads.watchSession(projectId, browserSession)
+    // them registers here once and keeps them across that rebuild. The partition
+    // is what the registration is keyed by, because a box's session is shared by
+    // every context that picked that box.
+    this.downloads.watchSession(projectId, browserSession, partition)
     if (this.configuredSessions.has(partition)) return browserSession
     // Reuse the ledgers the durable memory loaded: a fresh set here would throw
     // away every decision the user already made, so a site the user allowed in
@@ -4065,9 +4114,12 @@ export class BrowserService {
       )
       // A popup window's page asks for its own permissions   a camera prompt in a
       // popup is the same decision as one in a tab. The owner tab is what the
-      // prompt is labelled with and what a grant is remembered against.
-      const tabId = this.tabIdForContents(projectId, contents.id)
-      if (!tabId || !origin || this.window.webContents.isDestroyed()) {
+      // prompt is labelled with and what a grant is remembered against. It is
+      // found by its page rather than by this session's context: a box's jar is
+      // configured by whichever context reached it first and then serves every
+      // other one, so the tab's own project is what names the request.
+      const owner = this.tabForContents(contents.id)
+      if (!owner || !origin || this.window.webContents.isDestroyed()) {
         callback(false)
         return
       }
@@ -4078,8 +4130,8 @@ export class BrowserService {
         : []
       const request: BrowserPermissionRequest = {
         id,
-        tabId,
-        projectId,
+        tabId: owner.id,
+        projectId: owner.tab.projectId,
         origin,
         permission,
         mediaTypes
@@ -4190,17 +4242,18 @@ export class BrowserService {
     }
   }
 
-  /** Forget every remembered permission grant or denial for a context, in every
-   *  jar that context has open: boxes keep their own answers, so "forget this
-   *  site's permissions" has to reach each of them rather than only the default. */
+  /** Forget every remembered permission grant or denial for one context: its own
+   *  jar, plus any partition the caller is about to remove.
+   *
+   *  A box's ledger is deliberately not reached from here. A box is one jar for the
+   *  whole profile, so clearing one project's decisions must not forget the answers
+   *  the personal browser and other projects rely on; a box's own clear action
+   *  forgets its ledger when it empties that jar. */
   private clearProjectPermissionMemory(
     projectId: string,
     extraPartitions: readonly string[] = []
   ): void {
     const partitions = new Set<string>([browserPartitionFor(projectId), ...extraPartitions])
-    for (const partition of this.configuredSessions) {
-      if (partitionBelongsToProject(partition, projectId)) partitions.add(partition)
-    }
     // The store owns the clear so a permission read already in flight cannot
     // merge the forgotten keys back after the user asked for them to be gone.
     void Promise.all(
