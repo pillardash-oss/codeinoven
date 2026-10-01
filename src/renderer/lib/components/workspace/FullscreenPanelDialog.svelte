@@ -122,6 +122,7 @@
   panelClass="bg-app"
   trapFocus={false}
   escapeCloses={false}
+  scrim={!hostsBrowserView}
   blocksBrowserView={!hostsBrowserView}
 >
   <div
