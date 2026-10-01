@@ -313,13 +313,17 @@
         <SettingsEntry expanded={!folded[oven.id]}>
           <div class="grid grid-cols-1 items-center gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
             <div class="flex min-w-0 items-center gap-3">
-              <img
-                src={oven.customSvg
-                  ? getCustomSvgDataUrl(oven.customSvg, oven.color)
-                  : getIconSvgDataUrl(oven.icon, oven.color)}
-                alt=""
-                class="h-5 w-5"
-              />
+              {#if oven.id === LOCAL_OVEN_ID}
+                <Monitor size={20} class="shrink-0 text-muted" />
+              {:else}
+                <img
+                  src={oven.customSvg
+                    ? getCustomSvgDataUrl(oven.customSvg, oven.color)
+                    : getIconSvgDataUrl(oven.icon, oven.color)}
+                  alt=""
+                  class="h-5 w-5"
+                />
+              {/if}
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
                   <span class="truncate text-sm font-semibold">{oven.name}</span>
