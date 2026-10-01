@@ -114,7 +114,7 @@
 <div class="relative flex items-center gap-1 text-xs text-muted">
   <button
     type="button"
-    class="flex items-center gap-1.5 rounded-md px-2 py-1 hover:bg-elevated disabled:opacity-50"
+    class="flex items-center gap-1.5 rounded-md bg-raised px-2 py-1 hover:bg-elevated disabled:opacity-50"
     title="Choose the Oven for this chat"
     aria-haspopup="menu"
     aria-expanded={editor}
