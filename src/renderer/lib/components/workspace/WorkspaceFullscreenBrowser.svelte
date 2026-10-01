@@ -64,7 +64,7 @@
         <BrowserTabIndicator tabId={entry.id} />
       {/snippet}
       {#key tabId}
-        <BrowserPanel tab={browserTab} fullscreen />
+        <BrowserPanel tab={browserTab} fullscreen onTabReplaced={(id) => onTabIdChange(id)} />
       {/key}
     </FullscreenPanelDialog>
   {/if}

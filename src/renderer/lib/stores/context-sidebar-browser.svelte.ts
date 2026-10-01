@@ -89,6 +89,17 @@ export class SidebarBrowserTabs {
    *  is deliberately never persisted: it describes a live page, not the tab. */
   private readonly runtime = new SvelteMap<string, BrowserTabRuntime>()
 
+  /**
+   * The box a scope's next tabs are created in, keyed by conversation scope.
+   *
+   * Absent (or null) means the scope's own jar, which is where every scope
+   * starts. The choice lives for the sidebar session only and is deliberately
+   * not persisted: a scope reverts to its own box once its last tab is closed,
+   * so reopening the thread browser starts from the scope again. Tabs already on
+   * screen keep the box they were created in, because a jar cannot be migrated.
+   */
+  private readonly scopeBoxChoices = new SvelteMap<string, string | null>()
+
   /** Fills in the icon of a tab the app has no page for, from the tab's own
    *  address (see {@link ensureFavicon}). */
   private readonly tabFavicons = new BrowserTabFavicons()
@@ -260,13 +271,87 @@ export class SidebarBrowserTabs {
     }
     this.tabs = [
       ...this.tabs,
-      { id, kind: 'browser', title, projectId, threadId, url, favicon: null }
+      {
+        id,
+        kind: 'browser',
+        title,
+        projectId,
+        threadId,
+        url,
+        favicon: null,
+        // The box the scope is currently creating tabs in, or the scope's own
+        // jar when the user has not picked one this session.
+        boxId: this.boxForScope(this.host.threadScopeId(projectId, threadId))
+      }
     ]
     this.persist()
     if (reveal && this.isShownConversation(projectId, threadId)) {
       this.focus(id)
     }
     return id
+  }
+
+  /**
+   * The box a scope's next tab runs in: the box the user picked for it this
+   * session, or null for the scope's own jar.
+   */
+  private boxForScope(scopeId: string): string | null {
+    return this.scopeBoxChoices.get(scopeId) ?? null
+  }
+
+  /**
+   * Reopen a tab in another box.
+   *
+   * A jar cannot move between boxes, so the tab cannot either: this is a close
+   * plus an open. The chosen box becomes the scope's own for new tabs, the tab on
+   * screen is replaced in place by an equivalent tab in the new box, and every
+   * other open tab keeps the box it was created in. Returns the new tab id, or
+   * null when the tab is gone or already in the box.
+   */
+  reopenInBox(tabId: string, boxId: string | null): string | null {
+    const index = this.tabs.findIndex((tab) => tab.id === tabId)
+    if (index < 0) return null
+    const tab = this.tabs[index]
+    if (tab.boxId === boxId) return null
+    this.scopeBoxChoices.set(this.host.threadScopeId(tab.projectId, tab.threadId), boxId)
+    const replacement: BrowserContextTab = {
+      id: `browser:${crypto.randomUUID()}`,
+      kind: 'browser',
+      title: tab.title,
+      projectId: tab.projectId,
+      threadId: tab.threadId,
+      url: tab.url,
+      favicon: tab.favicon,
+      boxId
+    }
+    const tabs = [...this.tabs]
+    tabs.splice(index, 1, replacement)
+    this.tabs = tabs
+    this.forgetRuntime([tabId])
+    if (this.activeTabId === tabId) this.activeTabId = replacement.id
+    this.persist()
+    // The old page lives in the old jar, so it is destroyed rather than shown
+    // again: a show for the removed id would be refused as a different box.
+    void invoke('browser:destroy', tabId, 'closed').catch(() => {})
+    return replacement.id
+  }
+
+  /**
+   * Drop the picked box of every scope that no longer has a tab.
+   *
+   * The choice is deliberately session-scoped and reverts to the scope's own box
+   * once its last tab is closed, which is what "closing the thread browser"
+   * means: with no tab of the scope left, the next tab starts from the scope
+   * again.
+   */
+  private pruneScopeBoxChoices(): void {
+    if (this.scopeBoxChoices.size === 0) return
+    for (const scopeId of [...this.scopeBoxChoices.keys()]) {
+      const live = this.tabs.some(
+        (tab) => this.host.threadScopeId(tab.projectId, tab.threadId) === scopeId
+      )
+      if (!live) this.scopeBoxChoices.delete(scopeId)
+    }
   }
 
   /**
@@ -399,6 +484,7 @@ export class SidebarBrowserTabs {
     if (removedIds.length === 0) return []
     this.tabs = this.tabs.filter((tab) => tab.projectId !== projectId)
     this.forgetRuntime(removedIds)
+    this.pruneScopeBoxChoices()
     if (this.activeTabId && removedIds.includes(this.activeTabId)) {
       this.activeTabId = null
     }
@@ -414,6 +500,7 @@ export class SidebarBrowserTabs {
     if (removedIds.length === 0) return []
     this.tabs = this.tabs.filter((tab) => tab.projectId !== projectId || tab.threadId !== threadId)
     this.forgetRuntime(removedIds)
+    this.pruneScopeBoxChoices()
     if (this.activeTabId && removedIds.includes(this.activeTabId)) {
       this.activeTabId = this.activeTabs.at(-1)?.id ?? null
     }
@@ -429,6 +516,7 @@ export class SidebarBrowserTabs {
     if (browserIndex < 0) return
     this.tabs = this.tabs.filter((tab) => tab.id !== id)
     this.forgetRuntime([id])
+    this.pruneScopeBoxChoices()
     if (this.activeTabId === id) {
       this.activeTabId = this.activeTabs.at(-1)?.id ?? null
     }

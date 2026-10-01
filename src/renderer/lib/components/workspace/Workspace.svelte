@@ -1956,6 +1956,23 @@
         ? (assistantBrowserScopes.get(threadId) ?? threadId)
         : conversationScopeId(projectId, threadId, null)
     )
+    // The same resolver pattern names a conversation's own box: a project's
+    // name, a routine's name, or a chat's title. It is read lazily by the
+    // browser's box control, so the reactive lists are tracked where it is
+    // called rather than here.
+    contextSidebarState.setThreadBrowserScopeLabelResolver((projectId, threadId) => {
+      if (projectId === ASSISTANT_SPACE_ID) {
+        const thread = allThreads.find((candidate) => candidate.id === threadId)
+        const routine = thread?.routineId
+          ? assistantRoutineList.find((candidate) => candidate.id === thread.routineId)
+          : null
+        return routine?.name ?? thread?.title ?? 'Assistant'
+      }
+      if (projectId === INBOX_PROJECT_ID) {
+        return allThreads.find((candidate) => candidate.id === threadId)?.title ?? 'Chat'
+      }
+      return projects.find((candidate) => candidate.id === projectId)?.name ?? 'Project'
+    })
   })
 
   $effect(() => {

@@ -85,6 +85,18 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{3,8}$/u
 const ENTITY_ID_PATTERN = /^[a-zA-Z0-9:_-]+$/u
 
 /**
+ * Whether a stored value is a legal box id.
+ *
+ * A box id becomes part of a session partition, so a value that cannot be
+ * trusted has to be dropped rather than repaired: a repaired id would silently
+ * point at a different jar. The renderer mints these, so this is an id check,
+ * never a name the user typed.
+ */
+export function isBrowserBoxId(value: unknown): value is string {
+  return typeof value === 'string' && BOX_ID_PATTERN.test(value)
+}
+
+/**
  * The appearance vocabulary a browser tab, group, box and bookmark share, copied
  * from the project/routine model: a hex colour, a `PROJECT_SVG_ICONS` key, a
  * sanitized custom SVG, and a picked image file. One shape means one editor and

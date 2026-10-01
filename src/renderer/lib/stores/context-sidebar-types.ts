@@ -97,6 +97,17 @@ export interface BrowserContextTab {
    * tab it was saved from.
    */
   favicon: string | null
+  /**
+   * The box this thread-browser tab runs against, or null for the scope's own
+   * jar.
+   *
+   * The scope's own jar is the default every conversation starts from: a
+   * project's threads share the project's jar, and an assistant routine or a
+   * chat browses its own. A tab keeps the box it was created in for its whole
+   * life, because cookies cannot migrate between jars, so picking another box
+   * reopens the tab in it rather than moving it.
+   */
+  boxId: string | null
 }
 
 /**

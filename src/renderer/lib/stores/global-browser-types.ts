@@ -27,6 +27,7 @@ export {
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS
 } from '$shared/browser/global-browser-tabs'
+export { isBrowserBoxId } from '$shared/browser/global-browser-tabs'
 export type { BrowserAppearance } from '$shared/browser/global-browser-tabs'
 
 /** Live runtime state of one global tab, keyed by tab id. */
