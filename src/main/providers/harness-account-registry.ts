@@ -128,6 +128,8 @@ export class HarnessAccountRegistry {
           label = `${providerName}-${sequence}`
         }
         labels.add(label.toLocaleLowerCase('en-US'))
+        // Container-based harnesses keep the user's default in this registry;
+        // refreshing their shared-home credential must preserve that choice.
         legacy.push({
           id,
           harnessId,
@@ -136,7 +138,10 @@ export class HarnessAccountRegistry {
           label,
           containerKind: 'legacy-default',
           ...(sourceId ? { sourceId } : {}),
-          ...(sourceId && harnessActiveSourceIds.has(sourceId) ? { isDefault: true } : {}),
+          ...((sourceId && harnessActiveSourceIds.has(sourceId)) ||
+          (!harnessSupportsMultipleAccounts(harnessId) && existing?.isDefault)
+            ? { isDefault: true }
+            : {}),
           createdAt: existing?.createdAt ?? now + index,
           updatedAt: existing?.updatedAt ?? now
         })
@@ -154,6 +159,7 @@ export class HarnessAccountRegistry {
   async resolve(harnessId: string, accountId?: string): Promise<HarnessAccount> {
     const accounts = await this.list(harnessId)
     if (accounts.length === 1) return accounts[0]
+    if (!accountId && accounts.length > 0) return defaultAccountFor(accounts)
     const resolvedId = accountId || legacyHarnessAccountId(harnessId)
     const account = accounts.find((candidate) => candidate.id === resolvedId)
     if (account) return account
