@@ -10,6 +10,7 @@ export interface ComposerSlashActionsOptions {
   getAccountPickerVisible: () => boolean
   /** The scope shoe's picker is live (project mode, new thread). */
   getScopePickerVisible: () => boolean
+  getOvenPickerVisible: () => boolean
   getThinkingPresets: () => ThinkingPreset[]
   getActions: () => readonly ActionDefinition[]
 }
@@ -66,6 +67,18 @@ export function createComposerSlashActions(options: ComposerSlashActionsOptions)
               source: composerActionSource,
               keywords: ['account', 'user', 'profile', 'login', 'credential']
             }
+          ]
+        : []),
+      ...(options.getOvenPickerVisible()
+        ? [
+            {
+              id: 'selector:oven',
+              title: '/oven',
+              description: 'Choose the Oven for this project chat',
+              category: 'mode',
+              source: composerActionSource,
+              keywords: ['oven', 'ssh', 'remote', 'local']
+            } satisfies ActionDefinition
           ]
         : []),
       ...(options.getScopePickerVisible()

@@ -13,6 +13,7 @@ import type { Contract } from './contract-helpers'
 import type { Thread } from '../types'
 
 export const invokeOvenContract = {
+  'oven:validateIdentity': {} as Contract<[path: string], string>,
   'oven:state': {} as Contract<[], OvenState>,
   'oven:save': {} as Contract<[input: SaveOvenInput], Oven>,
   'oven:remove': {} as Contract<[id: string], OvenState>,

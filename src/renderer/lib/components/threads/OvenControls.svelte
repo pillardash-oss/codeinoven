@@ -5,7 +5,6 @@
   import type { Thread, ThreadSettings } from '$shared/types'
   import type { OvenState } from '$shared/ovens'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
-  import Modal from '../ui/Modal.svelte'
   import OvenWorkspace from './OvenWorkspace.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
@@ -50,7 +49,7 @@
       )
   })
 
-  async function openEditor(): Promise<void> {
+  export async function openPicker(): Promise<void> {
     selected = settings.ovenId ?? LOCAL_OVEN_ID
     root = settings.ovenPath ?? ''
     harness = settings.harnessId
@@ -99,13 +98,13 @@
   }
 </script>
 
-<div class="flex flex-wrap items-center gap-2 px-1 py-1 text-xs text-muted">
+<div class="relative flex items-center gap-1 text-xs text-muted">
   <button
     type="button"
     class="flex items-center gap-1.5 rounded-md px-2 py-1 hover:bg-elevated disabled:opacity-50"
     title="Choose the Oven for this chat"
     disabled={busy || saving}
-    onclick={() => void openEditor()}
+    onclick={() => void openPicker()}
   >
     {#if current}
       <img
@@ -129,100 +128,127 @@
     >
   {/if}
   {#if error && !editor}<span class="text-danger" role="alert">{error}</span>{/if}
-</div>
 
-<Modal
-  open={editor}
-  title="Choose Oven"
-  onClose={() => {
-    if (!saving) editor = false
-  }}
->
-  <form
-    id="oven-selection"
-    class="space-y-4"
-    onsubmit={(event) => {
-      event.preventDefault()
-      void select()
-    }}
-  >
-    <label class="block space-y-1 text-xs text-muted"
-      >Oven
-      <select
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
-        bind:value={selected}
-      >
-        {#each ovens?.ovens ?? [] as oven (oven.id)}<option value={oven.id}
-            >{oven.name}{oven.id === LOCAL_OVEN_ID ? ' · This computer' : ' · SSH'}</option
-          >{/each}
-      </select>
-    </label>
-    {#if selected !== LOCAL_OVEN_ID}
-      <label class="block space-y-1 text-xs text-muted"
-        >Harness on Oven
-        <select
-          class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
-          bind:value={harness}
-          onchange={() => {
-            provider = ''
-            model = ''
-          }}
-        >
-          <option value="codex">Codex</option>
-          <option value="claude-code">Claude Code</option>
-          <option value="opencode">OpenCode</option>
-          <option value="pi">Pi</option>
-          <option value="muse">Muse</option>
-          <option value="cline">Cline</option>
-        </select>
-      </label>
-      <label class="block space-y-1 text-xs text-muted"
-        >Provider, optional
-        <input
-          class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
-          bind:value={provider}
-          placeholder="Use the Oven's configured provider"
-        />
-      </label>
-      <label class="block space-y-1 text-xs text-muted"
-        >Model, optional
-        <input
-          class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
-          bind:value={model}
-          placeholder="Use the Oven's configured model"
-        />
-      </label>
-      <label class="block space-y-1 text-xs text-muted"
-        >Workspace on this Oven
-        <input
-          class="w-full rounded-lg border bg-elevated px-3 py-2 font-mono text-sm text-foreground"
-          bind:value={root}
-          placeholder="~/projects/my-repo"
-        />
-      </label>
-      <p class="text-xs text-dimmed">
-        Leave empty for a workspace owned by this chat. Files move only through an explicit
-        transfer.
-      </p>
-    {/if}
-    {#if error}<p class="text-xs text-danger" role="alert">{error}</p>{/if}
-  </form>
-  {#snippet footer()}
+  {#if editor}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm hover:bg-elevated"
-      disabled={saving}
-      onclick={() => (editor = false)}>Cancel</button
+      class="fixed inset-0 z-30 cursor-default"
+      title="Close Oven picker"
+      aria-label="Close Oven picker"
+      onclick={() => (editor = false)}
+    ></button>
+    <div
+      class="absolute bottom-full right-0 z-40 mb-2 max-h-[70vh] w-80 overflow-auto rounded-xl border bg-surface p-3 shadow-lg"
+      role="dialog"
+      tabindex="-1"
+      aria-label="Choose Oven"
+      onkeydown={(event) => {
+        if (event.key === 'Escape') editor = false
+      }}
     >
-    <button
-      type="submit"
-      form="oven-selection"
-      data-modal-primary
-      class="rounded-lg bg-primary px-4 py-2 text-sm text-on-primary"
-      disabled={saving || busy}>{saving ? 'Selecting…' : 'Use Oven'}</button
-    >
-  {/snippet}
-</Modal>
+      <form
+        id="oven-selection"
+        class="space-y-4"
+        onsubmit={(event) => {
+          event.preventDefault()
+          void select()
+        }}
+      >
+        <div class="space-y-1" role="menu" aria-label="Ovens">
+          {#each ovens?.ovens ?? [] as oven (oven.id)}
+            <button
+              type="button"
+              role="menuitem"
+              class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-elevated"
+              disabled={busy || saving}
+              onclick={() => {
+                root = oven.id === settings.ovenId ? (settings.ovenPath ?? '') : ''
+                selected = oven.id
+                void select()
+              }}
+            >
+              <img
+                class="h-4 w-4"
+                alt=""
+                src={oven.customSvg
+                  ? getCustomSvgDataUrl(oven.customSvg, oven.color)
+                  : getIconSvgDataUrl(oven.icon, oven.color)}
+              />
+              <span>{oven.name}</span>
+              <span class="ml-auto text-xs text-muted"
+                >{oven.id === LOCAL_OVEN_ID ? 'This computer' : 'SSH'}</span
+              >
+            </button>
+          {/each}
+        </div>
+        {#if selected !== LOCAL_OVEN_ID}
+          <label class="block space-y-1 text-xs text-muted"
+            >Harness on Oven
+            <select
+              class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
+              bind:value={harness}
+              onchange={() => {
+                provider = ''
+                model = ''
+              }}
+            >
+              <option value="codex">Codex</option>
+              <option value="claude-code">Claude Code</option>
+              <option value="opencode">OpenCode</option>
+              <option value="pi">Pi</option>
+              <option value="muse">Muse</option>
+              <option value="cline">Cline</option>
+            </select>
+          </label>
+          <label class="block space-y-1 text-xs text-muted"
+            >Provider, optional
+            <input
+              class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
+              bind:value={provider}
+              placeholder="Use the Oven's configured provider"
+            />
+          </label>
+          <label class="block space-y-1 text-xs text-muted"
+            >Model, optional
+            <input
+              class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground"
+              bind:value={model}
+              placeholder="Use the Oven's configured model"
+            />
+          </label>
+          <label class="block space-y-1 text-xs text-muted"
+            >Workspace on this Oven
+            <input
+              class="w-full rounded-lg border bg-elevated px-3 py-2 font-mono text-sm text-foreground"
+              bind:value={root}
+              placeholder="~/projects/my-repo"
+            />
+          </label>
+          <p class="text-xs text-dimmed">
+            Leave empty for a workspace owned by this chat. Files move only through an explicit
+            transfer.
+          </p>
+        {/if}
+        {#if error}<p class="text-xs text-danger" role="alert">{error}</p>{/if}
+      </form>
+      <div class="mt-3 flex justify-end gap-2">
+        <button
+          type="button"
+          class="rounded-lg px-3 py-2 text-sm hover:bg-elevated"
+          disabled={saving}
+          onclick={() => (editor = false)}>Cancel</button
+        >
+        <button
+          type="submit"
+          form="oven-selection"
+          data-modal-primary
+          class="rounded-lg bg-primary px-4 py-2 text-sm text-on-primary"
+          disabled={saving || busy}>{saving ? 'Selecting…' : 'Use Oven'}</button
+        >
+      </div>
+    </div>
+  {/if}
+</div>
 
 {#if workspace && settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID}
   <OvenWorkspace

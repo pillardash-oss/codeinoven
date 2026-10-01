@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, writeFile, rm, readdir, readFile, stat } from 'node:fs/
 import { join } from 'node:path'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import type { OvenRegistry } from './oven-registry'
+import { validateIdentityPath } from './oven-validation'
 
 type OvenSshRegistry = Pick<OvenRegistry, 'require'> & {
   storage: Pick<OvenRegistry['storage'], 'resolve'>
@@ -144,7 +145,12 @@ export class OvenSsh {
     try {
       if (connection.authentication === 'identity') {
         if (!connection.identityFile) throw new Error('Select an SSH identity file.')
-        args.push('-i', connection.identityFile, '-o', 'IdentitiesOnly=yes')
+        args.push(
+          '-i',
+          await validateIdentityPath(connection.identityFile),
+          '-o',
+          'IdentitiesOnly=yes'
+        )
       }
       if (connection.authentication === 'vault') {
         if (!oven.privateKeyRef) throw new Error('This Oven has no vaulted private key.')
@@ -257,7 +263,8 @@ export class OvenSsh {
             sshIssue =
               'This host is not trusted by OpenSSH. Verify its fingerprint and connect with OpenSSH first.'
           } else if (/Permission denied/u.test(text)) {
-            sshIssue = 'The host rejected the SSH credential. Check the user and authorized key.'
+            sshIssue =
+              'The host rejected the SSH credential. Check the SSH username and that the matching public key is in that user’s authorized_keys on the Oven. For SSH agent authentication, load the private key into your agent or select its identity file.'
           } else if (/Connection refused/u.test(text)) {
             sshIssue =
               'The host refused the connection. Check that SSH is running on the selected port.'

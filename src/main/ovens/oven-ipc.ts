@@ -1,7 +1,7 @@
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { OvenRegistry } from './oven-registry'
 import { OvenService } from './oven-service'
-import { ovenId, validateSaveOven } from './oven-validation'
+import { ovenId, validateSaveOven, validateIdentityPath } from './oven-validation'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { SecretVault } from '../storage/secret-vault'
 import { app } from 'electron'
@@ -23,7 +23,13 @@ export function registerOvenIpc(
   const previews = new OvenPreview(service)
   app.once('before-quit', () => previews.dispose())
   ipcMain.handle('oven:state', () => registry.state())
-  ipcMain.handle('oven:save', (_event, raw: unknown) => registry.save(validateSaveOven(raw)))
+  ipcMain.handle('oven:validateIdentity', (_event, raw: unknown) => validateIdentityPath(raw))
+  ipcMain.handle('oven:save', async (_event, raw: unknown) => {
+    const input = validateSaveOven(raw)
+    if (input.connection.authentication === 'identity')
+      input.connection.identityFile = await validateIdentityPath(input.connection.identityFile)
+    return registry.save(input)
+  })
   ipcMain.handle('oven:remove', (_event, raw: unknown) => registry.remove(ovenId(raw)))
   ipcMain.handle('oven:setDefault', (_event, raw: unknown) => registry.setDefault(ovenId(raw)))
   ipcMain.handle('oven:install', (_event, raw: unknown) => service.install(ovenId(raw)))

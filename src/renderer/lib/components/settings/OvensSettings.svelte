@@ -33,6 +33,7 @@
   let address = $state('ubuntu@')
   let authentication = $state<SaveOvenInput['connection']['authentication']>('agent')
   let identityFile = $state('')
+  let identityValidation = $state('')
   let privateKey = $state('')
   let passphrase = $state('')
   let publicKey = $state('')
@@ -68,6 +69,7 @@
       : 'ubuntu@'
     authentication = connection?.authentication ?? 'agent'
     identityFile = connection?.identityFile ?? ''
+    identityValidation = ''
     privateKey = ''
     passphrase = ''
     publicKey = ''
@@ -88,6 +90,10 @@
     modalError = ''
     busy = 'save'
     try {
+      if (authentication === 'identity') {
+        identityFile = await invoke('oven:validateIdentity', identityFile)
+        identityValidation = 'Private-key file validated.'
+      }
       const input: SaveOvenInput = {
         ...(editing ? { id: editing.id } : {}),
         name,
@@ -113,6 +119,32 @@
       modalError = message(failure)
     } finally {
       busy = ''
+    }
+  }
+
+  async function validateIdentity(): Promise<void> {
+    const candidate = identityFile
+    identityValidation = ''
+    if (!candidate.trim()) return
+    try {
+      const validated = await invoke('oven:validateIdentity', candidate)
+      if (identityFile === candidate) {
+        identityFile = validated
+        identityValidation = 'Private-key file validated.'
+      }
+    } catch (failure) {
+      if (identityFile === candidate) identityValidation = message(failure)
+    }
+  }
+
+  async function pickIdentity(): Promise<void> {
+    try {
+      const path = await invoke('dialog:pickFile')
+      if (!path) return
+      identityFile = path
+      await validateIdentity()
+    } catch (failure) {
+      identityValidation = message(failure)
     }
   }
 
@@ -337,14 +369,26 @@
       </select>
     </label>
     {#if authentication === 'identity'}
-      <label class="block space-y-1 text-xs font-medium text-muted"
-        >Identity file<input
-          class={fieldClass}
-          bind:value={identityFile}
-          required
-          placeholder="Absolute path to your SSH private key"
-        /></label
-      >
+      <div class="space-y-2">
+        <label class="block space-y-1 text-xs font-medium text-muted"
+          >Identity file<input
+            class={fieldClass}
+            bind:value={identityFile}
+            oninput={() => (identityValidation = '')}
+            onblur={() => void validateIdentity()}
+            required
+            placeholder="Pick or paste your SSH private-key path"
+          /></label
+        >
+        <button
+          type="button"
+          class="rounded-lg border px-3 py-2 text-sm"
+          onclick={() => void pickIdentity()}>Choose private-key file</button
+        >
+        {#if identityValidation}<p class="text-xs text-muted" role="status">
+            {identityValidation}
+          </p>{/if}
+      </div>
     {:else if authentication === 'vault'}
       <label class="block space-y-1 text-xs font-medium text-muted"
         >Private key {editing?.hasPrivateKey ? '(stored, leave blank to keep)' : ''}<textarea
@@ -356,7 +400,7 @@
           placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></label
       >
       <label class="block space-y-1 text-xs font-medium text-muted"
-        >Passphrase {editing?.hasPassphrase ? '(stored, leave blank to keep)' : ''}<input
+        >Passphrase, optional {editing?.hasPassphrase ? '(stored, leave blank to keep)' : ''}<input
           class={fieldClass}
           type="password"
           bind:value={passphrase}

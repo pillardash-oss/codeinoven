@@ -1,6 +1,41 @@
 import { isAbsolute } from 'node:path'
+import { open } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { sanitizeCustomSvg } from '../../lib/custom-svg'
 import { type SaveOvenInput, type OvenIcon, type OvenConnection } from '../../lib/ovens'
+
+export async function validateIdentityPath(value: unknown): Promise<string> {
+  const supplied = text(value, 'Identity file', 4096)
+  const path = supplied.startsWith('~/') ? join(homedir(), supplied.slice(2)) : supplied
+  if (!isAbsolute(path) || /[\r\n]/u.test(path))
+    throw new Error('Choose or paste an absolute private-key path.')
+  let file: Awaited<ReturnType<typeof open>>
+  try {
+    file = await open(path, 'r')
+  } catch {
+    throw new Error('The identity file does not exist or cannot be read.')
+  }
+  try {
+    const info = await file.stat()
+    if (!info.isFile() || info.size > 128 * 1024) throw new Error('Choose an SSH private-key file.')
+    const buffer = Buffer.alloc(256)
+    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0)
+    if (
+      !/^-----BEGIN (?:OPENSSH|RSA|EC|DSA|ENCRYPTED)? ?PRIVATE KEY-----\r?\n/u.test(
+        buffer.toString('utf8', 0, bytesRead)
+      )
+    )
+      throw new Error('Choose the private key, not its .pub public-key file.')
+    if (process.platform !== 'win32' && (info.mode & 0o077) !== 0)
+      throw new Error(
+        'SSH requires a private key readable only by its owner. Set its permissions to 600.'
+      )
+    return path
+  } finally {
+    await file.close()
+  }
+}
 
 function text(value: unknown, label: string, max: number): string {
   if (typeof value !== 'string' || !value.trim() || value.length > max || value.includes('\0')) {
@@ -39,7 +74,10 @@ export function validateSaveOven(value: unknown): SaveOvenInput {
   const connection: OvenConnection = { host, ...(user ? { user } : {}), port, authentication }
   if (authentication === 'identity') {
     const identityFile = text(raw.identityFile, 'Identity file', 4096)
-    if (!isAbsolute(identityFile) || /[\r\n]/u.test(identityFile)) {
+    if (
+      (!isAbsolute(identityFile) && !identityFile.startsWith('~/')) ||
+      /[\r\n]/u.test(identityFile)
+    ) {
       throw new TypeError('Identity file must be an absolute path.')
     }
     connection.identityFile = identityFile

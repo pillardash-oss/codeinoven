@@ -1190,6 +1190,7 @@
   let project = $state<Project | null>(null)
   let projectIconUrl = $state<string | null>(null)
   /** Composer scope shoe data   project mode only (ChatComposer hides it in chat mode). */
+  let ovenControl: OvenControls | undefined = $state(undefined)
   let scopeShoe = $derived.by((): ComposerScopeShoe | undefined => {
     if (chatMode) return undefined
     const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
@@ -1203,6 +1204,8 @@
       bucket,
       source: project?.source,
       host: project?.host,
+      oven: ovenPicker,
+      onOpenOven: () => void ovenControl?.openPicker(),
       project: project
         ? {
             name: project.name,
@@ -11175,6 +11178,16 @@
   })
 </script>
 
+{#snippet ovenPicker()}
+  <OvenControls
+    bind:this={ovenControl}
+    {thread}
+    {settings}
+    {busy}
+    onSettingsChange={updateSettings}
+  />
+{/snippet}
+
 {#if messageViewer}
   {@const viewerItem = messageViewer.items[messageViewer.index]}
   {#if viewerItem.media}
@@ -13126,9 +13139,6 @@
                 {#if foreignRunActive}
                   <ForeignRunCard projectId={thread.projectId} threadId={thread.id} />
                 {:else}
-                  {#if !controller}
-                    <OvenControls {thread} {settings} {busy} onSettingsChange={updateSettings} />
-                  {/if}
                   {#key composerRestoreKey}
                     <ChatComposer
                       bind:this={composer}

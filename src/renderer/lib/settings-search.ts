@@ -53,20 +53,20 @@ export interface SettingsSearchEntry {
 
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
-    id: 'ovens',
-    section: 'ovens',
-    title: 'Ovens',
-    description: 'SSH connections, credentials, remote service setup, and harness discovery.',
-    keywords: ['ssh', 'remote', 'container', 'server', 'keys'],
-    icon: Server
-  },
-  {
     id: 'general',
     section: 'general',
     title: 'General',
     description: 'Appearance, notifications, git, threads, and power defaults.',
     keywords: ['settings', 'preferences'],
     icon: SlidersHorizontal
+  },
+  {
+    id: 'ovens',
+    section: 'ovens',
+    title: 'Ovens',
+    description: 'SSH connections, credentials, remote service setup, and harness discovery.',
+    keywords: ['ssh', 'remote', 'container', 'server', 'keys'],
+    icon: Server
   },
   {
     id: 'browser',

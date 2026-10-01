@@ -993,6 +993,7 @@
     getSupportsThinking: () => supportsThinking,
     getAccountPickerVisible: () => accountPickerVisible,
     getScopePickerVisible: () => scopePickerAvailable,
+    getOvenPickerVisible: () => !!scopeShoe?.onOpenOven,
     getThinkingPresets: () => thinkingPresets,
     getActions: () => actions
   })
@@ -1125,6 +1126,11 @@
     if (action.id === 'selector:account') {
       // The account picker lives in the shared model picker's dropdown   open it directly.
       showAccountMenu()
+      return
+    }
+
+    if (action.id === 'selector:oven') {
+      scopeShoe?.onOpenOven?.()
       return
     }
 
@@ -2026,6 +2032,7 @@
         onOpenScopeView={scopeShoe.onOpenScopeView}
         onScopeMenuClosed={focusComposerAtSavedCaret}
         report={scopeShoe.report}
+        oven={scopeShoe.oven}
       />
     </div>
   </div>
