@@ -18,6 +18,10 @@
     /** Leading glyph for a tab that shows no indicator. Omit for a surface
      *  whose tabs are plain sections and carry no icon. */
     icon?: Snippet
+    /** Per-tab leading glyph, drawn instead of `icon` for a tab that shows no
+     *  indicator. The thread browser uses it to wear each tab's own favicon;
+     *  a surface whose tabs share one glyph keeps `icon`. */
+    tabIcon?: Snippet<[{ id: string; title: string }]>
     /** Per-tab overlay painted over the tab's own icon slot, used for the
      *  browser's live audio and capture indicators. Callers whose tabs never
      *  carry an indicator leave it, and `indicatorCount`, unset. */
@@ -46,6 +50,7 @@
     newLabel,
     minimizeLabel,
     icon,
+    tabIcon,
     tabIndicator,
     onNew,
     onMinimize,
@@ -144,6 +149,8 @@
                   class="shrink-0 {browserTabIndicatorSlotClass(indicatorCount)}"
                   aria-hidden="true"
                 ></span>
+              {:else if tabIcon}
+                {@render tabIcon({ id: tab.id, title: tab.title })}
               {:else if icon}
                 {@render icon()}
               {/if}
