@@ -47,6 +47,8 @@
   let editing = $state<Oven | null>(null)
   let editorOpen = $state(false)
   let name = $state('')
+  let pendingIcon = $state<{ path: string; dataUrl: string } | undefined>()
+  let clearImage = $state(false)
   let icon = $state<OvenIcon>('server')
   let customSvg = $state<string | undefined>()
   let customIcons = $state<CustomIcon[]>([])
@@ -62,6 +64,15 @@
   let showPassphrase = $state(false)
   let publicKey = $state('')
   let pendingRemoval = $state<Oven | null>(null)
+  const hasAppearance = $derived(
+    Boolean(
+      color !== (editing?.color ?? '#22c55e') ||
+      icon !== (editing?.icon ?? 'server') ||
+      customSvg !== editing?.customSvg ||
+      pendingIcon ||
+      clearImage
+    )
+  )
 
   function message(value: unknown): string {
     return value instanceof Error ? value.message : 'The Oven operation failed.'
@@ -124,6 +135,8 @@
     return (value / 1024 ** 3).toFixed(1) + ' GiB'
   }
   function openEditor(oven?: Oven): void {
+    pendingIcon = undefined
+    clearImage = false
     editing = oven ?? null
     connectionResult = null
     name = oven?.name ?? ''
@@ -151,6 +164,28 @@
     editorOpen = true
   }
 
+  async function uploadImage(): Promise<void> {
+    try {
+      const path = await invoke('dialog:pickImage')
+      if (!path) return
+      const dataUrl = await invoke('file:readAsDataUrl', path)
+      if (dataUrl) {
+        pendingIcon = { path, dataUrl }
+        clearImage = false
+      }
+    } catch (failure) {
+      modalError = message(failure)
+    }
+  }
+
+  function resetAppearance(): void {
+    icon = editing?.icon ?? 'server'
+    customSvg = editing?.customSvg
+    color = editing?.color ?? '#22c55e'
+    pendingIcon = undefined
+    clearImage = false
+  }
+
   function closeEditor(): void {
     if (busy) return
     editorOpen = false
@@ -167,6 +202,8 @@
       ...(editing ? { id: editing.id } : {}),
       name,
       icon,
+      ...(pendingIcon ? { imagePath: pendingIcon.path } : {}),
+      clearImage,
       ...(customSvg ? { customSvg } : {}),
       color,
       connection: {
@@ -317,11 +354,12 @@
                 <Monitor size={20} class="shrink-0 text-muted" />
               {:else}
                 <img
-                  src={oven.customSvg
-                    ? getCustomSvgDataUrl(oven.customSvg, oven.color)
-                    : getIconSvgDataUrl(oven.icon, oven.color)}
+                  src={oven.imageDataUrl ??
+                    (oven.customSvg
+                      ? getCustomSvgDataUrl(oven.customSvg, oven.color)
+                      : getIconSvgDataUrl(oven.icon, oven.color))}
                   alt=""
-                  class="h-5 w-5"
+                  class="h-5 w-5 object-contain"
                 />
               {/if}
               <div class="min-w-0">
@@ -515,15 +553,6 @@
     }}
   >
     {#if modalError}<p class="text-sm text-danger" role="alert">{modalError}</p>{/if}
-    <label class="block space-y-1 text-xs font-medium text-muted"
-      >Name<input
-        class={fieldClass}
-        bind:value={name}
-        required
-        maxlength={80}
-        placeholder="Ubuntu workspace"
-      /></label
-    >
     {#if editorOpen}
       {#await import('../shared/AppearancePicker.svelte') then { default: AppearancePicker }}
         <AppearancePicker
@@ -533,21 +562,37 @@
           {customSvg}
           {customIcons}
           allowCustomSvg
+          resetPlacement="footer"
+          fallbackIconUrl={pendingIcon?.dataUrl ?? (clearImage ? null : editing?.imageDataUrl)}
+          onUploadImage={() => void uploadImage()}
           onColorChange={(next) => (color = next ?? '#22c55e')}
-          onIconTypeChange={(next) => (icon = next ?? 'server')}
-          onCustomSvgChange={(next) => (customSvg = next)}
+          onIconTypeChange={(next) => {
+            icon = next ?? 'server'
+            pendingIcon = undefined
+            clearImage = true
+          }}
+          onCustomSvgChange={(next) => {
+            customSvg = next
+            pendingIcon = undefined
+            clearImage = true
+          }}
           onAddCustomIcon={async (svg) => {
             const saved = await invoke('icon-library:add', svg)
             customIcons = [...customIcons, saved]
           }}
-          onReset={() => {
-            icon = 'server'
-            customSvg = undefined
-            color = '#22c55e'
-          }}
+          onReset={resetAppearance}
         />
       {/await}
     {/if}
+    <label class="block space-y-1 text-xs font-medium text-muted"
+      >Name<input
+        class={fieldClass}
+        bind:value={name}
+        required
+        maxlength={80}
+        placeholder="Ubuntu workspace"
+      /></label
+    >
     <div class="space-y-2">
       <p class="text-xs font-medium text-muted">Connection preset</p>
       <div class="flex flex-wrap gap-2">
@@ -685,28 +730,43 @@
       </p>{/if}
   </form>
   {#snippet footer()}
-    <button
-      type="button"
-      class="mr-auto flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-elevated disabled:opacity-50"
-      disabled={Boolean(busy)}
-      onclick={() => void testConnection()}
-      >{#if busy === 'test'}<Loader2 size={14} class="animate-spin" />{/if}Test connection</button
-    >
-    <button
-      type="button"
-      data-modal-dismiss
-      class="rounded-lg border px-3 py-2 text-sm hover:bg-elevated"
-      disabled={Boolean(busy)}
-      onclick={closeEditor}>Cancel</button
-    >
-    <button
-      type="submit"
-      form="oven-editor"
-      data-modal-primary
-      class="flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary disabled:opacity-50"
-      disabled={Boolean(busy)}
-      >{#if busy === 'save'}<Loader2 size={14} class="animate-spin" />{/if}Save Oven</button
-    >
+    <div class="flex w-full flex-wrap items-center justify-between gap-2">
+      {#if hasAppearance}
+        <button
+          type="button"
+          class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
+          title="Reset appearance"
+          disabled={Boolean(busy)}
+          onclick={resetAppearance}
+        >
+          Reset
+        </button>
+      {:else}<span></span>{/if}
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          class="rounded-lg border px-3 py-2 text-sm hover:bg-elevated disabled:opacity-50"
+          disabled={Boolean(busy)}
+          onclick={() => void testConnection()}
+          >{#if busy === 'test'}<Loader2 size={14} class="animate-spin" />{/if}Test connection</button
+        >
+        <button
+          type="button"
+          data-modal-dismiss
+          class="rounded-lg border px-3 py-2 text-sm hover:bg-elevated"
+          disabled={Boolean(busy)}
+          onclick={closeEditor}>Cancel</button
+        >
+        <button
+          type="submit"
+          form="oven-editor"
+          data-modal-primary
+          class="flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary disabled:opacity-50"
+          disabled={Boolean(busy)}
+          >{#if busy === 'save'}<Loader2 size={14} class="animate-spin" />{/if}Save Oven</button
+        >
+      </div>
+    </div>
   {/snippet}
 </Modal>
 
