@@ -7,10 +7,21 @@ import { reportError } from './app-errors.svelte'
 import { BrowserTabFavicons } from './browser-tab-favicon'
 import { loadPersistedBrowserTabs, persistBrowserTabs } from './context-sidebar-persistence'
 import { browserHistory } from './browser-history.svelte'
+import { threadBrowserTabs } from './thread-browser-tabs.svelte'
 import type { BrowserContextTab } from './context-sidebar-types'
+import { MAX_REOPENED_BROWSER_TABS } from './global-browser-types'
 import { IDLE_BROWSER_TAB_RUNTIME, type BrowserTabRuntime } from './browser-tab-status'
 
 const EMPTY_BROWSER_TABS: BrowserContextTab[] = []
+
+/** One thread-browser tab closed this session, kept for a reopen of its own
+ *  conversation. `scopeId` is the conversation it belonged to, so a reopen only
+ *  reaches the browser that is on screen. */
+interface ClosedSidebarBrowserTab {
+  tab: BrowserContextTab
+  index: number
+  scopeId: string
+}
 
 /**
  * How long a change to the sidebar's tab list waits before it is written.
@@ -68,6 +79,15 @@ export class SidebarBrowserTabs {
   tabs: BrowserContextTab[] = $state([])
   activeTabId: string | null = $state(null)
   visible = $state(false)
+  /**
+   * Thread-browser tabs closed this session, most recently closed last.
+   *
+   * A thread browser is scoped to a conversation, so each entry remembers the
+   * scope it belonged to and a reopen only brings back a tab of the
+   * conversation on screen. Memory-only: quitting the app clears it, exactly as
+   * a browser's own reopen history is cleared.
+   */
+  private closedTabs: ClosedSidebarBrowserTab[] = $state([])
 
   /**
    * Whether {@link start} has restored the stored tabs and wired the runtime.
@@ -480,6 +500,10 @@ export class SidebarBrowserTabs {
   }
 
   removeForProject(projectId: string): string[] {
+    // A closed tab of a project that is gone can never be reopened, so its
+    // session entry goes with the project. This runs before the early return: a
+    // project with no live tab left may still have a closed one remembered.
+    this.closedTabs = this.closedTabs.filter((entry) => entry.tab.projectId !== projectId)
     const removedIds = this.tabs.filter((tab) => tab.projectId === projectId).map((tab) => tab.id)
     if (removedIds.length === 0) return []
     this.tabs = this.tabs.filter((tab) => tab.projectId !== projectId)
@@ -494,6 +518,9 @@ export class SidebarBrowserTabs {
   }
 
   removeForThread(projectId: string, threadId: string): string[] {
+    this.closedTabs = this.closedTabs.filter(
+      (entry) => entry.tab.projectId !== projectId || entry.tab.threadId !== threadId
+    )
     const removedIds = this.tabs
       .filter((tab) => tab.projectId === projectId && tab.threadId === threadId)
       .map((tab) => tab.id)
@@ -510,10 +537,14 @@ export class SidebarBrowserTabs {
   }
 
   /** Close one browser tab and fall back to the last remaining tab of the
-   *  active container (a project's threads or the open chat). */
-  close(id: string): void {
+   *  active container (a project's threads or the open chat). A close the user
+   *  asked for is remembered so it can be reopened; a close that replaces the
+   *  tab (a reopen in another box) opts out, because nothing left the strip. */
+  close(id: string, options: { recordForReopen?: boolean } = {}): void {
     const browserIndex = this.tabs.findIndex((tab) => tab.id === id)
     if (browserIndex < 0) return
+    const closing = this.tabs[browserIndex]
+    if (options.recordForReopen !== false) this.rememberClosedTab(closing, browserIndex)
     this.tabs = this.tabs.filter((tab) => tab.id !== id)
     this.forgetRuntime([id])
     this.pruneScopeBoxChoices()
@@ -522,6 +553,56 @@ export class SidebarBrowserTabs {
     }
     if (this.activeTabs.length === 0) this.visible = false
     this.persist()
+  }
+
+  /**
+   * Remember a just-closed tab for a reopen.
+   *
+   * The tab and its strip position are cloned, the scope is resolved now (a tab
+   * is always owned by a conversation), and the oldest entry falls off once the
+   * cap is reached.
+   */
+  private rememberClosedTab(tab: BrowserContextTab, index: number): void {
+    const entry: ClosedSidebarBrowserTab = {
+      tab: { ...tab },
+      index,
+      scopeId: this.host.threadScopeId(tab.projectId, tab.threadId)
+    }
+    const next = [...this.closedTabs, entry]
+    this.closedTabs = next.slice(Math.max(0, next.length - MAX_REOPENED_BROWSER_TABS))
+  }
+
+  /**
+   * Reopen the most recently closed tab of the conversation on screen.
+   *
+   * A thread browser is per-conversation, so a reopen only reaches a tab that
+   * belonged to the same conversation: a tab closed in another thread must not
+   * appear in this one. The tab keeps its id, so main hands its stored Back/
+   * Forward history back to the page. Returns the reopened tab id, or null when
+   * this conversation has nothing to reopen.
+   */
+  reopenLastClosedTab(): string | null {
+    const projectId = this.host.activeProjectId()
+    const threadId = this.host.activeThreadId()
+    if (!projectId || !threadId) return null
+    const scopeId = this.host.threadScopeId(projectId, threadId)
+    let entryIndex = -1
+    for (let index = this.closedTabs.length - 1; index >= 0; index -= 1) {
+      if (this.closedTabs[index].scopeId === scopeId) {
+        entryIndex = index
+        break
+      }
+    }
+    if (entryIndex < 0) return null
+    const entry = this.closedTabs[entryIndex]
+    this.closedTabs = this.closedTabs.filter((_, index) => index !== entryIndex)
+    const restored: BrowserContextTab = { ...entry.tab }
+    const ordered = [...this.tabs]
+    ordered.splice(Math.min(entry.index, ordered.length), 0, restored)
+    this.tabs = ordered
+    this.focus(restored.id)
+    this.persist()
+    return restored.id
   }
 
   focus(id: string): void {
@@ -539,6 +620,9 @@ export class SidebarBrowserTabs {
     this.activeTabId = id
     this.visible = true
     this.host.clearNotifications()
+    // Recency is what a Ctrl+Tab inside the full screen browser walks, so it is
+    // recorded here, at the one place a tab becomes the one in use.
+    threadBrowserTabs.record(id)
     this.persist()
   }
 
@@ -560,6 +644,7 @@ export class SidebarBrowserTabs {
     for (const tabId of tabIds) {
       this.runtime.delete(tabId)
       this.tabFavicons.forget(tabId)
+      threadBrowserTabs.forget(tabId)
     }
   }
 

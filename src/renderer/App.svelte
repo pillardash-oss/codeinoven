@@ -54,6 +54,7 @@
   import { pipState } from '$lib/stores/pip.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { installBrowserShortcutPublishing } from '$lib/keymap/browser-shortcuts'
   import { appQuitState } from '$lib/stores/app-quit.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
@@ -1400,6 +1401,18 @@
       }
 
       requestThreadForCurrentView()
+      return
+    }
+    if (keymapState.matches('browser-reopen-tab', e)) {
+      // The browser's own page is a native view, so this normally never fires:
+      // main claims the chord in the page and forwards the same action to the
+      // view that owns the strip. It is the fallback for the one state where no
+      // page holds the keyboard   the Browser view with every tab closed   so a
+      // mistaken last close can still be undone.
+      if (activeView !== 'browser') return
+      e.preventDefault()
+      if (e.repeat) return
+      void withBrowser((store) => store.reopenLastClosedTab())
     }
   }
 
@@ -1482,6 +1495,13 @@
     }
     observeNavigationLocation()
     void loadConfig()
+    // The keymap pushes the browser's chords whenever the config loads, but main's
+    // window-bound browser handlers are registered after the first paint, so that
+    // push can land before they exist and be dropped. The browser would then claim
+    // none of its own keys (Cmd/Ctrl+T, Cmd/Ctrl+W, find) until the next keymap
+    // change. This publishes now and again on every `app:featuresReady`, which
+    // main sends once those handlers are up.
+    installBrowserShortcutPublishing(keymapState)
     // Every launch leaves the browser alone: no chunk fetched, no store built,
     // no stored tab list read, no listener registered. The one exception is a
     // session that restores straight onto the browser view, where the page the

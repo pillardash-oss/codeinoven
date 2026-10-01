@@ -1505,10 +1505,11 @@
     if (tab.kind === 'coordinator') coordinatorDockState.setAutoOpen(false)
     if (tab.kind === 'browser') {
       if (browserFullscreenTabId === tab.id) browserFullscreenTabId = null
-      // A thread browser tab that is closed takes its Back/Forward stack with it.
-      // There is no hibernation on this surface, so a destroy here is always the
-      // tab really going away, and the last tab of a thread browser going this way
-      // is that browser being closed: no tab of it is left to own a history.
+      // A thread browser tab that is closed takes its Back/Forward stack out of
+      // the strip with it, but main keeps it in the session's reopen set so
+      // Cmd/Ctrl+Shift+T can bring the tab back on the page it was left on.
+      // Quitting the app clears that set. There is no hibernation on this surface,
+      // so a destroy here is otherwise the tab really going away.
       void invoke('browser:destroy', tab.id, 'closed')
     }
     // Symmetric with the browser: closing the terminal that is showing fullscreen
@@ -2008,6 +2009,11 @@
         closeContextTab(tabId)
         return
       }
+      if (action === 'reopen-tab') {
+        contextSidebarState.reopenClosedBrowserTab()
+        return
+      }
+      if (action !== 'new-tab') return
       // A new tab opens in the container the focused tab belongs to, so a key
       // pressed in a thread's browser can never open a tab the strip is not
       // showing. It takes the keyboard like one opened from the strip does.

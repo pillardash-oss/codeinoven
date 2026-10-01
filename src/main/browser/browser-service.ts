@@ -50,7 +50,10 @@ import type {
 } from '../../lib/ipc-contract'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc-contract'
 import { isVideoCaptureUrl } from '../../lib/video/project'
-import { boundedBrowserTabHistory } from '../../lib/browser/browser-tab-history'
+import {
+  boundedBrowserTabHistory,
+  type BrowserTabHistoryRecord
+} from '../../lib/browser/browser-tab-history'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
@@ -77,6 +80,7 @@ import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
 import { BrowserDownloadManager } from './browser-service/browser-downloads'
 import { BrowserTabHistoryStore } from './browser-tab-history-store'
+import { BrowserClosedTabHistory } from './browser-closed-tab-history'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
 import { BrowserInspector } from './browser-service/browser-inspector'
 import { BrowserSiteDataService } from './browser-service/browser-site-data'
@@ -202,13 +206,21 @@ import { designScreenTabId } from './browser-service/design-screen-tab'
  */
 const PANEL_SHORTCUT_TARGETS: Readonly<
   Record<
-    'focusAddress' | 'closeTab' | 'newTab' | 'toggleNotes' | 'find' | 'findNext' | 'findPrevious',
+    | 'focusAddress'
+    | 'closeTab'
+    | 'newTab'
+    | 'reopenTab'
+    | 'toggleNotes'
+    | 'find'
+    | 'findNext'
+    | 'findPrevious',
     BrowserPanelShortcutAction
   >
 > = {
   focusAddress: 'focus-address',
   closeTab: 'close-tab',
   newTab: 'new-tab',
+  reopenTab: 'reopen-tab',
   toggleNotes: 'toggle-notes',
   find: 'find',
   findNext: 'find-next',
@@ -570,6 +582,8 @@ export class BrowserService {
    * quitting. See `browser-tab-history-store.ts`.
    */
   private readonly tabHistory = new BrowserTabHistoryStore()
+  /** Stacks of tabs closed this session, held only until the tab is reopened. */
+  private readonly closedTabHistory = new BrowserClosedTabHistory()
   private consoleSequence = 0
   /**
    * The popup windows pages have opened, hosted by the app rather than by the
@@ -702,15 +716,12 @@ export class BrowserService {
   }
 
   /**
-   * Read one tab's Back/Forward stack off its live view and remember it.
-   *
-   * Called at the moments the view is about to lose the stack: parking it off
-   * screen, hibernating it, and quitting. Nothing is captured on a navigation,
-   * because the view is where the stack belongs while the tab is alive.
+   * Read one tab's Back/Forward stack off its live view, or null when the view is
+   * gone or has nothing loadable to restore.
    */
-  private captureTabHistory(tabId: string, tab: BrowserTab): void {
+  private readTabHistory(tabId: string, tab: BrowserTab): BrowserTabHistoryRecord | null {
     const contents = tab.view.webContents
-    if (contents.isDestroyed()) return
+    if (contents.isDestroyed()) return null
     const history = contents.navigationHistory
     const bounded = boundedBrowserTabHistory(
       history.getAllEntries().map((entry) => {
@@ -723,16 +734,49 @@ export class BrowserService {
       }),
       history.getActiveIndex()
     )
-    // Nothing loadable means nothing to restore, so the record is not written:
-    // an empty stack is the same as no stack, and one fewer row to keep.
-    if (!bounded) return
-    this.tabHistory.store(tabId, {
+    // Nothing loadable means nothing to restore, so there is no record: an empty
+    // stack is the same as no stack, and one fewer row to keep.
+    if (!bounded) return null
+    return {
       projectId: tab.projectId,
       threadId: tab.threadId,
       entries: bounded.entries,
       index: bounded.index,
       updatedAt: Date.now()
-    })
+    }
+  }
+
+  /**
+   * Read one tab's Back/Forward stack off its live view and remember it durably.
+   *
+   * Called at the moments the view is about to lose the stack: parking it off
+   * screen, hibernating it, and quitting. Nothing is captured on a navigation,
+   * because the view is where the stack belongs while the tab is alive. The tab
+   * is live again, so any copy kept for a reopen is dropped here rather than left
+   * to be restored twice.
+   */
+  private captureTabHistory(tabId: string, tab: BrowserTab): void {
+    const record = this.readTabHistory(tabId, tab)
+    if (!record) return
+    this.closedTabHistory.forget(tabId)
+    this.tabHistory.store(tabId, record)
+  }
+
+  /**
+   * Keep a closing tab's stack for a reopen instead of discarding it.
+   *
+   * A live tab's stack is read off its view before the view closes; a tab that
+   * was already hibernated has no view left, so its durable stack is the one that
+   * goes into the session set. Either way the durable copy is removed by the
+   * caller, because a closed tab's stack lives only until it is reopened or the
+   * session ends.
+   */
+  private stashClosedTabHistory(tabId: string, tab: BrowserTab | undefined): void {
+    const record =
+      tab && !tab.view.webContents.isDestroyed()
+        ? this.readTabHistory(tabId, tab)
+        : this.tabHistory.recordFor(tabId)
+    if (record) this.closedTabHistory.stash(tabId, record)
   }
 
   /**
@@ -744,10 +788,12 @@ export class BrowserService {
    *
    * A record is only ever restored into the tab that wrote it. A tab id is unique,
    * but the project and thread are checked as well, so a thread browser's stack can
-   * never be served to a global tab even if a file is edited to claim it.
+   * never be served to a global tab even if a file is edited to claim it. A tab
+   * that was closed and is being reopened reads its stack from the session set,
+   * which is the one place a closed tab's history is still alive.
    */
   private restoreTabHistory(tabId: string, tab: BrowserTab, fallbackUrl: string): boolean {
-    const record = this.tabHistory.recordFor(tabId)
+    const record = this.tabHistory.recordFor(tabId) ?? this.closedTabHistory.peek(tabId)
     if (!record) return false
     if (record.projectId !== tab.projectId || record.threadId !== tab.threadId) return false
     const contents = tab.view.webContents
@@ -1241,10 +1287,12 @@ export class BrowserService {
       }
       // A hibernated tab of that thread has no live tab for the loop above to
       // find, so its stored stack is swept by owner rather than by tab. This is
-      // the thread browser going away: its history goes with it.
-      this.tabHistory.forgetScopes(
-        (record) => record.projectId === projectId && record.threadId === threadId
-      )
+      // the thread browser going away: its history goes with it, session set and
+      // all.
+      const ownedByThread = (record: BrowserTabHistoryRecord): boolean =>
+        record.projectId === projectId && record.threadId === threadId
+      this.tabHistory.forgetScopes(ownedByThread)
+      this.closedTabHistory.forgetScopes(ownedByThread)
     })
     replaceHandler('browser:destroyProject', (_event, rawProjectId) => {
       this.dropProjectTabs(validateProjectId(rawProjectId))
@@ -2219,6 +2267,7 @@ export class BrowserService {
       case 'focusAddress':
       case 'closeTab':
       case 'newTab':
+      case 'reopenTab':
       case 'toggleNotes':
       case 'find':
       case 'findNext':
@@ -3480,6 +3529,7 @@ export class BrowserService {
       if (tab.projectId === projectId) this.destroy(tabId, 'closed')
     }
     this.tabHistory.forgetScopes((record) => record.projectId === projectId)
+    this.closedTabHistory.forgetScopes((record) => record.projectId === projectId)
     this.downloads.forgetProject(projectId)
   }
 
@@ -5084,13 +5134,15 @@ export class BrowserService {
     this.dropPendingPark(tabId)
     const tab = this.tabs.get(tabId)
     // The stack dies with the view, so a tab that is only being hibernated hands
-    // its stack over before it goes. A tab that is being closed drops it instead:
-    // history belongs to the tab it was made in, and a closed tab has none. Both
+    // its stack over before it goes. A tab that is being closed hands it to the
+    // session's reopen set instead: the stack outlives the tab just long enough
+    // for Cmd/Ctrl+Shift+T to bring it back, and a restart empties that set. Both
     // halves run before the early return, because a destroy for a tab this process
     // no longer holds still has a record to settle.
     if (reason === 'hibernated') {
       if (tab) this.captureTabHistory(tabId, tab)
     } else {
+      this.stashClosedTabHistory(tabId, tab)
       this.tabHistory.forget(tabId)
     }
     if (!tab) return

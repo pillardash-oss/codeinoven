@@ -598,6 +598,16 @@ class ContextSidebarState {
   }
 
   /**
+   * Reopen the most recently closed browser tab of the conversation on screen,
+   * restoring its Back/Forward history. Session-scoped: quitting the app clears
+   * what can be reopened. Returns the reopened tab id, or null when this
+   * conversation has nothing to reopen.
+   */
+  reopenClosedBrowserTab(): string | null {
+    return this.browser.reopenLastClosedTab()
+  }
+
+  /**
    * Give one sidebar browser tab the icon its address is known by, when the app
    * has no page to read one from (see `SidebarBrowserTabs.ensureFavicon`). The
    * strip draws this for every tab it shows, and the answer is written down with

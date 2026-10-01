@@ -623,6 +623,13 @@
           "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
         },
         {
+          "id": "browser-reopen-tab",
+          "keys": ["mod", "shift", "t"],
+          "label": "Reopen closed browser tab",
+          "description": "Brings back the tab you closed last, with its back and forward history. Reopening works until the app is quit, like a browser's own reopen.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
           "id": "browser-find",
           "keys": ["mod", "f"],
           "label": "Find in page",
