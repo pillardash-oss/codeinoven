@@ -149,13 +149,14 @@
     onEscapeKeydown?: (event: KeyboardEvent) => void
     /** Draw the dimmed scrim behind the panel. On by default.
      *
-     *  Off for the one full screen surface that hosts the browser's native
-     *  view. There the opaque panel already covers the whole window, so the
-     *  scrim is invisible, and its full-window `backdrop-blur` is a second
-     *  GPU-composited layer sitting under the native view. On a page that is
-     *  painting hard (a site's own modal, an animation, a video) that extra
-     *  layer starves the compositor and the page visibly tears, which is why
-     *  the same page is smooth in the narrow sidebar and torn at full size. */
+     *  Off for a full screen surface that covers the window with an opaque
+     *  panel over continuously repainting content (the browser's native view,
+     *  the terminal's renderer). There the scrim is invisible, and its
+     *  full-window `backdrop-blur` is a second GPU-composited layer under the
+     *  content that keeps painting. On a surface painting hard (a site's own
+     *  modal, an animation, a video, a terminal being scrolled) that extra
+     *  layer starves the compositor and the content visibly tears, which is why
+     *  the same content is smooth in the narrow sidebar and torn at full size. */
     scrim?: boolean
     /** Detach the browser's native view while this modal is open.
      *

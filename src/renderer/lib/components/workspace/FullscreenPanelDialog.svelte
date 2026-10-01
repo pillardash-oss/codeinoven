@@ -42,6 +42,16 @@
      *  keep the native view detached; the browser surface would blank itself if
      *  it did, because the view it suppresses is the page it is showing. */
     hostsBrowserView?: boolean
+    /** Paint the dimmed scrim behind this surface. On by default, and always
+     *  off when `hostsBrowserView` is set, because there the scrim can never be
+     *  seen.
+     *
+     *  Off for any surface whose body is a full-window child that keeps
+     *  repainting: the browser's page, the terminal's renderer. The opaque body
+     *  already hides the scrim, and its full-window `backdrop-blur` composites
+     *  under that child on every frame, which starves the GPU and makes the
+     *  content tear under load. */
+    scrim?: boolean
   }
 
   let {
@@ -57,7 +67,8 @@
     onSelect,
     onCloseTab,
     children,
-    hostsBrowserView = false
+    hostsBrowserView = false,
+    scrim = true
   }: Props = $props()
 
   let stripElement = $state<HTMLDivElement>()
@@ -122,7 +133,7 @@
   panelClass="bg-app"
   trapFocus={false}
   escapeCloses={false}
-  scrim={!hostsBrowserView}
+  scrim={scrim && !hostsBrowserView}
   blocksBrowserView={!hostsBrowserView}
 >
   <div

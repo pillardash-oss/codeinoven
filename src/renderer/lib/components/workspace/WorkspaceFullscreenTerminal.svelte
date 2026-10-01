@@ -25,6 +25,7 @@
     activeTabId={tabId}
     newLabel="New terminal"
     minimizeLabel="Minimize terminal"
+    scrim={false}
     onSelect={(id) => onTabIdChange(id)}
     onCloseTab={(id) => onCloseTab(id)}
     onNew={() => {
