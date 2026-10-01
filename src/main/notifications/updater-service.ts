@@ -69,6 +69,14 @@ export class UpdaterService {
    */
   private forceUpdateInBackground = false
   /**
+   * Brackets the quit lifecycle around an install. `begin` runs right before
+   * `autoUpdater.quitAndInstall()` so the bootstrap can clear background mode's
+   * park gate (otherwise the updater's own `app.quit()` is swallowed and the
+   * update never applies); `end` runs when the install cannot proceed, so a
+   * failed install leaves the app parkable in the menu bar as before.
+   */
+  private updateQuitHooks: { begin: () => void; end: () => void } | null = null
+  /**
    * Runs at the start of every update-check cycle (startup, periodic, explicit).
    * Skill freshness rides this cadence instead of running a timer of its own.
    */
@@ -115,6 +123,7 @@ export class UpdaterService {
       Logger.dev('Updater: no update available')
       this.pendingUpdateInfo = null
       this.forceUpdateInBackground = false
+      this.updateQuitHooks?.end()
       this.updateState({ state: 'idle' })
     })
 
@@ -139,6 +148,9 @@ export class UpdaterService {
     autoUpdater.on('error', (error) => {
       Logger.error('Updater error:', error.message)
       this.forceUpdateInBackground = false
+      // An install that failed before it could quit must not leave the park gate
+      // disabled: the app has to stay parkable in the menu bar.
+      this.updateQuitHooks?.end()
       // During a check, the rejected check promise settles the state (see
       // `settleCheckFailure`)   the event must not race it into a sticky error.
       // Idle/checking states mean the failure came from a background check, so
@@ -159,6 +171,16 @@ export class UpdaterService {
 
   setChatEngine(engine: SessionActivitySource | null): void {
     this.chatEngine = engine
+  }
+
+  /**
+   * Register how an update install brackets the quit lifecycle. Background mode
+   * parks on the `app.quit()` the updater triggers, which would leave a
+   * downloaded update unapplied, so the bootstrap clears the park gate for the
+   * duration of the install through these hooks.
+   */
+  attachUpdateQuitHooks(hooks: { begin: () => void; end: () => void }): void {
+    this.updateQuitHooks = hooks
   }
 
   /** Register an extra activity source (for example live terminal sessions). */
@@ -592,6 +614,10 @@ export class UpdaterService {
     const background = this.forceUpdateInBackground
     this.forceUpdateInBackground = false
     if (background && BrowserWindow.getAllWindows().length === 0) markBackgroundRelaunch()
+    // The install must be a real quit. Background mode would otherwise park on
+    // the app.quit() that quitAndInstall triggers, and the update would never be
+    // applied; `begin` clears that gate and `end` (on failure) restores it.
+    this.updateQuitHooks?.begin()
     autoUpdater.quitAndInstall(background, background)
   }
 

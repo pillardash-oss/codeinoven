@@ -445,10 +445,11 @@ function createWindow(): BrowserWindow {
     // Background mode parks instead of quitting: the window and its renderer are
     // destroyed, the backend keeps running in the menu bar. Everything else
     // closes the app. Either way the renderer still owns the unsaved-file gate,
-    // so the same confirmation round-trip runs   marked as a park when it is one.
+    // so the same confirmation round-trip runs   marked as a park when it is one,
+    // and never a park while an update install is driving the quit.
     if (state.quitConfirmed || state.quitCleanupStarted) return
     event.preventDefault()
-    const park = state.backgroundLifecycle?.shouldPark() ?? false
+    const park = !state.quitForUpdate && (state.backgroundLifecycle?.shouldPark() ?? false)
     requestCloseConfirmation({ state, database, window: state.mainWindow, park })
   })
 
@@ -851,8 +852,9 @@ void app
 app.on('window-all-closed', () => {
   // Background mode keeps the backend alive in the menu bar; a real quit is the
   // menu bar's Quit item, the direct-quit shortcut, or an OS logout. Everything
-  // else quits as before.
-  if (state.backgroundLifecycle?.shouldPark()) return
+  // else quits as before. An update install is a real quit too: parking on it
+  // would leave the downloaded update unapplied.
+  if (state.backgroundLifecycle?.shouldPark() && !state.quitForUpdate) return
   // Closing the last window (traffic-light close button) fully quits the app.
   // Cmd+Q follows the same path through before-quit → shutdown pipeline →
   // will-quit.
@@ -862,9 +864,17 @@ app.on('window-all-closed', () => {
 app.on('before-quit', (event) => {
   if (state.quitCleanupStarted) return
 
+  // An update install is a real quit, and background mode must not park on it.
+  // The flag is read once and cleared here so a restart the user declines leaves
+  // the app parkable again on the next close.
+  const quitForUpdate = state.quitForUpdate
+  state.quitForUpdate = false
+
   // Cmd+Q parks in background mode instead of quitting. Only the menu bar's
   // Quit item (or OS logout) sets `quitConfirmed` and reaches the real shutdown.
-  if (!state.quitConfirmed && state.backgroundLifecycle?.shouldPark()) {
+  // An update install is the exception: it must restart the app to apply, so it
+  // never parks.
+  if (!state.quitConfirmed && !quitForUpdate && state.backgroundLifecycle?.shouldPark()) {
     event.preventDefault()
     const window = state.mainWindow
     if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {

@@ -58,6 +58,12 @@ export interface BootstrapState {
   // shutdown pipeline.
   quitCleanupStarted: boolean
   quitConfirmed: boolean
+  /**
+   * A quit an update install drove, not the user. The park gate honours it so
+   * `autoUpdater.quitAndInstall()` can restart the app to apply an update
+   * instead of being swallowed by background mode's close-to-menu-bar path.
+   */
+  quitForUpdate: boolean
   shutdownFailsafe: ReturnType<typeof setTimeout> | null
 
   // Renderer readiness and startup milestones.
@@ -152,6 +158,7 @@ export function createBootstrapState(): BootstrapState {
     gatewaySupervisor: null,
     quitCleanupStarted: false,
     quitConfirmed: false,
+    quitForUpdate: false,
     shutdownFailsafe: null,
     rendererReadyReported: false,
     packagedSmokeProofStarted: false,
