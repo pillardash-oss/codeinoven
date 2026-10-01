@@ -85,7 +85,8 @@ import {
 import {
   InactiveQuestionTurnError,
   PermissionRequestGoneError,
-  QuestionRequestGoneError
+  QuestionRequestGoneError,
+  SteerDeliveryFailedError
 } from '../drivers/driver.interface'
 import type {
   AuxiliaryModelCandidate,
@@ -8060,6 +8061,7 @@ export class ChatEngine {
     try {
       await deliverNow()
     } catch (error) {
+      if (error instanceof SteerDeliveryFailedError) throw error
       // The turn can settle inside the race window between the working check
       // above and this delivery (auto-compaction, silent continue, retry)
       // pi considers compaction part of the working trace but the driver's
