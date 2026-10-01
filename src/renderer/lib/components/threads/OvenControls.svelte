@@ -114,7 +114,7 @@
 <div class="relative flex items-center gap-1 text-xs text-muted">
   <button
     type="button"
-    class="flex items-center gap-1.5 rounded-md bg-raised px-2 py-1 hover:bg-elevated disabled:opacity-50"
+    class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted hover:bg-elevated disabled:opacity-50"
     title="Choose the Oven for this chat"
     aria-haspopup="menu"
     aria-expanded={editor}
@@ -123,13 +123,13 @@
   >
     {#if current}
       <img
-        class="h-3 w-3"
+        class="h-2.5 w-2.5 shrink-0"
         alt=""
         src={current.customSvg
           ? getCustomSvgDataUrl(current.customSvg, current.color)
           : getIconSvgDataUrl(current.icon, current.color)}
       />
-    {:else}<Server size={12} />{/if}<span
+    {:else}<Server size={10} class="shrink-0" />{/if}<span
       >{current?.name ??
         (settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID ? 'Oven unavailable' : 'Local')}</span
     ><ChevronDown size={10} />
