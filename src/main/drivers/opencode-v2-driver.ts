@@ -365,16 +365,14 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
         prependHistoryRecap(opts.text, opts.historyRecap),
         opts.attachments
       )
-      if (opts.systemPrompt) {
-        // V2's prompt body has no `system` field. A synthetic inbox item parked
-        // ahead of the prompt is the only channel for context the user did not
-        // type, and `resume: false` keeps it from starting a loop of its own.
-        await handle.client.json(`/api/session/${encodeURIComponent(opts.sessionId)}/synthetic`, {
-          method: 'POST',
-          body: buildOpenCodeV2SyntheticBody(wrapOpenCodeV2SystemContext(opts.systemPrompt)),
-          timeoutMs: ADMISSION_TIMEOUT_MS
-        })
-      }
+      // V2's prompt body has no `system` field. A synthetic inbox item parked
+      // ahead of the prompt is the only channel for context the user did not
+      // type, and `resume: false` keeps it from starting a loop of its own.
+      await handle.client.json(`/api/session/${encodeURIComponent(opts.sessionId)}/synthetic`, {
+        method: 'POST',
+        body: buildOpenCodeV2SyntheticBody(wrapOpenCodeV2SystemContext(opts.systemPrompt ?? '')),
+        timeoutMs: ADMISSION_TIMEOUT_MS
+      })
       await handle.client.json(`/api/session/${encodeURIComponent(opts.sessionId)}/prompt`, {
         method: 'POST',
         body: buildOpenCodeV2PromptBody({
@@ -414,12 +412,12 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
         }
       })
     }
-    if (opts.agent) {
-      await handle.client.json(`${sessionPath}/agent`, {
-        method: 'POST',
-        body: { agent: opts.agent }
-      })
-    }
+    // Agent selection persists on V2 sessions. Restore build for project turns
+    // so a previous utility or read-only turn cannot leave its restrictions active.
+    await handle.client.json(`${sessionPath}/agent`, {
+      method: 'POST',
+      body: { agent: opts.agent ?? 'build' }
+    })
     const permissions = buildOpenCodeV2PermissionRuleset(opts)
     await handle.client.json(sessionPath, { method: 'PATCH', body: { permissions } })
   }

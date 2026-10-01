@@ -178,7 +178,13 @@ export function buildOpenCodeV2ModelRef(
  * text that goes in it.
  */
 export function wrapOpenCodeV2SystemContext(systemPrompt: string): string {
-  return `[System instructions for this session]\n\n${systemPrompt}`
+  return [
+    '[System instructions for this session]',
+    systemPrompt,
+    'OpenCode V2 tool access: execute runs Code Mode scripts for tools in its catalog. That catalog is not the complete list of tools available to this model. Native read, glob, grep, edit, write, patch, and shell tools are called directly when exposed by the active agent and permissions. A missing search result inside execute does not establish that a native tool is unavailable. Use the native file tools directly for repository work; use execute for catalog tools. Do not interpret Code Mode instructions about catalog tools as prohibiting direct native tool calls.'
+  ]
+    .filter(Boolean)
+    .join('\n\n')
 }
 
 /**
