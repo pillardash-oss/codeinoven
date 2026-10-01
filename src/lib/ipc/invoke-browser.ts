@@ -71,7 +71,10 @@ export const invokeBrowserContract = {
       /**
        * The box this tab belongs to, or null for the context's own jar. Optional
        * and trailing so every existing caller keeps meaning what it meant: an
-       * absent box is today's single durable profile, not a new behaviour.
+       * absent box is today's single durable profile, not a new behaviour. The
+       * profile's own box names itself here like any other box and resolves to the
+       * profile's jar, so null and that id are two different jars rather than two
+       * spellings of one.
        */
       boxId?: string | null
     ],

@@ -33,6 +33,9 @@ material way, and the difference is deliberate.
   project's jar   the global browser's clear still takes its boxes with it. The
   startup sweep reclaims the per-project box jars an earlier build created, since
   nothing resolves to them any more.
+  The profile's `Default` box is the global browser's own unboxed session, not a
+  separate box partition; a thread browser can select it to use that same profile,
+  while leaving the box unset continues to use the conversation's own jar.
 - **Agent-to-agent isolation lives at the tab level**, which is where clashes actually
   happen:
   - The agent's target tab is addressed per `(projectId, threadId)` (`agentTabIds`), so

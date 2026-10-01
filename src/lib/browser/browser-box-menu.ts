@@ -8,7 +8,13 @@
  * read, so the two cannot disagree about what a menu row is.
  */
 
-/** One selectable box: its jar id, and the name to show for it. */
+/** One selectable box: its jar id, and the name to show for it.
+ *
+ *  The profile's own box is one of these like any other, under the name the boxes
+ *  panel gives it. Its id is not read as "no box" anywhere on the way to a
+ *  session: main resolves it to the profile's jar, which is where the global
+ *  browser's unboxed pages live, while the absent id stays what it always was,
+ *  the jar of the conversation the menu was opened from. */
 export interface BrowserBoxMenuEntry {
   id: string
   name: string
@@ -19,7 +25,8 @@ export interface BrowserBoxMenuEntry {
  *
  * A chosen `null` box is the conversation scope's own jar, which is the menu's
  * first entry and where every scope starts. Every other value is the jar of one
- * of the entries that was offered.
+ * of the entries that was offered: a named box means that box's jar, and the
+ * profile's own box means the profile's jar rather than this conversation's.
  */
 export interface BrowserBoxMenuChoice {
   boxId: string | null

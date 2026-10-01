@@ -49,7 +49,7 @@ import type {
 } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
 import { getNotificationService } from '../../notifications/notification-service'
-import { browserPartitionFor } from '../browser-service/browser-validation'
+import { browserJarFor, browserPartitionFor } from '../browser-service/browser-validation'
 import { prepareExtensionSource } from './browser-extension-install-job'
 import { COMPAT_BRIDGE_PAGE_FILE_NAME, ensureInjectionCurrent } from './browser-extension-inject'
 import {
@@ -318,10 +318,12 @@ export class BrowserExtensionService {
    * host one: an extension the jar does not run is not loaded there, so its own
    * page would have no extension behind it.
    */
-  popupUrlFor(extensionId: string, boxId: string | null): string | null {
+  popupUrlFor(extensionId: string, projectId: string, boxId: string | null): string | null {
     const record = this.registry.get(extensionId)
     if (!record || !record.enabled) return null
-    if (!extensionRunsInJar(record, boxId)) return null
+    // The jar, not the choice: a context in the profile's default box is in the
+    // global browser's own jar, which is the set a popup can be hosted from.
+    if (!extensionRunsInJar(record, browserJarFor(projectId, boxId).boxId)) return null
     return extensionPopupUrl(record.id, record.popupPath)
   }
 
@@ -456,10 +458,14 @@ export class BrowserExtensionService {
   async ensureJarLoaded(projectId: string, boxId: string | null): Promise<void> {
     if (this.disposed) return
     await this.ready
-    const partition = browserPartitionFor(projectId, boxId)
+    // Loaded as the jar it is, not as the context that reached for it: the
+    // profile's default box is the global browser's own jar, and this pair is what
+    // the loaded state remembers.
+    const jar = browserJarFor(projectId, boxId)
+    const partition = browserPartitionFor(jar.projectId, jar.boxId)
     const inFlight = this.loading.get(partition)
     if (inFlight) return inFlight
-    const task = this.reconcileJar(projectId, boxId, partition).catch((error: unknown) => {
+    const task = this.reconcileJar(jar.projectId, jar.boxId, partition).catch((error: unknown) => {
       Logger.error('Browser extensions could not be reconciled for a jar:', error)
     })
     this.loading.set(partition, task)
@@ -700,10 +706,15 @@ export class BrowserExtensionService {
    * its service worker and its load warnings behind every thread browser.
    */
   private desiredForJar(projectId: string, boxId: string | null): BrowserExtensionRecord[] {
-    if (boxId === null && projectId !== GLOBAL_BROWSER_PROJECT_ID) return []
+    // Answered about the jar rather than about the choice, for the same reason the
+    // partitions agree: a context in the profile's default box is browsing the
+    // global browser's own jar, and answering "a project's own jar" for it would
+    // unload the set that jar is running.
+    const jar = browserJarFor(projectId, boxId)
+    if (jar.boxId === null && jar.projectId !== GLOBAL_BROWSER_PROJECT_ID) return []
     return this.registry
       .list()
-      .filter((record) => record.enabled && extensionRunsInJar(record, boxId))
+      .filter((record) => record.enabled && extensionRunsInJar(record, jar.boxId))
   }
 
   private async reconcileJar(

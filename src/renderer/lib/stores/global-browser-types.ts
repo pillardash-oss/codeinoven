@@ -10,11 +10,13 @@
 
 import type { BrowserLoadError } from '$shared/ipc-contract'
 import type { BrowserAppearance } from '$shared/browser/global-browser-tabs'
+import { DEFAULT_BOX_ID } from '$shared/browser/global-browser-tabs'
 
-// The stored shape's bounds and its shared appearance vocabulary live beside the
-// stored record itself (`$shared/browser/global-browser-tabs`), because the main
-// process validates the same payload. They are re-exported here so every browser
-// surface keeps importing one module for the model's limits.
+// The stored shape's bounds, its shared appearance vocabulary and the id of the
+// profile's own box live beside the stored record itself
+// (`$shared/browser/global-browser-tabs`), because the main process validates the
+// same payload and resolves that id to a partition. They are re-exported here so
+// every browser surface keeps importing one module for the model's limits.
 export {
   MAX_BROWSER_BOX_NAME_LENGTH,
   MAX_BROWSER_GROUP_CUSTOM_SVG_LENGTH,
@@ -27,7 +29,7 @@ export {
   MAX_GLOBAL_BROWSER_GROUPS,
   MAX_GLOBAL_BROWSER_TABS
 } from '$shared/browser/global-browser-tabs'
-export { isBrowserBoxId } from '$shared/browser/global-browser-tabs'
+export { DEFAULT_BOX_ID, isBrowserBoxId } from '$shared/browser/global-browser-tabs'
 export type { BrowserAppearance } from '$shared/browser/global-browser-tabs'
 
 /** Live runtime state of one global tab, keyed by tab id. */
@@ -79,16 +81,12 @@ export interface GlobalBrowserBox extends BrowserAppearance {
   name: string
 }
 
-/**
- * The box every context has without making one: the jar the browser's own pages
- * live in.
- *
- * Naming it is what lets the boxes panel, the extensions panel and the install
- * target treat "a box" and "no box" as one question with one answer. The id is a
- * literal rather than a minted uuid because a stored extension record has to keep
- * pointing at the same jar across releases.
- */
-export const DEFAULT_BOX_ID = 'box:default'
+// The profile's own box id lives with the rest of the shared browser vocabulary
+// (`$shared/browser/global-browser-tabs`) and is re-exported above, because the
+// main process resolves it to a partition too. It is the box every context has
+// without making one: the global browser's own jar, which is why naming it from a
+// conversation browses the profile the person does rather than the conversation's
+// own.
 
 /** What the default box is called before the user renames it. */
 export const DEFAULT_BOX_NAME = 'Default'

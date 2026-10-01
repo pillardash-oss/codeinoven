@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Boxes, ChevronDown } from '@lucide/svelte'
+  import { Boxes, ChevronDown, Globe } from '@lucide/svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
@@ -19,7 +19,9 @@
    * jar   a project's box, a routine's box, a chat's box   and the control names
    * that as the default. Picking one of the profile's boxes runs this
    * conversation's pages in that box's jar instead, which is how a run can face a
-   * site as a different identity than the scope's own.
+   * site as a different identity than the scope's own. The profile's own box, the
+   * one the global browser's everyday pages live in, is offered beside them, so a
+   * conversation can also browse as the person rather than as the conversation.
    *
    * The menu is an OS-native popup, like the downloads and site menus beside it:
    * the page underneath is a `WebContentsView` that composites above the
@@ -35,7 +37,8 @@
   interface Props {
     projectId: string
     threadId: string
-    /** The box the tab on screen runs in, or null for the scope's own jar. */
+    /** The box the tab on screen runs in, or null for the scope's own jar. The
+     *  profile's own box arrives here as its id, like any other box. */
     boxId: string | null
     /** Name the current box beside the icon, which the full screen toolbar has room for. */
     labelled?: boolean
@@ -50,15 +53,18 @@
   const currentAccent = $derived(current ? browserAppearanceAccent(current) : null)
   /**
    * The chosen box's own icon, worn in place of the generic box glyph so the
-   * trigger shows which jar is in use at a glance. Null for the scope's own jar
-   * (which has no appearance to draw) and for a box that was only given a colour,
-   * which falls back to an accent dot exactly like the tab row's box badge.
+   * trigger shows which jar is in use at a glance. The profile's own box draws the
+   * appearance the boxes panel gave it, exactly as a named box does. Null for the
+   * scope's own jar, which has no appearance to draw, and for a box that was only
+   * given a colour, which falls back to an accent dot exactly like the tab row's
+   * box badge.
    */
   const currentIcon = $derived(
     current && browserAppearanceHasIcon(current)
       ? browserAppearanceIconUrl(current, globalBrowser.boxIconUrl(current.id))
       : null
   )
+  const usesProfileDefault = $derived(current?.id === DEFAULT_BOX_ID)
 
   /** Whether the native menu is on screen, for the trigger's expanded state. */
   let menuOpen = $state(false)
@@ -72,16 +78,17 @@
    * browser. A thread browser with no boxes on offer would look broken rather than
    * empty.
    *
-   * The profile's default box is left out: its jar is the global browser's own
-   * context, which a thread browser tab cannot join, and `jarIdForBox` reads its
-   * id as the scope's own jar   the menu's first entry already. Offering it would
-   * put two rows on the menu that mean the same jar.
+   * The profile's default box is offered with the rest, under the name and
+   * appearance the boxes panel gives it. It is not a second row for the scope's own
+   * jar: picking it browses the global browser's own jar, the one its unboxed pages
+   * live in, which is the profile the person is signed in as everywhere else.
    */
   async function menuBoxes(): Promise<{ id: string; name: string }[]> {
     const browser = await loadBrowser()
-    return browser.boxes
-      .filter((box) => box.id !== DEFAULT_BOX_ID)
-      .map((box) => ({ id: box.id, name: box.name }))
+    return browser.boxes.map((box) => ({
+      id: box.id,
+      name: box.id === DEFAULT_BOX_ID ? `${box.name} (global browser)` : box.name
+    }))
   }
 
   async function openMenu(anchor: HTMLElement): Promise<void> {
@@ -112,6 +119,8 @@
 >
   {#if current && currentIcon}
     <img src={currentIcon} alt="" class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain" />
+  {:else if usesProfileDefault}
+    <Globe size={13} />
   {:else if current}
     <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background-color: {currentAccent}"
     ></span>

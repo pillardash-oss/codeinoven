@@ -164,6 +164,7 @@ import {
   boundedBoxLabel,
   browserContextKey,
   boxIdFromPartition,
+  browserJarFor,
   browserPartitionFor,
   isAllowedPopupWindowUrl,
   isSameBounds,
@@ -3019,7 +3020,7 @@ export class BrowserService {
     if (this.popupWindows.countForTab(tabId) >= MAX_POPUP_WINDOWS_PER_TAB) {
       throw new Error('This tab already holds the popups it may host')
     }
-    const url = this.extensions.popupUrlFor(extensionId, tab.boxId)
+    const url = this.extensions.popupUrlFor(extensionId, projectId, tab.boxId)
     if (!url) throw new Error('That extension offers no popup in this box')
     // The extension has to be loaded in the jar before its own page can resolve: a
     // jar is loaded on demand and does not wait for a popup.
@@ -3622,17 +3623,20 @@ export class BrowserService {
    *
    *  Listed by jar, not by tab owner: a box's session is one jar however many
    *  contexts have a tab in it, so the global browser and a project browsing the
-   *  same box contribute one entry.
+   *  same box contribute one entry. The profile's default box is that same rule
+   *  taken to its end: a tab in it is a tab in the global browser's own jar, so it
+   *  is reported as the global browser rather than as the context that opened it.
    */
   private liveJars(): { projectId: string; boxId: string | null }[] {
     const jars: { projectId: string; boxId: string | null }[] = []
     const partitions = new Set<string>()
     for (const tab of this.tabs.values()) {
       if (tab.view.webContents.isDestroyed()) continue
-      const partition = browserPartitionFor(tab.projectId, tab.boxId)
+      const jar = browserJarFor(tab.projectId, tab.boxId)
+      const partition = browserPartitionFor(jar.projectId, jar.boxId)
       if (partitions.has(partition)) continue
       partitions.add(partition)
-      jars.push({ projectId: tab.projectId, boxId: tab.boxId })
+      jars.push(jar)
     }
     return jars
   }

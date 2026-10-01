@@ -30,7 +30,10 @@ import {
   MAX_BROWSER_SEARCH_URL_TEMPLATE_LENGTH,
   type BrowserSearchEngine
 } from '../../../lib/browser-search-engines'
-import { MAX_BROWSER_BOX_NAME_LENGTH } from '../../../lib/browser/global-browser-tabs'
+import {
+  DEFAULT_BOX_ID,
+  MAX_BROWSER_BOX_NAME_LENGTH
+} from '../../../lib/browser/global-browser-tabs'
 import {
   MAX_BROWSER_BOX_MENU_ENTRIES,
   type BrowserBoxMenuEntry,
@@ -69,9 +72,39 @@ export const LEGACY_BROWSER_PARTITION = 'persist:codeinoven-browser'
  *  A context's own jar is named by its project id. A box's jar is named by the
  *  box instead, under the reserved global context id: a box is one identity of
  *  the profile, so every context that picks it joins the one Chromium profile
- *  the global browser made it in, cookies, cache and extensions included. */
+ *  the global browser made it in, cookies, cache and extensions included.
+ *
+ *  The default box is the profile's own jar rather than a jar of its own, which
+ *  is how the interface reads it too: it is where the global browser's unboxed
+ *  pages live. A conversation that picks it therefore browses as the person, and
+ *  a jar of its own would have been empty and had no page's sign-ins in it. */
 export function browserPartitionFor(projectId: string, boxId: string | null = null): string {
-  return boxId === null ? `${BROWSER_PARTITION_PREFIX}${projectId}` : browserBoxPartitionFor(boxId)
+  if (boxId === null) return `${BROWSER_PARTITION_PREFIX}${projectId}`
+  if (boxId === DEFAULT_BOX_ID) return browserPartitionFor(GLOBAL_BROWSER_PROJECT_ID)
+  return browserBoxPartitionFor(boxId)
+}
+
+/** The jar a context's box choice names, as the pair the rest of the browser
+ *  identifies jars by.
+ *
+ *  A jar is named by the context that made it plus the box it is, and the profile
+ *  has exactly one jar that two such pairs can describe: the global browser
+ *  browsing unboxed, and any context that picked the profile's default box. They
+ *  are the same cookies, the same session and the same extensions, so everywhere
+ *  that asks a jar a question rather than for a partition   which extensions it
+ *  runs, which contexts feed activity under it, what the interface calls it   the
+ *  default box has to be answered as the global context, unboxed. Answering it as
+ *  the context that picked it would have a conversation's own jar set applied to
+ *  the profile's, unloading the very extensions the global browser is running.
+ *
+ *  {@link browserPartitionFor} resolves the same id to the same session, so the
+ *  two answers cannot disagree. */
+export function browserJarFor(
+  projectId: string,
+  boxId: string | null
+): { projectId: string; boxId: string | null } {
+  if (boxId === DEFAULT_BOX_ID) return { projectId: GLOBAL_BROWSER_PROJECT_ID, boxId: null }
+  return { projectId, boxId }
 }
 
 /** The namespace the profile's shared box jars live in. It is the global
@@ -82,7 +115,11 @@ export const BROWSER_BOX_PARTITION_PREFIX = `${BROWSER_PARTITION_PREFIX}${GLOBAL
 
 /** The partition of one shared box jar. A box belongs to the profile rather than
  *  to a context, so this takes no project id: every context that picks that box
- *  resolves to the one jar here. */
+ *  resolves to the one jar here.
+ *
+ *  The profile's own box is not one of these. Its jar predates the namespace   it
+ *  is the global context's own   so {@link browserPartitionFor} answers it
+ *  directly and only a named box reaches this function. */
 export function browserBoxPartitionFor(boxId: string): string {
   return `${BROWSER_BOX_PARTITION_PREFIX}${boxId}`
 }
@@ -96,7 +133,10 @@ const BOX_ID_PATTERN = new RegExp(`^[a-zA-Z0-9:._-]{1,${MAX_BOX_ID_LENGTH}}$`, '
  *
  *  Null is deliberately not a special case downstream: it is what every tab that
  *  predates boxes already is, and it produces today's exact partition string, so
- *  \"no box whatsoever\" is the same code path rather than a branch of its own. */
+ *  "no box whatsoever" is the same code path rather than a branch of its own.
+ *
+ *  The profile's own box is an id like any other at this point; what makes it
+ *  mean the profile rather than the context is {@link browserPartitionFor}. */
 export function validateOptionalBoxId(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null
   if (typeof value !== 'string' || !BOX_ID_PATTERN.test(value)) {
