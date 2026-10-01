@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Server, FolderOpen, ChevronDown } from '@lucide/svelte'
+  import { Server, FolderOpen, Monitor } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { Thread, ThreadSettings } from '$shared/types'
   import type { OvenState } from '$shared/ovens'
@@ -115,13 +115,16 @@
   <button
     type="button"
     class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted hover:bg-elevated disabled:opacity-50"
+    style="border-radius: 0.375rem !important"
     title="Choose the Oven for this chat"
     aria-haspopup="menu"
     aria-expanded={editor}
     disabled={busy || saving}
     onclick={() => void openPicker()}
   >
-    {#if current}
+    {#if (settings.ovenId ?? LOCAL_OVEN_ID) === LOCAL_OVEN_ID}
+      <Monitor size={10} class="shrink-0" />
+    {:else if current}
       <img
         class="h-2.5 w-2.5 shrink-0"
         alt=""
@@ -132,7 +135,7 @@
     {:else}<Server size={10} class="shrink-0" />{/if}<span
       >{current?.name ??
         (settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID ? 'Oven unavailable' : 'Local')}</span
-    ><ChevronDown size={10} />
+    >
   </button>
   {#if settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID}
     <button
@@ -187,13 +190,15 @@
               void select()
             }}
           >
-            <img
-              class="h-3 w-3 shrink-0"
-              alt=""
-              src={oven.customSvg
-                ? getCustomSvgDataUrl(oven.customSvg, oven.color)
-                : getIconSvgDataUrl(oven.icon, oven.color)}
-            />
+            {#if oven.id === LOCAL_OVEN_ID}
+              <Monitor size={12} class="shrink-0" />
+            {:else}<img
+                class="h-3 w-3 shrink-0"
+                alt=""
+                src={oven.customSvg
+                  ? getCustomSvgDataUrl(oven.customSvg, oven.color)
+                  : getIconSvgDataUrl(oven.icon, oven.color)}
+              />{/if}
             <span class="min-w-0 flex-1 truncate">{oven.name}</span>
             <span class="shrink-0 text-[0.625rem] text-dimmed"
               >{oven.id === LOCAL_OVEN_ID ? 'Local' : 'SSH'}</span
