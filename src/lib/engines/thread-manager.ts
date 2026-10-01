@@ -2,6 +2,7 @@ import { rm } from 'fs/promises'
 import { generateId } from '../utils'
 import { threadOwnedDirectories } from '../thread-storage-paths'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
+import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '../ipc/browser'
 import { broadcastThreadDraftUpdated } from '../../main/chat/thread-events'
 import { trackDraftWrite } from '../../main/chat/draft-commit-gate'
 import { validateEntityId } from '../../main/ipc/ipc-validation'
@@ -237,6 +238,28 @@ export class ThreadManager {
     const { thread, finalize } = this.prepareCreateThread(input)
     await finalize()
     return thread
+  }
+
+  /**
+   * Ensure the global browser's single hidden thread exists.
+   *
+   * A per-tab agent conversation is a temporary side chat, and every side chat
+   * resolves its project scope against a parent thread. The global browser owns
+   * one such parent for all of its tabs, so this reserved row is what lets a
+   * tab's agent sidebar start a harness session without a real project folder.
+   * It is hidden behind the hidden browser project, so it never appears in any
+   * thread list. Idempotent: the row is created once and then only read.
+   */
+  async ensureGlobalBrowserThread(): Promise<Thread> {
+    const existing = await this.getThread(GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID)
+    if (existing) return existing
+    return this.createThread({
+      id: GLOBAL_BROWSER_THREAD_ID,
+      projectId: GLOBAL_BROWSER_PROJECT_ID,
+      providerId: '',
+      title: 'Browser',
+      workingDirectory: ''
+    })
   }
 
   /**
@@ -588,6 +611,7 @@ export class ThreadManager {
         | 'titleSource'
         | 'providerId'
         | 'workingDirectory'
+        | 'authoredWorkKind'
         | 'scopeBucketId'
         | 'lastActivity'
         | 'read'
@@ -628,6 +652,7 @@ export class ThreadManager {
       titleSource: input.titleSource ?? existing.titleSource,
       providerId: input.providerId ?? existing.providerId,
       workingDirectory: input.workingDirectory ?? existing.workingDirectory,
+      authoredWorkKind: input.authoredWorkKind ?? existing.authoredWorkKind,
       scopeBucketId: input.scopeBucketId ?? existing.scopeBucketId,
       read: input.read ?? existing.read,
       assignmentId: input.assignmentId ?? existing.assignmentId,
@@ -857,7 +882,7 @@ export class ThreadManager {
   private async removeThreadDiskArtifacts(threads: Thread[]): Promise<void> {
     for (const thread of threads) {
       const project = await this.projectRepo.getViaWorker(thread.projectId)
-      const dirs = threadOwnedDirectories(project, thread.projectId, thread.id)
+      const dirs = threadOwnedDirectories(project, thread.projectId, thread.id, thread.routineId)
       for (const dir of dirs) {
         await rm(dir, { recursive: true, force: true }).catch(() => {})
       }
@@ -907,10 +932,13 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
-    // Carry the failure's diagnostic text on the in-memory thread snapshot so
-    // downstream consumers (error notifications, panels) can show what actually
-    // went wrong. Never persisted: `threadUpsertParams` serializes an explicit
-    // column list, so `lastError` is dropped on write and resets on restart.
+    const now = Date.now()
+
+    // Carry the failure's diagnostic text on the thread row so downstream
+    // consumers (error notifications, the notification panel, and the next
+    // launch after an unattended run) can show what actually went wrong. It is
+    // persisted through `threadUpsertParams` and cleared the moment the thread
+    // leaves `failed`.
     const lastError =
       status === 'failed'
         ? (() => {
@@ -924,6 +952,18 @@ export class ThreadManager {
           })()
         : undefined
 
+    // The outcome of the most recent settled run. A status that is not itself a
+    // settle point (planning/executing/interrupted) leaves the previous outcome
+    // in place, so resuming a failed run does not erase the fact that it failed.
+    const lastOutcome: Thread['lastOutcome'] =
+      status === 'failed'
+        ? 'failed'
+        : status === 'completed'
+          ? 'completed'
+          : status === 'awaiting_approval'
+            ? 'parked'
+            : existing.lastOutcome
+
     const updated: Thread = {
       ...existing,
       status,
@@ -933,8 +973,10 @@ export class ThreadManager {
           : undefined,
       read: opts?.read ?? existing.read,
       lastError,
-      updatedAt: Date.now(),
-      lastActivity: Date.now()
+      lastErrorAt: status === 'failed' ? now : undefined,
+      lastOutcome,
+      updatedAt: now,
+      lastActivity: now
     }
 
     await this.threadRepo.upsertViaWorker(updated)

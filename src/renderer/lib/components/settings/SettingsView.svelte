@@ -1,19 +1,25 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { isOverlayOpen } from '$lib/overlay-close.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
+  import { isOverlayOpen } from '$lib/overlay-close.svelte'
+  import { flashElement } from '$lib/reveal-flash'
+  import type { SettingsSearchEntry } from '$lib/settings-search'
+  import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
   import {
     FONT_FAMILY_OPTIONS,
     FONT_WEIGHT_OPTIONS,
     ZOOM_LEVEL_OPTIONS
   } from '$lib/stores/app-config.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
-  import DownloadProgress from '../ui/DownloadProgress.svelte'
+  import { APP_NAME, APP_SLUG, GITHUB_URL, ORG_SLUG, WEBSITE_URL, X_URL } from '$shared/brand'
+  import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import {
+    MAX_BACKGROUND_WAKE_LEAD_MS,
     MAX_MAX_CONFLICT_FILE_BYTES,
+    MIN_BACKGROUND_WAKE_LEAD_MS,
     MIN_MAX_CONFLICT_FILE_BYTES,
     type AppConfig,
     type AppConfigPatch,
@@ -23,15 +29,9 @@
     type SlashCommandMode,
     type ThemePreference
   } from '$shared/types'
-  import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
-  import { APP_NAME, APP_SLUG, ORG_SLUG, WEBSITE_URL, GITHUB_URL, X_URL } from '$shared/brand'
-  import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
-  import { flashElement } from '$lib/reveal-flash'
   import {
     AlertCircle,
     AlertTriangle,
-    ArrowLeft,
     Bell,
     CheckCircle2,
     Clock,
@@ -45,31 +45,34 @@
     SlidersHorizontal,
     Sun
   } from '@lucide/svelte'
-  import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
-  import Switch from '../ui/Switch.svelte'
-  import Modal from '../ui/Modal.svelte'
-  import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
-  import type { SettingsSearchEntry } from '$lib/settings-search'
+  import { onMount, tick } from 'svelte'
+  import { toast } from 'svelte-sonner'
   import type { ActionDefinition, ActionSelection } from '../../actions/types'
-  import ProvidersView from '../providers/ProvidersView.svelte'
-  import UtilitiesView, { type UtilitiesTab } from './UtilitiesView.svelte'
-  import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
-  import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
-  import KeymapSettingsTab from './KeymapSettingsTab.svelte'
+  import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
+  import CommandPalette from '../actions/CommandPalette.svelte'
+  import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
+  import ProvidersView from '../providers/ProvidersView.svelte'
+  import DownloadProgress from '../ui/DownloadProgress.svelte'
+  import Modal from '../ui/Modal.svelte'
+  import Switch from '../ui/Switch.svelte'
+  import AboutChangelog from './AboutChangelog.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
-  import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
-  import ProfileSettingsTab from './ProfileSettingsTab.svelte'
-  import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
+  import BrowserSettingsTab from './BrowserSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
+  import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
-  import PrototypeCdnSettings from './PrototypeCdnSettings.svelte'
-  import AboutChangelog from './AboutChangelog.svelte'
+  import DesignWorkFoldersSettings from './DesignWorkFoldersSettings.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
+  import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
+  import KeymapSettingsTab from './KeymapSettingsTab.svelte'
+  import MediaGenerationSettings from './MediaGenerationSettings.svelte'
+  import ProfileSettingsTab from './ProfileSettingsTab.svelte'
+  import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
+  import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
   import SoundSettingsTab from './SoundSettingsTab.svelte'
-  import CommandPalette from '../actions/CommandPalette.svelte'
-  import { toast } from 'svelte-sonner'
+  import UtilitiesView, { type UtilitiesTab } from './UtilitiesView.svelte'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -199,15 +202,13 @@
       // keydown they consume on `document`, before this window listener runs;
       // Modal-style overlays unregister only in the microtask flush after the
       // event, so isOverlayOpen() still sees them during that same event.
-      if (settingsSearchOpen || e.defaultPrevented || isOverlayOpen()) return
+      if (settingsUiState.searchOpen || e.defaultPrevented || isOverlayOpen()) return
       e.preventDefault()
       goBack()
     }
   }
 
   // ── Settings search spotlight ────────────────────────────────────────────
-  let settingsSearchOpen = $state(false)
-
   const settingsSearchIndex = new Map<string, SettingsSearchEntry>(
     SETTINGS_SEARCH_ENTRIES.map((entry) => [`settings:${entry.id}`, entry])
   )
@@ -314,6 +315,14 @@
     { id: 'ff-only', label: 'Fast-forward only' }
   ]
 
+  const backgroundModeOptions: Array<{
+    id: 'scheduled' | 'always'
+    label: string
+  }> = [
+    { id: 'scheduled', label: 'Scheduled' },
+    { id: 'always', label: 'Always' }
+  ]
+
   function saveThreadLimit(event: Event): void {
     const input = event.currentTarget
     if (!(input instanceof HTMLInputElement)) return
@@ -338,6 +347,24 @@
     }
 
     void updateConfig({ questionTimeoutMs: seconds * 1_000 })
+  }
+
+  /** Wake lead is stored in milliseconds and shown in whole seconds. */
+  function saveBackgroundWakeLead(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const seconds = Number(input.value)
+    if (
+      !Number.isInteger(seconds) ||
+      seconds < MIN_BACKGROUND_WAKE_LEAD_MS / 1_000 ||
+      seconds > MAX_BACKGROUND_WAKE_LEAD_MS / 1_000
+    ) {
+      input.value = String(config.backgroundWakeLeadMs / 1_000)
+      return
+    }
+
+    void updateConfig({ backgroundWakeLeadMs: seconds * 1_000 })
   }
 
   function saveAgentQuestionCap(event: Event): void {
@@ -507,37 +534,15 @@
 
 <div class="flex h-full">
   <!-- Settings navigation   the shared sidebar, pinned so it can never be hidden here -->
-  <CollapsibleSidebar title="Back" pinned>
-    {#snippet titlePrefix()}
-      <button
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Go back"
-        aria-label="Go back"
-        onclick={goBack}
-      >
-        <ArrowLeft size={14} />
-      </button>
-    {/snippet}
-
-    {#snippet header()}
-      <button
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Search settings"
-        aria-label="Search settings"
-        onclick={() => (settingsSearchOpen = true)}
-      >
-        <Search size={14} />
-      </button>
-    {/snippet}
-
-    <nav class="space-y-px" aria-label="Settings sections">
+  <CollapsibleSidebar title="Settings" pinned hideHeader>
+    <nav class="space-y-1" aria-label="Settings sections">
       {#each tabs as tab (tab.id)}
         {@const Icon = tab.icon}
         {@const isActive = section === tab.id}
         <button
-          class="flex w-full items-center gap-2 border-l-2 px-2 py-1.5 text-left text-[0.8125rem] transition-colors {isActive
-            ? 'border-foreground bg-elevated text-foreground'
-            : 'border-transparent text-muted hover:border-border-strong hover:bg-elevated hover:text-foreground'}"
+          class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-colors {isActive
+            ? 'bg-elevated text-foreground'
+            : 'text-muted hover:bg-elevated hover:text-foreground'}"
           aria-current={isActive ? 'page' : undefined}
           title="{tab.label} settings"
           onclick={() => navigateSection(tab.id)}
@@ -557,7 +562,6 @@
           aria-label="Exit settings"
           onclick={onBack}
         >
-          <ArrowLeft size={14} />
           Exit settings
         </button>
       </div>
@@ -816,28 +820,6 @@
           </div>
 
           <!-- Browser -->
-          <div id="settings-block-general-browser" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Browser</h3>
-            <div class="flex items-center justify-between gap-4">
-              <div>
-                <p class="text-sm font-medium">Open localhost on CIO's browser</p>
-                <p class="text-xs leading-relaxed text-dimmed">
-                  Keep local development links inside the workspace for testing
-                </p>
-              </div>
-              <Switch
-                checked={config.openLocalhostInCioBrowser}
-                onchange={() =>
-                  void updateConfig({
-                    openLocalhostInCioBrowser: !config.openLocalhostInCioBrowser
-                  })}
-                aria-label="Toggle opening localhost links in CIO's browser"
-                disabled={!settingsReady}
-              />
-            </div>
-            <PrototypeCdnSettings {config} {settingsReady} {updateConfig} />
-          </div>
-
           <!-- Power -->
           <div id="settings-block-general-power" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Power</h3>
@@ -1080,22 +1062,122 @@
                   onchange={saveAgentQuestionCap}
                 />
               </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Run in the background</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Keep Assistant routines on schedule after the window closes
+                  </p>
+                </div>
+                <Switch
+                  checked={config.backgroundMode !== 'off'}
+                  onchange={(checked) =>
+                    void updateConfig({ backgroundMode: checked ? 'scheduled' : 'off' })}
+                  aria-label="Toggle running the app in the background"
+                  disabled={!settingsReady}
+                />
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Background mode</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Scheduled parks only when work is running or due; Always never quits on close
+                  </p>
+                </div>
+                <select
+                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  value={config.backgroundMode === 'off' ? 'scheduled' : config.backgroundMode}
+                  disabled={!settingsReady || config.backgroundMode === 'off'}
+                  aria-label="Background mode"
+                  onchange={(event: SelectChangeEvent) =>
+                    void updateConfig({
+                      backgroundMode: event.currentTarget.value as 'scheduled' | 'always'
+                    })}
+                >
+                  {#each backgroundModeOptions as option (option.id)}
+                    <option value={option.id}>{option.label}</option>
+                  {/each}
+                </select>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Start at login</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Launch CodeInOven at login so a schedule can fire after a restart
+                  </p>
+                </div>
+                <Switch
+                  checked={config.launchAtLogin}
+                  onchange={() => void updateConfig({ launchAtLogin: !config.launchAtLogin })}
+                  aria-label="Toggle starting the app at login"
+                  disabled={!settingsReady}
+                />
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Run missed scheduled work on return</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Catch up on assistant slots missed to sleep or a closed app
+                  </p>
+                </div>
+                <Switch
+                  checked={config.autoRunMissedAssistantRuns}
+                  onchange={() =>
+                    void updateConfig({
+                      autoRunMissedAssistantRuns: !config.autoRunMissedAssistantRuns
+                    })}
+                  aria-label="Toggle running missed scheduled work on return"
+                  disabled={!settingsReady}
+                />
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Wake lead</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    How long before a due run the device is held awake
+                  </p>
+                </div>
+                <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+                  <input
+                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    type="number"
+                    min={MIN_BACKGROUND_WAKE_LEAD_MS / 1_000}
+                    max={MAX_BACKGROUND_WAKE_LEAD_MS / 1_000}
+                    step="1"
+                    value={config.backgroundWakeLeadMs / 1_000}
+                    disabled={!settingsReady}
+                    aria-label="Wake lead in seconds"
+                    onchange={saveBackgroundWakeLead}
+                  />
+                  seconds
+                </label>
+              </div>
             </div>
           </div>
         </div>
       </div>
+    {:else if section === 'browser'}
+      <BrowserSettingsTab {config} {settingsReady} {updateConfig} />
     {:else if section === 'audits'}
       <AuditSettingsTab {config} {settingsReady} {updateConfig} />
     {:else if section === 'design'}
       <div class="p-6 pb-24">
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">Design</h1>
-          <p class="mt-0.5 text-sm text-muted">Assign a model to each kind of design work.</p>
+          <p class="mt-0.5 text-sm text-muted">
+            Where design work is saved, and which model does each kind of it.
+          </p>
           {#if error}
             <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {error}
             </p>
           {/if}
+        </div>
+        <div class="mb-6">
+          <DesignWorkFoldersSettings {config} {settingsReady} {updateConfig} />
+        </div>
+        <div class="mb-6">
+          <MediaGenerationSettings {config} {settingsReady} {updateConfig} />
         </div>
         <DesignAssignmentsSettings {config} {settingsReady} {updateConfig} />
       </div>
@@ -1460,16 +1542,16 @@
   </div>
 </div>
 
-{#if settingsSearchOpen}
+{#if settingsUiState.searchOpen}
   <CommandPalette
-    open={settingsSearchOpen}
+    open={settingsUiState.searchOpen}
     actions={settingsSearchActions}
     title="Search settings"
     placeholder="Search settings pages and sections…"
     emptyLabel="No matching settings"
     headerIcon={Search}
     onSelect={handleSettingsSearch}
-    onClose={() => (settingsSearchOpen = false)}
+    onClose={() => (settingsUiState.searchOpen = false)}
   />
 {/if}
 

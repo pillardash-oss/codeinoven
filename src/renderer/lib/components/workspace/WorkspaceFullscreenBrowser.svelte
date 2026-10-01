@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { Globe2 } from '@lucide/svelte'
   import BrowserPanel from '$lib/components/browser/BrowserPanel.svelte'
   import BrowserTabIndicator from '$lib/components/browser/BrowserTabIndicator.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { browserTabIndicators } from '$lib/stores/browser-tab-status'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { GlobeCode } from '@lucide/svelte'
 
   interface Props {
     tabId: string | null
@@ -27,6 +28,16 @@
         indicatorCount: browserTabIndicators(contextSidebarState.browserRuntime(tab.id)).length
       }))
   )
+
+  // While this overlay is up the browser is the surface the user is in, so its
+  // keys are the browser's, wherever the focus sits inside the dialog: the
+  // strip, the transport, the toolbar or the page. Released with the overlay.
+  $effect(() => {
+    const active = tabId
+    if (!active) return
+    browserKeyboardFocus.setClaim('fullscreen', active)
+    return () => browserKeyboardFocus.setClaim('fullscreen', null)
+  })
 </script>
 
 {#if tabId}
@@ -47,7 +58,7 @@
       onMinimize={() => onTabIdChange(null)}
     >
       {#snippet icon()}
-        <Globe2 size={11} class="shrink-0" />
+        <GlobeCode size={11} class="shrink-0" />
       {/snippet}
       {#snippet tabIndicator(entry)}
         <BrowserTabIndicator tabId={entry.id} />

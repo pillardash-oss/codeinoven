@@ -2,6 +2,7 @@ import { powerSaveBlocker } from 'electron'
 import type { Thread } from '../../lib/types'
 import { SCHEDULED_RETRY_WAKE_WINDOW_MS } from '../../lib/provider-issue'
 import { Logger } from './logger'
+import { instanceRegistry } from './instance-registry'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -29,6 +30,15 @@ export class PowerWakeService {
   private enabled = false
   private retryScheduler: RetrySchedulerService | null = null
   private readonly retryWakeWindows = new Map<string, number>()
+  /** Reads the next due scheduled assistant run, or null when none is set. */
+  private scheduledRunSource: (() => number | null) | null = null
+  /** Background-mode wake policy; off keeps the scheduled-run input inert. */
+  private backgroundEnabled = false
+  private wakeLeadMs = 0
+  private maxHoldMs = 0
+  /** When the machine started being held awake for an upcoming scheduled run. */
+  private scheduledHoldStartedAt: number | null = null
+  private backgroundTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(
     private storage: StorageEngine,
@@ -73,10 +83,48 @@ export class PowerWakeService {
     this.retryScheduler = scheduler
   }
 
+  /** The next due scheduled assistant run, read lazily on each evaluation. */
+  attachScheduledRunSource(source: (() => number | null) | null): void {
+    this.scheduledRunSource = source
+    this.onScheduledRunChanged()
+  }
+
+  /**
+   * Apply the background-mode wake policy. When background mode is on, the
+   * machine is held awake inside the lead window before a due run, capped by
+   * `maxHoldMs` so a mis-scheduled task can never pin the machine indefinitely.
+   */
+  setBackgroundPolicy(policy: { enabled: boolean; wakeLeadMs: number; maxHoldMs: number }): void {
+    this.backgroundEnabled = policy.enabled
+    this.wakeLeadMs = Math.max(0, policy.wakeLeadMs)
+    this.maxHoldMs = Math.max(0, policy.maxHoldMs)
+    if (this.backgroundEnabled && this.backgroundTimer === null) {
+      // Re-evaluate on a slow tick so the hold arms when the lead window opens
+      // even when no thread or retry event happens to fire at that moment.
+      this.backgroundTimer = setInterval(() => this.onScheduledRunChanged(), 30_000)
+      this.backgroundTimer.unref?.()
+    } else if (!this.backgroundEnabled && this.backgroundTimer !== null) {
+      clearInterval(this.backgroundTimer)
+      this.backgroundTimer = null
+      this.scheduledHoldStartedAt = null
+    }
+    if (this.enabled) this.refresh()
+  }
+
+  /** Re-evaluate after the next scheduled run moved (fired, rescheduled, removed). */
+  onScheduledRunChanged(): void {
+    if (this.enabled) this.refresh()
+  }
+
   /** Release the blocker on shutdown. */
   stop(): void {
     this.cancelScheduledRelease()
     this.retryWakeWindows.clear()
+    if (this.backgroundTimer !== null) {
+      clearInterval(this.backgroundTimer)
+      this.backgroundTimer = null
+    }
+    this.scheduledHoldStartedAt = null
     this.release()
   }
 
@@ -97,7 +145,47 @@ export class PowerWakeService {
   }
 
   private shouldKeepAwake(): boolean {
-    return this.enabled && (this.hasActiveThread() || this.hasScheduledRetry())
+    return (
+      this.enabled &&
+      (this.hasActiveThread() || this.hasScheduledRetry() || this.isScheduledRunImminent())
+    )
+  }
+
+  /**
+   * True when a scheduled assistant run is due inside the background wake lead.
+   * Owner-only, and bounded by `maxHoldMs` so an imminent-looking task cannot
+   * keep the machine awake forever: past the cap the hold is dropped and the
+   * slot is caught up on the next wake instead.
+   */
+  private isScheduledRunImminent(): boolean {
+    if (!this.backgroundEnabled || !this.scheduledRunSource) return false
+    if (!instanceRegistry.isIncumbentInstance()) return false
+    let due: number | null
+    try {
+      due = this.scheduledRunSource()
+    } catch (error) {
+      Logger.error('Power wake: could not read the next scheduled run', error)
+      return false
+    }
+    if (due === null) {
+      this.scheduledHoldStartedAt = null
+      return false
+    }
+    const now = Date.now()
+    if (
+      this.scheduledHoldStartedAt !== null &&
+      now - this.scheduledHoldStartedAt > this.maxHoldMs
+    ) {
+      return false
+    }
+    if (due - now <= this.wakeLeadMs) {
+      this.scheduledHoldStartedAt ??= now
+      return true
+    }
+    // The run moved out of the lead window (or was rescheduled): stop counting
+    // the current hold so the next approach gets a full cap.
+    this.scheduledHoldStartedAt = null
+    return false
   }
 
   /**

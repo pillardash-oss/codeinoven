@@ -2,7 +2,9 @@ import { ROUTINE_PLAN_SCHEMA_TEXT } from './routine-plan'
 import {
   ROUTINE_DELIVERY_OPTIONS,
   ROUTINE_IMPACT_OPTIONS,
-  ROUTINE_TIMELINESS_OPTIONS
+  ROUTINE_TIMELINESS_OPTIONS,
+  routineDeliveryLabel,
+  routinePriorityLabel
 } from './routine-reporting'
 import {
   ASK_SECRET_TOOL_NAME,
@@ -11,7 +13,8 @@ import {
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME
 } from './gateway-tools'
-import type { ResolvedUtility } from './types'
+import { describeSchedule } from './types'
+import type { ResolvedUtility, Routine } from './types'
 
 /** The app-owned capability that carries the Getting started checkpoint. */
 export const ROUTINE_AUTHORING_UTILITY_ID = 'cio:routine-authoring'
@@ -148,6 +151,64 @@ export function routineAuthoringContext(routineName: string): string {
     'After the recap and both blocks, ask the user to confirm. Never save the routine yourself and never tell the user to run a command: the app saves the instructions, the schedule, the connections, and the reporting agreement from your recap as soon as the user confirms. If they ask for a change, revise and present the recap and blocks again.',
     'Once the routine is saved the app will ask you for a short next-steps list for the user. Keep it brief and friendly, lead with adding fallback models on the routine panel\u2019s Agents tab so a failing model never stops the routine, and do not repeat the how-to.'
   ].join('\n')
+}
+
+/**
+ * The editing contract for a routine that is already saved: a later user turn on
+ * its Getting started thread.
+ *
+ * That thread never runs the routine. A run is dispatched on the routine's own
+ * run thread, under the run contract (`routineRunContext`), so a message here is
+ * always a request to tweak the routine itself: its how-to, its schedule, or its
+ * connections. This thread used to be handed the run contract once the how-to was
+ * saved, and the failure was visible: a "more Nigerian news, less politics" tweak
+ * was answered by executing the routine's job   searching the web and writing the
+ * brief   instead of revising the how-to.
+ *
+ * The saved state rides along as the starting point, not as a draft to replace:
+ * the agent changes what the user asked for, keeps every other part as it is, and
+ * presents the revised how-to so the recap card can commit it. A connection the
+ * change needs is installed and verified here, with the same management grant a
+ * run has, instead of sending the user to another screen.
+ */
+export function routineHowToUpdateContext(
+  routine: Pick<Routine, 'name' | 'howTo' | 'schedule' | 'connections' | 'delivery' | 'priority'>
+): string {
+  const howTo = routine.howTo.trim()
+  return [
+    `You are the user's assistant, and this is the Getting started thread of the routine "${routine.name}", which is already set up and saved.`,
+    'The user is here to tweak or update its how-to and its connections. This thread never runs the routine: a run is dispatched on the routine\u2019s own run thread with its own instructions. Never start doing the routine\u2019s job here, never gather what a run would produce, and never treat the user\u2019s message as the routine having fired.',
+    'The saved state below is your starting point, not a draft to replace wholesale. Read it, change exactly what the user asked for, keep everything else as it is, and say plainly what you changed. Ask before you rewrite a part they did not mention.',
+    `Work the change through rather than describing it. A connection the change needs is set up in this thread exactly as anywhere else: search the app utility library with ${UTILITY_SEARCH_TOOL_NAME}, install what you find with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) after explaining it and getting the user\u2019s agreement, collect any credential with ${ASK_SECRET_TOOL_NAME} (never ask the user to paste a secret into chat), and verify it with ${UTILITY_ACTIVATE_TOOL_NAME} before you call the connection set up. Never send the user to another screen for something you could install yourself.`,
+    'Ask about, and never guess, anything the change turns on that only the user can decide: a schedule time, a delivery channel, an urgency bracket, a service. Ask for what you need in that same turn instead of leaving it as a note.',
+    '## Saved state (app-owned)',
+    'What the routine is today. Revise it; do not replace it blindly.',
+    howTo.length > 0 ? ['Current how-to:', '', howTo].join('\n') : 'Current how-to: (empty)',
+    `Current schedule: ${describeSchedule(routine.schedule)}`,
+    `Current delivery: ${routine.delivery ? routineDeliveryLabel(routine.delivery) : 'none (the routine reports nothing to the user)'}`,
+    `Current urgency: ${routine.priority ? routinePriorityLabel(routine.priority) : 'not set'}`,
+    ...connectionLines(routine),
+    '## Presenting the revised routine',
+    'When you and the user have agreed the change, present it the way the app commits it: a short recap in plain language of what the routine does now and what changed, then exactly two fenced code blocks and nothing else in them.',
+    'First, the how-to. Open the fence with the tag how-to alone on its line. It must be the complete revised instruction set   the whole text as it should now be saved, never a diff, a patch, or a summary of the change.',
+    `Second, the machine-readable plan. Open the fence with the tag routine alone on its line, then write one JSON object that matches this schema: ${ROUTINE_PLAN_SCHEMA_TEXT}`,
+    'In the plan, restate `schedule` in full whenever the change touches when the routine runs, because the app replaces the routine\u2019s schedule with the one in the plan. List in `connections` the connections the change adds or alters, because the app matches them by label and keeps the ones you leave out; it never removes one, so when the user wants a connection gone, say plainly that removing it is their action on the routine\u2019s Connections tab, which confirms before it removes. Include `delivery` and `priority` when the change touches them.',
+    'After the recap and both blocks, ask the user to confirm. Never save the routine yourself and never tell the user to run a command: the app updates the routine from your recap the moment the user confirms. If they ask for another change, revise and present the recap and both blocks again.'
+  ].join('\n')
+}
+
+/** The saved-state connection list, naming each connection and whether it is set up. */
+function connectionLines(routine: Pick<Routine, 'connections'>): string[] {
+  const connections = routine.connections.filter((connection) => connection.label.trim().length > 0)
+  if (connections.length === 0) return ['Current connections: none']
+  return [
+    'Current connections:',
+    ...connections.map((connection) => {
+      const state = connection.required ? 'required, not yet linked to a library utility' : 'linked'
+      const setup = connection.setup?.trim()
+      return `- ${connection.label} (${state})${setup ? `\n  setup note: ${setup}` : ''}`
+    })
+  ]
 }
 
 /**

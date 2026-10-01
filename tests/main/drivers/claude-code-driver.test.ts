@@ -59,7 +59,16 @@ afterEach(async () => {
   execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: unknown, callback) =>
     callback(null, JSON.stringify({ loggedIn: true }))
   )
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
+  // A turn persists its session record after `exit` is emitted (the driver's
+  // exit handler drains the process before writing `drivers/<id>/sessions`), so a
+  // test that ends right after emitting an exit can still be writing while the
+  // temp root goes away. `rm` recreates nothing but its recursive walk does race
+  // that write's temp file, which is how it fails with ENOTEMPTY; retry it.
+  await Promise.all(
+    roots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }))
+  )
 })
 
 async function storage(): Promise<StorageEngine> {

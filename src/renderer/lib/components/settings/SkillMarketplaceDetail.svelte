@@ -1,43 +1,24 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import {
-    ArrowLeft,
-    CalendarDays,
-    Check,
-    Download,
-    ExternalLink,
-    FolderKanban,
-    GitFork,
-    Globe2,
-    Loader2,
-    ShieldCheck,
-    SquareTerminal,
-    Star,
-    Trash2
-  } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
+  import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
+  import { cachedSkillMarketDetail, loadSkillMarketDetail } from '$lib/skill-market-cache'
   import { publicAssetUrl } from '$lib/static-assets'
   import { installedSkillState } from '$lib/stores/installed-skills.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { providerStore } from '$lib/stores/providers.svelte'
+  import type { ScopeProject } from '$lib/stores/scope.svelte'
+  import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
   import { skillUpdateState } from '$lib/stores/skill-updates.svelte'
+  import { APP_NAME } from '$shared/brand'
   import {
     harnessGlobalSkillPath,
     SHARED_GLOBAL_SKILL_PATH,
     SHARED_PROJECT_SKILL_PATH
   } from '$shared/native-skill-paths'
-  import { openInBrowser } from '$lib/open-in-browser'
-  import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
-  import { cachedSkillMarketDetail, loadSkillMarketDetail } from '$lib/skill-market-cache'
-  import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
-  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
-  import { providerStore } from '$lib/stores/providers.svelte'
-  import MarkdownView from '../markdown/MarkdownView.svelte'
-  import ProjectSwitch from '../shared/ProjectSwitch.svelte'
-  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
-  import SkillBookmarkButton from './SkillBookmarkButton.svelte'
-  import SkillInstalledBadge from './SkillInstalledBadge.svelte'
-  import type { ScopeProject } from '$lib/stores/scope.svelte'
+  import { toPosixPath } from '$shared/paths'
   import type {
     Project,
     SkillMarketDetail,
@@ -45,8 +26,27 @@
     SkillMarketInstallRequest,
     UtilityActivation
   } from '$shared/types'
-  import { APP_NAME } from '$shared/brand'
-  import { toPosixPath } from '$shared/paths'
+  import {
+    ArrowLeft,
+    CalendarDays,
+    Check,
+    Download,
+    Earth,
+    ExternalLink,
+    FolderKanban,
+    GitFork,
+    Loader2,
+    ShieldCheck,
+    SquareTerminal,
+    Star,
+    Trash2
+  } from '@lucide/svelte'
+  import { onMount } from 'svelte'
+  import MarkdownView from '../markdown/MarkdownView.svelte'
+  import ProjectSwitch from '../shared/ProjectSwitch.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import SkillBookmarkButton from './SkillBookmarkButton.svelte'
+  import SkillInstalledBadge from './SkillInstalledBadge.svelte'
 
   interface Props {
     entry: SkillMarketEntry
@@ -334,7 +334,7 @@
   One scope destination per row: they are independent choices, so a shared row
   made them read as one segmented selector.
 -->
-{#snippet scopeOption(id: InstallScope, label: string, Icon: typeof Globe2)}
+{#snippet scopeOption(id: InstallScope, label: string, Icon: typeof Earth)}
   <button
     type="button"
     class="flex h-9 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors {scope ===
@@ -510,7 +510,7 @@
           <!-- One destination per row: each scope is a separate decision, and
                side-by-side chips read as one shared choice. -->
           <div class="grid gap-2">
-            {@render scopeOption('global', 'Global', Globe2)}
+            {@render scopeOption('global', 'Global', Earth)}
             {@render scopeOption('projects', 'Projects', FolderKanban)}
             {#if manager === 'native'}
               {@render scopeOption('harnesses', 'Harnesses', SquareTerminal)}

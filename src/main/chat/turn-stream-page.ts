@@ -47,11 +47,19 @@ export function isTodoTracePart(part: AgentPart): boolean {
  * from the trace window entirely: whichever trace page is mounted must never
  * decide whether the task card can render, so the newest slice always travels
  * with the read.
+ *
+ * The read also carries `turnStartTs`, the boundary the fold was scoped to, so
+ * the card can tell whether the snapshot still describes the turn the
+ * transcript is on. The card refreshes only while a view watches a live turn,
+ * so without that identity the previous turn's snapshot would outrank the
+ * fresher message cache after the transcript moved on, which is what left a
+ * stale task list on screen.
  */
 export function pageTurnStreamParts(
   folded: readonly AgentPart[],
   events: readonly TurnStreamEvent[],
-  query: TurnStreamPartsQuery = {}
+  query: TurnStreamPartsQuery = {},
+  turnStartTs: number | null = null
 ): TurnStreamPartsPage | TurnStreamPartsChange {
   const trace = folded.filter((part) => !isTodoTracePart(part))
   const todoParts = folded.filter(isTodoTracePart).slice(-TODO_PARTS_CAP)
@@ -63,7 +71,8 @@ export function pageTurnStreamParts(
       parts: touchedTraceParts(trace, events, query.changedSince),
       total: trace.length,
       cursor,
-      todoParts
+      todoParts,
+      turnStartTs
     }
   }
 
@@ -98,7 +107,8 @@ export function pageTurnStreamParts(
     start,
     hasOlder: start > 0,
     cursor,
-    todoParts
+    todoParts,
+    turnStartTs
   }
 }
 

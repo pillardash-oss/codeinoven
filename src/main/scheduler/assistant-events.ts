@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron'
-import type { MissedRun, Routine } from '../../lib/types'
+import type { AutoAnswerItem, BackgroundRun, MissedRun, Routine } from '../../lib/types'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 
 /** Push the full routine list so routine rows and the how-to panel stay live. */
@@ -13,6 +13,20 @@ export function broadcastRoutinesChanged(routines: Routine[]): void {
 export function broadcastMissedRunsChanged(runs: MissedRun[]): void {
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'assistant:missedRunsChanged', runs)
+  }
+}
+
+/** Push the durable unattended-run list so the "While you were away" surfaces refresh. */
+export function broadcastBackgroundRunsChanged(runs: BackgroundRun[]): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'assistant:backgroundRunsChanged', runs)
+  }
+}
+
+/** Push the auto-resolved-gate list so the attention rail and its panel react. */
+export function broadcastAutoAnswersChanged(items: AutoAnswerItem[]): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'assistant:autoAnswersChanged', items)
   }
 }
 

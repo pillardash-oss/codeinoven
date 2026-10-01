@@ -6,6 +6,7 @@
   import type { ProjectFileEntry, ProjectFileInfo, ProjectFileTransferMode } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
   import { clampFileExplorerWidth } from '$lib/stores/file-explorer.svelte'
@@ -1052,6 +1053,17 @@
     }
   }
 
+  /** Open a fresh terminal tab whose shell starts in the entry's folder (a
+   *  file opens in the folder that contains it). */
+  function openEntryInTerminal(entry: ProjectFileEntry | null): void {
+    const threadId = contextSidebarState.threadIdForProject(projectId)
+    if (!threadId) {
+      toast.error('Open a thread to use its terminal')
+      return
+    }
+    contextSidebarState.openTerminalAt(projectId, threadId, pasteDirectory(entry))
+  }
+
   async function loadAncestorDirectories(paths: string[]): Promise<void> {
     for (const directory of collectAncestorDirectories(paths)) {
       await projectFilesWorkspace.loadDirectory(projectId, directory)
@@ -1140,6 +1152,7 @@
     onInfo={() => undefined}
     onReveal={() => undefined}
     onOpenInBrowser={() => void openEntryInBrowser(null)}
+    onOpenInTerminal={() => openEntryInTerminal(null)}
   >
     <div
       {@attach attachTreeScroll}
@@ -1216,6 +1229,7 @@
                 onInfo={(entry) => void showInfo(entry)}
                 onReveal={(entry) => void revealInFileManager(entry)}
                 onOpenInBrowser={(entry) => void openEntryInBrowser(entry)}
+                onOpenInTerminal={openEntryInTerminal}
                 onRowClick={handleRowClick}
                 onRowDoubleClick={handleRowDoubleClick}
                 onRowContextMenu={handleRowContextMenu}

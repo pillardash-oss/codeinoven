@@ -77,7 +77,7 @@ workspace instead of a shared scratch directory:
   whether the user opens the task or one of its runs.
 - That routine directory is the session's working directory and its permission
   project root, so artifacts, generated images, and any files the agent writes
-  land under the routine. Assistant threads get no `chats-artifacts` scratch
+  land under the routine. Assistant threads get no chat workspace scratch
   path, and `assistant-cwd` is registered as an app artifact root so the
   renderer can show those files.
 - The rail's **Workspace files** panel mounts the file tree on exactly that
@@ -177,19 +177,36 @@ the app's clock for Assistant View.
   run on it, using the task's bound settings with the routine's primary model
   overlaid (`sendPrompt` with `origin: 'internal'`). The run thread inherits the
   task's `routineId`, so the engine composes the routine how-to and the run
-  contract into its system prompt exactly as it does for the task.
+  contract into its system prompt exactly as it does for the task. The tick also
+  runs with no window at all in background mode (see **Background mode**), so "the
+  app is open" now means "the backend is running", not "a window is visible".
+- **Firing happens exactly once, on the elected owner.** Every scheduler tick is
+  gated on `instanceRegistry.isIncumbentInstance()`, so a second CodeInOven
+  process on the same config root schedules nothing and can never double-fire a
+  slot.
+- **A run is named for what it runs.** The run's visible prompt is built by
+  `routineRunPrompt` (`src/lib/routine-run.ts`). A user's own task is named by
+  its title, but a routine's Getting started thread is its authoring host, not
+  a job: a run of it is named for the routine instead. Naming it "Getting
+  started" made a completed routine's run read (and get answered by the agent)
+  as another getting-started pass.
 - **Paused routines never fire.** `Routine.paused` is checked before the
   schedule is even read (`RoutineManager.isTaskPaused`), so pausing a routine
   stops every task in it while keeping the tasks, their how-to, and their
   history. Resume from the panel's **All** tab. A routine-less task is never
   paused.
-- **No auto catch-up.** A slot that came due while the app was closed (or a
-  machine slept through it) is recorded as a missed run, never run in a burst.
-  The grace window is `MISS_GRACE_MS`; a fire before process start is always a
-  miss. Each record carries a `reason`   `app-closed` when the app was not
-  running at the due time, `delayed` when it was running but could not start the
-  run in time   and both surfaces state it instead of always claiming the app
-  was closed.
+- **Catch-up is opt-in and bounded.** A slot that came due while the app was
+  closed (or a machine slept through it) is recorded as a missed run. By default
+  those records are only surfaced for the user to run. When
+  `autoRunMissedAssistantRuns` is on (the default), the slots are dispatched on
+  relaunch, on wake, and on take-over, in sequence and at most
+  `MAX_CATCH_UP_PER_PASS` per pass, so an outage can never dump a burst of runs.
+  The record is claimed by its `(threadId, dueAt)` identity before the run is
+  created, so repeated relaunches stay idempotent. The grace window is
+  `MISS_GRACE_MS`; a fire before process start is always a miss. Each record
+  carries a `reason` `app-closed` when the app was not running at the due time,
+  `delayed` when it was running but could not start the run in time and both
+  surfaces state it instead of always claiming the app was closed.
 - **A slot before the schedule existed is never due.** The scheduler floors a
   due slot at the later of the task's last fire and the moment its schedule
   became active (`Routine.scheduleUpdatedAt`, stamped when the schedule changes
@@ -204,10 +221,91 @@ the app's clock for Assistant View.
   `scheduler/missed-runs.json` through the storage engine. Records are
   idempotent by `(threadId, dueAt)`, so repeated relaunches cannot
   double-count or double-badge one miss.
+- **Unattended-run ledger.** Every dispatch the scheduler makes on its own  
+  a scheduled fire, a catch-up run, and a run that failed while handing off to
+  the engine is recorded in `BackgroundRunLedger`
+  (`src/main/scheduler/background-run-ledger.ts`), a bounded (`MAX_ENTRIES`),
+  versioned `scheduler/background-runs.json`. Each entry carries its own
+  snapshot of the run, so deleting the run thread later cannot erase the fact
+  that it happened. A user's own "Run now" is deliberately not recorded. The
+  ledger feeds the **While you were away** section of the notification panel's
+  Assistants tab and the **Run history** section of a routine's (or task's)
+  how-to panel.
 - **Dismiss vs Run Now.** `assistant:dismissMissedRun` acknowledges a record
   without running it; `assistant:runMissedRunNow` creates a fresh run thread,
   dispatches the run on it, settles the record on success, and returns the run so
   the caller can open it. Neither is automatic.
+
+## Background mode (menu bar)
+
+Background mode keeps the backend running after the window is closed or after
+Cmd+Q so a routine still fires on time. It is on by default
+(`backgroundMode: 'scheduled'`) and can be turned off in **General → Threads**.
+
+- **Closed means closed.** Parking destroys the window and its renderer process;
+  there is no hidden window and no warm renderer. The main process keeps only
+  SQLite, the 30s tick, the menu bar icon, and window-bound services are torn
+  down before the renderer dies (`BackgroundLifecycleService.park`). A login
+  launch in background mode boots with no splash and no window at all.
+- **One backend, one owner.** Every process attaches to the same config root, and
+  the longest-running live process owns the scheduled work
+  (`instanceRegistry.isIncumbentInstance()`); the routine, retry, and heartbeat
+  schedulers are all gated on it. A secondary instance keeps a fully usable
+  window, shows a standing **Running in another instance** status bar at the
+  bottom of the app, and quits on close rather than parking.
+- **Ownership can be transferred.** The secondary's bottom bar offers **Make this
+  the main instance**, which writes an owner override
+  (`instances/owner.json`) naming this pid (`instanceRegistry.transferOwnership`).
+  The previous owner steps down through the same ownership notification: it
+  destroys its menu bar icon, its schedulers stop firing, and its own bar now
+  reads **Running in another instance**. The new owner creates the icon and runs
+  the missed-slot catch-up. This is the escape hatch when the elected owner is a
+  stale window, or a crashed process still in the registry, and the user wants
+  the schedule in the instance they are actually working in. The override is
+  honoured only while its target is live; when that process dies the election
+  resumes on the next heartbeat, so a transfer can never strand scheduling.
+- **A probe launch stays out.** Setting `CODEINOVEN_NO_BACKGROUND` on an
+  unpackaged launch (normally alongside a scratch `CODEINOVEN_CONFIG_ROOT`)
+  skips background registration entirely: no menu bar icon, no login item, no
+  wake hold, and a close quits the process instead of parking. It is how a
+  second instance is started to inspect behaviour without adding a second icon
+  beside the running app. The opt-out is never inferred from an isolated data
+  root, because probing the menu bar itself needs background mode on.
+- **Menu bar, not Dock.** The tray carries exactly two items, **Open CodeInOven**
+  and **Quit CodeInOven** (the direct quit, also bound to Cmd/Ctrl+Shift+Q through
+  the keymap); the icon is the monochrome mark, or the mark with a bold
+  exclamation when a thread holds a live problem. While windowless the Dock
+  icon is hidden and restored when a window opens. The error state mirrors the
+  thread's own error card, computed in main from SQLite, never from a renderer,
+  because there is no renderer: a thread parked on an approval gate, a thread
+  that settled `failed` until the user reads it, or a thread paused on a
+  provider issue (`working-paused`, the persisted state behind the visible
+  provider card: a usage reset, a connection interruption, a provider outage).
+  It is re-evaluated on every persisted thread update and on every
+  retry-scheduler change, so the icon returns to normal the moment the error
+  clears, and a windowless run that breaks flips it with no window open.
+- **Gates.** A question with a timer answers itself with its recommended option
+  through `questionTimeoutMs`; a secret card counts down from the moment its card
+  appears and closes unanswered, paused while the user fills it in; a destructive
+  scope confirmation denies itself at its `expiresAt`. Every one of those is
+  recorded so the app never decides silently (see **Auto-resolved gates**). A
+  permission gate has no timer, so it parks durably and flips the icon; nothing
+  proceeds until the user answers.
+- **Sleep.** A machine that is asleep cannot run work. Inside
+  `backgroundWakeLeadMs` before a due run the app holds
+  `prevent-app-suspension`, capped by `maxBackgroundWakeHoldMs` so a
+  mis-scheduled task cannot pin the machine; a slot missed anyway is caught up on
+  resume (`PowerMonitorService`) or relaunch.
+- **What survives.** A run that failed while nobody was watching keeps its
+  message: `last_error`, `last_error_at`, and `last_outcome` are real columns
+  (`src/main/database/schema.ts`), the badge and the notification panel
+  rehydrate `failed` threads, and the ledger above records the dispatch.
+- **A deliberate close is never a crash.** An exit the user asked for settles
+  any turn left in flight with the neutral "CodeInOven closed before this turn
+  finished." line, while the crash wording ("CodeInOven stopped before the
+  harness reported completion.") is reserved for a process that died without
+  cleaning up: a crash, a force kill, or a power loss. Parking interrupts
+  nothing, so closing to background never settles a turn at all.
 
 ## Missed colour token
 
@@ -238,14 +336,99 @@ default:
   the specific missed task row;
 - the **Missed Runs section** of the notification panel (`Assistants` tab),
   grouped per routine, with per-entry **Dismiss** and **Run now** actions. The
-  Assistants tab exposes no sub-filter buttons; with no miss it shows only a
-  neutral empty state. Each entry states why the fire was not run
+  Assistants tab exposes no sub-filter buttons; with nothing to show it renders
+  only a neutral empty state. Each entry states why the fire was not run
   (`missedRunReasonText` in `assistant-view.ts`), so the copy never claims the
-  app was closed when the machine simply slept through the window.
+  app was closed when the machine simply slept through the window;
+- the **While you were away** section of the same Assistants tab, which lists the
+  recent unattended runs straight from the ledger (outcome, why it ran, when it
+  settled, any persisted failure, and how many gates it answered for you), and a
+  routine profile's **Run history** list in the how-to panel. A run whose thread
+  was later deleted still shows, as non-clickable evidence.
 
-The renderer state lives in `assistantRoutines`
-(`src/renderer/lib/stores/assistant-routines.svelte.ts`), fed by the
-`routine:changed` and `assistant:missedRunsChanged` events.
+## Auto-resolved gates (attention rail)
+
+Some cards settle without the user: a question whose timer answers it, a secret
+card that expires, an image-descriptor decision that times out, and a destructive
+scope confirmation that denies itself. Each is recorded in `AutoAnswerStore`
+(`src/main/system/auto-answer-store.ts`) as one `AutoAnswerItem` carrying the
+prompt, every option that was offered, what was chosen, and when. The store is
+written the instant the gate settles (idempotent by request id) and is kept
+independently of the transcript, so a decision stays auditable even if its thread
+is later deleted.
+
+The records surface on a dedicated right-rail attention panel:
+
+- a new amber triangle-exclamation item sits at the bottom of the context dock
+  rail, present only while at least one record is unread;
+- the panel lists each record with its kind, the resolved thread title, relative
+  and absolute time, the options, and the chosen one highlighted, with a button
+  to open the thread and a per-item dismiss, plus **Dismiss all** for the unread
+  set.
+
+`assistant:listAutoAnswers`, `assistant:dismissAutoAnswer`, and
+`assistant:dismissAllAutoAnswers` back the panel, and
+`assistant:autoAnswersChanged` pushes the fresh list to every window. Permission
+gates are deliberately not recorded here: they have no timer and park until
+answered, and an approval that merely expires on a late reply is already in
+`permission-events.jsonl`.
+
+### Assistant notifications
+
+Every assistant run notifies as its own entry on the **Assistants** tab. The
+main process tags a run thread's notification with `source: 'assistant'`
+(`notificationSource` in `src/main/notifications/notification-service.ts`), so
+the panel routes it to the Assistants tab instead of Projects and the card names
+its own status (done, needs attention, spec ready, error).
+
+The assistant is a surface with its own accent colour, the colour stored on the
+hidden assistant space project (the payload's `projectColor`, `#ec4899` by
+default). Every assistant notification surface uses that colour and **never an
+icon**, keeping the notification badge contract (just the colour of what it
+represents).
+
+A **needs-attention** notice is the thread's own parked state, not a message
+about a moment that has passed, so it is the one notice that reading does not
+retire: it leaves when the thread stops waiting on the user (the status changes
+as the card is answered), or when the user dismisses the entry itself. Opening
+the thread, marking it read, and the thread's own row all keep saying the same
+thing for as long as the park holds
+(`notificationPanelState.reconcileThread` in
+`src/renderer/lib/stores/notification-panel.svelte.ts`, the menu bar predicate in
+`src/main/system/background-work-state.ts`, and `isThreadLiveWorking` in
+`src/renderer/lib/thread-status-badge.ts`). Every other notice (done, spec, error,
+chat) reports a moment that has already passed, so reading the thread retires it.
+
+The header bell draws one plain colour dot per waiting kind, each in the exact
+status colour the app uses for the same meaning everywhere else
+(`NOTIFICATION_KIND_COLORS` in
+`src/renderer/lib/stores/notification-panel.svelte.ts`), so a glance at the bell
+says what is waiting without opening the panel:
+
+- a **project message** (a completed project thread), the success green its
+  entry carries;
+- a **chat message** (a completed chat turn), the chat teal;
+- an **assistant message** (a completed run, or a pending missed run), the
+  assistant accent colour (`assistantColor`), the assistant's own identity
+  across the app;
+- a **spec ready**, the spec purple;
+- a **request for attention**, the warning amber;
+- an **error**, the danger red. A failed run reads as an error even inside the
+  assistant space, so a failure is never hidden behind the assistant colour.
+
+The **panel entry** wears the same colour on its leading dot and its card's left
+border (`accentColor`, shared by the bell and the panel). An assistant entry
+therefore reads as assistant, a chat entry as chat, and a project entry as its
+kind, exactly like the project-colour dot beside a project entry's name.
+
+The renderer learns the accent colour two ways: each notification payload
+carries it, and `assistantRoutines.spaceColor`
+(`src/renderer/lib/stores/assistant-routines.svelte.ts`) holds it from
+`routine:ensureSpace`, so the bell can badge a missed run before any notice has
+arrived. The renderer state is fed by the `routine:changed` and
+`assistant:missedRunsChanged` events. The **toast** for a completed run brands
+itself with the same accent colour (via `--status`) instead of the generic
+success green, mirroring how a chat response toast uses its own colour.
 
 ## Assistant sidebar
 
@@ -279,7 +462,18 @@ Routine rows (`AssistantRoutineRow.svelte`) follow the project folder row: the
 icon swaps to a chevron on hover, and hover reveals a search-in-routine control,
 a new-task button, and an ellipsis menu (also opened by right-clicking the row)
 with How to, Edit routine, Pin/Unpin, and Remove. Rows are draggable to reorder, and a
-task dragged onto a routine is grouped into it. Hovering a routine reveals a
+task dragged onto a routine is grouped into it. A routine's row folds and opens
+exactly like a project folder: it starts open while it holds the selected thread
+(that routine's task, a run nested under the task, or a run lifted to the
+routine's own level) and while its own inline task search is open, and a fold or
+open the user performs by hand is the decision that wins from then on, so the
+routine holding the active thread can be folded like any other. The order those
+rows sit in is the user's own: pinned routines lead, then the arrangement a drag
+leaves behind, then
+creation with the newest routine on top, so writing a routine's how-to (or any
+other edit) never reshuffles the list. `src/lib/routine-order.ts` holds that one
+comparator, and both the main process's routine list and this sidebar sort
+through it. Hovering a routine reveals a
 popover with its status, schedule type, next run, task count, a how-to preview,
 and when it was created and last updated (`AssistantRoutineHoverPopover.svelte`).
 **Remove** deletes the routine
@@ -326,6 +520,29 @@ runs is working (`runWorking`), because the run, not the task, is what is
 executing, and the routine row aggregates the same signal. Missed badges stay on
 the task (and its routine): a miss is a property of the schedule, not of one
 execution.
+
+A task or run row's status indicator comes from the same canonical mapping every
+other thread surface reads, `statusBadgeForThread`
+(`src/renderer/lib/thread-status-badge.ts`, via the one live-working rule
+`isThreadLiveWorking`), so an assistant row can never disagree with a project
+row about the same state: the unread green for a finished run nobody has opened
+yet, the muted done colour once it has been read, the parked amber while a card
+(a question, a permission, a secret) waits on the user, and the working blue
+only while work is actually being produced. A parked run is never blue: its
+session stays bound and reports `waiting` for as long as the card is open, so
+the parked status is the authority until the user answers it.
+
+**A routine's Getting started runs leave that row once the routine is set up.**
+While the routine is still authoring (its how-to unsaved) its runs stay nested
+inside the Getting started thread, since they are still about setting the
+routine up. Once `routineHowToComplete` holds, `Workspace.svelte` also groups
+every run by its `routineId` (`groupRunsByRoutine`) and the sidebar lifts the
+seed thread's runs out to sit beside its task rows, at the same level, through
+`routineSiblingRuns`. A run whose task is no longer on screen (the Getting
+started thread was hidden) rises to the routine too, so hiding the seed only
+hides that row and never the runs it produced. A run whose task renders
+elsewhere (a pinned task that left for the Pinned section) keeps nesting under
+that row.
 
 Pinned tasks lead the sidebar **above** the routines, in one shared **Pinned**
 section rendered by the same `PinnedSection.svelte` the project sidebar uses.
@@ -492,6 +709,7 @@ prompt"; the user-facing term is how-to.
   re-offer its choices) and the ask itself: the two priority brackets are two
   separate single-choice questions, because one question carrying both brackets
   produces a combined answer no turn can resolve back into brackets.
+
 - The how-to panel shows that checkpoint under **Agreed so far** while the
   how-to is incomplete, so the interview is auditable from the panel instead of
   only from the thread. The main process broadcasts `routine:checkpointChanged`
@@ -562,6 +780,41 @@ prompt"; the user-facing term is how-to.
   with `cio_util_manage`, collects credentials with `cio_ask_secret`, and asks
   the user for anything else with `cio_ask_user`. Pointing the user at the
   Connections tab is the last resort, not the answer.
+- **The Getting started thread never runs the routine.** `ChatEngine.routineConversation`
+  (`src/main/chat/chat-engine.ts`) is the one place that decides which of the
+  three routine conversations a thread is on: `authoring` (any thread of a routine
+  that still has no how-to, the interview that drafts it), `update` (the Getting
+  started thread once the routine is saved), and `run` (every other thread of a
+  saved routine). A run of the routine
+  dispatches its own run thread (`assistantRunTitle`, `routineRunPrompt`), so a
+  message on the Getting started thread is always about the routine itself. It
+  carries the editing contract instead of the run contract
+  (`routineHowToUpdateContext` in `src/lib/routine-authoring.ts`): the saved
+  how-to, schedule, connections, delivery and urgency ride along as the starting
+  point, the agent changes only what the user asked for, and it is told plainly
+  to never start doing the routine's job or treat the message as the routine
+  having fired. This was a real bug: the thread was handed the run contract as
+  soon as the how-to was saved, so "more Nigerian news, less politics" was
+  answered by searching the web and writing the brief instead of revising the
+  how-to. The editing turn keeps the management grant a run has (a tweak that
+  names a new service installs it here; `CIO_UTILITY_ROUTINE_EDIT_PROMPT` in
+  `src/main/utilities/cio-utility-prompt.ts`), and a steer on that thread keeps
+  it too, while the interview checkpoint capability stays bound to the authoring
+  conversation alone.
+- **A revision commits through the same recap card.** The draft path is open on
+  the Getting started thread after the first save, not only before it:
+  `assistantRoutineDraft` (`ThreadView.svelte`) keeps parsing the thread's newest
+  `how-to` and `routine` fences there, while a task or run thread of the same
+  routine still never proposes one. A draft is offered only when it is a real
+  change: it must be newer than `Routine.howToUpdatedAt` (a draft left in a
+  reopened thread after an edit elsewhere is not) and it must differ from what is
+  saved, counting a plan-only change (a new time, an added connection) because the
+  how-to text often carries no schedule at all. `RoutineRecapCard` carries an
+  `update` flag, so it says **Ready to update**, lists the connections the routine
+  keeps beside the ones the plan adds, keeps the saved schedule when the plan does
+  not name it, and commits through the same `confirmRoutineSave`/
+  `saveRoutineHowTo` pair. The app-owned next-steps turn is posted for a routine's
+  first save only.
 - The contract is a property of the thread, so it applies to every turn on the
   task, not just the internal run: a scheduled run, a missed-run **Run now**, and
   a user follow-up on the same thread all carry it and the run grant
@@ -614,13 +867,16 @@ prompt"; the user-facing term is how-to.
 - A human decision runs on the app's one timer. `questionTimeoutMs` is read per
   request, so a Settings change applies to the next card instead of a restart,
   and both the question card and the `cio_ask_secret` card count down to the
-  same `expiresAt` the main process is running. A secret card deliberately skips
-  the activity pause a question uses: the user usually leaves the app to obtain
-  the value, so a card that only counted down while they were elsewhere would
-  expire exactly when they are fetching it. Nothing can invent a secret, so an
-  expired card closes and settles the waiting tool call as dismissed
-  (`expireSecretQuestion`) rather than answering it, which lets the agent react
-  instead of hanging on an unreachable card.
+  same `expiresAt` the main process is running. Until the user touches it, a
+  secret card deliberately skips the activity pause a question uses: the user
+  usually leaves the app to obtain the value, so a card that only counted down
+  while they were elsewhere would expire exactly when they are fetching it. From
+  the first keystroke that changes: the deadline is cleared, and the card gets a
+  full window back only once the user has stopped interacting with the app, so a
+  pasted value is never cut off while an abandoned card still closes. Nothing can
+  invent a secret, so an expired card closes and settles the waiting tool call as
+  dismissed (`expireSecretQuestion`) rather than answering it, which lets the
+  agent react instead of hanging on an unreachable card.
 - The app publishes that deadline to every gateway transport, because a harness
   whose client has its own shorter request timeout abandons the call while the
   card is still on screen. That is how a Slack token request was lost three times
@@ -763,15 +1019,35 @@ destination. The channels are `in-app`, `slack`, `telegram`, `whatsapp`,
 means a normal thread notification inside CodeInOven, and the app delivers it by
 the run thread itself. Note what that does and does not mean today. The report is
 the run thread's message, and the thread is listed in the assistant sidebar under
-its routine. The notification panel's **Assistants** tab carries **missed runs
-only**, so a finished report does not currently raise its own notification entry
-there. Every other channel is *external*, and picking one is
+its routine, and the run raises its own entry on the notification panel's
+**Assistants** tab, tagged with the assistant source. Every other channel is
+_external_, and picking one is
 also a statement that the routine needs a connection: the authoring contract
 tells the agent to add that channel to the plan's `connections` and set it up
 like any other, and the panel warns (and the All tab's summary row marks) a
 delivery whose channel has no ready connection. An action-only routine that
 reports nothing has no delivery, and the contract says so explicitly instead of
 inventing a channel.
+
+### Durable report files
+
+A run thread is capped and evicted, so a report that only ever lived in the
+transcript would eventually disappear. Every assistant task turn that settles
+with a report therefore also lands one Markdown file under `reports/` in the
+routine's own workspace (`assistant-cwd/<routineId>/reports/`), which the
+**Workspace files** panel mounts. `isAssistantReportThread`
+(`src/lib/assistant-reports.ts`) excludes the Getting started authoring thread,
+and `assistantReportIsTerminal` limits the copy to the terminal outcomes
+(`completed`, `failed`); a non-terminal settle (`awaiting_approval`,
+`working-paused`) is still in flight, and an `interrupted` turn was stopped on
+purpose. The file is written in the main process from the turn's final answer
+(`writeAssistantReport`, `src/main/chat/assistant-report-service.ts`, called from
+the chat engine's idle finalization), so it is deterministic and does not depend
+on the model remembering to write a file. `buildAssistantReportDocument` puts a
+short metadata header (run time, status, task, agreed urgency) above the final
+answer, and the file name is the run time plus a short thread suffix so two runs
+that settle in the same second do not collide. The in-app report and its
+notification are unchanged: the file is the copy that outlives the thread.
 
 ### Priority
 

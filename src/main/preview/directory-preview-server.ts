@@ -4,7 +4,15 @@ import { readdir, realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
 import { APP_NAME } from '../../lib/brand'
 import { APP_LOCALE } from '../../lib/date-time-format'
+import {
+  SCREEN_CANVAS_RUNTIME_SCRIPT_PATH,
+  SCREEN_CANVAS_RUNTIME_STYLE_PATH
+} from '../../lib/design/screen-canvas'
 import { mimeTypeForPath } from '../../lib/mime-types'
+import {
+  screenCanvasRuntimeScript,
+  screenCanvasRuntimeStyle
+} from '../design/screen-canvas-runtime'
 import { Logger } from '../system/logger'
 
 /**
@@ -169,6 +177,26 @@ function sendText(response: ServerResponse, status: number, message: string, met
 
 function sendNotFound(response: ServerResponse, method: string): void {
   sendText(response, 404, 'Not found', method)
+}
+
+/**
+ * One app-owned canvas asset, answered from memory rather than from disk.
+ *
+ * No-store is already set for every response in `respond`, which is what keeps
+ * an app update from being shadowed by a cached runtime.
+ */
+function sendCanvasAsset(
+  response: ServerResponse,
+  contentType: string,
+  body: string,
+  head: boolean
+): void {
+  const payload = Buffer.from(body, 'utf8')
+  response.statusCode = 200
+  response.setHeader('Content-Type', contentType)
+  response.setHeader('Content-Length', String(payload.length))
+  if (head) response.end()
+  else response.end(payload)
 }
 
 /**
@@ -618,6 +646,23 @@ export class DirectoryPreviewServer {
       const segments = decodePathSegments(parsed.pathname)
       if (!segments) {
         sendText(response, 400, 'Malformed request path', method)
+        return
+      }
+      // The Screen Canvas runtime belongs to the app, not to the served folder,
+      // so its two reserved paths are answered before any filesystem
+      // resolution. They deliberately shadow a real `__cio` directory in a
+      // served folder, and they never reach the change watcher or a listing.
+      if (parsed.pathname === SCREEN_CANVAS_RUNTIME_SCRIPT_PATH) {
+        sendCanvasAsset(
+          response,
+          'text/javascript; charset=utf-8',
+          screenCanvasRuntimeScript(),
+          head
+        )
+        return
+      }
+      if (parsed.pathname === SCREEN_CANVAS_RUNTIME_STYLE_PATH) {
+        sendCanvasAsset(response, 'text/css; charset=utf-8', screenCanvasRuntimeStyle(), head)
         return
       }
       const requested = resolve(this.root, ...segments)

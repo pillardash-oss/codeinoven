@@ -3,7 +3,7 @@
   import {
     BookOpen,
     Brain,
-    Globe2,
+    GlobeCode,
     Image as ImageIcon,
     Loader2,
     Search,
@@ -460,7 +460,7 @@
           title="No sources yet"
           description="Attach files or ask the agent to research the web. Sources will appear here as they are used."
         >
-          {#snippet icon()}<Globe2 size={18} />{/snippet}
+          {#snippet icon()}<GlobeCode size={18} />{/snippet}
         </SourcesPanelEmptyState>
       {:else if filteredSources.length === 0}
         <SourcesPanelEmptyState
@@ -649,7 +649,7 @@
         {#if appProcesses.length > 0}
           <div class="border-b border-border bg-elevated/60 px-4 py-3">
             <div class="flex items-center gap-2">
-              <Globe2 size={13} class="shrink-0 text-dimmed" />
+              <GlobeCode size={13} class="shrink-0 text-dimmed" />
               <p class="text-[0.6875rem] font-semibold text-foreground">App-wide processes</p>
             </div>
             <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">
@@ -717,6 +717,7 @@
 {#if previewSource}
   <MediaPreview
     src={imageUrls.getUrl(previewSource.url)}
+    revealUrl={previewSource.url}
     filename={previewSource.title}
     mime={previewSource.mime}
     onClose={() => (previewSource = null)}
@@ -726,6 +727,7 @@
 {#if previewArtifact}
   <MediaPreview
     src={imageUrls.getUrl(previewArtifact.url)}
+    revealUrl={previewArtifact.url}
     filename={previewArtifact.filename}
     mime={previewArtifact.mime}
     onClose={() => (previewArtifact = null)}

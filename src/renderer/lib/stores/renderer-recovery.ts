@@ -14,6 +14,7 @@ export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 export type SettingsSection =
   | 'profile'
   | 'general'
+  | 'browser'
   | 'memory'
   | 'audits'
   | 'design'
@@ -33,10 +34,12 @@ export type MainView =
   | 'projects-scope'
   | 'chats'
   | 'assistant'
+  | 'browser'
   | 'scope'
   | 'threads'
   | 'settings'
   | 'settings-profile'
+  | 'settings-browser'
   | 'settings-memory'
   | 'settings-audits'
   | 'settings-design'
@@ -73,11 +76,22 @@ export interface ComposerDraftEntry {
   startAfterThreads: StartAfterThreadReference[]
 }
 
-/** A selected assistant-response excerpt anchored to a message range. */
+/**
+ * A composer reference kept in the recovery snapshot.
+ *
+ * A response selection anchors to a message range; a design reference (an
+ * element picked from a design in the in-app browser) has no range and carries
+ * the CSS path its pin re-resolves by instead. Both are stored and sent the same
+ * way, so the range fields are optional.
+ */
 export interface QueuedResponseReference extends PromptReference {
-  messageId: string
-  startOffset: number
-  endOffset: number
+  messageId?: string
+  startOffset?: number
+  endOffset?: number
+  /** Design references: the CSS path the page re-resolves the element by. */
+  selector?: string
+  /** Design references: the browser tab the element was picked from. */
+  tabId?: string
 }
 
 /**
@@ -148,6 +162,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'projects-scope',
   'chats',
   'assistant',
+  'browser',
   'scope',
   'threads',
   'settings',
@@ -166,6 +181,7 @@ const MAIN_VIEWS: readonly MainView[] = [
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'profile',
   'general',
+  'browser',
   'memory',
   'audits',
   'design',
@@ -257,16 +273,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isQueuedResponseReference(value: unknown): value is QueuedResponseReference {
-  return (
-    isRecord(value) &&
-    typeof value.id === 'string' &&
-    typeof value.label === 'string' &&
-    typeof value.text === 'string' &&
-    typeof value.messageId === 'string' &&
-    typeof value.startOffset === 'number' &&
-    typeof value.endOffset === 'number' &&
-    (value.comment === undefined || typeof value.comment === 'string')
+  if (!isRecord(value)) return false
+  if (typeof value.id !== 'string') return false
+  if (typeof value.label !== 'string') return false
+  if (typeof value.text !== 'string') return false
+  if (
+    value.kind !== undefined &&
+    value.kind !== 'selection' &&
+    value.kind !== 'design' &&
+    value.kind !== 'file'
   )
+    return false
+  if (value.messageId !== undefined && typeof value.messageId !== 'string') return false
+  if (value.startOffset !== undefined && typeof value.startOffset !== 'number') return false
+  if (value.endOffset !== undefined && typeof value.endOffset !== 'number') return false
+  if (value.selector !== undefined && typeof value.selector !== 'string') return false
+  if (value.tabId !== undefined && typeof value.tabId !== 'string') return false
+  if (value.filePath !== undefined && typeof value.filePath !== 'string') return false
+  if (value.comment !== undefined && typeof value.comment !== 'string') return false
+  return true
 }
 
 function isUserMessagePresentation(value: unknown): value is UserMessagePresentation {
@@ -329,6 +354,7 @@ function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
     value === 'projects-scope' ||
     value === 'chats' ||
     value === 'assistant' ||
+    value === 'browser' ||
     value === 'scope' ||
     value === 'threads'
   ) {

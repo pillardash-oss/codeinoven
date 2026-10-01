@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Code2, Eye, FileDiff, Loader2, Save } from '@lucide/svelte'
+  import { Code2, Eye, FileDiff, Loader2, MessageSquarePlus, Save } from '@lucide/svelte'
   import type { ProjectFileTab, ProjectFileView } from '$lib/stores/project-files.svelte'
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
@@ -16,6 +16,11 @@
     diffStats: DiffStats | null
     previewKindLabel: string
     showPreviewToggle: boolean
+    /** Annotate is offered for the documents whose rendered preview can carry
+     *  annotations (Markdown); nothing else has selectable text to anchor. */
+    showAnnotateToggle: boolean
+    /** Annotate is refused while no conversation is open to attach to. */
+    annotateDisabled: boolean
     deletedAtCheckpoint: boolean
     showUndoRedo: boolean
     reloadDisabled: boolean
@@ -54,6 +59,8 @@
     diffStats,
     previewKindLabel,
     showPreviewToggle,
+    showAnnotateToggle,
+    annotateDisabled,
     deletedAtCheckpoint,
     showUndoRedo,
     reloadDisabled,
@@ -100,6 +107,26 @@
   >
     <FileDiff size={12} />
   </button>
+  {#if showAnnotateToggle}
+    <button
+      type="button"
+      class={[
+        'flex h-6 w-6 items-center justify-center rounded transition-colors disabled:opacity-30',
+        activeTab.view === 'annotate'
+          ? 'bg-overlay text-foreground'
+          : 'text-dimmed hover:bg-elevated hover:text-foreground'
+      ]}
+      aria-label={`Annotate ${activeTab.path}`}
+      aria-pressed={activeTab.view === 'annotate'}
+      title={annotateDisabled
+        ? 'Open a conversation to annotate this document'
+        : 'Annotate this document and attach the notes to your next message'}
+      disabled={annotateDisabled}
+      onclick={() => onSetView('annotate')}
+    >
+      <MessageSquarePlus size={12} />
+    </button>
+  {/if}
   {#if showPreviewToggle}
     <button
       type="button"

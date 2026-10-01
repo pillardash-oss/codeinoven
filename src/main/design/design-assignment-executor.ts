@@ -1,13 +1,21 @@
 import {
   designAssignmentCatalogue,
+  designAssignmentIsMedia,
   designAssignmentOutput,
   designAssignmentOutputWork,
+  isUsableDesignSelection,
   resolveDesignAssignment,
   usableDesignAssignments
 } from '../../lib/design-assignments'
+import type { EffectiveExperts } from '../../lib/experts'
 import { requireLocalProject } from '../../lib/project-artifacts'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
-import type { AgentModelSelection, DesignAssignmentOutput, DesignConfig } from '../../lib/types'
+import type {
+  AgentModelSelection,
+  DesignAssignment,
+  DesignAssignmentOutput,
+  DesignConfig
+} from '../../lib/types'
 import type { Database } from '../database/database'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 
@@ -64,8 +72,12 @@ export type DesignAssignmentRunner = (
 
 export interface DesignAssignmentExecutorOptions {
   database: Database
-  /** The live design config. Read per call so a re-assignment takes effect at once. */
-  designConfig: () => Promise<DesignConfig | undefined | null>
+  /**
+   * The experts this thread's session may delegate to, and why it may use none.
+   * Read per call, so a re-assignment or a mute applies to the next delegation
+   * rather than the next app run.
+   */
+  experts: (context: { projectId: string; threadId: string }) => Promise<EffectiveExperts>
   run: DesignAssignmentRunner
 }
 
@@ -80,18 +92,31 @@ export function createDesignAssignmentExecutor(
     }
     const requested = requiredString(input['assignment'], 'assignment', MAX_ASSIGNMENT_NAME_LENGTH)
     const prompt = requiredString(input['prompt'], 'prompt', MAX_DELEGATE_PROMPT_LENGTH)
-    const config = await options.designConfig()
+    // The thread's own answer, not the global config: a session the user muted
+    // has no experts at all, so the refusal below says that rather than claiming
+    // the user never staffed anyone.
+    const effective = await options.experts(context)
+    const config: DesignConfig = { assignments: effective.assignments }
     const assignment = resolveDesignAssignment(config, requested)
     if (!assignment) {
       const catalogue = designAssignmentCatalogue(config)
       throw new Error(
         catalogue.length === 0
-          ? `No design work is delegated yet: the user has not assigned a model to any design work. Do the work with your own tools when you can, and when the design needs something you cannot produce, tell the user plainly which work needs a model and that they assign it in Settings, Design. Never choose a model yourself.`
-          : `There is no design assignment named "${requested}". The user assigned ${catalogue}; delegate one of those, or ask them to add the work you need in Settings, Design.`
+          ? refusalForNoExpert(effective.availability)
+          : `There is no expert named "${requested}". The user assigned ${catalogue}; delegate one of those, or ask them to add the work you need in Settings, Design.`
       )
     }
     const project = requireLocalProject(options.database, context.projectId)
     const output = designAssignmentOutput(assignment)
+    // A media craft is made, not written: its model is a generation model and the
+    // app calls a provider for it. `delegate` is the completion lane, so it points
+    // at the operation that can actually produce the asset rather than pretending
+    // a text answer is one.
+    if (designAssignmentIsMedia(output)) {
+      throw new Error(
+        `"${assignment.label}" produces ${designAssignmentOutputWork(output)} by generation rather than by a completion. Call the \`generate\` operation with kind "${output}", and the model the user assigned to that craft produces the file; never write the asset yourself.`
+      )
+    }
     // Two assignments with one output are the user's own alternatives for that
     // job, so the one they named is tried first and the rest cover it in their
     // order. This is not the app substituting a model: every candidate here is a
@@ -101,7 +126,7 @@ export function createDesignAssignmentExecutor(
       ...usableDesignAssignments(config).filter(
         (entry) => entry.id !== assignment.id && designAssignmentOutput(entry) === output
       )
-    ]
+    ].filter(isRunnableAssignment)
     const failures: string[] = []
     for (const [index, candidate] of candidates.entries()) {
       const guidance = candidate.instructions?.trim()
@@ -135,14 +160,36 @@ export function createDesignAssignmentExecutor(
   }
 }
 
-/** One line on what came back, which differs for copywriting and for the other crafts. */
+/**
+ * Why nothing was delegated, in the terms of the reason.
+ *
+ * A mute and an empty settings page are different answers, and an agent told the
+ * wrong one does the wrong thing: told nothing is assigned it asks the user to
+ * assign a model, which they already did and then turned off for this thread.
+ */
+function refusalForNoExpert(availability: EffectiveExperts['availability']): string {
+  if (availability === 'muted') {
+    return 'The user turned the experts off for this thread, so nothing is delegated here. Do the work with your own tools when you can, and where it genuinely needs a model, tell the user plainly which work needs one and that they can turn the experts back on for this thread from the design coordinator. Never choose a model yourself.'
+  }
+  return 'No expert is assigned yet: the user has not put a model on any of the work a design or a composition needs. Do the work with your own tools when you can, and when the work needs something you cannot produce, tell the user plainly which work needs a model and that they assign it in Settings, Design. Never choose a model yourself.'
+}
+
+/** One line on what came back. The completion lane is text only, so the wording
+ *  names the model rather than the craft's asset. */
 function noteFor(output: DesignAssignmentOutput, usedFallback: boolean): string {
-  const standing = usedFallback
+  void output
+  return usedFallback
     ? 'The first model the user assigned to this work did not answer, so this one did.'
     : 'Produced by the model the user assigned to this work.'
-  return output === 'text'
-    ? standing
-    : `${standing} It was chosen for ${designAssignmentOutputWork(output)}, and this lane answers with text only, so the reply above is not the asset: produce it with a generation capability and save it with save-media.`
+}
+
+/** A text assignment that carries the harness model needed to run it. */
+interface RunnableAssignment extends DesignAssignment {
+  selection: AgentModelSelection
+}
+
+function isRunnableAssignment(assignment: DesignAssignment): assignment is RunnableAssignment {
+  return isUsableDesignSelection(assignment.selection)
 }
 
 function errorMessage(error: unknown): string {

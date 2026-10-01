@@ -9,6 +9,7 @@
 
 import type { BrowserWindow } from 'electron'
 import type { BrowserService } from '../browser/browser-service'
+import type { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { ChatEngine } from '../chat/chat-engine'
 import type { ForeignRunService } from '../chat/foreign-run-service'
 import type { ThreadTransferService } from '../chat/thread-transfer-service'
@@ -21,6 +22,9 @@ import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import type { RoutineSchedulerService } from '../scheduler/routine-scheduler-service'
+import type { BackgroundRunLedger } from '../scheduler/background-run-ledger'
+import type { AutoAnswerStore } from '../system/auto-answer-store'
+import type { CleanShutdownStore } from '../system/clean-shutdown-store'
 import type { RoutineManager } from '../../lib/engines/routine-manager'
 import type { PtyService } from '../system/pty-service'
 import type { ProviderConnectionService } from '../providers/provider-connection'
@@ -34,11 +38,20 @@ import type { SpeechService } from '../speech/speech-service'
 import type { ProjectFilesService } from '../editor/project-files-service'
 import type { PrototypePreviewService } from '../prototypes/prototype-preview-service'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
+import type { BackgroundLifecycleService } from '../system/background-lifecycle-service'
+import type { PowerMonitorService } from '../system/power-monitor-service'
 
 export interface BootstrapState {
   /** Primary window; null before creation and after it closes. */
   mainWindow: BrowserWindow | null
   browserService: BrowserService | null
+  /**
+   * Every browser download this process knows about, and the durable records
+   * they come from. One instance for the whole process, because a download keeps
+   * running while the window that started it is parked or rebuilt, and because
+   * the records outlive both. Null until the post-paint graph builds it.
+   */
+  browserDownloads: BrowserDownloadManager | null
   gatewaySupervisor: GatewaySupervisorService | null
 
   // Quit lifecycle flags shared by the close gate, the signal handlers and the
@@ -79,7 +92,16 @@ export interface BootstrapState {
   heartbeatScheduler: HeartbeatSchedulerService | null
   routineManager: RoutineManager | null
   routineScheduler: RoutineSchedulerService | null
-  
+  /** Durable record of unattended (background) runs for the "while you were away" list. */
+  backgroundRunLedger: BackgroundRunLedger | null
+  /** Durable record of gates the app resolved without the user (attention rail). */
+  autoAnswerStore: AutoAnswerStore | null
+  /**
+   * Proof the previous process exited on purpose, so a turn left in flight is
+   * settled as a clean app-closed stop rather than a crash failure.
+   */
+  cleanShutdownStore: CleanShutdownStore | null
+
   /** Stops the instance take-over watcher registered after launch recovery. */
   stopInstanceTakeOverListener: (() => void) | null
   /** Cross-instance turn-ownership notices pushed to every window. */
@@ -92,6 +114,21 @@ export interface BootstrapState {
   prototypePreviewService: PrototypePreviewService | null
   /** Loopback static servers behind the file tree's "Open in browser" action. */
   directoryPreviewService: DirectoryPreviewService | null
+  /**
+   * Background mode: stay-alive decision, menu bar icon, window attach/teardown,
+   * instance role, and headless boot. Constructed in the bootstrap, not here.
+   */
+  backgroundLifecycle: BackgroundLifecycleService | null
+  /** Resume/unlock hook that catches up slots missed to sleep. */
+  powerMonitorService: PowerMonitorService | null
+  /** True while the window is being torn down to keep running in the menu bar. */
+  parkingForBackground: boolean
+  /**
+   * Window-bound browser wiring, captured by the boot once the design service
+   * exists. `attachWindowServices` calls it for the first window and for every
+   * window opened after the previous one was destroyed.
+   */
+  attachBrowserToWindow: ((window: BrowserWindow) => Promise<void>) | null
   /**
    * Resolved lazily so the `appfile://` preview protocol can be installed before
    * the main window loads (its renderer requests previews as soon as it hydrates).
@@ -111,6 +148,7 @@ export function createBootstrapState(): BootstrapState {
   return {
     mainWindow: null,
     browserService: null,
+    browserDownloads: null,
     gatewaySupervisor: null,
     quitCleanupStarted: false,
     quitConfirmed: false,
@@ -138,6 +176,9 @@ export function createBootstrapState(): BootstrapState {
     heartbeatScheduler: null,
     routineManager: null,
     routineScheduler: null,
+    backgroundRunLedger: null,
+    autoAnswerStore: null,
+    cleanShutdownStore: null,
     stopInstanceTakeOverListener: null,
     foreignRuns: null,
     threadTransfer: null,
@@ -146,6 +187,10 @@ export function createBootstrapState(): BootstrapState {
     unregisterSpeechIpc: null,
     prototypePreviewService: null,
     directoryPreviewService: null,
+    backgroundLifecycle: null,
+    powerMonitorService: null,
+    parkingForBackground: false,
+    attachBrowserToWindow: null,
     appfileProjectFiles: null,
     appfileScopedPathResolver: null
   }

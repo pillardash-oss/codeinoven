@@ -24,6 +24,7 @@
         projectId={activeDockTab.projectId}
         threadId={activeDockTab.threadId}
         scopeBucketId={workspaceState.activeScopeBucketIdFor(activeDockTab.projectId)}
+        directory={activeDockTab.startingDirectory}
       />
     {/key}
   {/if}

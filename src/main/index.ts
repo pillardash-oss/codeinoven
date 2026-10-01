@@ -3,12 +3,13 @@ import { dirname, join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
-import { APP_ID, APP_NAME } from '../lib/brand'
+import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
 import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
 import { StorageEngine } from './storage/storage-engine'
+import { registerGlobalBrowserIpcHandlers } from './ipc/global-browser-ipc'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
 import { registerFilePreviewScheme } from './editor/file-preview-protocol'
 import { WindowStateService } from './system/window-state'
@@ -30,13 +31,21 @@ import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
 import { createBootstrapState } from './bootstrap/bootstrap-state'
-import { configureLinuxElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
+import { configureElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
 import { createSplashWindow, closeSplash } from './bootstrap/splash-window'
 import { isCloseShortcut, isNewTerminalShortcut } from './bootstrap/keyboard-shortcuts'
-import { armQuitFailsafe, requestCloseConfirmation } from './bootstrap/quit-lifecycle'
+import {
+  armQuitFailsafe,
+  flushSessionStorage,
+  requestCloseConfirmation
+} from './bootstrap/quit-lifecycle'
 import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap/open-with'
-import { bootPostPaintServices } from './bootstrap/post-paint-services'
+import { bootPostPaintServices, attachWindowServices } from './bootstrap/post-paint-services'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
+import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
+import { BackgroundLifecycleService } from './system/background-lifecycle-service'
+import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
+import { computeAttention, hasUpcomingWork } from './system/background-work-state'
 import { handleFatalStartup } from './bootstrap/fatal-startup'
 import {
   installAppFilePreviewProtocol,
@@ -45,12 +54,17 @@ import {
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 declare const __CODEINOVEN_APP_VERSION__: string
+declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
 app.setName(APP_NAME)
+// Naming the app is not enough on its own: Chromium still advertises
+// `Electron/<version>` to every site, so the fallback every web contents
+// inherits is rewritten here, before the first window exists.
+app.userAgentFallback = brandUserAgent(app.userAgentFallback, __CODEINOVEN_APP_VERSION__)
 
-configureLinuxElectronDataRoot()
+configureElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
 // per-window preferences below remain explicit so future windows inherit the
 // secure expectation even when reviewed in isolation.
@@ -66,10 +80,12 @@ if (app.isPackaged) {
 }
 
 /** Map OS termination signals into Electron's quit lifecycle so that every
- *  exit path (Cmd+Q, Dock menu, `kill`, system shutdown) converges into the
- *  same `before-quit` → disposal pipeline → `will-quit` sequence. */
+ *  exit path (Cmd+Q, Dock menu, `kill`, a closed terminal, system shutdown)
+ *  converges into the same `before-quit` → disposal pipeline → `will-quit`
+ *  sequence. SIGHUP matters in development: closing the terminal that runs the
+ *  dev server must not look like a crash to the next launch. */
 function registerSignalHandlers(): void {
-  const signals = ['SIGTERM', 'SIGINT'] as const
+  const signals = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const
   for (const signal of signals) {
     process.on(signal, () => {
       Logger.info(`Received ${signal}   shutting down`)
@@ -116,6 +132,36 @@ ipcMain.handle('app:confirmClose', async () => {
   app.quit()
 })
 
+// Park, not quit: the renderer approved closing the window while background mode
+// keeps the backend alive in the menu bar.
+ipcMain.handle('app:parkWindow', async () => {
+  await state.backgroundLifecycle?.park()
+})
+
+// Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+Q) is the menu bar's
+// Quit item without reaching for the menu bar, so it bypasses background mode
+// entirely.
+ipcMain.handle('app:quitDirect', () => quitAppDirectly())
+
+/** This process's role against the shared backend, for renderer hydration. */
+ipcMain.handle(
+  'app:instanceRole',
+  () =>
+    state.backgroundLifecycle?.currentRole() ?? { role: 'owner' as const, ownerPid: process.pid }
+)
+
+/** A secondary asks the elected owner to bring its window forward. */
+ipcMain.handle(
+  'app:openInstanceOwner',
+  () => state.backgroundLifecycle?.requestOwnerActivation() ?? false
+)
+
+/** A secondary takes over ownership of scheduled work from the current owner. */
+ipcMain.handle(
+  'app:transferInstanceControl',
+  () => state.backgroundLifecycle?.takeOverControl() ?? false
+)
+
 /** Track when a terminal in the renderer holds focus (Windows shortcut routing). */
 ipcMain.on('terminal:focusState', (_event, focused: unknown) => {
   state.terminalFocused = focused === true
@@ -158,7 +204,12 @@ async function completeStartupIfReady(): Promise<void> {
   state.packagedSmokeProofStarted = true
   try {
     await writePackagedSmokeProof(output, startupTelemetry.snapshot())
-    setImmediate(() => app.quit())
+    // A smoke pass must really exit; it is not the user closing a window, so it
+    // bypasses the background park path.
+    setImmediate(() => {
+      state.quitConfirmed = true
+      app.quit()
+    })
   } catch (error) {
     Logger.error('Could not write packaged startup proof', error)
     app.exit(1)
@@ -221,6 +272,104 @@ function getMacIconPath(): string {
 }
 
 /**
+ * Menu bar template art. macOS derives the tint from the alpha channel of a
+ * `...Template.png` file, so the attention variant is a second asset rather
+ * than a second colour.
+ */
+function getTrayIconPath(attention: boolean): string {
+  const name = attention ? 'trayAttentionTemplate.png' : 'trayTemplate.png'
+  return !isProduction && is.dev
+    ? join(app.getAppPath(), 'src/renderer/static/macos', name)
+    : join(mainBundleDirectory, '../renderer/macos', name)
+}
+
+/**
+ * Whether this launch came from the OS login item. A login launch starts
+ * windowless in background mode: the whole point is a backend that keeps the
+ * schedule without a renderer.
+ */
+function wasOpenedAtLogin(): boolean {
+  if (process.platform !== 'darwin' && process.platform !== 'win32') return false
+  try {
+    return app.getLoginItemSettings().wasOpenedAtLogin === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Background lifecycle: the stay-alive decision, the menu bar icon, window
+ * attach/teardown, the instance role, and headless boot. Its callbacks close
+ * over the window helpers below, which is why it is constructed here in the
+ * composition root rather than inside the boot module.
+ */
+const backgroundLifecycle = new BackgroundLifecycleService({
+  state,
+  storage,
+  openWindow: () => openMainWindow(),
+  destroyWindow: () => {
+    const window = state.mainWindow
+    if (window && !window.isDestroyed()) window.destroy()
+  },
+  quitApp: quitAppDirectly,
+  persistWindowState: () => windowStateService.persistNow(state.mainWindow),
+  releaseWindowServices: () => {
+    // The renderer is about to die with the window; tear down everything in
+    // main that would otherwise keep running page content or a shell with no
+    // visible window.
+    try {
+      // Commit every open tab's Back/Forward stack before the views are closed
+      // with the window. The app keeps running here rather than quitting, so the
+      // write is started and left to finish on its own.
+      void state.browserService?.flushTabHistory()
+      state.browserService?.dispose()
+      state.browserService = null
+    } catch (error) {
+      Logger.error('Browser teardown while parking failed', error)
+    }
+    try {
+      state.ptyService?.detach()
+    } catch (error) {
+      Logger.error('PTY detach while parking failed', error)
+    }
+  },
+  hasUpcomingWork: () => hasUpcomingWork(state, database),
+  computeAttention: () => computeAttention(database),
+  onBecameOwner: () => {
+    // A survivor that inherited the schedule picks up the slots missed while
+    // nobody owned the scheduler.
+    void state.routineScheduler
+      ?.runPendingMisses()
+      .catch((error) => Logger.error('Take-over catch-up failed:', error))
+  },
+  resolveTrayIcon: (attention) => getTrayIconPath(attention)
+})
+state.backgroundLifecycle = backgroundLifecycle
+
+/**
+ * The real quit, with no park and no confirmation gate: what the menu bar's
+ * Quit item and the direct-quit shortcut both run. `quitConfirmed` is what makes
+ * the close gate and `before-quit` skip parking and go straight to the shutdown
+ * pipeline, which records the clean-shutdown marker before the harness dies.
+ */
+function quitAppDirectly(): void {
+  state.quitConfirmed = true
+  app.quit()
+}
+
+/** Create the window, or bring the existing one forward. */
+function openMainWindow(): void {
+  const existing = state.mainWindow
+  if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore()
+    if (!existing.isVisible()) existing.show()
+    existing.focus()
+    return
+  }
+  createWindow()
+}
+
+/**
  * Resolve the preload script path. electron-vite's output extension varies
  * across versions (.js / .mjs / .cjs depending on module settings), so probe
  * for whichever file was actually emitted instead of hardcoding one.
@@ -256,11 +405,14 @@ function createWindow(): BrowserWindow {
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
       autoplayPolicy: 'no-user-gesture-required',
-      // Keep the renderer responsive when the window is hidden or occluded so
-      // background events (e.g. the notification alert played from the
-      // renderer) are handled the moment they arrive instead of after Chromium
-      // throttles the backgrounded page.
-      backgroundThrottling: false,
+      // Chromium throttles a hidden or occluded window by default, and that is
+      // left on deliberately: this window is occluded whenever the user works
+      // in another app, which is most of a long agent run, and an unthrottled
+      // renderer spends that whole time at full timer rate for nothing. The one
+      // behaviour that flag used to buy (the off-app notification alert playing
+      // promptly) is preserved at its own call site instead, which lifts
+      // throttling for the moment the alert is dispatched
+      // (see NotificationService.dispatchNotificationSound).
       preload: getPreloadPath(),
       sandbox: true,
       contextIsolation: true,
@@ -290,17 +442,20 @@ function createWindow(): BrowserWindow {
   })
 
   window.on('close', (event) => {
-    // Closing the window always closes the app   nothing is kept alive in the
-    // Tray. Gate the close while threads are working   ask the renderer to
-    // confirm before letting the window (and with it the app) go away. During
-    // an approved quit the flags below let the close pass straight through.
+    // Background mode parks instead of quitting: the window and its renderer are
+    // destroyed, the backend keeps running in the menu bar. Everything else
+    // closes the app. Either way the renderer still owns the unsaved-file gate,
+    // so the same confirmation round-trip runs   marked as a park when it is one.
     if (state.quitConfirmed || state.quitCleanupStarted) return
     event.preventDefault()
-    requestCloseConfirmation({ state, database, window: state.mainWindow })
+    const park = state.backgroundLifecycle?.shouldPark() ?? false
+    requestCloseConfirmation({ state, database, window: state.mainWindow, park })
   })
 
   window.on('closed', () => {
     if (state.mainWindow === window) state.mainWindow = null
+    state.parkingForBackground = false
+    state.backgroundLifecycle?.onWindowClosed()
   })
 
   if (state.ptyService) {
@@ -322,6 +477,11 @@ function createWindow(): BrowserWindow {
     })
 
   window.webContents.on('before-input-event', (event, input) => {
+    // A key pressed while a browser toolbar holds focus arrives here, not on the
+    // native page view. Claim the browser's own chords first, so a page-scoped
+    // key acts on the page instead of on the app around it (Cmd/Ctrl+R would
+    // otherwise reload the whole app, and Cmd/Ctrl+W would close its window).
+    if (state.browserService?.consumeChromeShortcut(event, input)) return
     // Cmd/Ctrl+W is handled by the renderer ("close the active surface": modal,
     // settings page, or thread). Prevent the default here so the macOS
     // application menu's "Close Window" accelerator never closes the window
@@ -344,25 +504,29 @@ function createWindow(): BrowserWindow {
 
   // External links leave the app through the default browser only when they
   // are safe web URLs. Every popup is denied regardless   the renderer never
-  // spawns a second window.
+  // spawns a second window. A link is routed into the in-app browser when the
+  // matching preference is on: local development links keep their own
+  // preference, every other link follows the general one. The renderer falls
+  // back to the system browser when no project thread can own the tab, so
+  // sending the request is never a dead end.
   window.webContents.setWindowOpenHandler((details) => {
     try {
       const safeUrl = windowBoundaryValidator.validateExternalUrl(details.url)
-      if (isLocalDevelopmentUrl(safeUrl)) {
-        void storage
-          .getConfig()
-          .then((config) => {
-            if (window.isDestroyed() || window.webContents.isDestroyed()) return
-            if (config.openLocalhostInCioBrowser) {
-              sendToRenderer(window.webContents, 'browser:openRequested', safeUrl)
-            } else {
-              void shell.openExternal(safeUrl)
-            }
-          })
-          .catch((error: unknown) => Logger.error('Local link routing failed:', error))
-      } else {
-        void shell.openExternal(safeUrl)
-      }
+      const local = isLocalDevelopmentUrl(safeUrl)
+      void storage
+        .getConfig()
+        .then((config) => {
+          if (window.isDestroyed() || window.webContents.isDestroyed()) return
+          const openInCioBrowser =
+            (local && config.openLocalhostInCioBrowser) ||
+            (!local && config.openAllLinksInCioBrowser)
+          if (openInCioBrowser) {
+            sendToRenderer(window.webContents, 'browser:openRequested', safeUrl)
+          } else {
+            void shell.openExternal(safeUrl)
+          }
+        })
+        .catch((error: unknown) => Logger.error('External link routing failed:', error))
     } catch (error) {
       Logger.error('Window open rejected unsafe URL:', error)
     }
@@ -387,6 +551,19 @@ function createWindow(): BrowserWindow {
     if (command === 'browser-backward') {
       sendToRenderer(window.webContents, 'window:historyBack')
     } else if (command === 'browser-forward') {
+      sendToRenderer(window.webContents, 'window:historyForward')
+    }
+  })
+
+  // On macOS, Logitech Options can map the mouse's side buttons to native
+  // swipe gestures instead of renderer mouse events. Electron exposes those
+  // gestures on the window; a left swipe goes back and a right swipe goes
+  // forward through the app's navigation history.
+  window.on('swipe', (_event, direction) => {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    if (direction === 'left') {
+      sendToRenderer(window.webContents, 'window:historyBack')
+    } else if (direction === 'right') {
       sendToRenderer(window.webContents, 'window:historyForward')
     }
   })
@@ -421,6 +598,14 @@ function createWindow(): BrowserWindow {
     void window.loadFile(join(mainBundleDirectory, '../renderer/index.html'))
   }
 
+  // A window exists again: restore the Dock icon and let the menu bar reflect
+  // the current state. On a reopen after parking this also rebuilds the
+  // window-bound services (browser, PTY) the previous window owned.
+  state.backgroundLifecycle?.onWindowOpened(window)
+  void attachWindowServices(state, window).catch((error) =>
+    Logger.error('Window service attach failed', error)
+  )
+
   return window
 }
 
@@ -453,19 +638,36 @@ void app
     // the close gate can later tell whether other live instances can keep a
     // project's threads running.
     instanceRegistry.start()
+    // A login launch in background mode starts windowless: no splash, no window,
+    // no renderer process. Everything below still runs   the whole point is a
+    // backend that keeps the schedule without a UI. A relaunch that followed a
+    // menu bar update is the same: the update must not pop a window at the user.
+    // The marker is consumed either way, so a stale one can never hide a later
+    // launch. A probe is never hidden: it is a window someone opened to look at
+    // behaviour, so it shows itself.
+    const relaunchRequested = consumeBackgroundRelaunchMarker()
+    const startHidden =
+      !backgroundLifecycle.backgroundOptOut && (wasOpenedAtLogin() || relaunchRequested)
     // This is the first post-ready action. Construct and show the native splash
     // immediately, then yield the main event loop until Chromium presents its
     // first frame. Synchronous SQLite/schema work cannot begin before this
     // barrier, so low-end devices always get visual feedback first.
-    const { visualReady: splashVisualReady } = createSplashWindow(mainBundleDirectory, isProduction)
-    startupTelemetry.mark('splash:created')
-    const splashOutcome = await splashVisualReady
-    if (splashOutcome === 'ready') {
-      startupTelemetry.mark('splash:visualReady')
+    let splashOutcome = 'skipped'
+    if (!startHidden) {
+      const { visualReady: splashVisualReady } = createSplashWindow(
+        mainBundleDirectory,
+        isProduction
+      )
+      startupTelemetry.mark('splash:created')
+      splashOutcome = await splashVisualReady
+      if (splashOutcome === 'ready') {
+        startupTelemetry.mark('splash:visualReady')
+      }
     }
     // A launcher must never remain topmost forever if the Chromium splash
     // fails. The normal path releases it after the first rendered frame; the
-    // bounded failure path releases it after the splash barrier resolves.
+    // bounded failure path releases it after the splash barrier resolves. A
+    // headless launch has no splash to release.
     signalNativeSplashReady()
 
     // Only after the splash is visibly rendered, wire the durable log sink
@@ -477,7 +679,7 @@ void app
     mkdirSync(storage.resolve(LOGS_DIRECTORY), { recursive: true })
     Logger.initialize(storage.resolve(LOGS_DIRECTORY))
     logConfiguredDataRoot()
-    if (splashOutcome !== 'ready') {
+    if (!startHidden && splashOutcome !== 'ready') {
       Logger.error('Splash did not reach visual readiness before startup continued', {
         outcome: splashOutcome
       })
@@ -509,12 +711,19 @@ void app
     startupTelemetry.mark('storage:ready')
     startupTelemetry.mark('database:ready')
     await windowStateService.load()
+    // Load the background preferences, apply the login item, and publish the
+    // instance role before any window exists.
+    await backgroundLifecycle.start()
     Logger.info(`${APP_NAME} main process initialized`)
 
     // The renderer invokes its first config/project/scope/thread reads while
     // its document evaluates. Register that bounded surface before navigation;
     // the feature graph remains dynamically imported after first paint.
     registerHydrationIpcHandlers(storage, database)
+    // The global browser's tab list is durable app state, not browser runtime:
+    // the renderer hydrates it while its document evaluates, so it is registered
+    // here with the other pre-navigation handlers.
+    registerGlobalBrowserIpcHandlers()
 
     // The trusted top-level renderer may capture microphone audio for local
     // dictation. Camera, subframes, foreign documents, and every unrelated
@@ -523,6 +732,10 @@ void app
       validator: windowBoundaryValidator,
       getMainWindow: () => state.mainWindow
     })
+
+    // Arm the platform authenticator before any browser tab can issue a passkey
+    // request. macOS only, and only in a build that can carry the entitlement.
+    installPlatformAuthenticator()
 
     // Install the `appfile://` preview protocol before the renderer loads: the
     // packaged renderer requests preview images as soon as it hydrates, and if
@@ -533,6 +746,32 @@ void app
       getProjectFiles: () => state.appfileProjectFiles,
       getScopedPathResolver: () => state.appfileScopedPathResolver
     })
+
+    const bootContext = {
+      state,
+      storage,
+      database,
+      isProduction,
+      threadCreation,
+      threadDeletion,
+      onThreadClicked: openThreadFromNotification,
+      onFeaturesReady: markWorkspaceReadyIfInteractive
+    }
+
+    if (startHidden) {
+      // Headless launch: no splash, no window, no renderer. The core service
+      // graph boots directly so the scheduler, chat engine, and notifications
+      // are live. Window-bound services (browser, PTY) attach the first time a
+      // window is opened, from the menu bar or a notification click.
+      void bootPostPaintServices(bootContext).catch((error) => {
+        Logger.error('Headless service boot failed; background work is degraded', error)
+      })
+      app.on('activate', () => {
+        if (state.quitCleanupStarted) return
+        if (BrowserWindow.getAllWindows().length === 0) openMainWindow()
+      })
+      return
+    }
 
     const window = createWindow()
     startupTelemetry.mark('window:created')
@@ -556,16 +795,7 @@ void app
       // already-registered services stay alive, and the failure is fully
       // logged for diagnosis. A background feature failing must never exit
       // the whole app on the user's behalf.
-      void bootPostPaintServices({
-        state,
-        storage,
-        database,
-        isProduction,
-        threadCreation,
-        threadDeletion,
-        onThreadClicked: openThreadFromNotification,
-        onFeaturesReady: markWorkspaceReadyIfInteractive
-      }).catch((error) => {
+      void bootPostPaintServices(bootContext).catch((error) => {
         Logger.error('Post-paint service boot failed; app continues with degraded features', error)
       })
     }
@@ -604,11 +834,11 @@ void app
     })
 
     app.on('activate', () => {
-      // The app always quits when its last window closes, so a dock click
-      // can only land during the shutdown grace period   ignore it then.
+      // A dock click opens the window when none is open   in background mode that
+      // is the normal way back from the menu bar.
       if (state.quitCleanupStarted) return
       if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow()
+        openMainWindow()
       }
     })
   })
@@ -619,14 +849,32 @@ void app
   })
 
 app.on('window-all-closed', () => {
+  // Background mode keeps the backend alive in the menu bar; a real quit is the
+  // menu bar's Quit item, the direct-quit shortcut, or an OS logout. Everything
+  // else quits as before.
+  if (state.backgroundLifecycle?.shouldPark()) return
   // Closing the last window (traffic-light close button) fully quits the app.
   // Cmd+Q follows the same path through before-quit → shutdown pipeline →
-  // will-quit. Nothing is kept alive in the Dock or Tray after the user closes.
+  // will-quit.
   app.quit()
 })
 
 app.on('before-quit', (event) => {
   if (state.quitCleanupStarted) return
+
+  // Cmd+Q parks in background mode instead of quitting. Only the menu bar's
+  // Quit item (or OS logout) sets `quitConfirmed` and reaches the real shutdown.
+  if (!state.quitConfirmed && state.backgroundLifecycle?.shouldPark()) {
+    event.preventDefault()
+    const window = state.mainWindow
+    if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
+      // The renderer still owns the unsaved-file gate, so the same confirmation
+      // round-trip runs   marked as a park, and answered with `app:parkWindow`.
+      requestCloseConfirmation({ state, database, window, park: true })
+    }
+    return
+  }
+
   event.preventDefault()
 
   // Hard failsafe: a wedged renderer must never hold quit hostage. Arm it on
@@ -661,11 +909,15 @@ app.on('before-quit', (event) => {
   // never lingers in the Dock with a stale icon after the user chose to close.
   state.shutdownFailsafe = setTimeout(() => {
     Logger.error('Shutdown pipeline timed out   forcing exit')
+    flushSessionStorage()
     app.exit(0)
   }, 15_000)
 })
 
 app.on('will-quit', () => {
-  // Final synchronous cleanup   the app has committed to terminating.
+  // Final synchronous cleanup   the app has committed to terminating. Commit
+  // any pending renderer storage here as the last line of defense against a
+  // force-exit losing the session's localStorage writes.
+  flushSessionStorage()
   setNotificationService(null)
 })

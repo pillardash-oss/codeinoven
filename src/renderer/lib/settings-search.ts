@@ -2,6 +2,8 @@ import {
   BrainCircuit,
   ChartColumn,
   Cloud,
+  FolderTree,
+  Globe,
   HeartPulse,
   Info,
   Keyboard,
@@ -11,6 +13,7 @@ import {
   Plug,
   Puzzle,
   Router,
+  Search,
   SlidersHorizontal,
   Sparkles,
   UsersRound,
@@ -57,6 +60,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: SlidersHorizontal
   },
   {
+    id: 'browser',
+    section: 'browser',
+    title: 'Browser',
+    description: 'Link routing, the search engine, tab hibernation, and prototype previews.',
+    keywords: ['search', 'address bar', 'duckduckgo', 'google', 'links', 'tabs', 'cdn'],
+    icon: Globe
+  },
+  {
     id: 'memory',
     section: 'memory',
     title: 'Memory',
@@ -71,6 +82,33 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Agent names, audits, and per-agent behavior.',
     keywords: ['workers', 'audit'],
     icon: UsersRound
+  },
+  {
+    id: 'design-work-folders',
+    section: 'design',
+    blockId: 'design-work-folders',
+    title: 'Work folders',
+    description: 'Where designs and videos are saved, and whether Git tracks them.',
+    keywords: [
+      'design folder',
+      'video folder',
+      'save path',
+      'version control',
+      'git',
+      'commit',
+      'move',
+      'output'
+    ],
+    icon: FolderTree
+  },
+  {
+    id: 'design-generation',
+    section: 'design',
+    blockId: 'design-generation',
+    title: 'Generation backend',
+    description: 'The provider that generates images, clips and sound.',
+    keywords: ['replicate', 'generation', 'image', 'video', 'audio', 'token', 'api key', 'media'],
+    icon: Sparkles
   },
   {
     id: 'design',
@@ -219,16 +257,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: SlidersHorizontal
   },
   {
-    id: 'general-browser',
-    section: 'general',
-    blockId: 'general-browser',
-    title: 'Browser',
-    description:
-      'Open localhost links in CIO’s browser, and approve the CDNs prototype previews may load.',
-    keywords: ['localhost', 'links', 'prototype', 'preview', 'cdn', 'fonts', 'allowlist'],
-    icon: SlidersHorizontal
-  },
-  {
     id: 'general-power',
     section: 'general',
     blockId: 'general-power',
@@ -274,6 +302,96 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Thread limits, slash command behavior, and question timeout.',
     keywords: ['limit', 'slash commands', 'timeout'],
     icon: SlidersHorizontal
+  },
+  {
+    id: 'general-background',
+    section: 'general',
+    blockId: 'general-threads',
+    title: 'Run in the background',
+    description: 'Keep Assistant routines on schedule after the window closes.',
+    keywords: ['background', 'menu bar', 'tray', 'scheduled', 'close', 'quit'],
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'general-background-mode',
+    section: 'general',
+    blockId: 'general-threads',
+    title: 'Background mode',
+    description: 'Park only when work is running or due, or never quit on close.',
+    keywords: ['scheduled', 'always', 'background', 'close', 'quit'],
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'general-launch-at-login',
+    section: 'general',
+    blockId: 'general-threads',
+    title: 'Start at login',
+    description: 'Launch CodeInOven at login so a schedule can fire after a restart.',
+    keywords: ['login', 'autostart', 'startup', 'boot'],
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'general-missed-runs',
+    section: 'general',
+    blockId: 'general-threads',
+    title: 'Run missed scheduled work on return',
+    description: 'Catch up on assistant slots missed to sleep or a closed app.',
+    keywords: ['missed', 'catch up', 'scheduled', 'sleep', 'resume'],
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'general-wake-lead',
+    section: 'general',
+    blockId: 'general-threads',
+    title: 'Wake lead',
+    description: 'How long before a due run the device is held awake.',
+    keywords: ['wake', 'sleep', 'lead', 'prevent sleep', 'battery'],
+    icon: SlidersHorizontal
+  },
+  // ── Blocks on Browser ─────────────────────────────────────────────────
+  {
+    id: 'browser-links',
+    section: 'browser',
+    blockId: 'browser-links',
+    title: 'Link routing',
+    description: 'Which links open in CIO’s browser instead of your default browser.',
+    keywords: ['localhost', 'links', 'open', 'system browser', 'workspace'],
+    icon: Globe
+  },
+  {
+    id: 'browser-search',
+    section: 'browser',
+    blockId: 'browser-search',
+    title: 'Search engine',
+    description: 'The engine typed text searches with, plus your own engines.',
+    keywords: [
+      'search',
+      'query',
+      'address bar',
+      'duckduckgo',
+      'google',
+      'custom engine',
+      'template'
+    ],
+    icon: Search
+  },
+  {
+    id: 'browser-tabs',
+    section: 'browser',
+    blockId: 'browser-tabs',
+    title: 'Tab hibernation',
+    description: 'Free a browser tab’s memory after it sits unused for a while.',
+    keywords: ['tab', 'memory', 'hibernate', 'idle'],
+    icon: Globe
+  },
+  {
+    id: 'browser-prototype-cdn',
+    section: 'browser',
+    blockId: 'browser-prototype-cdn',
+    title: 'Prototype previews',
+    description: 'Approve the external CDNs prototype previews may load.',
+    keywords: ['prototype', 'preview', 'cdn', 'fonts', 'allowlist'],
+    icon: Globe
   },
   // ── Blocks on About ──────────────────────────────────────────────────────
   {

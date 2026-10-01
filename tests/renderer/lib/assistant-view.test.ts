@@ -6,10 +6,12 @@ import {
   extractHowToDraft,
   extractRoutinePlanDraft,
   groupMissedRunsByRoutine,
+  groupRunsByRoutine,
   groupRunsByTask,
   handoffSummary,
   isRoutineConfirmation,
   routineGap,
+  routineSiblingRuns,
   latestHowToDraft,
   latestRoutinePlanDraft,
   missedTabVisible,
@@ -141,6 +143,56 @@ describe('assistant-view presentation helpers', () => {
     expect(previewRuns(runs, false)).toHaveLength(TASK_RUN_PREVIEW)
     expect(previewRuns(runs, false).map((run) => run.id)).toEqual(['run-1', 'run-2', 'run-3'])
     expect(previewRuns(runs, true)).toHaveLength(5)
+  })
+
+  it('groups runs under their routine, newest first, leaving routineless runs out', () => {
+    const grouped = groupRunsByRoutine([
+      { id: 'seed', createdAt: 1 },
+      { id: 'run-old', assistantTaskId: 'task-1', routineId: 'r1', createdAt: 10 },
+      { id: 'run-new', assistantTaskId: 'task-2', routineId: 'r1', createdAt: 30 },
+      { id: 'loose-run', assistantTaskId: 'task-3', createdAt: 40 },
+      { id: 'other-run', assistantTaskId: 'task-4', routineId: 'r2', createdAt: 20 }
+    ])
+    expect([...grouped.keys()]).toEqual(['r1', 'r2'])
+    expect(grouped.get('r1')?.map((run) => run.id)).toEqual(['run-new', 'run-old'])
+    expect(grouped.get('r2')?.map((run) => run.id)).toEqual(['other-run'])
+  })
+
+  it('keeps a setting-up routine’s runs nested inside Getting started', () => {
+    const runs = [
+      { id: 'run-new', assistantTaskId: 'seed', routineId: 'r1', createdAt: 30 },
+      { id: 'run-old', assistantTaskId: 'seed', routineId: 'r1', createdAt: 10 }
+    ]
+    const tasksById = new Map([['seed', { assistantGettingStarted: true }]])
+    const rendered = new Set(['seed'])
+    expect(routineSiblingRuns(runs, false, rendered, tasksById)).toEqual([])
+  })
+
+  it('moves a set-up routine’s Getting started runs beside it, newest first', () => {
+    const runs = [
+      { id: 'run-old', assistantTaskId: 'seed', routineId: 'r1', createdAt: 10 },
+      { id: 'run-new', assistantTaskId: 'seed', routineId: 'r1', createdAt: 30 }
+    ]
+    const tasksById = new Map([['seed', { assistantGettingStarted: true }]])
+    const rendered = new Set(['seed'])
+    expect(routineSiblingRuns(runs, true, rendered, tasksById).map((run) => run.id)).toEqual([
+      'run-new',
+      'run-old'
+    ])
+  })
+
+  it('hoists a hidden task’s runs, but never one whose task nests elsewhere', () => {
+    const runs = [
+      { id: 'pinned-task-run', assistantTaskId: 'pinned-task', routineId: 'r1', createdAt: 5 },
+      { id: 'hidden-seed-run', assistantTaskId: 'hidden-seed', routineId: 'r1', createdAt: 15 }
+    ]
+    // The pinned task stays on screen (in the Pinned section), so its run is
+    // not rendered under the routine; the hidden seed is not on screen at all.
+    const tasksById = new Map([['pinned-task', { assistantGettingStarted: false }]])
+    const rendered = new Set<string>()
+    expect(routineSiblingRuns(runs, true, rendered, tasksById).map((run) => run.id)).toEqual([
+      'hidden-seed-run'
+    ])
   })
 })
 

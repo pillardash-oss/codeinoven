@@ -2,9 +2,11 @@ import { MCP_TIMEOUT_MS, parseMcpServerInfo } from '../../agents/mcp-stdio-clien
 import type {
   JsonRpcResponse,
   McpClient,
+  McpClientOwner,
   McpServerInfo,
   McpTool
 } from '../../agents/mcp-stdio-client'
+import { appServiceRegistry } from '../../system/app-service-registry'
 import { isRecord, recordValue } from './utility-input'
 
 export class RemoteMcpClient implements McpClient {
@@ -12,13 +14,19 @@ export class RemoteMcpClient implements McpClient {
 
   private nextId = 1
   private sessionId: string | undefined
+  /** Registry id of this client's task-manager row, once announced. */
+  private serviceId: string | null = null
 
   private constructor(
     private readonly url: string,
     private readonly headers: Record<string, string>
   ) {}
 
-  static async connect(url: string, headers: Record<string, string>): Promise<RemoteMcpClient> {
+  static async connect(
+    url: string,
+    headers: Record<string, string>,
+    owner: McpClientOwner = {}
+  ): Promise<RemoteMcpClient> {
     const client = new RemoteMcpClient(url, headers)
     client.serverInfo = parseMcpServerInfo(
       await client.request('initialize', {
@@ -28,7 +36,27 @@ export class RemoteMcpClient implements McpClient {
       })
     )
     await client.notify('notifications/initialized', {})
+    client.announceService(owner)
     return client
+  }
+
+  /**
+   * A remote MCP has no process and no loopback port, so without this its use is
+   * invisible to the operator even though a turn is calling it right now.
+   */
+  private announceService(owner: McpClientOwner): void {
+    const reported = this.serverInfo.name?.trim()
+    const label = owner.name?.trim() || reported || this.url
+    this.serviceId = appServiceRegistry.register({
+      kind: 'mcp',
+      name: `MCP server: ${label}`,
+      detail: this.url,
+      scope: owner.scope ?? 'app',
+      projectId: owner.projectId ?? null,
+      threadId: owner.threadId ?? null,
+      url: this.url,
+      stop: () => this.close()
+    })
   }
 
   async listTools(): Promise<McpTool[]> {
@@ -53,6 +81,10 @@ export class RemoteMcpClient implements McpClient {
   }
 
   async close(): Promise<void> {
+    if (this.serviceId) {
+      appServiceRegistry.unregister(this.serviceId)
+      this.serviceId = null
+    }
     if (this.sessionId) {
       await fetch(this.url, {
         method: 'DELETE',

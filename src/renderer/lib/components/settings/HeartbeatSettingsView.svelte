@@ -53,8 +53,15 @@
     }
   }
 
-  function providerName(harnessId: string): string {
-    return providers.find((catalog) => catalog.harnessId === harnessId)?.name ?? harnessId
+  /** Provider display name for a heartbeat. Resolve the exact provider the
+   *  heartbeat targets, never the first provider of its harness, since one
+   *  harness can expose several providers (e.g. Pi with a local llama.cpp
+   *  server alongside a hosted one). */
+  function providerName(config: HeartbeatConfig): string {
+    const catalog = providers.find(
+      (candidate) => candidate.harnessId === config.harnessId && candidate.id === config.providerId
+    )
+    return catalog?.name ?? config.providerId
   }
 
   function modelName(harnessId: string, providerId: string, modelId: string): string {
@@ -237,11 +244,7 @@
       {#each heartbeatStore.heartbeats as config (config.id)}
         <div class="flex items-start gap-3 border-b px-4 py-3 last:border-b-0">
           <div class="mt-0.5 rounded-lg bg-primary/10 p-1.5 text-primary">
-            <AgentIcon
-              agentId={config.harnessId}
-              label={providerName(config.harnessId)}
-              size={16}
-            />
+            <AgentIcon agentId={config.harnessId} size={16} />
           </div>
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
@@ -265,7 +268,7 @@
               {/if}
             </div>
             <p class="mt-0.5 truncate text-[0.6875rem] text-dimmed">
-              {providerName(config.harnessId)} · {modelName(
+              {providerName(config)} · {modelName(
                 config.harnessId,
                 config.providerId,
                 config.modelId

@@ -1,19 +1,37 @@
-import { type Component } from 'svelte'
+import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
+import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
 import { invoke } from '$lib/ipc.svelte'
+import { keymapState } from '$lib/keymap/keymap-state.svelte'
+import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
-import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
-import { type MainView } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
-import { keymapState } from '$lib/keymap/keymap-state.svelte'
-import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
-import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
+import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
 import { type Project, type Thread } from '$shared/types'
+import { FolderKanban, Globe, Kanban, Microscope, Timeline } from '@lucide/svelte'
+import { type Component } from 'svelte'
 import { SvelteSet } from 'svelte/reactivity'
-import { FolderKanban, Kanban, SquareDashedKanban, Timeline } from '@lucide/svelte'
 
 export type HeaderViewOptionId =
-  'projects' | 'threads' | 'scoped-threads' | 'scope-board' | 'chats' | 'assistant'
+  'projects' | 'threads' | 'scoped-threads' | 'scope-board' | 'chats' | 'assistant' | 'browser'
+
+/**
+ * The view a return to the project family lands on.
+ *
+ * `scoped` is the projects view carrying the scope sidebar; `scope` is the
+ * Scope page, which follows the open thread's project. The two differ from the
+ * rail option ids because they are what a navigation can land on, not what the
+ * rail paints.
+ */
+export type ProjectFamilyLanding = 'projects' | 'threads' | 'scoped' | 'scope'
+
+/** The four views that share the project family's single activity badge. */
+const PROJECT_FAMILY_VIEW_OPTIONS: readonly HeaderViewOptionId[] = [
+  'projects',
+  'threads',
+  'scoped-threads',
+  'scope-board'
+]
 
 export interface HeaderViewOption {
   id: HeaderViewOptionId
@@ -56,8 +74,12 @@ export class AppHeaderNavigationController {
    *  the other takeover pages) keep the previous primary view. */
   lastViewBeforeScope: PrimaryView = $state('projects')
 
-  /** Last option shown while a primary view was active. */
-  lastPrimaryHeaderViewOption = $state<HeaderViewOptionId>('projects')
+  /** The project-family view (Projects, Threads, Scoped threads, Scope Board)
+   *  the user last had selected. The project family's activity badge rides this
+   *  option while a view that owns threads of another family   Chat and
+   *  Assistant   or no threads at all   the Browser   is on screen, so the badge
+   *  never lands on a rail item that cannot show project threads. */
+  lastProjectViewOption: HeaderViewOptionId = $state('projects')
 
   constructor(options: AppHeaderNavigationOptions) {
     this.getActiveView = options.getActiveView
@@ -76,8 +98,13 @@ export class AppHeaderNavigationController {
       }
     })
 
+    // Remember every project view the user selects so the badge has a home to
+    // return to once a view that is not a project view takes over.
     $effect(() => {
-      if (this.showsPrimaryOption) this.lastPrimaryHeaderViewOption = this.activeHeaderViewOption
+      const shown = this.shownHeaderViewOption
+      if (shown && PROJECT_FAMILY_VIEW_OPTIONS.includes(shown)) {
+        this.lastProjectViewOption = shown
+      }
     })
   }
 
@@ -125,11 +152,16 @@ export class AppHeaderNavigationController {
   }
 
   /** Navigate to a primary view without any sidebar toggling   used by the
-   *  Cmd/Ctrl+0-4 view shortcuts so they always land on the requested view. */
+   *  Cmd/Ctrl+0-9 view shortcuts so they always land on the requested view. */
   async navigateToView(
-    view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant'
+    view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant' | 'browser'
   ): Promise<void> {
     const activeView = this.getActiveView()
+    if (view === 'browser') {
+      // The browser is its own workspace with no scope state to reconcile.
+      this.navigate('browser')
+      return
+    }
     if (view === 'chats') this.preloadNavigationThreads('chats')
     else if (view === 'projects') this.preloadNavigationThreads('projects')
     if (view === 'threads') {
@@ -167,7 +199,7 @@ export class AppHeaderNavigationController {
   }
 
   async onPrimaryNavClick(
-    view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant'
+    view: 'projects' | 'chats' | 'scope' | 'threads' | 'assistant' | 'browser'
   ): Promise<void> {
     const activeView = this.getActiveView()
     // Scope Board keeps its toggle behaviour: already open → last view.
@@ -175,9 +207,11 @@ export class AppHeaderNavigationController {
       await this.navigateToView(this.lastViewBeforeScope)
       return
     }
-    // Selecting the view already open from the dropdown toggles the left
+    // Selecting the view already open from the dropdown toggles the shared left
     // sidebar (scoped threads → projects must simply close the board (the
-    // caller clears it) without hiding the sidebar).
+    // caller clears it) without hiding the sidebar). The browser's left sidebar
+    // is its tab strip, so re-selecting Browser folds that instead of the
+    // thread sidebar, which is how the user gets an uninterrupted page.
     if (view === activeView) {
       sidebarState.toggle()
       return
@@ -202,7 +236,7 @@ export class AppHeaderNavigationController {
     return [
       {
         id: 'projects',
-        label: 'Projects',
+        label: 'Project',
         icon: FolderKanban,
         keys: keymapState.keysFor('nav-projects'),
         select: () => {
@@ -212,28 +246,28 @@ export class AppHeaderNavigationController {
       },
       {
         id: 'threads',
-        label: 'Threads',
+        label: 'Thread',
         icon: Timeline,
         keys: keymapState.keysFor('nav-threads'),
         select: () => void this.onPrimaryNavClick('threads')
       },
       {
         id: 'scoped-threads',
-        label: 'Scoped threads',
-        icon: SquareDashedKanban,
+        label: 'Scoped',
+        icon: Microscope,
         keys: keymapState.keysFor('nav-projects-with-scope'),
         select: () => void this.toggleScopedThreads()
       },
       {
         id: 'scope-board',
-        label: 'Scope Board',
+        label: 'Board',
         icon: Kanban,
         keys: keymapState.keysFor('nav-scope'),
         select: () => void this.onPrimaryNavClick('scope')
       },
       {
         id: 'chats',
-        label: 'Chats',
+        label: 'Chat',
         icon: CONTENT_FAMILY_ICONS.chats,
         keys: keymapState.keysFor('nav-chats'),
         select: () => void this.onPrimaryNavClick('chats')
@@ -244,6 +278,13 @@ export class AppHeaderNavigationController {
         icon: CONTENT_FAMILY_ICONS.assistant,
         keys: keymapState.keysFor('nav-assistant'),
         select: () => void this.onPrimaryNavClick('assistant')
+      },
+      {
+        id: 'browser',
+        label: 'Browser',
+        icon: Globe,
+        keys: keymapState.keysFor('nav-browser'),
+        select: () => void this.onPrimaryNavClick('browser')
       }
     ]
   }
@@ -261,6 +302,7 @@ export class AppHeaderNavigationController {
     if (activeView === 'threads') return 'threads'
     if (activeView === 'chats') return 'chats'
     if (activeView === 'assistant') return 'assistant'
+    if (activeView === 'browser') return 'browser'
     return 'projects'
   })
 
@@ -274,27 +316,70 @@ export class AppHeaderNavigationController {
       activeView === 'threads' ||
       activeView === 'chats' ||
       activeView === 'assistant' ||
+      activeView === 'browser' ||
       activeView === 'scope'
     )
   })
 
-  /** The option the trigger and menu reflect: live on primary views, the last
-   *  primary option while a takeover page owns the header. */
-  shownHeaderViewOption = $derived(
-    this.showsPrimaryOption ? this.activeHeaderViewOption : this.lastPrimaryHeaderViewOption
+  /** The option the rail marks current: live on primary views, and none at all
+   *  on takeover pages (Settings and friends) so the utility controls own the
+   *  active state there instead of a stale view. */
+  shownHeaderViewOption = $derived<HeaderViewOptionId | null>(
+    this.showsPrimaryOption ? this.activeHeaderViewOption : null
   )
 
-  activeHeaderViewLabel = $derived.by(() => {
-    const option = this.headerViewOptions().find(
-      (candidate) => candidate.id === this.shownHeaderViewOption
-    )
-    return option?.label ?? 'Projects'
+  /**
+   * The view a return to the project family lands on: the option the user last
+   * selected for the family, which is also the one the rail's project badge
+   * rides while another family (or none, in the browser) is on screen.
+   *
+   * The Ctrl+Tab switcher asks for this when it brings the project family
+   * forward from the browser, Settings, Chats or Assistant: the jump lands on
+   * the project view the user left instead of resetting to the default
+   * Projects view.
+   */
+  projectFamilyLanding(): ProjectFamilyLanding {
+    switch (this.lastProjectViewOption) {
+      case 'threads':
+        return 'threads'
+      case 'scoped-threads':
+        return 'scoped'
+      case 'scope-board':
+        return 'scope'
+      default:
+        return 'projects'
+    }
+  }
+
+  /** The rail option that carries the project family's activity badge: the live
+   *  project view when one is shown, otherwise the last project view the user
+   *  was on. Chat, Assistant and Browser are on screen with a family of their
+   *  own (or none at all), so they never take the project badge   without this
+   *  fallback a working project thread would have no rail item to report on and
+   *  the activity would vanish from the rail entirely. Null on takeover pages
+   *  (Settings and friends), which carry no badge at all. Declared after
+   *  `shownHeaderViewOption` because a class field initializer cannot read a
+   *  later field. */
+  projectBadgeOption = $derived<HeaderViewOptionId | null>(
+    this.shownHeaderViewOption === null ||
+      PROJECT_FAMILY_VIEW_OPTIONS.includes(this.shownHeaderViewOption)
+      ? this.shownHeaderViewOption
+      : this.lastProjectViewOption
+  )
+
+  /** Name of the view the rail has selected, shown in the app header between
+   *  the nav buttons and the view's own action buttons. Settings is the one
+   *  takeover page with a rail selection of its own, so it names itself; every
+   *  other takeover page has no view to name. */
+  activeHeaderViewLabel = $derived.by((): string | null => {
+    if (this.showsPrimaryOption) {
+      const option = this.headerViewOptions().find(
+        (candidate) => candidate.id === this.activeHeaderViewOption
+      )
+      return option?.label ?? 'Projects'
+    }
+    return isSettingsView(this.getActiveView()) ? 'Settings' : null
   })
-
-  activeHeaderViewIcon = $derived(
-    this.headerViewOptions().find((candidate) => candidate.id === this.shownHeaderViewOption)
-      ?.icon ?? FolderKanban
-  )
 
   /** Cmd/Ctrl+3   Projects view with the scope sidebar active for the current
    *  thread (or project). Idempotent: never turns scope state off. */

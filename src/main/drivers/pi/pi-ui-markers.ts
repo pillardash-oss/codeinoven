@@ -22,7 +22,7 @@ export function questionMarkerPayload(record: Record<string, unknown>): AgentQue
  *  dialog, or null when the dialog is an ordinary confirmation. */
 export function permissionMarkerPayload(
   record: Record<string, unknown>
-): { permission: string; patterns: string[]; tool?: string; command?: string } | null {
+): { permission: string; patterns: string[]; tool?: string; command?: string; surface?: string } | null {
   if (stringValue(record['method']) !== 'confirm') return null
   const message = stringValue(record['message'])
   if (!message?.startsWith(CIO_PERMISSION_MARKER)) return null
@@ -32,6 +32,7 @@ export function permissionMarkerPayload(
       patterns?: unknown
       tool?: unknown
       command?: unknown
+      surface?: unknown
     }
     const permission = typeof payload.permission === 'string' ? payload.permission : ''
     if (!permission) return null
@@ -42,7 +43,8 @@ export function permissionMarkerPayload(
       permission,
       patterns,
       ...(typeof payload.tool === 'string' ? { tool: payload.tool } : {}),
-      ...(typeof payload.command === 'string' ? { command: payload.command } : {})
+      ...(typeof payload.command === 'string' ? { command: payload.command } : {}),
+      ...(typeof payload.surface === 'string' ? { surface: payload.surface } : {})
     }
   } catch {
     return null

@@ -3,8 +3,9 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     applyCodeFenceOnEnter,
-    applyEmptyPairCodeRule,
+    applyInlineCodeRules,
     applyMarkdownInputRule,
+    caretBlock,
     exitEmptyListItemOnEnter,
     formatRichSelection,
     insertMarkdownLineBreak,
@@ -17,9 +18,8 @@
     syncCodeBlockLanguages,
     unlistListItem
   } from './rich-markdown'
-  import type { RichInlineBadge } from './rich-markdown'
+  import type { MarkdownRuleKind, RichInlineBadge } from './rich-markdown'
   import {
-    captureVisibleSelection,
     demoteSmartPunctuation,
     flattenWithNewlines,
     hasRealAdjacentContent,
@@ -100,6 +100,7 @@
       replaceEditorContent(entry.markdown, entry.html)
       restoreSelection(entry.selection)
       publishCaretText()
+      holdRevertedRule(entry.revertedRule)
     },
     getValue: () => value,
     setValue: (next) => {
@@ -114,6 +115,31 @@
    *  modal) so focus-return flows can restore the caret exactly where the user
    *  left it instead of jumping to the end. */
   let lastSelectionBookmark: SelectionBookmark | null = null
+
+  /** The block whose last undo reverted an auto-conversion, plus the rule the
+   *  user already turned down there. Word-processor behaviour: after undoing
+   *  the conversion, typing on in that same paragraph must not convert again.
+   *  Dropped as soon as the caret works in another block. */
+  let revertedRuleHold: { block: HTMLElement; kind: MarkdownRuleKind } | null = null
+
+  function isRuleSuppressed(block: HTMLElement | null, kind: MarkdownRuleKind): boolean {
+    const hold = revertedRuleHold
+    if (!block || !hold) return false
+    if (hold.block !== block || !hold.block.isConnected) {
+      revertedRuleHold = null
+      return false
+    }
+    return hold.kind === kind
+  }
+
+  function holdRevertedRule(kind: MarkdownRuleKind | undefined): void {
+    if (!kind || !editor) {
+      revertedRuleHold = null
+      return
+    }
+    const block = caretBlock(editor)
+    revertedRuleHold = block ? { block, kind } : null
+  }
 
   function captureSelection(): SelectionBookmark | null {
     if (!editor) return null
@@ -320,10 +346,21 @@
   function handleInput(event: Event): void {
     if (!editor) return
     const inputEvent = event as InputEvent
-    applyMarkdownInputRule(editor)
+    // Two snapshots: `pending` is the state before the browser inserted this
+    // input (the plain undo target), `typed` is the state right after it, before
+    // any input rule rewrote the DOM   the literal text the user typed, which
+    // undo restores when a rule fired.
+    const pending = history.consumePending()
+    const typed = history.captureEntry()
+    const revertedRule = applyMarkdownInputRule(editor, { isRuleSuppressed })
     syncCodeBlockLanguages(editor)
     emitEditorValue(inputEvent.inputType.startsWith('delete'))
-    history.commit(history.consumePending(), inputEvent.inputType)
+    if (revertedRule) {
+      if (typed) typed.revertedRule = revertedRule
+      history.commit(typed, inputEvent.inputType, true)
+    } else {
+      history.commit(pending, inputEvent.inputType)
+    }
     publishCaretText()
   }
 
@@ -645,80 +682,30 @@
     publishCaretText()
   }
 
-  /** Put the caret inside the final editable block. Collapsing a range at the
-   *  editor root can strand it outside a trailing non-editable code wrapper. */
-  function placeCaretAtEditorEnd(): void {
-    if (!editor) return
-    const lastBlock = editor.lastElementChild as HTMLElement | null
-    if (!lastBlock) {
-      placeCaretAtEnd(editor)
-      return
-    }
-    if (lastBlock.matches('[data-editor-codeblock]')) {
-      placeCaretAtEnd(lastBlock.querySelector('code') ?? lastBlock)
-      return
-    }
-    placeCaretAtEnd(lastBlock)
-  }
-
   function handlePaste(event: ClipboardEvent): void {
     onPaste?.(event)
     if (event.defaultPrevented || !editor) return
     const text = event.clipboardData?.getData('text/plain')
     if (text === undefined) return
     const historyEntry = history.captureEntry()
-    const pasteEndsAtEditorEnd = isCursorAtBoundary(editor, false)
     event.preventDefault()
     insertPlainText(editor, text)
     // Pasting content right after a fresh `` pair opens an inline code span,
-    // exactly like typing the first character there would.
-    applyEmptyPairCodeRule(editor)
-    const insideCodeBlock = Boolean(
-      window.getSelection()?.anchorNode?.parentElement?.closest?.('[data-editor-codeblock]')
-    )
-    if (insideCodeBlock) {
-      // Pasting while the caret is inside a code block: insertPlainText already
-      // placed the text inside the <code> element and left the caret there, so a
-      // full serialize → re-render → caret-at-end round trip would eject the caret
-      // out of the block. Keep the caret put and just publish the new value.
-      emitEditorValue()
-      history.commit(historyEntry)
-      publishCaretText()
-      return
-    }
-    const markdown = serializeRichMarkdown(editor)
-    // `insertPlainText` leaves the caret right after the pasted text. Re-rendering
-    // the whole editor would otherwise drop that caret to the end of the document,
-    // so bookmark it first and restore it onto the freshly rendered content.
-    const bookmark = captureVisibleSelection(editor)
-    replaceEditorContent(markdown)
-    // A paste whose tail renders as a fenced code block must never park the caret
-    // inside or against the non-editable wrapper   typing, the slash menu and the
-    // input rules all go dead there. Guarantee a trailing editable paragraph.
-    if (editor.lastElementChild?.matches('[data-editor-codeblock]')) {
-      const p = document.createElement('p')
-      p.innerHTML = '<br>'
-      // eslint-disable-next-line svelte/no-dom-manipulating
-      editor.appendChild(p)
-    }
-    if (pasteEndsAtEditorEnd) placeCaretAtEditorEnd()
-    else if (bookmark) restoreSelection(bookmark)
-    else placeCaretAtEditorEnd()
-    // The bookmark is measured on the pre-render DOM, which can be much longer than
-    // the re-rendered markdown (fence markers, soft breaks and code headers collapse
-    // away), so it overshoots and strands the caret at the editor level   typically
-    // right after a trailing code block, where typing is impossible and ArrowDown
-    // cannot leave the block. Snap a stranded caret to the end of the last block
-    // (inside a trailing code block's <code> element), which is where the caret
-    // belongs after a paste that ends in a code block.
-    const selection = window.getSelection()
-    if (selection?.anchorNode === editor && editor.lastElementChild) {
-      placeCaretAtEditorEnd()
-    }
-    if (markdown !== value) {
-      value = markdown
-      onValueChange?.(markdown)
-    }
+    // exactly like typing the first character there would   and so does pasting
+    // between the two backticks of a pair. Only the caret's own run is read: the
+    // whole-document re-render this used to do reformatted every other block the
+    // user had already written (a literal `2. item` line became an ordered list,
+    // `x * y * z` became emphasis), so a paste may never re-parse the document.
+    applyInlineCodeRules(editor)
+    // Insert the clipboard text verbatim and leave every other block in the
+    // document exactly as the user wrote it. Serializing the whole editor and
+    // re-rendering it here would re-parse every untouched block as markdown and
+    // silently reformat text the user already typed   a literal `2. item` line
+    // becomes an ordered list, `x * y * z` becomes emphasis, a mid-paragraph `#`
+    // becomes a heading. Nothing outside the pasted text may change on paste.
+    // `insertPlainText` already parks the caret right after the inserted text,
+    // so no re-render (and no caret bookmark dance) is needed.
+    emitEditorValue()
     history.commit(historyEntry)
     publishCaretText()
   }

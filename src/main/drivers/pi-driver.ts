@@ -19,7 +19,7 @@ import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { WORKER_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
 import { CIO_SUBAGENT_STREAM_STATUS_KEY } from '../../lib/core-tools'
-import { buildProcessEnvironment } from './cli-environment'
+import { buildProcessEnvironment, OWNED_SESSION_MARKER } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -796,10 +796,23 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
+  /**
+   * Start this session's Pi process and RPC channel without sending a turn.
+   *
+   * `sendPrompt` already goes through `ensureRpcClient`, so this is the same
+   * work pulled forward: the spawn, the extension materialization and the
+   * session bootstrap that a first turn would otherwise pay for while the user
+   * waits. Nothing about the turn changes, because the first prompt finds the
+   * client already registered and skips straight to its own RPC calls.
+   */
+  async warmSession(projectPath: string, sessionId: string): Promise<void> {
+    const session = await this.requireSession(projectPath, sessionId)
+    await this.ensureRpcClient(projectPath, session.id)
+  }
+
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
-    const client = await this.ensureRpcClient(projectPath, session.id)
-    // A real user turn is not a continuation of a stop: clear the stop request
+    const client = await this.ensureRpcClient(projectPath, session.id) // A real user turn is not a continuation of a stop: clear the stop request
     // the extension applies to worker sessions, and re-arm pi's automatic retry
     // that the stop disarmed.
     await this.clearStopRequest(session.id)
@@ -1526,7 +1539,12 @@ export class PiDriver extends PersistentCliDriver {
         env: {
           ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
           ...(this.cioProvidersExtensionEnvs.get(sessionId) ?? {}),
-          ...runtimeEnv
+          ...runtimeEnv,
+          // Session-scoped ownership marker so any daemon this Pi session spawns
+          // that re-parents away from the process tree (e.g. the adb server) can
+          // still be attributed back to this session by the agent process
+          // service. It is the same marker every other CLI harness stamps.
+          [OWNED_SESSION_MARKER]: sessionId
         }
       }
     )
@@ -1551,7 +1569,19 @@ export class PiDriver extends PersistentCliDriver {
     this.ensureIdleSweep()
     // Register the long-lived RPC harness root with the app's process tracker
     // so it appears in the task manager and is covered by orphan reaping.
-    this.observeHarnessProcess(sessionId, client.process, invocation.command, projectPath)
+    //
+    // The label is the harness command (`pi`), never `invocation.command`: a
+    // bundled Pi runs on Electron's own executable, so the prepared command is
+    // the app binary's path and the task manager would show a Pi root as
+    // `CodeInOven-electron` instead of `pi`. `runtime.command` is the command
+    // the user asked for in both the bundled and native cases, so the row reads
+    // the harness that actually owns the process again.
+    this.observeHarnessProcess(
+      sessionId,
+      client.process,
+      invocation.runtime?.command ?? invocation.command,
+      projectPath
+    )
     try {
       this.compactionReadySessions.delete(sessionId)
       await client.newSession()
@@ -2725,6 +2755,7 @@ export class PiDriver extends PersistentCliDriver {
           metadata: {
             ...(permissionPayload.tool ? { tool: permissionPayload.tool } : {}),
             ...(permissionPayload.command ? { command: permissionPayload.command } : {}),
+            ...(permissionPayload.surface ? { surface: permissionPayload.surface } : {}),
             reason: stringValue(record['title']) ?? 'Destructive action requires approval'
           }
         }

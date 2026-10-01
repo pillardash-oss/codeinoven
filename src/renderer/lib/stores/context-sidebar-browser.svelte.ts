@@ -1,15 +1,43 @@
 import { SvelteMap } from 'svelte/reactivity'
+import { isConversationContainer } from '$shared/types'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import type { BrowserPageState } from '$shared/ipc-contract'
+import { isStorableBrowserFavicon } from '$shared/browser/global-browser-tabs'
 import { reportError } from './app-errors.svelte'
+import { BrowserTabFavicons } from './browser-tab-favicon'
 import { loadPersistedBrowserTabs, persistBrowserTabs } from './context-sidebar-persistence'
+import { browserHistory } from './browser-history.svelte'
 import type { BrowserContextTab } from './context-sidebar-types'
 import { IDLE_BROWSER_TAB_RUNTIME, type BrowserTabRuntime } from './browser-tab-status'
 
 const EMPTY_BROWSER_TABS: BrowserContextTab[] = []
 
-/** Parsed once at module load: the persisted tab list plus the last active tab. */
-const persistedBrowserTabs = loadPersistedBrowserTabs()
+/**
+ * How long a change to the sidebar's tab list waits before it is written.
+ *
+ * A page reports its title, its address and its icon as it loads, so a single
+ * navigation is a burst of changes, and the list is written to renderer storage
+ * with a synchronous write. One write per burst keeps that off the loading path,
+ * and the size of the list makes it worth doing: with the tabs' own icons in it a
+ * write is no longer a few kilobytes. A quit flushes the pending write outright,
+ * so the delay can never lose what the user had.
+ */
+const TAB_SAVE_COALESCE_MS = 400
+
+/**
+ * The persisted browser tab list, parsed on first use.
+ *
+ * Reading it is synchronous: a JSON parse of up to fifty tabs out of
+ * `localStorage`. Doing that at module load put it on the first-paint path, so
+ * it is deferred to the moment the sidebar's browser tabs are actually wired
+ * (see `SidebarBrowserTabs.start`).
+ */
+let persistedBrowserTabs: { tabs: BrowserContextTab[]; activeTabId: string | null } | null = null
+
+function restoredBrowserTabs(): { tabs: BrowserContextTab[]; activeTabId: string | null } {
+  persistedBrowserTabs ??= loadPersistedBrowserTabs()
+  return persistedBrowserTabs
+}
 
 /**
  * Host access the browser-tabs controller needs from the sidebar store.
@@ -19,19 +47,41 @@ const persistedBrowserTabs = loadPersistedBrowserTabs()
 export interface SidebarBrowserTabsHost {
   activeProjectId(): string | null
   activeThreadId(): string | null
+  /**
+   * The conversation a thread's browser tabs belong to (see
+   * `conversationScopeId`). The sidebar store holds no thread rows, so the
+   * workspace resolves this one identity: a routine's threads share the routine,
+   * a standalone chat or routine-less task owns its own, a project's threads
+   * share the project.
+   */
+  threadScopeId(projectId: string, threadId: string): string
   clearNotifications(): void
 }
 
 /**
  * Browser tabs docked in the sidebar. Owns the tab list, the remembered active
- * tab, and visibility, plus persistence and the native view detach. Project
- * scoping is resolved through the host so the store stays the active-identity
- * owner.
+ * tab, and visibility, plus persistence and the native view detach. Conversation
+ * scoping is resolved through the host, so the store never reads thread rows and
+ * stays the active-identity owner.
  */
 export class SidebarBrowserTabs {
-  tabs: BrowserContextTab[] = $state(persistedBrowserTabs.tabs)
-  activeTabId: string | null = $state(persistedBrowserTabs.activeTabId)
+  tabs: BrowserContextTab[] = $state([])
+  activeTabId: string | null = $state(null)
   visible = $state(false)
+
+  /**
+   * Whether {@link start} has restored the stored tabs and wired the runtime.
+   * The sidebar's browser is not part of the first paint, so both the parse above
+   * and the page-state subscription wait for the runtime seam.
+   */
+  private started = false
+
+  /** Host access the controller needs, resolved by the sidebar store. */
+  private readonly host: SidebarBrowserTabsHost
+
+  constructor(host: SidebarBrowserTabsHost) {
+    this.host = host
+  }
 
   /** Live audio and capture state per tab, keyed by tab id. Main reports it
    *  through `browser:state` for every tab it owns, whether or not the tab is on
@@ -39,22 +89,73 @@ export class SidebarBrowserTabs {
    *  is deliberately never persisted: it describes a live page, not the tab. */
   private readonly runtime = new SvelteMap<string, BrowserTabRuntime>()
 
-  constructor(private readonly host: SidebarBrowserTabsHost) {
+  /** Fills in the icon of a tab the app has no page for, from the tab's own
+   *  address (see {@link ensureFavicon}). */
+  private readonly tabFavicons = new BrowserTabFavicons()
+
+  /** The coalesced write still waiting to leave, or null. */
+  private saveTimer: number | null = null
+
+  /** Restore the stored tabs and wire the runtime's subscription. Idempotent.
+   *
+   * The stored list only lands while the strip is still empty: a tab the user
+   * created before this ran is theirs, and must not be replaced by what was on
+   * disk. */
+  start(): void {
+    if (this.started) return
+    this.started = true
+    const restored = restoredBrowserTabs()
+    if (this.tabs.length === 0) {
+      this.tabs = restored.tabs
+      this.activeTabId = restored.activeTabId
+    }
     // One app-lifetime subscription drives every tab's runtime state. A panel
     // only exists for the tab on screen, so a page that keeps playing audio in
     // a background tab would otherwise have no listener at all.
     subscribe('browser:state', (state) => this.applyPageState(state))
+    // A quit is the one moment the coalesced write cannot wait any longer.
+    subscribe('window:beforeQuit', () => this.flushPersist())
   }
 
-  /** Browser tabs for the active project. */
+  /** Browser tabs for the active conversation.
+   *
+   *  A project's threads share one browser tab list, so switching between a
+   *  project's threads keeps the browser the user was reading. A hidden
+   *  conversation container (the inbox, the assistant space) is different: it is
+   *  one project holding many independent conversations, so its tabs are scoped
+   *  to the conversation instead. An assistant routine is one such conversation
+   *  whatever thread of it is open   its how-to host and each of its runs share
+   *  the routine (see `conversationScopeId`)   so switching between a routine's
+   *  threads keeps the page those threads opened, instead of closing the browser
+   *  on every switch. */
   get activeTabs(): BrowserContextTab[] {
     const projectId = this.host.activeProjectId()
     if (!projectId) return EMPTY_BROWSER_TABS
-    return this.tabs.filter((tab) => tab.projectId === projectId)
+    const projectTabs = this.tabs.filter((tab) => tab.projectId === projectId)
+    if (!isConversationContainer(projectId)) return projectTabs
+    const threadId = this.host.activeThreadId()
+    if (!threadId) return EMPTY_BROWSER_TABS
+    const scopeId = this.host.threadScopeId(projectId, threadId)
+    return projectTabs.filter(
+      (tab) => this.host.threadScopeId(tab.projectId, tab.threadId) === scopeId
+    )
   }
 
   has(id: string): boolean {
     return this.tabs.some((tab) => tab.id === id)
+  }
+
+  /**
+   * Whether the browser surface a visit belongs to still has a tab.
+   *
+   * The browsing history keeps one list per surface and a thread browser's list
+   * dies with the browser, so it asks this of the list that owns the surface. A
+   * surface is a conversation (see the host's `threadScopeId`), which is exactly
+   * what the strip groups its tabs by, so this is the same identity the history
+   * files its lists under.
+   */
+  isScopeLive(scope: string): boolean {
+    return this.tabs.some((tab) => this.host.threadScopeId(tab.projectId, tab.threadId) === scope)
   }
 
   /**
@@ -142,11 +243,7 @@ export class SidebarBrowserTabs {
       existing.url = url
       existing.threadId = threadId
       this.persist()
-      if (
-        reveal &&
-        this.host.activeProjectId() === projectId &&
-        this.host.activeThreadId() === threadId
-      ) {
+      if (reveal && this.isShownConversation(projectId, threadId)) {
         this.focus(id)
       }
       return id
@@ -161,16 +258,31 @@ export class SidebarBrowserTabs {
         // The main-process browser boundary reports malformed custom URLs.
       }
     }
-    this.tabs = [...this.tabs, { id, kind: 'browser', title, projectId, threadId, url }]
+    this.tabs = [
+      ...this.tabs,
+      { id, kind: 'browser', title, projectId, threadId, url, favicon: null }
+    ]
     this.persist()
-    if (
-      reveal &&
-      this.host.activeProjectId() === projectId &&
-      this.host.activeThreadId() === threadId
-    ) {
+    if (reveal && this.isShownConversation(projectId, threadId)) {
       this.focus(id)
     }
     return id
+  }
+
+  /**
+   * Whether the sidebar is showing the conversation a tab is opening for. A
+   * reveal is delivered to the conversation on screen, which for an assistant
+   * routine is every one of its threads: a run that opens a page while the user
+   * reads its sibling opens it in the browser already on screen.
+   */
+  private isShownConversation(projectId: string, threadId: string): boolean {
+    if (this.host.activeProjectId() !== projectId) return false
+    const activeThreadId = this.host.activeThreadId()
+    if (!activeThreadId) return false
+    return (
+      this.host.threadScopeId(projectId, threadId) ===
+      this.host.threadScopeId(projectId, activeThreadId)
+    )
   }
 
   updateTab(tabId: string, url: string, title?: string, favicon?: string | null): void {
@@ -179,6 +291,14 @@ export class SidebarBrowserTabs {
     let changed = false
     if (tab.url !== url) {
       tab.url = url
+      // The icon is the icon of an address, so a tab that moved is not the tab
+      // the stored icon was read from: it goes with the address it came from, and
+      // the row picks up the new one from the page or from the address itself
+      // (see `ensureFavicon`).
+      if (tab.favicon !== null) {
+        tab.favicon = null
+        this.tabFavicons.forget(tabId)
+      }
       changed = true
     }
     const trimmedTitle = title?.trim()
@@ -186,21 +306,38 @@ export class SidebarBrowserTabs {
       tab.title = trimmedTitle
       changed = true
     }
-    if (favicon !== undefined) {
-      if (favicon) {
-        if (tab.favicon !== favicon) {
-          tab.favicon = favicon
-          changed = true
-        }
-      } else if (tab.favicon !== undefined) {
-        delete tab.favicon
-        changed = true
-      }
+    // An icon the document reported is adopted. A report of none is deliberately
+    // not an erasure: Chromium announces an icon only when it differs from the one
+    // the tab already holds, so a restored tab's page would blank its own row on
+    // the way back, and a page that reloads at the same address would lose the
+    // mark it just had. Only the address changing replaces the icon, above.
+    if (isStorableBrowserFavicon(favicon) && tab.favicon !== favicon) {
+      tab.favicon = favicon
+      changed = true
     }
     // Main reports page state on every load, title and favicon update, so the
-    // write is guarded by an actual change instead of a localStorage write per
-    // event.
+    // write is guarded by an actual change instead of a storage write per event.
     if (changed) this.persist()
+  }
+
+  /**
+   * Give one tab the icon its address is known by, when it has none.
+   *
+   * Called for every browser tab the strip draws, so a tab the app has no page for
+   * (one a restart restored, one main released before its page announced an icon)
+   * wears the site's mark instead of a globe. The answer is written down with the
+   * tab list, which is what makes it durable across the next launch. One lookup per
+   * address per tab, and none at all for a tab that already holds an icon.
+   */
+  async ensureFavicon(tabId: string): Promise<void> {
+    const favicon = await this.tabFavicons.resolve(
+      tabId,
+      () => this.tabs.find((candidate) => candidate.id === tabId) ?? null
+    )
+    const tab = this.tabs.find((candidate) => candidate.id === tabId)
+    if (favicon === null || !tab || tab.favicon !== null) return
+    tab.favicon = favicon
+    this.persist()
   }
 
   /**
@@ -285,16 +422,15 @@ export class SidebarBrowserTabs {
     return removedIds
   }
 
-  /** Close one browser tab and fall back to the project's last remaining tab. */
+  /** Close one browser tab and fall back to the last remaining tab of the
+   *  active container (a project's threads or the open chat). */
   close(id: string): void {
     const browserIndex = this.tabs.findIndex((tab) => tab.id === id)
     if (browserIndex < 0) return
-    const closedProjectId = this.tabs[browserIndex].projectId
     this.tabs = this.tabs.filter((tab) => tab.id !== id)
     this.forgetRuntime([id])
     if (this.activeTabId === id) {
-      this.activeTabId =
-        this.tabs.filter((tab) => tab.projectId === closedProjectId).at(-1)?.id ?? null
+      this.activeTabId = this.activeTabs.at(-1)?.id ?? null
     }
     if (this.activeTabs.length === 0) this.visible = false
     this.persist()
@@ -303,6 +439,15 @@ export class SidebarBrowserTabs {
   focus(id: string): void {
     const tab = this.tabs.find((candidate) => candidate.id === id)
     if (!tab || tab.projectId !== this.host.activeProjectId()) return
+    if (isConversationContainer(tab.projectId)) {
+      const activeThreadId = this.host.activeThreadId()
+      if (!activeThreadId) return
+      // A tab of the active conversation may be focused from any thread that
+      // shares it, which is what lets a routine keep one browser across its
+      // threads. A tab of another conversation never is.
+      const scopeId = this.host.threadScopeId(tab.projectId, activeThreadId)
+      if (this.host.threadScopeId(tab.projectId, tab.threadId) !== scopeId) return
+    }
     this.activeTabId = id
     this.visible = true
     this.host.clearNotifications()
@@ -324,10 +469,36 @@ export class SidebarBrowserTabs {
   /** Drop the runtime state of tabs that no longer exist, so a closed tab can
    *  never leave a stale speaker or recording indicator behind. */
   private forgetRuntime(tabIds: readonly string[]): void {
-    for (const tabId of tabIds) this.runtime.delete(tabId)
+    for (const tabId of tabIds) {
+      this.runtime.delete(tabId)
+      this.tabFavicons.forget(tabId)
+    }
   }
 
+  /** Queue a write of the current tab list.
+   *
+   * Never written before the stored list has landed: an unread list is not an
+   * empty one, and writing here would replace what the user had with nothing.
+   */
   private persist(): void {
+    if (!this.started) return
+    // The tab list is the only thing that can end a browser surface, so this is
+    // where the history of a surface that just lost its last tab is discarded. A
+    // close that leaves the surface with a tab left changes nothing, and a state
+    // report arriving after a close is caught by the history store's own check.
+    browserHistory.pruneThreadScopes()
+    if (this.saveTimer !== null) return
+    this.saveTimer = window.setTimeout(() => this.flushPersist(), TAB_SAVE_COALESCE_MS)
+  }
+
+  /** Write the tab list right now, dropping any pending write. The quit path and
+   *  the timer behind {@link persist} both land here. */
+  private flushPersist(): void {
+    if (this.saveTimer !== null) {
+      window.clearTimeout(this.saveTimer)
+      this.saveTimer = null
+    }
+    if (!this.started) return
     persistBrowserTabs(this.tabs, this.activeTabId)
   }
 }

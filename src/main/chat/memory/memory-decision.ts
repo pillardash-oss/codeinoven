@@ -43,6 +43,17 @@ export const MEMORY_DECISION_SEAM = 'memory-proposal'
 export const MEMORY_DURABILITY_FLOOR = 0.5
 
 /**
+ * The primary durability question must itself reach this floor for a proposal.
+ *
+ * The mean alone is not enough: a first-time feature request is not a repeat,
+ * so `repeated_request` answers false and its inverse contributes a high term
+ * even though the message states nothing lasting. Requiring `lasting_intent` to
+ * carry the decision stops a request that is merely "not a repeat" from being
+ * averaged into durability.
+ */
+export const MEMORY_LASTING_INTENT_FLOOR = 0.5
+
+/**
  * How sure the span choice must be before its sentence is copied into memory.
  *
  * Only a floor to keep a coin flip from being stored: the proposal still needs
@@ -280,6 +291,10 @@ export function readMemoryDecision(input: {
   // Every part of the evidence has to be readable; a missing answer is not a no.
   if (lasting === null || taskOnly === null || repeated === null) return nothing
   const durability = (lasting + invert(taskOnly) + invert(repeated)) / 3
+  // The mean alone can be cleared by the "not a repeat" term, so the primary
+  // question has to carry the decision: a message that states nothing lasting is
+  // a request for the current task, whatever else its phrasing suggests.
+  if (lasting < MEMORY_LASTING_INTENT_FLOOR) return nothing
   if (durability < MEMORY_DURABILITY_FLOOR) return nothing
 
   const span = choiceValue(input.answers, 'rule_span')

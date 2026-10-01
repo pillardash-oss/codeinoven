@@ -1,4 +1,4 @@
-import { isQuotedMentionPosition } from '../../lib/mention-context'
+import { CIO_DESIGN_TAG, isCioDesignRequest, type DesignSessionMode } from '../../lib/session-tags'
 
 /**
  * The explicit design-session tag.
@@ -17,29 +17,14 @@ import { isQuotedMentionPosition } from '../../lib/mention-context'
  * than produced in one.
  */
 
-/** Stable built-in tag that opens a design session on an explicit turn. */
-export const CIO_DESIGN_TAG = '@cio-design'
-
-const CIO_DESIGN_TAG_PATTERN = /(^|\s)@cio-design(?=\s|$|[.,:;!?])/giu
-
 /**
- * Whether this text opens a design session.
- *
- * A tag inside a quote or a blockquote is a mention of the tag rather than an
- * invocation of it, which is what keeps documentation about `@cio-design` from
- * starting a session. Shared with the utility tag through
- * `isQuotedMentionPosition` so both tags agree on what counts as quoting.
+ * The tag, its predicate and the turn mode are shared with the renderer and with
+ * the design service, so the copy that decides whether a send opens a design
+ * session is the same code everywhere it is asked. Re-exported here because this
+ * module is where the rest of the main process already looks for them.
  */
-export function isCioDesignRequest(text: string): boolean {
-  for (const match of text.matchAll(CIO_DESIGN_TAG_PATTERN)) {
-    const mentionStart = (match.index ?? 0) + (match[1]?.length ?? 0)
-    if (!isQuotedMentionPosition(text, mentionStart)) return true
-  }
-  return false
-}
-
-/** Which design contract a turn carries: none, the first one, or a continuation. */
-export type DesignSessionMode = 'off' | 'start' | 'continue'
+export { CIO_DESIGN_TAG, isCioDesignRequest }
+export type { DesignSessionMode }
 
 /**
  * The first turn of a design session.
@@ -68,7 +53,13 @@ How to run the session:
    for the end: the user is watching that tab, and seeing the design appear and
    change is the point of the session. The tab refreshes itself as you write, so
    you do not re-preview after every edit; preview again when you move to another
-   folder or another entry file.
+   screen, another folder, or another entry file. Keep the product in one design
+   folder with one HTML file per screen, linked from \`index.html\`: a website is
+   several pages and a dashboard is several screens, and the coordinator board
+   shows a picture of every screen in that folder. A Screen Canvas
+   (\`canvas.html\`) is the page that shows the whole product at once; write it
+   once a few screens exist and keep it in step, because the board shows it and
+   the user reviews the design on it.
 4. Check the result yourself before you describe it: screenshot it, look at a
    phone width and a desktop width, and read the console for failed requests and
    runtime errors.
@@ -90,4 +81,4 @@ How to run the session:
    say which one and what would settle it.`
 
 /** Every later turn of the same session. */
-export const CIO_DESIGN_CONTINUE_PROMPT = `This thread's design session continues: the user opened it with @cio-design, and the design capability stays active. Keep working in the same design folder, which keeps refreshing in its own preview tab as you write. Report what changed and what a viewer can now try.`
+export const CIO_DESIGN_CONTINUE_PROMPT = `This thread's design session continues: the user opened it with @cio-design, and the design capability stays active. Keep working in the design folder the product already lives in and add a screen as its own HTML file beside \`index.html\`, linked from the rest; the folder keeps refreshing in its own preview tab as you write, and the coordinator board pictures every screen it holds. If the design has a Screen Canvas, keep it in step with the screens in the same pass, because the user reviews the design on it. Report what changed and what a viewer can now try.`

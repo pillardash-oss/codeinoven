@@ -25,6 +25,21 @@ export interface ScopeReadContext {
   scopeBucketId: string
 }
 
+/**
+ * What to do about a worktree scope whose checkout cannot be used right now.
+ *
+ * Every category is repairable except `not-managed`, which means the scope left
+ * the board between the board read and this probe: there is nothing to repair,
+ * so sending the caller to "repair" would only loop it through a no-op. It is
+ * told to look at the board again instead.
+ */
+export function unhealthyScopeAdvice(health: ScopeWorktreeHealth | undefined): string {
+  if (health?.category === 'not-managed') {
+    return `${health.detail ?? 'This scope is no longer a managed worktree'}. List the scopes again and work in one that still exists.`
+  }
+  return `This scope’s checkout is unhealthy (${health?.category}). Run ${APP_SCOPE_UTILITY_ID} with action "repair" before working in it.`
+}
+
 export async function summarizeBucket(
   deps: ScopeReadDeps,
   context: ScopeReadContext,
@@ -93,7 +108,7 @@ export async function describeScope(
     ...(healthy
       ? {}
       : {
-          guidance: `This scope’s checkout is unhealthy (${summary.health?.category}). Run ${APP_SCOPE_UTILITY_ID} with action "repair" before working in it.`
+          guidance: unhealthyScopeAdvice(summary.health)
         })
   }
 }
@@ -107,7 +122,7 @@ export async function readConflicts(
   const summary = await summarizeBucket(deps, context, projectPath, bucket)
   if (summary.kind === 'worktree' && summary.health?.category !== 'healthy') {
     throw new Error(
-      `The scope “${bucket.name}” is unhealthy (${summary.health?.category}), so its conflicts cannot be read. Run ${APP_SCOPE_UTILITY_ID} with action "repair" first.`
+      `The scope “${bucket.name}” cannot be read for conflicts. ${unhealthyScopeAdvice(summary.health)}`
     )
   }
   const status = await deps.git.getStatus(summary.path)

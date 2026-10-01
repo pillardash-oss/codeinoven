@@ -11,10 +11,13 @@ import type {
 import {
   isGitInvocationSuccess,
   isGitRefusedOperation,
+  isGitRemoteUnavailable,
   type GitInvocationValue,
   type GitRefusingChannel
 } from '$shared/ipc-contract'
+import { GitRemoteUnavailableError } from '$lib/ipc-errors'
 import { agentDebug } from '$lib/stores/agent-debug.svelte'
+import { logRendererError } from '$lib/system/renderer-logger'
 
 declare global {
   interface Window {
@@ -25,8 +28,19 @@ declare global {
 /** IPC channels registered before the first renderer paint. */
 const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'app:confirmClose',
+  'app:parkWindow',
+  'app:quitDirect',
+  'app:instanceRole',
+  'app:openInstanceOwner',
+  'app:transferInstanceControl',
   'app:rendererReady',
   'app:waitForFeatures',
+  // Registered with the same pre-navigation surface
+  // (`registerGlobalBrowserIpcHandlers`), and read by the Ctrl+Tab switcher and
+  // by `loadBrowser` while the browser's own modules are still unloaded. Waiting
+  // for the post-paint feature graph here would hold the browser open behind a
+  // graph that has nothing to do with its tab list.
+  'browser:loadTabs',
   'config:get',
   'project:ensureInbox',
   // Registered on the hydration surface so Assistant View's first pass resolves
@@ -90,6 +104,11 @@ export async function invoke<Channel extends InvokeChannel>(
  * store keeps the failure handling it already has, and this app's logs stay
  * unchanged for a state the UI renders anyway.
  *
+ * A remote the checkout cannot use travels the same way, as `{ ok: false, issue }`,
+ * and is re-thrown as a `GitRemoteUnavailableError` carrying that verdict. The
+ * store that started the round trip decides whether it is a notice or an error,
+ * and either way nothing reaches the log.
+ *
  * Restricted to the channels whose contract result is a `GitInvocation`, so a
  * non-refusing channel cannot be routed through it by mistake.
  */
@@ -99,6 +118,7 @@ export async function invokeGit<Channel extends GitRefusingChannel>(
 ): Promise<GitInvocationValue<InvokeResult<Channel>>> {
   const result: unknown = await invoke(channel, ...args)
   if (isGitRefusedOperation(result)) throw new Error(result.refusal)
+  if (isGitRemoteUnavailable(result)) throw new GitRemoteUnavailableError(result.issue)
   // A channel that honoured its contract returns the `{ ok: true, value }`
   // envelope on success, so the value the caller asked for is one level down.
   if (isGitInvocationSuccess(result)) {
@@ -116,4 +136,35 @@ export function subscribe<Channel extends EventChannel>(
   callback: (...args: EventArgs<Channel>) => void
 ): () => void {
   return window.api.on(channel, callback)
+}
+
+/**
+ * Subscribe to an IPC event channel without letting one unknown channel take the
+ * caller, and everything the caller does after it, down with it.
+ *
+ * `subscribe` throws for a channel this window's preload does not expose, which
+ * is the right answer on its own: the preload is a built artifact that only
+ * changes when the app restarts, while this bundle is hot-reloaded on every
+ * save, so right after a channel is added the two can disagree and the mistake
+ * has to be visible. A caller that wires a whole subsystem, though, must not
+ * lose the rest of its wiring to that one disagreement: left unguarded, the
+ * throw aborts the caller, and every subscription after it is simply never made
+ * while the app keeps running, so the symptom looks nothing like the cause.
+ * Here the channel is named in the log, what it carries stays off until the
+ * window reloads against a preload that knows it, and every other channel is
+ * subscribed as usual.
+ */
+export function subscribeGuarded<Channel extends EventChannel>(
+  channel: Channel,
+  callback: (...args: EventArgs<Channel>) => void
+): () => void {
+  try {
+    return window.api.on(channel, callback)
+  } catch (error) {
+    logRendererError(
+      `This window's bridge does not expose "${channel}", so what it carries stays off until the window reloads against a matching build.`,
+      error
+    )
+    return () => {}
+  }
 }

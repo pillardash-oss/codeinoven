@@ -5,6 +5,11 @@ import {
 } from '../../../lib/speech/types'
 import { THINKING_LEVEL_ORDER } from '../../../lib/thinking-presets'
 import {
+  normalizeWorkRoot,
+  workRootsConflict,
+  type WorkRoots
+} from '../../../lib/design/work-roots'
+import {
   MAX_PROTOTYPE_CDN_ORIGINS,
   normalizePrototypeCdnOrigin
 } from '../../../lib/prototypes/prototype-cdn'
@@ -14,12 +19,37 @@ import {
   DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH,
   DESIGN_ASSIGNMENT_OUTPUTS,
   MAX_DESIGN_ASSIGNMENTS,
+  designAssignmentIsMedia,
+  designAssignmentOutputWork,
   isDesignAssignmentId,
   isDesignAssignmentOutput
 } from '../../../lib/design-assignments'
+import {
+  MEDIA_PROVIDER_IDS,
+  isValidMediaModel,
+  isMediaProviderId
+} from '../../../lib/media-generation'
+import {
+  MAX_BROWSER_CUSTOM_SEARCH_ENGINES,
+  MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH,
+  isBuiltInBrowserSearchEngineId,
+  normalizeBrowserSearchUrlTemplate,
+  type BrowserSearchEngine
+} from '../../../lib/browser-search-engines'
 import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
 import { validateMemoryConfig } from '../../chat/memory-service'
-import { MAX_MAX_CONFLICT_FILE_BYTES, MIN_MAX_CONFLICT_FILE_BYTES } from '../../../lib/types'
+import {
+  MAX_BROWSER_HIBERNATION_MINUTES,
+  MAX_BROWSER_HISTORY_LIMIT,
+  MAX_MAX_CONFLICT_FILE_BYTES,
+  MIN_BROWSER_HIBERNATION_MINUTES,
+  MIN_BROWSER_HISTORY_LIMIT,
+  MIN_MAX_CONFLICT_FILE_BYTES,
+  MAX_BACKGROUND_WAKE_LEAD_MS,
+  MIN_BACKGROUND_WAKE_LEAD_MS,
+  MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
+  MIN_MAX_BACKGROUND_WAKE_HOLD_MS
+} from '../../../lib/types'
 import { validateBoundedString, validateEntityId, validateMergeMethod } from '../ipc-validation'
 import { isRecord, requireString } from './shared'
 import type {
@@ -35,6 +65,7 @@ import type {
   LocalRankingGradeScope,
   LocalUsageClearInput,
   LocalUsageRecordStore,
+  MediaGenerationConfig,
   RankingJudgeConfig,
   RankingJudgeKind,
   ThinkingLevel
@@ -121,6 +152,14 @@ function validateLocalUsageClearInput(value: unknown): LocalUsageClearInput {
   }
 }
 
+/** Validate an integer inside an inclusive range, rejecting floats and strings. */
+function validateBoundedInteger(value: unknown, label: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw new TypeError(`${label} must be an integer between ${min} and ${max}`)
+  }
+  return value
+}
+
 const CONFIG_PATCH_FIELDS = new Set([
   'theme',
   'fontFamily',
@@ -137,6 +176,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'agentDefaults',
   'auxiliaryAgents',
   'design',
+  'workRoots',
+  'mediaGeneration',
   'rankingJudge',
   'agentBehaviorPrompt',
   'autoDownloadUpdates',
@@ -150,7 +191,18 @@ const CONFIG_PATCH_FIELDS = new Set([
   'defaultPullStrategy',
   'maxDiffLines',
   'maxConflictFileBytes',
+  'browserHibernationMinutes',
+  'browserHistoryLimit',
   'openLocalhostInCioBrowser',
+  'openAllLinksInCioBrowser',
+  'backgroundMode',
+  'launchAtLogin',
+  'launchAtLoginPrompted',
+  'autoRunMissedAssistantRuns',
+  'backgroundWakeLeadMs',
+  'maxBackgroundWakeHoldMs',
+  'browserSearchEngine',
+  'browserCustomSearchEngines',
   'allowPrototypeExternalCdn',
   'prototypeCdnAllowlist',
   'inAppNotificationSound',
@@ -264,7 +316,14 @@ export function validateAuxiliaryAgents(value: unknown): AuxiliaryAgentConfig {
 }
 
 /** Fields one design assignment may carry, and no others. */
-const DESIGN_ASSIGNMENT_FIELDS = new Set(['id', 'label', 'produces', 'instructions', 'selection'])
+const DESIGN_ASSIGNMENT_FIELDS = new Set([
+  'id',
+  'label',
+  'produces',
+  'instructions',
+  'selection',
+  'mediaModel'
+])
 
 /**
  * Validate the user's design assignments.
@@ -275,6 +334,44 @@ const DESIGN_ASSIGNMENT_FIELDS = new Set(['id', 'label', 'produces', 'instructio
  * Ids are unique because an agent resolves an assignment by id, and two rows
  * sharing one would make the call ambiguous.
  */
+/**
+ * The two authored-work folders, stored normalized.
+ *
+ * Normalized here rather than at every reader so one spelling reaches the file:
+ * `designs/`, `./designs` and `designs///` are one setting, and the relocation
+ * that follows a change compares two strings that are already canonical. A pair
+ * where one root is the other, or sits inside it, is refused outright, because a
+ * folder under both would be classified as whichever kind is tested first and the
+ * user would see a design listed as a composition.
+ */
+function validateWorkRoots(value: unknown): WorkRoots {
+  if (!isRecord(value)) throw new TypeError('Work folders must be an object')
+  for (const field of Object.keys(value)) {
+    if (field !== 'design' && field !== 'video') {
+      throw new TypeError(`Unsupported work folders field: ${field}`)
+    }
+  }
+  const design = normalizeWorkRoot(value.design)
+  if (!design) {
+    throw new TypeError(
+      'The design folder must be a project-relative path such as ".cio/designs" or "designs"'
+    )
+  }
+  const video = normalizeWorkRoot(value.video)
+  if (!video) {
+    throw new TypeError(
+      'The video folder must be a project-relative path such as ".cio/videos" or "videos"'
+    )
+  }
+  const roots: WorkRoots = { design, video }
+  if (workRootsConflict(roots)) {
+    throw new TypeError(
+      'The design and video folders must differ, and neither may sit inside the other'
+    )
+  }
+  return roots
+}
+
 function validateDesignConfig(value: unknown): DesignConfig {
   if (!isRecord(value)) throw new TypeError('Design settings must be an object')
   for (const field of Object.keys(value)) {
@@ -318,18 +415,52 @@ function validateDesignConfig(value: unknown): DesignConfig {
     if (produces !== undefined && !isDesignAssignmentOutput(produces)) {
       throw new TypeError(`${label} output must be one of ${DESIGN_ASSIGNMENT_OUTPUTS.join(', ')}`)
     }
-    return {
+    const output = produces ?? 'text'
+    const common = {
       id,
       label: name,
       // Copywriting is the default and the only output a config written before
       // this field existed could mean, so storing it would add a word to every
       // row.
       ...(produces === undefined || produces === 'text' ? {} : { produces }),
-      ...(instructions === undefined || instructions.trim().length === 0 ? {} : { instructions }),
-      selection: validateAgentModelSelection(entry.selection, `${label} model`)
+      ...(instructions === undefined || instructions.trim().length === 0 ? {} : { instructions })
     }
+    // A craft's model comes from the place that can actually run it: a media
+    // craft names a generation model, a text craft a harness model. Requiring
+    // the wrong one would store a row that can never run.
+    if (designAssignmentIsMedia(output)) {
+      if (!isValidMediaModel(entry.mediaModel)) {
+        throw new TypeError(
+          `${label} needs a generation model like "owner/name" for ${designAssignmentOutputWork(output)}`
+        )
+      }
+      return { ...common, mediaModel: entry.mediaModel.trim() }
+    }
+    return { ...common, selection: validateAgentModelSelection(entry.selection, `${label} model`) }
   })
   return { assignments: validated }
+}
+
+/**
+ * Validate the generation backend choice.
+ *
+ * Only the provider id is configurable: the token lives in the secure vault and
+ * the model for each craft is the user's design assignment, so there is nothing
+ * else here that could point the app at a service the user did not choose.
+ */
+function validateMediaGenerationConfig(value: unknown): MediaGenerationConfig {
+  if (!isRecord(value)) throw new TypeError('Generation settings must be an object')
+  for (const field of Object.keys(value)) {
+    if (field !== 'providerId') {
+      throw new TypeError(`Unsupported generation settings field: ${field}`)
+    }
+  }
+  const providerId = value.providerId
+  if (providerId === undefined || providerId === null) return { providerId: null }
+  if (!isMediaProviderId(providerId)) {
+    throw new TypeError(`Generation provider must be one of ${MEDIA_PROVIDER_IDS.join(', ')}`)
+  }
+  return { providerId }
 }
 
 const RANKING_JUDGE_KINDS = new Set<RankingJudgeKind>(['automatic', 'typesafe', 'model'])
@@ -384,6 +515,44 @@ const FONT_FAMILIES = new Set([
   'monaco',
   'fira-code'
 ])
+
+/** Validate a user-authored search engine list, rejecting the whole patch on
+ *  the first bad entry so a half-applied list can never reach the config. */
+function validateBrowserCustomSearchEngines(value: unknown): BrowserSearchEngine[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError('Custom search engines must be an array')
+  }
+  if (value.length > MAX_BROWSER_CUSTOM_SEARCH_ENGINES) {
+    throw new TypeError(
+      `At most ${MAX_BROWSER_CUSTOM_SEARCH_ENGINES} custom search engines are allowed`
+    )
+  }
+  const engines: BrowserSearchEngine[] = []
+  for (const entry of value) {
+    if (!isRecord(entry)) {
+      throw new TypeError('Each custom search engine must be an object')
+    }
+    const id = requireString(entry.id, 'Custom search engine id')
+    const name = requireString(entry.name, 'Custom search engine name').trim()
+    if (name === '' || name.length > MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH) {
+      throw new TypeError('Custom search engine name must be 1 to 48 characters')
+    }
+    if (isBuiltInBrowserSearchEngineId(id)) {
+      throw new TypeError('A built-in search engine id cannot be reused')
+    }
+    if (engines.some((engine) => engine.id === id)) {
+      throw new TypeError('Custom search engine ids must be unique')
+    }
+    const template = normalizeBrowserSearchUrlTemplate(
+      requireString(entry.searchUrlTemplate, 'Custom search engine URL')
+    )
+    if (!template) {
+      throw new TypeError('Custom search engine URL must be an http or https address')
+    }
+    engines.push({ id, name, searchUrlTemplate: template })
+  }
+  return engines
+}
 
 /** Validate the complete renderer-controlled config boundary. */
 export function validateAppConfigPatch(value: unknown): AppConfigPatch {
@@ -505,6 +674,27 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.maxDiffLines = value.maxDiffLines
   }
 
+  if ('browserHibernationMinutes' in value) {
+    if (
+      typeof value.browserHibernationMinutes !== 'number' ||
+      !Number.isInteger(value.browserHibernationMinutes) ||
+      value.browserHibernationMinutes < MIN_BROWSER_HIBERNATION_MINUTES ||
+      value.browserHibernationMinutes > MAX_BROWSER_HIBERNATION_MINUTES
+    ) {
+      throw new TypeError('Browser hibernation minutes must be a whole number between 5 and 120')
+    }
+    patch.browserHibernationMinutes = value.browserHibernationMinutes
+  }
+
+  if ('browserHistoryLimit' in value) {
+    patch.browserHistoryLimit = validateBoundedInteger(
+      value.browserHistoryLimit,
+      'Browser history limit',
+      MIN_BROWSER_HISTORY_LIMIT,
+      MAX_BROWSER_HISTORY_LIMIT
+    )
+  }
+
   if ('maxConflictFileBytes' in value) {
     if (
       typeof value.maxConflictFileBytes !== 'number' ||
@@ -534,6 +724,30 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Open localhost in CIO browser must be a boolean')
     }
     patch.openLocalhostInCioBrowser = value.openLocalhostInCioBrowser
+  }
+
+  if ('openAllLinksInCioBrowser' in value) {
+    if (typeof value.openAllLinksInCioBrowser !== 'boolean') {
+      throw new TypeError('Open all links in CIO browser must be a boolean')
+    }
+    patch.openAllLinksInCioBrowser = value.openAllLinksInCioBrowser
+  }
+
+  if ('browserSearchEngine' in value) {
+    if (
+      typeof value.browserSearchEngine !== 'string' ||
+      value.browserSearchEngine.trim() === '' ||
+      value.browserSearchEngine.length > 128
+    ) {
+      throw new TypeError('Browser search engine must be a non-empty id')
+    }
+    patch.browserSearchEngine = value.browserSearchEngine
+  }
+
+  if ('browserCustomSearchEngines' in value) {
+    patch.browserCustomSearchEngines = validateBrowserCustomSearchEngines(
+      value.browserCustomSearchEngines
+    )
   }
 
   if ('allowPrototypeExternalCdn' in value) {
@@ -699,6 +913,14 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.design = validateDesignConfig(value.design)
   }
 
+  if ('workRoots' in value) {
+    patch.workRoots = validateWorkRoots(value.workRoots)
+  }
+
+  if ('mediaGeneration' in value) {
+    patch.mediaGeneration = validateMediaGenerationConfig(value.mediaGeneration)
+  }
+
   if ('rankingJudge' in value) {
     patch.rankingJudge = validateRankingJudge(value.rankingJudge)
   }
@@ -759,6 +981,56 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('resumeWorkOnRestart must be a boolean')
     }
     patch.resumeWorkOnRestart = value.resumeWorkOnRestart
+  }
+
+  if ('backgroundMode' in value) {
+    if (
+      value.backgroundMode !== 'off' &&
+      value.backgroundMode !== 'scheduled' &&
+      value.backgroundMode !== 'always'
+    ) {
+      throw new TypeError('backgroundMode must be "off", "scheduled" or "always"')
+    }
+    patch.backgroundMode = value.backgroundMode
+  }
+
+  if ('launchAtLogin' in value) {
+    if (typeof value.launchAtLogin !== 'boolean') {
+      throw new TypeError('launchAtLogin must be a boolean')
+    }
+    patch.launchAtLogin = value.launchAtLogin
+  }
+
+  if ('launchAtLoginPrompted' in value) {
+    if (typeof value.launchAtLoginPrompted !== 'boolean') {
+      throw new TypeError('launchAtLoginPrompted must be a boolean')
+    }
+    patch.launchAtLoginPrompted = value.launchAtLoginPrompted
+  }
+
+  if ('autoRunMissedAssistantRuns' in value) {
+    if (typeof value.autoRunMissedAssistantRuns !== 'boolean') {
+      throw new TypeError('autoRunMissedAssistantRuns must be a boolean')
+    }
+    patch.autoRunMissedAssistantRuns = value.autoRunMissedAssistantRuns
+  }
+
+  if ('backgroundWakeLeadMs' in value) {
+    patch.backgroundWakeLeadMs = validateBoundedInteger(
+      value.backgroundWakeLeadMs,
+      'Background wake lead',
+      MIN_BACKGROUND_WAKE_LEAD_MS,
+      MAX_BACKGROUND_WAKE_LEAD_MS
+    )
+  }
+
+  if ('maxBackgroundWakeHoldMs' in value) {
+    patch.maxBackgroundWakeHoldMs = validateBoundedInteger(
+      value.maxBackgroundWakeHoldMs,
+      'Background wake hold cap',
+      MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
+      MAX_MAX_BACKGROUND_WAKE_HOLD_MS
+    )
   }
 
   if ('defaultMergeMethod' in value) {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Globe2, Loader2, SquareTerminal } from '@lucide/svelte'
+  import { GlobeCode, Loader2, SquareTerminal } from '@lucide/svelte'
   import type { AgentRunningProcess } from '$shared/types'
   import { processName, processStartedAt } from './sources-panel-helpers'
 
@@ -34,7 +34,7 @@
         : 'text-primary'}"
     >
       {#if isAppWide}
-        <Globe2 size={15} />
+        <GlobeCode size={15} />
       {:else}
         <SquareTerminal size={15} />
       {/if}

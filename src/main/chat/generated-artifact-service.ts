@@ -11,15 +11,14 @@ import {
   type Thread
 } from '../../lib/types'
 import {
-  CHATS_ARTIFACTS_DIRECTORY,
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
+  LEGACY_CHATS_ARTIFACTS_DIRECTORY,
+  chatThreadWorkspaceDirectory,
   featureSlugFromTitle,
   PROJECT_DATA_DIRECTORY
 } from '../../lib/project-artifacts'
 import { ensureDir } from '../../lib/utils'
 import type { StorageEngine } from '../storage/storage-engine'
-
-export const CHAT_ARTIFACTS_DIRECTORY = CHATS_ARTIFACTS_DIRECTORY
 
 const IMAGE_EXTENSIONS = new Set([
   '.avif',
@@ -69,12 +68,15 @@ const IMAGE_REFERENCE_PATTERN =
 
 interface ArtifactContext {
   scope: 'chat' | 'project'
+  /** Root of the conversation's own file surface: a chat's `chats-cwd/<threadId>`
+   *  workspace directory, or the project directory. */
   projectPath: string
   sourceRoot: string
   artifactRoot: string
-  /** Threads started before `chats-artifacts` materialized images into
-   *  `chat-artifacts/<threadId>`; those files stay in-root for this thread. */
-  legacyArtifactRoot?: string
+  /** Roots that chats started before the per-thread workspace consolidation
+   *  wrote images to. A file already inside one of them stays in-root for the
+   *  thread that owns it instead of being copied. */
+  legacyArtifactRoots: string[]
 }
 
 interface ImageCandidate {
@@ -234,19 +236,29 @@ export class GeneratedArtifactService {
   constructor(private readonly storage: StorageEngine) {}
 
   contextFor(thread: Thread, projectPath: string): ArtifactContext {
-    const scope = thread.projectId === INBOX_PROJECT_ID ? 'chat' : 'project'
-    const artifactRoot =
-      scope === 'chat'
-        ? this.storage.resolve(join(CHAT_ARTIFACTS_DIRECTORY, thread.id))
-        : resolve(projectPath, projectArtifactDirectory(thread))
+    // A chat owns one app-storage directory: `chats-cwd/<threadId>` is both the
+    // directory its session runs in and the root its file tree mounts, so an
+    // image is written, scanned, and cited in the same place. The older roots
+    // stay readable for a chat that predates the consolidation.
+    if (thread.projectId === INBOX_PROJECT_ID) {
+      const workspaceRoot = this.storage.resolve(chatThreadWorkspaceDirectory(thread.id))
+      return {
+        scope: 'chat',
+        projectPath: workspaceRoot,
+        sourceRoot: workspaceRoot,
+        artifactRoot: workspaceRoot,
+        legacyArtifactRoots: [
+          this.storage.resolve(join(LEGACY_CHATS_ARTIFACTS_DIRECTORY, thread.id)),
+          this.storage.resolve(join(LEGACY_CHAT_ARTIFACTS_DIRECTORY, thread.id))
+        ]
+      }
+    }
     return {
-      scope,
+      scope: 'project',
       projectPath,
-      sourceRoot: scope === 'chat' ? this.storage.resolve('chats-cwd') : projectPath,
-      artifactRoot,
-      ...(scope === 'chat'
-        ? { legacyArtifactRoot: this.storage.resolve(join(LEGACY_CHAT_ARTIFACTS_DIRECTORY, thread.id)) }
-        : {})
+      sourceRoot: projectPath,
+      artifactRoot: resolve(projectPath, projectArtifactDirectory(thread)),
+      legacyArtifactRoots: []
     }
   }
 
@@ -322,10 +334,16 @@ export class GeneratedArtifactService {
     const latestAssistant = assistantMessages.at(-1)
     if (latestAssistant) {
       const recentAfter = latestAssistant.createdAt - RECENT_IMAGE_WINDOW_MS
-      const scanned = [
-        ...(await this.scanImages(context.artifactRoot)),
-        ...(await this.scanImages(context.sourceRoot, recentAfter))
-      ]
+      // A chat's workspace root is also where its images are kept, so the two
+      // scans would walk one directory. The unfiltered scan is a superset of
+      // the recent-window scan, so that case scans once.
+      const scanned =
+        context.sourceRoot === context.artifactRoot
+          ? await this.scanImages(context.artifactRoot)
+          : [
+              ...(await this.scanImages(context.artifactRoot)),
+              ...(await this.scanImages(context.sourceRoot, recentAfter))
+            ]
       for (const image of scanned) {
         const identity = resolve(image.path)
         if (knownIdentities.has(identity)) continue
@@ -425,8 +443,7 @@ export class GeneratedArtifactService {
       const existingPath = resolve(sourcePath)
       if (
         isWithinRoot(context.artifactRoot, existingPath) ||
-        (context.legacyArtifactRoot !== undefined &&
-          isWithinRoot(context.legacyArtifactRoot, existingPath)) ||
+        context.legacyArtifactRoots.some((root) => isWithinRoot(root, existingPath)) ||
         (context.scope === 'project' && isWithinRoot(context.projectPath, existingPath))
       ) {
         return {
@@ -521,21 +538,19 @@ export class GeneratedArtifactService {
 
 export function artifactInstruction(
   thread: Pick<Thread, 'projectId' | 'id' | 'title' | 'featureSlug'>,
-  options?: { chatArtifactRoot?: string; chatFileSystemMode?: boolean }
+  options?: { chatWorkspaceRoot?: string; chatFileSystemMode?: boolean }
 ): string {
   if (thread.projectId === INBOX_PROJECT_ID) {
-    const relativeRoot = `${CHAT_ARTIFACTS_DIRECTORY}/${thread.id}/`
-    const absoluteRoot = options?.chatArtifactRoot
-    const rootLabel = absoluteRoot
-      ? `${relativeRoot} (absolute: ${absoluteRoot})`
-      : relativeRoot
+    const relativeRoot = `${promptPath(chatThreadWorkspaceDirectory(thread.id))}/`
+    const absoluteRoot = options?.chatWorkspaceRoot
+    const rootLabel = absoluteRoot ? `${relativeRoot} (absolute: ${absoluteRoot})` : relativeRoot
     const destinationRule =
       'Save every file you create for the user there: images, Markdown, documents, generated code, exports, anything. That directory is the pre-authorized workspace of this chat: reading and writing inside it never requires approval, and everything you save there appears in the Files panel for the user. Keep filenames descriptive.'
     const boundaryRule = options?.chatFileSystemMode
       ? 'If the user asks for a file at a specific location outside that directory, honor the explicitly requested path.'
       : 'Anything outside that directory is gated: if the user asks you to create or touch files anywhere else on their file system, do not do it silently; tell them to turn on File System mode for this chat so that gate opens.'
     return [
-      `Your artifact directory in this chat is ${rootLabel}.`,
+      `Your workspace directory in this chat is ${rootLabel}.`,
       destinationRule,
       boundaryRule
     ].join(' ')

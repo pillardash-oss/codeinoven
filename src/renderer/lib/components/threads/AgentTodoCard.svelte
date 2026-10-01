@@ -12,23 +12,38 @@
     items: AgentTodoItem[]
     signature: string
     busy: boolean
+    /** The run is over, so the list on screen is a record and not live progress. */
+    stopped: boolean
     /** Dismiss the card after the thread stopped working. */
     onClose: () => void
   }
 
-  let { items, signature, busy, onClose }: Props = $props()
+  let { items, signature, busy, stopped, onClose }: Props = $props()
 
   let open = $state(false)
   let userPinnedOpen = $state(false)
   let lastSignature = $state('')
 
   let completedCount = $derived(items.filter((item) => item.status === 'completed').length)
+  /**
+   * The task line beside the counter on a collapsed card. Only a running turn
+   * has a current task: a stopped turn left its list behind, and naming a task
+   * here would read as work still in progress.
+   */
   let currentItem = $derived(
-    items.find((item) => item.status === 'in_progress') ??
-      items.find((item) => item.status === 'pending')
+    busy
+      ? (items.find((item) => item.status === 'in_progress') ??
+          items.find((item) => item.status === 'pending'))
+      : undefined
   )
   let activeIndex = $derived(activeAgentTodoIndex(items, busy))
   let progressLabel = $derived(agentTodoProgressLabel(items.length, completedCount, activeIndex))
+  /**
+   * The turn stopped with tasks it never completed, so the list on screen is a
+   * record of where the run left off and not live progress. Naming that state
+   * keeps a reader from taking an abandoned list for the app having lost track.
+   */
+  let stoppedUnfinished = $derived(stopped && items.some((item) => item.status !== 'completed'))
 
   $effect(() => {
     const currentSignature = signature
@@ -135,5 +150,11 @@
         {/each}
       </ul>
     </div>
+  {/if}
+
+  {#if stoppedUnfinished}
+    <p class="border-t px-3 py-1.5 text-center text-[0.6875rem] leading-relaxed text-warning">
+      The agent ended its turn without clearing this list
+    </p>
   {/if}
 </section>

@@ -44,10 +44,10 @@ gh secret set GITLEAKS_LICENSE --repo pillardash-oss/codeinoven
 ### Download mirror   release artifacts (`dl.codeinoven.com`)
 
 After a release is published, `.github/workflows/download-mirror.yml` copies the same
-verified artifacts to our own Cloudflare R2 origin so users stop downloading installers
-from GitHub Releases. The endpoint and bucket are repository **variables**; the
-credentials are **secrets**. Full setup (bucket, custom domain, cache rules):
-`docs/DOWNLOAD-MIRROR.md`.
+verified artifacts to our own Cloudflare R2 origin so users stop downloading installers, and
+the app stops downloading the macOS auto-update payload, from GitHub Releases. The endpoint
+and bucket are repository **variables**; the credentials are **secrets**. Full setup (bucket,
+custom domain, cache rules): `docs/DOWNLOAD-MIRROR.md`.
 
 | Name | Kind | What it is | Where to get it |
 | ---- | ---- | ---------- | --------------- |

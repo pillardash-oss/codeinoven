@@ -70,6 +70,30 @@ class FaviconState {
     return this.cacheFor().resolved.get(hostname) ?? null
   }
 
+  /**
+   * The favicon data URL for one address, resolved now.
+   *
+   * `faviconFor` answers from the cache and `ensureResolved` warms it for a later
+   * render. A caller that has to write the bytes down (a saved page's default
+   * icon) cannot wait for one, so this asks and waits for the batch that carries
+   * the host. It still asks at most once per host, exactly like the warming path,
+   * and answers null whenever the host has no discoverable icon or the request
+   * failed: an icon is always optional.
+   */
+  async resolve(url: string): Promise<string | null> {
+    const hostname = this.hostnameOf(url)
+    if (!hostname) return null
+    const resolved = this.cacheFor().resolved
+    if (resolved.has(hostname)) return resolved.get(hostname) ?? null
+    this.ensureResolved([url])
+    // A drain that is already running re-reads its queue before it exits, so it
+    // carries a host queued while it awaited. No drain left means the host was
+    // asked for in an earlier round: it either answered above or had no icon.
+    const inflight = this.inflight.get('global')
+    if (inflight) await inflight
+    return resolved.get(hostname) ?? null
+  }
+
   /** Queue favicon resolution for every unique hostname in the given URLs. */
   ensureResolved(urls: string[]): void {
     const cache = this.cacheFor()

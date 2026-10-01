@@ -20,6 +20,35 @@ export const permissionResolutions: Record<BrowserPermissionDecision, Permission
   dismiss: { granted: false, rememberGrant: false, rememberDeny: false }
 }
 
+/** Answer a request from a decision the memory already holds: the grant is real,
+ *  but there is nothing new to write. */
+export const permissionSilentGrant: PermissionResolution = {
+  granted: true,
+  rememberGrant: false,
+  rememberDeny: false
+}
+
+/**
+ * The live decision ledger for one session partition.
+ *
+ * A session's handlers must keep observing the very same `Set` the durable
+ * memory loaded into {@link PermissionMemoryLedgers}, so this returns the
+ * existing ledger instead of replacing it. Replacing it silently threw away
+ * every decision the user had already made (`hydratePermissionMemory()` reads
+ * the file into these maps, so a fresh set discarded the whole run's memory and
+ * re-prompted for permissions that were granted earlier).
+ */
+export function permissionLedgerForPartition(
+  ledger: Map<string, Set<string>>,
+  partition: string
+): Set<string> {
+  const existing = ledger.get(partition)
+  if (existing) return existing
+  const created = new Set<string>()
+  ledger.set(partition, created)
+  return created
+}
+
 export function permissionOrigin(value: string): string | null {
   try {
     const parsed = new URL(value)

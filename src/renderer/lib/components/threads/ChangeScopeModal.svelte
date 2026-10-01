@@ -1,5 +1,6 @@
 <script lang="ts">
   import { X, Search, Check, Plus } from '@lucide/svelte'
+  import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import ScopeCreateModal from '../scope/ScopeCreateModal.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
@@ -24,6 +25,13 @@
   let loadError = $state('')
   /** Seed for the canonical scope creation modal when the query is a miss. */
   let createModalOpen = $state(false)
+  /**
+   * Where a scope produced by the create flow must land: frozen the moment the
+   * run starts and never read back from the props, because that run outlives this
+   * dialog and the props keep tracking whichever thread and project the user is
+   * on by the time the job finishes.
+   */
+  let creationTarget: { projectId: string; threadId: string } | null = null
 
   let buckets = $derived(
     (scopeState.boards.get(projectId)?.buckets ?? [])
@@ -38,13 +46,23 @@
   /** The typed query matches no existing scope, so a "+" appears to create it. */
   let noMatch = $derived(query.trim().length > 0 && buckets.length === 0)
 
+  /** Point one thread at a scope and keep both stores in step. It throws so each
+   *  caller can surface the failure wherever the user still is. */
+  async function applyScopeToThread(
+    targetProjectId: string,
+    targetThreadId: string,
+    bucketId: string
+  ): Promise<void> {
+    const updated = await invoke('thread:update', targetProjectId, targetThreadId, {
+      scopeBucketId: bucketId
+    })
+    workspaceState.updateThread(updated)
+    scopeState.updateThread(updated)
+  }
+
   async function selectBucket(bucket: ScopeBucket): Promise<void> {
     try {
-      const updated = await invoke('thread:update', projectId, threadId, {
-        scopeBucketId: bucket.id
-      })
-      workspaceState.updateThread(updated)
-      scopeState.updateThread(updated)
+      await applyScopeToThread(projectId, threadId, bucket.id)
     } catch (error) {
       loadError = error instanceof Error ? error.message : 'Failed to change scope'
       return
@@ -71,17 +89,34 @@
     openCreateModal()
   }
 
-  /** Apply a freshly created scope from the creation modal to the thread. */
-  async function selectCreatedScope(bucketId: string): Promise<void> {
-    createModalOpen = false
-    const bucket = (scopeState.boards.get(projectId)?.buckets ?? []).find(
-      (candidate) => candidate.id === bucketId
-    )
-    if (!bucket) {
-      loadError = 'The created scope could not be found.'
-      return
+  /** Apply a freshly created scope to the thread this flow was started for. */
+  async function assignCreatedScope(bucketId: string): Promise<void> {
+    const target = creationTarget
+    if (!target) return
+    creationTarget = null
+    try {
+      await applyScopeToThread(target.projectId, target.threadId, bucketId)
+    } catch (error) {
+      // The dialog is long gone by now: the run reports into the scope dock and
+      // the user has moved on, so the failure has to reach them where they are.
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'The thread could not be moved into the created scope'
+      )
     }
-    await selectBucket(bucket)
+  }
+
+  /**
+   * Creating a scope is a dock job, so launching it dismisses this dialog along
+   * with the form that started it: the run reports its stages in the scope dock
+   * for as long as it needs, and the user is never parked on a search that cannot
+   * match anything until a worktree finishes. The target thread is frozen here,
+   * while the dialog still belongs to the thread being changed.
+   */
+  function handleCreateStarted(): void {
+    creationTarget = { projectId, threadId }
+    onClose()
   }
 </script>
 
@@ -180,13 +215,16 @@
      first (empty) mount and force a retype. It is a sibling of the shared
      Modal, which is safe: bits-ui keeps one global layer stack, so the nested
      dialog owns Escape and outside interaction while it is up and this modal
-     keeps the typed query. -->
+     keeps the typed query. Cancelling the form returns here with that query
+     intact; creating dismisses the whole flow, because the run it starts reports
+     in the scope dock instead of in this dialog. -->
 {#if createModalOpen}
   <ScopeCreateModal
     open={createModalOpen}
     {projectId}
     initialName={query.trim()}
-    onCreated={(bucketId) => void selectCreatedScope(bucketId)}
+    onStarted={handleCreateStarted}
+    onCreated={(bucketId) => void assignCreatedScope(bucketId)}
     onClose={() => (createModalOpen = false)}
   />
 {/if}

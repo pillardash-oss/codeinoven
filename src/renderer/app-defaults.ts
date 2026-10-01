@@ -1,7 +1,13 @@
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
+import { DEFAULT_BROWSER_SEARCH_ENGINE_ID } from '$shared/browser-search-engines'
+import { DEFAULT_WORK_ROOTS } from '$shared/design/work-roots'
 import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '$shared/prototypes/prototype-cdn'
 import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
 import {
+  DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_BROWSER_HISTORY_LIMIT,
+  DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   DEFAULT_MAX_CONFLICT_FILE_BYTES,
   DEFAULT_IN_APP_NOTIFICATION_SOUND,
   type AppConfig
@@ -25,6 +31,8 @@ export const defaultConfig: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
   design: { assignments: [] },
+  workRoots: { ...DEFAULT_WORK_ROOTS },
+  mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
@@ -39,6 +47,17 @@ export const defaultConfig: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
+  openAllLinksInCioBrowser: false,
+  browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  browserHistoryLimit: DEFAULT_BROWSER_HISTORY_LIMIT,
+  backgroundMode: 'scheduled',
+  launchAtLogin: false,
+  launchAtLoginPrompted: false,
+  autoRunMissedAssistantRuns: true,
+  backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
+  browserSearchEngine: DEFAULT_BROWSER_SEARCH_ENGINE_ID,
+  browserCustomSearchEngines: [],
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },

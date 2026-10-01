@@ -130,6 +130,41 @@ function collectEditorDefinitions(lines: string[]): EditorDefinitions {
   }
 }
 
+/**
+ * Emphasis delimiters only open or close a span when the text between them
+ * starts and ends on a non-space character   the CommonMark flanking rule the
+ * message renderer (`marked`) already follows. Without it the literal
+ * asterisks of `* this should not be italicized *` and `1.* or 2.*` were read
+ * as an italic window.
+ *
+ * The renderer and the typing rules share these sources so a keystroke converts
+ * exactly what a re-render would produce. They are kept as sources because the
+ * renderer wants a global regex while the typing rules anchor `$` at the caret.
+ */
+const DELIMITED_SPAN_SOURCES = {
+  strongAsterisk: String.raw`\*\*([^\s*](?:[^*\n]*[^\s*])?)\*\*`,
+  strongUnderscore: String.raw`(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__(?![A-Za-z0-9])`,
+  strike: String.raw`~~([^\s~](?:[^~\n]*[^\s~])?)~~`,
+  emphasisAsterisk: String.raw`(?<!\*)\*([^\s*](?:[^*\n]*[^\s*])?)\*(?!\*)`,
+  emphasisUnderscore: String.raw`(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_(?![A-Za-z0-9])`
+} as const
+
+/** Renderer passes, in order: strong before emphasis so `**` is never eaten by
+ *  the single-asterisk rule. */
+const RENDER_DELIMITED_SPAN_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [
+    new RegExp(DELIMITED_SPAN_SOURCES.strongAsterisk, 'g'),
+    '<strong class="font-semibold">$1</strong>'
+  ],
+  [
+    new RegExp(DELIMITED_SPAN_SOURCES.strongUnderscore, 'g'),
+    '<strong class="font-semibold">$1</strong>'
+  ],
+  [new RegExp(DELIMITED_SPAN_SOURCES.strike, 'g'), '<del class="text-muted line-through">$1</del>'],
+  [new RegExp(DELIMITED_SPAN_SOURCES.emphasisAsterisk, 'g'), '<em class="italic">$1</em>'],
+  [new RegExp(DELIMITED_SPAN_SOURCES.emphasisUnderscore, 'g'), '<em class="italic">$1</em>']
+]
+
 function renderInline(
   source: string,
   inlineBadges: readonly RichInlineBadge[],
@@ -157,7 +192,7 @@ function renderInline(
     if (!badge.value) continue
     prepared = prepared.replaceAll(badge.value, (match, offset: number, text: string) => {
       // Mentions and other badge values never become badges inside a block
-      // quote, an open double-quoted passage, or an unclosed inline code span  
+      // quote, an open double-quoted passage, or an unclosed inline code span
       // there the text must stay literal. (Closed inline code and fenced code
       // blocks are already safe: they are stashed or block-rendered before this
       // loop runs.)
@@ -220,17 +255,9 @@ function renderInline(
   })
 
   let html = escapeHtml(prepared)
-  html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong class="font-semibold">$1</strong>')
-  html = html.replace(
-    /(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__(?![A-Za-z0-9])/g,
-    '<strong class="font-semibold">$1</strong>'
-  )
-  html = html.replace(/~~([^~\n]+)~~/g, '<del class="text-muted line-through">$1</del>')
-  html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em class="italic">$1</em>')
-  html = html.replace(
-    /(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_(?![A-Za-z0-9])/g,
-    '<em class="italic">$1</em>'
-  )
+  for (const [pattern, replacement] of RENDER_DELIMITED_SPAN_RULES) {
+    html = html.replace(pattern, replacement)
+  }
   return html
     .replace(/\uE000(\d+)\uE001/g, (_match, index: string) => code[Number(index)] ?? '')
     .replace(/\uE002(\d+)\uE003/g, (_match, index: string) => badges[Number(index)] ?? '')
@@ -730,6 +757,14 @@ export function selectedBlockTag(root: HTMLElement): string | null {
   return block === root ? null : (block?.tagName ?? null)
 }
 
+/** Block element holding the caret, or null when the caret is outside `root`.
+ *  The rule-suppression bookkeeping compares this element's identity. */
+export function caretBlock(root: HTMLElement): HTMLElement | null {
+  const selection = selectionInside(root)
+  if (!selection?.anchorNode) return null
+  return currentBlock(root, selection.anchorNode)
+}
+
 function isFirstContentInBlock(block: HTMLElement, element: Node): boolean {
   for (const child of Array.from(block.childNodes)) {
     if (child === element) return true
@@ -831,38 +866,77 @@ function scanInlineCode(prefix: string): InlineCodeScan {
 }
 
 /**
- * Typing between the two backticks of a fresh pair opens the inline code span
- * around what was typed   the mirror of `applyEmptyPairCodeRule`, which only
- * sees content typed *after* the pair. Going back inside a pair and typing used
- * to leave the backticks literal, so the run never read as a span and a later
- * backtick could re-pair with one of its backticks and swallow the sentence.
+ * The caret's place in the text it sits in: the collapsed selection resolved to
+ * the text node it lives in, with the text on either side of it. Every markdown
+ * rule reads the document through this   a caret anchored on an element instead
+ * (which is where a plain insertion leaves it) carries no text at all, so no
+ * rule can see the characters around it.
  */
-function applyInsidePairCodeRule(root: HTMLElement): boolean {
-  const selection = selectionInside(root)
-  if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
-  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
+interface InlineCaret {
+  textNode: Text
+  offset: number
+  /** Text before the caret in its node, and the text after it. */
+  prefix: string
+  suffix: string
+  block: HTMLElement | null
+}
 
+function inlineCaret(root: HTMLElement): InlineCaret | null {
+  const selection = selectionInside(root)
+  if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return null
+  // Markdown inline formatting must never fire inside a code block   code like
+  // `const x = `foo`` or `**not bold**` has to stay literal.
+  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return null
   const textNode = selection.anchorNode
-  const endOffset = selection.anchorOffset
-  const prefix = textNode.data.slice(0, endOffset)
-  const suffix = textNode.data.slice(endOffset)
+  const offset = selection.anchorOffset
+  return {
+    textNode,
+    offset,
+    prefix: textNode.data.slice(0, offset),
+    suffix: textNode.data.slice(offset),
+    block: currentBlock(root, textNode)
+  }
+}
+
+/** True when the caret's block reads as a ``` fence candidate, which belongs to
+ *  the Enter-triggered fence rule: no inline rule may eat its backticks while it
+ *  is being built. */
+function isFenceCandidateBlock(root: HTMLElement, block: HTMLElement | null): boolean {
+  if (!block) return false
+  const candidate = collectFenceCandidate(root, block)
+  return candidate !== null && parseFenceCandidateText(candidate.text) !== null
+}
+
+/** Select a slice of one text node, which the code-span rules then consume. */
+function selectTextSlice(textNode: Text, start: number, end: number): void {
+  const range = document.createRange()
+  range.setStart(textNode, start)
+  range.setEnd(textNode, end)
+  const selection = window.getSelection()
+  if (!selection) return
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+/**
+ * The caret sitting right before the closing backtick of a pair opens the inline
+ * code span around the content between them   the mirror of
+ * `applyEmptyPairCodeRule`, which only sees content *after* the pair. Reaching
+ * into a pair (typing back inside it, or pasting between its two backticks) used
+ * to leave the backticks literal, so the run never read as a span and a later
+ * backtick could re-pair with one of them and swallow the sentence.
+ */
+function applyInsidePairCodeRule(root: HTMLElement, caret: InlineCaret): boolean {
   // The span's closing backtick sits right after the caret, and it is a single
   // backtick (``` and `` are delimiters of their own).
-  if (suffix[0] !== '`' || suffix[1] === '`') return false
+  if (caret.suffix[0] !== '`' || caret.suffix[1] === '`') return false
 
-  const { opener } = scanInlineCode(prefix)
-  if (opener === -1 || (opener > 0 && prefix[opener - 1] === '`')) return false
-  const content = prefix.slice(opener + 1)
+  const { opener } = scanInlineCode(caret.prefix)
+  if (opener === -1 || (opener > 0 && caret.prefix[opener - 1] === '`')) return false
+  const content = caret.prefix.slice(opener + 1)
   if (!content || content.includes('`') || content.includes('\n')) return false
 
-  const range = document.createRange()
-  range.setStart(textNode, opener)
-  range.setEnd(textNode, endOffset + 1)
-  const selectionRanges = window.getSelection()
-  if (selectionRanges) {
-    selectionRanges.removeAllRanges()
-    selectionRanges.addRange(range)
-  }
+  selectTextSlice(caret.textNode, opener, caret.offset + 1)
   // The caret belongs inside the span: this is the run the user is writing.
   insertInlineCode(root, content, true)
   return true
@@ -953,98 +1027,59 @@ function insertInlineCode(root: HTMLElement, content: string, caretInsideCode: b
  * pasting content between the backticks "opens" the span, while the bare pair
  * `` and the triple ``` (a fence) stay literal.
  */
-export function applyEmptyPairCodeRule(root: HTMLElement): boolean {
-  const selection = selectionInside(root)
-  if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
-  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
-
-  const textNode = selection.anchorNode
-  const endOffset = selection.anchorOffset
-  const prefixText = textNode.data.slice(0, endOffset)
-  const pairContent = prefixText.match(/``([^`\n]+)$/)
+function applyEmptyPairCodeRule(root: HTMLElement, caret: InlineCaret): boolean {
+  const pairContent = caret.prefix.match(/``([^`\n]+)$/)
   if (!pairContent) return false
   // A pair that is itself preceded by a backtick is the tail of ``` (or more)
   //   that is a code fence being typed, never an inline span.
-  const pairStart = endOffset - pairContent[0].length
-  if (pairStart > 0 && prefixText[pairStart - 1] === '`') return false
+  const pairStart = caret.offset - pairContent[0].length
+  if (pairStart > 0 && caret.prefix[pairStart - 1] === '`') return false
 
-  const range = document.createRange()
-  range.setStart(textNode, endOffset - pairContent[0].length)
-  range.setEnd(textNode, endOffset)
-  if (window.getSelection()) {
-    window.getSelection()?.removeAllRanges()
-    window.getSelection()?.addRange(range)
-  }
+  selectTextSlice(caret.textNode, pairStart, caret.offset)
   insertInlineCode(root, pairContent[1] ?? '', true)
   return true
 }
 
-function applyInlineRule(root: HTMLElement): boolean {
-  const selection = selectionInside(root)
-  if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
-  // Markdown inline formatting must never fire inside a code block   code like
-  // `const x = `foo`` or `**not bold**` has to stay literal.
-  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
-
-  const textNode = selection.anchorNode
-  const endOffset = selection.anchorOffset
-  const prefix = textNode.data.slice(0, endOffset)
-  const suffix = textNode.data.slice(endOffset)
-
-  // A block whose view is a ``` fence candidate (```lang, or ```…``` across
-  // its own text and following sibling blocks for the tag-end-then-open flow)
-  // belongs to the Enter-triggered fence rule   inline rules must never eat
-  // its backticks while it is typed.
-  const fenceBlock = currentBlock(root, selection.anchorNode)
-  if (fenceBlock) {
-    const candidate = collectFenceCandidate(root, fenceBlock)
-    if (candidate && parseFenceCandidateText(candidate.text)) return false
-  }
-
+/**
+ * Every way a backtick run in front of, or around, the caret becomes an inline
+ * code span: the `` pair the user opened before it, the pair they reached into,
+ * the closing backtick they tagged on after the run, and the plain pair the
+ * caret has just closed. Returns the rule that fired, or null.
+ */
+function applyInlineCodeRule(
+  root: HTMLElement,
+  caret: InlineCaret,
+  suppressed: (kind: MarkdownRuleKind) => boolean
+): MarkdownRuleKind | null {
   // A non-backtick character typed (or pasted) right after a fresh double
   // backtick starts an inline code span with the caret inside. The bare pair
   // `` stays literal, and a third backtick never triggers   that is a code
   // fence. Skipped while a fence is being built: a trailing triple after the
   // caret means the closing ``` of the tag-end-then-open flow, not content.
-  if (!suffix.includes('```') && applyEmptyPairCodeRule(root)) return true
-  if (applyInsidePairCodeRule(root)) return true
+  if (
+    !caret.suffix.includes('```') &&
+    !suppressed('inline-code') &&
+    applyEmptyPairCodeRule(root, caret)
+  ) {
+    return 'inline-code'
+  }
+  if (!suppressed('inline-code') && applyInsidePairCodeRule(root, caret)) return 'inline-code'
 
   // Opening-backtick-last flow: the user tagged the end of a run with a backtick
   // first, moved the caret before the run, and now types the opening backtick.
   // The typed backtick plus the trailing one after the caret wrap the text
   // between them into an inline code span. The run must start at a word
   // boundary so literal backticks in mid-word prose never trigger it.
-  const closesAfter = suffix.match(/^([^`\n]+)`/)
-  const boundaryChar = endOffset >= 2 ? prefix[endOffset - 2] : undefined
+  const closesAfter = caret.suffix.match(/^([^`\n]+)`/)
+  const boundaryChar = caret.offset >= 2 ? caret.prefix[caret.offset - 2] : undefined
   if (
     closesAfter &&
+    !suppressed('inline-code') &&
     (boundaryChar === undefined || /[\s\u00a0\u200b]/.test(boundaryChar))
   ) {
-    const range = document.createRange()
-    range.setStart(textNode, endOffset - 1)
-    range.setEnd(textNode, endOffset + closesAfter[0].length)
-    const selection = window.getSelection()
-    if (selection) {
-      selection.removeAllRanges()
-      selection.addRange(range)
-    }
+    selectTextSlice(caret.textNode, caret.offset - 1, caret.offset + closesAfter[0].length)
     insertInlineCode(root, closesAfter[1] ?? '', false)
-    return true
-  }
-
-  const rules: Array<[RegExp, 'strong' | 'em' | 'del']> = [
-    [/\*\*([^*\n]+)\*\*$/, 'strong'],
-    [/(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__$/, 'strong'],
-    [/~~([^~\n]+)~~$/, 'del'],
-    [/(?<!\*)\*([^*\n]+)\*$/, 'em'],
-    [/(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_$/, 'em']
-  ]
-
-  for (const [pattern, tag] of rules) {
-    const match = prefix.match(pattern)
-    if (!match) continue
-    replaceInlineMatch(root, textNode, endOffset, match, tag)
-    return true
+    return 'inline-code'
   }
 
   // Inline code pairs single backticks left to right, exactly like the renderer:
@@ -1054,14 +1089,63 @@ function applyInlineRule(root: HTMLElement): boolean {
   // to let a backtick typed for the *next* word re-pair with the backtick that
   // had already closed an earlier span, which swallowed the whole sentence into
   // one inline code span and left the earlier pair unread as a pair.
-  if (prefix.endsWith('`')) {
-    const pair = scanInlineCode(prefix).pair
+  if (caret.prefix.endsWith('`') && !suppressed('inline-code')) {
+    const pair = scanInlineCode(caret.prefix).pair
     if (pair) {
-      replaceInlineCodePair(root, textNode, pair, endOffset)
-      return true
+      replaceInlineCodePair(root, caret.textNode, pair, caret.offset)
+      return 'inline-code'
     }
   }
-  return false
+  return null
+}
+
+/**
+ * The backtick pairings above, as their own pass, so that paste runs exactly the
+ * rules typing runs. A paste inserts a run of text instead of the character that
+ * triggers a rule, so `` the user typed before it, or the backticks they are
+ * sitting between, have to be recognized without re-parsing anything else in the
+ * document   which is what the editor used to do, and what silently rewrote
+ * every block the user had already written.
+ */
+export function applyInlineCodeRules(
+  root: HTMLElement,
+  options: MarkdownInputRuleOptions = {}
+): MarkdownRuleKind | null {
+  const caret = inlineCaret(root)
+  if (!caret) return null
+  if (isFenceCandidateBlock(root, caret.block)) return null
+  return applyInlineCodeRule(
+    root,
+    caret,
+    (kind) => options.isRuleSuppressed?.(caret.block, kind) === true
+  )
+}
+
+function applyInlineRule(
+  root: HTMLElement,
+  options: MarkdownInputRuleOptions
+): MarkdownRuleKind | null {
+  const caret = inlineCaret(root)
+  if (!caret) return null
+  // A block whose view is a ``` fence candidate (```lang, or ```…``` across
+  // its own text and following sibling blocks for the tag-end-then-open flow)
+  // belongs to the Enter-triggered fence rule   inline rules must never eat
+  // its backticks while it is typed.
+  if (isFenceCandidateBlock(root, caret.block)) return null
+
+  const suppressed = (kind: MarkdownRuleKind): boolean =>
+    options.isRuleSuppressed?.(caret.block, kind) === true
+
+  const codeRule = applyInlineCodeRule(root, caret, suppressed)
+  if (codeRule) return codeRule
+
+  for (const [pattern, tag, kind] of INLINE_TYPING_RULES) {
+    const match = caret.prefix.match(pattern)
+    if (!match || suppressed(kind)) continue
+    replaceInlineMatch(root, caret.textNode, caret.offset, match, tag)
+    return kind
+  }
+  return null
 }
 
 function replaceBlockWithHeading(block: HTMLElement, level: number, content: string): void {
@@ -1168,7 +1252,12 @@ function collectFenceCandidate(root: HTMLElement, block: HTMLElement): FenceCand
   while (sibling instanceof HTMLElement && root.contains(sibling)) {
     if (++scanned > MAX_FENCE_CANDIDATE_SIBLINGS) return null
     const text = blockTextWithBreaks(sibling).replace(/[\u200b\u00a0\s]+$/g, '')
-    if (text === '```') return { text: `${parts.join('\n')}\n\u0060\u0060\u0060`, nodes: [...nodes, sibling], closed: true }
+    if (text === '```')
+      return {
+        text: `${parts.join('\n')}\n\u0060\u0060\u0060`,
+        nodes: [...nodes, sibling],
+        closed: true
+      }
     if (text.startsWith('```')) break
     if (sibling.tagName !== 'P' && sibling.tagName !== 'DIV') break
     if (text.split('\n').some((line) => /^\s*>/.test(line))) return null
@@ -1277,38 +1366,82 @@ export function applyCodeFenceOnEnter(root: HTMLElement): boolean {
   return true
 }
 
-function applyBlockRule(root: HTMLElement): boolean {
-  const selection = selectionInside(root)
-  if (!selection?.anchorNode) return false
-  const block = currentBlock(root, selection.anchorNode)
-  if (!block || block === root || (block.tagName !== 'P' && block.tagName !== 'DIV')) return false
-  const text = block.textContent ?? ''
+/**
+ * Identifies which markdown input rule rewrote the DOM. The editor uses it to
+ * make an auto-conversion its own undo step (undo restores the literal text the
+ * user typed) and to hold that same rule off inside the block the user just
+ * reverted it in.
+ */
+export type MarkdownRuleKind =
+  | 'heading'
+  | 'bullet-list'
+  | 'ordered-list'
+  | 'strong-asterisk'
+  | 'strong-underscore'
+  | 'strikethrough'
+  | 'emphasis-asterisk'
+  | 'emphasis-underscore'
+  | 'inline-code'
 
-  const heading = text.match(/^(#{1,6})\s+(.*)$/)
-  if (heading) {
-    replaceBlockWithHeading(block, heading[1]?.length ?? 1, heading[2] ?? '')
-    return true
-  }
-  const unordered = text.match(/^[-+*]\s+(.*)$/)
-  if (unordered) {
-    replaceBlockWithList(block, false, unordered[1] ?? '')
-    return true
-  }
-  const ordered = text.match(/^1[.)]\s+(.*)$/)
-  if (ordered) {
-    replaceBlockWithList(block, true, ordered[1] ?? '')
-    return true
-  }
-
-  return false
+export interface MarkdownInputRuleOptions {
+  /** True when the caret's block must skip `kind` because the user undid that
+   *  very conversion there and the typed characters are still literal. */
+  isRuleSuppressed?: (block: HTMLElement | null, kind: MarkdownRuleKind) => boolean
 }
 
-export function applyMarkdownInputRule(root: HTMLElement): void {
+/** Typing-rule passes, in order: strong before emphasis so `**` is never eaten
+ *  by the single-asterisk rule. Matched against the text before the caret. */
+const INLINE_TYPING_RULES: ReadonlyArray<
+  readonly [RegExp, 'strong' | 'em' | 'del', MarkdownRuleKind]
+> = [
+  [new RegExp(`${DELIMITED_SPAN_SOURCES.strongAsterisk}$`), 'strong', 'strong-asterisk'],
+  [new RegExp(`${DELIMITED_SPAN_SOURCES.strongUnderscore}$`), 'strong', 'strong-underscore'],
+  [new RegExp(`${DELIMITED_SPAN_SOURCES.strike}$`), 'del', 'strikethrough'],
+  [new RegExp(`${DELIMITED_SPAN_SOURCES.emphasisAsterisk}$`), 'em', 'emphasis-asterisk'],
+  [new RegExp(`${DELIMITED_SPAN_SOURCES.emphasisUnderscore}$`), 'em', 'emphasis-underscore']
+]
+
+function applyBlockRule(
+  root: HTMLElement,
+  options: MarkdownInputRuleOptions
+): MarkdownRuleKind | null {
+  const selection = selectionInside(root)
+  if (!selection?.anchorNode) return null
+  const block = currentBlock(root, selection.anchorNode)
+  if (!block || block === root || (block.tagName !== 'P' && block.tagName !== 'DIV')) return null
+  const text = block.textContent ?? ''
+  const suppressed = (kind: MarkdownRuleKind): boolean =>
+    options.isRuleSuppressed?.(block, kind) === true
+
+  const heading = text.match(/^(#{1,6})\s+(.*)$/)
+  if (heading && !suppressed('heading')) {
+    replaceBlockWithHeading(block, heading[1]?.length ?? 1, heading[2] ?? '')
+    return 'heading'
+  }
+  const unordered = text.match(/^[-+*]\s+(.*)$/)
+  if (unordered && !suppressed('bullet-list')) {
+    replaceBlockWithList(block, false, unordered[1] ?? '')
+    return 'bullet-list'
+  }
+  const ordered = text.match(/^1[.)]\s+(.*)$/)
+  if (ordered && !suppressed('ordered-list')) {
+    replaceBlockWithList(block, true, ordered[1] ?? '')
+    return 'ordered-list'
+  }
+
+  return null
+}
+
+export function applyMarkdownInputRule(
+  root: HTMLElement,
+  options: MarkdownInputRuleOptions = {}
+): MarkdownRuleKind | null {
   // The code fence is deliberately NOT an input rule: it only materializes on
   // Enter (see `applyCodeFenceOnEnter`), so typing ```lang never yanks the
   // paragraph away mid-sentence.
-  if (applyBlockRule(root)) return
-  applyInlineRule(root)
+  const blockRule = applyBlockRule(root, options)
+  if (blockRule) return blockRule
+  return applyInlineRule(root, options)
 }
 
 export function formatRichSelection(root: HTMLElement, tagName: 'strong' | 'em' | 'code'): boolean {
@@ -1359,31 +1492,67 @@ export function insertMarkdownLineBreak(root: HTMLElement): boolean {
   return true
 }
 
+/**
+ * Fold the adjacent Text siblings of `parent` into one text node, reporting the
+ * caret position that sat right after `boundary` (null when `boundary` is not a
+ * text node, i.e. when the insertion ended on a line break). An insertion splits
+ * the text node the caret was in and parks the caret on the block element, so
+ * the run around the caret ends up spread over separate nodes   and a caret
+ * anchored on an element is invisible to every markdown rule.
+ */
+function mergeTextRunAt(parent: Node, boundary: Node): { node: Text; offset: number } | null {
+  let merged: Text | null = null
+  let caret: { node: Text; offset: number } | null = null
+  for (const child of Array.from(parent.childNodes)) {
+    if (!(child instanceof Text)) {
+      merged = null
+      continue
+    }
+    const target = merged ?? child
+    if (child === boundary) {
+      // The caret belonged right after `boundary`, counted across the text that
+      // precedes it in this run and its own characters.
+      caret = { node: target, offset: (merged ? target.data.length : 0) + child.data.length }
+    }
+    if (merged) {
+      merged.appendData(child.data)
+      child.remove()
+    } else {
+      merged = child
+    }
+  }
+  return caret
+}
+
 export function insertPlainText(root: HTMLElement, text: string): void {
   const selection = selectionInside(root)
   if (!selection || selection.rangeCount === 0) return
   const range = selection.getRangeAt(0)
   range.deleteContents()
   const fragment = document.createDocumentFragment()
-  let lastNode: Node | null = null
 
   text
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .forEach((line, index) => {
-      if (index > 0) {
-        lastNode = document.createElement('br')
-        fragment.append(lastNode)
-      }
-      if (line) {
-        lastNode = document.createTextNode(line)
-        fragment.append(lastNode)
-      }
+      if (index > 0) fragment.append(document.createElement('br'))
+      if (line) fragment.append(document.createTextNode(line))
     })
 
+  // The node the caret belongs after, read before the fragment is emptied into
+  // the document (a text node tail is what the caret ends up inside of).
+  const tail = fragment.lastChild
   range.insertNode(fragment)
-  if (!lastNode) return
-  range.setStartAfter(lastNode)
+  if (!tail) return
+  // Keep the caret inside the text it sits in, with the whole run in one node:
+  // the markdown rules read the text around the caret, and the backticks a paste
+  // lands between are split off into neighbouring nodes by the insertion above.
+  const parked = tail.parentNode ? mergeTextRunAt(tail.parentNode, tail) : null
+  if (parked) {
+    range.setStart(parked.node, Math.min(parked.offset, parked.node.data.length))
+  } else {
+    range.setStartAfter(tail)
+  }
   range.collapse(true)
   selection.removeAllRanges()
   selection.addRange(range)

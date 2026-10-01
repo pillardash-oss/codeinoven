@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { Logger } from '../system/logger'
 
 interface NativeCaptureRequest {
   id: string
@@ -14,6 +15,9 @@ interface NativeCaptureResponse {
   id: string
   ok: boolean
   error?: string
+  /** CoreAudio's own domain and status, when the worker reported a failure. */
+  errorDomain?: string
+  errorCode?: number
 }
 
 interface PendingRequest {
@@ -28,6 +32,15 @@ export class NativeSpeechCapture {
   private readonly pending = new Map<string, PendingRequest>()
   private buffered = ''
   private currentSessionId: string | null = null
+  /**
+   * The worker's recent stderr.
+   *
+   * The worker reports every CoreAudio failure with its OSStatus on stderr, and
+   * it used to be discarded, which left "error 2003329396" with no record of
+   * which call or which device reported it. Kept bounded so a chatty worker
+   * cannot grow the buffer.
+   */
+  private stderrTail = ''
 
   constructor(private readonly executablePath: string) {}
 
@@ -56,12 +69,26 @@ export class NativeSpeechCapture {
 
   async start(sessionId: string, outputPath: string): Promise<void> {
     if (!(await this.available())) throw new Error('Native microphone recording is unavailable.')
-    if (this.currentSessionId) throw new Error('A native recording is already active.')
-    await this.request({
-      id: randomUUID(),
-      operation: 'start',
-      outputPath
-    })
+    // A claim that was never released (a renderer reload, a lost stop) must not
+    // fail every later attempt with "a native recording is already active" and
+    // strand the run on the browser recorder. The worker stops its own engine
+    // on every start, so the stale claim is reclaimed rather than refused.
+    if (this.currentSessionId && this.currentSessionId !== sessionId) {
+      await this.stop(this.currentSessionId).catch(() => undefined)
+    }
+    try {
+      await this.request({
+        id: randomUUID(),
+        operation: 'start',
+        outputPath
+      })
+    } catch (error) {
+      // A failed or unresponsive start leaves a worker whose engine may be
+      // half-built with the microphone open. Nothing can reuse it safely, so it
+      // is killed and the next attempt gets a fresh CoreAudio state.
+      this.restart(error instanceof Error ? error : new Error(String(error)))
+      throw error
+    }
     this.currentSessionId = sessionId
   }
 
@@ -69,6 +96,10 @@ export class NativeSpeechCapture {
     if (this.currentSessionId !== sessionId) return
     try {
       await this.request({ id: randomUUID(), operation: 'stop' })
+    } catch (error) {
+      // A rejected or timed-out stop means the worker is wedged with an engine
+      // that may still hold the microphone. Kill it instead of reusing it.
+      this.restart(error instanceof Error ? error : new Error(String(error)))
     } finally {
       // A rejected stop (the worker exited or wedged) still ends this session's
       // claim on the microphone. Leaving the claim set would fail every later
@@ -107,7 +138,7 @@ export class NativeSpeechCapture {
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => this.read(chunk))
     child.stderr.setEncoding('utf8')
-    child.stderr.on('data', () => undefined)
+    child.stderr.on('data', (chunk: string) => this.recordStderr(chunk))
     child.once('error', (error) => this.failPending(error))
     child.once('exit', (code) => {
       this.process = null
@@ -117,6 +148,30 @@ export class NativeSpeechCapture {
         )
     })
     return child
+  }
+
+  /**
+   * Kill the worker and drop everything that refers to it.
+   *
+   * A worker left alive after a failed start keeps its engine and tap, so the
+   * microphone stays claimed by a process nothing will stop. Killing it here is
+   * what makes the next attempt a fresh start rather than a reuse.
+   */
+  private restart(reason: Error): void {
+    const child = this.process
+    this.process = null
+    this.buffered = ''
+    this.currentSessionId = null
+    this.failPending(reason)
+    if (child && !child.killed) child.kill()
+  }
+
+  private recordStderr(chunk: string): void {
+    this.stderrTail = (this.stderrTail + chunk).slice(-2_000)
+    for (const line of chunk.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed) Logger.dev(`Native speech capture: ${trimmed}`)
+    }
   }
 
   private request(request: NativeCaptureRequest): Promise<NativeCaptureResponse> {
@@ -134,7 +189,19 @@ export class NativeSpeechCapture {
         reject(error)
       })
     }).then((response) => {
-      if (!response.ok) throw new Error(response.error ?? 'Native microphone recorder failed.')
+      if (!response.ok) {
+        if (response.errorDomain) {
+          Logger.dev('Native speech capture failed', {
+            domain: response.errorDomain,
+            code: response.errorCode ?? null,
+            detail: response.error ?? ''
+          })
+        }
+        if (this.stderrTail) {
+          Logger.dev('Native speech capture stderr:', this.stderrTail.trim())
+        }
+        throw new Error(response.error ?? 'Native microphone recorder failed.')
+      }
       return response
     })
   }

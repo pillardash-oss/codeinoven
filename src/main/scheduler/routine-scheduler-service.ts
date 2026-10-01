@@ -1,15 +1,20 @@
 import { Logger } from '../system/logger'
+import { instanceRegistry } from '../system/instance-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { RoutineManager } from '../../lib/engines/routine-manager'
 import {
+  nextRunAt,
   previousDueAt,
   scheduleIsActive,
+  type BackgroundRun,
+  type BackgroundRunReason,
   type MissedRun,
   type Routine,
   type Thread,
   type ThreadStatus
 } from '../../lib/types'
 import { MissedRunStore } from './missed-run-store'
+import type { BackgroundRunLedger } from './background-run-ledger'
 
 /** How often the scheduler checks whether a configured time has come due. */
 const TICK_MS = 30_000
@@ -20,6 +25,14 @@ const TICK_MS = 30_000
  * through it, without a burst of catch-up runs.
  */
 const MISS_GRACE_MS = 2 * 60_000
+
+/**
+ * Most missed slots one catch-up pass will dispatch. A long outage can leave
+ * many pending runs; firing them all at once would be a burst that hammers the
+ * machine and every provider, so a pass is bounded and the rest wait for the
+ * next pass.
+ */
+const MAX_CATCH_UP_PER_PASS = 5
 
 /**
  * Create the fresh thread a run executes on. Every run gets its own thread, so
@@ -47,6 +60,17 @@ export interface RoutineSchedulerDeps {
    * every renderer without the scheduler depending on Electron.
    */
   onTaskChanged?: (task: Thread) => void
+  /**
+   * A dispatched run settled failed or interrupted. `post-paint-services` uses
+   * this to mark the run thread unread so the durable failure is visible on the
+   * next open. Optional so the scheduler stays usable without the app shell.
+   */
+  onRunFailed?: (runThreadId: string) => void
+  /**
+   * Durable record of unattended dispatches. Optional so the scheduler stays
+   * usable (and testable) without the background feature.
+   */
+  backgroundLedger?: BackgroundRunLedger
 }
 
 /**
@@ -115,6 +139,15 @@ export class RoutineSchedulerService {
     return this.missed.list()
   }
 
+  /**
+   * The durable ledger of unattended runs, newest first. Read straight from the
+   * ledger so the "While you were away" surface can still show a run whose own
+   * thread has since been evicted or deleted.
+   */
+  listBackgroundRuns(): BackgroundRun[] {
+    return this.deps.backgroundLedger?.list() ?? []
+  }
+
   dismissMissedRun(id: string): void {
     this.missed.dismiss(id)
     this.notifyChange()
@@ -144,6 +177,18 @@ export class RoutineSchedulerService {
    * belonged to is gone (the orphan is settled so it stops badging).
    */
   async runMissedRunNow(id: string): Promise<Thread | null> {
+    return this.runMissed(id, null)
+  }
+
+  /**
+   * Dispatch one missed slot. `backgroundReason` is set only for the catch-up
+   * pass, so an entry lands in the ledger for a run nobody watched, while the
+   * user's own "Run now" stays out of it.
+   */
+  private async runMissed(
+    id: string,
+    backgroundReason: BackgroundRunReason | null
+  ): Promise<Thread | null> {
     const missed = this.missed.listAll().find((entry) => entry.id === id)
     if (!missed) throw new Error(`Missed run not found: ${id}`)
     const task = this.deps.routines
@@ -157,7 +202,7 @@ export class RoutineSchedulerService {
     }
     const routine = task.routineId ? this.deps.routines.getRoutine(task.routineId) : null
     try {
-      const run = await this.startRun(task, routine)
+      const run = await this.startRun(task, routine, backgroundReason)
       this.recordLastRun(task.id, missed.dueAt)
       this.recordDispatch(task.id)
       this.missed.markRun(id)
@@ -200,12 +245,15 @@ export class RoutineSchedulerService {
     if (taskId === undefined) return
     if (status === 'completed') {
       this.inFlightRuns.delete(runThreadId)
+      this.deps.backgroundLedger?.settle(runThreadId, { outcome: 'completed' })
       const updated = this.deps.routines.markTaskRunSuccess(taskId, this.now())
       if (updated) this.deps.onTaskChanged?.(updated)
       return
     }
     if (status === 'failed' || status === 'interrupted') {
       this.inFlightRuns.delete(runThreadId)
+      this.deps.backgroundLedger?.settle(runThreadId, { outcome: 'failed' })
+      this.deps.onRunFailed?.(runThreadId)
     }
   }
 
@@ -227,12 +275,63 @@ export class RoutineSchedulerService {
 
   /** Evaluate every scheduled task once (used by start and by tests). */
   evaluate(allowDispatch = true): void {
+    // Scheduled work happens exactly once per config root: only the elected
+    // owner evaluates schedules, so two live instances can never double-fire a
+    // slot. A secondary still serves "Run now", which is user-initiated and
+    // does not go through this path.
+    if (!instanceRegistry.isIncumbentInstance()) return
     const tasks = this.deps.routines.listAssistantTasks()
     for (const task of tasks) {
       try {
         this.evaluateTask(task, allowDispatch)
       } catch (error) {
         Logger.error('Routine schedule evaluation failed', error)
+      }
+    }
+  }
+
+  /**
+   * The soonest moment any runnable assistant task is next due, or null when
+   * nothing is scheduled. Powers the background wake lead (hold the machine
+   * awake near a due run) and the "next run" tooltip.
+   */
+  nextDueAt(now: number): number | null {
+    let soonest: number | null = null
+    for (const task of this.deps.routines.listAssistantTasks()) {
+      try {
+        if (this.deps.routines.isTaskPaused(task)) continue
+        if (this.deps.routines.resolveTaskHowTo(task).trim() === '') continue
+        const schedule = this.deps.routines.resolveTaskSchedule(task)
+        if (!scheduleIsActive(schedule)) continue
+        // A slot already claimed must not be offered again, so the search starts
+        // after the later of now and the task's last fire.
+        const from = Math.max(now, task.lastRunAt ?? 0)
+        const candidate = nextRunAt(schedule, from)
+        if (candidate !== null && (soonest === null || candidate < soonest)) soonest = candidate
+      } catch (error) {
+        Logger.error('Routine next-due evaluation failed', error)
+      }
+    }
+    return soonest
+  }
+
+  /**
+   * Dispatch the slots missed while the app was closed or the machine slept.
+   * Runs on the owner only, in sequence and bounded per pass, and is idempotent
+   * across relaunches because a recorded miss is claimed by its (thread, due)
+   * identity before the run is created.
+   */
+  async runPendingMisses(): Promise<void> {
+    if (!instanceRegistry.isIncumbentInstance()) return
+    const pending = this.missed.list()
+    let dispatched = 0
+    for (const run of pending) {
+      if (dispatched >= MAX_CATCH_UP_PER_PASS) break
+      try {
+        const created = await this.runMissed(run.id, 'caught-up')
+        if (created) dispatched += 1
+      } catch (error) {
+        Logger.error('Catch-up run failed', error)
       }
     }
   }
@@ -261,6 +360,7 @@ export class RoutineSchedulerService {
   async flush(): Promise<void> {
     await this.missed.flush()
     await this.dispatchChain
+    await this.deps.backgroundLedger?.flush()
   }
 
   stop(): void {
@@ -335,7 +435,7 @@ export class RoutineSchedulerService {
   private fire(task: Thread, dueAt: number): void {
     this.recordLastRun(task.id, dueAt)
     this.dispatchChain = this.dispatchChain
-      .then(() => this.startRun(task))
+      .then(() => this.startRun(task, undefined, 'scheduled'))
       .then(() => {
         this.recordDispatch(task.id)
         this.notifyChange()
@@ -347,9 +447,15 @@ export class RoutineSchedulerService {
 
   /**
    * Create the run's thread and hand the run to the dispatcher. The run is
-   * tracked against its task so a settled turn stamps the task, not the run.
+   * tracked against its task so a settled turn stamps the task, not the run. A
+   * background reason records the dispatch in the audit ledger before anything
+   * can fail, so an overnight run is never invisible.
    */
-  private async startRun(task: Thread, knownRoutine?: Routine | null): Promise<Thread> {
+  private async startRun(
+    task: Thread,
+    knownRoutine?: Routine | null,
+    backgroundReason?: BackgroundRunReason | null
+  ): Promise<Thread> {
     const routine =
       knownRoutine !== undefined
         ? knownRoutine
@@ -357,11 +463,23 @@ export class RoutineSchedulerService {
           ? this.deps.routines.getRoutine(task.routineId)
           : null
     const run = await this.deps.createRunThread(task, routine)
+    if (backgroundReason && this.deps.backgroundLedger) {
+      this.deps.backgroundLedger.recordStart({
+        taskId: task.id,
+        ...(task.routineId ? { routineId: task.routineId } : {}),
+        runThreadId: run.id,
+        reason: backgroundReason
+      })
+    }
     this.inFlightRuns.set(run.id, task.id)
     try {
       await this.deps.dispatch(run, task, routine)
     } catch (error) {
       this.inFlightRuns.delete(run.id)
+      this.deps.backgroundLedger?.settle(run.id, {
+        outcome: 'failed',
+        errorSummary: error instanceof Error ? error.message : String(error)
+      })
       throw error
     }
     return run

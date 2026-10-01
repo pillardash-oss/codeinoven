@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { randomInt } from 'crypto'
-import { readFile, appendFile, unlink, open, type FileHandle } from 'fs/promises'
+import { readFile, appendFile, unlink, open, stat, type FileHandle } from 'fs/promises'
 import {
   getConfigRoot,
   ensureDir,
@@ -13,8 +13,20 @@ import {
   resolveWithinRoot
 } from '../../lib/utils'
 import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
-import { DEFAULT_MAX_CONFLICT_FILE_BYTES, DEFAULT_IN_APP_NOTIFICATION_SOUND } from '../../lib/types'
+import {
+  DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_BROWSER_HISTORY_LIMIT,
+  DEFAULT_MAX_CONFLICT_FILE_BYTES,
+  DEFAULT_IN_APP_NOTIFICATION_SOUND,
+  DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
+  MAX_BACKGROUND_WAKE_LEAD_MS,
+  MIN_BACKGROUND_WAKE_LEAD_MS,
+  MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
+  MIN_MAX_BACKGROUND_WAKE_HOLD_MS
+} from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
+import { DEFAULT_WORK_ROOTS, workRootsFromConfig } from '../../lib/design/work-roots'
 import {
   CIO_PROMPT_DEFINITIONS,
   CIO_PROMPT_MAX_LENGTH,
@@ -29,7 +41,6 @@ import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../.
 import type { Project } from '../../lib/types'
 import {
   ASSISTANT_CWD_DIR,
-  CHATS_ARTIFACTS_DIRECTORY,
   CHATS_CWD_DIR,
   featureArtifactDirectory,
   featureSlugFromTitle
@@ -44,9 +55,19 @@ import {
 } from '../../lib/assignment/worker-names'
 import type { WorkerNameSettings } from '../../lib/assignment/worker-names'
 import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '../../lib/prototypes/prototype-cdn'
+import {
+  DEFAULT_BROWSER_SEARCH_ENGINE_ID,
+  sanitizeCustomSearchEngines
+} from '../../lib/browser-search-engines'
 import { MAX_DESIGN_ASSIGNMENTS, isUsableDesignAssignment } from '../../lib/design-assignments'
 import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
 import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/image-descriptor'
+
+/** Coerce an untrusted numeric config value into its allowed range, or default. */
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
 
 const DEFAULT_CONFIG: AppConfig = {
   theme: 'system',
@@ -65,6 +86,8 @@ const DEFAULT_CONFIG: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
   design: { assignments: [] },
+  workRoots: { ...DEFAULT_WORK_ROOTS },
+  mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
@@ -79,6 +102,17 @@ const DEFAULT_CONFIG: AppConfig = {
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
   openLocalhostInCioBrowser: true,
+  openAllLinksInCioBrowser: false,
+  browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  browserHistoryLimit: DEFAULT_BROWSER_HISTORY_LIMIT,
+  backgroundMode: 'scheduled',
+  launchAtLogin: false,
+  launchAtLoginPrompted: false,
+  autoRunMissedAssistantRuns: true,
+  backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
+  browserSearchEngine: DEFAULT_BROWSER_SEARCH_ENGINE_ID,
+  browserCustomSearchEngines: [],
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
@@ -96,6 +130,18 @@ const VISION_MODELS_FILE = 'vision-models.json'
 export interface RawFileTail {
   /** Complete lines after `fromByte`, decoded UTF-8. Empty when none yet. */
   content: string
+  /** Byte offset to pass to the next call. */
+  nextByte: number
+  /** Current file size in bytes. */
+  size: number
+}
+
+/** One bounded chunk of a raw file, still undecoded. */
+export interface RawFileChunk {
+  /** The bytes read, empty at or past end of file. */
+  buffer: Buffer
+  /** How many bytes `buffer` holds. */
+  bytesRead: number
   /** Byte offset to pass to the next call. */
   nextByte: number
   /** Current file size in bytes. */
@@ -131,7 +177,6 @@ export class StorageEngine {
     await ensureDir(this.resolve('logs'))
     await ensureDir(this.resolve(CHATS_CWD_DIR))
     await ensureDir(this.resolve(ASSISTANT_CWD_DIR))
-    await ensureDir(this.resolve(CHATS_ARTIFACTS_DIRECTORY))
     await ensureDir(this.resolve('window-state'))
     await ensureDir(this.resolve('scheduler'))
     await ensureDir(this.resolve('memory'))
@@ -178,6 +223,15 @@ export class StorageEngine {
           .filter(isUsableDesignAssignment)
           .slice(0, MAX_DESIGN_ASSIGNMENTS)
       },
+      // A provider id a future version wrote is passed through as-is so the
+      // choice is not silently erased; only a missing field falls back.
+      mediaGeneration: {
+        providerId: config?.mediaGeneration?.providerId ?? DEFAULT_CONFIG.mediaGeneration.providerId
+      },
+      // Read tolerantly: a value a future version wrote, a hand-edited path, or a
+      // pair where one root sits inside the other arrives as a working app with
+      // the defaults rather than as a failed start.
+      workRoots: workRootsFromConfig(config ?? {}),
       memory: {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),
@@ -192,6 +246,44 @@ export class StorageEngine {
             (origin): origin is string => typeof origin === 'string'
           )
         : DEFAULT_CONFIG.prototypeCdnAllowlist,
+      browserSearchEngine:
+        typeof config?.browserSearchEngine === 'string' && config.browserSearchEngine.trim() !== ''
+          ? config.browserSearchEngine
+          : DEFAULT_CONFIG.browserSearchEngine,
+      browserCustomSearchEngines: sanitizeCustomSearchEngines(config?.browserCustomSearchEngines),
+      // Background settings are read tolerantly: a hand-edited value outside the
+      // closed set or the bounds falls back instead of disabling the feature
+      // silently, and `launchAtLogin` follows the mode when it is off.
+      backgroundMode:
+        config?.backgroundMode === 'off' ||
+        config?.backgroundMode === 'always' ||
+        config?.backgroundMode === 'scheduled'
+          ? config.backgroundMode
+          : DEFAULT_CONFIG.backgroundMode,
+      launchAtLogin:
+        typeof config?.launchAtLogin === 'boolean'
+          ? config.launchAtLogin
+          : DEFAULT_CONFIG.launchAtLogin,
+      launchAtLoginPrompted:
+        typeof config?.launchAtLoginPrompted === 'boolean'
+          ? config.launchAtLoginPrompted
+          : DEFAULT_CONFIG.launchAtLoginPrompted,
+      autoRunMissedAssistantRuns:
+        typeof config?.autoRunMissedAssistantRuns === 'boolean'
+          ? config.autoRunMissedAssistantRuns
+          : DEFAULT_CONFIG.autoRunMissedAssistantRuns,
+      backgroundWakeLeadMs: clampNumber(
+        config?.backgroundWakeLeadMs,
+        MIN_BACKGROUND_WAKE_LEAD_MS,
+        MAX_BACKGROUND_WAKE_LEAD_MS,
+        DEFAULT_CONFIG.backgroundWakeLeadMs
+      ),
+      maxBackgroundWakeHoldMs: clampNumber(
+        config?.maxBackgroundWakeHoldMs,
+        MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
+        MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
+        DEFAULT_CONFIG.maxBackgroundWakeHoldMs
+      ),
       sound: {
         ...DEFAULT_CONFIG.sound,
         ...(config?.sound ?? {}),
@@ -481,6 +573,58 @@ export class StorageEngine {
     }
   }
 
+  /**
+   * Read at most `length` bytes starting at `fromByte`, without decoding them.
+   *
+   * The bounded counterpart of `readRawTail`: a caller that has to walk a large
+   * append-only log walks it a chunk at a time instead of allocating the whole
+   * file, so peak memory stays flat no matter how big the log grew and the
+   * caller can hand the event loop back between chunks. Returns null when the
+   * file is missing; `size` is the file's current byte length so a caller can
+   * still detect a rewrite (shrunk file) between chunks.
+   */
+  async readRawChunk(
+    relativePath: string,
+    fromByte: number,
+    length: number
+  ): Promise<RawFileChunk | null> {
+    let handle: FileHandle
+    try {
+      handle = await open(this.resolve(relativePath), 'r')
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+      throw error
+    }
+    try {
+      const { size } = await handle.stat()
+      if (length <= 0 || fromByte >= size) {
+        return { buffer: Buffer.alloc(0), bytesRead: 0, nextByte: fromByte, size }
+      }
+      const requested = Math.min(length, size - fromByte)
+      const buffer = Buffer.allocUnsafe(requested)
+      let read = 0
+      while (read < requested) {
+        const chunk = await handle.read(buffer, read, requested - read, fromByte + read)
+        if (chunk.bytesRead === 0) break
+        read += chunk.bytesRead
+      }
+      return { buffer: buffer.subarray(0, read), bytesRead: read, nextByte: fromByte + read, size }
+    } finally {
+      await handle.close()
+    }
+  }
+
+  /** Current byte length of a raw file, read from its metadata and never its content. */
+  async rawSize(relativePath: string): Promise<number | null> {
+    try {
+      const metadata = await stat(this.resolve(relativePath))
+      return metadata.size
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
+      throw error
+    }
+  }
+
   /** Write raw text file atomically */
   async writeRaw(relativePath: string, content: string): Promise<void> {
     const fullPath = this.resolve(relativePath)
@@ -507,12 +651,26 @@ export class StorageEngine {
    */
   async appendRaw(relativePath: string, content: string): Promise<void> {
     const fullPath = this.resolve(relativePath)
-    const previous = this.appendQueues.get(fullPath) ?? Promise.resolve()
-    const write = previous.then(async () => {
+    return this.enqueueRawWrite(fullPath, async () => {
       await ensureDir(join(fullPath, '..'))
       await appendFile(fullPath, content, 'utf-8')
     })
-    // The queue only ever advances on a settled link: a failed append must not
+  }
+
+  /**
+   * Run a write on one file's append queue.
+   *
+   * The queue is what makes an append-only log readable: without it the OS
+   * decides which of two concurrent writes lands first. A rewrite has to share
+   * the queue for the same reason   renaming over a file an in-flight append is
+   * still writing loses that line, and a delete that runs while an append is
+   * queued is undone when the append recreates the file. Both operations go
+   * through here so that can never happen.
+   */
+  private enqueueRawWrite(fullPath: string, task: () => Promise<void>): Promise<void> {
+    const previous = this.appendQueues.get(fullPath) ?? Promise.resolve()
+    const write = previous.then(task)
+    // The queue only ever advances on a settled link: a failed write must not
     // wedge every later write to the same file. Callers still receive the real
     // outcome through `write`.
     const queued = write.then(
@@ -524,6 +682,41 @@ export class StorageEngine {
       if (this.appendQueues.get(fullPath) === queued) this.appendQueues.delete(fullPath)
     })
     return write
+  }
+
+  /**
+   * Rewrite a raw file inside its append queue.
+   *
+   * `build` receives the bytes appended since `fromByte`, read inside the lock so
+   * an append that raced the caller's own read is still included, and returns the
+   * whole new file, or null to leave it as it is. A caller that already holds the
+   * parsed content before `fromByte` compacts a several-hundred-megabyte append
+   * log without reading it a second time.
+   */
+  async rewriteRawFrom(
+    relativePath: string,
+    fromByte: number,
+    build: (appended: string) => string | null
+  ): Promise<void> {
+    const fullPath = this.resolve(relativePath)
+    await this.enqueueRawWrite(fullPath, async () => {
+      const tail = await this.readRawTail(relativePath, fromByte)
+      const next = build(tail?.content ?? '')
+      if (next === null) return
+      await ensureDir(join(fullPath, '..'))
+      await atomicWrite(fullPath, next)
+    })
+  }
+
+  /**
+   * Wait for the writes already queued for a path.
+   *
+   * Called before a file is removed so a queued append cannot land after the
+   * delete and recreate it. A write queued after this returns is the caller's to
+   * prevent   the turn-stream delete does that with a tombstone.
+   */
+  async drainRaw(relativePath: string): Promise<void> {
+    await (this.appendQueues.get(this.resolve(relativePath)) ?? Promise.resolve())
   }
 
   /** List entries in a directory relative to config root */

@@ -1,11 +1,9 @@
 <script lang="ts">
   import { Clock, MessagesSquare } from '@lucide/svelte'
   import type { Thread } from '$shared/types'
-  import { isOrchestrationChildThread, isThreadBusy } from '$shared/types'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { isOrchestrationChildThread } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
-  import { statusBadgeForThread } from '$lib/thread-status-badge'
-  import CommandPalette from '../actions/CommandPalette.svelte'
+  import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
   import type { ActionDefinition, ActionSelection } from '$lib/actions'
 
   interface Props {
@@ -24,10 +22,10 @@
   let loading = $state(false)
   let requestId = 0
 
+  /** The one live-working rule, so a thread parked on the user reads as
+   *  "Needs attention" here instead of as work in progress. */
   function isLiveWorking(thread: Thread): boolean {
-    return agentRuns.hasSettled(thread.projectId, thread.id)
-      ? agentRuns.isBusy(thread.projectId, thread.id)
-      : Boolean(thread.sessionId) && isThreadBusy(thread)
+    return isThreadLiveWorking(thread)
   }
 
   function isCandidate(thread: Thread): boolean {
@@ -105,17 +103,25 @@
   }
 </script>
 
-<CommandPalette
-  {open}
-  {actions}
-  title="Start after threads"
-  placeholder="Search working or attention threads…"
-  emptyLabel={loading ? 'Loading active threads…' : 'No working or attention threads'}
-  headerIcon={Clock}
-  headerIconBadge
-  headerIconBadgeClass="border-info/25 bg-info/10 text-info"
-  closeOnSelect={false}
-  onSelect={selectThread}
-  {onClose}
-  shortcutLabel="ESC"
-/>
+<!-- The picker is a dialog palette, so its module is only needed once it is
+     open. Deferring the import is what keeps CommandPalette out of the
+     first-paint chunk: this component is reachable from the composer and the
+     thread view, both of which render on the first screen. -->
+{#if open}
+  {#await import('../actions/CommandPalette.svelte') then { default: CommandPalette }}
+    <CommandPalette
+      {open}
+      {actions}
+      title="Start after threads"
+      placeholder="Search working or attention threads…"
+      emptyLabel={loading ? 'Loading active threads…' : 'No working or attention threads'}
+      headerIcon={Clock}
+      headerIconBadge
+      headerIconBadgeClass="border-info/25 bg-info/10 text-info"
+      closeOnSelect={false}
+      onSelect={selectThread}
+      {onClose}
+      shortcutLabel="ESC"
+    />
+  {/await}
+{/if}

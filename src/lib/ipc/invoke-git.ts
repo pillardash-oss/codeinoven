@@ -146,7 +146,7 @@ export const invokeGitContract = {
   >,
   'git:deleteRemoteBranch': {} as Contract<
     [projectId: string, remote: string, name: string, scopeBucketId?: string],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'git:log': {} as Contract<
     [projectId: string, limit?: number, offset?: number, query?: string, scopeBucketId?: string],
@@ -203,10 +203,13 @@ export const invokeGitContract = {
     [projectId: string, name: string, scopeBucketId?: string],
     GitRemoteInfo[]
   >,
-  'git:fetch': {} as Contract<[projectId: string, scopeBucketId?: string], GitStatus>,
+  'git:fetch': {} as Contract<
+    [projectId: string, scopeBucketId?: string],
+    GitInvocation<GitStatus>
+  >,
   'git:fetchBranch': {} as Contract<
     [projectId: string, remote: string, branch: string, scopeBucketId?: string],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'git:pull': {} as Contract<[projectId: string, scopeBucketId?: string], GitInvocation<GitStatus>>,
   'git:pullIntegrate': {} as Contract<
@@ -257,11 +260,11 @@ export const invokeGitContract = {
   >,
   'git:preparePrResolve': {} as Contract<
     [projectId: string, options: PrResolveOptions, scopeBucketId?: string],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'git:finishPrResolve': {} as Contract<
     [projectId: string, options: PrResolveOptions, scopeBucketId?: string],
-    GitStatus
+    GitInvocation<GitStatus>
   >,
   'git:stash': {} as Contract<
     [projectId: string, message?: string, paths?: string[], scopeBucketId?: string],

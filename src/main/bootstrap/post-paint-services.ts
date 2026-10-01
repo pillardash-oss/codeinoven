@@ -11,31 +11,133 @@
  * paint, in the exact order the bootstrap established.
  */
 
-import { app } from 'electron'
+import { app, type BrowserWindow } from 'electron'
 import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
+import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
-import { assistantRunTitle } from '../../lib/routine-run'
+import { workRootsFromConfig } from '../../lib/design/work-roots'
+import { setWorkRoots } from '../design/work-roots-state'
+import { assistantRunTitle, routineRunPrompt } from '../../lib/routine-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { Logger } from '../system/logger'
+import { resolveAutoAnswerScope } from '../system/auto-answer-scope'
 import {
   broadcastThreadUpdate,
+  setBackgroundAttention,
   setNotificationService,
   setPowerWakeService
 } from '../chat/thread-events'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
+import { ThreadRepo } from '../database/repositories/thread-repo'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
+import { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
+import type { DesignService } from '../design/design-service'
 import type { BootstrapState } from './bootstrap-state'
+
+/** Boot-scoped collaborators a per-window browser attach needs. */
+interface BrowserAttachContext {
+  state: BootstrapState
+  storage: StorageEngine
+  database: Database
+  designService: DesignService
+}
+
+/**
+ * Create (or recreate) the window-bound browser service and wire its two
+ * collaborators. Called once for the first window and again for every window
+ * opened after the previous one was destroyed, so parking to the menu bar and
+ * reopening rebuilds exactly the same browser wiring instead of leaving a stale
+ * service pointing at a dead window.
+ */
+async function attachBrowserService(
+  context: BrowserAttachContext,
+  window: BrowserWindow
+): Promise<void> {
+  const { state, storage, database, designService } = context
+  const chatEngine = state.chatEngine
+  if (!chatEngine) return
+  if (state.browserService) {
+    // The previous window's tabs are about to lose their views, so their stacks
+    // are committed first. This await is what makes the write survive: `dispose()`
+    // closes the views and nothing would be left to read a stack from afterwards.
+    await state.browserService.flushTabHistory()
+    state.browserService.dispose()
+    state.browserService = null
+  }
+  // The download manager is deliberately *not* created per window. Downloads
+  // belong to their project's session and keep running while no window shows
+  // them, so the first attach builds it, hydrates the records an earlier run
+  // left behind, and every later window reuses the same one.
+  if (!state.browserDownloads) {
+    state.browserDownloads = new BrowserDownloadManager({
+      persistence: storage,
+      window: () => (state.mainWindow?.isDestroyed() ? null : state.mainWindow)
+    })
+  }
+  await state.browserDownloads.hydrate()
+  const service = new BrowserService(window, database, storage, state.browserDownloads)
+  state.browserService = service
+  // Remembered permission decisions load before the service accepts browser
+  // IPC, so a site is never re-prompted for a permission the user already
+  // granted in this or an earlier run.
+  await service.hydratePermissionMemory()
+  // The stored Back/Forward stacks load before the service accepts browser IPC.
+  // A tab can be shown on the very first frame the renderer is allowed to ask,
+  // and a tab restored from a hibernated row has to find its history already
+  // there: there is no second chance to restore it once it has loaded.
+  await service.hydrateTabHistory()
+  service.register()
+  // The browser's native context menu is built in main, so it needs the address
+  // bar's search engine. The config is read once at attach; the renderer pushes
+  // later changes.
+  void storage
+    .getConfig()
+    .then((config) =>
+      service.setSearchEngine(
+        findBrowserSearchEngine(config.browserSearchEngine, config.browserCustomSearchEngines)
+      )
+    )
+    .catch(() => {})
+  chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
+    service.executeUtility(operation, input, browserContext)
+  )
+  service.setTabMarkRecogniser((projectId, threadId, url) =>
+    designService.observeShownFolder(projectId, threadId, url)
+  )
+}
+
+/**
+ * Attach every window-bound service to a newly created window.
+ *
+ * The core service graph boots once, headlessly if necessary, and the pieces
+ * that need a window (the PTY sender, the browser, the `app:featuresReady`
+ * signal) are attached here for each window. Running this on every window
+ * creation is what makes reopen work: the previous window's renderer is gone,
+ * so none of these can be inherited.
+ */
+export async function attachWindowServices(
+  state: BootstrapState,
+  window: BrowserWindow
+): Promise<void> {
+  if (window.isDestroyed() || window.webContents.isDestroyed()) return
+  if (!state.chatEngine) return
+  state.ptyService?.attach(window.webContents)
+  await state.attachBrowserToWindow?.(window)
+  if (state.featuresReady) {
+    sendToRenderer(window.webContents, 'app:featuresReady')
+  }
+}
 import { reconcileInterruptedWork, watchForInstanceTakeOver } from './interrupted-work-recovery'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
@@ -77,7 +179,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { ThreadTransferService },
     { RoutineManager },
     { RoutineSchedulerService },
-    { broadcastMissedRunsChanged },
+    { broadcastMissedRunsChanged, broadcastAutoAnswersChanged, broadcastBackgroundRunsChanged },
     { SkillUpdateService },
     { SecretVault },
     { GitHubAuthService }
@@ -120,7 +222,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const projectFilesService = new ProjectFilesService(
     projectManager,
     scopeRootProvider(scopeRootResolver),
-    // Chat file trees mount on the thread's own `chats-artifacts/<threadId>`
+    // Chat file trees mount on the thread's own `chats-cwd/<threadId>`
     // directory and assistant file trees on the task's
     // `assistant-cwd/<routineId ?? threadId>` workspace; both are created on
     // demand so an empty conversation still has a browsable root.
@@ -161,6 +263,16 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
   )
   state.updaterService = new UpdaterService(storage)
+  // The menu bar's "Check for Updates" drives the whole silent cycle. Wired here,
+  // where the updater is born, so the tray item is live the moment the updater is.
+  state.backgroundLifecycle?.setUpdater({
+    updateInBackground: async () => {
+      await state.updaterService?.updateInBackground()
+    },
+    status: () => state.updaterService?.status ?? { canAutoUpdate: false, state: 'idle' },
+    onStatusChange: (callback) =>
+      state.updaterService?.onStatusChange(callback) ?? (() => undefined)
+  })
   // One vault and one GitHub auth for the whole app: the skill updater reads the
   // same token the IPC layer does, so a check is authenticated exactly like an
   // install instead of running against the anonymous rate limit.
@@ -193,8 +305,55 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.chatEngine.attachHeartbeatScheduler(state.heartbeatScheduler)
   state.routineManager = new RoutineManager(database)
   const routineManager = state.routineManager
+  // Durable evidence of unattended runs, loaded before the scheduler can
+  // dispatch so a run that fails at 3am is never invisible on the next launch.
+  const { BackgroundRunLedger } = await import('../scheduler/background-run-ledger')
+  state.backgroundRunLedger = new BackgroundRunLedger(storage)
+  await state.backgroundRunLedger.load()
+  // Durable record of gates the app resolved without the user. Written the
+  // instant one settles, so the attention rail can explain what was asked,
+  // offered and chosen even after a restart.
+  const { AutoAnswerStore } = await import('../system/auto-answer-store')
+  state.autoAnswerStore = new AutoAnswerStore(storage)
+  await state.autoAnswerStore.load()
+  // Proof a previous process shut down on purpose, so an orphaned turn is
+  // settled as a clean app-closed stop rather than a crash failure. Loaded
+  // before launch recovery reads it.
+  const { CleanShutdownStore } = await import('../system/clean-shutdown-store')
+  state.cleanShutdownStore = new CleanShutdownStore(storage)
+  await state.cleanShutdownStore.load()
+  state.chatEngine.attachAutoAnswerRecorder((report) => {
+    const store = state.autoAnswerStore
+    if (!store) return
+    store.record({
+      id: report.id,
+      kind: report.kind,
+      outcome: report.outcome,
+      projectId: report.projectId,
+      threadId: report.threadId,
+      // File the gate under the task and routine it actually concerns, so the
+      // decision keeps surfacing after this run thread is evicted.
+      ...resolveAutoAnswerScope(database, report.projectId, report.threadId),
+      entries: report.entries,
+      at: report.at
+    })
+    broadcastAutoAnswersChanged(store.list())
+    state.backgroundLifecycle?.refreshAttention()
+  })
   state.routineScheduler = new RoutineSchedulerService(storage, {
     routines: routineManager,
+    backgroundLedger: state.backgroundRunLedger,
+    // A run that failed while nobody was watching becomes unread, so its
+    // persisted message reaches the badge and the panel on the next open and the
+    // menu bar icon can say something needs attention.
+    onRunFailed: (runThreadId) => {
+      try {
+        new ThreadRepo(database).markUnread(runThreadId)
+        state.backgroundLifecycle?.refreshAttention()
+      } catch (error) {
+        Logger.error('Could not flag a failed run as unread:', error)
+      }
+    },
     onTaskChanged: (task) => broadcastThreadUpdate(task),
     // Every run executes on a fresh thread: a scheduled fire and a manual
     // "Run now" both create one, so a run never lands in the task's own
@@ -216,16 +375,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         title: assistantRunTitle(Date.now())
       })
     },
-    dispatch: (run, task) => {
+    dispatch: (run, task, routine) => {
       const chatEngine = state.chatEngine
       if (!chatEngine) {
         Logger.dev('Scheduled routine run skipped   no chat engine', { threadId: task.id })
         return
       }
-      const prompt =
-        task.title.trim().length > 0
-          ? `Run this scheduled task now: ${task.title}`
-          : 'Run this scheduled task now.'
+      const prompt = routineRunPrompt(task, routine?.name)
       const runSettings = run.settings ?? task.settings
       if (!runSettings) {
         Logger.error('Routine run has no bound settings', { taskId: task.id, runId: run.id })
@@ -256,7 +412,28 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   })
   state.routineScheduler.attachChangeListener(() => {
     broadcastMissedRunsChanged(state.routineScheduler?.listMissedRuns() ?? [])
+    broadcastBackgroundRunsChanged(state.routineScheduler?.listBackgroundRuns() ?? [])
+    state.backgroundLifecycle?.refreshAttention()
   })
+  // Background wake: the machine is held awake inside the lead window before a
+  // due scheduled run, capped so a mis-scheduled task cannot pin it. The next
+  // due moment is read lazily from the scheduler, so a change is never cached.
+  state.powerWakeService.attachScheduledRunSource(
+    () => state.routineScheduler?.nextDueAt(Date.now()) ?? null
+  )
+  try {
+    const backgroundConfig = await storage.getConfig()
+    state.powerWakeService.setBackgroundPolicy({
+      // The lifecycle is the authority: it also knows whether this launch opted
+      // out of background work, which no config value can express.
+      enabled:
+        state.backgroundLifecycle?.backgroundEnabled ?? backgroundConfig.backgroundMode !== 'off',
+      wakeLeadMs: state.backgroundLifecycle?.wakeLeadMs ?? backgroundConfig.backgroundWakeLeadMs,
+      maxHoldMs: backgroundConfig.maxBackgroundWakeHoldMs
+    })
+  } catch (error) {
+    Logger.error('Background wake policy could not be applied', error)
+  }
   // Scheduled assistant runs fall over to the routine's next model when the
   // current one fails, instead of waiting out the failed provider's reset.
   state.chatEngine.attachAssistantAgentsResolver((task) =>
@@ -267,6 +444,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // successful run once the run's turn actually completes.
   state.chatEngine.attachAssistantRunSettledRecorder((threadId, status) => {
     state.routineScheduler?.settleRun(threadId, status)
+    // A settled run's outcome now belongs in the "While you were away" list.
+    broadcastBackgroundRunsChanged(state.routineScheduler?.listBackgroundRuns() ?? [])
   })
   state.speechService = new SpeechService(
     {
@@ -308,11 +487,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   )
   state.prototypePreviewService = new PrototypePreviewService()
   try {
-    state.prototypePreviewService.setCdnPolicy(
-      prototypeCdnPolicyFromConfig(await storage.getConfig())
-    )
+    const startupConfig = await storage.getConfig()
+    state.prototypePreviewService.setCdnPolicy(prototypeCdnPolicyFromConfig(startupConfig))
+    // The folders designs and videos are written into. Held for the whole run so a
+    // path resolver never touches the config file, and replaced on every save.
+    setWorkRoots(workRootsFromConfig(startupConfig))
   } catch {
-    // The strict policy stands until the config can be read.
+    // The strict policy and the default folders stand until the config can be read.
   }
   state.directoryPreviewService = new DirectoryPreviewService()
   state.chatEngine.setPrototypePreviewRegistrar(
@@ -347,28 +528,60 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       allocatedPort: port
     }).origin
   })
-  if (state.mainWindow && !state.mainWindow.isDestroyed()) {
-    const service = new BrowserService(state.mainWindow, database, storage)
-    state.browserService = service
-    // Remembered permission decisions load before the service accepts browser
-    // IPC, so a site is never re-prompted for a permission the user already
-    // granted in this or an earlier run.
-    await service.hydratePermissionMemory()
-    service.register()
-    state.chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
-      service.executeUtility(operation, input, browserContext)
-    )
-  }
+  // The browser is window-bound: it owns the WebContentsViews the window's stage
+  // hosts. It is created by `attachBrowserToWindow` for the current window and
+  // again for every window opened after the first one was destroyed, so a
+  // reopen after parking gets exactly the same wiring as the first launch.
+  // Nothing to do here when there is no window (a headless background launch);
+  // the design capability reads it lazily and degrades when it is absent.
   // The design capability's `preview` operation composes the two services above:
   // the loopback static host that serves a folder and the thread's browser tab
   // that shows it. Serving must keep working with no window to host a tab, so the
   // browser is read lazily and a missing one degrades to a URL in the reply.
+  //
+  // The design service is the durable side of the same thing: it owns what the
+  // app knows about a thread's authored work (which folder, and how to get back
+  // to it after a restart) and serves the coordinator's open and thumbnail
+  // actions. Both capabilities record every preview through it, so the user's
+  // design or composition is not lost when the window that showed it closes.
+  const { DesignService } = await import('../design/design-service')
+  const designService = new DesignService({
+    database,
+    previews: state.directoryPreviewService,
+    browser: () => state.browserService
+  })
+  designService.registerIpc()
+  // What each thread decided about the experts its design or video session may
+  // delegate to. One service answers it, because the playbook that names the
+  // experts and the `delegate` operation that would run one have to agree: a
+  // thread the user muted must be neither described as staffed nor allowed to
+  // delegate, and two derivations is how those two answers drift apart.
+  const { ExpertSettingsService } = await import('../design/expert-settings-service')
+  const expertSettings = new ExpertSettingsService({
+    database,
+    config: () => storage.getConfig(),
+    sessionKind: async (_projectId, threadId) => designService.authoredWorkKindFor(threadId)
+  })
+  expertSettings.registerIpc()
+  state.chatEngine.setExpertSettings(expertSettings)
+  // A tab is recognised from the page it is showing rather than from a record of who
+  // opened it, so a design the agent opened itself and a tab the renderer restored
+  // after a restart are designs too, and a tab that navigated away stops being one.
+  // The same recognition arms a composition's playback transport, which is why it
+  // answers with the folder, its kind and, for a composition, its timeline. The
+  // wiring is captured once and applied to every window's browser below.
+  state.attachBrowserToWindow = (window) =>
+    attachBrowserService({ state, storage, database, designService }, window)
+  if (state.mainWindow && !state.mainWindow.isDestroyed()) {
+    await state.attachBrowserToWindow(state.mainWindow)
+  }
   const { createDesignPreviewExecutor } = await import('../preview/design-preview-executor')
   state.chatEngine.setDesignPreviewExecutor(
     createDesignPreviewExecutor({
       previews: state.directoryPreviewService,
       database,
-      browser: () => state.browserService
+      browser: () => state.browserService,
+      record: (input) => designService.recordPreview(input)
     })
   )
   // Generation services answer with a link and those links expire, so the design
@@ -376,6 +589,50 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // as a file the design references by relative path.
   const { createDesignMediaExecutor } = await import('../design/design-media-executor')
   state.chatEngine.setDesignMediaExecutor(createDesignMediaExecutor({ database }))
+  // The engine the app was missing: it turns the prompt an agent writes into a
+  // picture, a clip or a track, using the model the user assigned to that craft
+  // and the provider token the user stored. The bytes land through the same
+  // saver above, so generated media has one writer and one set of ceilings.
+  const { MediaGenerationService } = await import('../media/media-generation-service')
+  const mediaGeneration = new MediaGenerationService({
+    config: () => storage.getConfig(),
+    vault
+  })
+  const { createMediaGenerationExecutor } = await import('../media/media-generation-executor')
+  state.chatEngine.setMediaGenerationExecutor(
+    createMediaGenerationExecutor({
+      database,
+      config: () => storage.getConfig(),
+      service: mediaGeneration,
+      // `generate` is one operation on two capabilities, so which folder a file
+      // lands in when the caller names none follows the thread's session. The
+      // board answers the same question the same way, so the two cannot disagree.
+      sessionKind: async (_projectId, threadId) => designService.authoredWorkKindFor(threadId)
+    })
+  )
+  const { registerMediaGenerationIpc } = await import('../media/media-generation-ipc')
+  registerMediaGenerationIpc(mediaGeneration)
+  // The video capability composes the same two services: the loopback static
+  // host that serves a composition folder and the thread's browser tab that
+  // shows it. `capture` adds the frame render and the screenshot on top of the
+  // same serve-and-show path, so the two operations cannot drift.
+  const { createVideoPreviewExecutor } = await import('../video/video-preview-executor')
+  state.chatEngine.setVideoPreviewExecutor(
+    createVideoPreviewExecutor({
+      previews: state.directoryPreviewService,
+      database,
+      browser: () => state.browserService,
+      record: (input) => designService.recordPreview(input)
+    })
+  )
+  const { createVideoCaptureExecutor } = await import('../video/video-capture-executor')
+  state.chatEngine.setVideoCaptureExecutor(
+    createVideoCaptureExecutor({
+      previews: state.directoryPreviewService,
+      database,
+      browser: () => state.browserService
+    })
+  )
   // A previewed folder refreshes itself: the preview server reports a batched
   // change for the directory it serves, and the tab showing that origin reloads.
   // The browser is read lazily because it exists only while the app has a window,
@@ -386,7 +643,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // Keep the device awake while a scheduled auto-retry is due within the wake
   // window, so a usage-limit reset fires even when the user is away.
   state.powerWakeService.attachRetryScheduler(state.retryScheduler)
-  state.retryScheduler.attachChangeListener(() => state.powerWakeService?.onRetryScheduleChanged())
+  state.retryScheduler.attachChangeListener(() => {
+    state.powerWakeService?.onRetryScheduleChanged()
+    // A tracked provider issue (and the retry that clears it) is the durable
+    // half of the thread's error card, which the icon mirrors.
+    state.backgroundLifecycle?.requestAttentionRefresh()
+  })
   state.updaterService.setChatEngine(state.chatEngine)
   // Reap any harness processes orphaned by an unclean previous run before the
   // first session can spawn fresh servers, so leftover dev servers/ports are
@@ -405,16 +667,19 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   registerIpcHandlers(storage, database, state.updaterService, state.chatEngine, {
     projectManager,
     projectFilesService,
+    browser: () => state.browserService,
     vault,
     githubAuthService,
     skillUpdates: skillUpdateService,
     directoryPreviewService: state.directoryPreviewService,
     prototypePreviewService: state.prototypePreviewService ?? undefined,
     powerWakeService: state.powerWakeService,
+    backgroundLifecycle: state.backgroundLifecycle ?? undefined,
     retryScheduler: state.retryScheduler,
     heartbeatScheduler: state.heartbeatScheduler,
     routineManager: state.routineManager ?? undefined,
     routineScheduler: state.routineScheduler ?? undefined,
+    autoAnswerStore: state.autoAnswerStore ?? undefined,
     harnessManifestService: state.harnessManifestService,
     worktreeService: scopeWorktreeService,
     threadCreation: context.threadCreation,
@@ -594,6 +859,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       Logger.error('Power wake startup failed (non-fatal):', error)
     }
 
+    // Every persisted thread update now re-evaluates the menu bar icon, so a
+    // thread that breaks while the window is closed flips it and a thread that
+    // recovers flips it back.
+    if (state.backgroundLifecycle) setBackgroundAttention(state.backgroundLifecycle)
+
     try {
       await state.retryScheduler?.start()
       await state.chatEngine?.repairPendingRetryThreadStatuses()
@@ -609,8 +879,35 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     try {
       await state.routineScheduler?.start()
+      // A slot the app was closed (or asleep) through is dispatched on return
+      // when the user allows it, bounded per pass and idempotent across relaunch.
+      if (state.backgroundLifecycle?.autoRunMissedRuns) {
+        void state.routineScheduler
+          ?.runPendingMisses()
+          .catch((error) => Logger.error('Auto-run of missed assistant runs failed:', error))
+      }
     } catch (error) {
       Logger.error('Routine scheduler startup failed (non-fatal):', error)
+    }
+
+    // A machine that slept through a slot catches up when it wakes or unlocks.
+    try {
+      if (!state.powerMonitorService) {
+        const { PowerMonitorService } = await import('../system/power-monitor-service')
+        state.powerMonitorService = new PowerMonitorService({
+          onResume: () => {
+            state.routineScheduler?.evaluate()
+            if (state.backgroundLifecycle?.autoRunMissedRuns) {
+              void state.routineScheduler
+                ?.runPendingMisses()
+                .catch((error) => Logger.error('Resume catch-up failed:', error))
+            }
+          }
+        })
+      }
+      state.powerMonitorService.start()
+    } catch (error) {
+      Logger.error('Power monitor startup failed (non-fatal):', error)
     }
 
     try {
@@ -665,5 +962,26 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     } catch (error) {
       Logger.error('Update/notification startup failed (non-fatal):', error)
     }
+
+    // Reclaim directory trees whose database row is gone. Delayed past the
+    // interactive path and bounded per run, so a large backlog costs a
+    // background task instead of a slower launch.
+    setTimeout(() => {
+      void import('../storage/orphan-artifact-sweep')
+        .then(({ sweepOrphanProjectArtifacts }) => sweepOrphanProjectArtifacts(storage, database))
+        .catch((error: unknown) => Logger.dev('Orphan artifact sweep failed:', error))
+    }, 20_000)
+
+    // Reclaim the Chromium profiles no live project owns, the same way the sweep
+    // above reclaims directory trees under the config root: a deleted project's
+    // browser survives as a profile directory that can hold gigabytes. Delayed and
+    // bounded for the same reason, and it declines to run at all while a sibling
+    // instance is alive, because a sibling's live browser is not this one's to take
+    // away.
+    setTimeout(() => {
+      void import('../browser/browser-service/browser-profile-store')
+        .then(({ sweepUnclaimedBrowserProfiles }) => sweepUnclaimedBrowserProfiles(database))
+        .catch((error: unknown) => Logger.dev('Browser profile sweep failed:', error))
+    }, 25_000)
   })()
 }

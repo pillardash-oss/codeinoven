@@ -5,6 +5,12 @@ import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../src/lib/agent-behavior'
 import { DEFAULT_SPEECH_SETTINGS } from '../../src/lib/speech/types'
 import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../src/lib/types'
 import {
+  DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_BROWSER_HISTORY_LIMIT,
+  DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS
+} from '../../src/lib/types/settings'
+import {
   UpdaterService,
   type SessionActivitySource
 } from '../../src/main/notifications/updater-service'
@@ -66,6 +72,7 @@ function defaultConfig(): AppConfig {
     slashCommandMode: 'app',
     preferredEditor: 'system',
     openLocalhostInCioBrowser: true,
+    openAllLinksInCioBrowser: false,
     allowPrototypeExternalCdn: true,
     prototypeCdnAllowlist: [],
     inAppNotificationSound: { success: true, issue: true },
@@ -73,6 +80,8 @@ function defaultConfig(): AppConfig {
     agentDefaults: { syncFromThreadChanges: false },
     auxiliaryAgents: {},
     design: { assignments: [] },
+    workRoots: { design: '.cio/designs', video: '.cio/videos' },
+    mediaGeneration: { providerId: null },
     rankingJudge: { kind: 'automatic' },
     agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
     autoDownloadUpdates: true,
@@ -86,6 +95,16 @@ function defaultConfig(): AppConfig {
     defaultPullStrategy: 'ask',
     maxDiffLines: 100,
     maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
+    browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+    browserHistoryLimit: DEFAULT_BROWSER_HISTORY_LIMIT,
+    backgroundMode: 'scheduled',
+    launchAtLogin: true,
+    launchAtLoginPrompted: false,
+    autoRunMissedAssistantRuns: true,
+    backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+    maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
+    browserSearchEngine: 'duckduckgo',
+    browserCustomSearchEngines: [],
     sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
   }
 }

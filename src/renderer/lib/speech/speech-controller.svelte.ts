@@ -25,8 +25,10 @@ import type {
   SpeechEditorTarget
 } from './editor-target'
 import {
+  CAPTURE_START_TIMEOUT_MS,
   CAPTURE_STOP_TIMEOUT_MS,
   CAPTURE_TIMESLICE_MS,
+  CAPTURE_UPLOAD_DRAIN_TIMEOUT_MS,
   PAUSE_UPLOAD_DEPTH,
   errorMessage,
   recordingToastMessage,
@@ -48,12 +50,29 @@ import {
 import type {
   ActiveCapture,
   RendererSpeechState,
+  SpeechPendingDelivery,
   VoiceSendIntent,
   VoiceSendStage,
   VoiceTranscriptionRecord
 } from './speech-controller-types'
 
 export type { RendererSpeechState, VoiceSendStage } from './speech-controller-types'
+
+/**
+ * Most waiting transcripts to hold at once.
+ *
+ * The cap only exists so a long session of abandoned fields cannot pin an
+ * unbounded number of strings: the oldest wait is dropped first, and the
+ * transcript is always on the clipboard as well.
+ */
+const MAX_PENDING_DELIVERIES = 12
+
+/** One transcript held for a field that was not on screen when it landed. */
+interface PendingDeliveryRecord {
+  transcript: string
+  attemptId: string
+  scope: SpeechScope
+}
 
 class SpeechController {
   state = $state<RendererSpeechState>({ state: 'idle' })
@@ -125,6 +144,13 @@ class SpeechController {
   /** Scope captured when `start()` begins so the capture is attributable to
    *  its thread even before permission resolves (no ActiveCapture yet). */
   private captureScope: SpeechScope | null = null
+  /**
+   * Cancels the start currently opening the microphone. The mic can take an
+   * unbounded time to open (a wedged device, a stalled permission prompt), and
+   * while it does there is no `ActiveCapture` for `stop()` to finish, so this
+   * is the only handle that lets a stop or Escape interrupt the attempt.
+   */
+  private startToken: AbortController | null = null
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
   private preloadTimer: ReturnType<typeof setTimeout> | null = null
   private preloadFired = false
@@ -148,6 +174,16 @@ class SpeechController {
   /** Dictations the user armed to deliver themselves (see `armVoiceSend`). */
   private voiceSends = $state<VoiceSendIntent[]>([])
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
+  /**
+   * Transcripts still waiting for the field they were recorded for.
+   *
+   * A dictation whose editor was destroyed before the transcript landed, and
+   * whose target has no stored value to mirror into, is held here by target id.
+   * The field asks for it the moment it mounts again, so leaving a view while
+   * the model is still transcribing cannot lose the recording: the text lands
+   * in the field it belongs to as soon as that field is back on screen.
+   */
+  private readonly pendingDeliveries = new Map<string, PendingDeliveryRecord>()
   private stopPromise: Promise<void> | null = null
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
   /** Whether `sound` has been loaded from config at least once. Until then a
@@ -239,6 +275,14 @@ class SpeechController {
     const sidebarTab = contextSidebarState.activeTab
     if (sidebarTab?.kind === 'temporary-chat') {
       if (sidebarTab.temporaryChatId === scope.threadId) {
+        return scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
+      }
+    }
+    // A browser tab's assistant chat is a real thread the workspace is not
+    // showing, and its rail tab is the surface the recording belongs to: a
+    // recording started there answers Escape like any other conversation's.
+    if (sidebarTab?.kind === 'browser-agent') {
+      if (sidebarTab.threadId === scope.threadId) {
         return scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
       }
     }
@@ -538,47 +582,194 @@ class SpeechController {
     // the mic button must respond in the same frame they are pressed. Every
     // async pipeline step below has a failure path that settles into `failed`.
     this.state = { state: 'starting', targetId: target.id }
-
-    const nativeStarted = await invoke('speech:beginNativeCapture', scope).catch(() => null)
-    if (nativeStarted?.ok) {
-      const capture: ActiveCapture = {
-        target,
-        snapshot,
-        scope,
-        recorder: null,
-        stream: null,
-        native: true,
-        sessionId: nativeStarted.value.sessionId,
-        attemptId: nativeStarted.value.attemptId,
-        startedAt: performance.now(),
-        uploadTail: Promise.resolve(),
-        queuedChunks: 0,
-        uploadError: null
-      }
-      this.active = capture
-      this.state = {
-        state: 'recording',
-        targetId: target.id,
-        attemptId: capture.attemptId,
-        startedAt: Date.now(),
-        elapsedMs: 0
-      }
-      this.startElapsedTimer(capture)
-      this.scheduleAsrPreload(capture)
-      this.flagCaptureDrafting(capture.scope)
-      playSpeechCue(this.sound, 'started')
-      return
-    }
-
-    let stream: MediaStream
+    const startToken = new AbortController()
+    this.startToken = startToken
     try {
-      if (typeof navigator.mediaDevices?.getUserMedia !== 'function') {
-        throw new Error('Microphone recording is unavailable in this environment.')
+      const nativeStarted = await invoke('speech:beginNativeCapture', scope).catch(
+        (cause: unknown) => {
+          // Falling back to the browser recorder is expected on a device without
+          // the native worker, but a failure with the worker present is the real
+          // reason a recording is lost or sounds different, so it is recorded
+          // instead of being swallowed.
+          logRendererError('Native voice capture did not start; using the browser recorder.', cause)
+          return null
+        }
+      )
+      if (startToken.signal.aborted) {
+        // The user stopped (or hit Escape) while the native capture was starting:
+        // end the session on the way out so a cancelled attempt never lingers in
+        // main, and settle quietly instead of raising a failure toast.
+        if (nativeStarted?.ok) {
+          await invoke(
+            'speech:failNativeCapture',
+            nativeStarted.value.sessionId,
+            'Recording was cancelled.'
+          ).catch(() => undefined)
+        }
+        this.state = { state: 'idle' }
+        return
       }
-      if (typeof MediaRecorder === 'undefined') {
-        throw new Error('Audio recording is unavailable in this environment.')
+      if (nativeStarted?.ok) {
+        const capture: ActiveCapture = {
+          target,
+          snapshot,
+          scope,
+          recorder: null,
+          stream: null,
+          native: true,
+          sessionId: nativeStarted.value.sessionId,
+          attemptId: nativeStarted.value.attemptId,
+          startedAt: performance.now(),
+          uploadTail: Promise.resolve(),
+          queuedChunks: 0,
+          uploadError: null
+        }
+        this.active = capture
+        this.state = {
+          state: 'recording',
+          targetId: target.id,
+          attemptId: capture.attemptId,
+          startedAt: Date.now(),
+          elapsedMs: 0
+        }
+        this.startElapsedTimer(capture)
+        this.scheduleAsrPreload(capture)
+        this.flagCaptureDrafting(capture.scope)
+        playSpeechCue(this.sound, 'started')
+        return
       }
-      stream = await navigator.mediaDevices.getUserMedia({
+
+      let stream: MediaStream
+      try {
+        if (typeof MediaRecorder === 'undefined') {
+          throw new Error('Audio recording is unavailable in this environment.')
+        }
+        stream = await this.openMicrophone(startToken.signal)
+      } catch (cause) {
+        // A cancelled start is not a permission failure: the user asked for it to
+        // end, so it settles quietly instead of raising a toast.
+        if (startToken.signal.aborted) {
+          this.state = { state: 'idle' }
+          return
+        }
+        const message = errorMessage(cause)
+        await invoke('speech:recordPermissionFailure', scope, message).catch(() => undefined)
+        this.surfaceFailure(target.id, 'permission', cause)
+        return
+      }
+      if (startToken.signal.aborted) {
+        for (const track of stream.getTracks()) track.stop()
+        this.state = { state: 'idle' }
+        return
+      }
+
+      let recorder: MediaRecorder
+      let pendingSessionId: string | null = null
+      let active: ActiveCapture | null = null
+      try {
+        const mimeType = selectedMimeType()
+        recorder = new MediaRecorder(stream, {
+          ...(mimeType ? { mimeType } : {}),
+          audioBitsPerSecond: 64_000
+        })
+        const started = await invoke(
+          'speech:beginCapture',
+          scope,
+          recorder.mimeType || mimeType || 'audio/webm'
+        )
+        if (!started.ok) throw new Error(started.error.message)
+        pendingSessionId = started.value.sessionId
+        const capture: ActiveCapture = {
+          target,
+          snapshot,
+          scope,
+          recorder,
+          stream,
+          native: false,
+          sessionId: started.value.sessionId,
+          attemptId: started.value.attemptId,
+          startedAt: performance.now(),
+          uploadTail: Promise.resolve(),
+          queuedChunks: 0,
+          uploadError: null
+        }
+        active = capture
+        this.active = capture
+        recorder.ondataavailable = (event) => this.queueChunk(capture, event.data)
+        recorder.onerror = () => {
+          capture.uploadError ??= new Error('The recording device stopped unexpectedly.')
+          void this.stop()
+        }
+        for (const track of stream.getAudioTracks()) {
+          track.addEventListener(
+            'ended',
+            () => {
+              if (this.active !== capture || recorder.state === 'inactive') return
+              capture.uploadError ??= new Error(
+                'Microphone access was revoked or the device was disconnected.'
+              )
+              void this.stop()
+            },
+            { once: true }
+          )
+        }
+        recorder.start(CAPTURE_TIMESLICE_MS)
+        pendingSessionId = null
+        this.state = {
+          state: 'recording',
+          targetId: target.id,
+          attemptId: capture.attemptId,
+          startedAt: Date.now(),
+          elapsedMs: 0
+        }
+        this.startElapsedTimer(capture)
+        this.scheduleAsrPreload(capture)
+        this.flagCaptureDrafting(capture.scope)
+        playSpeechCue(this.sound, 'started')
+      } catch (cause) {
+        this.clearElapsedTimer()
+        this.clearPreloadTimer()
+        if (active) {
+          active.uploadError ??= cause instanceof Error ? cause : new Error(errorMessage(cause))
+          if (active.recorder) await this.stopRecorder(active.recorder).catch(() => undefined)
+          if (active.stream) for (const track of active.stream.getTracks()) track.stop()
+          await active.uploadTail.catch(() => undefined)
+          await invoke('speech:failCapture', active.sessionId, errorMessage(cause)).catch(
+            () => undefined
+          )
+        } else if (pendingSessionId) {
+          await invoke('speech:failCapture', pendingSessionId, errorMessage(cause)).catch(
+            () => undefined
+          )
+        }
+        for (const track of stream.getTracks()) track.stop()
+        this.active = null
+        this.settleCaptureDraft(scope)
+        this.surfaceFailure(target.id, 'capture', cause)
+      }
+    } finally {
+      if (this.startToken === startToken) this.startToken = null
+    }
+  }
+
+  /**
+   * Open the microphone, bounded in time.
+   *
+   * `getUserMedia` can hang for good: a wedged device, a permission prompt the
+   * user never answers, a platform audio service that stopped responding. The
+   * surface has already flipped to `starting` at that point and no
+   * `ActiveCapture` exists, so an unbounded await is a permanent wedge. The
+   * timeout settles the attempt as a failure, and the abort settles it as a
+   * cancellation. A stream that resolves after the race is lost is stopped so a
+   * live mic is never leaked.
+   */
+  private async openMicrophone(signal: AbortSignal): Promise<MediaStream> {
+    if (typeof navigator.mediaDevices?.getUserMedia !== 'function') {
+      throw new Error('Microphone recording is unavailable in this environment.')
+    }
+    let settled = false
+    const pending = navigator.mediaDevices
+      .getUserMedia({
         audio: {
           channelCount: 1,
           echoCancellation: true,
@@ -587,102 +778,68 @@ class SpeechController {
         },
         video: false
       })
-    } catch (cause) {
-      const message = errorMessage(cause)
-      await invoke('speech:recordPermissionFailure', scope, message).catch(() => undefined)
-      this.surfaceFailure(target.id, 'permission', cause)
-      return
-    }
-
-    let recorder: MediaRecorder
-    let pendingSessionId: string | null = null
-    let active: ActiveCapture | null = null
-    try {
-      const mimeType = selectedMimeType()
-      recorder = new MediaRecorder(stream, {
-        ...(mimeType ? { mimeType } : {}),
-        audioBitsPerSecond: 64_000
+      .then((stream) => {
+        if (settled) {
+          for (const track of stream.getTracks()) track.stop()
+          throw new Error('The microphone opened after the recording was cancelled.')
+        }
+        return stream
       })
-      const started = await invoke(
-        'speech:beginCapture',
-        scope,
-        recorder.mimeType || mimeType || 'audio/webm'
+    const interruption = new Promise<never>((_resolve, rejectPromise) => {
+      const timer = setTimeout(
+        () => rejectPromise(new Error('The microphone did not open in time.')),
+        CAPTURE_START_TIMEOUT_MS
       )
-      if (!started.ok) throw new Error(started.error.message)
-      pendingSessionId = started.value.sessionId
-      const capture: ActiveCapture = {
-        target,
-        snapshot,
-        scope,
-        recorder,
-        stream,
-        native: false,
-        sessionId: started.value.sessionId,
-        attemptId: started.value.attemptId,
-        startedAt: performance.now(),
-        uploadTail: Promise.resolve(),
-        queuedChunks: 0,
-        uploadError: null
-      }
-      active = capture
-      this.active = capture
-      recorder.ondataavailable = (event) => this.queueChunk(capture, event.data)
-      recorder.onerror = () => {
-        capture.uploadError ??= new Error('The recording device stopped unexpectedly.')
-        void this.stop()
-      }
-      for (const track of stream.getAudioTracks()) {
-        track.addEventListener(
-          'ended',
-          () => {
-            if (this.active !== capture || recorder.state === 'inactive') return
-            capture.uploadError ??= new Error(
-              'Microphone access was revoked or the device was disconnected.'
-            )
-            void this.stop()
-          },
-          { once: true }
-        )
-      }
-      recorder.start(CAPTURE_TIMESLICE_MS)
-      pendingSessionId = null
-      this.state = {
-        state: 'recording',
-        targetId: target.id,
-        attemptId: capture.attemptId,
-        startedAt: Date.now(),
-        elapsedMs: 0
-      }
-      this.startElapsedTimer(capture)
-      this.scheduleAsrPreload(capture)
-      this.flagCaptureDrafting(capture.scope)
-      playSpeechCue(this.sound, 'started')
-    } catch (cause) {
-      this.clearElapsedTimer()
-      this.clearPreloadTimer()
-      if (active) {
-        active.uploadError ??= cause instanceof Error ? cause : new Error(errorMessage(cause))
-        if (active.recorder) await this.stopRecorder(active.recorder).catch(() => undefined)
-        if (active.stream) for (const track of active.stream.getTracks()) track.stop()
-        await active.uploadTail.catch(() => undefined)
-        await invoke('speech:failCapture', active.sessionId, errorMessage(cause)).catch(
-          () => undefined
-        )
-      } else if (pendingSessionId) {
-        await invoke('speech:failCapture', pendingSessionId, errorMessage(cause)).catch(
-          () => undefined
-        )
-      }
-      for (const track of stream.getTracks()) track.stop()
-      this.active = null
-      this.settleCaptureDraft(scope)
-      this.surfaceFailure(target.id, 'capture', cause)
+      signal.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(timer)
+          rejectPromise(new Error('The recording was cancelled before the microphone opened.'))
+        },
+        { once: true }
+      )
+    })
+    try {
+      return await Promise.race([pending, interruption])
+    } finally {
+      settled = true
+      // A losing `pending` must not surface as an unhandled rejection.
+      void pending.catch(() => undefined)
+    }
+  }
+
+  /**
+   * Drain the serialized chunk-upload chain, bounded in time. Returning instead
+   * of hanging keeps the stop path able to settle: the caller checks
+   * `uploadError` and fails the capture, which is far better than a surface
+   * pinned in `stopping` with every later stop blocked behind it.
+   */
+  private async drainUploads(active: ActiveCapture): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      await Promise.race([
+        active.uploadTail,
+        new Promise<never>((_resolve, rejectPromise) => {
+          timer = setTimeout(
+            () => rejectPromise(new Error('The recording upload did not finish in time.')),
+            CAPTURE_UPLOAD_DRAIN_TIMEOUT_MS
+          )
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 
   async stop(): Promise<void> {
     const active = this.active
-    if (!active) return
+    if (!active) {
+      // No capture exists yet: the microphone is still opening. Cancelling the
+      // in-flight start is what makes stop (and Escape) work in `starting`
+      // instead of silently doing nothing while the attempt pins the surface.
+      if (this.state.state === 'starting') this.startToken?.abort()
+      return
+    }
     if (this.stopPromise) return this.stopPromise
     const pending = this.finishStop(active)
     this.stopPromise = pending
@@ -722,7 +879,7 @@ class SpeechController {
         if (!active.recorder || !active.stream) throw new Error('Browser capture is unavailable.')
         await this.stopRecorder(active.recorder)
         for (const track of active.stream.getTracks()) track.stop()
-        await active.uploadTail
+        await this.drainUploads(active)
         if (active.uploadError) throw active.uploadError
         const finished = await invoke(
           'speech:finishCapture',
@@ -804,25 +961,35 @@ class SpeechController {
         applied = active.target.fallbackApply(insertionSnapshot, transcript)
       }
       if (!applied.ok) {
-        const insertionNotice =
-          'Transcript copied to the clipboard. It could not be inserted into the recording field.'
+        // The field is still on screen but no longer holds what the recording
+        // was measured against (an editor that re-rendered or normalised its
+        // content while the model worked). Inserting against its value as it is
+        // now is what the user asked for when they pressed the mic, and it is
+        // the only reading that works for an editor whose serialized form is not
+        // byte-stable.
+        const fresh = active.target.capture()
+        if (fresh) applied = active.target.apply(fresh, transcript)
+      }
+      if (!applied.ok) {
+        // Nothing on screen can take it. Hold the transcript for its field
+        // instead of dropping it: the same field asks for it when it mounts
+        // again, which is what makes leaving a view mid-transcription safe.
+        this.holdPendingDelivery(active, transcript)
+        const insertionNotice = 'Voice recording kept for its field'
         try {
-          toast.info(insertionNotice, { closeButton: true })
+          toast.info(insertionNotice, {
+            id: 'voice-recording-pending',
+            description:
+              'The field was closed while the model was transcribing. The transcript is on the clipboard, and it will be inserted into that field when you reopen it.',
+            closeButton: true,
+            duration: 8000
+          })
         } catch (cause) {
           logRendererError('Could not show the voice recording clipboard notice.', cause)
         }
         return
       }
-      const span: SpeechDictationSpan = {
-        id: crypto.randomUUID(),
-        attemptId: active.attemptId,
-        editorId: active.target.id,
-        insertedText: transcript,
-        insertedAt: Date.now(),
-        scope: structuredClone(active.scope)
-      }
-      const current = this.spans.get(active.target.id) ?? []
-      this.spans.set(active.target.id, [...current.slice(-7), span])
+      this.recordDictationSpan(active.attemptId, active.target.id, transcript, active.scope)
       playSpeechCue(this.sound, 'completed')
       // Armed dictation: the transcript has landed, so hand it over now. The
       // composer drives its own send path whenever the transcript reached the
@@ -846,6 +1013,79 @@ class SpeechController {
       this.endTranscription(active.attemptId)
       this.settleCaptureDraft(transcribingScope)
     }
+  }
+
+  /**
+   * Hold a transcript whose field was not there to take it, and keep the last
+   * `MAX_PENDING_DELIVERIES` of them.
+   */
+  private holdPendingDelivery(active: ActiveCapture, transcript: string): void {
+    if (this.pendingDeliveries.size >= MAX_PENDING_DELIVERIES) {
+      const oldest = this.pendingDeliveries.keys().next().value
+      if (oldest !== undefined) this.pendingDeliveries.delete(oldest)
+    }
+    this.pendingDeliveries.set(active.target.id, {
+      transcript,
+      attemptId: active.attemptId,
+      scope: structuredClone(active.scope)
+    })
+  }
+
+  /** Whether this field is still owed a transcript its recording produced. */
+  hasPendingDelivery(targetId: string): boolean {
+    return this.pendingDeliveries.has(targetId)
+  }
+
+  /**
+   * Insert a transcript that is still waiting for its field.
+   *
+   * Called by the mic of a field that has just mounted. The insertion is
+   * measured against the value the field holds at this instant, so it lands at
+   * the caret the user is about to see rather than at an offset captured before
+   * the field was destroyed.
+   */
+  deliverPending(target: SpeechEditorTarget): SpeechPendingDelivery {
+    const pending = this.pendingDeliveries.get(target.id)
+    if (!pending) return 'none'
+    const snapshot = target.capture()
+    if (!snapshot) return 'waiting'
+    const applied = target.apply(snapshot, pending.transcript)
+    if (!applied.ok) return 'waiting'
+    this.pendingDeliveries.delete(target.id)
+    this.recordDictationSpan(pending.attemptId, target.id, pending.transcript, pending.scope)
+    playSpeechCue(this.sound, 'completed')
+    try {
+      toast.success('Voice recording inserted into its field', {
+        id: 'voice-recording-delivered',
+        description: 'It was recorded before that field was reopened.',
+        duration: 4000
+      })
+    } catch (cause) {
+      logRendererError('Could not show the voice recording delivery notice.', cause)
+    }
+    return 'inserted'
+  }
+
+  /**
+   * Remember one landed dictation so a later send of the same field can be
+   * compared against what the model produced.
+   */
+  private recordDictationSpan(
+    attemptId: string,
+    editorId: string,
+    transcript: string,
+    scope: SpeechScope
+  ): void {
+    const span: SpeechDictationSpan = {
+      id: crypto.randomUUID(),
+      attemptId,
+      editorId,
+      insertedText: transcript,
+      insertedAt: Date.now(),
+      scope: structuredClone(scope)
+    }
+    const current = this.spans.get(editorId) ?? []
+    this.spans.set(editorId, [...current.slice(-7), span])
   }
 
   /**

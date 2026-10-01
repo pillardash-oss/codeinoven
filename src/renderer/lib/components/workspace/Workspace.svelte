@@ -15,13 +15,14 @@
     FileDiff,
     MonitorCog,
     FolderTree,
-    Globe2,
+    GlobeCode,
     Hammer,
     History,
     Info,
     MessageCircleDashed,
     SquareTerminal,
-    StickyNote
+    StickyNote,
+    TriangleAlert
   } from '@lucide/svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
@@ -30,6 +31,7 @@
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
@@ -37,28 +39,27 @@
   import { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
   import WorkspaceSidebar from './WorkspaceSidebar.svelte'
-  import WorkspaceBrowserMenu from './WorkspaceBrowserMenu.svelte'
   import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
-  import WorkspaceBrowserDataModal from './WorkspaceBrowserDataModal.svelte'
-  import WorkspaceBrowserDownloadsModal from './WorkspaceBrowserDownloadsModal.svelte'
   import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
   import WorkspaceEditProjectModal from './WorkspaceEditProjectModal.svelte'
   import WorkspaceFullscreenTerminal from './WorkspaceFullscreenTerminal.svelte'
-  import WorkspaceFullscreenBrowser from './WorkspaceFullscreenBrowser.svelte'
   import WorkspaceUnsavedChangesDialog from './WorkspaceUnsavedChangesDialog.svelte'
   import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
   import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
-  import { groupRunsByTask } from '../assistant/assistant-view'
+  import { groupRunsByRoutine, groupRunsByTask } from '../assistant/assistant-view'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { attentionState } from '$lib/stores/attention.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
   import { contentThreadFamily } from '$lib/content-view-threads'
+  import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
   import { chatDraft } from '$lib/stores/chat-draft'
   import {
     assistantEffectiveSettings,
@@ -87,6 +88,7 @@
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -94,15 +96,24 @@
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
+  import { toPosixPath } from '$shared/paths'
   import { toast } from 'svelte-sonner'
   import { logRendererError } from '$lib/system/renderer-logger'
   import {
     threadSort,
     pinnedThreadSort,
     threadStatusSort,
+    threadStatusSortKey,
     findEmptyNewThread,
     threadVisitKey
   } from '$lib/stores/workspace.svelte'
+  import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
+  import { browserStore, loadBrowser, switcherBrowserTabs } from '$lib/stores/browser-access.svelte'
+  import {
+    buildThreadSwitcherEntries,
+    type ThreadSwitcherEntry
+  } from '../threads/thread-switcher-entries'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import { threadHasVisibleWork } from './workspace-thread-helpers'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -113,12 +124,14 @@
     coordinatorHasActiveDelegates,
     activeThreadRowId,
     INBOX_PROJECT_ID,
+    DRAFT_CHAT_THREAD_ID,
     ASSISTANT_SPACE_ID,
     ASSISTANT_SETUP_TITLE,
     DEFAULT_THREAD_TITLE,
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
     isOrchestrationChildThread,
+    conversationScopeId,
     threadTracksReadStatus,
     usesThreadWorkspaceMount
   } from '$shared/types'
@@ -130,7 +143,8 @@
     Project,
     PromptAttachment,
     Routine,
-    Thread
+    Thread,
+    ThreadSettings
   } from '$shared/types'
 
   interface Props {
@@ -142,6 +156,11 @@
      *  scope store's active project in sync with the selected thread. */
     scopeViewActive?: boolean
     navigate: (view: MainView) => void
+    /** The project view a Ctrl+Tab return to the project family lands on: the
+     *  view the user last used for the family, which is also the one the rail's
+     *  project badge rides. Read per call, because the browser can be left long
+     *  after the value last changed. */
+    lastProjectViewLanding?: () => ProjectFamilyLanding
     /** Global app config   drives the image-descriptor default + ask-again flag. */
     config?: AppConfig
     updateConfig?: (patch: AppConfigPatch) => Promise<void>
@@ -152,6 +171,7 @@
     active = true,
     scopeViewActive = false,
     navigate,
+    lastProjectViewLanding = () => 'projects',
     config,
     updateConfig
   }: Props = $props()
@@ -176,14 +196,25 @@
   let chatsComposerRestoreKey = $state(0)
 
   // ─── Sidebar focus-follow ────────────────────────────────────────────────
-  // While a thread is selected, the sidebar keeps its row (and thus its
-  // project) in view. A user-initiated scroll of the sidebar suppresses that
-  // until the next thread is selected (or the thread comes back into view).
+  // The active thread owns the sidebar's scroll position. Three things can move
+  // the list, and their precedence is the whole contract:
+  //
+  // 1. The reader's own wheel or touch gesture hands the scroll over: while they
+  //    hold it, background list changes may not move the viewport.
+  // 2. Selecting another thread reveals its row, and so does a row the active
+  //    thread moves by itself (typing an unsent draft sends it to the top).
+  // 3. Switching sidebar mode settles the incoming list on the active thread's
+  //    row, keeping that mode's remembered place when it already shows the row.
   let sidebarScroller: HTMLElement | null = $state(null)
-  let sidebarFocusSuppressed = $state(false)
+  /** The reader has taken over the scroll for the current thread. Cleared when
+   *  they pick another thread, move to another mode, or scroll the active row
+   *  back into view. */
+  let sidebarReaderOwnsScroll = $state(false)
   let lastFocusedThreadId: string | null = null
-  let sidebarSuppressTimer: ReturnType<typeof setTimeout> | undefined
-  const SIDEBAR_FOCUS_RELEASE_MS = 4000
+  /** The slot the active row sat in on the last run of the follow effect, so a
+   *  row the thread moves by itself is followed even while the reader holds the
+   *  scroll. */
+  let lastActiveRowSortKey: number | null = null
 
   function findThreadRow(threadId: string): HTMLElement | null {
     if (typeof document === 'undefined') return null
@@ -224,58 +255,54 @@
     findThreadRow(threadId)?.scrollIntoView({ block: 'nearest' })
   }
 
-  async function revealThreadInSidebar(threadId: string): Promise<void> {
-    const active = selectedThread
-    // In Projects mode the target thread may sit in a collapsed folder and/or
-    // past the per-folder "show more" cutoff. Expand its folder and raise the
-    // row budget so the row actually renders. We intentionally don't gate this
-    // on the current mode: when Ctrl+Tab crosses modes (e.g. Chats → Projects)
-    // the mode prop may not have propagated yet, but expanding is harmless and
-    // ensures the folder is open by the time the scroll step runs. In Threads
-    // mode the flat list always renders every row, so only the scroll applies.
-    if (active && active.projectId !== INBOX_PROJECT_ID) {
-      sidebar.expandedFolders.add(active.projectId)
-      const folderThreads = threadsByProject.get(active.projectId) ?? []
-      const threadIndex = folderThreads.findIndex((candidate) => candidate.id === threadId)
-      if (threadIndex >= 0) {
-        sidebar.ensureRowVisible(active.projectId, threadIndex + 1)
-      }
+  /**
+   * Expand the folder that owns a thread and raise its row budget, so the row
+   * exists in the DOM by the time the reveal measures it. In Projects mode the
+   * target thread may sit in a collapsed folder and/or past the per-folder "show
+   * more" cutoff; in Threads mode the flat list renders every row already, so
+   * this costs nothing but a map lookup and a set insert.
+   */
+  function prepareThreadRow(thread: Thread): void {
+    if (thread.projectId === INBOX_PROJECT_ID) return
+    sidebar.expandedFolders.add(thread.projectId)
+    const folderThreads = threadsByProject.get(thread.projectId) ?? []
+    const threadIndex = folderThreads.findIndex((candidate) => candidate.id === thread.id)
+    if (threadIndex >= 0) {
+      sidebar.ensureRowVisible(thread.projectId, threadIndex + 1)
     }
+  }
+
+  async function revealThreadInSidebar(thread: Thread): Promise<void> {
+    // The row can only be measured once it is rendered, so prepare it first.
+    prepareThreadRow(thread)
     // Flush Svelte's DOM update (folder expansion / mode switch / re-sort), then
-    // wait frames so the browser has final layout, then scroll. Retry over a few
+    // scroll   the first attempt lands before the next paint. Retry over a few
     // frames because the folder's rows can mount a tick later than expected
     // in Projects mode the row only appears once the folder has expanded and the
     // per-folder row budget has grown to include it.
     await tick()
     for (let attempt = 0; attempt < 12; attempt++) {
-      await nextAnimationFrame()
-      scrollThreadRowIntoView(threadId)
-      if (findThreadRow(threadId)) break
+      // The first attempt runs in the same task as the DOM update, before the
+      // next paint, so the incoming list never shows the outgoing mode's scroll
+      // position for a frame. The later frames only serve rows that mount a tick
+      // late (a folder expanding to reveal the row it holds).
+      if (attempt > 0) await nextAnimationFrame()
+      scrollThreadRowIntoView(thread.id)
+      if (findThreadRow(thread.id)) break
     }
   }
 
+  /** A wheel or touch gesture on the sidebar hands its scroll to the reader. */
   function handleSidebarUserScroll(): void {
-    sidebarFocusSuppressed = true
-    // A user taking over the scroll ends the post-mode-change suppression window.
-    sidebarRevealSuppressed = false
-    clearTimeout(sidebarRevealSuppressTimer)
-    clearTimeout(sidebarSuppressTimer)
-    sidebarSuppressTimer = setTimeout(() => {
-      // Release the suppression once the user stops interacting AND the active
-      // thread is back in view, so a brief/accidental scroll doesn't disable
-      // focus-follow for the rest of the session on that thread.
-      const thread = selectedThread
-      if (!thread || !isThreadRowVisible(thread.id)) return
-      sidebarFocusSuppressed = false
-    }, SIDEBAR_FOCUS_RELEASE_MS)
+    sidebarReaderOwnsScroll = true
   }
 
-  // ─── Per-mode sidebar scroll preservation ───────────────────────────────
+  // ─── Per-mode sidebar place ─────────────────────────────────────────────
   // Switching between Projects/Chats/Threads swaps the sidebar content
-  // wholesale, which would otherwise drop the user's place in the thread list.
-  // Keep each mode's scroll position and restore it when the mode comes back,
-  // and briefly suppress the focus-follow reveal so it doesn't yank the
-  // restored scroll back to the selected thread's row.
+  // wholesale. Each mode remembers where the reader left its list, so coming
+  // back restores that place when it still shows the active thread's row; a
+  // remembered place that hides the row is settled onto the row instead, which
+  // is what keeps the thread in charge of the scroll across a view switch.
   const sidebarScrollByMode = new SvelteMap<
     'projects' | 'chats' | 'threads' | 'assistant',
     number
@@ -283,36 +310,58 @@
   // Intentional initial-value capture   the map is keyed by the mode prop.
   // svelte-ignore state_referenced_locally
   let previousMode = mode
-  // Reactive so the focus-follow effect re-runs (and re-reveals the active
-  // thread) the moment the mode-switch suppression window closes. As a plain
-  // `let` the reveal would be skipped forever whenever a mode switch coincided
-  // with the active thread falling out of view.
-  let sidebarRevealSuppressed = $state(false)
-  let sidebarRevealSuppressTimer: ReturnType<typeof setTimeout> | undefined
+  /**
+   * The incoming mode's list has not settled yet. The focus-follow effect leaves
+   * the scroll to the settle below while this is set, because it would measure
+   * the outgoing list's position rather than the place the reader is about to
+   * see.
+   */
+  let sidebarModeSettlePending = $state(false)
+  /**
+   * Which mode switch the pending settle belongs to. A second switch while the
+   * first one is still rendering must not apply the older mode's remembered
+   * place to the newer mode's list.
+   */
+  let sidebarSettleGeneration = 0
 
   // Runs before the DOM swaps: capture the outgoing mode's scrollTop while its
-  // list is still mounted, and open the suppression window for the switch.
+  // list is still mounted, render the incoming mode's row, then settle the
+  // incoming list once it has rendered.
   $effect.pre(() => {
     if (mode === previousMode) return
     const scroller = sidebarScroller
     if (scroller) sidebarScrollByMode.set(previousMode, scroller.scrollTop)
     previousMode = mode
-    sidebarRevealSuppressed = true
-    clearTimeout(sidebarRevealSuppressTimer)
-    sidebarRevealSuppressTimer = setTimeout(() => {
-      sidebarRevealSuppressed = false
-    }, 2000)
+    // A mode switch is the thread's turn to control the scroll: the reader's
+    // place in the list they just left does not follow them into the new one.
+    sidebarReaderOwnsScroll = false
+    sidebarModeSettlePending = true
+    const generation = ++sidebarSettleGeneration
+    // The row of a thread whose folder is collapsed is not in the incoming list
+    // yet. Expanding here, before Svelte renders it, is what lets the settle
+    // place the list on the row before the browser paints the switch.
+    const thread = selectedThread
+    if (thread) prepareThreadRow(thread)
+    void settleSidebarForMode(mode, generation)
   })
 
-  // After the incoming mode's list has rendered, restore its saved scroll.
-  $effect(() => {
-    const saved = sidebarScrollByMode.get(mode)
-    if (saved === undefined) return
-    void tick().then(() => {
-      const scroller = sidebarScroller
-      if (scroller) scroller.scrollTop = saved
-    })
-  })
+  /**
+   * Put the sidebar where the incoming mode's list belongs: the reader's
+   * remembered place for that mode, which the focus-follow effect then settles
+   * onto the active thread's row when that place hides it.
+   */
+  async function settleSidebarForMode(settledMode: typeof mode, generation: number): Promise<void> {
+    // The mode's own list is mounted by the end of this flush, so the remembered
+    // place is written against the list the reader is about to see, never the
+    // one they just left. A microtask is all this waits for, so the follow
+    // effect below is never held off by a window that stopped painting.
+    await tick()
+    if (generation !== sidebarSettleGeneration) return
+    const scroller = sidebarScroller
+    const remembered = sidebarScrollByMode.get(settledMode)
+    if (scroller && remembered !== undefined) scroller.scrollTop = remembered
+    sidebarModeSettlePending = false
+  }
 
   const sidebar = new WorkspaceSidebarController()
 
@@ -554,8 +603,12 @@
 
   function openNewBrowser(): string | null {
     // A new tab starts blank: no URL is loaded, the address bar stays empty,
-    // and the page only loads once the user types an address.
-    return contextSidebarState.openBrowser('')
+    // and the page only loads once the user types an address. It takes the
+    // keyboard with it, so the user can start typing without reaching for the
+    // address bar first.
+    const tabId = contextSidebarState.openBrowser('')
+    if (tabId) browserAddressFocus.request(tabId)
+    return tabId
   }
 
   function openDebugger(): void {
@@ -591,6 +644,33 @@
   function dockKindActive(kind: ContextSidebarTab['kind']): boolean {
     return contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === kind
   }
+
+  /**
+   * Panels that paint the app background instead of the sidebar's own surface.
+   * The sidebar shell is `bg-surface`, so a panel that sets `bg-app` bleeds
+   * straight into the conversation behind it and the two regions read as one.
+   * A subtle left border keeps them apart. Panels that keep the shell surface
+   * (sources, memory, notifications, the debugger, coordinators) already stand
+   * apart from the app background and need no border.
+   */
+  const APP_BACKGROUND_PANEL_KINDS: ReadonlySet<ContextSidebarTab['kind']> = new Set([
+    'files',
+    'diff',
+    'git',
+    'terminal',
+    'actions',
+    'browser',
+    'thread-note',
+    'temporary-chat',
+    'attention'
+  ])
+
+  /** Whether the right sidebar's active panel would otherwise flush into the
+   *  conversation background, so the shell draws a subtle left border. */
+  let rightSidebarFlushes = $derived.by(() => {
+    const tab = contextSidebarState.sidebarActiveTab
+    return tab !== null && APP_BACKGROUND_PANEL_KINDS.has(tab.kind)
+  })
 
   /**
    * The dock's toggle contract: clicking the active tool collapses the panel,
@@ -680,6 +760,23 @@
   let coordinator = $derived(
     coordinatorDockState.forThread(selectedThread?.projectId, activeThreadRowId(selectedThread))
   )
+
+  /**
+   * Keep the coordinator in step with the on-screen thread.
+   *
+   * A session belongs to a thread and survives everything the turn that started it
+   * did, so this re-reads when the thread changes and whenever that thread sees
+   * activity: the `@cio-design` or `@cio-video` tag can arrive on any later message,
+   * and main is the one that decides from the persisted messages, so the coordinator
+   * docks the moment the tag lands rather than waiting for a reload.
+   */
+  $effect(() => {
+    const thread = selectedThread
+    if (!thread) return
+    // Read as a dependency: a new message on this thread re-runs the refresh.
+    void thread.lastActivity
+    void designCoordinatorState.refresh(thread.projectId, thread.id)
+  })
 
   /** The auditor thread of the on-screen coordinator, if one exists. Orchestration
    *  children stay out of the visible thread list but land in the scope store
@@ -1046,10 +1143,10 @@
       threadNote.push({
         id: 'browser',
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
-        icon: Globe2,
+        icon: GlobeCode,
         active: dockKindActive('browser'),
         countBadge:
-          browser.activeDownloadCount > 0 ? String(browser.activeDownloadCount) : undefined,
+          browser.unfinishedDownloadCount > 0 ? String(browser.unfinishedDownloadCount) : undefined,
         menu: browser.menuOpen ? browserMenu : undefined,
         onSelect: () => {
           browser.menuOpen = false
@@ -1077,6 +1174,40 @@
       })
     }
 
+    // Auto-resolved gates sit at the very bottom of the rail: they are the
+    // app's own record of what it decided while the user was away, not a
+    // workspace tool. The item is keyed to the open conversation, so it appears
+    // only on the thread a decision concerns (or on its task, or on any thread
+    // of its routine), and disappears once that scope has nothing unread.
+    const attentionScope = selectedThread
+      ? {
+          id: selectedThread.id,
+          projectId: selectedThread.projectId,
+          ...(selectedThread.routineId ? { routineId: selectedThread.routineId } : {}),
+          ...(selectedThread.assistantTaskId
+            ? { assistantTaskId: selectedThread.assistantTaskId }
+            : {})
+        }
+      : null
+    const attentionItems = attentionScope ? attentionState.unreadFor(attentionScope) : []
+    const autoAnswerTools: ContextDockItem[] =
+      selectedThread && attentionItems.length > 0
+        ? [
+            {
+              id: 'attention',
+              label: 'Decisions made for you',
+              icon: TriangleAlert,
+              tone: 'warning',
+              countBadge: String(attentionItems.length),
+              active: dockKindActive('attention'),
+              onSelect: () =>
+                toggleDockPanel('attention', () =>
+                  contextSidebarState.openAttention(selectedThread.projectId, selectedThread.id)
+                )
+            }
+          ]
+        : []
+
     return [
       history,
       assistantTools,
@@ -1085,7 +1216,8 @@
       temporaryChats,
       coordination,
       threadNote,
-      subagents
+      subagents,
+      autoAnswerTools
     ]
   })
 
@@ -1199,11 +1331,38 @@
   // a stray gap opens up where its column used to be. Reserving the track
   // until the outro actually finishes keeps the panel inside its cell for
   // the whole animation.
+  //
+  // The panel must leave the moment its region goes away, not when the
+  // reservation ends: the outro is what the reservation is for. Gating the
+  // panel on the reservation instead held it in its cell, squeezed it to
+  // nothing as the animated rail track collapsed, and only *then* let it fly
+  // out. With the column gone by that point the flying panel fell into an
+  // implicit auto track, so the thread narrowed again by the panel's own width
+  // for the whole outro and snapped back when the node was finally removed.
+  // The region's panel and its track are two clocks, and the panel's starts
+  // first.
+  //
+  // A region can also have to stay mounted because a panel inside it owns a
+  // surface that covers the whole window: the full screen file editor renders
+  // its modal from the files panel. Hiding the sidebar, or any other reason
+  // `sidebarVisible` goes false while the files panel is still the region's
+  // active panel, used to unmount that panel and take the editor with it. The
+  // workspace showed behind the surface for a moment and the surface came
+  // straight back, because the request that had opened it was never cleared, so
+  // remounting the panel re-opened a window the user never closed. The pin is
+  // scoped to the panel that actually hosts the surface, so a region with no
+  // files panel (a thread that was left, a panel that was closed outright)
+  // still goes away exactly as it did before.
   const PANEL_EXIT_MS = 160
   let sidebarTrackReserved = $state(false)
   let sidebarWasVisible = false
+  /** Whether the sidebar's own panel is the one hosting a window-sized surface,
+   *  which has to outlive `sidebarVisible` going false (see above). */
+  let sidebarHostsFullscreenEditor = $derived(
+    contextSidebarState.sidebarActiveTab?.kind === 'files' && projectFilesWorkspace.fullscreenOpen
+  )
   $effect(() => {
-    if (sidebarVisible) {
+    if (sidebarVisible || sidebarHostsFullscreenEditor) {
       sidebarWasVisible = true
       sidebarTrackReserved = true
       return
@@ -1239,9 +1398,38 @@
 
   let contextPanelColumns = $derived(
     sidebarTrackReserved
-      ? `minmax(360px, 1fr) minmax(0, min(${contextSidebarState.width}px, calc(100% - 360px)))`
+      ? 'minmax(360px, 1fr) max(0px, min(calc(100% - 360px), var(--context-rail-width)))'
       : 'minmax(0, 1fr)'
   )
+
+  /**
+   * The rail's animated track width, in the registered property the column
+   * above reads. It is a length at every moment, so the track grows and shrinks
+   * frame by frame and the thread beside it follows, the same motion the left
+   * sidebar gets from `slideWidth`.
+   */
+  let railTrackWidth = $derived(
+    sidebarVisible ? `${Math.round(contextSidebarState.width)}px` : '0px'
+  )
+  /**
+   * True while the user drags the rail's edge. A drag has to track the pointer
+   * exactly, so the track's transition is switched off for its duration instead
+   * of easing behind every pointer move.
+   */
+  let railDragging = $state(false)
+  let railDragTimer: ReturnType<typeof setTimeout> | undefined
+  let railTrackDuration = $derived(
+    railDragging ? '0ms' : `${motionDuration(sidebarVisible ? 200 : PANEL_EXIT_MS)}ms`
+  )
+
+  /** Move the rail: a drag writes the width straight through, everything else
+   *  is the open/close transition above. */
+  function handleRailWidthChange(width: number): void {
+    railDragging = true
+    clearTimeout(railDragTimer)
+    railDragTimer = setTimeout(() => (railDragging = false), motionDuration(160))
+    contextSidebarState.setWidth(width)
+  }
   // A folded dock leaves no restore strip behind: the context dock's terminal
   // icon is always on screen and is the way back, so hiding the terminal really
   // does give the full height back to the thread.
@@ -1317,7 +1505,11 @@
     if (tab.kind === 'coordinator') coordinatorDockState.setAutoOpen(false)
     if (tab.kind === 'browser') {
       if (browserFullscreenTabId === tab.id) browserFullscreenTabId = null
-      void invoke('browser:destroy', tab.id)
+      // A thread browser tab that is closed takes its Back/Forward stack with it.
+      // There is no hibernation on this surface, so a destroy here is always the
+      // tab really going away, and the last tab of a thread browser going this way
+      // is that browser being closed: no tab of it is left to own a history.
+      void invoke('browser:destroy', tab.id, 'closed')
     }
     // Symmetric with the browser: closing the terminal that is showing fullscreen
     // would otherwise leave the fullscreen record pointing at a tab that is gone.
@@ -1399,8 +1591,25 @@
   )
   /** Every task's runs, newest first, for the sidebar's nested rows. */
   let assistantRunsByTask = $derived(groupRunsByTask(assistantThreads))
+  /** Every routine's runs, newest first, for the sidebar's sibling run rows. */
+  let assistantRunsByRoutine = $derived(groupRunsByRoutine(assistantThreads))
   /** Every run thread, for the header search's Runs results. */
   let assistantRuns = $derived(assistantThreads.filter((thread) => thread.assistantTaskId))
+  /**
+   * Every assistant thread's browser scope, keyed by thread id: a routine's
+   * how-to host and each of its runs share the routine, and a routine-less task
+   * owns its own. The sidebar resolves a tab's scope through this, so switching
+   * between a routine's threads keeps the browser those threads opened instead
+   * of closing it.
+   */
+  const assistantBrowserScopes = $derived.by(() => {
+    const scopes = new SvelteMap<string, string>()
+    for (const thread of allThreads) {
+      if (thread.projectId !== ASSISTANT_SPACE_ID) continue
+      scopes.set(thread.id, conversationScopeId(thread.projectId, thread.id, thread.routineId))
+    }
+    return scopes
+  })
   let assistantRoutineList = $derived(assistantRoutines.routines)
 
   let threadsByProject = $derived.by(() => {
@@ -1456,17 +1665,39 @@
     return [...pinned, ...unpinned]
   })
 
-  let recentThreads = $derived.by(() => {
-    const availableThreads = allThreads.filter((thread) => !thread.archived)
-    const byVisitKey = new Map(availableThreads.map((thread) => [threadVisitKey(thread), thread]))
-    const visited = workspaceState.recentThreadVisits
-      .map((visitKey) => byVisitKey.get(visitKey))
-      .filter((thread): thread is Thread => thread !== undefined)
-    const visitedIds = new Set(visited.map((thread) => threadVisitKey(thread)))
-    const activityFallback = availableThreads
-      .filter((thread) => !visitedIds.has(threadVisitKey(thread)))
-      .sort((a, b) => b.lastActivity - a.lastActivity)
-    return [...visited, ...activityFallback].slice(0, 10)
+  /**
+   * The browser tab on screen while the browser view is the surface the user is
+   * looking at, and null in every other view.
+   *
+   * The switcher both leads with this tab and starts cycling from it, so one
+   * Control+Tab out of the browser lands on the surface the user was on before
+   * it, and one Control+Tab back into the browser always reaches the tab they
+   * left instead of sending them to the mouse.
+   */
+  let currentBrowserTabId = $derived.by(() => {
+    if (active) return null
+    const browser = browserStore()
+    return browser?.opened ? browser.activeTabId : null
+  })
+
+  let recentSwitcherEntries = $derived.by(() =>
+    buildThreadSwitcherEntries({
+      // One recency order across every switchable surface: a project thread, a
+      // chat, an assistant task or an open browser tab, interleaved by when each
+      // was last visited.
+      visits: recentVisits.all,
+      threads: allThreads.filter((thread) => !thread.archived),
+      tabs: switcherBrowserTabs(),
+      currentBrowserTabId
+    })
+  )
+
+  /** The entry the switcher starts cycling from: the active browser tab while the
+   *  browser view is on screen, otherwise the selected thread. */
+  let switcherSelectedKey = $derived.by(() => {
+    if (currentBrowserTabId) return browserTabVisitKey(currentBrowserTabId)
+    const thread = selectedThread
+    return thread ? threadVisitKey(thread) : null
   })
 
   let recentScopeLoadRequest = 0
@@ -1516,6 +1747,15 @@
    *  or history   or one the harness just started working on   must be added
    *  on first sighting instead of silently dropped. */
   function upsertThreadInList(thread: Thread): void {
+    // Orchestration children (Assignment workers and auditors) are internals:
+    // their activity rolls up onto the Sr. Engineer's row, so they never get a
+    // sidebar row of their own. This guard lives here, not only at the call
+    // sites, because the sidebar list is exactly the user-facing surface a
+    // child must never enter   an unguarded ingestion (for example restoring
+    // the last-open thread when the user had a worker open) previously inserted
+    // one, and every later `thread:updated` for it was then skipped by the same
+    // predicate, freezing that row on the stale snapshot it was restored with.
+    if (isOrchestrationChildThread(thread)) return
     const index = allThreads.findIndex((candidate) => candidate.id === thread.id)
     if (index < 0) {
       allThreads = [thread, ...allThreads]
@@ -1702,13 +1942,27 @@
         workspaceState.selectedThread?.projectId === projectId &&
         workspaceState.selectedThread.id === threadId
       ) {
-        void workspaceState.refreshSourceProcessCount(projectId, threadId)
+        void workspaceState.refreshSourceProcessCount(projectId, threadId, { force: true })
       }
     })
   })
 
   $effect(() => {
+    // The sidebar owns the browser tab list but holds no thread rows, so it asks
+    // the workspace which conversation a tab belongs to. The resolver reads the
+    // scope index lazily, so registering it once is enough.
+    contextSidebarState.setThreadBrowserScopeResolver((projectId, threadId) =>
+      projectId === ASSISTANT_SPACE_ID
+        ? (assistantBrowserScopes.get(threadId) ?? threadId)
+        : conversationScopeId(projectId, threadId, null)
+    )
+  })
+
+  $effect(() => {
     return subscribe('browser:openRequested', (url, context) => {
+      // A tab opened by the global browser belongs to the global strip, which
+      // adopts it in its own store; the workspace sidebar must not mirror it.
+      if (context?.projectId === GLOBAL_BROWSER_PROJECT_ID) return
       if (context) {
         contextSidebarState.openBrowserForContext(
           url,
@@ -1720,6 +1974,34 @@
         return
       }
       if (contextSidebarState.openBrowser(url) === null) void invoke('shell:openExternal', url)
+    })
+  })
+
+  $effect(() => {
+    return subscribe('browser:panelShortcut', (tabId, action) => {
+      // Focusing the address bar is the panel's own: it owns the input, and it
+      // is the surface (sidebar or full screen) that decides whether it shows it.
+      if (action === 'focus-address') return
+      // Find is the page-showing surface's too: the bar is a row of that surface,
+      // and the store it writes to is shared with it.
+      if (action === 'find' || action === 'find-next' || action === 'find-previous') return
+      const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
+      if (!tab || tab.kind !== 'browser') return
+      if (action === 'close-tab') {
+        closeContextTab(tabId)
+        return
+      }
+      // A new tab opens in the container the focused tab belongs to, so a key
+      // pressed in a thread's browser can never open a tab the strip is not
+      // showing. It takes the keyboard like one opened from the strip does.
+      const newTabId = contextSidebarState.openBrowserForContext(
+        '',
+        tab.projectId,
+        tab.threadId,
+        undefined,
+        true
+      )
+      browserAddressFocus.request(newTabId)
     })
   })
 
@@ -2081,10 +2363,11 @@
     })
   })
 
-  // While a thread is selected, keep its row (and project) in focus in the
-  // sidebar. Selection changes expand the owning folder and reset any scroll
-  // suppression; list changes re-reveal the row if background activity pushed
-  // it out of view. The scope-board view is left untouched.
+  // While a thread is selected, its row (and thus its project) stays in view in
+  // the sidebar. Selecting another thread expands the owning folder and reveals
+  // the row; a row the thread moves by itself is followed; background list
+  // changes only reveal while the reader has not taken the scroll over. The
+  // scope-board view is left untouched.
   $effect(() => {
     const thread = selectedThread
     if (!thread) return
@@ -2093,43 +2376,40 @@
     // every background thread update would pay for it. When the workspace comes
     // back, `active` flips and this effect re-runs to restore the reveal.
     if (!active) return
+    // A mode switch settles the incoming list itself, once its own rows are
+    // mounted: this run would measure the position of the list being replaced.
+    if (sidebarModeSettlePending) return
     // Track the sort source arrays so the effect re-runs whenever the sidebar
     // lists reorder (thread updates, project reorders) and re-reveals if needed.
     void allThreads
     void projects
-    if (thread.id !== lastFocusedThreadId) {
-      lastFocusedThreadId = thread.id
-      sidebarFocusSuppressed = false
-      // A deliberate selection of a new thread overrides the mode-switch
-      // suppression window so the chosen thread is always revealed, even right
-      // after navigating across sidebar modes.
-      sidebarRevealSuppressed = false
-      clearTimeout(sidebarRevealSuppressTimer)
-      if (thread.projectId !== INBOX_PROJECT_ID) {
-        sidebar.expandedFolders.add(thread.projectId)
-        // Ensure the folder shows enough rows for the focused thread so its
-        // row is actually rendered, then reveal it once the rows mount.
-        const folderThreads = threadsByProject.get(thread.projectId) ?? []
-        const threadIndex = folderThreads.findIndex((candidate) => candidate.id === thread.id)
-        if (threadIndex >= 0) {
-          sidebar.ensureRowVisible(thread.projectId, threadIndex + 1)
-        }
-        if (!sidebarRevealSuppressed) {
-          void tick().then(() => revealThreadInSidebar(thread.id))
-        }
-      } else if (!sidebarRevealSuppressed) {
-        // Standalone chats (inbox) have no folder to expand   reveal directly
-        // once the mode's list has rendered the row.
-        void tick().then(() => revealThreadInSidebar(thread.id))
-      }
+    // A row moves without its thread changing hands: typing an unsent draft
+    // sends the active row to the top of the list, and clearing it sends the
+    // row back down. Its slot is that movement, and the reader's hold on the
+    // scroll does not survive it   the move is the thread's own doing.
+    const activeRowSortKey = threadStatusSortKey(thread, draftThreadKeys)
+    const selectedNewThread = thread.id !== lastFocusedThreadId
+    const rowMoved = lastActiveRowSortKey !== null && activeRowSortKey !== lastActiveRowSortKey
+    lastFocusedThreadId = thread.id
+    lastActiveRowSortKey = activeRowSortKey
+    if (selectedNewThread) {
+      // Picking a thread ends the reader's hold on the scroll: the one they
+      // chose is what they are looking for now.
+      sidebarReaderOwnsScroll = false
+      prepareThreadRow(thread)
     }
-    if (sidebarFocusSuppressed || sidebarRevealSuppressed) return
     if (isScopeBoardView) return
-    // Steady state: this effect re-runs on every thread update. A row that is
-    // still in view needs no reveal, and the reveal loop costs a DOM query plus
-    // up to twelve animation frames, so check visibility first.
-    if (isThreadRowVisible(thread.id)) return
-    revealThreadInSidebar(thread.id)
+    // A row that is still in view needs no reveal, and the reveal loop costs a
+    // DOM query plus up to twelve animation frames. Seeing the row again also
+    // hands the scroll back to the thread.
+    if (isThreadRowVisible(thread.id)) {
+      sidebarReaderOwnsScroll = false
+      return
+    }
+    // Background changes wait for the reader to hand the scroll back; a new
+    // thread, or a row the thread moved itself, always gets its row into view.
+    if (sidebarReaderOwnsScroll && !selectedNewThread && !rowMoved) return
+    void revealThreadInSidebar(thread)
   })
 
   // Keep the header icon in sync with the active project and icon cache.
@@ -2300,7 +2580,10 @@
       // so routine/missed-run reads can never occupy the startup frame or race
       // the project and thread hydration for the main process. Idempotent: a
       // second call is a no-op, and re-scheduling replaces the pending task.
-      scheduleDeferredWork('assistant:hydrate', () => assistantRoutines.initialize())
+      scheduleDeferredWork('assistant:hydrate', () => {
+        assistantRoutines.initialize()
+        attentionState.initialize()
+      })
     }
   }
 
@@ -2446,6 +2729,54 @@
 
   $effect(() => {
     if (mode === 'threads' && active) void ensureThreadsViewFullyLoaded()
+  })
+
+  /** The chat a Chats view with nothing to restore should land on: the last chat
+   *  the user actually visited (`recentThreadVisits` is persisted visit order),
+   *  else the family's most recently active thread. `allThreads` order is not
+   *  visit recency, so it is only ever the activity fallback. */
+  function lastChatToLandOn(): Thread | null {
+    const chats = allThreads.filter((t) => !t.archived && t.projectId === INBOX_PROJECT_ID)
+    const byVisit = new Map(chats.map((t) => [threadVisitKey(t), t]))
+    return (
+      workspaceState.recentThreadVisits
+        .map((key) => byVisit.get(key))
+        .find((t) => t !== undefined) ??
+      chats.sort((a, b) => b.lastActivity - a.lastActivity)[0] ??
+      null
+    )
+  }
+
+  /** True once the Chats view has been shown, so the entry guarantee below runs
+   *  once per entry instead of on every reactive pass while the view stays open.
+   *  Clearing the thread for a fresh chat must not immediately create another. */
+  let chatViewEntered = false
+
+  // The Chats view is thread-backed: its composer, its conversation and its
+  // right rail all belong to a thread, so showing it with nothing selected must
+  // still land on one. The shell restores a chat the user visited this session;
+  // when that leaves nothing (a first visit, or a session holding chats it has
+  // never opened) the view lands on the most recently active chat, and only a
+  // family with no thread at all falls through to creating the empty draft chat
+  // it would otherwise create on the first keystroke. Without this the view
+  // opened on its thread-less welcome composer, and the right rail had no thread
+  // to belong to. `loading` keeps it from racing the startup thread restore.
+  $effect(() => {
+    if (!active || mode !== 'chats' || loading) {
+      chatViewEntered = false
+      return
+    }
+    if (chatViewEntered) return
+    chatViewEntered = true
+    if (workspaceState.selectedThread) return
+    const existing = lastChatToLandOn()
+    if (existing) {
+      workspaceState.openThread(existing, inboxProject())
+      return
+    }
+    // Nothing to land on: open the blank chat row the view is built around, so
+    // it never paints the thread-less welcome composer (and never loses its rail).
+    openNewChatThread()
   })
 
   /** Filter backfill: the 200-row hydration window is unfiltered, so a narrowed
@@ -2748,6 +3079,21 @@
 
   // ─── Thread actions ──────────────────────────────────────────────────────
 
+  /** A client-side id for an optimistic thread, so the row mounts before the
+   *  create round trip and keeps the same id once the server confirms it. */
+  function newOptimisticThreadId(): string {
+    const bytes = new Uint8Array(12)
+    crypto.getRandomValues(bytes)
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  }
+
+  /** The hidden inbox project when it is already loaded. Chats live in it, but a
+   *  launch that never held one does not have it yet, so the create path asks the
+   *  main process for it instead. */
+  function inboxProject(): Project | null {
+    return projects.find((candidate) => candidate.id === INBOX_PROJECT_ID) ?? null
+  }
+
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
   async function createThreadInProject(
     project: Project,
@@ -2861,11 +3207,7 @@
     // Instant mount: create optimistic thread locally so the composer
     // paints on the same tick as the click   no IPC on the critical path.
     // Git branch and persistence hydrate async via the thread:update broadcast.
-    const optimisticId = (() => {
-      const bytes = new Uint8Array(12)
-      crypto.getRandomValues(bytes)
-      return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
-    })()
+    const optimisticId = newOptimisticThreadId()
     const optimisticThread = {
       id: optimisticId,
       projectId: project.id,
@@ -2955,9 +3297,90 @@
       })
   }
 
-  /** Start a fresh standalone chat   shows the composer immediately. */
+  /**
+   * Start a fresh standalone chat. A chat is a project-less thread, so this
+   * behaves exactly like a project's New thread: the blank row goes into the
+   * Chats sidebar on the same tick as the click and opens, and its label follows
+   * what the user types through the shared draft-label path. A blank chat already
+   * sitting there is reused instead of stacking a second empty row beside it.
+   */
   function startNewChat(): void {
-    workspaceState.clearThread()
+    const existing = findEmptyNewThread(allThreads, INBOX_PROJECT_ID, undefined)
+    if (existing) {
+      threadMessages.seedEmpty(INBOX_PROJECT_ID, existing.id)
+      // The blank row is already the chat the click asked for.
+      if (workspaceState.selectedThread?.id === existing.id) {
+        workspaceState.requestFocusComposer()
+        return
+      }
+      upsertThreadInList(existing)
+      workspaceState.openThread(existing, inboxProject())
+      return
+    }
+    openNewChatThread()
+  }
+
+  /**
+   * Put a blank chat row in the Chats sidebar and open it, mirroring a project's
+   * optimistic New thread: the row mounts on the same tick and the server
+   * confirms it in the background under the same id, so nothing typed while the
+   * create round trip is in flight is lost.
+   */
+  function openNewChatThread(): void {
+    const optimisticId = newOptimisticThreadId()
+    const settings = chatEffectiveSettings(threadSettings.lastUsed)
+    const optimisticThread: Thread = {
+      id: optimisticId,
+      projectId: INBOX_PROJECT_ID,
+      providerId: 'pi',
+      title: DEFAULT_THREAD_TITLE,
+      titleSource: 'default',
+      status: 'created',
+      pinned: false,
+      archived: false,
+      read: true,
+      settings,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActivity: Date.now(),
+      workingDirectory: ''
+    }
+    upsertThreadInList(optimisticThread)
+    threadMessages.seedEmpty(INBOX_PROJECT_ID, optimisticId)
+    workspaceState.openThread(optimisticThread, inboxProject())
+    void persistNewChatThread(optimisticId, settings)
+  }
+
+  async function persistNewChatThread(
+    optimisticId: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    try {
+      // The inbox project is created on demand, so a launch that has never held
+      // a chat has to ask for it before the thread can be persisted into it.
+      const inbox = inboxProject() ?? (await invoke('project:ensureInbox'))
+      const created = await invoke('thread:create', {
+        id: optimisticId,
+        projectId: INBOX_PROJECT_ID,
+        providerId: 'pi',
+        title: DEFAULT_THREAD_TITLE,
+        workingDirectory: '',
+        settings
+      })
+      upsertThreadInList(created)
+      if (workspaceState.selectedThread?.id === optimisticId) {
+        workspaceState.openThread(created, inbox)
+      }
+    } catch (error) {
+      // Creation failed   drop the optimistic row so the view never strands on a
+      // phantom chat, and fall back to the thread-less welcome composer.
+      const index = allThreads.findIndex((candidate) => candidate.id === optimisticId)
+      if (index !== -1) allThreads.splice(index, 1)
+      if (workspaceState.selectedThread?.id === optimisticId) {
+        workspaceState.clearThread()
+      }
+      reportError(error, 'The new chat could not be created.')
+    }
   }
 
   /** Create a standalone (project-less) chat thread inside the hidden inbox. */
@@ -3001,10 +3424,15 @@
     // Publish the hand-off before awaiting the thread: when a draft hand-off is
     // already creating it, ThreadView mounts for that same thread and picks the
     // message up, instead of a second thread being created here.
+    let staged = files
     chatDraft.message = msg
-    chatDraft.attachments = files
+    chatDraft.attachments = staged
     try {
       const { thread, inbox } = await ensureWelcomeChatThread()
+      // The chat exists, so everything the composer staged before it did is
+      // moved into that chat's own scratch path before the message goes.
+      staged = await adoptDraftAttachments(thread.id, staged)
+      chatDraft.attachments = staged
       // Seed the empty conversation so the composer renders on the first frame
       // and the hand-off message is sent without a loading flash.
       threadMessages.seedEmpty(INBOX_PROJECT_ID, thread.id)
@@ -3015,9 +3443,43 @@
       chatDraft.attachments = []
       // The thread was never created, so the message cannot appear anywhere.
       // Put it back in the composer so the user doesn't lose their first message.
-      rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', msg, files)
+      rendererRecovery.setDraft(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID, msg, staged)
       chatsComposerRestoreKey += 1
       reportError(error, 'The chat could not be started.')
+    }
+  }
+
+  /**
+   * Move everything the welcome composer staged before its chat existed into
+   * that chat's own scratch path, and answer the composer's attachment list
+   * repointed at the moved files.
+   *
+   * The composer has no thread while the draft is only a draft, so it stages
+   * into a transient scope; the chat's scratch path is the one place its files
+   * belong, so the hand-off moves them there rather than leaving them in a
+   * directory no conversation owns. Best-effort: a failure leaves the files
+   * where they are, where they stay readable and deletable.
+   */
+  async function adoptDraftAttachments(
+    threadId: string,
+    files: PromptAttachment[]
+  ): Promise<PromptAttachment[]> {
+    try {
+      // Run even with no chip attached: a file the user dropped and then
+      // removed from the composer is still staged, and it belongs to this chat
+      // rather than to a scope no conversation owns.
+      const moves = await invoke('attachment:adoptDraft', threadId)
+      if (moves.length === 0) return files
+      // Both sides of the lookup are compared in POSIX form: a Windows move
+      // answers with `\` separators while the chip's URL decodes to `/`.
+      const targets = new Map(moves.map((move) => [toPosixPath(move.from), move.to]))
+      return files.map((file) => {
+        const target = targets.get(toPosixPath(fileUrlToPath(file.url)))
+        return target ? { ...file, url: pathToFileUrl(target) } : file
+      })
+    } catch (error) {
+      reportError(error, 'The draft files could not be moved into the new chat.')
+      return files
     }
   }
 
@@ -3030,8 +3492,8 @@
    * sent: the draft stays a draft, and the next New chat starts another one.
    */
   async function startChatDraft(): Promise<void> {
-    const draft = rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')
-    const attachments = rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+    const draft = rendererRecovery.draftFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
+    const attachments = rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
     if (!draft.trim() && attachments.length === 0) return
 
     try {
@@ -3039,15 +3501,21 @@
       // The thread is seeded empty so its conversation renders the composer on
       // the first frame   the welcome composer never flashes a loading state.
       threadMessages.seedEmpty(INBOX_PROJECT_ID, thread.id)
-      // Re-read: the composer is authoritative and may have taken more
-      // keystrokes (or been cleared by a send) while the thread was created.
+      // The chat exists, so its own scratch path now owns what the composer
+      // staged before it did. Re-read: the composer is authoritative and may
+      // have taken more keystrokes (or been cleared by a send) while the thread
+      // was created.
+      const adopted = await adoptDraftAttachments(
+        thread.id,
+        rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
+      )
       rendererRecovery.setDraft(
         INBOX_PROJECT_ID,
         thread.id,
-        rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
-        rendererRecovery.attachmentsFor(INBOX_PROJECT_ID, 'new-chat')
+        rendererRecovery.draftFor(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID),
+        adopted
       )
-      rendererRecovery.clearDraft(INBOX_PROJECT_ID, 'new-chat')
+      rendererRecovery.clearDraft(INBOX_PROJECT_ID, DRAFT_CHAT_THREAD_ID)
       upsertThreadInList(thread)
       workspaceState.openThread(thread, inbox)
     } catch (error) {
@@ -3140,7 +3608,7 @@
     void scopeState.ensureBoardLoaded(thread.projectId)
     if (threadTracksReadStatus(thread)) markThreadReadAfterPaint(thread)
     // Reveal immediately and again once any read-state update re-sorts the list.
-    revealThreadInSidebar(thread.id)
+    revealThreadInSidebar(thread)
   }
 
   // ─── Assistant actions ────────────────────────────────────────────────────
@@ -3406,15 +3874,42 @@
    * A Ctrl+Tab selection is a deliberate jump to one specific thread, so the
    * shell lands in the view that owns that thread's family: a chat is only ever
    * shown by Chats, an assistant task only by Assistant, and a project thread by
-   * Projects (or by the scope state, which the projects family owns). Without
-   * this the switcher could select a thread in a view that does not own it, leaving
-   * the wrong sidebar and that view's own tools on screen for it.
+   * whichever project view the user last used (Projects, Threads, Scoped or
+   * Board), because that is the view the rail's project badge rides. Without
+   * this the switcher could select a thread in a view that does not own it,
+   * leaving the wrong sidebar and that view's own tools on screen for it.
    */
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
     const family = contentThreadFamily(thread)
+    // The switcher can be opened from the browser view, where Ctrl+Tab is
+    // claimed inside a page, or from Settings: the shell is mounted but not the
+    // on-screen view. A project thread then has to bring the shell forward,
+    // because `mode` still reads the last content view and the guard below would
+    // change only a selection nobody can see, leaving the browser (or Settings)
+    // on screen. On the Scope page the landing resolves to the page itself, so a
+    // switch made there stays on the board and only follows the picked project.
+    const shellHidden = !active && !scopeViewActive
+    /** Whether the landing selected the thread already, because it needed to. */
+    let openedThread = false
+    /** The project family's landing when this jump re-enters it, else null. */
+    let projectLanding: ProjectFamilyLanding | null = null
     if (family === 'chats') navigate('chats')
     else if (family === 'assistant') navigate('assistant')
-    else if (mode === 'chats' || mode === 'assistant') navigate('projects')
+    else if (mode === 'chats' || mode === 'assistant' || shellHidden) {
+      // A project thread can be shown by several project views, so the jump
+      // returns to the one the user last used (the view the rail's project
+      // badge rides) instead of resetting to the default Projects view.
+      projectLanding = lastProjectViewLanding()
+      if (projectLanding === 'threads') navigate('threads')
+      else if (projectLanding === 'scope') {
+        // The Scope page activates the open thread's project, so the thread is
+        // selected before the page is entered; otherwise the board would follow
+        // the thread the user left instead of the one they picked.
+        await openThread(thread)
+        openedThread = true
+        navigate('scope')
+      } else navigate('projects')
+    }
     // The scope store reads its own activeProjectId / sidebarContext, not the
     // workspace selection, so a cross-project Ctrl+Tab jump must sync it
     // otherwise the scope view tabs and the scope-state sidebar stay stuck on
@@ -3424,20 +3919,37 @@
     if (family === 'projects') {
       if (scopeViewActive) {
         void scopeState.activateProject(thread.projectId)
-      } else if (scopeState.sidebarContext) {
+      } else if (projectLanding === 'scoped' || scopeState.sidebarContext) {
+        // The scoped state is the projects view carrying the scope sidebar: the
+        // sidebar is what the rail reports as Scoped, so a landing there has to
+        // bring it back focused on the thread the user picked.
         scopeState.showSidebarForThread(thread)
       }
     }
-    await openThread(thread)
-    // A Ctrl+Tab selection is a deliberate jump to a specific thread. When it
-    // crosses modes (e.g. Chats → Projects) the mode switch opens a suppression
-    // window and restores the incoming mode's saved scroll, which would keep the
-    // chosen thread out of view. Cancel that suppression and reveal the row once
-    // the restore + folder expansion have settled.
-    sidebarRevealSuppressed = false
-    clearTimeout(sidebarRevealSuppressTimer)
-    if (family === 'projects') sidebar.expandedFolders.add(thread.projectId)
-    void tick().then(() => revealThreadInSidebar(thread.id))
+    if (!openedThread) await openThread(thread)
+    // A Ctrl+Tab selection is a deliberate jump to a specific thread: the reader
+    // hands the sidebar scroll back here, and the row is revealed once the mode
+    // switch has settled the incoming list.
+    sidebarReaderOwnsScroll = false
+    void tick().then(() => revealThreadInSidebar(thread))
+  }
+
+  /**
+   * Open whatever the Ctrl+Tab switcher landed on. A browser entry reveals the
+   * browser view and switches to that tab, which also hands the page the keyboard
+   * (or opens a blank tab's address spotlight); a thread entry takes the same path
+   * it always did, landing in the view that owns the thread's family.
+   */
+  async function openSwitcherEntry(entry: ThreadSwitcherEntry): Promise<void> {
+    if (entry.kind === 'browser') {
+      navigate('browser')
+      // An entry for a browser tab only exists once the browser is loaded, so
+      // this resolves immediately; asking through the access seam is what keeps
+      // that fact out of this component's imports.
+      void loadBrowser().then((browser) => browser.switchTo(entry.tab.id))
+      return
+    }
+    await openThreadFromSwitcher(entry.thread)
   }
 
   async function openProjectFileFromCommand(
@@ -3575,21 +4087,28 @@
     workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
   }
 
+  /** Register a thread that arrived from another view, then hand it to the shell
+   *  so it lands in the view that owns it with its composer focused. A chat
+   *  continued into a project, an assistant task handed off, and a side chat
+   *  promoted to a thread all arrive while a view of another family is on screen,
+   *  so selecting the thread without moving used to leave it open invisibly. */
+  function openCreatedThread(thread: Thread): void {
+    upsertThreadInList(thread)
+    scopeState.updateThread(thread)
+    workspaceState.openThreadInOwningView(
+      thread,
+      projects.find((p) => p.id === thread.projectId) ?? null
+    )
+  }
+
   /** A chat was continued into a project   register the thread and open it there. */
   function handleContinuedInProject(forked: Thread): void {
-    upsertThreadInList(forked)
-    scopeState.updateThread(forked)
-    if (forked.projectId === INBOX_PROJECT_ID) navigate('chats')
-    else if (mode === 'chats') navigate('projects')
-    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+    openCreatedThread(forked)
   }
 
   /** An assistant task was forked to a project: open it in the projects view. */
   function handleAssistantHandoff(forked: Thread): void {
-    upsertThreadInList(forked)
-    scopeState.updateThread(forked)
-    navigate('projects')
-    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+    openCreatedThread(forked)
   }
 
   /** Register a freshly added project without landing in a new thread   used by
@@ -3618,11 +4137,7 @@
       tab.settings
     )
     contextSidebarState.close(tab.id)
-    upsertThreadInList(converted)
-    scopeState.updateThread(converted)
-    if (converted.projectId === INBOX_PROJECT_ID) navigate('chats')
-    else if (mode === 'chats') navigate('projects')
-    workspaceState.openThread(converted, projects.find((p) => p.id === converted.projectId) ?? null)
+    openCreatedThread(converted)
   }
 
   loadData()
@@ -3639,8 +4154,8 @@
         routines={assistantRoutineList}
         tasks={assistantTasks}
         runsByTask={assistantRunsByTask}
+        runsByRoutine={assistantRunsByRoutine}
         selectedThreadId={activeThreadRowId(selectedThread)}
-        {navigate}
         onOpenTask={openAssistantTask}
         onOpenTaskHowTo={openAssistantHowToForTask}
         onOpenRoutineHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
@@ -3664,7 +4179,6 @@
       bind:scroller={sidebarScroller}
       {mode}
       {active}
-      {navigate}
       {projects}
       {visibleProjects}
       {projectIcons}
@@ -3703,12 +4217,22 @@
     />
   {/if}
 
-  <!-- Main Content -->
-  <section class="flex min-w-0 flex-1 overflow-hidden">
+  <!-- Main Content. `overflow-clip`, not `overflow-hidden`: hidden is still a
+       scroll container, and a panel sliding in on `fly` translates past this
+       box, which grows the scrollable area. A focused control inside the
+       arriving panel (the terminal is the one that focuses itself) then
+       scrolls the whole shell down and the scroll clamps back as the slide
+       settles, so the thread visibly dropped and rose. Clip makes this box
+       never scrollable, so nothing can move it. -->
+  <section class="flex min-w-0 flex-1 overflow-clip">
     <div
       class="grid h-full min-h-0 min-w-0 flex-1"
       style:grid-template-columns={contextPanelColumns}
       style:grid-template-rows={contextPanelRows}
+      style:--context-rail-width={railTrackWidth}
+      style:transition-property="--context-rail-width"
+      style:transition-timing-function="cubic-bezier(0.215, 0.61, 0.355, 1)"
+      style:transition-duration={railTrackDuration}
     >
       <WorkspaceConversationPane
         {mode}
@@ -3733,7 +4257,7 @@
         }}
       />
 
-      {#if sidebarVisible}
+      {#if sidebarVisible || sidebarHostsFullscreenEditor}
         {#snippet contextSidebarContent()}
           <WorkspaceContextPanelContent
             {gitPanelProjectId}
@@ -3755,7 +4279,7 @@
           />
         {/snippet}
         <div
-          class="min-h-0 min-w-0"
+          class="min-h-0 min-w-0 {rightSidebarFlushes ? 'border-l border-border' : ''}"
           style:grid-column="2"
           style:grid-row="1"
           in:fly={{ x: contextSidebarState.width, duration: motionDuration(200), easing: cubicOut }}
@@ -3777,7 +4301,7 @@
             onFullscreenTab={openTabFullscreen}
             onMoveTab={(id, targetId, position) =>
               contextSidebarState.reorder(id, targetId, position)}
-            onWidthChange={(width) => contextSidebarState.setWidth(width)}
+            onWidthChange={(width) => handleRailWidthChange(width)}
             onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
@@ -3838,23 +4362,34 @@
 {/snippet}
 
 {#snippet browserMenu()}
-  <WorkspaceBrowserMenu {browser} />
+  {#await import('./WorkspaceBrowserMenu.svelte') then { default: WorkspaceBrowserMenu }}
+    <WorkspaceBrowserMenu {browser} />
+  {/await}
 {/snippet}
 
-<WorkspaceBrowserDataModal {browser} {projects} />
+<!-- Every browser surface waits for `browserStore()` so its chunk is not even
+     fetched on a launch that never reaches the browser. The store arrives with
+     the runtime, which is also what warms these chunks. -->
+{#if browserStore()}
+  {#await import('./WorkspaceBrowserDataModal.svelte') then { default: WorkspaceBrowserDataModal }}
+    <WorkspaceBrowserDataModal {browser} {projects} />
+  {/await}
 
-<WorkspaceBrowserDownloadsModal {browser} />
+  {#await import('./WorkspaceBrowserDownloadsModal.svelte') then { default: WorkspaceBrowserDownloadsModal }}
+    <WorkspaceBrowserDownloadsModal {browser} />
+  {/await}
+{/if}
 
 <WorkspaceRemoveProjectModals dialogs={projectDialogs} />
 
 <WorkspaceEditProjectModal dialogs={projectDialogs} {projectIcons} />
 
 <ThreadSwitcher
-  threads={recentThreads}
+  entries={recentSwitcherEntries}
   projects={visibleProjects}
   projectIconUrls={projectIcons}
-  selectedThreadId={selectedThread?.id ?? null}
-  onSelect={openThreadFromSwitcher}
+  selectedKey={switcherSelectedKey}
+  onSelect={openSwitcherEntry}
 />
 
 <WorkspaceFullscreenTerminal
@@ -3863,12 +4398,16 @@
   onNewTerminal={openNewTerminal}
   onCloseTab={(id) => closeFullscreenTab('terminal', id)}
 />
-<WorkspaceFullscreenBrowser
-  tabId={browserFullscreenTabId}
-  onTabIdChange={(id) => (browserFullscreenTabId = id)}
-  onNewBrowser={openNewBrowser}
-  onCloseTab={(id) => closeFullscreenTab('browser', id)}
-/>
+{#if browserStore()}
+  {#await import('./WorkspaceFullscreenBrowser.svelte') then { default: WorkspaceFullscreenBrowser }}
+    <WorkspaceFullscreenBrowser
+      tabId={browserFullscreenTabId}
+      onTabIdChange={(id) => (browserFullscreenTabId = id)}
+      onNewBrowser={openNewBrowser}
+      onCloseTab={(id) => closeFullscreenTab('browser', id)}
+    />
+  {/await}
+{/if}
 
 <!-- Closing a files tab with unsaved changes -->
 <WorkspaceUnsavedChangesDialog

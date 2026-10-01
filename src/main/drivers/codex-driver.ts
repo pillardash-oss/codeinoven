@@ -131,8 +131,10 @@ export class CodexDriver extends PersistentCliDriver {
    *  item notifications that arrive outside any registered turn (between
    *  turns, at resume/turn-start) can still reach the owning session. */
   private threadSessionsByNativeId = new Map<string, { sessionId: string; projectPath: string }>()
-  /** Resident app-server hosts keyed by project working directory so the
-   *  chats inbox (`chats-cwd`) runs on its own isolated app-server. */
+  /** Resident app-server hosts keyed by project working directory, so one
+   *  app-server never serves two working directories at once. A standalone chat
+   *  works in its own `chats-cwd/<threadId>` directory, so chats never share a
+   *  resident server; {@link stopResidentHostForPathIfIdle} stops an idle one. */
   private hostsByProjectPath = new Map<string, CodexAppServerHost>()
   private hostsStartingByProjectPath = new Map<string, Promise<CodexAppServerHost>>()
   private authenticationRestartsByProjectPath = new Map<string, Promise<void>>()

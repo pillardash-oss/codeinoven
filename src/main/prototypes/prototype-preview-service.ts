@@ -4,6 +4,7 @@ import { opendir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { mimeTypeForPath } from '../../lib/mime-types'
 import { PROTOTYPE_ASSET_BYTE_LIMIT } from '../../lib/prototypes/prototype-artifacts'
+import { appServiceRegistry } from '../system/app-service-registry'
 import {
   STRICT_PROTOTYPE_CDN_POLICY,
   prototypePreviewCsp,
@@ -104,6 +105,17 @@ export class PrototypePreviewService {
         if (!address || typeof address === 'string') {
           throw new Error('Prototype preview port unavailable')
         }
+        // Announce the loopback origin so the task manager shows it. It lives
+        // for the whole app session, so it registers with no stop action.
+        appServiceRegistry.register({
+          id: 'prototype-preview',
+          kind: 'server',
+          name: 'Prototype preview server',
+          detail: `http://127.0.0.1:${address.port}`,
+          scope: 'app',
+          port: address.port,
+          url: `http://127.0.0.1:${address.port}`
+        })
         return address.port
       } catch (error) {
         if (this.server === server) this.server = null
@@ -123,6 +135,7 @@ export class PrototypePreviewService {
     await this.starting?.catch(() => undefined)
     const server = this.server
     this.server = null
+    appServiceRegistry.unregister('prototype-preview')
     if (!server) return
     await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()))
   }

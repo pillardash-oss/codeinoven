@@ -245,7 +245,7 @@
   <div class="relative min-w-0">
     <button
       type="button"
-      class="flex min-w-0 cursor-pointer items-center gap-1 rounded-md transition-opacity hover:opacity-85"
+      class="flex w-full min-w-0 cursor-pointer items-center gap-1 rounded-md transition-opacity hover:opacity-85"
       aria-haspopup="menu"
       aria-expanded={menuOpen}
       title={isNewThread
@@ -478,10 +478,12 @@
 {/if}
 
 <style>
-  /* The chat composer is the query container (`.chat-composer` sets
-     `container-type: inline-size`): as it shrinks (e.g. a very wide right
-     sidebar), give the truncating stages room in order   project name first,
-     then location, connection label, and finally only the icons remain.
+  /* The shoe wrapper is the query container (`.composer-shoe` carries the
+     `@container` class), so every threshold below is a width of the room the
+     composer leaves that wrapper: the composer, less the wrapper's own inline
+     padding. As the composer tightens, give the truncating stages room in
+     order   project name first, then location, connection label, and finally
+     only the icons remain.
 
      The project and identity classes below are handed to ProjectSwitch and
      ProjectIdentity as props, so those elements belong to the child components
@@ -494,7 +496,7 @@
     min-width: 4.5rem;
   }
 
-  @container (max-width: 400px) {
+  @container (max-width: 630px) {
     :global(.shoe-project) {
       max-width: 8rem;
     }
@@ -509,7 +511,7 @@
     }
   }
 
-  @container (max-width: 320px) {
+  @container (max-width: 490px) {
     :global(.shoe-project) {
       max-width: 1.25rem;
     }

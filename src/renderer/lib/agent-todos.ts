@@ -23,15 +23,21 @@ export interface AgentTodoSnapshot {
 /**
  * Resolve the task that should be presented as active.
  *
- * Harnesses do not always publish an `in_progress` transition before starting
- * work. While the turn is live, fall back to the first pending item so the task
- * card still reflects observed agent activity. An explicit provider status
- * always wins.
+ * Only a running turn has an active task. Harnesses do not always publish an
+ * `in_progress` transition before starting work, so while the turn is live fall
+ * back to the first pending item so the card still reflects observed agent
+ * activity.
+ *
+ * A stopped turn has no active task at all, not even one a harness published as
+ * `in_progress` and then abandoned: the card renders that index as live work (a
+ * spinner and "Working on N of M"), which left finished threads advertising a
+ * task the agent had already walked away from.
  */
 export function activeAgentTodoIndex(items: AgentTodoItem[], busy: boolean): number {
+  if (!busy) return -1
   const explicitIndex = items.findIndex((item) => item.status === 'in_progress')
   if (explicitIndex >= 0) return explicitIndex
-  return busy ? items.findIndex((item) => item.status === 'pending') : -1
+  return items.findIndex((item) => item.status === 'pending')
 }
 
 export function agentTodoProgressLabel(
@@ -42,6 +48,28 @@ export function agentTodoProgressLabel(
   if (activeIndex >= 0) return `Working on ${activeIndex + 1} of ${itemCount}`
   if (completedCount === 0) return `${itemCount} tasks`
   return `${completedCount}/${itemCount} done`
+}
+
+/**
+ * Whether a durable task-list snapshot still describes the turn the transcript
+ * is on.
+ *
+ * The snapshot is refreshed only while a view watches a live turn or crosses a
+ * boundary it observed, so it can lag the transcript. Because the snapshot is
+ * fed to the card as a synthetic trailing message and a task-list snapshot
+ * replaces the whole task map, a snapshot from an older turn would otherwise
+ * overrule the fresher message state and leave a stale list and a stale
+ * highlight on screen after the agent moved on. A transcript that has advanced
+ * past the snapshot's turn (`transcriptTurnStart > snapshotTurnStart`) must
+ * therefore ignore it. Either timestamp being unknown (no prompt yet on either
+ * side) cannot prove staleness, so the snapshot is trusted.
+ */
+export function todoSnapshotMatchesTurn(
+  snapshotTurnStart: number | null,
+  transcriptTurnStart: number | null
+): boolean {
+  if (snapshotTurnStart === null || transcriptTurnStart === null) return true
+  return transcriptTurnStart <= snapshotTurnStart
 }
 
 type ToolPart = Extract<AgentPart, { type: 'tool' }>
@@ -97,12 +125,12 @@ function applyTodoPart(tasks: Map<string, AgentTodoItem>, part: ToolPart): void 
     return
   }
   if (tool.endsWith('tasklist')) {
-    const items = part.state.output ? parseTodoItems({}, part.state.output) : []
-    if (items.length > 0) replaceTasks(tasks, items)
+    const items = part.state.output ? parseTodoItems({}, part.state.output) : null
+    if (items) replaceTasks(tasks, items)
     return
   }
   const items = parseTodoItems(part.state.input, part.state.output)
-  if (items.length > 0) replaceTasks(tasks, items)
+  if (items) replaceTasks(tasks, items)
 }
 
 function applyTaskCreate(tasks: Map<string, AgentTodoItem>, part: ToolPart): void {
@@ -151,10 +179,21 @@ function replaceTasks(tasks: Map<string, AgentTodoItem>, items: AgentTodoItem[])
   for (const item of items) tasks.set(item.id, item)
 }
 
-function parseTodoItems(input: Record<string, unknown>, output?: string): AgentTodoItem[] {
+/**
+ * Normalize a todo payload into items, or null when the payload carries no task
+ * list at all.
+ *
+ * The distinction matters: a whole-list tool that publishes an explicitly empty
+ * list is clearing its tasks, so the card has to drop them. Treating "no list in
+ * this payload" the same as "an empty list" would clear the state on every
+ * snapshot that does not restate the tasks (a mid-stream argument update, a
+ * tool result envelope), and treating both as "no change" leaves the card stuck
+ * on a list the agent already cleared.
+ */
+function parseTodoItems(input: Record<string, unknown>, output?: string): AgentTodoItem[] | null {
   const source =
     findTodoArray(input) ?? (output ? findTodoArray(parseRecord(output) ?? {}) : undefined)
-  if (!source) return []
+  if (!source) return null
 
   return source.flatMap((value, index) => {
     if (typeof value === 'string' && value.trim()) {

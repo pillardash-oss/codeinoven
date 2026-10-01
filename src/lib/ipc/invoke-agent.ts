@@ -16,6 +16,7 @@ import type {
   BrainstormDocument,
   BrainstormEntryChoice,
   BrainstormPrototypeFidelity,
+  DraftAttachmentMove,
   EngineeringSpec,
   EngineeringSpecContent,
   HeartbeatConfig,
@@ -94,6 +95,15 @@ export const invokeAgentContract = {
     [projectId: string, threadId: string, requestedDriverId?: string],
     string
   >,
+  /**
+   * Start the thread's harness session before its next prompt needs it, so a
+   * first message does not pay for the spawn while the user waits.
+   *
+   * Best-effort by design: it resolves false when the driver has no transport to
+   * warm or the warm-up failed, and the send that follows starts the session the
+   * normal way either way.
+   */
+  'agent:warmSession': {} as Contract<[projectId: string, threadId: string], boolean>,
   'agent:ensureInitialSpec': {} as Contract<[projectId: string, threadId: string], EngineeringSpec>,
   'agent:getSessionStatus': {} as Contract<
     [projectId: string, threadId: string],
@@ -240,7 +250,7 @@ export const invokeAgentContract = {
       answers: string[],
       nextQuestionIndex?: number
     ],
-    PendingAgentQuestionRequest
+    PendingAgentQuestionRequest | null
   >,
   'agent:listPermissions': {} as Contract<
     [projectId: string, threadId: string],
@@ -428,6 +438,22 @@ export const invokeAgentContract = {
     [scope: AttachmentStorageScope, text: string, existingPath?: string],
     string
   >,
+  /**
+   * Retain a media link a drag carried as a real attachment file, and answer its
+   * absolute path. A browser-page drag hands over the link and no file, so this
+   * is what fetches those bytes; anything that is not image, video or audio is
+   * refused with the reason rather than kept.
+   */
+  'attachment:retainRemote': {} as Contract<
+    [scope: AttachmentStorageScope, source: string],
+    string
+  >,
+  /**
+   * Adopt everything the welcome composer staged before its chat existed: the
+   * files move into the created chat's own scratch path and the moves come back
+   * so the composer can repoint its attachment chips at them.
+   */
+  'attachment:adoptDraft': {} as Contract<[threadId: string], DraftAttachmentMove[]>,
   'heartbeat:list': {} as Contract<[], HeartbeatConfig[]>,
   'heartbeat:create': {} as Contract<
     [input: Omit<HeartbeatConfig, 'id' | 'lastRun'>],

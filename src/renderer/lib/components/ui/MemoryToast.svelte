@@ -1,8 +1,6 @@
 <script lang="ts">
   import { BrainCircuit } from '@lucide/svelte'
-  import { invoke } from '$lib/ipc.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { openMemoryProposal } from '$lib/stores/memory-proposal-open'
   interface Props {
     message: string
     projectId: string
@@ -15,40 +13,18 @@
   let opening = $state(false)
 
   /**
-   * The sidebar only renders the tabs of the *active* project context, and that
-   * context becomes active when one of its threads is opened. A proposal can be
-   * raised by a thread the user has since left, so Review has to open that
-   * thread first, otherwise the memory panel it docks is never the visible one.
-   * The notification open hook is reused so the current view is preserved the
-   * same way an 'Open thread' notification preserves it.
+   * Review opens the thread the proposal came from and docks the memory panel on
+   * it. The flow itself lives in the store, because the same toast is drawn by
+   * the native overlay over a browser page, where only this renderer can run it.
    */
-  async function revealSourceThread(): Promise<void> {
-    const selected = workspaceState.selectedThread
-    if (selected?.projectId === projectId && selected.id === threadId) return
-    const [project, thread] = await Promise.all([
-      invoke('project:get', projectId),
-      invoke('thread:get', projectId, threadId)
-    ])
-    if (!thread) return
-    const openFromNotification = workspaceState.openThreadFromNotification
-    if (project && openFromNotification) {
-      await openFromNotification(thread, project)
-      return
-    }
-    workspaceState.openThread(thread, project)
-  }
-
   async function view(): Promise<void> {
     if (opening) return
     opening = true
     try {
-      await revealSourceThread()
-    } catch {
-      // A deleted thread or a failed lookup must not dead-end the button: the
-      // panel still opens for the project the proposal came from.
+      await openMemoryProposal(projectId, threadId)
+    } finally {
+      closeToast?.()
     }
-    contextSidebarState.openMemory(projectId, threadId, 'proposed')
-    closeToast?.()
   }
 </script>
 

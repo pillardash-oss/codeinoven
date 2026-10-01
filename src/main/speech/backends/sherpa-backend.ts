@@ -110,6 +110,10 @@ export class SherpaSpeechBackend implements SpeechBackend {
     if (response.kind !== 'synthesize') throw new Error('Unexpected sherpa synthesis response.')
   }
 
+  isResident(): boolean {
+    return this.workers.size > 0
+  }
+
   async dispose(): Promise<void> {
     const workers = [...this.workers.values()]
     this.workers.clear()

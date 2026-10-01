@@ -35,9 +35,16 @@
         },
         {
           "id": "nav-chats",
-          "keys": ["mod", "0"],
+          "keys": ["mod", "8"],
           "label": "Chats view",
           "description": "Opens the Chats view.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-browser",
+          "keys": ["mod", "0"],
+          "label": "Browser view",
+          "description": "Opens the global browser workspace with its tab strip in the left sidebar. Inside a browser the same chord resets page zoom, which mirrors a browser.",
           "scenario": "Anywhere in the app."
         },
         {
@@ -52,6 +59,13 @@
           "keys": ["mod", ","],
           "label": "Settings",
           "description": "Opens the Settings page.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-task-manager",
+          "keys": ["mod", "shift", ","],
+          "label": "Task manager",
+          "description": "Opens the Task Manager with every process and service the app runs, its pid, its owner, and its resource use.",
           "scenario": "Anywhere in the app."
         },
         {
@@ -144,8 +158,8 @@
           "id": "nav-toggle-right-sidebar",
           "keys": ["mod", "shift", "s"],
           "label": "Toggle right sidebar",
-          "description": "Hides the right context sidebar, or brings back the tool you last had selected in it. With nothing selected yet it opens the file tree when the open thread has one, otherwise the first tool the context rail offers.",
-          "scenario": "Projects, Chats, or Threads view, including the scope state."
+          "description": "Hides the right context sidebar, or brings back the tool you last had selected in it. With nothing selected yet it opens the file tree when the open thread has one, otherwise the first tool the context rail offers. In the Browser view it shows or hides the notes rail of the browser tab on screen, which is the same right sidebar holding notes.",
+          "scenario": "Projects, Chats, or Threads view, including the scope state; or the Browser view with a browser tab open."
         }
       ]
     },
@@ -248,8 +262,8 @@
           "id": "chat-annotation-comment",
           "keys": ["mod", "enter"],
           "label": "Submit annotation comment",
-          "description": "Posts the comment on a response selection; Escape closes the editor.",
-          "scenario": "Editing a comment on a response selection."
+          "description": "Posts the comment being written: on a response selection, on a document passage, or on an element of a design open in the browser. Escape closes the editor.",
+          "scenario": "Editing a comment on a selection, a document passage, or a design element."
         },
         {
           "id": "chat-notification-open",
@@ -517,6 +531,121 @@
       ]
     },
     {
+      "id": "browser",
+      "label": "Browser",
+      "shortcuts": [
+        {
+          "id": "browser-reload",
+          "keys": ["mod", "r"],
+          "platformKeys": { "other": ["f5", "ctrl", "r"] },
+          "label": "Reload page",
+          "description": "Reloads the page in the browser. Cmd+R on macOS, F5 or Ctrl+R on Windows and Linux.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-hard-reload",
+          "keys": ["mod", "shift", "r"],
+          "label": "Hard reload page",
+          "description": "Reloads the page ignoring its cache, so every asset is fetched again.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-back",
+          "keys": ["mod", "["],
+          "platformKeys": { "other": ["alt", "arrowleft"] },
+          "label": "Back in page history",
+          "description": "Goes back in the page's own history, not in the app's. Cmd+[ on macOS, Alt+Left on Windows and Linux.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-forward",
+          "keys": ["mod", "]"],
+          "platformKeys": { "other": ["alt", "arrowright"] },
+          "label": "Forward in page history",
+          "description": "Goes forward in the page's own history, not in the app's. Cmd+] on macOS, Alt+Right on Windows and Linux.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-focus-address",
+          "keys": ["mod", "l"],
+          "label": "Focus the address bar",
+          "description": "Moves focus to the browser's address bar and selects the address already there.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-save-page",
+          "keys": ["mod", "s"],
+          "label": "Save page",
+          "description": "Saves the page to a file you choose, as one complete web page.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-zoom-in",
+          "keys": ["mod", "="],
+          "label": "Zoom page in",
+          "description": "Steps the page's zoom in.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-zoom-out",
+          "keys": ["mod", "-"],
+          "label": "Zoom page out",
+          "description": "Steps the page's zoom out.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-zoom-reset",
+          "keys": ["mod", "0"],
+          "label": "Reset page zoom",
+          "description": "Returns the page to its default zoom level.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-devtools",
+          "keys": ["mod", "alt", "i"],
+          "platformKeys": { "other": ["ctrl", "shift", "i", "f12"] },
+          "label": "Toggle page DevTools",
+          "description": "Opens or closes DevTools for the page in this browser.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-close-tab",
+          "keys": ["mod", "w"],
+          "label": "Close browser tab",
+          "description": "Closes the browser tab that has focus. The app's close-the-active-surface chord owns this key everywhere else.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-new-tab",
+          "keys": ["mod", "t"],
+          "label": "New browser tab",
+          "description": "Opens a new blank browser tab for the current thread.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-find",
+          "keys": ["mod", "f"],
+          "label": "Find in page",
+          "description": "Opens the find bar over the page, or returns to it with the query selected when it is already open. Enter moves to the next match, Shift+Enter to the previous one, and Escape closes the bar.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-find-next",
+          "keys": ["mod", "g"],
+          "label": "Find next match in page",
+          "description": "Moves to the next match of the page's find bar, and opens the bar on the last query when it is closed. Works with the page focused, which is what makes it usable after clicking into it.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        },
+        {
+          "id": "browser-find-previous",
+          "keys": ["mod", "shift", "g"],
+          "label": "Find previous match in page",
+          "description": "Moves to the previous match of the page's find bar.",
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+        }
+      ]
+    },
+    {
       "id": "files",
       "label": "Files & Find",
       "shortcuts": [
@@ -726,6 +855,19 @@
           "label": "Close media preview",
           "description": "Closes the attachment or media preview.",
           "scenario": "A media preview is open."
+        }
+      ]
+    },
+    {
+      "id": "application",
+      "label": "Application",
+      "shortcuts": [
+        {
+          "id": "app-quit-direct",
+          "keys": ["mod", "shift", "q"],
+          "label": "Quit CodeInOven",
+          "description": "Quits the app for real, bypassing background mode's park to the menu bar. A turn still running settles as a deliberate close on the next launch.",
+          "scenario": "Anywhere in the app."
         }
       ]
     }

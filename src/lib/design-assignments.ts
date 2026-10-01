@@ -1,5 +1,7 @@
 import type { AgentModelSelection } from './types/common'
 import type { DesignAssignment, DesignAssignmentOutput, DesignConfig } from './types/settings'
+import type { DesignMediaKind } from './design-media'
+import { isValidMediaModel } from './media-generation'
 
 /**
  * Design assignments, as pure functions.
@@ -26,6 +28,24 @@ export const DESIGN_ASSIGNMENT_OUTPUTS: readonly DesignAssignmentOutput[] = [
   'video',
   'audio'
 ]
+
+/**
+ * The crafts that produce a file rather than words.
+ *
+ * A text craft staffs a harness model and is run as a completion. A media craft
+ * staffs a generation model and is run by the app, because no harness can hand
+ * back a picture, a clip or a track.
+ */
+export const DESIGN_ASSIGNMENT_MEDIA_OUTPUTS: readonly DesignMediaKind[] = [
+  'image',
+  'video',
+  'audio'
+]
+
+/** Whether one output names a media craft. */
+export function designAssignmentIsMedia(output: DesignAssignmentOutput): output is DesignMediaKind {
+  return output !== 'text'
+}
 
 /**
  * One kind of work an assignment can cover, named the way a studio names the
@@ -162,11 +182,10 @@ export function isUsableDesignSelection(
 export function isUsableDesignAssignment(
   assignment: DesignAssignment | undefined | null
 ): assignment is DesignAssignment {
-  return Boolean(
-    assignment &&
-    isDesignAssignmentId(assignment.id) &&
-    isUsableDesignSelection(assignment.selection)
-  )
+  if (!assignment || !isDesignAssignmentId(assignment.id)) return false
+  return designAssignmentIsMedia(designAssignmentOutput(assignment))
+    ? isValidMediaModel(assignment.mediaModel)
+    : isUsableDesignSelection(assignment.selection)
 }
 
 /** Every assignment the config holds, in the order the user listed them. */
@@ -233,4 +252,24 @@ export function uniqueDesignAssignmentId(
 /** Every usable assignment, for a message that has to list them. */
 export function designAssignmentCatalogue(config: DesignConfig | undefined | null): string {
   return usableDesignAssignments(config).map(designAssignmentReference).join(', ')
+}
+
+/**
+ * The generation model the user assigned to one media craft.
+ *
+ * The first usable assignment of that craft wins, which matches the rule the
+ * text lane already follows: two rows for one craft are alternatives and the
+ * order the user listed them in is the order they are preferred. Returns null
+ * when nothing is staffed, so the caller refuses rather than inventing a model.
+ */
+export function mediaModelForKind(
+  config: DesignConfig | undefined | null,
+  kind: DesignMediaKind
+): { assignment: DesignAssignment; model: string } | null {
+  for (const assignment of usableDesignAssignments(config)) {
+    if (designAssignmentOutput(assignment) !== kind) continue
+    const model = assignment.mediaModel?.trim()
+    if (model) return { assignment, model }
+  }
+  return null
 }

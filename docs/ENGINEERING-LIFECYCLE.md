@@ -54,7 +54,7 @@ The coordinator panel marks the state without opening a thread: a task whose wor
 
 Reporting can be switched back on from the board too. While the open worker has reporting off, the Assignment coordinator board shows a **Report to Sr. Engineer** button above **Back to Sr. Engineer**. It switches reporting back on, reactivates the task, and prompts the worker to submit fresh baseline and check evidence and report through the Assignment API, which is what hands the work to the Sr. Engineer for audit and feedback. The button carries a loading state and is disabled while it runs, and it disappears the moment the thread reports again. A stopped Assignment cannot take a worker report, so the button is not offered there.
 
-Because such a worker never hands its task back, the Assignment lifecycle is frozen for it. A live worker turn no longer flips the task to `running`: `AssignmentEngine.markWorkerSteered` returns the plan untouched when the worker's reporting is off, so the task stays wherever the user left it instead of sitting on `running` forever with no report coming to settle it. The row shows the worker thread's own live status next to the badge instead, using the same indicator, colour, and wording as the thread row (Working, Waiting to retry, Needs approval, Spec ready, Needs attention, Unread, Done, New), and the frozen lifecycle pill is hidden for that row because it can no longer advance.
+Because such a worker never hands its task back, the Assignment lifecycle is frozen for it. A live worker turn no longer flips the task to `running`: `AssignmentEngine.markWorkerSteered` returns the plan untouched when the worker's reporting is off, so the task stays wherever the user left it instead of sitting on `running` forever with no report coming to settle it. The row shows the worker thread's own live status next to the badge instead, using the same indicator, colour, and wording as the thread row (Working, Waiting to retry, Needs attention, Spec ready, Needs attention · error, Unread, Done, New), and the frozen lifecycle pill is hidden for that row because it can no longer advance.
 
 Read tracking belongs to the same split. Only a non-reporting worker carries a read state at all: a reporting worker's progress is visible through the Assignment lifecycle, so its `read` flag stays untouched and nothing ever settles it. Opening or selecting a non-reporting worker marks it read through the same `thread:markRead` flow as a regular thread, so its chip moves from Unread (green) to Done once the user has seen it. The Sr. Engineer's own row aggregates this: it reads as unread while any of its non-reporting workers is unread, and it clears only once the coordinator itself and all of those workers are read.
 
@@ -128,12 +128,59 @@ A missing production preview origin is a deployment-readiness failure; the relat
 
 Desktop preview registration is reconstructed from validated feature-scoped manifests after restart. The preview origin serves the canonical prototype files to the desktop's own browser surface.
 
+## External assets in previews
+
+A prototype served by the app's own preview server carries a content security policy that denies every external origin, so a prototype can load a web font or a chart library only from an approved CDN. Settings, Browser holds both the switch (`allowPrototypeExternalCdn`, on by default) and the origins a user added (`prototypeCdnAllowlist`). `src/lib/prototypes/prototype-cdn.ts` owns the app's origins, the HTTPS origin validation, the merge, the header and the paragraph the prototype turn is told, so the hosts the browser will load and the hosts the model is told about cannot disagree.
+
+The list is a host allowlist, and nothing more than that. It says nothing about the code a host serves, approved origins are reachable from `connect-src` as well as from the asset directives, and the policy keeps `'unsafe-inline'` and `'unsafe-eval'` because running the prototype's own script is the feature. Read it as the answer to "which assets will load, and where may this page send a request", not as a security boundary.
+
+Enforcement follows the serving origin. The app stamps the header on responses from its own loopback preview server (`src/main/prototypes/prototype-preview-service.ts`). A build configured with `CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN` never starts that server, and the deployment serving the files sets its own policy, so there the list is what the model is told rather than a limit the app applies.
+
+The design preview is a different surface. `cio:design` and the file tree's "Open in browser" serve a folder through the directory preview server, which sets no content security policy at all (`src/main/preview/directory-preview-server.ts`), so a design may load any host today. A design that is meant to be promoted into the prototype phase should still stay inside the approved origins.
+
 ## Recovery
 
 - Generation failure: keep the lifecycle selected, fix the provider or validation failure, and retry from the persisted stage.
 - Invalid preview link: verify the feature-scoped artifact, manifest, preview link target, and configured public origin.
 - Unsupported symlink or junction environment: preserve the canonical artifact and report the preview as unavailable; do not copy over another preview.
 - Cancellation after artifact creation: confirm cancellation; generated artifacts remain available and `started_at` remains set.
+
+### A deliberate close is not a crash
+
+When a turn is still in flight and the process stops, the next launch settles its
+turn checkpoint and shows a line on the file-changes card. Two cases are
+possible and must not be conflated:
+
+- **Abrupt death** (crash, power loss, an OS kill): nothing cleaned up, so the
+  checkpoint is marked `interrupted` with `stopReason: 'crash'` and the wording
+  "CodeInOven stopped before the harness reported completion". This is the only
+  case that blames the harness, because only here did the harness actually fail
+  to report.
+- **Deliberate close** (the menu bar Quit item, the Cmd/Ctrl+Shift+Q direct
+  quit, or a confirmed force close):
+  `runShutdownPipeline` writes a durable clean-shutdown marker
+  (`src/main/system/clean-shutdown-store.ts`) before it kills the harness, and
+  the next launch consumes it. An orphaned turn whose recorded `owner_pid`
+  matches the marker is settled by `CheckpointManager.markActiveStopped` as
+  `stopReason: 'app-closed'` with the plain wording "CodeInOven closed before
+  this turn finished", rendered in a neutral style rather than as an error.
+
+The marker has to be current wherever it is read. A survivor instance that
+adopts a departed sibling's orphans re-reads the file first
+(`CleanShutdownStore.reload`, called from `reconcileInterruptedWork`), because
+its in-memory copy dates from its own launch and predates the sibling's quit.
+The quit failsafe, which force-exits a wedged renderer 15 seconds after a close
+was requested, writes the marker synchronously before `app.exit(0)`
+(`CleanShutdownStore.recordSync`), and `SIGHUP` is handled with `SIGTERM` and
+`SIGINT` so a development launch killed by its closing terminal is a clean stop
+too. A process killed without reaching any of these paths (a crash, `SIGKILL`,
+a power loss) keeps the crash wording, which is the point.
+
+In background mode a window close is a park, not a close: the chat engine and
+its in-flight turns keep running, so parking never settles a turn at all. The
+marker is only written on a real shutdown, and it is cleared the moment a launch
+has read it, so a later crash with no marker can never inherit a stale "clean"
+verdict from an earlier deliberate quit.
 
 ### Stop outranks every auto-resume
 
@@ -146,7 +193,7 @@ launch and never re-tracked), and the launch repair scan. The next real user
 prompt clears the latch, which re-arms all automatic resumes.
 
 The assignment's own status is deliberately untouched by Stop, so the Auto
-Pilot chain and the manual resume controls keep working; only the *automatic*
+Pilot chain and the manual resume controls keep working; only the _automatic_
 paths honour the latch. With auto-retry off in General settings, a recorded
 usage-reset wait backs the visible "Waiting to retry" card but never fires
 automatically.

@@ -1,10 +1,17 @@
 import { realpath } from 'node:fs/promises'
+import { basename } from 'node:path'
 import {
   DirectoryPreviewServer,
   type DirectoryPreviewChangeListener,
   type DirectoryPreviewEndpoint
 } from './directory-preview-server'
+import { appServiceRegistry } from '../system/app-service-registry'
 import { Logger } from '../system/logger'
+
+/** Registry id for one served directory, stable across re-registration. */
+function previewServiceId(root: string): string {
+  return `directory-preview:${root}`
+}
 
 /**
  * Lifecycle owner for directory preview servers.
@@ -21,6 +28,15 @@ export const MAX_LIVE_SERVERS = 8
 interface LivePreview {
   server: DirectoryPreviewServer
   endpoint: DirectoryPreviewEndpoint
+  /**
+   * The origin the folder is served on, kept beside the endpoint so a browser tab
+   * can be recognised from the URL it is showing.
+   *
+   * A previewed folder is reached at a loopback origin with no path prefix (see
+   * `DirectoryPreviewServer` for why), so the origin is the only thing that says
+   * which folder a tab has open.
+   */
+  origin: string
   touchedAt: number
 }
 
@@ -61,9 +77,50 @@ export class DirectoryPreviewService {
     }
     const server = new DirectoryPreviewServer(root, (change) => this.changeListener?.(change))
     const endpoint = await server.start()
-    this.live.set(root, { server, endpoint, touchedAt: Date.now() })
+    this.live.set(root, {
+      server,
+      endpoint,
+      origin: new URL(endpoint.url).origin,
+      touchedAt: Date.now()
+    })
+    // Announce the served folder so the task manager shows the design or file
+    // preview server the app opened, not only the OS processes it spawned.
+    appServiceRegistry.register({
+      id: previewServiceId(root),
+      kind: 'server',
+      name: `Preview server: ${basename(root) || root}`,
+      detail: root,
+      scope: 'app',
+      port: endpoint.port,
+      url: endpoint.url,
+      stop: () => this.close(root)
+    })
     await this.evictBeyondCapacity(root)
     return { ...endpoint, root, started: true }
+  }
+
+  /**
+   * The directory served on one origin, or null when this service serves nothing
+   * there.
+   *
+   * The reverse of `open`, and the reason a browser tab can be recognised from the
+   * page it is showing rather than from a record of who opened it: the tab stores a
+   * URL, and this is what turns a URL back into the folder the app is serving.
+   */
+  rootForOrigin(origin: string): string | null {
+    for (const [root, entry] of this.live) {
+      if (entry.origin === origin) return root
+    }
+    return null
+  }
+
+  /** Close one served directory and drop it from the task manager. */
+  async close(root: string): Promise<void> {
+    const entry = this.live.get(root)
+    if (!entry) return
+    this.live.delete(root)
+    appServiceRegistry.unregister(previewServiceId(root))
+    await entry.server.dispose().catch(() => undefined)
   }
 
   /** Live preview count, used by diagnostics and tests. */
@@ -72,9 +129,10 @@ export class DirectoryPreviewService {
   }
 
   async dispose(): Promise<void> {
-    const servers = [...this.live.values()].map((entry) => entry.server)
+    const entries = [...this.live.entries()]
     this.live.clear()
-    await Promise.all(servers.map((server) => server.dispose().catch(() => undefined)))
+    for (const [root] of entries) appServiceRegistry.unregister(previewServiceId(root))
+    await Promise.all(entries.map(([, entry]) => entry.server.dispose().catch(() => undefined)))
   }
 
   private async evictBeyondCapacity(keep: string): Promise<void> {
@@ -89,6 +147,7 @@ export class DirectoryPreviewService {
       const [root, entry] = oldest
       if (this.live.get(root) !== entry) continue
       this.live.delete(root)
+      appServiceRegistry.unregister(previewServiceId(root))
       evicted.push(entry.server)
     }
     if (evicted.length === 0) return

@@ -6,9 +6,12 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'path'
 import { atomicWrite, getConfigRoot } from '../../../lib/utils'
 import { posixDirname } from '../../../lib/paths'
 import { Logger } from '../../system/logger'
+import { resolveAutoAnswerScope } from '../../system/auto-answer-scope'
 import { openWithService } from '../../system/open-with-service'
+import { broadcastAutoAnswersChanged } from '../../scheduler/assistant-events'
 import { sendToRenderer } from '../renderer-delivery'
 import { ScopeToolService } from '../../workspaces/scope-tool-service'
+import { removeProjectBrowserProfiles } from '../../browser/browser-service/browser-profile-store'
 import type { ScopeToolServiceOptions } from '../../workspaces/scope-tool-service'
 import { AssignmentWorkerScopeService } from '../../workspaces/assignment-worker-scope-service'
 import {
@@ -42,6 +45,8 @@ import type {
   ScopeWorktreeProgressEvent
 } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
+import { sanitizeCustomSvg } from '../../../lib/custom-svg'
+import { randomUUID } from 'node:crypto'
 
 /** Upper bound on one in-app "open these paths" request (a drag selection). */
 const MAX_OPEN_PATHS = 64
@@ -97,6 +102,26 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     gitCredentialRef
   } = ctx
 
+  ipcMain.handle('icon-library:list', () =>
+    database
+      .all<{ id: string; svg: string; created_at: number }>(
+        'SELECT id, svg, created_at FROM custom_icons ORDER BY created_at, id'
+      )
+      .map((icon) => ({ id: icon.id, svg: icon.svg, createdAt: icon.created_at }))
+  )
+  ipcMain.handle('icon-library:add', (_, rawSvg: unknown) => {
+    const svg = sanitizeCustomSvg(requireString(rawSvg, 'Custom SVG'))
+    const id = randomUUID()
+    const createdAt = Date.now()
+    database.run(
+      'INSERT INTO custom_icons(id, svg, created_at) VALUES(?, ?, ?)',
+      id,
+      svg,
+      createdAt
+    )
+    return { id, svg, createdAt }
+  })
+
   const worktreeProgressRelay =
     (event: IpcMainInvokeEvent, target: ScopeTarget) =>
     (progress: ScopeWorktreeProgress): void => {
@@ -134,7 +159,32 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     // a closed or reloaded renderer from parking the agent's turn forever.
     const timeout = setTimeout(
       () => {
-        if (pendingScopeConfirmations.delete(request.requestId)) settle?.(false)
+        if (pendingScopeConfirmations.delete(request.requestId)) {
+          settle?.(false)
+          // A destructive action that nobody answered denies itself. Record the
+          // cancelled choice so the attention rail can tell the user what the
+          // app refused on their behalf while they were away.
+          const store = ctx.autoAnswerStore
+          if (store) {
+            store.record({
+              id: request.requestId,
+              kind: 'scope-confirmation',
+              outcome: 'expired',
+              projectId: request.projectId,
+              threadId: request.threadId,
+              ...resolveAutoAnswerScope(database, request.projectId, request.threadId),
+              entries: [
+                {
+                  prompt: request.summary,
+                  options: ['Confirm', 'Cancel'],
+                  picked: 'Cancel'
+                }
+              ],
+              at: Date.now()
+            })
+            broadcastAutoAnswersChanged(store.list())
+          }
+        }
       },
       Math.max(0, request.expiresAt - Date.now())
     )
@@ -197,8 +247,8 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
   )
 
   /** Optional trailing thread mount on `projectFiles:*` channels: when the
-   *  caller browses a chat's own artifact directory it names the thread so the
-   *  service resolves `chats-artifacts/<threadId>` as the root. */
+   *  caller browses a chat's own workspace directory it names the thread so the
+   *  service resolves `chats-cwd/<threadId>` as the root. */
   function threadIdArg(threadId: unknown): string | undefined {
     return threadId === undefined ? undefined : validateEntityId(threadId, 'Thread ID')
   }
@@ -555,7 +605,16 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle(
     'project:update',
     async (_, projectId: string, input: Partial<CreateProjectInput>) => {
-      const project = await projectManager.updateProject(projectId, input)
+      const validatedInput = { ...input }
+      if ('customSvg' in input) {
+        if (input.customSvg === null) validatedInput.customSvg = undefined
+        else if (typeof input.customSvg === 'string') {
+          validatedInput.customSvg = sanitizeCustomSvg(input.customSvg)
+        } else if (input.customSvg !== undefined) {
+          throw new TypeError('Project custom SVG must be text')
+        }
+      }
+      const project = await projectManager.updateProject(projectId, validatedInput)
       projectFilesService.invalidateProject(projectId)
       // The root may have changed; warm the index and re-point the watcher.
       void projectFilesService.prewarmProject(projectId)
@@ -564,12 +623,12 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
   )
   ipcMain.handle(
     'project:delete',
-    async (_, projectId: string, options?: { deleteFolder?: boolean }) => {
+    async (_, projectId: string, deleteOptions?: { deleteFolder?: boolean }) => {
       // Optional folder erasure runs FIRST and gates the CodeInOven-side
       // removal: if the filesystem delete fails, nothing below executes and
       // the project stays fully intact in CodeInOven (the renderer restores
       // it). Only after the folder is gone does the app data removal begin.
-      if (options?.deleteFolder === true) {
+      if (deleteOptions?.deleteFolder === true) {
         const project = await projectManager.getProject(projectId)
         if (!project?.path || !isAbsolute(project.path)) {
           throw new Error('This project has no local folder on disk to delete')
@@ -610,6 +669,14 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
           `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
         )
       }
+      // The project's browser goes with the project, before its threads are torn
+      // down: the browser service owns the live tabs and the session that holds
+      // the profile open, and a profile can be gigabytes of cache that nothing
+      // could reach once the project row is gone. A launch with no browser (no
+      // window yet) still removes the profiles; that is all there is to do.
+      const browser = options.browser?.() ?? null
+      if (browser) await browser.forgetProject(projectId)
+      else await removeProjectBrowserProfiles(projectId)
       // Delete every thread through the same path as `thread:delete` (session
       // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
       // project deletion can never fall behind that logic or leave orphans.

@@ -3,6 +3,7 @@ import {
   isDocumentPreviewPath,
   isHtmlPreviewPath,
   isImageMime,
+  isMarkdownPreviewPath,
   isSvgMime,
   isVideoMime,
   mimeFromPath
@@ -34,7 +35,7 @@ export function filePreviewFlags(path: string | null): FilePreviewFlags {
   if (!path) return NO_PREVIEW
   const mime = mimeFromPath(path)
   return {
-    markdown: /\.(?:md|mdown|markdown)$/iu.test(path),
+    markdown: isMarkdownPreviewPath(path),
     html: isHtmlPreviewPath(path),
     pdf: /\.pdf$/iu.test(path),
     image: isImageMime(mime),
@@ -67,4 +68,11 @@ export function hasAnyPreview(flags: FilePreviewFlags): boolean {
     flags.audio ||
     flags.document
   )
+}
+
+/** Whether the preview can carry annotations. Only rendered Markdown can: it is
+ *  the one preview mounted as live selectable DOM, every other kind being a
+ *  sandboxed frame or a media surface with no text to anchor a note to. */
+export function canAnnotateDocument(flags: FilePreviewFlags): boolean {
+  return flags.markdown
 }

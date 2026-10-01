@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { readFile, readlink } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import type { AgentRunningProcess, TaskManagerProcess } from '../../lib/types'
 import type { AgentProcessObserver } from '../drivers/driver.interface'
@@ -11,10 +11,39 @@ import { broadcastAgentProcessesChanged } from '../chat/thread-events'
 const execFileAsync = promisify(execFile)
 const PROCESS_EXIT_GRACE_MS = 1_500
 const PORT_SCAN_TIMEOUT_MS = 2_000
+/**
+ * Minimum gap between two process snapshots.
+ *
+ * One snapshot is two process spawns (`ps` for the table, `ps -E` for the
+ * ownership probe) plus parsing, and several surfaces ask for the same answer in
+ * the same instant: the open thread's badge, the sources panel, and the task
+ * manager. A scan starting within this window of the previous one reuses its
+ * result. Callers that must observe a change they just made force it.
+ */
+const SCAN_MIN_INTERVAL_MS = 1_500
 /** Maximum pids per batched `ps -E` ownership probe. */
 const OWNERSHIP_PROBE_CHUNK = 64
+/** Maximum pids per batched `lsof` working-directory probe. */
+const CWD_PROBE_CHUNK = 64
+/** A probe is best-effort: a wedged `lsof` must never stall a scan. */
+const CWD_PROBE_TIMEOUT_MS = 2_000
 /** Key under which app-wide roots (e.g. the shared opencode server) are tracked. */
 const APP_SCOPE = '__codeinoven_app_scope__'
+
+/**
+ * OpenCode's own managed background service (`opencode serve --service`).
+ *
+ * OpenCode starts this daemon for its own client commands and re-parents it to
+ * launchd, so it outlives whatever asked for it. The app never talks to it   it
+ * spawns private `serve --port 0` servers for its own work   so a stray one is
+ * never adopted as an app runtime and is reaped on the next launch.
+ */
+const OPENCODE_SERVICE_DAEMON_PATTERN =
+  /(?:^|[\\/])opencode(?:\.exe)?["']?\s+serve\s+--service(?:\s|$)/u
+
+function isOpenCodeServiceDaemon(command: string): boolean {
+  return OPENCODE_SERVICE_DAEMON_PATTERN.test(command)
+}
 
 export interface ProcessSnapshotEntry {
   pid: number
@@ -168,6 +197,7 @@ export class AgentProcessService implements AgentProcessObserver {
   private readonly roots = new Map<string, Map<number, HarnessRoot>>()
   private readonly tracked = new Map<string, Map<number, TrackedProcess>>()
   private scanInFlight: Promise<void> | null = null
+  private lastScanAt = 0
   private journal: OwnedProcessJournal | null = null
   private lastSnapshot: ProcessSnapshotEntry[] = []
 
@@ -229,7 +259,7 @@ export class AgentProcessService implements AgentProcessObserver {
       throw new Error(`Process ${pid} is not owned by this thread`)
     }
     await this.killTree(pid, false)
-    await this.scan()
+    await this.scan({ force: true })
   }
 
   /**
@@ -240,7 +270,7 @@ export class AgentProcessService implements AgentProcessObserver {
   async killProcessGlobal(pid: number, force: boolean): Promise<void> {
     if (!this.ownsProcess(pid)) throw new Error(`Process ${pid} is not owned by this app`)
     await this.killTree(pid, force)
-    await this.scan()
+    await this.scan({ force: true })
   }
 
   /**
@@ -513,7 +543,10 @@ export class AgentProcessService implements AgentProcessObserver {
       if (options.requireOwnershipProof) {
         // An adopted daemon (see OwnedRoot.adopted) is an app-marked orphan too,
         // but the running app may be talking to it; only a launch reaps those.
-        if (root.adopted === true) continue
+        // The exception is OpenCode's own managed service, which the app caused
+        // but never uses: it is reaped so a historical leak does not outlive the
+        // fix that stopped spawning it.
+        if (root.adopted === true && !isOpenCodeServiceDaemon(root.command)) continue
         const marker = await this.processHasMarker(root.pid)
         if (marker === true) {
           await this.killTree(root.pid)
@@ -657,6 +690,63 @@ export class AgentProcessService implements AgentProcessObserver {
     return (await this.readOwnership([pid])).get(pid)?.owned ?? null
   }
 
+  /**
+   * Working directory of each pid, best effort.
+   *
+   * A daemon that re-parents to launchd (the adb fork-server) is adopted from
+   * the process snapshot, and that snapshot carries no cwd field on any
+   * platform, so this is the only way its row can show where it was launched,
+   * and the only handle the task manager has for attributing it to a project.
+   * One batched `lsof` answers the whole adoption batch on macOS and the BSDs;
+   * Linux answers from `/proc/<pid>/cwd` without spawning anything. Windows has
+   * no read path for another process's cwd, so adopted rows there keep none.
+   */
+  private async resolveWorkingDirectories(pids: readonly number[]): Promise<Map<number, string>> {
+    const result = new Map<number, string>()
+    if (pids.length === 0) return result
+    if (process.platform === 'linux') {
+      await Promise.all(
+        pids.map(async (pid): Promise<void> => {
+          try {
+            const cwd = await readlink(`/proc/${pid}/cwd`)
+            if (cwd) result.set(pid, cwd)
+          } catch {
+            // The process exited, or its directory is unreadable: leave it unknown.
+          }
+        })
+      )
+      return result
+    }
+    if (process.platform === 'win32') return result
+    for (let index = 0; index < pids.length; index += CWD_PROBE_CHUNK) {
+      const chunk = pids.slice(index, index + CWD_PROBE_CHUNK)
+      let stdout: string
+      try {
+        stdout = (
+          await execFileAsync('lsof', ['-a', '-d', 'cwd', '-F', 'pn', '-p', chunk.join(',')], {
+            timeout: CWD_PROBE_TIMEOUT_MS,
+            windowsHide: true
+          })
+        ).stdout
+      } catch (error) {
+        // `lsof` exits non-zero as soon as one pid has already exited; the rows
+        // it did match are still on stdout.
+        const failed = record(error)
+        stdout = typeof failed?.['stdout'] === 'string' ? failed['stdout'] : ''
+      }
+      let currentPid = 0
+      for (const line of stdout.split(/\r?\n/u)) {
+        if (line.startsWith('p')) {
+          currentPid = Number(line.slice(1))
+        } else if (line.startsWith('n') && currentPid > 0) {
+          const cwd = line.slice(1)
+          if (cwd) result.set(currentPid, cwd)
+        }
+      }
+    }
+    return result
+  }
+
   private sessionsForThread(projectId: string, threadId: string): string[] {
     return [...this.owners.entries()].flatMap(([sessionId, owner]) =>
       owner.projectId === projectId && owner.threadId === threadId ? [sessionId] : []
@@ -673,8 +763,10 @@ export class AgentProcessService implements AgentProcessObserver {
     return false
   }
 
-  private async scan(): Promise<void> {
+  private async scan(options: { force?: boolean } = {}): Promise<void> {
     if (this.scanInFlight) return this.scanInFlight
+    if (!options.force && Date.now() - this.lastScanAt < SCAN_MIN_INTERVAL_MS) return
+    this.lastScanAt = Date.now()
     const request = this.performScan()
     this.scanInFlight = request
     try {
@@ -696,7 +788,7 @@ export class AgentProcessService implements AgentProcessObserver {
         childrenByParent.set(entry.parentPid, children)
       }
 
-      await this.adoptMarkedOrphans(snapshot, currentByPid)
+      await this.adoptMarkedOrphans(snapshot, currentByPid, childrenByParent)
 
       const changedOwners = new Map<string, ProcessOwner>()
       const sessionIds = new Set([...this.roots.keys(), ...this.tracked.keys()])
@@ -753,44 +845,108 @@ export class AgentProcessService implements AgentProcessObserver {
   }
 
   /**
-   * Daemons spawned by a harness can outlive their parent: the adb server, for
-   * example, re-parents itself to launchd/init the moment the `adb` client
-   * first spawns it, so it never appears under a harness root's descendant
-   * tree. Adopt any orphaned process carrying the app's ownership marker so it
-   * stays visible in the task manager, is killable, and   via the journal   is
-   * reaped if the app closes while it is still running. Attribution uses the
-   * session marker stamped into the harness environment, falling back to the
-   * only live session, then app scope. On Windows, where the environment of
-   * another process cannot be read, only the uniquely fingerprintable adb
-   * server daemon is adopted. Live children of a harness (short-lived `adb`
-   * clients, dev servers, etc.) are already tracked as descendants and are
-   * unaffected.
+   * Adopt app-owned processes that detached from every tracked harness tree.
+   *
+   * A process a harness spawns can outlive the tree that explains it: the adb
+   * server re-parents to launchd the moment the `adb` client first starts it,
+   * and a background server started with `nohup` (a training server, a dev
+   * server) keeps running under a wrapper launchd inherits once the harness is
+   * gone. Neither appears under a live root's descendant tree, so they are
+   * adopted here instead: anything the app can prove it owns and no live root
+   * reaches becomes a runtime the task manager lists, the user can end, and the
+   * journal reaps.
+   *
+   * Ownership is proven by the marker in the process environment, which the app
+   * stamps on every harness spawn and children inherit. Inheritance covers a
+   * child macOS cannot judge on its own: the environment of a process running a
+   * platform binary (`/bin/bash`, `/bin/sleep`) is unreadable, so a `/bin/bash`
+   * worker under a marked server is adopted because its parent is. A platform
+   * binary wrapper that launched a marked server is not provable from below and
+   * stays out, which is the one case this cannot see. Two exclusions keep
+   * adoption from stealing rows the app already owns elsewhere: the app's own
+   * process family (registered services such as the gateway, the llama server,
+   * and MCP children are its descendants and already have service rows), and a
+   * process whose readable session marker names a session another running
+   * instance owns, unless it is detached, which is what a cross-instance handoff
+   * looks like.
+   *
+   * Live children of a harness (short-lived `adb` clients, dev servers, etc.)
+   * are reachable from their root, already tracked as descendants, and never
+   * candidates. On Windows, where the environment of another process cannot be
+   * read at all, only the uniquely fingerprintable adb server daemon is adopted.
    */
   private async adoptMarkedOrphans(
     snapshot: ProcessSnapshotEntry[],
-    currentByPid: ReadonlyMap<number, ProcessSnapshotEntry>
+    currentByPid: ReadonlyMap<number, ProcessSnapshotEntry>,
+    childrenByParent: ReadonlyMap<number, ProcessSnapshotEntry[]>
   ): Promise<void> {
     if (currentByPid.size === 0) return
     const liveSessions = [...this.roots.entries()].flatMap(([sessionId, sessionRoots]) =>
       [...sessionRoots.keys()].some((pid) => currentByPid.has(pid)) ? [sessionId] : []
     )
-    const trackedPids = new Set<number>()
+    // Everything a live root reaches is tracked by the descendant walk that
+    // follows, and every known row is already tracked, so neither is a candidate.
+    const knownPids = new Set<number>()
     for (const processes of this.tracked.values()) {
-      for (const pid of processes.keys()) trackedPids.add(pid)
+      for (const pid of processes.keys()) knownPids.add(pid)
     }
+    const reachable = new Set<number>()
+    for (const roots of this.roots.values()) {
+      for (const root of roots.values()) {
+        if (!currentByPid.has(root.pid)) continue
+        knownPids.add(root.pid)
+        reachable.add(root.pid)
+        for (const descendant of descendantsOf(root.pid, childrenByParent)) {
+          reachable.add(descendant.pid)
+        }
+      }
+    }
+    const appFamily = this.appProcessFamily(currentByPid, childrenByParent)
     const alive = new Set(currentByPid.keys())
     const isWindows = process.platform === 'win32'
     const adbServerPattern = /\badb\b[^\0]*\bfork-server\b/u
     const candidates = snapshot.filter(
       (entry) =>
-        !trackedPids.has(entry.pid) &&
-        this.isOrphaned(entry.parentPid, alive) &&
+        !knownPids.has(entry.pid) &&
+        !reachable.has(entry.pid) &&
+        !appFamily.has(entry.pid) &&
+        // OpenCode's managed service daemon is app-marked because the app's own
+        // probe triggered it, but the app never talks to it (it spawns private
+        // servers instead), so it is not adopted as an app runtime.
+        !isOpenCodeServiceDaemon(entry.command) &&
         // Windows cannot read another process's environment; only adopt the
         // unambiguously fingerprintable adb server daemon there.
         (!isWindows || adbServerPattern.test(entry.command))
     )
     if (candidates.length === 0) return
+    const candidatePids = new Set(candidates.map((entry) => entry.pid))
     const ownership = await this.readOwnership(candidates.map((entry) => entry.pid))
+    // A process is app-owned when its own environment carries the marker, and so
+    // is a child of an owned process: the environment is inherited, so a platform
+    // binary a marked server spawns is adopted even though its own environment is
+    // unreadable.
+    const adoptable = new Map<number, string | null>()
+    for (const entry of candidates) {
+      const owner = ownership.get(entry.pid)
+      if (owner?.owned === true) adoptable.set(entry.pid, owner.sessionId)
+    }
+    const queue = [...adoptable.keys()]
+    while (queue.length > 0) {
+      const pid = queue.pop()
+      if (pid === undefined) continue
+      const sessionId = adoptable.get(pid) ?? null
+      for (const child of childrenByParent.get(pid) ?? []) {
+        if (!candidatePids.has(child.pid) || adoptable.has(child.pid)) continue
+        adoptable.set(child.pid, ownership.get(child.pid)?.sessionId ?? sessionId)
+        queue.push(child.pid)
+      }
+    }
+    if (adoptable.size === 0) return
+    // Resolve where each adoptable process was launched before recording it. An
+    // adopted row has no session to fall back on, so this cwd is both the path
+    // its row shows and the handle the task manager attributes it to a project
+    // with. One batched probe covers the whole adoption batch.
+    const adoptedCwds = await this.resolveWorkingDirectories([...adoptable.keys()])
     // Journal an adopted daemon only when no entry exists yet: an entry written
     // by the process that spawned it carries the real command and cwd and stays a
     // swept root, while overwriting it as "adopted" would hide it from the
@@ -799,20 +955,26 @@ export class AgentProcessService implements AgentProcessObserver {
     const journalled = new Set(existingRoots.map((root) => root.pid))
     const adoptedScopes = new Set<string>()
     for (const entry of candidates) {
-      const owner = ownership.get(entry.pid)
-      if (!owner?.owned) continue
-      const claimed = owner.sessionId !== null && this.owners.has(owner.sessionId)
-      const scope = claimed
-        ? (owner.sessionId as string)
-        : liveSessions.length === 1
-          ? liveSessions[0]
-          : APP_SCOPE
+      if (!adoptable.has(entry.pid)) continue
+      const sessionId = adoptable.get(entry.pid) ?? null
+      const claimed = sessionId !== null && this.owners.has(sessionId)
+      // A process that still has a live parent and carries a session this
+      // instance does not own belongs to another running instance. Leave it be;
+      // a detached one is the cross-instance handoff case and is adopted.
+      if (sessionId !== null && !claimed && !this.isOrphaned(entry.parentPid, alive)) continue
+      const scope =
+        claimed && sessionId !== null
+          ? sessionId
+          : liveSessions.length === 1
+            ? liveSessions[0]
+            : APP_SCOPE
       let sessionProcesses = this.tracked.get(scope)
       if (!sessionProcesses) {
         sessionProcesses = new Map()
         this.tracked.set(scope, sessionProcesses)
       }
       if (sessionProcesses.has(entry.pid)) continue
+      const cwd = adoptedCwds.get(entry.pid) ?? null
       sessionProcesses.set(entry.pid, {
         pid: entry.pid,
         parentPid: entry.parentPid,
@@ -820,12 +982,12 @@ export class AgentProcessService implements AgentProcessObserver {
         startedAt: Date.now(),
         scope: scope === APP_SCOPE ? 'app' : 'thread',
         sessionId: scope,
-        cwd: null
+        cwd
       })
       // Journal the adopted daemon so reapOrphans can still kill it after the
       // app closes without a clean shutdown.
       if (this.journal && !journalled.has(entry.pid)) {
-        this.journal.registerAdopted(entry.pid, entry.command)
+        this.journal.registerAdopted(entry.pid, entry.command, cwd ?? '')
         journalled.add(entry.pid)
       }
       adoptedScopes.add(scope)
@@ -834,6 +996,32 @@ export class AgentProcessService implements AgentProcessObserver {
       const owner = this.owners.get(scope)
       if (owner) broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
     }
+  }
+
+  /**
+   * Pids that belong to the app's own process structure: this main process, the
+   * processes that launched it, and every process below it. A registered service
+   * (the utility gateway, the llama server, an MCP child) is a descendant of this
+   * process and already has its own row, so adoption must never duplicate it.
+   */
+  private appProcessFamily(
+    currentByPid: ReadonlyMap<number, ProcessSnapshotEntry>,
+    childrenByParent: ReadonlyMap<number, ProcessSnapshotEntry[]>
+  ): Set<number> {
+    const family = new Set<number>()
+    const pending = [process.pid]
+    while (pending.length > 0) {
+      const pid = pending.pop()
+      if (pid === undefined || pid <= 0 || family.has(pid)) continue
+      family.add(pid)
+      for (const child of childrenByParent.get(pid) ?? []) pending.push(child.pid)
+    }
+    let ancestor = currentByPid.get(process.pid)?.parentPid ?? 0
+    while (ancestor > 1 && !family.has(ancestor)) {
+      family.add(ancestor)
+      ancestor = currentByPid.get(ancestor)?.parentPid ?? 0
+    }
+    return family
   }
 
   private async killTree(pid: number, force = false): Promise<void> {

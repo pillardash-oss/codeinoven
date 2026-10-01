@@ -1,6 +1,6 @@
-import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { isThreadLiveWorking } from '$lib/thread-status-badge'
 import { scopeState } from '$lib/stores/scope.svelte'
-import { coordinatorHasActiveDelegates, isThreadWorking, type Thread } from '$shared/types'
+import { coordinatorHasActiveDelegates, type Thread } from '$shared/types'
 
 export function filterThreadsByQuery(threads: Thread[], query: string): Thread[] {
   const q = query.trim().toLowerCase()
@@ -8,9 +8,14 @@ export function filterThreadsByQuery(threads: Thread[], query: string): Thread[]
   return threads.filter((t) => t.title.toLowerCase().includes(q))
 }
 
+/**
+ * Whether the thread has work to show in the header's activity stat. It reads
+ * the one live-working rule, so a thread parked on the user (a question,
+ * permission, or secret card) reports as waiting for the user rather than as
+ * work in progress.
+ */
 export function threadHasVisibleWork(thread: Thread): boolean {
-  const settledWorking = agentRuns.hasSettled(thread.projectId, thread.id)
-    ? agentRuns.isBusy(thread.projectId, thread.id)
-    : Boolean(thread.sessionId) && isThreadWorking(thread)
-  return settledWorking || coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
+  return (
+    isThreadLiveWorking(thread) || coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
+  )
 }

@@ -36,6 +36,7 @@
     routineAgentsComplete,
     routineHowToComplete,
     type AgentCapabilityCatalog,
+    type BackgroundRun,
     type MissedRun,
     type Routine,
     type RoutineAgents,
@@ -56,10 +57,15 @@
     ROUTINE_TIMELINESS_OPTIONS
   } from '$shared/routine-reporting'
   import {
+    backgroundRunOutcomeLabel,
+    backgroundRunReasonText,
+    backgroundRunTone,
     parseHowToSections,
+    previewRuns,
     resolveConnections,
     serializeHowToSections,
     missedRunReasonText,
+    TASK_RUN_PREVIEW,
     type ConnectionView,
     type HowToSection
   } from './assistant-view'
@@ -69,6 +75,7 @@
     type ConnectionLibraryEntry
   } from './connection-library'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ConnectionRow from './ConnectionRow.svelte'
   import RoutineAgentPicker from './RoutineAgentPicker.svelte'
   import UtilityPicker from './UtilityPicker.svelte'
@@ -428,6 +435,32 @@
       : assistantRoutines.missedForTask(threadId)
   )
 
+  /**
+   * Ledger-entried unattended runs for this panel's scope: a routine's runs, or
+   * a routine-less task's own runs, newest first. The ledger keeps working after
+   * the run thread is gone, which is why it is evidence beside thread issues.
+   */
+  const backgroundRuns = $derived(
+    routine
+      ? assistantRoutines.backgroundForRoutine(routine.id)
+      : assistantRoutines.backgroundForTask(threadId)
+  )
+
+  let showAllBackgroundRuns = $state(false)
+
+  /** The task a run recorded, resolved from the live thread list when it survives. */
+  function runTaskTitle(run: BackgroundRun): string {
+    return (
+      scopeState.allScopeThreads.find((thread) => thread.id === run.taskId)?.title ??
+      'Assistant run'
+    )
+  }
+
+  /** The run's own thread when it still exists; null once it was deleted. */
+  function runThreadFor(run: BackgroundRun): Thread | null {
+    return scopeState.allScopeThreads.find((thread) => thread.id === run.runThreadId) ?? null
+  }
+
   /** Run problems: rate limits, failures, and interrupted runs. Each entry is a
    *  thread   usually one run, since that is where the execution status lives. */
   const runIssues = $derived.by(() => {
@@ -741,6 +774,40 @@
   </div>
 {/snippet}
 
+{#snippet backgroundRunRowBody(run: BackgroundRun, thread: Thread | null)}
+  <span class="mt-0.5 shrink-0">
+    <StatusBadge
+      tone={backgroundRunTone(run.outcome)}
+      title={backgroundRunOutcomeLabel(run.outcome)}
+    />
+  </span>
+  <span class="min-w-0 flex-1">
+    <span class="flex items-center gap-1.5">
+      <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">{runTaskTitle(run)}</span
+      >
+      <span class="shrink-0 text-[0.625rem] text-muted">
+        {backgroundRunOutcomeLabel(run.outcome)}
+      </span>
+    </span>
+    <span class="mt-0.5 block text-[0.625rem] text-dimmed">
+      {backgroundRunReasonText(run.reason)} · {formatDateTime(run.startedAt)}
+    </span>
+    {#if run.outcome === 'failed' && run.errorSummary}
+      <span class="mt-0.5 block text-[0.625rem] text-danger">{run.errorSummary}</span>
+    {/if}
+    {#if run.autoAnswered > 0}
+      <span class="mt-0.5 block text-[0.625rem] text-dimmed">
+        {run.autoAnswered} decision{run.autoAnswered === 1 ? '' : 's'} answered automatically
+      </span>
+    {/if}
+    {#if !thread}
+      <span class="mt-0.5 block text-[0.625rem] text-dimmed italic">
+        Run thread deleted. Kept as evidence.
+      </span>
+    {/if}
+  </span>
+{/snippet}
+
 {#snippet panelContent()}
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if activeTab === 'all'}
@@ -996,6 +1063,10 @@
 
               {#if editingId === section.id}
                 <div class="border-t border-border p-2">
+                  <!-- The editor grows with its content (no `max-h` cap) so a long
+                       section keeps the same tall box the read view showed instead
+                       of collapsing into a short scroll pane on edit. The panel's
+                       content already scrolls, so an overlong body is still safe. -->
                   <RichMarkdownEditor
                     id="assistant-section-{section.id}"
                     value={editDraft}
@@ -1003,7 +1074,9 @@
                     placeholder="Write this section in Markdown…"
                     ariaLabel="Edit {section.title}"
                     autofocus
+                    onSubmit={() => void saveSection(section.id)}
                     containerClass="rounded-md border border-border bg-surface"
+                    class="min-h-10 w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
                   />
                   <div class="mt-1.5 flex justify-end gap-1.5">
                     <button
@@ -1146,6 +1219,50 @@
                   </span>
                 </button>
               {/each}
+            </div>
+          {/if}
+        </section>
+
+        <section aria-label="Unattended run history">
+          <h2 class="mb-1.5 text-[0.6875rem] font-medium text-muted">Run history</h2>
+          {#if backgroundRuns.length === 0}
+            <p class="text-[0.6875rem] text-dimmed">No unattended runs recorded yet.</p>
+          {:else}
+            <div class="flex flex-col gap-1.5">
+              {#each previewRuns(backgroundRuns, showAllBackgroundRuns) as run (run.runThreadId)}
+                {@const thread = runThreadFor(run)}
+                {#if thread}
+                  <button
+                    type="button"
+                    class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                    title="Open this run"
+                    aria-label="Open unattended run for {runTaskTitle(run)}"
+                    onclick={() => onOpenTask(thread)}
+                  >
+                    {@render backgroundRunRowBody(run, thread)}
+                  </button>
+                {:else}
+                  <div
+                    class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2"
+                    title="The run's thread was deleted; this record is the evidence it ran"
+                  >
+                    {@render backgroundRunRowBody(run, null)}
+                  </div>
+                {/if}
+              {/each}
+              {#if backgroundRuns.length > TASK_RUN_PREVIEW}
+                <button
+                  type="button"
+                  class="self-start rounded-md px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  title={showAllBackgroundRuns ? 'Show fewer runs' : 'Show every recorded run'}
+                  aria-label={showAllBackgroundRuns
+                    ? 'Show fewer runs'
+                    : `Show all ${backgroundRuns.length} runs`}
+                  onclick={() => (showAllBackgroundRuns = !showAllBackgroundRuns)}
+                >
+                  {showAllBackgroundRuns ? 'Show fewer' : `Show all ${backgroundRuns.length}`}
+                </button>
+              {/if}
             </div>
           {/if}
         </section>

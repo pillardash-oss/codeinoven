@@ -38,13 +38,12 @@
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
-  import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { STAGE_COLORS, STAGE_LABELS, STAGE_ORDER, scopeState } from '$lib/stores/scope.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { type Project, type Thread } from '$shared/types'
   import FolderRow from './FolderRow.svelte'
-  import SidebarFooterControls from './SidebarFooterControls.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import type { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
@@ -53,7 +52,6 @@
   interface Props {
     mode: 'projects' | 'chats' | 'threads' | 'assistant'
     active: boolean
-    navigate: (view: MainView) => void
     scroller?: HTMLElement | null
     projects: Project[]
     visibleProjects: Project[]
@@ -113,7 +111,6 @@
 
   let {
     mode,
-    navigate,
     scroller = $bindable(),
     projects,
     visibleProjects,
@@ -277,12 +274,6 @@
         <span class="text-[0.625rem] tabular-nums text-dimmed">
           {workspaceState.specAgentResponses.length}
         </span>
-      {/if}
-    {/snippet}
-
-    {#snippet footer()}
-      {#if !workspaceState.specStudioOpen}
-        <SidebarFooterControls {navigate} />
       {/if}
     {/snippet}
 
@@ -728,6 +719,8 @@
                         {expanded}
                         {working}
                         showLocation={hasProjectNameCollision(project, visibleProjects)}
+                        actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
+                          openProjectMenuId === project.id}
                         onToggle={() => toggleFolder(project.id)}
                         onMoveProject={(draggedId, targetId, pos) =>
                           onProjectMove(draggedId, targetId, pos)}
@@ -940,6 +933,8 @@
                     {expanded}
                     {working}
                     showLocation={hasProjectNameCollision(project, visibleProjects)}
+                    actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
+                      openProjectMenuId === project.id}
                     onToggle={() => toggleFolder(project.id)}
                     onMoveProject={(draggedId, targetId, pos) =>
                       onProjectMove(draggedId, targetId, pos)}

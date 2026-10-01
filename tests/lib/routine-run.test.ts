@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ROUTINE_NEXT_STEPS_PROMPT, isRoutineNextStepsPrompt } from '$shared/assistant-next-steps'
-import { composeRoutineInstruction, routineRunContext } from '$shared/routine-run'
+import { composeRoutineInstruction, routineRunContext, routineRunPrompt } from '$shared/routine-run'
 import type { RoutineConnection } from '$shared/types'
 
 function connection(overrides: Partial<RoutineConnection> = {}): RoutineConnection {
@@ -104,6 +104,29 @@ describe('composeRoutineInstruction', () => {
   it('returns undefined when neither piece exists, so no empty layer is added', () => {
     expect(composeRoutineInstruction(undefined, undefined)).toBeUndefined()
     expect(composeRoutineInstruction('  ', '  ')).toBeUndefined()
+  })
+})
+
+describe('routineRunPrompt', () => {
+  it('names a user task by its own title', () => {
+    expect(routineRunPrompt({ title: 'Triage PRs' }, 'Shower News')).toBe(
+      'Run this scheduled task now: Triage PRs'
+    )
+  })
+
+  it('names a Getting started thread by the routine, never by its authoring title', () => {
+    // The seed thread's fixed "Getting started" title is the authoring host, so
+    // a run of it must read as the routine, not as another getting-started pass.
+    expect(
+      routineRunPrompt({ title: 'Getting started', assistantGettingStarted: true }, 'Shower News')
+    ).toBe('Run this scheduled task now: Shower News')
+  })
+
+  it('falls back to the bare prompt when neither label exists', () => {
+    expect(routineRunPrompt({ title: '   ' }, 'Shower News')).toBe('Run this scheduled task now.')
+    expect(
+      routineRunPrompt({ title: 'Getting started', assistantGettingStarted: true }, '   ')
+    ).toBe('Run this scheduled task now.')
   })
 })
 

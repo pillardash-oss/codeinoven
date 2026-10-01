@@ -31,6 +31,13 @@
     details?: Snippet
     /** One sentence: what happens next, or that the user may leave. */
     note: string
+    /**
+     * Optional primary action a settled run offers in its footer ("Try again"),
+     * so a failure the user can act on is never a dead end. When set, the
+     * closing button becomes secondary and this one owns Cmd/Ctrl+Enter.
+     */
+    actionLabel?: string
+    onAction?: () => void
     minimized: boolean
     onMinimize: () => void
     onClose: () => void
@@ -47,6 +54,8 @@
     error = null,
     details,
     note,
+    actionLabel,
+    onAction,
     minimized,
     onMinimize,
     onClose,
@@ -155,9 +164,31 @@
       <button
         type="button"
         class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
+        data-modal-dismiss
         onclick={onMinimize}
       >
         Run in background
+      </button>
+    {:else if actionLabel && onAction}
+      <!--
+        A failure with a way forward: the closing button steps aside and the
+        run's own action becomes the panel's primary action, so Cmd/Ctrl+Enter
+        retries instead of dismissing the panel the user still has to act on.
+      -->
+      <button
+        type="button"
+        class="rounded-lg px-3 py-2 text-sm text-muted hover:bg-elevated"
+        data-modal-dismiss
+        onclick={onClose}
+      >
+        Done
+      </button>
+      <button
+        type="button"
+        class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover"
+        onclick={onAction}
+      >
+        {actionLabel}
       </button>
     {:else}
       <button

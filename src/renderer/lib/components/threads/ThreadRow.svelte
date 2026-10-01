@@ -31,12 +31,18 @@
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { longPress } from '$lib/long-press.svelte'
+  import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
   import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import {
+    AUTHORED_WORK_ICON_BY_KIND,
+    AUTHORED_WORK_NAME_BY_KIND
+  } from '$lib/authored-work-presentation'
+  import type { AuthoredWorkKind } from '$shared/ipc-contract'
   import { threadScopeBucket } from '$lib/threads/thread-scope'
   import { pipState } from '$lib/stores/pip.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
@@ -46,7 +52,6 @@
     coordinatorHasUnreadWorkers,
     DEFAULT_SCOPE_BUCKET_ID,
     isThreadBusy,
-    isThreadWorking,
     isOrchestrationChildThread
   } from '$shared/types'
   import type { Thread } from '$shared/types'
@@ -356,17 +361,11 @@
     coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
   )
 
-  /** Once the run state has been settled by a live session check (a ThreadView
-   *  mounted for this thread, or its session streamed activity), the live busy
-   *  flag is authoritative   a stale persisted `planning`/`executing` status
-   *  must not keep the spinner alive after the turn actually finished. Before
-   *  anything settles (fresh app start), the persisted status is the only
-   *  signal and stands in for genuinely in-flight work. */
-  let isWorking = $derived(
-    (agentRuns.hasSettled(thread.projectId, thread.id)
-      ? agentRuns.isBusy(thread.projectId, thread.id)
-      : Boolean(thread.sessionId) && isThreadWorking(thread)) || delegatedWorkActive
-  )
+  /** Whether the agent is producing work right now. The one live-working rule
+   *  (`isThreadLiveWorking`) keeps a thread parked on the user out of this, so a
+   *  permission, question, or secret card never reads as work in progress   its
+   *  status is the authority until the user answers. */
+  let isWorking = $derived(isThreadLiveWorking(thread) || delegatedWorkActive)
   let isRetryPaused = $derived(thread.status === 'working-paused')
   /** Another CodeInOven instance owns this thread's in-flight turn, so its live
    *  output and its stop control are there rather than here. */
@@ -498,11 +497,20 @@
 
   let scopeBucket = $derived(threadScopeBucket(thread))
 
+  /** The authored-work session this thread is in, or null when it is in none.
+   *  Drawn from the persisted thread field: main writes it the moment the thread
+   *  enters a session and pushes the row over `thread:updated`, so no scan and no
+   *  per-row round trip stands behind the marker. */
+  let authoredWorkKind = $derived(thread.authoredWorkKind ?? null)
+
   let hasNote = $derived(threadNotesState.has(thread.id))
 
-  /** Whether the bottom line (scope/harness/time) is shown. Single harness on
-   *  the default scope collapses to a one-line row with the time on the top. */
-  let showBottomRow = $derived(scopeBucket !== null || harnessIds.length > 1 || hasNote)
+  /** Whether the bottom line (scope/harness/time) is shown. A thread in an
+   *  authored-work session always shows it, because the marker for that session rides
+   *  the bottom line beside the computer-use/recording indicator. */
+  let showBottomRow = $derived(
+    authoredWorkKind !== null || scopeBucket !== null || harnessIds.length > 1 || hasNote
+  )
 
   let scopeColor = $derived(
     scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''
@@ -524,6 +532,10 @@
     if (isForeignRun) return 'Running in another instance'
     if (isRetryPaused || isWorking) return stageLabel
     if (thread.status === 'spec') return 'Spec ready'
+    // A parked thread says what it waits for in the app's own words, and says it
+    // for as long as the status holds   opening or reading the row never
+    // changes it.
+    if (threadState === 'approval') return threadStatusPolicy(thread.status).label
     if (threadState === 'scheduled') return 'Scheduled'
     if (threadState === 'temporary-unread') return 'Temporary chat unread'
     return threadState
@@ -658,15 +670,28 @@
   }
 </script>
 
+{#snippet authoredWorkMarker(kind: AuthoredWorkKind | null)}
+  {#if kind}
+    {@const WorkIcon = AUTHORED_WORK_ICON_BY_KIND[kind]}
+    <span
+      class="flex shrink-0 items-center text-muted"
+      title="{AUTHORED_WORK_NAME_BY_KIND[kind]} thread"
+      aria-label="{AUTHORED_WORK_NAME_BY_KIND[kind]} thread"
+    >
+      <WorkIcon size={11} strokeWidth={1.8} aria-hidden="true" />
+    </span>
+  {/if}
+{/snippet}
+
 {#if picker}
   <div
-    class="flex min-h-11 w-full flex-col gap-1 border-l-2 px-2.5 py-1.5 text-left transition-colors {selected
-      ? 'border-foreground bg-selected'
+    class="flex min-h-11 w-full flex-col gap-1 px-2.5 py-1.5 text-left transition-colors {selected
+      ? 'bg-selected'
       : isBusyIndicator
         ? isRetryPaused
-          ? 'border-warning bg-warning/5'
-          : 'border-thread-working bg-thread-working/5'
-        : 'border-transparent'}"
+          ? 'bg-warning/5'
+          : 'bg-thread-working/5'
+        : ''}"
     title={displayTitle}
   >
     <span class="flex w-full min-w-0 items-center gap-2">
@@ -780,6 +805,7 @@
               <StickyNote size={11} />
             </span>
           {/if}
+          {@render authoredWorkMarker(authoredWorkKind)}
           {#if indicator}
             <ThreadIndicatorSlot {indicator} />
           {:else}
@@ -822,17 +848,17 @@
       : 'opacity-0'}"
   ></div>
   <button
-    class="relative mb-1 flex w-full flex-col gap-1 border-l-2 text-left transition-colors {compact
+    class="relative mb-1 flex w-full flex-col gap-1 text-left transition-colors {compact
       ? 'px-2 py-1'
       : 'px-2 py-1.5'} {selected
-      ? 'border-foreground bg-selected'
+      ? 'bg-selected'
       : isBusyIndicator
         ? isRetryPaused
-          ? 'border-warning bg-warning/5 hover:bg-elevated'
+          ? 'bg-warning/5 hover:bg-elevated'
           : isForeignRun
-            ? 'border-thread-working bg-thread-working/5 hover:bg-elevated'
-            : 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
-        : 'border-transparent hover:border-border-strong hover:bg-elevated'}"
+            ? 'bg-thread-working/5 hover:bg-elevated'
+            : 'animate-pulse bg-thread-working/5 hover:bg-elevated'
+        : 'hover:bg-elevated'}"
     title={displayTitle}
     aria-current={selected ? 'true' : undefined}
     onpointerdown={() => preloadMessages()}
@@ -863,9 +889,10 @@
       <!-- State indicator / pin toggle   fixed slot, opacity crossfade, zero layout shift -->
       <span class="relative h-4 w-4 shrink-0">
         <span
-          class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 {pinVisible
-            ? 'opacity-0'
-            : 'opacity-100'}"
+          class="absolute inset-0 flex items-center transition-opacity duration-150 {projectIconUrl ||
+          projectIconGlyph
+            ? 'justify-center'
+            : 'justify-start'} {pinVisible ? 'opacity-0' : 'opacity-100'}"
           aria-hidden={pinVisible}
         >
           {#if badgeProps}
@@ -1022,6 +1049,7 @@
               <StickyNote size={11} />
             </span>
           {/if}
+          {@render authoredWorkMarker(authoredWorkKind)}
           {#if indicator}
             <ThreadIndicatorSlot {indicator} />
           {:else}

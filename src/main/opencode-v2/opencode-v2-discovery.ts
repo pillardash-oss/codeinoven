@@ -7,10 +7,12 @@ import type {
   OpenCodeV2DiscoveryResult,
   OpenCodeV2ModelEntry,
   OpenCodeV2ProviderEntry,
-  OpenCodeV2ServerIdentity
+  OpenCodeV2ServerIdentity,
+  ProviderCatalog
 } from '../../lib/types'
 import { OpenCodeV2Client } from './opencode-v2-client'
 import { startOpenCodeV2Server, type OpenCodeV2ServerHandle } from './opencode-v2-server'
+import { mapOpenCodeV2Catalogs } from '../drivers/opencode-v2/v2-catalog'
 
 /** The canonical command every OpenCode install provides. */
 export { OPENCODE_COMMAND }
@@ -250,6 +252,40 @@ export async function discoverOpenCodeV2Catalog(
   try {
     const result = await readSettledCatalog(handle)
     return result.ok ? result : { ok: false, reason: result.reason, detail: result.detail }
+  } finally {
+    await handle.close()
+  }
+}
+
+/** Probe the provider catalog on an ephemeral server that always gets closed. */
+export async function discoverOpenCodeV2ProviderCatalogs(options: {
+  command: string
+  cwd: string
+  env?: NodeJS.ProcessEnv
+}): Promise<ProviderCatalog[]> {
+  let handle: OpenCodeV2ServerHandle
+  try {
+    handle = await startOpenCodeV2Server(options)
+  } catch (error) {
+    Logger.dev('OpenCode V2 provider probe could not start:', error)
+    return []
+  }
+  try {
+    const client = new OpenCodeV2Client(handle)
+    const query = client.locationQuery(options.cwd)
+    const deadline = Date.now() + CATALOG_SETTLE_TIMEOUT_MS
+    for (;;) {
+      const [models, providers] = await Promise.all([
+        client.json(`/api/model?${query}`, { timeoutMs: 30_000 }),
+        client.json(`/api/provider?${query}`, { timeoutMs: 30_000 }).catch(() => null)
+      ])
+      const catalogs = mapOpenCodeV2Catalogs(models, providers)
+      if (catalogs.length > 0 || Date.now() >= deadline) return catalogs
+      await delay(CATALOG_POLL_INTERVAL_MS)
+    }
+  } catch (error) {
+    Logger.dev('OpenCode V2 provider probe failed:', error)
+    return []
   } finally {
     await handle.close()
   }

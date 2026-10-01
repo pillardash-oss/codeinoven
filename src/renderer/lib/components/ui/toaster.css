@@ -1,0 +1,165 @@
+/* The app's toast cards.
+ *
+ * Imported by `ToastStack.svelte`, which is the one toaster both windows draw
+ * with: the app window, and the native overlay that covers a browser page
+ * (`BrowserOverlaySurface.svelte`). The cards have to be identical in both, so the
+ * look lives here rather than inside either host.
+ *
+ * Every rule is written for elements svelte-sonner renders, so it is global by
+ * nature, and it competes with the library's own stylesheet in the cascade:
+ * hence the `!important`s. */
+
+/* ─── Both windows lay the cards out identically ──────────────────────────
+   The overlay window spans the app's own content area (see
+   `browserOverlayWindowBounds`), so its document has the same viewport width as
+   the app window and svelte-sonner's own responsive layout resolves the same way
+   in both: a handover between the two windows cannot restyle the card, so no
+   geometry override belongs here. (When the overlay was a fixed 428px window it
+   sat inside the library's mobile branch while the app window did not, which is
+   what the overrides that used to live here compensated for.) */
+
+[data-close-button] {
+  top: 6px !important;
+  right: 6px !important;
+  left: auto !important;
+  transform: none !important;
+}
+
+[data-close-button] > * {
+  pointer-events: none;
+}
+
+/* ─── Layout: [icon] [title] header row, [description] full-width row,
+   [buttons] sharing the bottom row. Selectors match svelte-sonner's
+   internal [data-styled='true'] specificity and use !important because
+   the library's own stylesheet competes in the cascade. ─────────────── */
+[data-sonner-toast] {
+  flex-wrap: wrap !important;
+  align-items: flex-start !important;
+  gap: 6px !important;
+}
+
+/* Dissolve the content wrapper so title and description become direct
+   flex items and can sit on separate rows */
+[data-sonner-toast][data-styled='true'] [data-content] {
+  display: contents !important;
+}
+
+[data-sonner-toast][data-styled='true'] [data-title] {
+  flex: 1 1 0 !important;
+  min-width: 0 !important;
+}
+
+[data-sonner-toast][data-styled='true'] [data-description] {
+  flex: 1 1 100% !important;
+}
+
+[data-sonner-toast][data-styled='true'] [data-button] {
+  /* 100% basis (not 0) so the button ALWAYS wraps to its own bottom row,
+     even when the toast has no description. With basis 0 an action button
+     and a title fit side by side on one row, which is exactly the bug that
+     hit error toasts (title + Copy, no description) while thread toasts
+     (title + description + action) wrapped correctly. One rule, one
+     behaviour, every status. */
+  flex: 1 1 100% !important;
+  margin-top: 4px !important;
+  justify-content: center !important;
+}
+
+/* ─── Normal toasts ─────────────────────────────────────────────────────── */
+[data-sonner-toaster][data-sonner-theme='light'] {
+  --normal-bg: var(--color-surface) !important;
+  --normal-border: var(--color-border) !important;
+  --normal-text: var(--color-foreground) !important;
+}
+
+[data-sonner-toaster][data-sonner-theme='dark'] {
+  --normal-bg: var(--color-surface) !important;
+  --normal-border: var(--color-border) !important;
+  --normal-text: var(--color-foreground) !important;
+}
+
+/* ─── Branded status toasts ───────────────────────────────────────────────
+   Obsidian / Ivory / Auric system: each status toast keeps the ivory
+   surface but carries a status tint in the background wash, the hairline
+   border, the icon chip and a slim accent bar on the left edge. */
+[data-sonner-toast][data-type='success'],
+[data-sonner-toast][data-type='error'],
+[data-sonner-toast][data-type='warning'],
+[data-sonner-toast][data-type='info'] {
+  position: relative;
+}
+
+[data-sonner-toast][data-type='success'] {
+  --status: var(--color-success);
+}
+
+[data-sonner-toast][data-type='error'] {
+  --status: var(--color-danger);
+}
+
+[data-sonner-toast][data-type='warning'] {
+  --status: var(--color-warning);
+}
+
+[data-sonner-toast][data-type='info'] {
+  --status: var(--color-info);
+}
+
+[data-sonner-toast][data-type='success'],
+[data-sonner-toast][data-type='error'],
+[data-sonner-toast][data-type='warning'],
+[data-sonner-toast][data-type='info'] {
+  background:
+    linear-gradient(
+      to right,
+      color-mix(in srgb, var(--status) 16%, transparent),
+      color-mix(in srgb, var(--status) 7%, transparent) 60%,
+      color-mix(in srgb, var(--status) 4%, transparent)
+    ),
+    var(--color-surface) !important;
+  border: 1px solid color-mix(in srgb, var(--status) 55%, var(--color-border)) !important;
+  /* Real border instead of a ::before bar   it can never detach or escape
+     the toast during drag, dismissal or scale transitions. */
+  border-left: 3px solid var(--status) !important;
+  box-shadow:
+    0 4px 16px -4px color-mix(in srgb, var(--status) 25%, transparent),
+    0 2px 8px -2px rgba(0, 0, 0, 0.12) !important;
+  color: var(--color-foreground) !important;
+}
+
+/* Status-colored title   the colour reads before the words do */
+[data-sonner-toast][data-type='success'] [data-title],
+[data-sonner-toast][data-type='error'] [data-title],
+[data-sonner-toast][data-type='warning'] [data-title],
+[data-sonner-toast][data-type='info'] [data-title] {
+  color: color-mix(in srgb, var(--status) 78%, var(--color-foreground)) !important;
+}
+
+/* Status-colored close button for instant recognition */
+[data-sonner-toast][data-type='success'] [data-close-button],
+[data-sonner-toast][data-type='error'] [data-close-button],
+[data-sonner-toast][data-type='warning'] [data-close-button],
+[data-sonner-toast][data-type='info'] [data-close-button] {
+  color: color-mix(in srgb, var(--status) 70%, var(--color-dimmed)) !important;
+  background: color-mix(in srgb, var(--status) 10%, transparent) !important;
+  border-radius: 999px !important;
+  width: 1.25rem !important;
+  height: 1.25rem !important;
+  display: grid !important;
+  place-items: center !important;
+}
+
+/* Icon chip: tinted circle behind the status icon */
+[data-sonner-toast] [data-icon] {
+  background: color-mix(in srgb, var(--status) 22%, transparent);
+  color: var(--status);
+  border-radius: 999px;
+  width: 1.75rem;
+  height: 1.75rem;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 1px;
+}

@@ -11,9 +11,18 @@ import type {
 import type {
   BrowserDevToolsState,
   BrowserDownload,
+  BrowserExtension,
+  BrowserExtensionActivityUpdate,
+  BrowserExtensionProgress,
+  BrowserExtensionSidePanel,
+  BrowserFindResult,
+  BrowserInspectorEvent,
   BrowserOpenRequestContext,
   BrowserPageState,
-  BrowserPermissionRequest
+  BrowserPanelShortcutAction,
+  BrowserPermissionRequest,
+  BrowserPopupWindow,
+  BrowserSwitcherKey
 } from './browser'
 import type {
   AgentNotificationPayload,
@@ -24,10 +33,25 @@ import type {
 } from './notifications'
 import type { UpdaterStatus } from './updater'
 import type { SkillUpdateStatus } from '../types/utility'
+import type {
+  BrowserOverlayAck,
+  BrowserStripOverlayInteraction,
+  BrowserStripOverlayRequest,
+  ToastOverlayInteractionReport,
+  ToastOverlayRequestStack
+} from '../browser-overlay'
 
 export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
+  /**
+   * The one-time start-at-login offer, raised right after a routine gets its
+   * first how-to: the app asks whether it should start at login so a scheduled
+   * run can fire after a restart. Sent at most once in an install's life, and
+   * only while `launchAtLoginPrompted` is still false, so nothing has to guard
+   * against a second prompt arriving.
+   */
+  'app:startAtLoginPrompt': [] as [],
   'agent:processesChanged': [] as unknown as [projectId: string, threadId: string],
   /** Live agent lifecycle/stream event broadcast to every window. */
   'agent:event': [] as unknown as [event: import('../types').AgentEvent],
@@ -56,6 +80,12 @@ export const IPC_EVENT_CONTRACT = {
    * working spinner with no live output.
    */
   'thread:foreignRuns': [] as unknown as [notices: import('../types').ForeignRunNotice[]],
+  /**
+   * The persisted config was written. Broadcast so a surface that did not make
+   * the change still shows the value that was saved, which matters when the
+   * design board changes the work folders and Settings is open behind it.
+   */
+  'config:changed': [] as unknown as [config: import('../types').AppConfig],
   /** Assistant routines changed (created, updated, deleted, reordered). */
   'routine:changed': [] as unknown as [routines: import('../types').Routine[]],
   /**
@@ -65,6 +95,14 @@ export const IPC_EVENT_CONTRACT = {
   'routine:checkpointChanged': [] as unknown as [routineId: string],
   /** The set of pending missed scheduled runs changed. */
   'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
+  /** The durable record of unattended runs changed (a run started or settled). */
+  'assistant:backgroundRunsChanged': [] as unknown as [runs: import('../types').BackgroundRun[]],
+  /**
+   * The set of gates the app resolved without the user changed: one settled, or
+   * the user dismissed one or all. Drives the amber attention rail item and its
+   * panel.
+   */
+  'assistant:autoAnswersChanged': [] as unknown as [items: import('../types').AutoAnswerItem[]],
   /** The off-app audible alert for a notification, dispatched by the main
    *  process to a live renderer while the app is in the background. The in-app
    *  alert for a focused toast is played by the renderer itself, at the moment
@@ -99,6 +137,20 @@ export const IPC_EVENT_CONTRACT = {
    *  state and either confirms the close or shows the confirmation modal. */
   'window:confirmClose': [] as unknown as [payload: CloseConfirmationPayload],
   /**
+   * Emitted just before the window is destroyed to keep running in the
+   * background (park, not quit). The renderer gets a short grace window to
+   * persist anything only it holds   the durable browser tab lists, editor
+   * drafts it wants to keep   before the renderer process goes away.
+   */
+  'window:beforePark': [] as [],
+  /**
+   * This process's role against the shared backend, pushed on mount and
+   * whenever the running instance set changes. A secondary shows the
+   * "running in another instance" notice; the push is what clears it when
+   * this instance is promoted after the owner exits.
+   */
+  'app:instanceRole': [] as unknown as [role: import('../types').InstanceRole],
+  /**
    * Emitted when the user presses Cmd/Ctrl+W. The main process intercepts the
    * key (so the macOS "Close Window" menu accelerator never fires) and asks the
    * renderer to close the active in-app surface: modal, settings page, sidebar
@@ -115,10 +167,11 @@ export const IPC_EVENT_CONTRACT = {
   /**
    * Emitted when the user presses the mouse's back side button. Windows and
    * Linux surface it as the `browser-backward` app command in the main process;
-   * the main process forwards it here so the renderer can walk its own
-   * in-app navigation history (the window has no native browser history).
-   * On macOS the renderer instead sees a raw `mousedown`/`auxclick` with
-   * button 3: handled directly in App.svelte.
+   * the main process forwards it here so the renderer can route it to the
+   * focused browser page's native history, or the app's history when the
+   * browser does not own focus.
+   * On macOS the renderer may see a raw `mousedown`/`auxclick` with button 3;
+   * App.svelte sends it through the same focus-aware routing.
    */
   'window:historyBack': [] as [],
   /** Emitted when the user presses the mouse's forward side button. */
@@ -161,7 +214,47 @@ export const IPC_EVENT_CONTRACT = {
   'providers:status': [] as unknown as [payload: ProviderConnectionInfo[]],
   /** DevTools open state changed for a browser tab (open/closed). */
   'browser:devToolsChanged': [] as unknown as [state: BrowserDevToolsState],
+  /** One event from a tab's injected design inspector: a pick, a finished
+   *  comment, a removed pin, or inspect mode ending on its own. */
+  'browser:inspector': [] as unknown as [tabId: string, event: BrowserInspectorEvent],
+  /**
+   * A browser shortcut the renderer has to carry out, because it owns the tab
+   * strip or holds the find bar: focusing the address bar of a tab, closing or
+   * opening a tab, or showing and stepping its find bar. Main decides the key,
+   * the renderer decides what the tab strip or the find bar does with it.
+   */
+  'browser:panelShortcut': [] as unknown as [tabId: string, action: BrowserPanelShortcutAction],
+  /**
+   * What Chromium's find reported for a tab's page. The page is a native view, so
+   * this is the only place a match count can come from; the find bar draws it and
+   * nothing else.
+   */
+  'browser:findResult': [] as unknown as [result: BrowserFindResult],
+  /**
+   * A Ctrl+Tab switcher gesture pressed while a native page held the keyboard.
+   * Main claimed the chord and handed this renderer the keyboard, so the switcher
+   * opens from inside a page exactly as it does from the app's own chrome.
+   */
+  'browser:switcherKey': [] as unknown as [key: BrowserSwitcherKey],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
+  /**
+   * Every popup window the browser holds, whole, after any change to one of
+   * them: one opened, closed itself, or moved on to another address. The rail
+   * draws one tab per entry, and the list is short, so it is published whole
+   * rather than as add/remove/update deltas.
+   */
+  'browser:popupWindows': [] as unknown as [popups: BrowserPopupWindow[]],
+  /**
+   * Every extension side panel the rail is hosting, whole, after any change to
+   * one of them: an extension asked for one, it closed, or the tab it belonged to
+   * went away. Like the popup list, it is short enough to publish whole rather
+   * than as deltas.
+   *
+   * `chrome.sidePanel` is compiled out of this runtime, so this is the record an
+   * extension declared through the compatibility shim rather than a surface the
+   * runtime provided.
+   */
+  'browser:extensionSidePanels': [] as unknown as [panels: BrowserExtensionSidePanel[]],
   /**
    * Delivered to the native permission-prompt popup window (not the main
    * renderer): the page permission awaiting a decision, plus how many requests
@@ -171,9 +264,63 @@ export const IPC_EVENT_CONTRACT = {
     request: BrowserPermissionRequest,
     context: { queueSize: number; projectLabel: string | null }
   ],
+  /**
+   * The toast stack the native overlay should draw, delivered to the overlay
+   * document rather than to the app renderer. The app window keeps its own copy
+   * of the same state and draws nothing while the overlay is up. Null takes the
+   * stack down without touching the rest of the window.
+   */
+  'browser:overlay:stack': [] as unknown as [stack: ToastOverlayRequestStack | null],
+  /**
+   * The browser's floating tab strip the native overlay should draw, delivered
+   * to the overlay document. Null takes it down; the window itself stays for the
+   * next surface that needs it.
+   */
+  'browser:overlay:strip': [] as unknown as [strip: BrowserStripOverlayRequest | null],
+  /**
+   * One interaction with a toast the overlay drew, delivered back to the app
+   * renderer, which runs the handler that toast holds (open the thread, copy the
+   * details, and so on) and then drops the toast from its own state.
+   */
+  'browser:overlay:event': [] as unknown as [report: ToastOverlayInteractionReport],
+  /**
+   * One interaction with the floating tab strip the overlay drew: a tab picked, a
+   * tab closed, or the pointer entering or leaving the strip's own rectangle
+   * (which is what keeps the floating panel open while it is the overlay's to
+   * draw). The app renderer owns what each one means.
+   */
+  'browser:overlay:stripEvent': [] as unknown as [report: BrowserStripOverlayInteraction],
+  /**
+   * The overlay has drawn what it was given, confirming that a press on a card or
+   * a tab row can still reach the app renderer that owns the handler. The app
+   * renderer holds the content in its own window until this arrives.
+   */
+  'browser:overlay:drawn': [] as unknown as [ack: BrowserOverlayAck],
   /** The native site-settings menu was closed; the panel resets its expanded state. */
   'browser:siteMenuClosed': [] as unknown as [],
+  /**
+   * The browser's installed extensions, whole, after any change to them: one
+   * installed, removed, or its enablement edited. The list is short, so it is
+   * published whole rather than as deltas, and the rail redraws from it.
+   */
+  'browser:extensions': [] as unknown as [extensions: BrowserExtension[]],
+  /** One step of the install currently running, so a fetch and an unpack report
+   *  where they are instead of the surface freezing on a spinner. */
+  'browser:extensionProgress': [] as unknown as [progress: BrowserExtensionProgress],
+  /**
+   * One extension's action state (badge, icon, title) for one box: for one tab,
+   * or for every tab of the box when `tabId` is null. A `reset` means the
+   * worker restarted and holds none of what it recorded before.
+   */
+  'browser:extensionActivity': [] as unknown as [update: BrowserExtensionActivityUpdate],
   'browser:download': [] as unknown as [download: BrowserDownload],
+  /**
+   * A download the browser dropped from its own list (removed by the user, or
+   * forgotten with the project). It carries no replacement record, so without
+   * this the renderer's mirror of the list keeps a row main no longer has and
+   * nothing can make it go away short of reopening the surface.
+   */
+  'browser:downloadRemoved': [] as unknown as [downloadId: string],
   'speech:progress': [] as unknown as [progress: import('../speech/types').SpeechProgressEvent],
   /**
    * One live stage of a managed-worktree creation/adoption job. The renderer

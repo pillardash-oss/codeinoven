@@ -362,6 +362,34 @@ describe('detectMemoryCandidates', () => {
     ).toEqual([])
   })
 
+  it('never treats a feature request or acceptance criterion as memory', () => {
+    const featureRequests = [
+      'I want you to never collapse the sidebar when switching projects.',
+      'Can you make sure every download is tracked in the ledger?',
+      'Could you add a dark mode toggle to the settings page?',
+      'Implement the task manager so it tracks every app process.',
+      'Make sure to always run the focused tests before committing.'
+    ]
+    for (const userMessage of featureRequests) {
+      expect(
+        detectMemoryCandidates({ userMessage, assistantResponse: ASSISTANT, existingEntries: [] })
+      ).toEqual([])
+    }
+  })
+
+  it('keeps a rule stated as a preference and an explicit memory request', () => {
+    const durable = [
+      'Never collapse the sidebar when switching projects.',
+      'Anything downloadable must be tracked in the ledger.',
+      'I want you to remember that I prefer tabs over spaces for this codebase.'
+    ]
+    for (const userMessage of durable) {
+      expect(
+        detectMemoryCandidates({ userMessage, assistantResponse: ASSISTANT, existingEntries: [] })
+      ).toHaveLength(1)
+    }
+  })
+
   it('deduplicates a candidate that already exists in memory', () => {
     const existing: MemoryEntry[] = [
       {
@@ -488,6 +516,31 @@ describe('evaluateMemoryExtraction', () => {
     expect(decision.userInput.length).toBeLessThanOrEqual(
       MEMORY_EXTRACTION_LIMITS.maxUserCandidateCharacters
     )
+  })
+
+  it('skips a bare feature request even when durability is the model’s call', async () => {
+    const { service: memoryService } = await service()
+    const decision = await memoryService.evaluateMemoryExtraction({
+      userMessage: 'Add a dark mode toggle to the settings page.',
+      assistantResponse: ASSISTANT,
+      projectId: 'project-1',
+      threadId: 'thread-5',
+      requireDurableCandidate: false
+    })
+    expect(decision.run).toBe(false)
+    expect(decision.reason).toBe('no-candidate')
+  })
+
+  it('still sends a request that also states a rule for the model to judge', async () => {
+    const { service: memoryService } = await service()
+    const decision = await memoryService.evaluateMemoryExtraction({
+      userMessage: 'Add a dark mode toggle, and never use npm in this project again.',
+      assistantResponse: ASSISTANT,
+      projectId: 'project-1',
+      threadId: 'thread-6',
+      requireDurableCandidate: false
+    })
+    expect(decision.run).toBe(true)
   })
 })
 

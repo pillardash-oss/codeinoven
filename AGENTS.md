@@ -27,6 +27,7 @@ After completing the code, ask the user if they want a playground link. Only cal
 - CodeInOven stores all threads, sessions, and app data in `~/.config/pillardash/codeinoven/`. When asked to inspect a thread, session, logs, or any stored app data, look there. NEVER use `~/Library/Application Support/CodeInOven` for app data — it contains only Electron/Chromium runtime junk (caches, cookies, an empty db) and inspecting it is always wrong.
 - Always read the `docs/APP-BIBLE.md` file if it exists. It will guide you on the principles and philosophies of this app, and how to contribute to it.
 - Always use `bun`.
+- To run the app and probe its behaviour, use `bun run dev:probe` instead of `bun dev`. It launches an isolated instance with its own data root (`.cio/tmp/probe`) and background registration off, so it adds no second menu bar icon, registers no login item, and quits when its window closes. Never probe against the user's live data root, and never leave a probe running in the background.
 - Do not use type `any` anywhere in this codebase!
 - In svelte when you add an attribute to an element, just like html, the default value is true, so writing something like `<Button active={true}>Sample</Button>` makes no sense, it should simply be `<Button active>Sample</Button>`
 - Every icon-only button MUST have both a descriptive `title` and a descriptive `aria-label`. Reusable icon-button components MUST expose a typed, required `title` prop, bind it to the rendered button, and require every call site to provide an action-specific title.

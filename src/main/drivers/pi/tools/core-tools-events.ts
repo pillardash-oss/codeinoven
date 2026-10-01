@@ -63,6 +63,9 @@ export function piCoreToolsEventsSource(): string {
   // instead of duplicating them inside every user turn's text (see
   // loadCioSystemPrompt above for why).
   pi.on('before_agent_start', (event) => {
+    // Pi reports each surface's annotations here, and an MCP server can connect
+    // between turns, so the read-only set is refreshed before every turn.
+    refreshCioReadOnlyTools(pi)
     applyCioSubAgentScope()
     const extra = loadCioSystemPrompt()
     const isProjectMode = extra.includes(CIO_PROJECT_MODE_MARKER)
@@ -95,6 +98,12 @@ export function piCoreToolsEventsSource(): string {
       }
     }
     const allowedTools = loadCioAllowedTools()
+    // A script (Pi 0.99 codemode) runs other tools through this same pipeline.
+    // App-owned tools are deliberately reachable from scripts: stringing many
+    // bridge calls into one script is the reason codemode exists, and a script
+    // reaching a user-facing tool makes the same call the model makes directly,
+    // on the same gate. Pi excludes codemode itself from its own script table,
+    // so a script can never recurse into codemode.
     // Backstop for the window between a scope change and the next agent start:
     // a scoped session must never run a sub-agent tool, even when the model
     // still saw it in an earlier request.
@@ -124,7 +133,7 @@ export function piCoreToolsEventsSource(): string {
     if (
       !hit &&
       allowedTools.length > 0 &&
-      CIO_PI_BUILTIN_TOOLS.has(event.toolName) &&
+      !isCioOwnToolName(event.toolName) &&
       !allowedTools.includes(event.toolName)
     ) {
       if (isSafeNetworkCurl(event.toolName, input)) return undefined
@@ -134,7 +143,8 @@ export function piCoreToolsEventsSource(): string {
         permission: command === undefined ? event.toolName : 'shell',
         patterns: command === undefined && path !== undefined ? [path] : [],
         tool: event.toolName,
-        ...(command === undefined ? {} : { command })
+        ...(command === undefined ? {} : { command }),
+        ...(CIO_PI_BUILTIN_TOOLS.has(event.toolName) ? {} : { surface: event.toolName })
       }
       const approved = await ctx.ui.confirm(
         'Permission needed: this chat has no file-system access   using ' + event.toolName + ' requires your approval',
@@ -154,7 +164,8 @@ export function piCoreToolsEventsSource(): string {
       permission: hit.permission,
       patterns: hit.patterns,
       tool: event.toolName,
-      ...(hit.command === undefined ? {} : { command: hit.command })
+      ...(hit.command === undefined ? {} : { command: hit.command }),
+      ...(hit.surface === undefined ? {} : { surface: hit.surface })
     }
     const approved = await ctx.ui.confirm(
       'Permission needed: ' + hit.reason,
@@ -164,7 +175,7 @@ export function piCoreToolsEventsSource(): string {
     return {
       block: true,
       reason:
-        'The user denied this action in the permission card because it is destructive (' +
+        'The user denied this action (' +
         hit.reason +
         '). Do not retry it as-is; continue the turn with a safe alternative.'
     }

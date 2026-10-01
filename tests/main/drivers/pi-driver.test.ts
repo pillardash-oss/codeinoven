@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from 'fs/promises'
+import type { ChildProcess } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -33,6 +34,12 @@ const rpcMock = vi.hoisted(() => {
     setAutoCompaction: ReturnType<typeof vi.fn>
     respondToExtensionUiRequest: ReturnType<typeof vi.fn>
     dispose: ReturnType<typeof vi.fn>
+    /**
+     * The real client exposes the harness child it spawned, which the driver
+     * reads to register the harness root with the app's process tracker. A
+     * positive pid keeps that registration on its synchronous path.
+     */
+    process: ChildProcess
     onEvent: (record: Record<string, unknown>) => void
     onUiRequest: (record: Record<string, unknown>) => void
     emitUi: (record: Record<string, unknown>) => void
@@ -58,6 +65,7 @@ const rpcMock = vi.hoisted(() => {
       setAutoCompaction: ReturnType<typeof vi.fn>
       respondToExtensionUiRequest: ReturnType<typeof vi.fn>
       dispose: ReturnType<typeof vi.fn>
+      process: ChildProcess
       constructor(options: {
         onEvent?: (record: Record<string, unknown>) => void
         onUiRequest?: (record: Record<string, unknown>) => void
@@ -97,6 +105,10 @@ const rpcMock = vi.hoisted(() => {
         this.setAutoCompaction = vi.fn(async () => undefined)
         this.respondToExtensionUiRequest = vi.fn()
         this.dispose = vi.fn()
+        this.process = {
+          pid: 4242,
+          once: vi.fn()
+        } as unknown as ChildProcess
         this.onEvent = options.onEvent ?? (() => undefined)
         this.onUiRequest = options.onUiRequest ?? (() => undefined)
         this.onExtensionStatus = options.onExtensionStatus ?? (() => undefined)

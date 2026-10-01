@@ -49,14 +49,16 @@ export function registerMergeHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle(
     'git:preparePrResolve',
     async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
-      gitService.preparePrResolve(
-        await resolveProjectPath(
-          validateEntityId(projectId, 'Project ID'),
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validatePrResolveOptions(options)
+      gitInvocation(async () =>
+        gitService.preparePrResolve(
+          await resolveProjectPath(
+            validateEntityId(projectId, 'Project ID'),
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          ),
+          validatePrResolveOptions(options)
+        )
       )
   )
   ipcMain.handle(
@@ -69,14 +71,16 @@ export function registerMergeHandlers(ctx: IpcHandlerContext): void {
       // credential the panel's own push uses.
       const tokenRef = gitCredentialRef(safeProjectId)
       const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
-      return gitService.finishPrResolve(
-        await resolveProjectPath(
-          safeProjectId,
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        { ...safeOptions, token }
+      return gitInvocation(async () =>
+        gitService.finishPrResolve(
+          await resolveProjectPath(
+            safeProjectId,
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          ),
+          { ...safeOptions, token }
+        )
       )
     }
   )

@@ -11,10 +11,10 @@
     THREAD_HOVER_POPOVER_SURFACE_CLASS
   } from '$lib/components/shared/thread-hover-popover-layout'
   import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import SpeakingIndicator from '$lib/components/speech/SpeakingIndicator.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
-  import { statusBadgeForThread } from '$lib/thread-status-badge'
-  import { isThreadWorking, type Thread, type ThreadSearchResult } from '$shared/types'
+  import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
+  import { type Thread, type ThreadSearchResult } from '$shared/types'
 
   interface Props {
     result: ThreadSearchResult
@@ -28,12 +28,9 @@
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
   let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
 
-  /** Live-settled run state wins over the persisted status, matching ThreadRow. */
-  let isWorking = $derived(
-    agentRuns.hasSettled(thread.projectId, thread.id)
-      ? agentRuns.isBusy(thread.projectId, thread.id)
-      : Boolean(thread.sessionId) && isThreadWorking(thread)
-  )
+  /** The one live-working rule, so a parked thread shows the attention dot
+   *  instead of a spinner and the row matches the sidebar's own ThreadRow. */
+  let isWorking = $derived(isThreadLiveWorking(thread))
   let isRetryPaused = $derived(thread.status === 'working-paused')
 
   let badgeProps = $derived.by(() => {
@@ -196,7 +193,7 @@
     {#if isRecording}
       <RecordingIndicator label="Listening" />
     {:else if isSpeaking}
-      <RecordingIndicator label="Speaking" tone="speech" />
+      <SpeakingIndicator label="Playing audio" />
     {:else}
       <span class="shrink-0 whitespace-nowrap text-[0.625rem] text-dimmed">
         {relativeTime(thread.lastActivity)}

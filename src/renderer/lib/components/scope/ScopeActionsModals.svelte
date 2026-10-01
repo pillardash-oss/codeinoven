@@ -166,12 +166,13 @@
 </Modal>
 
 {#if projectId && actions.mergeTarget}
+  {@const mergeSource = actions.mergeTarget}
   <ScopeMergeModal
     open
     {projectId}
-    sourceBucketId={actions.mergeTarget.id}
+    sourceBucketId={mergeSource.id}
     onClose={() => (actions.mergeTarget = null)}
-    onDone={() => (actions.mergeTarget = null)}
+    onMerged={() => actions.finishMergedScope(mergeSource)}
     onConflicts={(sourceProjectId: string, targetScopeBucketId: string) =>
       actions.openConflictsHandoff(sourceProjectId, targetScopeBucketId)}
   />

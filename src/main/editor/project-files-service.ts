@@ -25,7 +25,7 @@ import {
 import { ProjectFilesRootResolver } from './project-files/project-files-roots'
 import type {
   ProjectFilesAssistantRootLookup,
-  ProjectFilesChatArtifactRootLookup,
+  ProjectFilesChatWorkspaceRootLookup,
   ProjectFilesProjectLookup,
   ProjectFilesScopeRootLookup,
   ProjectFilesThreadWorkspaceRoots
@@ -39,7 +39,7 @@ import {
 export type {
   ProjectFilesProjectLookup,
   ProjectFilesScopeRootLookup,
-  ProjectFilesChatArtifactRootLookup,
+  ProjectFilesChatWorkspaceRootLookup,
   ProjectFilesAssistantRootLookup
 }
 

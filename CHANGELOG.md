@@ -122,6 +122,31 @@ All notable changes to CodeInOven are documented here. This project follows
   told what the request is for and that an actual value must never be invented or
   guessed.
 
+- **Sign in to GitHub without leaving CodeInOven.** The device-flow sign-in is a
+  dockable panel now instead of a modal, so it can get out of the way while the
+  user authorizes and keep polling from wherever they are, and it offers both
+  destinations explicitly: the operating system's browser, or the app-wide
+  CodeInOven browser. Signing in inside the app docks the sign-in **into that
+  browser's own view**: a browser page is a native view painted above every DOM
+  node, so the panel cannot float over the page it opened, and it is a row of the
+  browser's page column instead, which the page shrinks around the way it already
+  does for the find bar. The code, the countdown it expires on and the attempt's
+  status stay in that row for the whole wait, with a copy control and a chevron
+  that opens the full details and both destinations in place, so nothing about a
+  sign-in in progress is more than one click away from the page it belongs to.
+  Every other view still floats the panel, and it is the same flow either way.
+  The Git panel's account menu reloads the moment the authorization lands. A
+  sign-in the user no longer wants is explicitly cancellable: **Cancel** sits at
+  the footer's left edge while an attempt is in flight, the docked row and the
+  dock chip carry the same dismiss control, and it cancels the attempt rather
+  than merely hiding it, since the header withholds its close affordance until
+  the flow settles. The in-app hand-off is awaited and confirmed before the panel
+  docks, so a first-open in a session (which reads the browser's modules and its
+  durable tab list first) shows an **Opening…** state instead of a click that
+  silently did nothing, and a browser that does not take the page within eight
+  seconds hands it to the operating system's browser instead, with the code
+  already on the clipboard and the reason stated in a toast.
+
 ### Changed
 
 - A capability installed without explicit harness targeting now applies to every harness,
@@ -152,6 +177,14 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- Automatic memory proposals no longer treat feature requests as durable
+  preferences. The deterministic gate stops recognising request phrasing
+  (`i want you to`, `make sure to`) and task imperatives as standing vocabulary,
+  and it refuses a request that states no rule of its own. The decision the
+  model makes now has to clear a floor on its primary "lasting intent" answer,
+  so a first-time request can no longer pass on the strength of merely not being
+  a repeat, and the decision prompt names feature requests and acceptance
+  criteria as current-task work.
 - The vision-model error card is dismissable in every state. A request that the
   engine already settled (its five-minute decision timeout, a newer descriptor
   request superseding it, or its harness session being retired) used to answer

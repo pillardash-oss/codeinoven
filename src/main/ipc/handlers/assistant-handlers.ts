@@ -8,11 +8,14 @@ import {
   ROUTINE_IMPACT_IDS,
   ROUTINE_TIMELINESS_IDS
 } from '../../../lib/routine-reporting'
+import { routineFirstHowToSave } from '../../../lib/types'
 import {
+  broadcastAutoAnswersChanged,
   broadcastMissedRunsChanged,
   broadcastRoutinesChanged
 } from '../../scheduler/assistant-events'
 import { broadcastThreadUpdate } from '../../chat/thread-events'
+import { raiseStartAtLoginOffer } from '../../system/start-at-login-offer'
 import type { IpcHandlerContext } from './context'
 import type {
   CreateRoutineInput,
@@ -26,6 +29,7 @@ import type {
   RoutineTimeliness,
   UpdateRoutineInput
 } from '../../../lib/types'
+import { sanitizeCustomSvg } from '../../../lib/custom-svg'
 
 const CADENCES = new Set(['once', 'hourly', 'daily', 'weekdays', 'weekly'])
 const DELIVERY_CHANNELS = new Set<string>(ROUTINE_DELIVERY_CHANNEL_IDS)
@@ -246,6 +250,12 @@ function validateUpdateInput(value: unknown): UpdateRoutineInput {
         ? null
         : requireString(record.iconType, 'Routine icon type').slice(0, 64)
   }
+  if (record.customSvg !== undefined) {
+    patch.customSvg =
+      record.customSvg === null
+        ? null
+        : sanitizeCustomSvg(requireString(record.customSvg, 'Routine custom SVG'))
+  }
   if (record.schedule !== undefined) patch.schedule = sanitizeSchedule(record.schedule)
   if (record.howTo !== undefined) {
     if (typeof record.howTo !== 'string') throw new TypeError('Routine how-to must be a string')
@@ -292,10 +302,17 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     return routine
   })
 
-  ipcMain.handle('routine:update', (_, routineId: unknown, input: unknown) => {
+  ipcMain.handle('routine:update', async (_, routineId: unknown, input: unknown) => {
     const safeId = validateEntityId(routineId, 'Routine ID')
+    const existing = routineManager.getRoutine(safeId)
     const routine = routineManager.updateRoutine(safeId, validateUpdateInput(input))
     broadcastRoutines()
+    // The first how-to a routine ever gets is the moment its owner has work they
+    // expect to run, so it is the one moment the app offers to start at login.
+    // It is raised once in an install's life: the offer carries its own flag.
+    if (existing && routineFirstHowToSave(existing, routine)) {
+      await raiseStartAtLoginOffer(ctx.storage)
+    }
     return routine
   })
 
@@ -381,6 +398,33 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   })
 
   ipcMain.handle('assistant:listMissedRuns', () => requireScheduler().listMissedRuns())
+
+  // The durable record of unattended runs. Read from the ledger, not the thread
+  // table, so a run whose thread was evicted or deleted still reports what
+  // happened on the "While you were away" surfaces.
+  ipcMain.handle('assistant:listBackgroundRuns', () => requireScheduler().listBackgroundRuns())
+
+  ipcMain.handle('assistant:listAutoAnswers', () => ctx.autoAnswerStore?.list() ?? [])
+
+  /**
+   * Dismiss one auto-resolved gate (or all of them). The store owns the durable
+   * flag; the fresh list is pushed so every open attention panel updates, and
+   * the amber rail icon leaves once nothing is left unread.
+   */
+  ipcMain.handle('assistant:dismissAutoAnswer', (_, id: unknown) => {
+    const store = ctx.autoAnswerStore
+    if (!store) return
+    store.dismiss(requireString(id, 'Auto-answer ID').slice(0, 300))
+    broadcastAutoAnswersChanged(store.list())
+  })
+
+  ipcMain.handle('assistant:dismissAllAutoAnswers', () => {
+    const store = ctx.autoAnswerStore
+    if (!store) return 0
+    const dismissed = store.dismissAll()
+    broadcastAutoAnswersChanged(store.list())
+    return dismissed
+  })
 
   /**
    * Post the saved-how-to next-steps turn into the routine's Getting started

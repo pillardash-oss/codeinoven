@@ -55,6 +55,7 @@ export function registerUtilityIpc(
   ipcMain.handle('computerUse:updateCua', () =>
     cuaBridge.applyUpdate((progress) => broadcastToWindows('computerUse:cuaUpdate', progress))
   )
+  ipcMain.handle('computerUse:getCuaUpdateState', () => cuaBridge.getUpdateState())
   ipcMain.handle('computerUse:pipGetState', () => pip?.getState() ?? { active: false })
   ipcMain.handle('computerUse:activityGet', () => pip?.getActivitySnapshot() ?? [])
   ipcMain.handle('computerUse:pipSetFrameWidth', (_, requested: unknown) => {

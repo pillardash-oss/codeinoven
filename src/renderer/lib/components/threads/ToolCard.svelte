@@ -4,9 +4,10 @@
     CheckCircle2,
     ChevronRight,
     Clock,
+    CodeXml,
     FilePenLine,
     FilePlus2,
-    Globe2,
+    GlobeCode,
     Loader2,
     Search,
     Terminal,
@@ -14,6 +15,7 @@
     XCircle
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { isCodeModeToolName } from '$shared/agent-interactions'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationSeconds } from '$lib/format/duration'
@@ -125,6 +127,10 @@
 
   const inputPreview = $derived(formatInput(part.state.input))
   const toolKind = $derived.by(() => {
+    // Code mode outranks the name heuristics: a call a script made can carry
+    // any inner tool name (read, bash, an MCP call), and it belongs to the
+    // code-mode glyph wherever the harness reports it as such.
+    if (part.codeMode === true || isCodeModeToolName(part.tool)) return 'code'
     const name = part.tool.toLowerCase().replace(/[-_\s]/g, '')
     if (name.includes('websearch') || name.includes('webfetch')) return 'web'
     if (
@@ -143,6 +149,12 @@
     if (name.includes('bash') || name.includes('shell') || name.includes('terminal')) return 'shell'
     return 'other'
   })
+
+  /** A code-mode call orchestrates other tools by script, so it reads as a
+   *  distinct kind of step in the trace instead of an unnamed tool. */
+  const codeModeLabel = $derived(
+    part.state.title ?? (toolKind === 'code' ? 'Code mode' : part.tool)
+  )
 
   function formatInput(input: Record<string, unknown>): string {
     const entries = Object.entries(input)
@@ -195,7 +207,9 @@
     {:else}
       <Clock size={14} class="shrink-0 {statusMeta.class}" />
     {/if}
-    {#if toolKind === 'read'}
+    {#if toolKind === 'code'}
+      <CodeXml size={12} class="shrink-0 text-dimmed" />
+    {:else if toolKind === 'read'}
       <BookOpenText size={12} class="shrink-0 text-dimmed" />
     {:else if toolKind === 'edit'}
       <FilePenLine size={12} class="shrink-0 text-dimmed" />
@@ -204,14 +218,14 @@
     {:else if toolKind === 'search'}
       <Search size={12} class="shrink-0 text-dimmed" />
     {:else if toolKind === 'web'}
-      <Globe2 size={12} class="shrink-0 text-dimmed" />
+      <GlobeCode size={12} class="shrink-0 text-dimmed" />
     {:else if toolKind === 'shell'}
       <Terminal size={12} class="shrink-0 text-dimmed" />
     {:else}
       <Wrench size={12} class="shrink-0 text-dimmed" />
     {/if}
     <span class="shrink-0 font-mono text-xs font-medium text-foreground">
-      {part.state.title ?? part.tool}
+      {codeModeLabel}
     </span>
     {#if start}
       <span class="tabular-nums text-[0.625rem] text-dimmed">{formatDurationSeconds(elapsed)}</span>

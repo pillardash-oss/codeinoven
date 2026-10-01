@@ -1,8 +1,15 @@
+import { toast } from 'svelte-sonner'
 import type { OpenedPath, ProjectTextFile } from '$shared/types'
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { posixBasename } from '$shared/paths'
 import { invoke } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
+
+/**
+ * How the open files are surfaced: a docked floating panel (the default, so the
+ * workspace and its threads stay usable) or the fullscreen reader/editor.
+ */
+export type StandaloneFilePresentation = 'docked' | 'fullscreen'
 
 /** One file opened on its own, outside any project. */
 export interface StandaloneFile {
@@ -26,7 +33,7 @@ export interface StandaloneTextSession {
 
 /**
  * Files the user opened through the operating system ("Open in CodeInOven"),
- * viewed and edited in the fullscreen standalone viewer.
+ * docked as a floating panel by default and openable full screen.
  *
  * Deliberately project-less: opening one file must not create a project or load
  * a file tree, so nothing about a repository is read, indexed, or kept in
@@ -42,6 +49,18 @@ export interface StandaloneTextSession {
 class StandaloneFilesState {
   files = $state<StandaloneFile[]>([])
   activePath = $state<string | null>(null)
+  /**
+   * Whether the files are surfaced as the docked floating panel (default) or
+   * fullscreen. Chosen per open, and reset to docked when the last file closes
+   * so a fresh OS hand-off always starts docked.
+   */
+  presentation = $state<StandaloneFilePresentation>('docked')
+  /** Whether the docked panel is collapsed into its dock chip. Only meaningful
+   *  while the panel is docked; the fullscreen surface is never minimized. */
+  minimized = $state(false)
+  /** A file whose close is waiting on the unsaved-changes decision. Owned here
+   *  because both the docked and the fullscreen surface ask the same question. */
+  pendingClose = $state<{ path: string; name: string } | null>(null)
   #sessions = $state<Record<string, StandaloneTextSession>>({})
 
   get active(): StandaloneFile | null {
@@ -67,11 +86,14 @@ class StandaloneFilesState {
   }
 
   /**
-   * Whether the file in front has edits that are not on disk yet. The save chord
-   * and the sidebar fold both key off this, so the two can never both fire: the
-   * global handler defers to the pane's save whenever the active file is dirty.
+   * Whether the on-screen file has edits that are not on disk yet. A minimized
+   * panel is off screen, so it releases the save chord: the file is still open
+   * and still saved by `saveAllUnsaved`, but Cmd/Ctrl+S belongs to whatever the
+   * user is actually looking at. The save chord and the sidebar fold both key off
+   * this, so the two can never both fire.
    */
   get activeHasUnsavedChanges(): boolean {
+    if (this.minimized) return false
     const path = this.activePath
     return path ? this.isDirty(path) : false
   }
@@ -84,17 +106,83 @@ class StandaloneFilesState {
       .map((file) => ({ projectId: '', path: file.path }))
   }
 
-  /** Add (or focus) a file, and show it. */
+  /** Add (or focus) a file, and show it. A file the user just opened is always
+   *  brought to the front, so a collapsed panel is restored to show it. */
   show(path: string, name?: string): void {
     if (!path) return
     if (!this.files.some((file) => file.path === path)) {
       this.files = [...this.files, { path, name: name || posixBasename(path) || path }]
     }
+    this.minimized = false
     this.activePath = path
   }
 
   activate(path: string): void {
     if (this.files.some((file) => file.path === path)) this.activePath = path
+  }
+
+  /** Collapse the docked panel into its dock chip. */
+  minimize(): void {
+    if (this.files.length === 0) return
+    this.minimized = true
+  }
+
+  /** Bring the docked panel back from its chip. */
+  restore(): void {
+    this.minimized = false
+  }
+
+  /** Switch to the fullscreen reader/editor. */
+  showFullscreen(): void {
+    if (this.files.length === 0) return
+    this.minimized = false
+    this.presentation = 'fullscreen'
+  }
+
+  /** Return to the docked floating panel. */
+  dock(): void {
+    this.presentation = 'docked'
+  }
+
+  /** Ask to close one file, confirming first when it has unsaved edits. */
+  requestClose(path: string): void {
+    if (!this.isDirty(path)) {
+      this.close(path)
+      return
+    }
+    const file = this.files.find((candidate) => candidate.path === path)
+    if (file) this.pendingClose = { path: file.path, name: file.name }
+  }
+
+  dismissClose(): void {
+    this.pendingClose = null
+  }
+
+  /** Save the pending file and close it; on failure the file stays open so the
+   *  error the pane renders can be acted on. */
+  async saveAndClosePending(): Promise<void> {
+    const target = this.pendingClose
+    if (!target) return
+    // A save already in flight: let it land rather than closing over it.
+    if (this.#sessions[target.path]?.saving) return
+    await this.save(target.path)
+    if (this.isDirty(target.path)) {
+      this.pendingClose = null
+      toast.error(`${target.name} could not be saved`, {
+        description: 'The file stayed open so you can review the error and retry.'
+      })
+      return
+    }
+    this.close(target.path)
+    this.pendingClose = null
+  }
+
+  /** Close the pending file, dropping its unsaved draft. */
+  discardPending(): void {
+    const target = this.pendingClose
+    if (!target) return
+    this.close(target.path)
+    this.pendingClose = null
   }
 
   /** Close one file; the next one becomes active, if any. The caller confirms
@@ -105,6 +193,16 @@ class StandaloneFilesState {
     const remaining = this.files.filter((file) => file.path !== path)
     this.files = remaining
     delete this.#sessions[path]
+    if (this.pendingClose?.path === path) this.pendingClose = null
+    if (remaining.length === 0) {
+      // Nothing left to show: forget the surface choice so the next hand-off
+      // starts from the docked default instead of a stale fullscreen. Nothing
+      // is lost if a close was still pending; its file is already gone.
+      this.activePath = null
+      this.minimized = false
+      this.presentation = 'docked'
+      return
+    }
     if (this.activePath !== path) return
     this.activePath = remaining[Math.min(index, remaining.length - 1)]?.path ?? null
   }

@@ -2,7 +2,9 @@ import { extname, join } from 'path'
 import { mkdir, rename, rm, writeFile } from 'fs/promises'
 import { randomUUID } from 'node:crypto'
 import { retainTemporaryAttachment } from '../../editor/temporary-attachment-retention'
-import { validateBoundedString } from '../ipc-validation'
+import { adoptDraftAttachments } from '../../editor/draft-attachment-adoption'
+import { retainRemoteMediaAttachment } from '../../editor/remote-media-attachment'
+import { validateBoundedString, validateEntityId } from '../ipc-validation'
 import { validateAttachmentStorageScope } from './shared'
 import type { IpcHandlerContext } from './context'
 
@@ -58,5 +60,39 @@ export function registerFilesHandlers(ctx: IpcHandlerContext): void {
 
     await privilegedIpc.registerUserSelectedFile(retainedPath)
     return retainedPath
+  })
+
+  /**
+   * Retain a media link a drag carried.
+   *
+   * A drag out of a web page carries no file, only the link, so the bytes are
+   * fetched here (the renderer cannot: a cross-origin read answers with an opaque
+   * body). The link is untrusted even though the gesture is deliberate, so the
+   * transfer applies its own source rules and refuses anything that does not turn
+   * out to be image, video or audio.
+   */
+  privileged('attachment:retainRemote', async (_event, rawScope: unknown, source: unknown) => {
+    const scope = validateAttachmentStorageScope(rawScope)
+    if (typeof source !== 'string' || source.length === 0) {
+      throw new TypeError('Attachment link must be a non-empty string')
+    }
+    const directory = await attachmentStorageDirectory(scope)
+    const saved = await retainRemoteMediaAttachment({ source, directory })
+    await privilegedIpc.registerUserSelectedFile(saved.path)
+    return saved.path
+  })
+
+  /**
+   * Move everything the welcome composer staged before its chat existed into
+   * that chat's own scratch path, and answer the moves so the composer can
+   * repoint the attachment chips at the files' new homes.
+   */
+  privileged('attachment:adoptDraft', async (_event, rawThreadId: unknown) => {
+    const threadId = validateEntityId(rawThreadId, 'Thread ID')
+    const moves = await adoptDraftAttachments(threadId)
+    for (const move of moves) {
+      await privilegedIpc.registerUserSelectedFile(move.to)
+    }
+    return moves
   })
 }

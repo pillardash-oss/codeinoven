@@ -10,12 +10,22 @@ import {
 } from '../icon-file'
 import type { Project, CreateProjectInput } from '../types'
 import { INBOX_PROJECT_ID, ASSISTANT_SPACE_ID } from '../types'
+import { GLOBAL_BROWSER_PROJECT_ID } from '../ipc/browser'
+import { MAX_GLOBAL_BROWSER_TABS } from '../browser/global-browser-tabs'
 import { pickColorForSeed } from '../project-colors'
 import { ensureProjectScratchSpace } from '../project-artifacts'
 import { toPosixPath } from '../paths'
 import type { Database } from '../../main/database/database'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
+
+/**
+ * How many threads the hidden global-browser container holds: one assistant
+ * conversation per browser tab, plus the reserved scope anchor thread. The tab
+ * strip is capped separately, so this is a ceiling no real session reaches rather
+ * than a budget conversations compete for.
+ */
+const GLOBAL_BROWSER_THREAD_LIMIT = MAX_GLOBAL_BROWSER_TABS + 1
 
 const ICON_SKIP_DIRS = new Set([
   'node_modules',
@@ -304,6 +314,58 @@ export class ProjectManager {
     return project
   }
 
+  /**
+   * Ensure the hidden global-browser container exists.
+   *
+   * The global browser is a container of many tabs, exactly as the assistant
+   * space is a container of many tasks: one hidden project row lets the chat
+   * engine resolve the scope of a per-tab agent conversation (its neutral
+   * working directory, its memory scope and its capability discovery) through
+   * the same code path every other conversation uses, while the row stays out of
+   * the Projects and Chats lists because it is hidden.
+   *
+   * Its capacity covers one assistant conversation per browser tab plus the
+   * reserved scope anchor. A lower limit would make creating a conversation evict
+   * an older one, and losing a transcript to capacity is data loss the user never
+   * asked for: the tab cap is what bounds this container, not thread eviction.
+   */
+  async ensureGlobalBrowserSpace(): Promise<Project> {
+    const existing = this.projectRepo.get(GLOBAL_BROWSER_PROJECT_ID)
+    if (existing) {
+      if (existing.threadLimit === GLOBAL_BROWSER_THREAD_LIMIT) return existing
+      // An install that predates per-tab assistant conversations still carries
+      // the old capacity, so it is widened once here rather than left to evict
+      // the conversations this build now stores.
+      const widened: Project = {
+        ...existing,
+        threadLimit: GLOBAL_BROWSER_THREAD_LIMIT,
+        updatedAt: Date.now()
+      }
+      this.projectRepo.upsert(widened)
+      return widened
+    }
+
+    const now = Date.now()
+    const project: Project = {
+      id: GLOBAL_BROWSER_PROJECT_ID,
+      name: 'Browser',
+      path: '',
+      source: 'local',
+      providerId: '',
+      workflowId: 'default',
+      threadLimit: GLOBAL_BROWSER_THREAD_LIMIT,
+      hidden: true,
+      color: pickColorForSeed(GLOBAL_BROWSER_PROJECT_ID),
+      changeTrackingMode: 'manual',
+      createdAt: now,
+      updatedAt: now
+    }
+
+    this.projectRepo.upsert(project)
+
+    return project
+  }
+
   async listProjects(): Promise<Project[]> {
     return this.projectRepo.list()
   }
@@ -373,6 +435,7 @@ export class ProjectManager {
       changeTrackingMode: input.changeTrackingMode ?? existing.changeTrackingMode,
       color: 'color' in input ? input.color : existing.color,
       iconType: 'iconType' in input ? input.iconType : existing.iconType,
+      customSvg: 'customSvg' in input ? (input.customSvg ?? undefined) : existing.customSvg,
       updatedAt: Date.now()
     }
 

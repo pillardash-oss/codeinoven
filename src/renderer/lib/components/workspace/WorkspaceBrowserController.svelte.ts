@@ -38,9 +38,11 @@ export class WorkspaceBrowserController {
     return browserDownloads.forProject(projectId)
   }
 
-  activeDownloadCount = $derived.by(() => {
+  /** How many of the selected project's downloads are unfinished: the running
+   *  ones plus the interrupted ones waiting to be resumed or started over. */
+  unfinishedDownloadCount = $derived.by(() => {
     const projectId = this.getSelectedProjectId()
-    return projectId ? browserDownloads.activeCount(projectId) : 0
+    return projectId ? browserDownloads.unfinishedCount(projectId) : 0
   })
 
   openContextMenu(event: MouseEvent): void {
@@ -99,6 +101,16 @@ export class WorkspaceBrowserController {
 
   resumeDownload(download: BrowserDownload): void {
     browserDownloads.resume(download)
+  }
+
+  /** Start a stopped download over from its first byte. */
+  retryDownload(download: BrowserDownload): void {
+    browserDownloads.retry(download)
+  }
+
+  /** Drop a stopped download from the list, keeping the file it saved. */
+  removeDownload(download: BrowserDownload): void {
+    browserDownloads.remove(download)
   }
 
   cancelDownload(download: BrowserDownload): void {

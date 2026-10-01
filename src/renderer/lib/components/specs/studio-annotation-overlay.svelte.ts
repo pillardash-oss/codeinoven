@@ -1,5 +1,5 @@
 import { tick } from 'svelte'
-import { rangeForAnnotation, waitForScrollSettle, type TextAnchor } from './studio-annotation-anchors'
+import { rangeForAnnotation, waitForScrollSettle, type TextAnchor } from '$lib/selection-anchors'
 
 /** Anchor fields shared by every studio annotation document type. */
 export interface OverlayAnnotation extends TextAnchor {

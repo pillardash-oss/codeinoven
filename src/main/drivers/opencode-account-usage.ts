@@ -144,6 +144,58 @@ export async function readOpenCodeV2ActiveCredentialIds(
   return active
 }
 
+/**
+ * Non-secret account rows read from OpenCode V2's own credential store.
+ *
+ * This is the same source `opencode auth list --format json` reads, but it is
+ * read straight from SQLite. Running the client instead ensured OpenCode's
+ * managed background service: every `auth list` spawns `opencode serve
+ * --service`, a daemon that outlives the probe and is then adopted by the task
+ * manager. Reading the store lists the accounts without starting any process.
+ */
+export interface OpenCodeV2StoredCredential {
+  id: string
+  integrationId: string
+  label: string | null
+  method: string | null
+}
+
+/** Every stored credential across the install's channel databases, non-secret. */
+export async function readOpenCodeV2StoredCredentials(
+  environment: NodeJS.ProcessEnv
+): Promise<OpenCodeV2StoredCredential[]> {
+  const credentials: OpenCodeV2StoredCredential[] = []
+  for (const databasePath of await openCodeCredentialDatabasePaths(environment)) {
+    const database = await openCredentialStore(databasePath)
+    if (!database) continue
+    try {
+      const rows = database
+        .prepare(
+          'SELECT id, integration_id AS integrationId, label, method_id AS methodId FROM credential'
+        )
+        .all()
+      for (const raw of Array.isArray(rows) ? rows : []) {
+        if (raw === null || typeof raw !== 'object') continue
+        const row = raw as Record<string, unknown>
+        const id = typeof row['id'] === 'string' ? row['id'] : ''
+        const integrationId = typeof row['integrationId'] === 'string' ? row['integrationId'] : ''
+        if (!id || !integrationId) continue
+        credentials.push({
+          id,
+          integrationId,
+          label: typeof row['label'] === 'string' ? row['label'] : null,
+          method: typeof row['methodId'] === 'string' ? row['methodId'] : null
+        })
+      }
+    } catch {
+      // A store written by a different schema is not a reason to fail a read.
+    } finally {
+      database.close()
+    }
+  }
+  return credentials
+}
+
 async function readV2CredentialRows(databasePath: string): Promise<CredentialRow[]> {
   const database = await openCredentialStore(databasePath)
   if (!database) return []

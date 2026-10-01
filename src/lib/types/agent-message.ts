@@ -117,6 +117,9 @@ export type AgentPart =
       messageID: string
       callID: string
       tool: string
+      /** True when this call ran model-written code (a code-mode script) or
+       *  was made from inside one. The trace renders it with the code glyph. */
+      codeMode?: boolean
       state: AgentToolState
     }
   | {
@@ -315,6 +318,12 @@ export interface TurnStreamPartsPage {
   /** Newest durable task-list tool parts for the turn, so the task card never
    *  depends on which trace page happens to be mounted. */
   todoParts: AgentPart[]
+  /** Start time of the logical turn `todoParts` was folded for (the newest
+   *  non-activity prompt in the mirror), or null on a thread with no such
+   *  prompt. The card compares it against the transcript's own turn anchor: a
+   *  snapshot from an older turn must never override the fresher message state
+   *  once the transcript has moved on. */
+  turnStartTs: number | null
 }
 
 /**
@@ -335,6 +344,9 @@ export interface TurnStreamPartsChange {
   cursor: number
   /** Newest durable task-list tool parts for the turn. */
   todoParts: AgentPart[]
+  /** Start time of the logical turn `todoParts` was folded for, or null on a
+   *  thread with no prompt yet. See `TurnStreamPartsPage.turnStartTs`. */
+  turnStartTs: number | null
 }
 
 /** Lightweight user-authored message summary for the header history jump list. */

@@ -6,6 +6,7 @@ export type ScopeWorktreeHealthCategory =
   | 'prunable'
   | 'branch-mismatch'
   | 'path-mismatch'
+  | 'not-managed'
   | 'repository-unavailable'
 
 export interface ScopeWorktreeHealth {

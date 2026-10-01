@@ -16,7 +16,7 @@
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import SpecStudioDocument from './SpecStudioDocument.svelte'
-  import { offsetsForQuote, offsetsForRange } from './studio-annotation-anchors'
+  import { offsetsForQuote, offsetsForRange } from '$lib/selection-anchors'
   import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type { PendingOverlayAnchor } from './studio-annotation-overlay.svelte'
@@ -251,8 +251,17 @@
   const editingAnnotationPosition = $derived(overlay.editingPosition)
   const annotationMarkers = $derived(overlay.markers)
   let decisionNotesEditor = $state<RichMarkdownEditor>()
-  const pendingSpeechTargetId = `spec-annotation-${crypto.randomUUID()}`
-  const decisionSpeechTargetId = `spec-decision-${crypto.randomUUID()}`
+  /**
+   * A dictation is delivered to whichever field carries its target id, so the id
+   * has to outlive the component that draws the field. A per-mount id made the
+   * field unrecognisable the moment the view was left and reopened, and the
+   * transcript had nowhere to land. Name the field by the document it belongs
+   * to, and an annotation body also by the passage it was captured from.
+   */
+  const pendingSpeechTargetId = $derived(
+    `spec-annotation-${spec.id}-${spec.version}-${overlay.pending?.startOffset ?? -1}-${overlay.pending?.endOffset ?? -1}`
+  )
+  const decisionSpeechTargetId = $derived(`spec-decision-${spec.id}-${spec.version}`)
   const speechScope = $derived({
     kind: 'project',
     projectId: spec.projectId,

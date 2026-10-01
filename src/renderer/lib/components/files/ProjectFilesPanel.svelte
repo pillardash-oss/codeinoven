@@ -55,12 +55,14 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ProjectFilesPanelDialogs from './ProjectFilesPanelDialogs.svelte'
+  import ProjectFilesPanelAnnotator from './ProjectFilesPanelAnnotator.svelte'
   import ProjectFilesPanelPreviewPane from './ProjectFilesPanelPreviewPane.svelte'
   import ProjectFilesPanelToolbar from './ProjectFilesPanelToolbar.svelte'
   import { ProjectFilesPanelSvgPreview } from './project-files-panel-svg-preview.svelte'
   import { ProjectFilesPanelFind } from './project-files-panel-find.svelte'
   import { ProjectFilesPanelDocumentPreview } from './project-files-panel-document-preview.svelte'
   import {
+    canAnnotateDocument,
     filePreviewFlags,
     hasAnyPreview,
     previewKindLabel as previewKindLabelFor
@@ -308,6 +310,12 @@
   let visibleLineCount = $derived(visibleContent.split('\n').length)
   let showLineNumbers = $state(true)
   const wrapLines = $derived(wrapTextState.wrapped)
+  /** The annotate view is offered for the rendered documents that can carry a
+   *  note (Markdown), and never while the conflict editor owns the body. */
+  let showAnnotateToggle = $derived(canAnnotateDocument(previewFlags) && !activeFileInMergeEditor)
+  /** An annotation is a composer reference, so there has to be a conversation
+   *  open for it to attach to; the toolbar explains that instead of hiding. */
+  let annotateDisabled = $derived(!activeThreadId || deletedAtCheckpoint)
   let fullscreenOpen = $derived(projectState.fullscreenActive)
   // The browser's native view floats above every DOM overlay, so a full-window
   // editor must register itself as a fullscreen surface while it is up. The
@@ -382,7 +390,9 @@
   }
 
   function closeFullscreen(): void {
-    fullscreenOpen = false
+    // The store is the whole transition: the editor's `open` is derived from it,
+    // so there is no local mirror to keep in step. Assigning that derived as
+    // well only overrides it  the store write is what closes the surface.
     projectFilesWorkspace.setFullscreenActive(projectId, false)
   }
 
@@ -882,6 +892,8 @@
           {diffStats}
           {previewKindLabel}
           showPreviewToggle={hasAnyPreview(previewFlags)}
+          {showAnnotateToggle}
+          {annotateDisabled}
           {deletedAtCheckpoint}
           showUndoRedo={canUndoRedo}
           {reloadDisabled}
@@ -998,6 +1010,13 @@
         </div>
       {:else if activeTab.view === 'diff' && checkpointDiff}
         <FileDiffView diff={checkpointDiff} />
+      {:else if activeTab.view === 'annotate' && showAnnotateToggle && activeThreadId}
+        <ProjectFilesPanelAnnotator
+          {projectId}
+          threadId={activeThreadId}
+          path={activeTab.path}
+          content={visibleContent}
+        />
       {:else if activeTab.view === 'preview' && hasAnyPreview(previewFlags)}
         <ProjectFilesPanelPreviewPane
           path={activeTab.path}
@@ -1242,6 +1261,8 @@
           {diffStats}
           {previewKindLabel}
           showPreviewToggle={hasAnyPreview(previewFlags)}
+          {showAnnotateToggle}
+          {annotateDisabled}
           {deletedAtCheckpoint}
           showUndoRedo={canUndoRedo}
           {reloadDisabled}
@@ -1304,6 +1325,15 @@
         {/if}
         {#if activeTab?.view === 'diff' && checkpointDiff}
           <FileDiffView diff={checkpointDiff} />
+        {:else if activeTab?.view === 'annotate' && showAnnotateToggle && activeThreadId}
+          <ProjectFilesPanelAnnotator
+            {projectId}
+            threadId={activeThreadId}
+            path={activeTab.path}
+            content={visibleContent}
+            fullscreen
+            onExitFullscreen={closeFullscreen}
+          />
         {:else if activeTab?.view === 'preview' && hasAnyPreview(previewFlags)}
           <ProjectFilesPanelPreviewPane
             path={activeTab.path}

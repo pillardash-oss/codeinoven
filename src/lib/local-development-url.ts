@@ -76,6 +76,22 @@ export function isBlockedFetchHost(value: string | URL): boolean {
 }
 
 /**
+ * The origin of a URL, or null when it cannot be parsed.
+ *
+ * An origin and not a URL, because that is the unit a preview identity is built
+ * from: the server is reached at `http://127.0.0.1:<port>/` and any path under it
+ * is the same page, so comparing whole URLs would call two spellings of one page
+ * two different pages.
+ */
+export function originOf(value: string): string | null {
+  try {
+    return new URL(value).origin
+  } catch {
+    return null
+  }
+}
+
+/**
  * Whether a page URL belongs to one preview origin.
  *
  * This is how the tab a preview server is feeding gets found: the server knows
@@ -94,7 +110,10 @@ export function isPreviewOriginUrl(value: string, origin: string): boolean {
 export function normalizeBrowserUrl(value: string): string | null {
   const trimmed = value.trim()
   if (!trimmed) return null
-  const candidate = /^[a-z][a-z\d+.-]*:/iu.test(trimmed) ? trimmed : `http://${trimmed}`
+  // A scheme is recognized only as `scheme://`: a bare `host:port` such as
+  // `localhost:5173` would otherwise parse as a URL whose protocol is
+  // `localhost:`, and a web address bar's most common input would be refused.
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//iu.test(trimmed) ? trimmed : `http://${trimmed}`
   try {
     const url = new URL(candidate)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null

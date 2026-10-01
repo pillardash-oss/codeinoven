@@ -7,6 +7,8 @@ import { SidebarTabContexts } from './context-sidebar-tabs.svelte'
 import {
   EMPTY_TABS,
   isProjectTab,
+  ATTENTION_TAB_ID,
+  attentionTab,
   NOTIFICATIONS_TAB,
   TEMPORARY_CHAT_INACTIVITY_MS,
   type ContextSidebarTab,
@@ -14,13 +16,22 @@ import {
   type TemporaryChatContextTab,
   type TemporaryChatMode,
   type TerminalContextTab,
-  type TerminalPlacement
+  type TerminalPlacement,
+  type ThreadNoteContextTab
 } from './context-sidebar-types'
-import type { AgentSubagentActivity, ThreadSettings } from '$shared/types'
+import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } from '$shared/types'
 
 export type {
   ActionsContextTab,
+  AttentionContextTab,
+  BrowserAgentContextTab,
+  BrowserBookmarksContextTab,
+  BrowserBoxesContextTab,
   BrowserContextTab,
+  BrowserDownloadsContextTab,
+  BrowserExtensionsContextTab,
+  BrowserHistoryContextTab,
+  BrowserPopupWindowContextTab,
   CloudDeploymentContextTab,
   ContextSidebarTab,
   CoordinatorContextTab,
@@ -55,6 +66,20 @@ class ContextSidebarState {
    *  instead of an empty one. See `activeThreadRowId`. */
   private activeRowThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
+  /** The auto-resolved decision panel, held with the conversation it belongs to.
+   *  Mutually exclusive with notifications: only one owns the sidebar at a time. */
+  private attentionScope = $state<{ projectId: string; threadId: string } | null>(null)
+  /**
+   * How the sidebar resolves a thread's browser scope. The sidebar holds no
+   * thread rows, and the workspace owns the only list of them, so the workspace
+   * registers this one resolver: it maps a thread to the conversation that owns
+   * its browser tabs (see `conversationScopeId`), which is what makes a
+   * routine's threads keep one browser across a thread switch. Until it is
+   * registered, a conversation is scoped by its own thread, which is the
+   * pre-routine behaviour.
+   */
+  private threadBrowserScopeResolver: ((projectId: string, threadId: string) => string) | null =
+    null
   width = $state(480)
   terminalHeight = $state(320)
   terminalPlacement = $state<TerminalPlacement>(loadTerminalPlacement())
@@ -76,23 +101,51 @@ class ContextSidebarState {
     hideBrowserForFocus: () => this.browser.hideForFocus(),
     clearNotifications: () => {
       this.notificationsVisible = false
+      this.attentionScope = null
     }
   })
 
   private browser = new SidebarBrowserTabs({
     activeProjectId: () => this.activeProjectId,
     activeThreadId: () => this.activeThreadId,
+    threadScopeId: (projectId, threadId) => this.threadBrowserScopeId(projectId, threadId),
     clearNotifications: () => {
       this.notificationsVisible = false
+      this.attentionScope = null
     }
   })
+
+  /** Wire the sidebar's browser tabs.
+   *
+   * The sidebar's browser is not part of the first paint, so its stored tab list
+   * and its page-state listener are held back until the runtime seam asks for
+   * them (see `startBrowserRuntime`). Idempotent. */
+  startBrowserTabs(): void {
+    this.browser.start()
+  }
+
+  /** Register the workspace's thread-to-conversation resolver (see
+   *  `threadBrowserScopeResolver`). */
+  setThreadBrowserScopeResolver(resolver: (projectId: string, threadId: string) => string): void {
+    this.threadBrowserScopeResolver = resolver
+  }
+
+  private threadBrowserScopeId(projectId: string, threadId: string): string {
+    return (
+      this.threadBrowserScopeResolver?.(projectId, threadId) ??
+      conversationScopeId(projectId, threadId, null)
+    )
+  }
 
   get tabs(): ContextSidebarTab[] {
     return [
       ...(this.tabContexts.activeProjectContext?.tabs ?? EMPTY_TABS),
       ...(this.tabContexts.activeContext?.tabs.filter((tab) => !isProjectTab(tab)) ?? EMPTY_TABS),
       ...this.browser.activeTabs,
-      ...(this.notificationsVisible ? [NOTIFICATIONS_TAB] : [])
+      ...(this.notificationsVisible ? [NOTIFICATIONS_TAB] : []),
+      ...(this.attentionScope
+        ? [attentionTab(this.attentionScope.projectId, this.attentionScope.threadId)]
+        : [])
     ]
   }
 
@@ -131,7 +184,15 @@ class ContextSidebarState {
     ]
     const positionedTabs =
       this.terminalPlacement === 'bottom' ? tabs.filter((tab) => tab.kind !== 'terminal') : tabs
-    return this.notificationsVisible ? [...positionedTabs, NOTIFICATIONS_TAB] : positionedTabs
+    const withNotifications = this.notificationsVisible
+      ? [...positionedTabs, NOTIFICATIONS_TAB]
+      : positionedTabs
+    return this.attentionScope
+      ? [
+          ...withNotifications,
+          attentionTab(this.attentionScope.projectId, this.attentionScope.threadId)
+        ]
+      : withNotifications
   }
 
   /** Tabs shown in the bottom terminal dock. Empty while docked to the right. */
@@ -149,6 +210,7 @@ class ContextSidebarState {
    */
   get sidebarVisible(): boolean {
     if (this.notificationsVisible) return true
+    if (this.attentionScope) return true
     if (this.browser.visible && this.browser.activeTabs.length > 0) return true
     return this.activeThreadId !== null && (this.tabContexts.activeProjectContext?.visible ?? false)
   }
@@ -223,6 +285,7 @@ class ContextSidebarState {
   /** Active tab id for the right sidebar (ignores terminal tabs). */
   get sidebarActiveTabId(): string | null {
     if (this.notificationsVisible) return NOTIFICATIONS_TAB.id
+    if (this.attentionScope) return ATTENTION_TAB_ID
     if (this.browser.visible) {
       return this.browser.activeTabIdOrLast()
     }
@@ -253,6 +316,9 @@ class ContextSidebarState {
   /** The tab the sidebar content should render for. */
   get sidebarActiveTab(): ContextSidebarTab | null {
     if (this.notificationsVisible) return NOTIFICATIONS_TAB
+    if (this.attentionScope) {
+      return attentionTab(this.attentionScope.projectId, this.attentionScope.threadId)
+    }
     return this.sidebarTabs.find((tab) => tab.id === this.sidebarActiveTabId) ?? null
   }
 
@@ -276,6 +342,12 @@ class ContextSidebarState {
     rowThreadId?: string
   ): void {
     const keepNotificationsVisible = this.notificationsVisible
+    // The decision panel is keyed to one conversation, so it survives a switch
+    // only while that same conversation stays open.
+    const keepAttentionVisible =
+      this.attentionScope !== null &&
+      this.attentionScope.projectId === projectId &&
+      this.attentionScope.threadId === threadId
     const projectChanged = this.activeProjectId !== projectId
     // Capture before `activeProjectId` moves: the native view (if any) belongs
     // to the outgoing project and must be detached from the store layer so the
@@ -292,8 +364,10 @@ class ContextSidebarState {
     this.tabContexts.rebindProjectTabs(projectId, contextThreadId)
     this.tabContexts.ensureActiveThreadPanel(projectId, contextThreadId, threadTitle)
     this.notificationsVisible = keepNotificationsVisible
+    if (!keepAttentionVisible) this.attentionScope = null
     this.browser.visible =
       !keepNotificationsVisible &&
+      !keepAttentionVisible &&
       !projectChanged &&
       this.browser.visible &&
       this.browser.activeTabs.length > 0
@@ -315,7 +389,7 @@ class ContextSidebarState {
    * toggle shortcut (Cmd/Ctrl+Shift+S) can bring back exactly what the user was
    * looking at instead of guessing from whatever panel is still remembered.
    */
-  private lastRegion: 'context' | 'browser' | 'notifications' = 'context'
+  private lastRegion: 'context' | 'browser' | 'notifications' | 'attention' = 'context'
 
   /**
    * Toggle the sidebar region without picking a panel for it: hide whatever is
@@ -334,6 +408,11 @@ class ContextSidebarState {
       // Notifications are hidden right now, so this reveals them again (and
       // detaches the browser view the same way the header button does).
       this.toggleNotifications()
+      return true
+    }
+    if (this.lastRegion === 'attention' && this.activeProjectId && this.activeThreadId) {
+      // The decision panel is hidden right now, so this reveals it again.
+      this.toggleAttention(this.activeProjectId, this.activeThreadId)
       return true
     }
     if (this.lastRegion === 'browser') {
@@ -356,6 +435,11 @@ class ContextSidebarState {
     if (this.notificationsVisible) {
       this.lastRegion = 'notifications'
       this.notificationsVisible = false
+      return
+    }
+    if (this.attentionScope) {
+      this.lastRegion = 'attention'
+      this.attentionScope = null
       return
     }
     if (this.browser.visible) {
@@ -478,6 +562,16 @@ class ContextSidebarState {
     return this.browser.openForContext(url, projectId, threadId, requestedTabId, reveal)
   }
 
+  /**
+   * Give one sidebar browser tab the icon its address is known by, when the app
+   * has no page to read one from (see `SidebarBrowserTabs.ensureFavicon`). The
+   * strip draws this for every tab it shows, and the answer is written down with
+   * the tab list.
+   */
+  ensureBrowserTabFavicon(tabId: string): void {
+    void this.browser.ensureFavicon(tabId)
+  }
+
   updateBrowserTab(tabId: string, url: string, title?: string, favicon?: string | null): void {
     this.browser.updateTab(tabId, url, title, favicon)
   }
@@ -509,6 +603,24 @@ class ContextSidebarState {
     return this.browser.removeForThread(projectId, threadId)
   }
 
+  /**
+   * The browser surface a conversation's tabs belong to.
+   *
+   * The same identity the strip groups its tabs by (see
+   * `threadBrowserScopeId`), exposed because the browsing history files its lists
+   * under it: a history and the strip it belongs to must agree on what "this
+   * browser" is, or a page could be remembered by a browser that is not showing
+   * it.
+   */
+  browserScopeIdFor(projectId: string, threadId: string): string {
+    return this.threadBrowserScopeId(projectId, threadId)
+  }
+
+  /** Whether a browser surface still has a tab of the sidebar's browser docked. */
+  browserScopeIsLive(scope: string): boolean {
+    return this.browser.isScopeLive(scope)
+  }
+
   /** Opens the thread's note as a sidebar panel, creating one the first time
    *  it's visited so the panel is ready to write into even before a note
    *  exists. The body loads asynchronously onto the tab itself (not local
@@ -521,6 +633,28 @@ class ContextSidebarState {
     options: { edit?: boolean; focusEditor?: boolean } = {}
   ): void {
     this.tabContexts.openThreadNote(projectId, threadId, threadTitle, options)
+  }
+
+  /**
+   * The note docked for one subject, read directly from its own context rather
+   * than from the active one.
+   *
+   * The global browser view is not a workspace thread context, so its notes are
+   * keyed by browser tab and live outside whatever context is active. This is
+   * the read the browser rail uses; the workspace reads its own active context
+   * through `sidebarTabs`.
+   */
+  noteTabFor(projectId: string, threadId: string): ThreadNoteContextTab | null {
+    const tab = this.tabContexts
+      .contextFor(projectId, threadId)
+      ?.tabs.find((candidate) => candidate.kind === 'thread-note')
+    return tab?.kind === 'thread-note' ? tab : null
+  }
+
+  /** Create and load a subject's note tab without focusing it. See `noteTabFor`
+   *  for why the browser view needs a read that does not steal focus. */
+  ensureNoteTab(projectId: string, threadId: string, threadTitle: string): void {
+    this.tabContexts.ensureThreadNote(projectId, threadId, threadTitle)
   }
 
   openCloudDeployments(projectId: string, threadId: string): void {
@@ -572,7 +706,39 @@ class ContextSidebarState {
     if (this.notificationsVisible) {
       if (this.browser.visible) this.browser.detachView()
       this.browser.visible = false
+      this.attentionScope = null
     }
+  }
+
+  /**
+   * Show or hide the auto-resolved decision panel for one conversation.
+   * Notifications and the decision panel are both rail surfaces, so opening one
+   * closes the other and detaches the browser view, exactly as the notifications
+   * toggle does, so a stale native view can never float over the panel.
+   */
+  toggleAttention(projectId: string, threadId: string): void {
+    if (this.attentionScope?.projectId === projectId && this.attentionScope.threadId === threadId) {
+      this.attentionScope = null
+      return
+    }
+    this.openAttention(projectId, threadId)
+  }
+
+  /** Reveal the decision panel for one conversation and make it the active surface. */
+  openAttention(projectId: string, threadId: string): void {
+    this.attentionScope = { projectId, threadId }
+    if (this.browser.visible) this.browser.detachView()
+    this.browser.visible = false
+    this.notificationsVisible = false
+  }
+
+  /**
+   * Close the decision panel. Called when its scope has nothing left to show:
+   * the rail icon goes with the last unread decision, so the panel must not
+   * linger on its empty state.
+   */
+  closeAttention(): void {
+    this.attentionScope = null
   }
 
   openTemporaryChat(
@@ -628,6 +794,11 @@ class ContextSidebarState {
     return this.tabContexts.openNewTerminal(projectId, threadId)
   }
 
+  /** Open a new terminal tab whose shell starts in `directory` (project-relative). */
+  openTerminalAt(projectId: string, threadId: string, directory: string): string {
+    return this.tabContexts.openTerminalAt(projectId, threadId, directory)
+  }
+
   openDebugger(projectId: string, threadId: string): void {
     this.tabContexts.openDebugger(projectId, threadId)
   }
@@ -661,6 +832,10 @@ class ContextSidebarState {
   close(id: string): void {
     if (id === NOTIFICATIONS_TAB.id) {
       this.notificationsVisible = false
+      return
+    }
+    if (id === ATTENTION_TAB_ID) {
+      this.attentionScope = null
       return
     }
     if (this.browser.has(id)) {

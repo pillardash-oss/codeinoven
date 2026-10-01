@@ -20,6 +20,7 @@
  * Message protocol (JSON-serializable payloads only, binary is base64):
  *   main -> child: { t: 'run', modulePath, argv?, cwd?, env? }
  *   main -> child: { t: 'stdin-data', b64 } | { t: 'stdin-end' }
+ *   child -> main: { t: 'pid', pid }
  *   child -> main: { t: 'data', stream: 'out' | 'err', b64 }
  *   child -> main: { t: 'error', message }
  *   child -> main: { t: 'exit', code }
@@ -132,6 +133,12 @@ process.parentPort.on('message', (event) => {
   const message = event?.data
   if (!message || typeof message !== 'object') return
   if (message.t === 'run') {
+    // Report the helper's own OS pid before anything else. Electron leaves
+    // `utilityProcess.fork().pid` undefined until the helper has spawned, so the
+    // main process cannot read it synchronously after the fork; this handshake
+    // is what lets a bundled harness be registered with the task manager and
+    // orphan reaping exactly like a natively spawned one.
+    send({ t: 'pid', pid: process.pid })
     void runHarnessModule(message)
     return
   }

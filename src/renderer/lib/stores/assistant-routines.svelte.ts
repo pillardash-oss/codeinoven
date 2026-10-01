@@ -2,8 +2,10 @@ import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   nextRunAt,
+  type BackgroundRun,
   type CreateRoutineInput,
   type MissedRun,
+  type Project,
   type Routine,
   type RoutineDeletionResult,
   type RoutineSchedule,
@@ -33,6 +35,25 @@ function mapsEqual(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string
 class AssistantRoutinesState {
   routines: Routine[] = $state([])
   missedRuns: MissedRun[] = $state([])
+  /**
+   * How much unattended-run history a panel renders. The ledger keeps up to 200
+   * entries (months of runs), so a surface shows only the recent past instead of
+   * growing into an unbounded wall the panel has to lay out.
+   */
+  static readonly BACKGROUND_RUN_HISTORY_LIMIT = 20
+  /**
+   * The durable ledger of unattended runs, newest first. Kept independently of
+   * the run threads, so a run whose thread was later deleted still has evidence
+   * to show in the "While you were away" and routine-history surfaces.
+   */
+  backgroundRuns: BackgroundRun[] = $state([])
+  /**
+   * The hidden assistant space's accent colour. Assistant notifications brand
+   * themselves with it (the bell badge, the panel entry dot and the toast), so
+   * the renderer needs it even when only a missed run is pending and no
+   * notification payload is carrying the colour.
+   */
+  spaceColor: string | null = $state(null)
   /** Custom icon data URLs for routines that store one, keyed by routine id. */
   iconUrls: SvelteMap<string, string> = $state(new SvelteMap())
   /**
@@ -67,6 +88,9 @@ class AssistantRoutinesState {
       subscribe('assistant:missedRunsChanged', (runs) => {
         this.missedRuns = runs
       }),
+      subscribe('assistant:backgroundRunsChanged', (runs) => {
+        this.backgroundRuns = runs
+      }),
       subscribe('routine:checkpointChanged', (routineId) => {
         void this.refreshCheckpoint(routineId)
       })
@@ -74,6 +98,7 @@ class AssistantRoutinesState {
     void this.ensureSpace().catch(() => undefined)
     void this.refresh()
     void this.refreshMissedRuns()
+    void this.refreshBackgroundRuns()
   }
 
   dispose(): void {
@@ -137,9 +162,16 @@ class AssistantRoutinesState {
     this.missedRuns = await invoke('assistant:listMissedRuns')
   }
 
-  /** Ensure the hidden assistant-space container exists. */
-  ensureSpace(): Promise<{ id: string }> {
-    return invoke('routine:ensureSpace')
+  async refreshBackgroundRuns(): Promise<void> {
+    this.backgroundRuns = await invoke('assistant:listBackgroundRuns')
+  }
+
+  /** Ensure the hidden assistant-space container exists, and keep its accent
+   *  colour so assistant notification surfaces can brand themselves with it. */
+  async ensureSpace(): Promise<Project> {
+    const project = await invoke('routine:ensureSpace')
+    this.spaceColor = project.color ?? null
+    return project
   }
 
   routineForTask(task: Thread | null | undefined): Routine | null {
@@ -166,6 +198,21 @@ class AssistantRoutinesState {
   /** Pending missed runs belonging to any task of one routine. */
   missedForRoutine(routineId: string): MissedRun[] {
     return this.missedRuns.filter((run) => run.routineId === routineId)
+  }
+
+  /** Ledger-entried unattended runs belonging to one task. */
+  backgroundForTask(taskId: string): BackgroundRun[] {
+    return this.backgroundRuns.filter((run) => run.taskId === taskId)
+  }
+
+  /** The recent unattended runs a panel renders, newest first. */
+  get recentBackgroundRuns(): BackgroundRun[] {
+    return this.backgroundRuns.slice(0, AssistantRoutinesState.BACKGROUND_RUN_HISTORY_LIMIT)
+  }
+
+  /** Ledger-entried unattended runs belonging to any task of one routine. */
+  backgroundForRoutine(routineId: string): BackgroundRun[] {
+    return this.backgroundRuns.filter((run) => run.routineId === routineId)
   }
 
   hasMissedForRoutine(routineId: string): boolean {

@@ -165,6 +165,10 @@ export class MlxSpeechBackend implements SpeechBackend {
     )
   }
 
+  isResident(): boolean {
+    return this.process !== null
+  }
+
   async dispose(): Promise<void> {
     const child = this.process
     this.process = null

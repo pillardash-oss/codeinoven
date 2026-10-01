@@ -5,7 +5,8 @@ import {
   MAX_DESIGN_MEDIA_SOURCE_LENGTH
 } from '../../lib/design-media'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
-import { resolveDesignDirectory } from './design-paths'
+import { resolveServedFolder } from '../preview/served-folder'
+import { currentWorkRoot } from './work-roots-state'
 import { saveDesignMedia } from './design-media-service'
 import type { Database } from '../database/database'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
@@ -59,7 +60,11 @@ export function createDesignMediaExecutor(
     const source = requiredString(input['source'], 'source', MAX_DESIGN_MEDIA_SOURCE_LENGTH)
     const name = optionalMediaName(input['name'])
     const project = requireLocalProject(options.database, context.projectId)
-    const directory = resolveDesignDirectory(project.path, input['directory'])
+    const directory = resolveServedFolder(
+      project.path,
+      input['directory'],
+      currentWorkRoot('design')
+    )
 
     const saved = await saveDesignMedia({
       directory: directory.absolute,

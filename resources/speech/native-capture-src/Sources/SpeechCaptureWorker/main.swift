@@ -11,6 +11,25 @@ private struct Response: Encodable {
     let id: String
     let ok: Bool
     let error: String?
+    /// CoreAudio's own domain and status, so the host can tell a permission
+    /// denial from a device negotiation failure instead of parsing a string.
+    let errorDomain: String?
+    let errorCode: Int?
+}
+
+/// Diagnostics for the host.
+///
+/// The host used to discard this worker's stderr, so a CoreAudio failure
+/// surfaced as a bare "error 2003329396" with no record of which device or
+/// which call failed. Every failure now says what it was.
+private func log(_ message: String) {
+    FileHandle.standardError.write(Data(("[speech-capture] \(message)\n").utf8))
+}
+
+/// The error as a message plus the domain and status CoreAudio reported.
+private func describe(_ error: Error) -> String {
+    let nsError = error as NSError
+    return "\(nsError.localizedDescription) [\(nsError.domain) \(nsError.code)]"
 }
 
 private final class CaptureSession {
@@ -25,15 +44,47 @@ private final class CaptureSession {
     private var converter: AVAudioConverter?
     private var file: AVAudioFile?
     private var generation = 0
+    private var configurationObserver: NSObjectProtocol?
 
     var isRecording: Bool { engine != nil }
 
     func start(outputPath: String) throws {
         stop()
+        // One retry with a rebuilt engine and tap. A device switch between the
+        // warmup and the start, or a HAL object invalidated under us, fails the
+        // first `start` with CoreAudio's unspecified error ('what'); rebuilding
+        // binds to the current default device and recovers the common case
+        // instead of degrading the whole recording to the browser path.
+        var lastError: Error?
+        for attempt in 0..<2 {
+            do {
+                try begin(outputPath: outputPath)
+                return
+            } catch {
+                lastError = error
+                log("start attempt \(attempt + 1) failed: \(describe(error))")
+                tearDown()
+                // Only a CoreAudio/HAL failure is worth rebuilding for. A bad
+                // output path or an unusable format fails the same way twice.
+                if (error as NSError).domain != "com.apple.coreaudio.avfaudio" { break }
+            }
+        }
+        throw lastError
+            ?? NSError(
+                domain: "SpeechCaptureWorker",
+                code: 5,
+                userInfo: [NSLocalizedDescriptionKey: "The microphone could not be started."]
+            )
+    }
 
+    /// One attempt: a fresh engine, tap, converter and output file.
+    private func begin(outputPath: String) throws {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        let inputFormat = inputNode.inputFormat(forBus: 0)
+        // The tap is installed with the node's OUTPUT format. `inputFormat` is
+        // the hardware format, which CoreAudio rejects at tap time once the
+        // default device has moved, and that rejection is the 'what' failure.
+        let inputFormat = inputNode.outputFormat(forBus: 0)
         guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
             throw NSError(
                 domain: "SpeechCaptureWorker",
@@ -81,21 +132,34 @@ private final class CaptureSession {
             }
         }
         engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            inputNode.removeTap(onBus: 0)
-            self.engine = nil
-            self.converter = nil
-            self.file = nil
-            throw error
+        try engine.start()
+        // A device switch mid-recording stops the engine and its tap. The host
+        // cannot rebuild the engine for a recording already in progress, but the
+        // log says the device moved rather than leaving a short file unexplained.
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { _ in
+            log("audio engine configuration changed mid-recording")
         }
+        log("recording started at \(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) ch")
     }
 
     func stop() {
-        guard let engine else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        tearDown()
+    }
+
+    /// Release the engine, tap, converter and file, whatever state they are in.
+    private func tearDown() {
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+            self.configurationObserver = nil
+        }
+        if let engine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
         self.engine = nil
         self.converter = nil
         writeQueue.sync {
@@ -111,7 +175,7 @@ private final class CaptureSession {
     /// warmup can never pin a stale microphone.
     func warm() {
         let engine = AVAudioEngine()
-        let inputFormat = engine.inputNode.inputFormat(forBus: 0)
+        let inputFormat = engine.inputNode.outputFormat(forBus: 0)
         guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else { return }
         _ = AVAudioConverter(from: inputFormat, to: targetFormat)
         engine.prepare()
@@ -183,9 +247,17 @@ private func handle(_ request: Request) -> Response {
         default:
             throw NSError(domain: "SpeechCaptureWorker", code: 4, userInfo: [NSLocalizedDescriptionKey: "Unsupported capture operation."])
         }
-        return Response(id: request.id, ok: true, error: nil)
+        return Response(id: request.id, ok: true, error: nil, errorDomain: nil, errorCode: nil)
     } catch {
-        return Response(id: request.id, ok: false, error: error.localizedDescription)
+        let nsError = error as NSError
+        log("operation \(request.operation) failed: \(describe(error))")
+        return Response(
+            id: request.id,
+            ok: false,
+            error: describe(error),
+            errorDomain: nsError.domain,
+            errorCode: nsError.code
+        )
     }
 }
 

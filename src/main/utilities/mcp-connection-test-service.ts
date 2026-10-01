@@ -112,13 +112,26 @@ export class McpConnectionTestService {
     const base = target.baseUtilityId
       ? await this.dependencies.registry.get(target.baseUtilityId)
       : null
-    const credentials = base?.kind === 'mcp' ? base.credentials : []
+    const credentials = base?.kind === 'mcp' ? [...base.credentials] : []
     const environment = await this.credentialEnvironment(credentials)
     for (const credential of target.credentials ?? []) {
       // An empty field is not a value: leaving the variable unset is what tells
       // the server's own error apart from a blank secret being passed in.
       if (!credential.value) continue
       environment[credential.environmentVariable] = credential.value
+      // A value typed into the editor is a credential too, so a remote server
+      // receives it the same way a saved one is: as a request header.
+      if (
+        !credentials.some((entry) => entry.environmentVariable === credential.environmentVariable)
+      ) {
+        credentials.push({
+          id: credential.environmentVariable,
+          label: credential.environmentVariable,
+          secretRef: '',
+          required: false,
+          environmentVariable: credential.environmentVariable
+        })
+      }
     }
     return this.probe({
       name: base?.name ?? 'MCP server',
@@ -139,6 +152,7 @@ export class McpConnectionTestService {
       const client = await connectMcpServer({
         config,
         environment,
+        credentials,
         owner: { name: request.name, credentials }
       })
       try {
@@ -165,6 +179,7 @@ export class McpConnectionTestService {
         transport,
         target,
         latencyMs: Date.now() - startedAt,
+        error: explainRemoteFailure(error, config, credentials, environment),
         missingCredentials: missingCredentialVariables(credentials, environment)
       }
     }
@@ -195,4 +210,33 @@ function unrun(error: unknown): McpConnectionTestResult {
     error: error instanceof Error ? error.message : String(error),
     missingCredentials: []
   }
+}
+
+/**
+ * Turn a remote authentication failure into something the user can act on.
+ *
+ * A 401 says only that the server refused the request; whether the app even sent
+ * the stored key is what the user cannot tell from that. Naming the variable
+ * that reached a header, or its absence, is what separates a wrong key from a
+ * credential that was never wired in.
+ */
+function explainRemoteFailure(
+  error: unknown,
+  config: McpConnectionConfig,
+  credentials: readonly UtilityCredentialMetadata[],
+  environment: Record<string, string>
+): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (config.transport === 'stdio') return message
+  if (!/[\s(](401|403)\)?/u.test(message)) return message
+  const sent = credentials.filter(
+    (credential) => credential.environmentVariable && environment[credential.environmentVariable]
+  )
+  if (sent.length === 0) {
+    return `${message}. No stored credential reached this request: set the server's credential in Utilities and test again.`
+  }
+  const names = sent.map((credential) => `\`${credential.environmentVariable}\``).join(', ')
+  return `${message}. The stored credential${sent.length > 1 ? 's' : ''} ${names} ${
+    sent.length > 1 ? 'were' : 'was'
+  } sent and the server rejected it, so the value itself is the likeliest cause.`
 }

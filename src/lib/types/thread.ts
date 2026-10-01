@@ -1,4 +1,5 @@
 import type { ScopeSlice } from './scope'
+import type { AuthoredWorkKind } from '../ipc/design'
 import type { ThreadSettings } from './agent'
 import { workerReportsToCoordinator } from './agent'
 import type { ThreadContextUsage } from './usage'
@@ -20,6 +21,7 @@ export type ThreadStatus =
   | 'failed'
 
 import {
+  isThreadAwaitingUserStatus,
   isThreadBusyStatus,
   isThreadExecutionActiveStatus,
   isThreadRetryPausedStatus,
@@ -63,6 +65,13 @@ export interface Thread {
   branch?: string
   /** Stable agent-work directory name shared by forks of the same feature. */
   featureSlug?: string
+  /**
+   * The authored-work session this thread is in, recorded the moment it enters
+   * one (the `@cio-design`/`@cio-video` tag, or a preview into a work root). A
+   * thread row draws its marker straight from this field, so no message scan
+   * stands between the persisted fact and the sidebar.
+   */
+  authoredWorkKind?: AuthoredWorkKind
   /** User-defined feature bucket used by the project's Scope board. */
   scopeBucketId?: string
   /** Per-thread agent configuration (harness, model, thinking, permissions). */
@@ -81,11 +90,16 @@ export interface Thread {
   /** Account container that owns the bound native session. */
   sessionAccountId?: string
   /** Diagnostic text of the most recent failure (message plus any raw
-   *  detail/stack the engine captured). In-memory only: it is never persisted
-   *  and exists so error notifications and panels can show what actually went
-   *  wrong instead of a generic "hit an error" label. Cleared whenever the
-   *  thread leaves the `failed` status. */
+   *  detail/stack the engine captured). Persisted on the thread row so a run
+   *  that failed while no window was open still explains itself when the app is
+   *  next opened. Cleared whenever the thread leaves the `failed` status. */
   lastError?: string
+  /** Epoch ms the failure in `lastError` was recorded. Absent when the thread
+   *  is not currently failed. */
+  lastErrorAt?: number
+  /** Outcome of the most recent settled run. Absent while a run is in flight
+   *  or has never settled; `parked` marks a gate that waited for the user. */
+  lastOutcome?: 'completed' | 'failed' | 'parked'
   /** Last specification card explicitly dismissed by the user. */
   dismissedSpecId?: string
   dismissedSpecVersion?: number
@@ -239,6 +253,15 @@ export function isThreadBusy(thread: Thread): boolean {
 /** True when the provider is paused until an automatic retry deadline. */
 export function isThreadRetryPaused(thread: Thread): boolean {
   return isThreadRetryPausedStatus(thread.status)
+}
+
+/**
+ * True while the thread is parked on the user (a permission, question, or
+ * secret card, or a reviewable artifact waiting on them) and produces no work.
+ * Its session stays bound while a card waits, so the status is the authority.
+ */
+export function isThreadAwaitingUser(thread: Thread): boolean {
+  return isThreadAwaitingUserStatus(thread.status)
 }
 
 /**

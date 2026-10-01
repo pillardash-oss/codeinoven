@@ -17,36 +17,13 @@ import { openComposerFocusWindow } from '$lib/focus/composer-focus'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { threadMessages } from './thread-messages.svelte'
 import { scopeState } from './scope.svelte'
-import { APP_SLUG } from '$shared/brand'
 import { invoke } from '$lib/ipc.svelte'
+import { recentVisits, threadVisitKey } from './recent-visits.svelte'
 
-const RECENT_THREAD_VISITS_KEY = `${APP_SLUG}.recent-thread-visits.v1`
-const RECENT_THREAD_VISITS_LIMIT = 50
-
-function loadRecentThreadVisits(): string[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(RECENT_THREAD_VISITS_KEY) ?? '[]')
-    return Array.isArray(parsed)
-      ? parsed.filter((value): value is string => typeof value === 'string')
-      : []
-  } catch {
-    return []
-  }
-}
-
-function persistRecentThreadVisits(visits: readonly string[]): void {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(RECENT_THREAD_VISITS_KEY, JSON.stringify(visits))
-  } catch {
-    // Recent navigation history is optional and must never block task switching.
-  }
-}
-
-export function threadVisitKey(thread: Pick<Thread, 'projectId' | 'id'>): string {
-  return `${thread.projectId}:${thread.id}`
-}
+// Thread navigation history is shared with the browser tab visits so the Ctrl+Tab
+// switcher can interleave both kinds of surface in one recency order. The keys
+// and the persisted list live in `recent-visits.svelte`.
+export { threadVisitKey }
 
 export interface JumpTarget {
   id: string
@@ -87,6 +64,17 @@ export interface ThreadStudioOpenRequest {
   auditReportVersion?: number
 }
 
+/**
+ * How long a thread's process count stays usable without re-reading it.
+ *
+ * The count is a sidebar badge. Reading it walks the OS process table, and the
+ * `agent:processesChanged` broadcast already corrects it while the thread stays
+ * open, so this only bounds how stale a reopened thread's badge can be. Thirty
+ * seconds covers clicking back and forth between threads, which is the gesture
+ * that used to pay a scan per click.
+ */
+const SOURCE_PROCESS_COUNT_TTL_MS = 30_000
+
 class WorkspaceState {
   /** Currently open thread, if any. */
   selectedThread: Thread | null = $state(null)
@@ -100,7 +88,9 @@ class WorkspaceState {
   /** Signal used by AppHeader to ask Workspace to open the edit modal. */
   projectIdToEdit: string | null = $state(null)
   /** Globally ordered task visits, newest first, independent of project. */
-  recentThreadVisits: string[] = $state(loadRecentThreadVisits())
+  get recentThreadVisits(): readonly string[] {
+    return recentVisits.threadKeys
+  }
   /**
    * The thread each content-view family (Projects, Chats, Assistant) was last
    * showing. Switching views restores the family's own thread instead of a
@@ -138,22 +128,68 @@ class WorkspaceState {
   navigateToSettings: ((tab?: string) => void) | null = null
   navigateToContent: (() => void) | null = null
   /**
+   * Bring the top-level Browser (global browser) view on screen. Registered by
+   * App.svelte so a shared surface such as the link context menu can open a page
+   * there without owning view navigation.
+   */
+  navigateToBrowser: (() => void) | null = null
+  /**
    * Opens a thread from a notification while preserving the current view:
    * regular project view stays, scope state stays, threads view stays, and
    * chat notifications switch to the chats view.  Registered by App.svelte.
    */
   openThreadFromNotification:
     ((thread: Thread, project: Project, temporaryChatId?: string) => Promise<void>) | null = null
+  /**
+   * Move the shell to the content view that owns a thread's family, when it is
+   * not already there. Registered by App.svelte, because only the shell changes
+   * the view, so a module that creates or finds a thread can put it on screen
+   * without owning navigation (a quoted passage spun into its own thread, the
+   * task manager jumping to a process's thread, a conversation handed off into
+   * a project's thread list).
+   *
+   * A no-op when the view already owns the family, so a project thread opened
+   * from Projects or Threads never moves the user off it.
+   */
+  navigateToThreadView: ((thread: Thread) => void) | null = null
 
   // ─── Sources (fed by ThreadView) ───────────────────────────────────────
   sources: AgentSource[] = $state([])
   sourceProcessCount = $state(0)
   private sourceProcessCountRequestId = 0
+  /** Last process count learned per thread, with when it was learned. */
+  private processCountsByThread = new Map<string, { count: number; readAt: number }>()
 
-  async refreshSourceProcessCount(projectId: string, threadId: string): Promise<void> {
+  /** A thread's process count when it was read recently enough to reuse. */
+  private freshProcessCount(projectId: string, threadId: string): number | null {
+    const entry = this.processCountsByThread.get(threadVisitKey({ projectId, id: threadId }))
+    if (!entry || Date.now() - entry.readAt > SOURCE_PROCESS_COUNT_TTL_MS) return null
+    return entry.count
+  }
+
+  async refreshSourceProcessCount(
+    projectId: string,
+    threadId: string,
+    options: { force?: boolean } = {}
+  ): Promise<void> {
+    const cached = options.force ? null : this.freshProcessCount(projectId, threadId)
+    if (cached !== null) {
+      // A count read moments ago is shown as is: reopening the thread you just
+      // left must not pay another process scan for an unchanged number. The
+      // change broadcast still refreshes it the moment the set actually moves.
+      this.sourceProcessCountRequestId += 1
+      if (this.selectedThread?.projectId === projectId && this.selectedThread.id === threadId) {
+        this.sourceProcessCount = cached
+      }
+      return
+    }
     const requestId = ++this.sourceProcessCountRequestId
     try {
       const processes = await invoke('agent:listProcesses', projectId, threadId)
+      this.processCountsByThread.set(threadVisitKey({ projectId, id: threadId }), {
+        count: processes.length,
+        readAt: Date.now()
+      })
       if (
         requestId === this.sourceProcessCountRequestId &&
         this.selectedThread?.projectId === projectId &&
@@ -204,17 +240,14 @@ class WorkspaceState {
     // "Loading conversation…". In-flight loads are shared, so the view's own
     // load never duplicates this read.
     void threadMessages.preload(thread.projectId, thread.id)
-    const visitKey = threadVisitKey(thread)
-    this.recentThreadVisits = [
-      visitKey,
-      ...this.recentThreadVisits.filter((candidate) => candidate !== visitKey)
-    ].slice(0, RECENT_THREAD_VISITS_LIMIT)
-    persistRecentThreadVisits(this.recentThreadVisits)
+    recentVisits.recordThread(thread)
     this.selectedThread = thread
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
     this.rememberContentViewThread(thread)
-    this.sourceProcessCount = 0
+    // A count already read for this thread is shown straight away instead of
+    // blanking the badge and scanning the process table again.
+    this.sourceProcessCount = this.freshProcessCount(thread.projectId, thread.id) ?? 0
     // A worker/auditor child opens the coordinator's sidebar context: its own
     // row is the Sr. Engineer, and that is where the coordinator panel is docked.
     contextSidebarState.activateThread(
@@ -231,15 +264,36 @@ class WorkspaceState {
     // tells the git store the project is in use, so it can refresh status and
     // the connection-gated PR indicators without any polling.
     gitState.notifyThreadOpened(project, thread)
-    // The moment a thread is opened its notifications are stale — drop them so
-    // an error/completion that was already seen never lingers in the panel.
-    notificationPanelState.dismissForThread(thread.projectId, thread.id)
+    // The moment a thread is opened its notices are retired, so an
+    // error/completion that was already seen never lingers in the panel. A
+    // needs-attention notice is the exception: the thread is still parked on the
+    // user, and only a status change (answering the card) leaves that state.
+    notificationPanelState.reconcileThread(thread)
     // The live process count is a badge, and reading it walks a session's
     // process table. It must never share the switch instant with the
     // conversation mount.
     scheduleDeferredWork('workspace:sourceProcessCount', () => {
       void this.refreshSourceProcessCount(thread.projectId, thread.id)
     })
+  }
+
+  /**
+   * Open a thread in the view that owns its family, with the composer focused:
+   * a chat lands in Chats, an assistant task in Assistant, a project thread in
+   * Projects (or Threads, if that is where the user already is).
+   *
+   * Every surface that continues or spins off a conversation goes through here,
+   * because opening a thread without moving was how a hand-off from Assistant or
+   * Chats selected a thread no visible view could show: the thread was live, and
+   * the user was left staring at the view they were already on.
+   */
+  openThreadInOwningView(thread: Thread, project: Project | null): void {
+    // The view move comes first: landing on the target view reconciles which
+    // thread it shows (the family's remembered one), and the thread being opened
+    // is the deliberate selection that overrides that reconciliation.
+    this.navigateToThreadView?.(thread)
+    this.openThread(thread, project)
+    this.requestFocusComposer()
   }
 
   /** The project's active scope bucket: the open thread's bucket when it belongs

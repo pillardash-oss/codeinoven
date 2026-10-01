@@ -6,10 +6,12 @@ import type {
   TurnCheckpointChangeSummary,
   TurnCheckpointFileDiff,
   TurnCheckpointStatus,
+  TurnCheckpointStopReason,
   TurnCheckpointSummary
 } from '../../lib/types'
 import type { Database } from '../database/database'
 import { CrossProcessMutex } from '../system/cross-process-mutex'
+import { Logger } from '../system/logger'
 import {
   ChangeTrackingService,
   isBinary,
@@ -41,6 +43,13 @@ import {
 
 export { MAX_CHECKPOINT_FAILURE_LENGTH }
 
+/**
+ * The plain wording for a turn stopped by a deliberate app close. Kept distinct
+ * from the crash text below so a card never blames the harness for an exit the
+ * user asked for.
+ */
+const APP_CLOSED_TURN_MESSAGE = `${APP_NAME} closed before this turn finished.`
+
 export interface TurnCheckpoint {
   id: string
   projectId: string
@@ -59,6 +68,8 @@ export interface TurnCheckpoint {
   rolledBackAt?: number
   rolledBackPaths?: string[]
   failure?: string
+  /** Why an interrupted turn stopped short of a terminal answer. */
+  stopReason?: TurnCheckpointStopReason
 }
 
 /**
@@ -86,6 +97,16 @@ export interface TurnCompletionOptions {
 
 /** Cap on foreign-thread checkpoints scanned while reconciling concurrent edits. */
 const FOREIGN_CHECKPOINT_SCAN_LIMIT = 500
+
+/** Minimum age before a still-`active` checkpoint can be called abandoned, and
+ *  the bounds of one settlement pass. The age is what makes the pass safe: a
+ *  turn that is genuinely starting writes its `active_turns` ledger row a
+ *  moment after the checkpoint row, so a young row is never declared ownerless. */
+const ABANDONED_CHECKPOINT_MIN_AGE_MS = 10 * 60_000
+const ABANDONED_CHECKPOINT_SCAN_LIMIT = 200
+const ABANDONED_CHECKPOINT_SETTLE_LIMIT = 50
+const ABANDONED_CHECKPOINT_MESSAGE =
+  'No process was left to finish this turn, so its checkpoint was closed without a file diff.'
 
 /** How recent a completed checkpoint must be for a late file-tool claim to
  *  reopen it. Bounds the risk of resurrecting an old turn for an unrelated
@@ -202,7 +223,8 @@ export class CheckpointManager {
     status: Extract<TurnCheckpointStatus, 'completed' | 'failed' | 'interrupted'>,
     failure?: string,
     changedPaths?: ReadonlySet<string>,
-    options: TurnCompletionOptions = {}
+    options: TurnCompletionOptions = {},
+    stopReason?: TurnCheckpointStopReason
   ): Promise<TurnCheckpoint> {
     return this.withBlobLock(projectId, async () => {
       const checkpoint = await this.get(projectId, threadId, turnId)
@@ -227,6 +249,27 @@ export class CheckpointManager {
       const changes = changedPaths
         ? allChanges.filter((change) => changedPaths.has(change.path) && keepChange(change.path))
         : allChanges.filter((change) => keepChange(change.path))
+      // A turn whose real diff was entirely filtered away is the one case where
+      // the file-changes card silently shows nothing. Record why, bounded, so a
+      // missing card can be explained from the log instead of a reproduction.
+      if (changes.length === 0 && allChanges.length > 0) {
+        let foreigned = 0
+        let userOwned = 0
+        for (const change of allChanges) {
+          if (excludedPaths?.has(change.path) ?? false) userOwned += 1
+          else if (foreign?.has(change.path) ?? false) foreigned += 1
+        }
+        Logger.info('Turn diff was filtered out of the file-changes card', {
+          projectId,
+          threadId,
+          turnId: checkpoint.id,
+          changed: allChanges.length,
+          foreigned,
+          userOwned,
+          claimFiltered: changedPaths !== undefined,
+          sample: allChanges.slice(0, 3).map((change) => change.path)
+        })
+      }
       const lineStats = await calculateLineStats(tracker, changes)
       const contentUnavailable = new Set([
         ...(checkpoint.before.unavailableFiles ?? []),
@@ -246,6 +289,7 @@ export class CheckpointManager {
         changeFilterApplied: changedPaths !== undefined || changes.length !== allChanges.length,
         lineStats: lineStats.stats,
         completedAt: Date.now(),
+        ...(stopReason ? { stopReason } : {}),
         ...(completionFailure ? { failure: completionFailure } : {})
       }
       await this.save(updated)
@@ -399,13 +443,17 @@ export class CheckpointManager {
         checkpoint.id,
         checkpoint.before.projectRoot,
         'interrupted',
-        interruption
+        interruption,
+        undefined,
+        {},
+        'crash'
       )
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       const updated: TurnCheckpoint = {
         ...checkpoint,
         status: 'interrupted',
+        stopReason: 'crash',
         failure: boundCheckpointFailure(`${interruption} Change capture failed: ${detail}`)
       }
       await this.save(updated)
@@ -415,6 +463,125 @@ export class CheckpointManager {
       ])
       return updated
     }
+  }
+
+  /**
+   * Finalize the active turn as a clean stop after a deliberate app close.
+   *
+   * The harness was still working when the user quit, so the turn has no
+   * terminal answer. Distinct from `markActiveInterrupted`: the same on-disk
+   * diff is kept, but the wording is plain and `stopReason` is `app-closed`, so a
+   * file-changes card reports an expected stop rather than a crash the user
+   * never had.
+   */
+  async markActiveStopped(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
+    const active = this.db.get<{ turn_id: string | null }>(
+      'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',
+      projectId,
+      threadId
+    )
+    if (!active?.turn_id) return null
+    const checkpoint = await this.get(projectId, threadId, active.turn_id)
+    if (!checkpoint || checkpoint.status !== 'active') return checkpoint
+    try {
+      return await this.completeTurn(
+        projectId,
+        threadId,
+        checkpoint.id,
+        checkpoint.before.projectRoot,
+        'interrupted',
+        APP_CLOSED_TURN_MESSAGE,
+        undefined,
+        {},
+        'app-closed'
+      )
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const updated: TurnCheckpoint = {
+        ...checkpoint,
+        status: 'interrupted',
+        stopReason: 'app-closed',
+        failure: boundCheckpointFailure(
+          `${APP_CLOSED_TURN_MESSAGE} Change capture failed: ${detail}`
+        )
+      }
+      await this.save(updated)
+      await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
+        projectId,
+        threadId
+      ])
+      return updated
+    }
+  }
+
+  /**
+   * Settle checkpoints that no process can ever finalize: still marked
+   * `active`, old enough that no in-flight turn is starting, and recorded by a
+   * process that is gone (`active_turns` has no row, or its owner pid is absent
+   * or no longer a live instance). Every other finalization path walks the
+   * ledger or a recoverable thread status, so such a row used to stay `active`
+   * forever: the renderer treats it as in flight and never draws its
+   * file-changes card, restart recovery cannot see it, and nothing else can
+   * finish it.
+   *
+   * The row is settled as an interrupted turn holding the state it already
+   * recorded. Nothing is snapshotted now, because the workspace has moved on and
+   * a diff taken today would attribute other turns' work to this turn, and
+   * `completedAt` stays at the turn's own start so the settled row can never
+   * claim an assistant message's card window.
+   */
+  async settleAbandonedActiveCheckpoints(
+    options: {
+      /** Whether a process with this pid is a live instance that may still own the turn. */
+      isOwnerAlive?: (pid: number) => boolean
+      minAgeMs?: number
+      maxRows?: number
+    } = {}
+  ): Promise<number> {
+    const cutoff = Date.now() - (options.minAgeMs ?? ABANDONED_CHECKPOINT_MIN_AGE_MS)
+    const maxRows = options.maxRows ?? ABANDONED_CHECKPOINT_SETTLE_LIMIT
+    const rows = await this.queryRows(
+      `SELECT tc.turn_id AS turn_id, at.owner_pid AS owner_pid
+         FROM turn_checkpoints tc
+         LEFT JOIN active_turns at ON at.turn_id = tc.turn_id
+        WHERE json_extract(tc.data, '$.status') = 'active'
+          AND json_extract(tc.data, '$.createdAt') <= ?
+        ORDER BY json_extract(tc.data, '$.createdAt') ASC
+        LIMIT ?`,
+      [cutoff, ABANDONED_CHECKPOINT_SCAN_LIMIT],
+      ABANDONED_CHECKPOINT_SCAN_LIMIT
+    )
+    let settled = 0
+    for (const row of rows) {
+      if (settled >= maxRows) break
+      const turnId = row['turn_id']
+      if (typeof turnId !== 'string') continue
+      const ownerPid = Number(row['owner_pid'])
+      if (Number.isInteger(ownerPid) && ownerPid > 0) {
+        if (ownerPid === process.pid) continue
+        if (options.isOwnerAlive?.(ownerPid) === true) continue
+      }
+      try {
+        await this.writeRow(
+          `UPDATE turn_checkpoints
+              SET data = json_set(data,
+                    '$.status', 'interrupted',
+                    '$.completedAt', json_extract(data, '$.createdAt'),
+                    '$.stopReason', 'crash',
+                    '$.failure', json_quote(?))
+            WHERE turn_id = ? AND json_extract(data, '$.status') = 'active'`,
+          [ABANDONED_CHECKPOINT_MESSAGE, turnId]
+        )
+        settled += 1
+      } catch (error) {
+        Logger.error('Abandoned checkpoint settlement failed (non-fatal):', error)
+        continue
+      }
+      // A settled row rewrites its stored snapshots, so a long backlog must
+      // never hold the main process: yield between rows.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    return settled
   }
 
   /**
@@ -579,6 +746,7 @@ export class CheckpointManager {
           : {}),
         ...(checkpoint.lineStats?.[change.path]?.truncated ? { lineCountsTruncated: true } : {})
       })),
+      ...(checkpoint.stopReason ? { stopReason: checkpoint.stopReason } : {}),
       createdAt: checkpoint.createdAt,
       completedAt: checkpoint.completedAt,
       rolledBackAt: checkpoint.rolledBackAt,

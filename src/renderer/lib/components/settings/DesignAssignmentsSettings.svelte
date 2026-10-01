@@ -11,11 +11,18 @@
     DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH,
     DESIGN_ASSIGNMENT_OUTPUTS,
     MAX_DESIGN_ASSIGNMENTS,
+    designAssignmentIsMedia,
     designAssignmentOutput,
     designAssignmentOutputDescription,
     designAssignmentOutputLabel,
+    isUsableDesignSelection,
     uniqueDesignAssignmentId
   } from '$shared/design-assignments'
+  import {
+    MEDIA_MODEL_MAX_LENGTH,
+    mediaProviderLabel,
+    parseMediaModelRef
+  } from '$shared/media-generation'
   import { INBOX_PROJECT_ID } from '$shared/types'
   import type {
     AgentModelSelection,
@@ -65,18 +72,32 @@
   let guidanceDrafts = $state<Record<string, string>>({})
   /** The assignment a removal is waiting to confirm. */
   let pendingRemoval = $state<DesignAssignment | null>(null)
+  /** In-flight generation-model edits, keyed by assignment id, so typing never writes config. */
+  let mediaModelDrafts = $state<Record<string, string>>({})
+  /** One short message per row, shown only while a change cannot be saved. */
+  let rowErrors = $state<Record<string, string>>({})
+  /** The generation model being typed in the add form. */
+  let draftMediaModel = $state('')
 
   /** Harness catalogs are app-wide, so this holds with no project selected. */
   const catalogProjectId = $derived(rendererRecovery.selectedProjectId ?? INBOX_PROJECT_ID)
   const assignments = $derived(config.design?.assignments ?? [])
   const atCapacity = $derived(assignments.length >= MAX_DESIGN_ASSIGNMENTS)
   const draftLabelTooLong = $derived(draftLabel.length > DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH)
+  /** The craft being added, which decides where its model comes from. */
+  const draftIsMedia = $derived(designAssignmentIsMedia(draftOutput))
+  /** The generation backend the user chose, for a row's hint. */
+  const providerLabel = $derived(
+    config.mediaGeneration.providerId
+      ? mediaProviderLabel(config.mediaGeneration.providerId)
+      : 'a generation provider'
+  )
   const canAdd = $derived(
     settingsReady &&
       !atCapacity &&
       draftLabel.trim().length > 0 &&
       !draftLabelTooLong &&
-      draftSelection !== null
+      (draftIsMedia ? parseMediaModelRef(draftMediaModel) !== null : draftSelection !== null)
   )
 
   /**
@@ -127,7 +148,7 @@
     // carried over when the new model is the same one on the same harness.
     const previous = assignment.selection
     const sameModel =
-      previous.harnessId === harnessId &&
+      previous?.harnessId === harnessId &&
       previous.providerId === providerId &&
       previous.modelId === modelId
     const selection: AgentModelSelection = {
@@ -144,24 +165,84 @@
   }
 
   async function selectThinking(assignment: DesignAssignment, level: ThinkingLevel): Promise<void> {
+    const selection = assignment.selection
+    if (!isUsableDesignSelection(selection)) return
     await persist(
-      replace(assignment, { selection: { ...assignment.selection, thinkingLevel: level } }),
+      replace(assignment, { selection: { ...selection, thinkingLevel: level } }),
       'The design assignment thinking level could not be saved.'
     )
   }
 
   /**
-   * Change which craft one assignment covers. Copywriting is the default and the
-   * validator stores nothing for it, so switching back is not a special case.
+   * Change which craft one assignment covers.
+   *
+   * A row can only run the craft it has a model for: a media craft needs a
+   * generation model and a text craft needs a harness model. Switching to a
+   * craft the row cannot run is refused with a message rather than saved, because
+   * a saved row with no model for its craft would silently never run.
    */
   async function selectOutput(
     assignment: DesignAssignment,
     output: DesignAssignmentOutput
   ): Promise<void> {
+    const ready = designAssignmentIsMedia(output)
+      ? parseMediaModelRef(assignment.mediaModel ?? '') !== null
+      : isUsableDesignSelection(assignment.selection)
+    if (!ready) {
+      rowErrors = {
+        ...rowErrors,
+        [assignment.id]: designAssignmentIsMedia(output)
+          ? `Enter a generation model before making this row ${designAssignmentOutputLabel(output)}.`
+          : 'Pick a harness model before making this row a copywriting assignment.'
+      }
+      return
+    }
+    const cleared = { ...rowErrors }
+    delete cleared[assignment.id]
+    rowErrors = cleared
     await persist(
       replace(assignment, { produces: output }),
       'The design assignment output could not be saved.'
     )
+  }
+
+  /** The generation model a row is showing, including an unsaved edit. */
+  function mediaModelOf(assignment: DesignAssignment): string {
+    return mediaModelDrafts[assignment.id] ?? assignment.mediaModel ?? ''
+  }
+
+  /**
+   * Save one row's generation model.
+   *
+   * A value the provider could not run is refused and the row keeps what it had,
+   * because a half-typed model reference would make the craft unrunnable while
+   * looking configured.
+   */
+  async function commitMediaModel(assignment: DesignAssignment): Promise<void> {
+    const typed = mediaModelOf(assignment).trim()
+    if (typed === (assignment.mediaModel ?? '')) {
+      const cleared = { ...mediaModelDrafts }
+      delete cleared[assignment.id]
+      mediaModelDrafts = cleared
+      return
+    }
+    if (parseMediaModelRef(typed) === null) {
+      rowErrors = {
+        ...rowErrors,
+        [assignment.id]: 'Use a model reference like owner/model-name.'
+      }
+      return
+    }
+    const cleared = { ...rowErrors }
+    delete cleared[assignment.id]
+    rowErrors = cleared
+    await persist(
+      replace(assignment, { mediaModel: typed }),
+      'The generation model could not be saved.'
+    )
+    const drafts = { ...mediaModelDrafts }
+    delete drafts[assignment.id]
+    mediaModelDrafts = drafts
   }
 
   async function commitLabel(assignment: DesignAssignment): Promise<void> {
@@ -202,22 +283,29 @@
   }
 
   async function addAssignment(): Promise<void> {
-    if (!canAdd || !draftSelection) return
+    if (!canAdd) return
     const label = draftLabel.trim().slice(0, DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH)
-    await persist(
-      [
-        ...assignments,
-        {
+    const own = draftSelection
+    const draft: DesignAssignment | null = designAssignmentIsMedia(draftOutput)
+      ? {
           id: uniqueDesignAssignmentId(config.design, label),
           label,
           produces: draftOutput,
-          selection: draftSelection
+          mediaModel: draftMediaModel.trim()
         }
-      ],
-      'The design assignment could not be saved.'
-    )
+      : own
+        ? {
+            id: uniqueDesignAssignmentId(config.design, label),
+            label,
+            produces: draftOutput,
+            selection: own
+          }
+        : null
+    if (!draft) return
+    await persist([...assignments, draft], 'The design assignment could not be saved.')
     draftLabel = ''
     draftSelection = null
+    draftMediaModel = ''
   }
 
   async function confirmRemoval(): Promise<void> {
@@ -258,11 +346,12 @@
     <p class="mt-2 text-xs leading-relaxed text-dimmed">
       Name the work, say which craft it belongs to, and pick the model that does it: the copy, an
       SEO pass, the images a page needs, the clip that opens it, the voice-over. A design session
-      hands that work to the model you pick here and never picks one itself. Copywriting comes back
-      as text. An image, a clip or a track names the model you want for it, and the session produces
-      it with a generation capability, then saves the result into the design as a file. Give one
-      craft several models and they cover each other, in the order they are listed. With nothing
-      assigned, the agent says which work needs a model instead of improvising one.
+      hands that work to the model you pick here and never picks one itself. Copywriting names a
+      harness model and comes back as text. An image, a clip or a track names a generation model
+      instead, and the app produces it with the backend configured above, then saves the result into
+      the design as a file. Give one craft several models and they cover each other, in the order
+      they are listed. With nothing assigned, the agent says which work needs a model instead of
+      improvising one.
     </p>
   </div>
 
@@ -341,29 +430,68 @@
 
                 <div class="flex w-64 shrink-0 items-center gap-1.5">
                   <div class="min-w-0 flex-1">
-                    <ModelPicker
-                      providers={catalogs}
-                      projectId={catalogProjectId}
-                      harnessId={assignment.selection.harnessId}
-                      providerId={assignment.selection.providerId}
-                      modelId={assignment.selection.modelId}
-                      accountId={assignment.selection.accountId}
-                      favoriteModels={rendererRecovery.favoriteModels}
-                      recentModels={rendererRecovery.recentModels}
-                      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-                      side="bottom"
-                      variant="field"
-                      label="Model"
-                      disabled={!settingsReady || catalogs.length === 0}
-                      onSelect={(providerId, modelId, harnessId, accountId) =>
-                        void selectModel(assignment, providerId, modelId, harnessId, accountId)}
-                      thinkingLevel={assignment.selection.thinkingLevel}
-                      onSelectThinking={(level) => void selectThinking(assignment, level)}
-                      onToggleFavorite={(providerId, modelId, harnessId) =>
-                        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-                      onReorderFavorite={(draggedKey, targetKey, position) =>
-                        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                    />
+                    {#if designAssignmentIsMedia(designAssignmentOutput(assignment))}
+                      <label
+                        class="block text-xs text-muted"
+                        for={`design-assignment-model-${assignment.id}`}
+                      >
+                        Generation model
+                      </label>
+                      <input
+                        id={`design-assignment-model-${assignment.id}`}
+                        class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
+                        type="text"
+                        maxlength={MEDIA_MODEL_MAX_LENGTH}
+                        placeholder="owner/model-name"
+                        value={mediaModelOf(assignment)}
+                        disabled={!settingsReady}
+                        title={`The ${providerLabel} model that produces this work`}
+                        oninput={(event) => {
+                          mediaModelDrafts = {
+                            ...mediaModelDrafts,
+                            [assignment.id]: event.currentTarget.value
+                          }
+                        }}
+                        onblur={() => void commitMediaModel(assignment)}
+                        onkeydown={(event) => {
+                          if (event.key === 'Enter') event.currentTarget.blur()
+                        }}
+                      />
+                      {#if rowErrors[assignment.id]}
+                        <p class="mt-1 text-xs text-danger" role="alert">
+                          {rowErrors[assignment.id]}
+                        </p>
+                      {/if}
+                    {:else}
+                      <ModelPicker
+                        providers={catalogs}
+                        projectId={catalogProjectId}
+                        harnessId={assignment.selection?.harnessId ?? ''}
+                        providerId={assignment.selection?.providerId ?? ''}
+                        modelId={assignment.selection?.modelId ?? ''}
+                        accountId={assignment.selection?.accountId}
+                        favoriteModels={rendererRecovery.favoriteModels}
+                        recentModels={rendererRecovery.recentModels}
+                        onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                        side="bottom"
+                        variant="field"
+                        label="Model"
+                        disabled={!settingsReady || catalogs.length === 0}
+                        onSelect={(providerId, modelId, harnessId, accountId) =>
+                          void selectModel(assignment, providerId, modelId, harnessId, accountId)}
+                        thinkingLevel={assignment.selection?.thinkingLevel}
+                        onSelectThinking={(level) => void selectThinking(assignment, level)}
+                        onToggleFavorite={(providerId, modelId, harnessId) =>
+                          rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                        onReorderFavorite={(draggedKey, targetKey, position) =>
+                          rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                      />
+                      {#if rowErrors[assignment.id]}
+                        <p class="mt-1 text-xs text-danger" role="alert">
+                          {rowErrors[assignment.id]}
+                        </p>
+                      {/if}
+                    {/if}
                   </div>
                   <button
                     type="button"
@@ -453,37 +581,55 @@
           </div>
         </div>
         <div class="w-64 shrink-0">
-          <span class="block text-xs text-muted">Model</span>
-          <div class="mt-1">
-            <ModelPicker
-              providers={catalogs}
-              projectId={catalogProjectId}
-              harnessId={draftSelection?.harnessId ?? ''}
-              providerId={draftSelection?.providerId ?? ''}
-              modelId={draftSelection?.modelId ?? ''}
-              accountId={draftSelection?.accountId}
-              favoriteModels={rendererRecovery.favoriteModels}
-              recentModels={rendererRecovery.recentModels}
-              onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-              side="bottom"
-              variant="field"
-              fullWidth
-              label="Choose model"
-              disabled={!settingsReady || atCapacity || catalogs.length === 0}
-              onSelect={(providerId, modelId, harnessId, accountId) => {
-                rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
-                draftSelection = { harnessId, providerId, modelId, accountId }
-              }}
-              thinkingLevel={draftSelection?.thinkingLevel}
-              onSelectThinking={(level) => {
-                draftSelection = draftSelection ? { ...draftSelection, thinkingLevel: level } : null
-              }}
-              onToggleFavorite={(providerId, modelId, harnessId) =>
-                rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-              onReorderFavorite={(draggedKey, targetKey, position) =>
-                rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+          {#if draftIsMedia}
+            <label class="block text-xs text-muted" for="design-assignment-new-model">
+              Generation model
+            </label>
+            <input
+              id="design-assignment-new-model"
+              class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
+              type="text"
+              maxlength={MEDIA_MODEL_MAX_LENGTH}
+              placeholder="owner/model-name"
+              bind:value={draftMediaModel}
+              disabled={!settingsReady || atCapacity}
+              title={`The ${providerLabel} model this work is generated with`}
             />
-          </div>
+          {:else}
+            <span class="block text-xs text-muted">Model</span>
+            <div class="mt-1">
+              <ModelPicker
+                providers={catalogs}
+                projectId={catalogProjectId}
+                harnessId={draftSelection?.harnessId ?? ''}
+                providerId={draftSelection?.providerId ?? ''}
+                modelId={draftSelection?.modelId ?? ''}
+                accountId={draftSelection?.accountId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+                side="bottom"
+                variant="field"
+                fullWidth
+                label="Choose model"
+                disabled={!settingsReady || atCapacity || catalogs.length === 0}
+                onSelect={(providerId, modelId, harnessId, accountId) => {
+                  rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
+                  draftSelection = { harnessId, providerId, modelId, accountId }
+                }}
+                thinkingLevel={draftSelection?.thinkingLevel}
+                onSelectThinking={(level) => {
+                  draftSelection = draftSelection
+                    ? { ...draftSelection, thinkingLevel: level }
+                    : null
+                }}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              />
+            </div>
+          {/if}
         </div>
         <button
           type="button"
@@ -504,7 +650,9 @@
           Keep the work name under {DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH} characters.
         {:else if draftLabel.trim().length === 0}
           Name the work first.
-        {:else if !draftSelection}
+        {:else if draftIsMedia && parseMediaModelRef(draftMediaModel) === null}
+          Enter the generation model this craft runs on, like black-forest-labs/flux-1.1-pro.
+        {:else if !draftIsMedia && !draftSelection}
           Pick the model that does this work; the assignment is saved with it.
         {:else}
           The handle a design session types to reach this model is generated from the name.

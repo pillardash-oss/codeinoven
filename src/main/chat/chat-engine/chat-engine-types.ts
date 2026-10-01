@@ -10,6 +10,9 @@ import type {
   AgentModelSelection,
   AgentPart,
   AgentQuestionResolution,
+  AutoAnswerEntry,
+  AutoAnswerKind,
+  AutoAnswerOutcome,
   AssignmentPlan,
   AssignmentTask,
   EngineeringSpec,
@@ -335,6 +338,23 @@ export interface PendingQuestionInfo {
    * harness: the values never travel to a driver.
    */
   settleSecret?: (resolution: AgentSecretResolution) => void
+}
+
+/**
+ * One gate the engine resolved without the user, reported to the attention
+ * recorder so the app can tell the user what it answered on their behalf.
+ */
+export interface AutoAnswerReport {
+  /** Provider request id; unique per gate. */
+  id: string
+  kind: AutoAnswerKind
+  outcome: AutoAnswerOutcome
+  projectId: string
+  threadId: string
+  /** The prompt(s), the options offered, and what was chosen. */
+  entries: AutoAnswerEntry[]
+  /** Epoch ms the gate settled. */
+  at: number
 }
 
 /** How the user resolved a failed image-descriptor call. */

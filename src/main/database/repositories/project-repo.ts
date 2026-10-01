@@ -16,6 +16,7 @@ interface ProjectRow {
   icon: string | null
   color: string | null
   icon_type: string | null
+  custom_svg: string | null
   change_tracking_mode: string
   has_deployments: number
   created_at: number
@@ -38,6 +39,7 @@ function rowToProject(row: ProjectRow): Project {
     icon: row.icon ?? undefined,
     color: row.color ?? undefined,
     iconType: row.icon_type ?? undefined,
+    customSvg: row.custom_svg ?? undefined,
     changeTrackingMode: row.change_tracking_mode as 'git' | 'manual',
     hasDeployments: row.has_deployments === 1 || undefined,
     createdAt: row.created_at,
@@ -52,9 +54,9 @@ export class ProjectRepo {
     this.db.run(
       `INSERT INTO projects(
         id, name, path, source, host, provider_id, workflow_id, thread_limit,
-        hidden, pinned, sort_order, icon, color, icon_type, change_tracking_mode,
+        hidden, pinned, sort_order, icon, color, icon_type, custom_svg, change_tracking_mode,
         has_deployments, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         path = excluded.path,
@@ -69,6 +71,7 @@ export class ProjectRepo {
         icon = excluded.icon,
         color = excluded.color,
         icon_type = excluded.icon_type,
+        custom_svg = excluded.custom_svg,
         change_tracking_mode = excluded.change_tracking_mode,
         has_deployments = excluded.has_deployments,
         created_at = excluded.created_at,
@@ -87,6 +90,7 @@ export class ProjectRepo {
       project.icon ?? null,
       project.color ?? null,
       project.iconType ?? null,
+      project.customSvg ?? null,
       project.changeTrackingMode ?? 'manual',
       project.hasDeployments ? 1 : 0,
       project.createdAt,
@@ -112,6 +116,18 @@ export class ProjectRepo {
       'SELECT * FROM projects ORDER BY sort_order ASC, updated_at DESC'
     )
     return rows.map(rowToProject)
+  }
+
+  /**
+   * Every registered project id, read on the database worker.
+   *
+   * For a caller that compares the rows against what is on disk and must not
+   * touch SQLite on the main thread (see `docs/APP-BIBLE.md`).
+   */
+  async listIdsViaWorker(): Promise<string[]> {
+    const result = await this.db.queryViaWorker('SELECT id FROM projects', [], 0)
+    if (!result.ok) return []
+    return result.rows.map((row) => String(row['id']))
   }
 
   delete(id: string): void {

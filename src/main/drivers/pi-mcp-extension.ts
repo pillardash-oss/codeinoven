@@ -230,6 +230,23 @@ export default function codeInOvenMcpExtension(pi: ExtensionAPI): void {
     }
   })
 
+  // Pi activates codemode itself when its own MCP host has servers that only
+  // scripts can reach. CodeInOven's MCP servers arrive through this bridge
+  // instead, with no native host in the picture, so the bridge that owns them
+  // turns codemode on: one script can then string calls across every server,
+  // filter large results before the model reads them, and fan out in parallel.
+  // Every call a script makes still runs through the core-tools gate, so
+  // permissions and scope rules see script calls exactly like direct ones.
+  pi.on('session_start', () => {
+    const registered = pi.getAllTools().some(function (tool) {
+      return tool && tool.name === 'codemode'
+    })
+    if (!registered) return
+    const active = pi.getActiveTools()
+    if (active.includes('codemode')) return
+    pi.setActiveTools([...active, 'codemode'])
+  })
+
   pi.on('session_shutdown', async () => {
     for (const client of clients.values()) client.close()
   })

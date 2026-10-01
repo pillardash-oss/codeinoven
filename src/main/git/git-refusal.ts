@@ -1,3 +1,4 @@
+import { classifyGitRemoteFailure } from './git-remote-failure'
 import type { GitInvocation } from '../../lib/types'
 
 /**
@@ -112,7 +113,13 @@ export function isUncommittedChangesRefusal(failure: unknown): boolean {
 }
 
 /**
- * Run a refusing git channel, reporting an expected refusal as data.
+ * Run a refusing git channel, reporting an expected failure as data.
+ *
+ * Two kinds of failure are expected enough to travel as data: a repository
+ * state the user resolves by acting, and a remote the checkout cannot reach,
+ * authenticate against, or find. Both are states the UI renders, and rejecting
+ * them would have Electron log a cause chain for a sentence the panel is
+ * already showing.
  *
  * Any other failure still rejects: an unexpected error is exactly what the
  * renderer's `catch` fallback is for, and it must stay visible in the log.
@@ -124,6 +131,8 @@ export async function gitInvocation<Value>(
     return { ok: true, value: await run() }
   } catch (failure) {
     if (isGitStateRefusal(failure)) return { ok: false, refusal: failureMessage(failure) }
+    const issue = classifyGitRemoteFailure(failure)
+    if (issue) return { ok: false, issue }
     throw failure
   }
 }

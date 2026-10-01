@@ -1,9 +1,21 @@
 <script lang="ts">
-  import { Toaster as Sonner, toast } from 'svelte-sonner'
+  import { toast } from 'svelte-sonner'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { onMount } from 'svelte'
-  import { CheckCircle2, AlertTriangle, XCircle, Info } from '@lucide/svelte'
+  import { onDestroy, onMount } from 'svelte'
+  import {
+    OVERLAY_ACK_TIMEOUT_MS,
+    TOAST_STACK_TOP,
+    type BrowserOverlayAck
+  } from '$shared/browser-overlay'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import {
+    handleToastOverlayInteraction,
+    projectStack,
+    toastCornerBounds
+  } from '$lib/browser-overlay-bridge'
+  import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
   import MemoryToastComponent from './MemoryToast.svelte'
+  import ToastStack from './ToastStack.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
 
@@ -13,27 +25,225 @@
     threadId: string
   }
 
+  /**
+   * The app window's toaster, and the switch that moves the stack out of it.
+   *
+   * The stack itself is svelte-sonner's, in this renderer, and this component is
+   * its only owner. The in-app browser's page is a native `WebContentsView`
+   * painted above every DOM node of the window, so while a page covers the
+   * corner the cards are drawn in, this component hands the stack to the native
+   * overlay window (`browser-overlay-window.ts`) and draws nothing itself. The
+   * handover is by state, not by call site: every toast in the app keeps calling
+   * `toast.*` exactly as it always has.
+   *
+   * A card in the overlay is only worth drawing while this window can hear it
+   * back, because the handlers live here and a card whose button cannot reach
+   * them is a card with dead buttons. That is why the reports are subscribed
+   * before anything can publish a stack, and why the overlay must confirm what
+   * it drew before this window stops drawing.
+   */
+
+  let viewportWidth = $state(window.innerWidth)
   let theme = $state<'light' | 'dark'>(
     document.documentElement.classList.contains('dark') ? 'dark' : 'light'
   )
 
-  // The in-app browser is a native WebContentsView that composites above every
-  // DOM surface of the window, so it must be detached while a toast is on
-  // screen or it would cover the toast (see `browser:setToastVisible` in
-  // browser-service.ts). svelte-sonner starts dismissing by flagging the toast
-  // while its ~200ms exit animation still plays, so the restore is delayed to
-  // wait the animation out instead of clipping a fading toast.
-  let toastActive = $derived(toast.getActiveToasts().length > 0)
+  /** The stack the overlay would draw, projected off the live toast state. */
+  let stack = $derived(projectStack(toast.getActiveToasts(), theme))
 
+  /** Whether a native page covers the corner the cards are drawn in. */
+  let cornerCovered = $derived(browserVisibility.overlapsNative(toastCornerBounds(viewportWidth)))
+
+  /** True while the overlay window is drawing the stack, which is exactly when
+   *  this window must not draw it as well. */
+  let overlayLive = $state(false)
+
+  /** True while the page is parked because the overlay cannot be used. */
+  let parked = false
+
+  /**
+   * The last request this component sent, as a value to compare against.
+   *
+   * Deliberately not reactive state: the effect below must not re-run because of
+   * what it itself last sent, and a stack is republished on every change to any
+   * toast, which would otherwise repeat a request that says nothing new. It also
+   * keeps the app from asking for an overlay at all until one is needed, which
+   * matters because the browser service is only registered once the browser has
+   * been opened.
+   */
+  let sentRequest = 'none'
+
+  /**
+   * Whether the overlay's reports can reach this window at all.
+   *
+   * The reports travel over IPC channels the preload has to expose, and a preload
+   * older than this bundle does not expose them: the subscription below then
+   * throws as it is made, and without this flag every card drawn in the overlay
+   * would have buttons that quietly do nothing. Set here, once, and kept for the
+   * session: a window that cannot hear the overlay never uses it, and the toast
+   * is drawn by the code path that has always worked.
+   */
+  let overlayUnavailable = $state(false)
+
+  /** The revision stamped on the next stack this window publishes. */
+  let nextRevision = 0
+
+  /** The revision the overlay has been asked for and has not confirmed, or 0. */
+  let awaitedRevision = 0
+
+  /** The ids published under `awaitedRevision`, for the dev diagnostic below. */
+  let awaitedIds: Array<number | string> = []
+
+  let ackTimer: ReturnType<typeof setTimeout> | undefined
+
+  function stopAckWatch(): void {
+    if (ackTimer !== undefined) clearTimeout(ackTimer)
+    ackTimer = undefined
+    awaitedRevision = 0
+    awaitedIds = []
+  }
+
+  /**
+   * Stop using the overlay for the rest of the session, and draw the cards here.
+   *
+   * Every reason the overlay cannot serve the stack ends the same way: the cards
+   * belong in this window's own toaster, and the page steps aside while they are
+   * up so they are not painted under it. Losing the overlay is logged rather
+   * than shown, because the toast itself still works; what it costs is the page
+   * blinking for as long as a card is on screen, which the log line is there to
+   * explain when someone notices it.
+   */
+  function abandonOverlay(reason: string): void {
+    stopAckWatch()
+    if (overlayUnavailable) return
+    overlayUnavailable = true
+    overlayLive = false
+    logRendererError(
+      `The native toast overlay was abandoned: ${reason}. Toasts are drawn in the app window again, and a browser page that covers their corner is parked for as long as they are on screen.`
+    )
+    void invoke('browser:setToastOverlay', null).catch(() => {})
+  }
+
+  /**
+   * Wait for the overlay to confirm the revision it was given.
+   *
+   * The deadline belongs to the first stack that went unanswered, not to the
+   * newest one: a window that never confirms would otherwise keep its watch
+   * moving every time a card arrived. Any confirmation clears it, because a
+   * revision only stays unconfirmed while the overlay is silent.
+   */
+  function armAckWatch(revision: number, ids: Array<number | string>): void {
+    awaitedRevision = revision
+    awaitedIds = ids
+    if (ackTimer !== undefined) return
+    ackTimer = setTimeout(() => {
+      ackTimer = undefined
+      if (awaitedRevision === 0) return
+      abandonOverlay('it never confirmed the cards it was given')
+    }, OVERLAY_ACK_TIMEOUT_MS)
+  }
+
+  /** The overlay drew the revision this window published, so the path works. */
+  function noteOverlayDrawn(ack: BrowserOverlayAck): void {
+    if (ack.revision === undefined || ack.revision !== awaitedRevision) return
+    if (import.meta.env.DEV && (ack.drawn?.length ?? 0) !== awaitedIds.length) {
+      logRendererDev(
+        `The toast overlay drew ${ack.drawn?.length ?? 0} of the ${awaitedIds.length} cards it was given`
+      )
+    }
+    stopAckWatch()
+  }
+
+  /**
+   * The overlay's reports, subscribed during setup rather than in `onMount`.
+   *
+   * Two reasons, and both are load-bearing. The publish effect below must never
+   * be able to hand the stack to an overlay this window cannot hear, so the
+   * answer has to be known before that effect's first pass; and a subscription
+   * that throws inside a lifecycle callback would take the rest of that callback
+   * with it, which is how a channel this preload does not know once left every
+   * toast in the app without its handler.
+   */
+  const overlayReports: Array<() => void> = (() => {
+    try {
+      return [
+        subscribe('browser:overlay:event', (report) => handleToastOverlayInteraction(report)),
+        subscribe('browser:overlay:drawn', (ack) => noteOverlayDrawn(ack))
+      ]
+    } catch (error) {
+      overlayUnavailable = true
+      logRendererError(
+        'This window cannot hear the native toast overlay, so toasts stay in the app window.',
+        error
+      )
+      return []
+    }
+  })()
+
+  async function parkForFallback(park: boolean): Promise<void> {
+    if (park === parked) return
+    parked = park
+    await invoke('browser:setToastVisible', park).catch(() => {})
+  }
+
+  /**
+   * Point the overlay at the stack, or take it down.
+   *
+   * Three outcomes, in the order they are tried:
+   *
+   *   - no page covers the corner: the app window draws the cards, as always,
+   *     and the overlay is released so a browsing session that never covers the
+   *     corner never pays for a second renderer;
+   *   - a page covers it and the overlay draws and confirms them: the overlay
+   *     draws them;
+   *   - the overlay cannot serve them for any reason (this window cannot hear it,
+   *     its window could not be created, its request was refused, or it never
+   *     confirmed): the cards stay in this window's toaster and the page steps
+   *     aside for as long as they are up, because a page that blinks is far
+   *     better than a toast that is either invisible behind it or drawn with
+   *     buttons that do nothing.
+   */
   $effect(() => {
-    if (toastActive) {
-      void invoke('browser:setToastVisible', true).catch(() => {})
+    if (overlayUnavailable) {
+      overlayLive = false
+      void parkForFallback(cornerCovered && stack.toasts.length > 0)
       return
     }
-    const restoreTimer = setTimeout(() => {
-      void invoke('browser:setToastVisible', false).catch(() => {})
-    }, 300)
-    return () => clearTimeout(restoreTimer)
+    const request = cornerCovered ? stack : null
+    const signature = request === null ? 'release' : JSON.stringify(request)
+    if (signature === sentRequest) return
+    sentRequest = signature
+    // The revision is stamped here, not on the stack itself: the signature above
+    // compares the stack, and one that changed every pass would make every pass
+    // look new and republish a stack that says nothing different.
+    const revision = (nextRevision += 1)
+    if (request === null || request.toasts.length === 0) {
+      stopAckWatch()
+      overlayLive = false
+      void parkForFallback(false)
+      void invoke(
+        'browser:setToastOverlay',
+        request === null ? null : { ...request, revision }
+      ).catch(() => {})
+      return
+    }
+    const ids = request.toasts.map((entry) => entry.id)
+    let cancelled = false
+    void invoke('browser:setToastOverlay', { ...request, revision })
+      .then((available) => {
+        if (cancelled) return
+        overlayLive = available
+        void parkForFallback(!available)
+        if (available) armAckWatch(revision, ids)
+        else abandonOverlay('its window could not be created')
+      })
+      .catch(() => {
+        if (cancelled) return
+        abandonOverlay('a request to draw the cards was refused')
+      })
+    return () => {
+      cancelled = true
+    }
   })
 
   $effect(() => {
@@ -45,7 +255,11 @@
   })
 
   onMount(() => {
-    return subscribe('app:toast', (event) => {
+    const trackViewport = (): void => {
+      viewportWidth = window.innerWidth
+    }
+    window.addEventListener('resize', trackViewport)
+    const unsubscribe = subscribe('app:toast', (event) => {
       const payload = event as
         | {
             message?: string
@@ -80,198 +294,18 @@
         })
       }
     })
+    return () => {
+      window.removeEventListener('resize', trackViewport)
+      unsubscribe()
+    }
+  })
+
+  onDestroy(() => {
+    for (const off of overlayReports) off()
+    stopAckWatch()
   })
 </script>
 
-{#snippet successIcon()}
-  <CheckCircle2 size={15} stroke-width={2.25} />
-{/snippet}
-
-{#snippet warningIcon()}
-  <AlertTriangle size={15} stroke-width={2.25} />
-{/snippet}
-
-{#snippet errorIcon()}
-  <XCircle size={15} stroke-width={2.25} />
-{/snippet}
-
-{#snippet infoIcon()}
-  <Info size={15} stroke-width={2.25} />
-{/snippet}
-
-<Sonner
-  position="top-right"
-  {theme}
-  closeButton
-  pauseWhenPageIsHidden
-  offset={{ top: '56px' }}
-  {successIcon}
-  {warningIcon}
-  {errorIcon}
-  {infoIcon}
-  toastOptions={{
-    classes: {
-      toast: 'group toast shadow-lg rounded-lg font-[inherit]',
-      title: 'text-[0.8125rem] font-semibold tracking-tight',
-      description: 'group-[.toast]:text-muted text-xs',
-      actionButton: 'group-[.toast]:bg-primary group-[.toast]:text-on-primary',
-      cancelButton: 'group-[.toast]:bg-elevated group-[.toast]:text-muted'
-    }
-  }}
-/>
-
-<style>
-  :global([data-close-button]) {
-    top: 6px !important;
-    right: 6px !important;
-    left: auto !important;
-    transform: none !important;
-  }
-
-  :global([data-close-button] > *) {
-    pointer-events: none;
-  }
-
-  /* ─── Layout: [icon] [title] header row, [description] full-width row,
-     [buttons] sharing the bottom row. Selectors match svelte-sonner's
-     internal [data-styled='true'] specificity and use !important because
-     the library's own stylesheet competes in the cascade. ─────────────── */
-  :global([data-sonner-toast]) {
-    flex-wrap: wrap !important;
-    align-items: flex-start !important;
-    gap: 6px !important;
-  }
-
-  /* Dissolve the content wrapper so title and description become direct
-     flex items and can sit on separate rows */
-  :global([data-sonner-toast][data-styled='true'] [data-content]) {
-    display: contents !important;
-  }
-
-  :global([data-sonner-toast][data-styled='true'] [data-title]) {
-    flex: 1 1 0 !important;
-    min-width: 0 !important;
-  }
-
-  :global([data-sonner-toast][data-styled='true'] [data-description]) {
-    flex: 1 1 100% !important;
-  }
-
-  :global([data-sonner-toast][data-styled='true'] [data-button]) {
-    /* 100% basis (not 0) so the button ALWAYS wraps to its own bottom row,
-       even when the toast has no description. With basis 0 an action button
-       and a title fit side by side on one row, which is exactly the bug that
-       hit error toasts (title + Copy, no description) while thread toasts
-       (title + description + action) wrapped correctly. One rule, one
-       behaviour, every status. */
-    flex: 1 1 100% !important;
-    margin-top: 4px !important;
-    justify-content: center !important;
-  }
-
-  /* ─── Normal toasts ─────────────────────────────────────────────────────── */
-  :global([data-sonner-toaster][data-sonner-theme='light']) {
-    --normal-bg: var(--color-surface) !important;
-    --normal-border: var(--color-border) !important;
-    --normal-text: var(--color-foreground) !important;
-  }
-
-  :global([data-sonner-toaster][data-sonner-theme='dark']) {
-    --normal-bg: var(--color-surface) !important;
-    --normal-border: var(--color-border) !important;
-    --normal-text: var(--color-foreground) !important;
-  }
-
-  /* ─── Branded status toasts ───────────────────────────────────────────────
-     Obsidian / Ivory / Auric system: each status toast keeps the ivory
-     surface but carries a status tint in the background wash, the hairline
-     border, the icon chip and a slim accent bar on the left edge. */
-  :global([data-sonner-toast][data-type='success']),
-  :global([data-sonner-toast][data-type='error']),
-  :global([data-sonner-toast][data-type='warning']),
-  :global([data-sonner-toast][data-type='info']) {
-    position: relative;
-  }
-
-  :global([data-sonner-toast][data-type='success']) {
-    --status: var(--color-success);
-  }
-
-  :global([data-sonner-toast][data-type='error']) {
-    --status: var(--color-danger);
-  }
-
-  :global([data-sonner-toast][data-type='warning']) {
-    --status: var(--color-warning);
-  }
-
-  :global([data-sonner-toast][data-type='info']) {
-    --status: var(--color-info);
-  }
-
-  :global(
-    [data-sonner-toast][data-type='success'],
-    [data-sonner-toast][data-type='error'],
-    [data-sonner-toast][data-type='warning'],
-    [data-sonner-toast][data-type='info']
-  ) {
-    background:
-      linear-gradient(
-        to right,
-        color-mix(in srgb, var(--status) 16%, transparent),
-        color-mix(in srgb, var(--status) 7%, transparent) 60%,
-        color-mix(in srgb, var(--status) 4%, transparent)
-      ),
-      var(--color-surface) !important;
-    border: 1px solid color-mix(in srgb, var(--status) 55%, var(--color-border)) !important;
-    /* Real border instead of a ::before bar   it can never detach or escape
-       the toast during drag, dismissal or scale transitions. */
-    border-left: 3px solid var(--status) !important;
-    box-shadow:
-      0 4px 16px -4px color-mix(in srgb, var(--status) 25%, transparent),
-      0 2px 8px -2px rgba(0, 0, 0, 0.12) !important;
-    color: var(--color-foreground) !important;
-  }
-
-  /* Status-colored title   the colour reads before the words do */
-  :global(
-    [data-sonner-toast][data-type='success'] [data-title],
-    [data-sonner-toast][data-type='error'] [data-title],
-    [data-sonner-toast][data-type='warning'] [data-title],
-    [data-sonner-toast][data-type='info'] [data-title]
-  ) {
-    color: color-mix(in srgb, var(--status) 78%, var(--color-foreground)) !important;
-  }
-
-  /* Status-colored close button for instant recognition */
-  :global(
-    [data-sonner-toast][data-type='success'] [data-close-button],
-    [data-sonner-toast][data-type='error'] [data-close-button],
-    [data-sonner-toast][data-type='warning'] [data-close-button],
-    [data-sonner-toast][data-type='info'] [data-close-button]
-  ) {
-    color: color-mix(in srgb, var(--status) 70%, var(--color-dimmed)) !important;
-    background: color-mix(in srgb, var(--status) 10%, transparent) !important;
-    border-radius: 999px !important;
-    width: 1.25rem !important;
-    height: 1.25rem !important;
-    display: grid !important;
-    place-items: center !important;
-  }
-
-  /* Icon chip: tinted circle behind the status icon */
-  :global([data-sonner-toast] [data-icon]) {
-    background: color-mix(in srgb, var(--status) 22%, transparent);
-    color: var(--status);
-    border-radius: 999px;
-    width: 1.75rem;
-    height: 1.75rem;
-    display: grid;
-    place-items: center;
-    flex-shrink: 0;
-    align-self: flex-start;
-    margin-top: 1px;
-  }
-
-  /* Close button inherits the status colour subtly */
-</style>
+{#if !overlayLive}
+  <ToastStack {theme} offsetTop={TOAST_STACK_TOP} />
+{/if}

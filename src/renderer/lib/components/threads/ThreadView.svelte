@@ -46,6 +46,9 @@
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import MediaPreview from '../chats/MediaPreview.svelte'
+  import AttachmentPreview from '../chats/AttachmentPreview.svelte'
+  import { createComposerAttachmentPreview } from '../chats/chat-composer-preview.svelte'
+  import type { PreviewPagerState } from '../ui/PreviewPager.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
@@ -88,7 +91,13 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
-  import { isImageMime, isVideoMime, isAudioMime, fileUrlToPath } from '$lib/mime'
+  import {
+    attachmentPreviewKind,
+    isImageMime,
+    isVideoMime,
+    isAudioMime,
+    fileUrlToPath
+  } from '$lib/mime'
   import {
     fastBaseModelId,
     fastVariantForModelId,
@@ -143,15 +152,17 @@
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import {
     connectionsFromPlan,
+    extractHowToDraft,
     isRoutineConfirmation,
-    latestHowToDraft as latestHowToDraftIn,
     latestRoutinePlanDraft as latestRoutinePlanDraftIn,
     type RoutinePlanDraft
   } from '$lib/components/assistant/assistant-view'
   import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
+  import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
+    ORCHESTRATION_COORDINATOR_COMPONENTS,
     type CoordinatorDockPanel
   } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -169,22 +180,33 @@
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import {
+    isResponseSelection,
     responseReferencesState,
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
-  import { isTodoToolPart, latestAgentTodo } from '$lib/agent-todos'
+  import { isTodoToolPart, latestAgentTodo, todoSnapshotMatchesTurn } from '$lib/agent-todos'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
   import { toPosixPath } from '$shared/paths'
-  import { revealCitationFile, revealFileInAppTree, revealLocalFile } from '$lib/reveal-file'
+  import {
+    revealAttachmentFile,
+    revealCitationFile,
+    revealFileInAppTree,
+    revealLocalFile,
+    revealAnnotatedDocument
+  } from '$lib/reveal-file'
+  import { openPassageInNewThread } from '$lib/quoted-passage'
+  import { documentAnnotationFocusState } from '$lib/stores/document-annotation-focus.svelte'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { routineDeliveryLabel, routinePriorityLabel } from '$shared/routine-reporting'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
-    DEFAULT_THREAD_TITLE,
+    describeSchedule,
+    isAssistantSetupThread,
     isOrchestrationChildThread,
     WORKING_TRACE_PAGE_SIZE
   } from '$shared/types'
@@ -243,6 +265,8 @@
     PendingAgentQuestionRequest,
     ImageDescriptorErrorRequest,
     ImageDescriptorReplyAction,
+    TurnStreamPartsChange,
+    TurnStreamPartsPage,
     AttachmentStorageScope,
     UserMessagePresentation,
     UserMessageSummary,
@@ -260,6 +284,11 @@
   import { APP_NAME } from '$shared/brand'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
+  import {
+    continuationRequestPrompt,
+    pendingContinuationRequest,
+    type PendingContinuationRequest
+  } from '$shared/pending-request'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { LiveGenerationRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -280,14 +309,19 @@
     type SubagentPart
   } from './thread-turn-parts'
   import {
-    applyResponseHighlights,
+    annotationFallbackAnchor,
+    applyAnnotationHighlights,
+    measureAnnotationBubbles,
+    releaseAnnotationHighlights,
+    withUnmeasuredAnchors,
+    ANNOTATION_BUBBLE_SIZE,
+    type AnnotationBubblePosition
+  } from '$lib/selection-anchors'
+  import {
     captureResponseSelection,
-    measureResponseBubblePositions,
-    releaseResponseHighlights,
     responseRangeFor,
     responseRangeIsCurrent,
-    RESPONSE_BUBBLE_SIZE,
-    type ResponseBubblePosition,
+    RESPONSE_HIGHLIGHT_NAME,
     type ResponseSelectionCandidate
   } from './thread-response-ranges'
   import {
@@ -359,6 +393,26 @@
      *  conversation. Workspace gates this: always true in chat mode, and in
      *  project mode only for a project's sole, untouched thread. */
     allowCenteredComposer?: boolean
+    /**
+     * Replaces the centered empty state's heading when the conversation is about
+     * something more specific than "a new chat". The browser rail's conversation
+     * is the user today: it names the page the tab is on instead of greeting the
+     * user like the Chats tab. Rendered inside the shared centered block, so the
+     * snippet supplies only the heading and its own supporting line.
+     */
+    emptyStateHeading?: Snippet
+    /**
+     * Suggested prompts for the centered empty state, replacing the generic
+     * chat/project list. Each entry has to read as something the user would send,
+     * because picking one fills the composer with it.
+     */
+    promptSuggestions?: readonly string[]
+    /**
+     * The composer's placeholder once nothing more specific applies. The states
+     * that describe what is happening right now (a run in flight, a routine's
+     * how-to, a plan being prepared) all outrank it.
+     */
+    composerPlaceholder?: string
     /** Opens the scoped projects view with the sidebar focused on this thread
      *  (composer scope shoe   existing threads). */
     onOpenScopeView?: (thread: Thread) => void
@@ -385,6 +439,9 @@
     controller,
     headerSnippet,
     allowCenteredComposer = true,
+    emptyStateHeading,
+    promptSuggestions,
+    composerPlaceholder,
     onOpenScopeView,
     active = true
   }: Props = $props()
@@ -500,7 +557,9 @@
     'Brainstorm ideas with me'
   ]
 
-  const suggestedPrompts = $derived(chatMode ? chatSuggestedPrompts : projectSuggestedPrompts)
+  const suggestedPrompts = $derived(
+    promptSuggestions ?? (chatMode ? chatSuggestedPrompts : projectSuggestedPrompts)
+  )
 
   /** Auto-fill the mounted window up to HISTORY_WINDOW_SIZE after the first
    *  paint, one batch per frame. Batches mount above the viewport only, so
@@ -982,6 +1041,9 @@
    *  trace, so they ride beside the trace window and keep the task card correct
    *  no matter which page of the trace is mounted. */
   let streamTodoParts = $state<AgentPart[]>([])
+  /** Start time of the turn `streamTodoParts` was folded for. Null when the log
+   *  had no prompt to bound against (or nothing has been read yet). */
+  let streamTodoTurnStart = $state<number | null>(null)
   /** Stream events the durable log has consumed for this fold: the live poll's
    *  change cursor. `null` until a read lands, so the first poll falls back to
    *  a window read. */
@@ -998,7 +1060,15 @@
     streamParts = []
     streamHasOlder = false
     streamTodoParts = []
+    streamTodoTurnStart = null
     streamCursor = null
+  }
+
+  /** Adopt a durable read's task-list snapshot together with the turn it was
+   *  folded for, so the card can reject it once the transcript moves on. */
+  function applyTodoSnapshot(page: TurnStreamPartsPage | TurnStreamPartsChange): void {
+    streamTodoParts = page.todoParts
+    streamTodoTurnStart = page.turnStartTs
   }
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
@@ -1081,9 +1151,21 @@
    * the task card so a trailing provider snapshot cannot rewind the visible
    * task state. Task-list parts never render in the trace, so they are carried
    * beside its window instead of inside it.
+   *
+   * The snapshot only counts while it still describes the turn the transcript
+   * is on. It is refreshed only while this view watches a live turn or crosses
+   * a boundary it observed, so once the transcript advanced to a newer prompt
+   * the previous turn's snapshot is dropped: it is appended after the messages
+   * and a task-list snapshot replaces the whole task map, so otherwise it would
+   * overrule the fresher message state and leave a stale list, and a stale
+   * highlight, on screen.
    */
+  let todoSnapshotIsCurrent = $derived.by(() => {
+    if (streamTodoParts.length === 0) return false
+    return todoSnapshotMatchesTurn(streamTodoTurnStart, turnAnchorCreatedAt())
+  })
   let todoMessages = $derived.by(() => {
-    if (streamTodoParts.length === 0) return messages
+    if (!todoSnapshotIsCurrent) return messages
     const streamMessage: AgentMessage = {
       id: `${thread.id}:todo-stream`,
       role: 'assistant',
@@ -1198,6 +1280,18 @@
       }
     }
   })
+  /**
+   * The task card's run is over: nothing is live for this thread, no other
+   * instance owns it, and the provider is not parked waiting on the user or on a
+   * retry. A task list still unfinished in this state was abandoned by the
+   * agent, and the card has to say so instead of presenting it as live work.
+   */
+  let todoRunStopped = $derived(
+    !busy &&
+      !foreignRunActive &&
+      visibleProviderStatus?.state !== 'waiting' &&
+      thread.status !== 'working-paused'
+  )
   /** True while the visible provider card is the proactive sign-in card. */
   const proactiveAuthVisible = $derived(
     proactiveAuthIssue !== null &&
@@ -1447,6 +1541,23 @@
       })
     }
 
+    // The conversation's own browser: reveal the page it already has, or start
+    // a blank tab the user can type an address into. Offered only where a
+    // conversation owns a thread browser   a project thread, an inbox chat, an
+    // assistant task   never in a controller-driven side surface (a quick chat,
+    // the browser rail's own conversation), which is a panel beside the page it
+    // is about rather than a workspace of its own.
+    if (!hasController) {
+      actions.push({
+        id: 'command:browser',
+        title: '/browser',
+        description: "Open this thread's browser, or start a new tab to begin browsing",
+        category: 'command',
+        source: applicationActionSource,
+        keywords: ['browser', 'web', 'browse', 'tab', 'page', 'site', 'address', 'url']
+      })
+    }
+
     for (const command of commands) {
       actions.push({
         id: actionId(command.id),
@@ -1485,6 +1596,21 @@
       category: 'command',
       source: applicationActionSource,
       keywords: ['cio', 'design', 'designer', 'prototype', 'ui', 'landing', 'page', 'wireframe'],
+      slashCommand: true,
+      ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+
+    // CodeInOven video session   the slash spelling of the @cio-video composer
+    // tag. The tag promotes the app-owned video capability to an active
+    // capability for the turn, so the agent starts editing instead of first
+    // looking for a tool that makes video.
+    actions.push({
+      id: 'command:cio-video',
+      title: '/cio-video',
+      description: 'Start a video session: make a video and watch it render in the browser',
+      category: 'command',
+      source: applicationActionSource,
+      keywords: ['cio', 'video', 'motion', 'edit', 'cut', 'reel', 'animation', 'composition'],
       slashCommand: true,
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
@@ -1968,19 +2094,38 @@
   const checkpointRefreshGuard = new LatestRequestGuard()
   let showSpecStudio = $state(false)
   let threadViewElement = $state<HTMLDivElement | null>(null)
-  let previewFile = $state<{ url: string; filename: string; mime: string } | null>(null)
   let imageUrls = new FileBlobUrlManager()
+  /** One file part of a message the fullscreen preview can render, and whether
+   *  it renders in the media lightbox or the document/text preview. */
+  interface PreviewableFilePart {
+    url: string
+    filename: string
+    mime: string
+    media: boolean
+  }
+  /** Fullscreen preview for a message attachment: the same cache the composer
+   *  previews attachments with, keyed by the attachment's `file://` URL. */
+  const attachmentPreview = createComposerAttachmentPreview()
+  /** The message file parts a fullscreen preview can render, and which one is
+   *  open. Parts no preview can render stay out of `items`, so the pager walks
+   *  only the attachments that can be shown. */
+  let messageViewer = $state<{ items: PreviewableFilePart[]; index: number } | null>(null)
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
+  /** How many frames a range rebuild is retried for while its anchor has not
+   *  mounted yet, before the annotation settles for the fallback anchor. */
+  const RESPONSE_RANGE_RETRIES = 3
   /** Selection references shown in the composer (controller-driven for temporary chats). */
   let composerReferences = $derived(controller?.references ?? responseReferences)
   const responseReferenceRanges = new SvelteMap<string, Range>()
   /** Identity of this view as the CSS highlight registry's owner, so its
    *  teardown can never clear highlights another view published. */
   const responseHighlightOwner = {}
-  /** Viewport position for the comment bubble of each reference anchor. */
-  let responseBubblePositions = $state<Record<string, ResponseBubblePosition>>({})
+  /** Viewport position for the comment bubble of each reference anchor. Every
+   *  live reference has an entry, so a comment whose highlight cannot be
+   *  measured still has an anchor its editor can open at. */
+  let responseBubblePositions = $state<Record<string, AnnotationBubblePosition>>({})
   let commentEditorReferenceId = $state<string | null>(null)
   let messageEditEditor = $state<RichMarkdownEditor>()
 
@@ -1997,7 +2142,11 @@
 
   /** Republish the live annotation ranges to the CSS Custom Highlight registry. */
   function refreshResponseHighlights(): void {
-    applyResponseHighlights(responseReferenceRanges, responseHighlightOwner)
+    applyAnnotationHighlights(
+      responseReferenceRanges,
+      responseHighlightOwner,
+      RESPONSE_HIGHLIGHT_NAME
+    )
   }
 
   /** Re-measure where each annotation's comment bubble belongs in the viewport. */
@@ -2006,10 +2155,38 @@
     // reading every range rect costs, so the common conversation pays nothing.
     if (responseReferenceRanges.size === 0 && Object.keys(responseBubblePositions).length === 0)
       return
-    responseBubblePositions = measureResponseBubblePositions(scrollEl, responseReferenceRanges)
+    responseBubblePositions = withUnmeasuredAnchors(
+      measureAnnotationBubbles(scrollEl, responseReferenceRanges),
+      responseReferences.map((reference) => reference.id),
+      responseAnchorFallback
+    )
+  }
+
+  /**
+   * Where a selection's comment opens when its highlight cannot be measured.
+   *
+   * A quoted excerpt has no rect while its message is outside the mounted
+   * window, while the conversation is hidden behind another view, or after a
+   * rebuild failed. The comment is still attached to the next message, so its
+   * editor docks on the message that carries the excerpt, and on the top of the
+   * conversation when even that message is not mounted.
+   */
+  function responseAnchorFallback(id: string): { x: number; y: number } | null {
+    const messageId = responseReferences.find((reference) => reference.id === id)?.messageId
+    const rect = messageId
+      ? document.getElementById(`msg-${messageId}`)?.getBoundingClientRect()
+      : undefined
+    if (rect && rect.width > 0 && rect.height > 0) {
+      return { x: Math.round(rect.left + Math.min(rect.width / 2, 240)), y: Math.round(rect.top) }
+    }
+    return annotationFallbackAnchor(scrollEl)
   }
 
   let responseBubblePositionFrame = 0
+  /** Frame handle and budget for the bounded retry that rebuilds a range whose
+   *  anchor has not mounted yet (see `syncResponseHighlights`). */
+  let responseRangeRetryFrame = 0
+  let responseRangeRetriesLeft = RESPONSE_RANGE_RETRIES
 
   function scheduleResponseBubbleUpdate(): void {
     if (responseBubblePositionFrame) return
@@ -2036,7 +2213,28 @@
    * conversation publish.
    */
   function syncResponseHighlights(references: ResponseReferenceAnchor[]): void {
+    const missing = rebuildResponseRanges(references)
+    scheduleResponseBubbleUpdate()
+    // A rebuild can miss for a single frame while the anchor mounts: a history
+    // window that has just been merged, or the newest answer leaving the
+    // working trace for its final-answer block. Retrying a bounded number of
+    // frames turns "the comment is gone for good" into "the comment arrives a
+    // frame late", and stops the moment every reference has its range.
+    if (missing === 0 || responseRangeRetriesLeft === 0) return
+    if (responseRangeRetryFrame) return
+    responseRangeRetriesLeft -= 1
+    responseRangeRetryFrame = requestAnimationFrame(() => {
+      responseRangeRetryFrame = 0
+      if (!alive) return
+      if (rebuildResponseRanges(references) === 0) scheduleResponseBubbleUpdate()
+    })
+  }
+
+  /** Rebuild every stale range from the conversation DOM, and report how many
+   *  references still have no range once the pass is over. */
+  function rebuildResponseRanges(references: ResponseReferenceAnchor[]): number {
     let changed = false
+    let missing = 0
     const liveIds = references.map((reference) => reference.id)
     for (const reference of references) {
       const existing = responseReferenceRanges.get(reference.id)
@@ -2045,9 +2243,12 @@
       if (range) {
         responseReferenceRanges.set(reference.id, range)
         changed = true
-      } else if (existing) {
-        responseReferenceRanges.delete(reference.id)
-        changed = true
+      } else {
+        missing += 1
+        if (existing) {
+          responseReferenceRanges.delete(reference.id)
+          changed = true
+        }
       }
     }
     // A detached selection is no longer part of the chat component.
@@ -2057,7 +2258,7 @@
       changed = true
     }
     if (changed) refreshResponseHighlights()
-    scheduleResponseBubbleUpdate()
+    return missing
   }
 
   function scheduleResponseHighlightRestore(references: ResponseReferenceAnchor[]): void {
@@ -2133,21 +2334,96 @@
     responseReferencesState.updateCommentDraft(thread.projectId, thread.id, id, comment)
   }
 
-  /** Jump back to a selection's highlight and open its comment editor. */
-  function editResponseReference(id: string): void {
-    commentEditorReferenceId = id
-    void tick().then(() => {
-      updateResponseBubblePositions()
-      const range = responseReferenceRanges.get(id)
-      if (range && scrollEl) {
-        const element =
-          range.startContainer.parentElement ??
-          (range.startContainer.parentNode instanceof Element
-            ? range.startContainer.parentNode
-            : null)
-        element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  /**
+   * Jump to the document one annotation was made in: reveal it in the project tree
+   * and open it in the annotate view, which is the only surface that draws the
+   * annotated passage and its note, then open that note. A document that has since
+   * been deleted has nothing to show, so it is reported rather than opened.
+   */
+  function editDocumentAnnotation(reference: ResponseReferenceAnchor): void {
+    const path = reference.filePath
+    if (!path) return
+    void revealAnnotatedDocument(thread.projectId, path).then((opened) => {
+      if (!opened) {
+        toast.error('The annotated document is no longer in this project.', {
+          description: path
+        })
+        return
       }
+      documentAnnotationFocusState.request(thread.projectId, thread.id, reference.id)
     })
+  }
+
+  /**
+   * Bring a commented design element back in front of the reader: reveal the
+   * browser tab it was picked from, then highlight the element, scroll it into
+   * view and open its comment. A tab the user has since closed has nothing to
+   * show, so it is reported rather than silently doing nothing.
+   */
+  function editDesignAnnotation(reference: ResponseReferenceAnchor): void {
+    const tabId = reference.tabId
+    const open = tabId
+      ? contextSidebarState.tabs.some((tab) => tab.id === tabId && tab.kind === 'browser')
+      : false
+    if (!tabId || !open) {
+      toast.error('The design this comment was made on is no longer open.', {
+        description: reference.label
+      })
+      return
+    }
+    contextSidebarState.focus(tabId)
+    // The design inspector is the browser's own session and is not part of the
+    // conversation this view owns. Importing it statically would carry the browser
+    // inspector into the first-paint chunk through the thread view, so it is
+    // loaded on demand; by the time a comment needs focusing the browser is open
+    // and the module is already in memory.
+    void import('$lib/stores/browser-inspector.svelte').then((module) =>
+      module.browserInspector.focusComment(tabId, reference.id)
+    )
+  }
+
+  /**
+   * Jump back to a selection's highlight and open its comment editor.
+   *
+   * The editor opens first, before the excerpt is found: the commented message
+   * can sit outside the mounted window, in which case there is no range to pin
+   * a bubble to, and a comment that is merely not on screen must still be
+   * readable and editable rather than the action silently doing nothing. The
+   * message is then brought on screen, the range rebuilt, and the highlight
+   * scrolled to.
+   */
+  async function editResponseReference(id: string): Promise<void> {
+    const reference = responseReferences.find((candidate) => candidate.id === id)
+    if (!reference) return
+    // A document annotation is drawn in the file panel and a design element in
+    // the browser, not in the conversation, so each of their edit actions opens
+    // the surface that draws it instead of a response range here.
+    if (reference.kind === 'file') {
+      editDocumentAnnotation(reference)
+      return
+    }
+    if (reference.kind === 'design') {
+      editDesignAnnotation(reference)
+      return
+    }
+    if (!isResponseSelection(reference)) return
+    commentEditorReferenceId = id
+    // Bring the commented message back on screen first. It can lie outside the
+    // mounted window entirely (a restore, a long transcript), and the range is
+    // built from that element   without it there is no highlight to scroll to
+    // and no bubble to pin.
+    if (reference.messageId) await jumpToMessage(reference.messageId)
+    if (!alive) return
+    syncResponseHighlights(responseReferences)
+    await tick()
+    if (!alive) return
+    updateResponseBubblePositions()
+    const range = responseReferenceRanges.get(id)
+    if (!range) return
+    const element =
+      range.startContainer.parentElement ??
+      (range.startContainer.parentNode instanceof Element ? range.startContainer.parentNode : null)
+    element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
   /** Remove a single composer selection reference, routing to the controller for temporary chats. */
@@ -2174,6 +2450,18 @@
     return responseReferences.find((reference) => reference.id === id) ?? null
   }
 
+  /** Where the open comment editor anchors.
+   *
+   * The measured bubble position when the highlight is on screen, and the
+   * message's own anchor when it is not: the editor is gated on this reference
+   * existing, never on the highlight happening to be measurable, so editing a
+   * comment can never silently do nothing. */
+  const commentEditorAnchor = $derived.by(() => {
+    const id = commentEditorReferenceId
+    if (!id) return null
+    return responseBubblePositions[id] ?? responseAnchorFallback(id)
+  })
+
   // Keep comment bubbles and highlights anchored to their text as the
   // conversation re-renders. Every trigger below can change which DOM nodes
   // carry the annotated text: a streamed publish, the mounted history window
@@ -2183,25 +2471,52 @@
   // ran once - before that anchor existed - and never ran again, so the
   // highlights and comment bubbles stayed missing until a new selection
   // happened to re-trigger it.
+  //
+  // Becoming active again is one of those triggers: every position measured
+  // while the conversation was off screen or covered by another view is stale,
+  // and a range that failed to rebuild in that state was never retried. That is
+  // what left a comment with no bubble and no highlight on return.
   $effect(() => {
     void responseReferences.length
     void visibleMessages.length
     void conversationBusy
     void threadMessages.streamRevision(thread.projectId, conversationId)
+    void active
     if (responseReferences.length === 0) return
+    responseRangeRetriesLeft = RESPONSE_RANGE_RETRIES
     void tick().then(() => {
       if (!alive) return
       syncResponseHighlights(responseReferences)
     })
   })
 
+  // A bubble is measured in viewport coordinates, so it has to be re-measured
+  // when the conversation changes width: a sidebar drag or a docked panel moves
+  // every highlight without firing a window resize. A height change is content,
+  // which the publish trigger already covers, and re-measuring on every
+  // streamed frame would force layout for nothing.
+  $effect(() => {
+    const element = scrollEl
+    if (!element) return
+    let lastWidth = element.clientWidth
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth === lastWidth) return
+      lastWidth = element.clientWidth
+      scheduleResponseBubbleUpdate()
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  })
+
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user quoted excerpts from your earlier response as references. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
+      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser, and may have annotated passages of a project document in the file panel. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
-        return `[${reference.label}]\n${comment}<selection>\n${reference.text}\n</selection>`
+        const tag =
+          reference.kind === 'design' ? 'element' : reference.kind === 'file' ? 'file' : 'selection'
+        return `[${reference.label}]\n${comment}<${tag}>\n${reference.text}\n</${tag}>`
       })
     ].join('\n\n')
   }
@@ -2364,35 +2679,14 @@
     )
   }
 
-  /** Spin the selection off into a brand-new thread in the same project: the
-   *  text is seeded as the fresh composer's draft, wrapped in a txt code block
-   *  with breathing room above and below so the user can add context around
-   *  it, and immediately kick off a task from it. The fence widens when the
-   *  selection itself contains triple backticks so the block stays intact. */
+  /** Spin the selection off into a brand-new thread in the same project, seeded
+   *  as its composer draft. The same hand-off is offered for a passage of an
+   *  annotated document, so both go through one implementation. */
   function openSelectionInNewThread(): void {
     const selection = responseSelection
     if (!selection) return
     closeResponseSelection()
-    const fence = selection.text.includes('```') ? '````' : '```'
-    const draft = `\n${fence}txt\n${selection.text}\n${fence}\n`
-    const project = scopeState.projectRecords.find((p) => p.id === thread.projectId) ?? null
-    invoke('thread:create', {
-      projectId: thread.projectId,
-      providerId: thread.providerId,
-      title: DEFAULT_THREAD_TITLE,
-      workingDirectory: thread.workingDirectory,
-      settings: thread.settings,
-      // Inherit the current thread's scope so the spun-off thread stays in
-      // the same scope instead of dropping to the default bucket.
-      scopeBucketId: thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-    })
-      .then((newThread) => {
-        rendererRecovery.setDraft(newThread.projectId, newThread.id, draft)
-        workspaceState.openThread(newThread, project)
-      })
-      .catch((error) => {
-        reportError(error, 'The new thread could not be created.')
-      })
+    openPassageInNewThread(thread.projectId, thread.id, selection.text)
   }
 
   let spec = $state<EngineeringSpec | null>(null)
@@ -2934,7 +3228,13 @@
   $effect(() => {
     if (hasController || !workflowReady) return
     if (coordinatorKind !== null) return
-    coordinatorDockState.withdraw(thread.projectId, coordinatorDockThreadId)
+    // Only the orchestration boards this view publishes. An authored-work board on
+    // the same row belongs to the design store and must survive this cleanup.
+    coordinatorDockState.withdraw(
+      thread.projectId,
+      coordinatorDockThreadId,
+      ORCHESTRATION_COORDINATOR_COMPONENTS
+    )
   })
 
   /** Turning the Independent Audit switch off undocks the coordinator AND
@@ -3936,6 +4236,10 @@
       // Remounting into a side chat that is already blocked on a permission
       // request rehydrates its card; the parent thread is never asked for it.
       void refreshPendingPermissions()
+      // Same for a question the agent asked: a controller-driven conversation can
+      // be a durable thread (a browser tab's assistant chat), and a question has
+      // no other surface, so its queue is rehydrated here too.
+      void refreshPendingQuestions()
 
       return () => {
         alive = false
@@ -4135,6 +4439,26 @@
       if (messages[index]?.role === 'user') return messages[index].id
     }
     return undefined
+  }
+
+  /**
+   * Creation time of the newest prompt that opened a turn. Activity-only user
+   * messages (compaction notices, sub-agent envelopes) ride mid-turn, so they
+   * never move the boundary   the same rule the main process folds by.
+   */
+  function turnAnchorCreatedAt(): number | null {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index]
+      if (!message || message.role !== 'user') continue
+      if (
+        message.parts.length > 0 &&
+        message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
+      ) {
+        continue
+      }
+      return message.createdAt || null
+    }
+    return null
   }
 
   function beginLocalTurn(userMessageId: string): void {
@@ -4446,7 +4770,7 @@
           if (page.kind !== 'window') return
           streamParts = mergeWorkingParts(streamParts, page.parts)
           streamHasOlder = page.hasOlder
-          streamTodoParts = page.todoParts
+          applyTodoSnapshot(page)
           streamCursor = page.cursor
           if (
             providerStatus === null &&
@@ -4623,6 +4947,22 @@
     }
   }
 
+  /**
+   * The request a retry re-sends: the unanswered request's text plus the files
+   * it carried.
+   *
+   * A retry used to send a bare "Continue" and trust the harness session to
+   * still hold the request the failed turn was answering. Nothing guarantees
+   * that: a provider pause, an account change, or a replaced session leaves the
+   * agent with a "Continue" and no request to continue, and the message reads
+   * as delivered while the agent never saw it. Relaying the unanswered request
+   * with the nudge makes the turn answerable on any session, and its
+   * attachments ride along so a screenshotted request is not half delivered.
+   */
+  function retryRequest(): PendingContinuationRequest | undefined {
+    return pendingContinuationRequest(messages)
+  }
+
   /** Retry after an error or a paused provider retry   replace the live turn first. */
   async function retryConnection(): Promise<void> {
     if (providerRetrying) return
@@ -4642,9 +4982,17 @@
           providerStatus = null
         }
       }
-      await sendMessage('Continue', [], undefined, true, undefined, [], [], {
-        action: 'Retry connection'
-      })
+      const request = retryRequest()
+      await sendMessage(
+        request ? continuationRequestPrompt(request) : 'Continue',
+        request?.attachments ?? [],
+        undefined,
+        true,
+        undefined,
+        [],
+        [],
+        { action: 'Retry connection' }
+      )
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The connection could not be retried.'
     } finally {
@@ -4732,8 +5080,29 @@
   }
 
   function handleAgentEvent(event: AgentEvent): void {
-    // Controller-driven conversations handle their own live events.
-    if (controller) return
+    // A controller-driven conversation is still a real conversation when it is
+    // durable (a browser tab's assistant chat is a thread of its own), so the
+    // events that carry a human gate have to reach it: a question the agent asked
+    // has no other surface, and a card the user never sees leaves the panel
+    // blocked until the question times out. Everything else this view handles is
+    // either published by the primary conversation surface, which a panel must
+    // never touch, or owned by the controller's own store.
+    if (controller) {
+      if (event.type === 'question.asked' || event.type === 'question.updated') {
+        // No session filter: a panel can mount before it has learned its session
+        // id, and reconciling asks main for this conversation's own queue, so an
+        // event belonging to another conversation costs one read and nothing else.
+        void refreshPendingQuestions()
+        return
+      }
+      if (event.type === 'question.resolved') {
+        resolvedQuestionRequestIds.add(event.requestId)
+        pendingQuestionRequests = pendingQuestionRequests.filter(
+          (request) => request.requestId !== event.requestId
+        )
+      }
+      return
+    }
 
     if (
       event.type === 'spec.trace' &&
@@ -5951,6 +6320,14 @@
     sendComposerMessage(request ? `@cio-design ${request}` : '@cio-design', [])
   }
 
+  /** Open a video session   the slash spelling of the @cio-video composer tag.
+   *  The main process owns the video contract and the capability that goes with
+   *  it, so this only has to send the tag and whatever the user typed after it. */
+  function triggerCioVideoTurn(args: string): void {
+    const request = args.trim()
+    sendComposerMessage(request ? `@cio-video ${request}` : '@cio-video', [])
+  }
+
   /** Ask the agent to load and follow a skill by name. This is the route for
    *  skills with no runnable native command in the current conversation (a
    *  side chat owns no thread row, and a global or CodeInOven skill is not a
@@ -5980,6 +6357,15 @@
       : null
   )
 
+  /** Whether this thread is a routine's Getting started thread: the authoring
+   *  host while its how-to is missing, and the editing host once it is saved. */
+  const assistantSetupThread = $derived(isAssistantSetupThread(thread))
+
+  /** The routine's own connection labels, for the recap card's kept ones. */
+  const existingRoutineConnections = $derived(
+    assistantRoutine?.connections.map((connection) => connection.label) ?? []
+  )
+
   /**
    * The complete draft the agent has presented for this routine: the how-to it
    * wrote plus the machine-readable plan (schedule and connections). A draft is
@@ -5989,18 +6375,75 @@
    * every delta would be wasted work for a card that cannot show yet anyway.
    * The authoring conversation is short and lives only until the routine is
    * saved, so scanning it once per settled turn is bounded work.
+   *
+   * A saved routine keeps its draft path on its Getting started thread alone, and
+   * only for a revision that actually changes it: a message there tweaks the
+   * how-to, so a revised draft has to be committable, while a task or run thread
+   * of the same routine carries the saved how-to and must never suggest a new one,
+   * and the draft already committed must not read as a pending change.
    */
   const assistantRoutineDraft = $derived.by(
     (): {
       howTo: string
       plan: RoutinePlanDraft | null
     } | null => {
-      if (!assistantMode || !assistantRoutineId || assistantHowToComplete || busy) return null
-      const howTo = latestHowToDraft()
-      if (!howTo) return null
-      return { howTo, plan: latestRoutinePlanDraft() }
+      if (!assistantMode || !assistantRoutineId || busy) return null
+      const draft = latestHowToDraft()
+      if (!draft) return null
+      const plan = latestRoutinePlanDraft()
+      if (assistantHowToComplete && !isRoutineRevision(draft, plan)) return null
+      return { howTo: draft.howTo, plan }
     }
   )
+
+  /**
+   * Whether a how-to draft is a change to the routine that is already saved, so
+   * the card offers a revision and never a second save of what is saved. Three
+   * things disqualify a draft:
+   *
+   * - it sits on a thread that is not the routine's Getting started thread;
+   * - it is older than the saved how-to, which is what a draft left in a reopened
+   *   thread looks like after the how-to was edited elsewhere;
+   * - it changes nothing, either because the agent re-presented the same how-to
+   *   and the same plan, or because the save would patch no field differently.
+   *   A plan-only change counts, because the how-to text often does not carry the
+   *   schedule at all.
+   *
+   * A routine that predates the how-to timestamp falls back to comparing content.
+   */
+  function isRoutineRevision(
+    draft: { howTo: string; at: number },
+    plan: RoutinePlanDraft | null
+  ): boolean {
+    if (!assistantSetupThread) return false
+    const savedAt = assistantRoutine?.howToUpdatedAt
+    if (savedAt !== undefined && draft.at <= savedAt) return false
+    const routine = assistantRoutine
+    if (!routine) return true
+    if (draft.howTo.trim() !== routine.howTo.trim()) return true
+    if (!plan) return false
+    if (plan.schedule && describeSchedule(plan.schedule) !== describeSchedule(routine.schedule)) {
+      return true
+    }
+    if (plan.delivery && routineDeliveryLabel(plan.delivery) !== currentDeliveryLabel()) return true
+    if (plan.priority && routinePriorityLabel(plan.priority) !== currentPriorityLabel()) return true
+    const known = new Set(
+      routine.connections.map((connection) => connection.label.trim().toLowerCase())
+    )
+    return plan.connections.some((connection) => !known.has(connection.name.trim().toLowerCase()))
+  }
+
+  /** The saved delivery as the plan's own label, so the two compare. */
+  function currentDeliveryLabel(): string {
+    const delivery = assistantRoutine?.delivery
+    return delivery ? routineDeliveryLabel(delivery) : ''
+  }
+
+  /** The saved urgency as the plan's own label, so the two compare. */
+  function currentPriorityLabel(): string {
+    const priority = assistantRoutine?.priority
+    return priority ? routinePriorityLabel(priority) : ''
+  }
 
   /**
    * Identity of the current draft. Dismissing the recap card hides it only for
@@ -6027,18 +6470,20 @@
   }
 
   /**
-   * The how-to the agent last drafted for this routine, taken from the newest
-   * how-to fenced block in an assistant message. The authoring contract asks
-   * for a `how-to` fence, but a bare fence whose body starts with a
-   * `how-to: <title>` line is accepted too.
+   * The how-to the agent last drafted for this routine, with the time it was
+   * written: the newest how-to fenced block in the newest assistant message that
+   * carries one. The authoring contract asks for a `how-to` fence, but a bare
+   * fence whose body starts with a `how-to: <title>` line is accepted too. The
+   * time is what tells a revision from the authoring draft the app already saved.
    */
-  function latestHowToDraft(): string | null {
-    const assistantTexts: string[] = []
-    for (const message of messages) {
-      if (message.role !== 'assistant') continue
-      assistantTexts.push(messageText(message))
+  function latestHowToDraft(): { howTo: string; at: number } | null {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (!message || message.role !== 'assistant') continue
+      const howTo = extractHowToDraft(messageText(message))
+      if (howTo) return { howTo, at: message.createdAt }
     }
-    return latestHowToDraftIn(assistantTexts)
+    return null
   }
 
   /** The machine-readable routine plan the agent last emitted, if any. */
@@ -6093,13 +6538,16 @@
    * The user's go-ahead for the pending routine recap: commit the draft, then
    * have the agent post a short next-steps list in the Getting started thread.
    * Both the recap card's Save button and a typed confirmation route here, so
-   * the follow-up turn happens whichever way the user agreed.
+   * the follow-up turn happens whichever way the user agreed. The next-steps
+   * turn belongs to a routine's first save; an edit of a routine that already
+   * has its how-to commits on its own, with nothing left to set up.
    */
   async function confirmRoutineSave(): Promise<void> {
     const routineId = assistantRoutineId
     if (!routineId) return
+    const firstSave = !assistantHowToComplete
     const saved = await saveRoutineHowTo()
-    if (saved) await assistantRoutines.postSetup(routineId).catch(() => undefined)
+    if (saved && firstSave) await assistantRoutines.postSetup(routineId).catch(() => undefined)
   }
 
   /**
@@ -6147,6 +6595,32 @@
     }
   }
 
+  /**
+   * Open the conversation's browser from the composer: reveal the page it
+   * already has, or start a blank tab when it has none, handing that tab's
+   * address bar the keyboard so the user begins browsing straight away.
+   *
+   * Both halves are the gestures the user already has on the rail, composed
+   * here: the reveal is the browser toggle's own read (the conversation on
+   * screen), and the create is the strip's new-tab path, which is blank and
+   * takes the caret.
+   */
+  function openThreadBrowser(): void {
+    const existingTabId = contextSidebarState.rememberedBrowserTabId
+    if (existingTabId) {
+      contextSidebarState.focus(existingTabId)
+      return
+    }
+    const tabId = contextSidebarState.openBrowserForContext(
+      '',
+      thread.projectId,
+      thread.id,
+      undefined,
+      true
+    )
+    browserAddressFocus.request(tabId)
+  }
+
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
     if (busy || commandExecuting) return
     if (commandId === 'command:save-how-to') {
@@ -6159,6 +6633,10 @@
     }
     if (commandId === 'command:cio-design') {
       triggerCioDesignTurn(args)
+      return
+    }
+    if (commandId === 'command:cio-video') {
+      triggerCioVideoTurn(args)
       return
     }
     if (commandId.startsWith('cio-skill:')) {
@@ -6264,11 +6742,21 @@
       return
     }
 
-    // App-owned slash commands (/cio-utility, /cio-design and capability skills)
-    // route through the same handler the composer's submit path uses.
+    // The conversation's own browser runs the moment it is chosen, exactly like
+    // quick chat: it takes no arguments, so there is never anything to type
+    // after it, and it is a rail gesture rather than a harness command.
+    if (action.id === 'command:browser') {
+      openThreadBrowser()
+      return
+    }
+
+    // App-owned slash commands (/cio-utility, /cio-design, /cio-video and
+    // capability skills) route through the same handler the composer's submit
+    // path uses.
     if (
       action.id === 'command:cio-utility' ||
       action.id === 'command:cio-design' ||
+      action.id === 'command:cio-video' ||
       action.id.startsWith('cio-skill:')
     ) {
       await executeHarnessCommand(action.id, '')
@@ -6508,6 +6996,88 @@
 
   function openFilePart(url: string): void {
     void revealLocalFile(thread.projectId, url)
+  }
+
+  /**
+   * Every file part of `msg` that the fullscreen preview can render, in the
+   * order the message shows them. A part with no preview is left out, so
+   * navigation never lands on an empty frame.
+   */
+  function previewableFileParts(msg: AgentMessage): PreviewableFilePart[] {
+    const items: PreviewableFilePart[] = []
+    for (const part of msg.parts) {
+      if (part.type !== 'file') continue
+      const filename = part.filename ?? part.url.split('/').pop() ?? 'file'
+      const kind = attachmentPreviewKind(part.mime, filename)
+      if (!kind) continue
+      items.push({
+        url: part.url,
+        filename,
+        mime: part.mime,
+        media: kind === 'image' || kind === 'video' || kind === 'audio'
+      })
+    }
+    return items
+  }
+
+  /** Prepare the payload for the item a preview is about to show: media render
+   *  straight from the file through the blob cache, every other kind through
+   *  the shared document/text cache. */
+  function loadViewerItem(item: PreviewableFilePart): void {
+    if (item.media) return
+    attachmentPreview.open({ mime: item.mime, url: item.url, filename: item.filename })
+  }
+
+  /**
+   * Open one of a message's attachments in the fullscreen preview, collected
+   * with its previewable siblings so the modal can step between them. This is
+   * the click behaviour for an image thumbnail and for a chip the preview can
+   * render (PDF, document, Markdown, text); media chips land here too.
+   */
+  function openMessageViewer(msg: AgentMessage, part: Extract<AgentPart, { type: 'file' }>): void {
+    const items = previewableFileParts(msg)
+    const index = items.findIndex((item) => item.url === part.url)
+    if (index === -1) return
+    messageViewer = { items, index }
+    loadViewerItem(items[index])
+  }
+
+  /** Move the open preview by `delta` items, loading the payload it lands on. */
+  function stepMessageViewer(delta: number): void {
+    const viewer = messageViewer
+    if (!viewer) return
+    const index = viewer.index + delta
+    if (index < 0 || index >= viewer.items.length) return
+    messageViewer = { items: viewer.items, index }
+    loadViewerItem(viewer.items[index])
+  }
+
+  function closeMessageViewer(): void {
+    messageViewer = null
+    attachmentPreview.close()
+  }
+
+  /** Sibling navigation for the open message preview, absent for a message with
+   *  fewer than two previewable attachments. */
+  const messageViewerPager = $derived.by<PreviewPagerState | undefined>(() => {
+    const viewer = messageViewer
+    if (!viewer || viewer.items.length < 2) return undefined
+    return {
+      index: viewer.index,
+      count: viewer.items.length,
+      onPrevious: () => stepMessageViewer(-1),
+      onNext: () => stepMessageViewer(1)
+    }
+  })
+
+  /**
+   * Click behaviour for a message attachment nothing in the app can render: the
+   * reader has to find it on disk, so it is revealed in the project's file tree
+   * when it lives there and in the OS file manager when it does not. A file
+   * neither can show is reported as gone.
+   */
+  function revealSentAttachment(part: Extract<AgentPart, { type: 'file' }>): void {
+    void revealAttachmentFile(part.url)
   }
 
   function citationForFilePart(
@@ -10139,23 +10709,28 @@
   }
 
   /**
-   * Pause a secret card's countdown while the user reads a temporary chat: the
-   * same interaction that pauses a question (an update with no next index)
-   * clears the request's deadline. Best-effort, so the chat still opens when the
-   * request is already resolving.
+   * Hold a secret card's countdown while the user works on it: the same
+   * interaction that pauses a question (an update with no next index) clears the
+   * request's deadline. The card owns the best-effort handling, so a pause that
+   * did not land is retried on the next interaction instead of being swallowed
+   * here.
    */
-  function handleSecretPause(requestId: string, questionIndex: number): void {
-    void handleQuestionUpdate(requestId, questionIndex, [], undefined).catch(() => {
-      // The request may already be resolving; the chat still opens.
-    })
+  function handleSecretPause(requestId: string, questionIndex: number): Promise<void> {
+    return handleQuestionUpdate(requestId, questionIndex, [], undefined).then(() => undefined)
   }
 
+  /**
+   * Persist the draft progress of one question card. The main process answers
+   * `null` when the request already settled (it was answered, dismissed, timed
+   * out, or retired with its session), so a save that lost that race closes the
+   * stale card instead of reporting a failure for a card nobody can answer.
+   */
   async function handleQuestionUpdate(
     requestId: string,
     questionIndex: number,
     answers: string[],
     nextQuestionIndex?: number
-  ): Promise<PendingAgentQuestionRequest> {
+  ): Promise<PendingAgentQuestionRequest | null> {
     const updated = await invoke(
       'agent:updateQuestion',
       thread.projectId,
@@ -10165,6 +10740,13 @@
       answers,
       nextQuestionIndex
     )
+    if (!updated) {
+      resolvedQuestionRequestIds.add(requestId)
+      pendingQuestionRequests = pendingQuestionRequests.filter(
+        (request) => request.requestId !== requestId
+      )
+      return null
+    }
     pendingQuestionRequests = pendingQuestionRequests.map((request) =>
       request.requestId === requestId ? updated : request
     )
@@ -10451,12 +11033,12 @@
         // No cursor yet (a mount read that has not landed): adopt the window.
         streamParts = mergeWorkingParts(streamParts, page.parts)
         streamHasOlder = page.hasOlder
-        streamTodoParts = page.todoParts
+        applyTodoSnapshot(page)
         streamCursor = page.cursor
         return
       }
       streamCursor = page.cursor
-      streamTodoParts = page.todoParts
+      applyTodoSnapshot(page)
       // A fold that shrank under us belongs to another turn (a steered
       // continuation, or a log rewritten after the fact): remount the newest
       // page instead of keeping entries that no longer belong here.
@@ -10488,7 +11070,7 @@
       if (!alive || page.kind !== 'window') return
       streamParts = mergeWorkingParts(streamParts, page.parts)
       streamHasOlder = page.hasOlder
-      streamTodoParts = page.todoParts
+      applyTodoSnapshot(page)
       streamCursor = page.cursor
     } catch {
       // Best-effort: the message cache still carries the checkoffs, and the
@@ -10504,7 +11086,7 @@
     if (!alive || generation !== streamPartsLoadGeneration || page.kind !== 'window') return
     streamParts = page.parts
     streamHasOlder = page.hasOlder
-    streamTodoParts = page.todoParts
+    applyTodoSnapshot(page)
     streamCursor = page.cursor
   }
 
@@ -10546,6 +11128,29 @@
     }
   })
 
+  // The transcript can advance to a new turn without this view ever observing
+  // the boundary (a queued message, an auto-retry, a routine, or another app
+  // instance running the turn). The live poll above only runs while this view
+  // believes the thread is busy, so re-read the durable snapshot the moment the
+  // transcript's turn anchor actually changes. The guard that feeds the task
+  // card then decides whether the snapshot still applies, which is what keeps a
+  // second instance and an unwatched thread from showing the previous turn's
+  // list. The first anchor this view sees is left to the mount read, which owns
+  // the initial snapshot.
+  let todoAnchorLastRead: number | null = null
+  $effect(() => {
+    const anchor = turnAnchorCreatedAt()
+    if (anchor === null) return
+    if (todoAnchorLastRead === null) {
+      todoAnchorLastRead = anchor
+      return
+    }
+    if (anchor === todoAnchorLastRead) return
+    todoAnchorLastRead = anchor
+    if (!active || appQuitState.quitting) return
+    void refreshStreamTailAfterTurn()
+  })
+
   // Leaving this thread (another thread, another top-level view) paginates its
   // working trace in the background: the poll above stops and the durable window
   // collapses to the newest page, so coming back mounts a bounded trace instead
@@ -10560,25 +11165,44 @@
   })
 
   onDestroy(() => {
-    releaseResponseHighlights(responseHighlightOwner)
+    if (responseRangeRetryFrame) cancelAnimationFrame(responseRangeRetryFrame)
+    responseRangeRetryFrame = 0
+    releaseAnnotationHighlights(responseHighlightOwner, RESPONSE_HIGHLIGHT_NAME)
     imageUrls.destroy()
+    attachmentPreview.revokeAll()
     // Signal the main process that this thread's composer is gone so the
     // draft-timer never fires for a composer that no longer exists.
     publishDraftActivity(thread.projectId, thread.id, false)
   })
 </script>
 
-{#if previewFile}
-  <MediaPreview
-    src={imageUrls.getUrl(previewFile.url)}
-    filename={previewFile.filename}
-    mime={previewFile.mime}
-    onClose={() => (previewFile = null)}
-    onLoadError={(el) => {
-      const target = previewFile
-      if (target) void imageUrls.bindMedia(target.url, target.mime, el)
-    }}
-  />
+{#if messageViewer}
+  {@const viewerItem = messageViewer.items[messageViewer.index]}
+  {#if viewerItem.media}
+    <MediaPreview
+      src={imageUrls.getUrl(viewerItem.url)}
+      revealUrl={viewerItem.url}
+      filename={viewerItem.filename}
+      mime={viewerItem.mime}
+      pager={messageViewerPager}
+      onClose={closeMessageViewer}
+      onLoadError={(el) => {
+        const viewer = messageViewer
+        const target = viewer?.items[viewer.index]
+        if (target) void imageUrls.bindMedia(target.url, target.mime, el)
+      }}
+    />
+  {:else}
+    <AttachmentPreview
+      attachment={viewerItem}
+      src={attachmentPreview.urls[viewerItem.url]}
+      text={attachmentPreview.texts[viewerItem.url]}
+      documentHtml={attachmentPreview.documents[viewerItem.url]}
+      documentLoading={attachmentPreview.documentLoading[viewerItem.url] ?? false}
+      pager={messageViewerPager}
+      onClose={closeMessageViewer}
+    />
+  {/if}
 {/if}
 
 {#if responseSelection}
@@ -10614,12 +11238,10 @@
 
 {#if commentEditorReferenceId}
   {@const editorReference = commentEditorReference()}
-  {@const editorPosition = commentEditorReferenceId
-    ? responseBubblePositions[commentEditorReferenceId]
-    : undefined}
+  {@const editorPosition = commentEditorAnchor}
   {#if editorReference && editorPosition}
     <ResponseAnnotationComment
-      x={editorPosition.x + RESPONSE_BUBBLE_SIZE / 2}
+      x={editorPosition.x + ANNOTATION_BUBBLE_SIZE / 2}
       y={editorPosition.y}
       initialComment={editorReference.comment ?? ''}
       targetId={`response-comment-${thread.id}-${editorReference.id}`}
@@ -10932,6 +11554,36 @@
             </div>
           {/if}
           <!-- Messages -->
+          <!--
+            One chip for every attachment a message carries that is not an image
+            thumbnail. The icon is the only difference between the kinds, so it
+            travels as a value rather than as three copies of the same button.
+          -->
+          {#snippet filePartChip(
+            name: string,
+            kind: 'video' | 'audio' | 'renderable' | 'opaque',
+            action: string,
+            onclick: () => void
+          )}
+            <button
+              type="button"
+              class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+              title={action}
+              aria-label={action}
+              {onclick}
+            >
+              {#if kind === 'video'}
+                <Video size={11} class="shrink-0" />
+              {:else if kind === 'audio'}
+                <AudioLines size={11} class="shrink-0" />
+              {:else if kind === 'renderable'}
+                <FileTypeIcon path={name} size={12} class="shrink-0" />
+              {:else}
+                <FileText size={11} class="shrink-0" />
+              {/if}
+              <span class="max-w-32 truncate">{name}</span>
+            </button>
+          {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
             {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
             {#if msg.role === 'user'}
@@ -11066,6 +11718,13 @@
                                 : isAudioMime(part.mime)
                                   ? 'audio'
                                   : null}
+                              <!-- Kinds with no inline thumbnail but a preview we
+                                   can render: PDF, document, Markdown, text. -->
+                              {@const renderable =
+                                !mediaKind &&
+                                Boolean(attachmentPreviewKind(part.mime, part.filename ?? ''))}
+                              {@const partName =
+                                part.filename ?? part.url.split('/').pop() ?? 'file'}
                               {#if imageFile}
                                 <FileCitationContextMenu
                                   projectId={thread.projectId}
@@ -11076,12 +11735,7 @@
                                     class="group relative overflow-hidden rounded-lg border border-border transition-shadow hover:shadow-md"
                                     title="Preview {part.filename ?? 'image'}"
                                     aria-label="Preview {part.filename ?? 'image'}"
-                                    onclick={() =>
-                                      (previewFile = {
-                                        url: part.url,
-                                        filename: part.filename ?? 'image',
-                                        mime: part.mime
-                                      })}
+                                    onclick={() => openMessageViewer(msg, part)}
                                   >
                                     <img
                                       src={imageUrls.getUrl(part.url)}
@@ -11110,44 +11764,36 @@
                                   projectId={thread.projectId}
                                   citation={citationForFilePart(part)}
                                 >
-                                  <button
-                                    type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
-                                    title="Preview {part.filename ?? mediaKind}"
-                                    aria-label="Preview {part.filename ?? mediaKind}"
-                                    onclick={() =>
-                                      (previewFile = {
-                                        url: part.url,
-                                        filename: part.filename ?? mediaKind,
-                                        mime: part.mime
-                                      })}
-                                  >
-                                    {#if mediaKind === 'video'}
-                                      <Video size={11} class="shrink-0" />
-                                    {:else}
-                                      <AudioLines size={11} class="shrink-0" />
-                                    {/if}
-                                    <span class="max-w-32 truncate"
-                                      >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
-                                    >
-                                  </button>
+                                  {@render filePartChip(
+                                    partName,
+                                    mediaKind,
+                                    `Preview ${partName}`,
+                                    () => openMessageViewer(msg, part)
+                                  )}
+                                </FileCitationContextMenu>
+                              {:else if renderable}
+                                <FileCitationContextMenu
+                                  projectId={thread.projectId}
+                                  citation={citationForFilePart(part)}
+                                >
+                                  {@render filePartChip(
+                                    partName,
+                                    'renderable',
+                                    `Preview ${partName}`,
+                                    () => openMessageViewer(msg, part)
+                                  )}
                                 </FileCitationContextMenu>
                               {:else}
                                 <FileCitationContextMenu
                                   projectId={thread.projectId}
                                   citation={citationForFilePart(part)}
                                 >
-                                  <button
-                                    type="button"
-                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
-                                    title={`Open ${part.filename ?? part.url.split('/').pop() ?? 'file'}`}
-                                    onclick={() => openFilePart(part.url)}
-                                  >
-                                    <FileText size={11} class="shrink-0" />
-                                    <span class="max-w-32 truncate"
-                                      >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
-                                    >
-                                  </button>
+                                  {@render filePartChip(
+                                    partName,
+                                    'opaque',
+                                    `Reveal ${partName}`,
+                                    () => revealSentAttachment(part)
+                                  )}
                                 </FileCitationContextMenu>
                               {/if}
                             {/if}
@@ -11993,6 +12639,10 @@
                     {/if}
                   </p>
                 </div>
+              {:else if emptyStateHeading}
+                <div class="mb-5 text-center">
+                  {@render emptyStateHeading()}
+                </div>
               {:else}
                 <div class="mb-5 text-center">
                   <h1
@@ -12012,8 +12662,8 @@
                     {chatMode
                       ? 'Send a message to begin no project needed'
                       : centeredModelName
-                        ? `What should ${centeredModelName} work on?`
-                        : 'How can CIO serve you today?'}
+                        ? `What should ${centeredModelName} work on using CodeInOven?`
+                        : 'How can CodeInOven serve you today?'}
                   </p>
                 </div>
               {/if}
@@ -12103,6 +12753,8 @@
                     routineName={assistantRoutine?.name ?? assistantRoutineName ?? thread.title}
                     howTo={assistantRoutineDraft.howTo}
                     plan={assistantRoutineDraft.plan}
+                    update={assistantHowToComplete}
+                    existingConnections={existingRoutineConnections}
                     saving={routineSaving}
                     onSave={() => void confirmRoutineSave()}
                     onKeepEditing={keepEditingRoutine}
@@ -12469,6 +13121,7 @@
                     items={visibleTodo.items}
                     signature={visibleTodo.signature}
                     {busy}
+                    stopped={todoRunStopped}
                     onClose={() => dismissedTodo.dismiss(thread.id, visibleTodo.signature)}
                   />
                 {/if}
@@ -12480,19 +13133,21 @@
                       bind:this={composer}
                       placeholder={assistantMode && assistantRoutineName && !assistantHowToComplete
                         ? 'Describe how this routine should run…'
-                        : activePlanningEntry === 'brainstorm'
-                          ? 'Add details to the Brainstorm discussion…'
-                          : activePlanningEntry === 'spec'
-                            ? 'Sr. Engineer is preparing the specification…'
-                            : assignmentFormulating
-                              ? 'Sr. Engineer is preparing the Assignment…'
-                              : specFormulating
-                                ? 'Formulating specification…'
-                                : delegatedWorkBusy
-                                  ? `${delegatedActivityLabel}   message the Sr. Engineer`
-                                  : busy
-                                    ? `${APP_NAME} is working   type to queue a message`
-                                    : 'Send a message...'}
+                        : assistantSetupThread && assistantHowToComplete
+                          ? 'Tweak the how-to, the schedule, or a connection…'
+                          : activePlanningEntry === 'brainstorm'
+                            ? 'Add details to the Brainstorm discussion…'
+                            : activePlanningEntry === 'spec'
+                              ? 'Sr. Engineer is preparing the specification…'
+                              : assignmentFormulating
+                                ? 'Sr. Engineer is preparing the Assignment…'
+                                : specFormulating
+                                  ? 'Formulating specification…'
+                                  : delegatedWorkBusy
+                                    ? `${delegatedActivityLabel}   message the Sr. Engineer`
+                                    : busy
+                                      ? `${APP_NAME} is working   type to queue a message`
+                                      : (composerPlaceholder ?? 'Send a message...')}
                       disabled={specFormulating}
                       working={busy}
                       onStop={abortRun}

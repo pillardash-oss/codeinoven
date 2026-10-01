@@ -36,6 +36,7 @@
     onInfo: (entry: ProjectFileEntry) => void
     onReveal: (entry: ProjectFileEntry) => void
     onOpenInBrowser: (entry: ProjectFileEntry) => void
+    onOpenInTerminal: (entry: ProjectFileEntry) => void
     onRowClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowDoubleClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowContextMenu: (entry: ProjectFileEntry) => void
@@ -66,6 +67,7 @@
     onInfo,
     onReveal,
     onOpenInBrowser,
+    onOpenInTerminal,
     onRowClick,
     onRowDoubleClick,
     onRowContextMenu,
@@ -145,6 +147,7 @@
     onInfo={() => onInfo(entry)}
     onReveal={() => onReveal(entry)}
     onOpenInBrowser={() => onOpenInBrowser(entry)}
+    onOpenInTerminal={() => onOpenInTerminal(entry)}
   >
     {#if inlineEdit?.kind === 'rename' && inlineEdit.entry.path === entry.path}
       <div

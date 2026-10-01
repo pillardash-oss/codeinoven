@@ -1,7 +1,11 @@
 /// <reference types="node" />
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
+import { mkdirSync } from 'fs'
+import { basename, join } from 'path'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { appServiceRegistry } from '../system/app-service-registry'
+import { getConfigRoot } from '../../lib/utils'
 
 export const MCP_TIMEOUT_MS = 30_000
 
@@ -38,6 +42,18 @@ export interface McpClient {
   readonly serverInfo?: McpServerInfo
 }
 
+/**
+ * Who started an MCP server, so the task manager can attribute the row.
+ * `name` is the utility or service it belongs to; the project/thread fields name
+ * the turn that started it, and are omitted for app-lifetime clients.
+ */
+export interface McpClientOwner {
+  name?: string
+  scope?: 'app' | 'project' | 'thread'
+  projectId?: string | null
+  threadId?: string | null
+}
+
 /** Read `result.serverInfo` from an `initialize` response, ignoring a malformed one. */
 export function parseMcpServerInfo(result: unknown): McpServerInfo {
   if (!isRecord(result)) return {}
@@ -46,6 +62,29 @@ export function parseMcpServerInfo(result: unknown): McpServerInfo {
   return {
     ...(typeof info['name'] === 'string' ? { name: info['name'] } : {}),
     ...(typeof info['version'] === 'string' ? { version: info['version'] } : {})
+  }
+}
+
+/**
+ * The directory an MCP child process runs in: app-owned, and deliberately empty
+ * of any `package.json` or `.npmrc`.
+ *
+ * An `npx`-launched server resolves its package against the working directory,
+ * and the Electron process's own cwd is whatever launched the app. When that cwd
+ * is a source checkout, npm reads that project's `overrides` and `.npmrc`: a
+ * single conflicting override then aborts the install with `EOVERRIDE` before
+ * the MCP server ever starts (the community Slack server died exactly this way
+ * inside CodeInOven's own checkout). A neutral directory keeps the server's
+ * install independent of whichever project the app happens to be sitting in.
+ */
+function mcpWorkingDirectory(): string | undefined {
+  const directory = join(getConfigRoot(), 'runtime', 'mcp-servers')
+  try {
+    mkdirSync(directory, { recursive: true })
+    return directory
+  } catch {
+    // A cwd is an optimization, never a reason an MCP server cannot start.
+    return undefined
   }
 }
 
@@ -65,6 +104,9 @@ export class StdioMcpClient implements McpClient {
     { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
   >()
 
+  /** Registry id of the task-manager row for this server, once announced. */
+  private serviceId: string | null = null
+
   private constructor(
     private readonly child: ChildProcessWithoutNullStreams,
     private readonly command: string
@@ -76,18 +118,23 @@ export class StdioMcpClient implements McpClient {
     child.stderr.on('data', (chunk: Buffer) => this.recordStderr(chunk.toString()))
     // `close` rather than `exit`: it fires once the stdio streams are drained, so the
     // tail above is complete by the time the failure is reported.
-    child.on('close', (code, signal) => this.rejectPending(this.exitError(code, signal)))
+    child.on('close', (code, signal) => {
+      this.retireService()
+      this.rejectPending(this.exitError(code, signal))
+    })
     child.on('error', (error) => this.rejectPending(error))
   }
 
   static async connect(
     command: string,
     args: string[],
-    environment: Record<string, string>
+    environment: Record<string, string>,
+    owner: McpClientOwner = {}
   ): Promise<StdioMcpClient> {
     const client = new StdioMcpClient(
       spawn(command, args, {
         env: { ...buildProcessEnvironment(), ...environment },
+        cwd: mcpWorkingDirectory(),
         stdio: ['pipe', 'pipe', 'pipe']
       }),
       command
@@ -100,7 +147,34 @@ export class StdioMcpClient implements McpClient {
       })
     )
     client.notify('notifications/initialized', {})
+    client.announceService(command, args, owner)
     return client
+  }
+
+  /**
+   * Publish the running server so the task manager lists it while it lives.
+   * Before this, a turn's MCP child existed only as an untracked process of the
+   * Electron main process and was invisible to the operator.
+   */
+  private announceService(command: string, args: string[], owner: McpClientOwner): void {
+    const reported = this.serverInfo.name?.trim()
+    const label = owner.name?.trim() || reported || basename(command) || 'MCP server'
+    this.serviceId = appServiceRegistry.register({
+      kind: 'mcp',
+      name: `MCP server: ${label}`,
+      detail: [command, ...args].join(' '),
+      scope: owner.scope ?? 'app',
+      projectId: owner.projectId ?? null,
+      threadId: owner.threadId ?? null,
+      pid: this.child.pid ?? null,
+      stop: () => this.close()
+    })
+  }
+
+  private retireService(): void {
+    if (!this.serviceId) return
+    appServiceRegistry.unregister(this.serviceId)
+    this.serviceId = null
   }
 
   async listTools(): Promise<McpTool[]> {
@@ -125,6 +199,7 @@ export class StdioMcpClient implements McpClient {
   }
 
   async close(): Promise<void> {
+    this.retireService()
     this.rejectPending(new Error('MCP client closed'))
     this.child.kill()
   }

@@ -14,12 +14,20 @@
  *   - blocks    DOM surfaces that are on screen and must stay in front
  *   - claims    which tab wants to display native content, on which surface
  *   - occlusion floating overlays that currently overlap a surface's frame
+ *   - frames    native rectangles actually on screen, the inverse question
  *
  * A component that needs the browser hidden publishes one block for as long as
  * it is on screen (`hideWhile`). A component that displays native content claims
  * the view for its tab (`claimTab`) and asks whether it may be shown
  * (`isVisible`). Both are keyed and return their own release function, so a
  * block or claim can never outlive the surface that published it.
+ *
+ * The third question runs the other way. A DOM surface that has to stay usable
+ * while the page is up   the toaster, which asks whether a page covers the
+ * corner it draws in and hands the stack to a window of its own when one does
+ *   needs to know where the page actually is (`publishNativeFrame`). That
+ * publication is a read for everyone else and must never reach `isCovered`,
+ * which is the mechanism that hides the page in the first place.
  *
  * Extending the browser to a new scope is a change in this file: add the surface
  * to `BrowserSurface`, add the reason to `BrowserHideBlock`, and resolve it in
@@ -33,7 +41,7 @@ import type { BrowserViewBounds } from '$shared/ipc-contract'
 import { contextSidebarState } from './context-sidebar.svelte'
 
 /** The places the browser can display native content. */
-export type BrowserSurface = 'sidebar' | 'fullscreen'
+export type BrowserSurface = 'sidebar' | 'fullscreen' | 'workspace'
 
 /**
  * A reason a DOM surface publishes while it is on screen and the native view
@@ -78,6 +86,13 @@ class BrowserVisibilityState {
    *  which is also the space the browser view is positioned in. */
   private overlays = new SvelteMap<string, BrowserViewBounds>()
 
+  /** On-screen rectangles of the native views themselves, published by the
+   *  surface displaying each one. Read by anything that has to ask whether a page
+   *  covers it (the toaster's corner check). Deliberately not consulted by
+   *  `isCovered`: that is the decision to hide the page, and feeding the page's
+   *  own rectangle back into it would hide it on every write. */
+  private nativeFrames = new SvelteMap<string, BrowserViewBounds>()
+
   /**
    * Keep the native view hidden while `hidden` is true, for as long as the
    * publisher is on screen. Returns the release function, so the caller can hand
@@ -102,8 +117,12 @@ class BrowserVisibilityState {
    * claim dies with the component that made it.
    *
    * ```svelte
-   * $effect(() => browserVisibility.claimTab(tabId, 'sidebar'))
+   * onMount(() => browserVisibility.claimTab(tabId, 'sidebar'))
    * ```
+   *
+   * Called from a lifecycle rather than an `$effect` on purpose: a claim is a
+   * side effect that lasts exactly as long as its component, and its inputs are
+   * snapshotted at construction, so there is nothing for an effect to track.
    */
   claimTab(tabId: string, surface: BrowserSurface): () => void {
     this.claims.set(surface, tabId)
@@ -123,6 +142,57 @@ class BrowserVisibilityState {
   }
 
   /**
+   * Publish a native view's on-screen rectangle for as long as it is really on
+   * screen. A parked view covers nothing, so its surface clears the frame
+   * instead of publishing the rectangle it would occupy.
+   */
+  publishNativeFrame(key: string, rect: BrowserViewBounds): void {
+    this.nativeFrames.set(key, rect)
+  }
+
+  /** Drop a native view's rectangle once it is off screen or unmounted. */
+  clearNativeFrame(key: string): void {
+    this.nativeFrames.delete(key)
+  }
+
+  /** Every native rectangle currently on screen, in viewport CSS pixels. */
+  get onScreenFrames(): BrowserViewBounds[] {
+    return [...this.nativeFrames.values()]
+  }
+
+  /**
+   * Whether a full-window DOM surface is on screen over the browser: a modal, a
+   * sheet, the command palette, or the thread switcher.
+   *
+   * The same reason `hideReasonFor` carries, exposed for a surface that has to
+   * decide whether it may keep drawing above a page. `workspace-inactive` is
+   * excluded for the same reason it is excluded there: the workspace shell stays
+   * mounted and hidden while the browser's own top-level view is the active one,
+   * so it says nothing about a full-window surface being up.
+   */
+  get hasFullWindowSurface(): boolean {
+    for (const reason of this.blocks.values()) {
+      if (reason !== 'workspace-inactive') return true
+    }
+    return false
+  }
+
+  /**
+   * Whether any on-screen native view overlaps `bounds`.
+   *
+   * The question a DOM surface asks before drawing somewhere: a page is opaque
+   * and composites above every DOM node, so a surface that must be readable picks
+   * somewhere else to be. Both rectangles are in viewport CSS pixels, which is
+   * the space the native views are positioned in.
+   */
+  overlapsNative(bounds: BrowserViewBounds): boolean {
+    for (const frame of this.nativeFrames.values()) {
+      if (intersects(frame, bounds)) return true
+    }
+    return false
+  }
+
+  /**
    * Why the native view for `tabId` is hidden, or null when it may be shown.
    * `bounds` is the frame the requesting surface would occupy.
    *
@@ -130,10 +200,47 @@ class BrowserVisibilityState {
    * placement and overlay occlusion itself.
    */
   hideReasonFor(tabId: string, bounds: BrowserViewBounds | null): BrowserHideReason | null {
-    for (const reason of this.blocks.values()) return reason
     const surface = this.owningSurface
+    for (const reason of this.blocks.values()) {
+      // `workspace-inactive` reports that the workspace shell is hidden because
+      // another top-level view owns the window, which is equally true while the
+      // browser view is the active one   the shell stays mounted but hidden.
+      // That reason exists to stop a browser docked inside the shell from
+      // floating over Settings or Scope, so it must never suppress the browser's
+      // own top-level workspace surface, which is not inside the shell at all.
+      // Without this, opening the browser view published the block and the page
+      // was attached in main but never shown.
+      if (reason === 'workspace-inactive' && surface === 'workspace') continue
+      return reason
+    }
     if (surface === null) return 'not-placed'
     if (this.claims.get(surface) !== tabId) return 'owned-elsewhere'
+    return this.isCovered(bounds) ? 'covered-by-overlay' : null
+  }
+
+  /** Whether a popup window's page may be displayed at `bounds`. */
+  isPopupVisible(bounds: BrowserViewBounds | null): boolean {
+    return this.popupHideReasonFor(bounds) === null
+  }
+
+  /**
+   * Why a popup window's native view must stay hidden, or null when it may be
+   * shown. `bounds` is the frame the rail's panel would occupy.
+   *
+   * A popup window's page is a second native view, so it needs the same answer a
+   * tab's page does for everything that has to stay in front of it: a full-window
+   * DOM surface, the thread switcher, or a floating overlay over the panel. It has
+   * no claim to resolve   the rail decides which popup it is showing   so this is
+   * the published blocks plus occlusion, and nothing else.
+   */
+  popupHideReasonFor(bounds: BrowserViewBounds | null): BrowserHideReason | null {
+    for (const reason of this.blocks.values()) {
+      // The popup panel lives in the browser's own top-level view, which is not
+      // inside the workspace shell, so the shell's own hidden state says nothing
+      // about it (see `hideReasonFor`).
+      if (reason === 'workspace-inactive') continue
+      return reason
+    }
     return this.isCovered(bounds) ? 'covered-by-overlay' : null
   }
 
@@ -144,11 +251,13 @@ class BrowserVisibilityState {
 
   /**
    * The surface that currently owns the native view. Only one view can be on
-   * screen at a time, so a fullscreen surface outranks the sidebar, and the
-   * sidebar owns it only while it is actually displaying the tab that claimed
-   * it. Other tabs are not detached any more, they run parked offscreen.
+   * screen at a time, so a full-window surface outranks the sidebar: the
+   * global browser workspace, then the full screen dialog, then the sidebar,
+   * which owns it only while it is actually displaying the tab that claimed it.
+   * Other tabs are not detached any more, they run parked offscreen.
    */
   private get owningSurface(): BrowserSurface | null {
+    if (this.claims.has('workspace')) return 'workspace'
     if (this.claims.has('fullscreen')) return 'fullscreen'
     const tabId = this.claims.get('sidebar')
     if (tabId === undefined) return null

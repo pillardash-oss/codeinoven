@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws:"
+    />
+    <title>Browser permission</title>
+    <style>
+      /* The window is transparent and only the card paints, so the prompt floats
+         over the page it belongs to instead of sitting in an opaque rectangle
+         that was never the shape of anything the app draws. The app stylesheet
+         gives a document the app's surface colour, which here would be exactly
+         such a rectangle. */
+      html,
+      body {
+        background: transparent !important;
+      }
+
+      body {
+        overflow: hidden;
+      }
+
+      /* The card's margins inside the window: they are the room its shadow needs
+         and are mirrored by the window's own size in
+         src/main/browser/permission-prompt-window.ts. */
+      #permission-prompt {
+        padding: 6px 12px 16px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="permission-prompt"></div>
+    <script type="module" src="./permission-prompt.ts"></script>
+  </body>
+</html>

@@ -52,6 +52,12 @@ import type {
   EngineeringSpecContent
 } from '../../src/lib/types'
 import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../src/lib/types'
+import {
+  DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  DEFAULT_BROWSER_HISTORY_LIMIT,
+  DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS
+} from '../../src/lib/types/settings'
 import { ProjectManager } from '../../src/lib/engines/project-manager'
 import { exportEngineeringSpecMarkdown } from '../../src/lib/spec/spec-markdown'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
@@ -95,6 +101,7 @@ const defaultConfig: AppConfig = {
   slashCommandMode: 'app',
   preferredEditor: 'system',
   openLocalhostInCioBrowser: true,
+  openAllLinksInCioBrowser: false,
   allowPrototypeExternalCdn: true,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { success: true, issue: true },
@@ -102,6 +109,8 @@ const defaultConfig: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
   design: { assignments: [] },
+  workRoots: { design: '.cio/designs', video: '.cio/videos' },
+  mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
@@ -115,6 +124,16 @@ const defaultConfig: AppConfig = {
   defaultPullStrategy: 'ask',
   maxDiffLines: 100,
   maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
+  browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
+  browserHistoryLimit: DEFAULT_BROWSER_HISTORY_LIMIT,
+  backgroundMode: 'scheduled',
+  launchAtLogin: true,
+  launchAtLoginPrompted: true,
+  autoRunMissedAssistantRuns: true,
+  backgroundWakeLeadMs: DEFAULT_BACKGROUND_WAKE_LEAD_MS,
+  maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
+  browserSearchEngine: 'duckduckgo',
+  browserCustomSearchEngines: [],
   sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
 }
 
@@ -169,6 +188,10 @@ describe('validateAppConfigPatch', () => {
         imageDescriptorAskAgain: true,
         autoRetryAfterReset: true,
         resumeWorkOnRestart: false,
+        browserSearchEngine: 'google',
+        browserCustomSearchEngines: [
+          { id: 'kagi', name: 'Kagi', searchUrlTemplate: 'https://kagi.com/search?q=%s' }
+        ],
         defaultMergeMethod: 'rebase',
         maxDiffLines: 250,
         agentBehaviorPrompt: 'Custom agent behavior.',
@@ -195,6 +218,10 @@ describe('validateAppConfigPatch', () => {
       imageDescriptorAskAgain: true,
       autoRetryAfterReset: true,
       resumeWorkOnRestart: false,
+      browserSearchEngine: 'google',
+      browserCustomSearchEngines: [
+        { id: 'kagi', name: 'Kagi', searchUrlTemplate: 'https://kagi.com/search?q=%s' }
+      ],
       defaultMergeMethod: 'rebase',
       maxDiffLines: 250,
       agentBehaviorPrompt: 'Custom agent behavior.',
@@ -236,6 +263,19 @@ describe('validateAppConfigPatch', () => {
     { imageDescriptorAskAgain: 1 },
     { autoRetryAfterReset: 'yes' },
     { resumeWorkOnRestart: 'yes' },
+    { browserSearchEngine: '' },
+    { browserSearchEngine: 7 },
+    { browserCustomSearchEngines: 'kagi' },
+    {
+      browserCustomSearchEngines: [
+        { id: 'duckduckgo', name: 'Fake', searchUrlTemplate: 'https://x/?q=%s' }
+      ]
+    },
+    {
+      browserCustomSearchEngines: [
+        { id: 'kagi', name: 'Kagi', searchUrlTemplate: 'javascript:alert(1)' }
+      ]
+    },
     { resumeWorkOnRestart: 1 },
     {
       memory: {

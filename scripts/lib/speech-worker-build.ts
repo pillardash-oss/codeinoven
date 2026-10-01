@@ -577,17 +577,32 @@ async function runSwiftBuild(worker: SpeechWorkerPackage): Promise<void> {
   })
 }
 
-/** Locate the executable SwiftPM produced, across the build-system layouts in use. */
+/**
+ * Locate the executable SwiftPM produced, across the build-system layouts in use.
+ *
+ * The scratch directory can hold artifacts from more than one layout: a newer
+ * SwiftPM writes `out/Products/Release/<product>` while an earlier build left
+ * `<arch>-apple-macosx/release/<product>` behind. Taking the first path that
+ * exists installed the stale binary and silently discarded the build that had
+ * just run, which is how a shipped native fix never reached the app. The newest
+ * candidate is the one this build produced.
+ */
 async function findCompiledProduct(worker: SpeechWorkerPackage): Promise<string> {
   const candidates = [
     join(worker.scratchDirectory, `${process.arch}-apple-macosx`, 'release', worker.product),
     join(worker.scratchDirectory, 'release', worker.product),
     join(worker.scratchDirectory, 'out', 'Products', 'Release', worker.product)
   ]
+  let newest: { path: string; mtimeMs: number } | null = null
   for (const candidate of candidates) {
-    if ((await stat(candidate).catch(() => null))?.isFile()) return candidate
+    const details = await stat(candidate).catch(() => null)
+    if (!details?.isFile()) continue
+    if (newest === null || details.mtimeMs > newest.mtimeMs) {
+      newest = { path: candidate, mtimeMs: details.mtimeMs }
+    }
   }
-  throw new Error(`SwiftPM did not produce ${worker.product}.`)
+  if (newest === null) throw new Error(`SwiftPM did not produce ${worker.product}.`)
+  return newest.path
 }
 
 function shortKey(key: string): string {

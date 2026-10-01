@@ -347,15 +347,17 @@ export function registerGitHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle(
     'git:deleteRemoteBranch',
     async (_, projectId: unknown, remote: unknown, name: unknown, scopeBucketId?: unknown) =>
-      gitService.deleteRemoteBranch(
-        await resolveProjectPath(
-          validateEntityId(projectId, 'Project ID'),
-          scopeBucketId === undefined
-            ? undefined
-            : validateEntityId(scopeBucketId, 'Scope bucket ID')
-        ),
-        validateRemoteName(remote),
-        validateBranchName(name)
+      gitInvocation(async () =>
+        gitService.deleteRemoteBranch(
+          await resolveProjectPath(
+            validateEntityId(projectId, 'Project ID'),
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          ),
+          validateRemoteName(remote),
+          validateBranchName(name)
+        )
       )
   )
   ipcMain.handle(

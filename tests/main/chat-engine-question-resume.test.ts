@@ -15,6 +15,8 @@ import { ProjectRepo } from '../../src/main/database/repositories/project-repo'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
 import { ChatEngine } from '../../src/main/chat/chat-engine'
 import type { PendingQuestionInfo } from '../../src/main/chat/chat-engine/chat-engine-types'
+import type { SessionInfo } from '../../src/main/chat/chat-engine/chat-engine-types'
+import type { CheckpointManager } from '../../src/main/storage/checkpoint-manager'
 import {
   InactiveQuestionTurnError,
   QuestionRequestGoneError
@@ -32,7 +34,9 @@ import type {
  * driver writes into a closed conversation and the thread sits idle on an
  * answered card. These lock in the engine's two recoveries: resume the
  * persisted session with the decision when the driver can prove no turn is
- * live, and keep the old finalize behavior otherwise.
+ * live, and keep the old finalize behavior otherwise. They also lock in the
+ * turn attribution that resume depends on, since a turn whose evidence is lost
+ * records no file changes at all.
  */
 
 const PROJECT_ID = 'p1'
@@ -55,6 +59,19 @@ interface EngineInternals {
   drivers: Map<string, unknown>
   pendingQuestions: Map<string, PendingQuestionInfo>
   handledIdleSessions: Set<string>
+  checkpointManager: CheckpointManager
+  sessionRegistry: Map<string, SessionInfo>
+  registerSession(
+    sessionId: string,
+    projectId: string,
+    threadId: string,
+    projectPath: string,
+    permissionLevel: SessionInfo['permissionLevel'],
+    driverId: string,
+    activeTurnId?: string,
+    ephemeral?: boolean
+  ): void
+  reassertTurnToolEvidence(session: SessionInfo, messages: readonly AgentMessage[]): void
   registerPendingQuestion(
     driverId: string,
     projectId: string,
@@ -66,6 +83,7 @@ interface EngineInternals {
 }
 
 const temporaryDatabases: Database[] = []
+const temporaryProjectRoots: string[] = []
 const originalConfigRoot = process.env['CODEINOVEN_CONFIG_ROOT']
 let temporaryConfigRoot = ''
 
@@ -77,6 +95,7 @@ beforeEach(() => {
 afterEach(() => {
   temporaryDatabases.splice(0).forEach(destroyTestDb)
   rmSync(temporaryConfigRoot, { force: true, recursive: true })
+  temporaryProjectRoots.splice(0).forEach((path) => rmSync(path, { force: true, recursive: true }))
   temporaryConfigRoot = ''
   if (originalConfigRoot === undefined) delete process.env['CODEINOVEN_CONFIG_ROOT']
   else process.env['CODEINOVEN_CONFIG_ROOT'] = originalConfigRoot
@@ -96,13 +115,15 @@ function setDriver(engine: ChatEngine, id: string, driver: Record<string, unknow
   internals(engine).drivers.set(id, driver)
 }
 
-async function setup(): Promise<{ engine: ChatEngine; threadId: string }> {
+async function setup(
+  projectPath = PROJECT_PATH
+): Promise<{ engine: ChatEngine; threadId: string }> {
   const db = await createTestDb()
   temporaryDatabases.push(db)
   new ProjectRepo(db).upsert({
     id: PROJECT_ID,
     name: 'Project',
-    path: PROJECT_PATH,
+    path: projectPath,
     source: 'local',
     providerId: 'openai',
     workflowId: 'default',
@@ -200,6 +221,46 @@ describe('ChatEngine question reply after the owning turn ended', () => {
     expect(internals(engine).pendingQuestions.has(REQUEST_ID)).toBe(false)
   })
 
+  it("settles the unresumable turn's checkpoint so its file changes still reach a card", async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'codeinoven-question-turn-'))
+    temporaryProjectRoots.push(projectRoot)
+    const { engine, threadId } = await setup(projectRoot)
+    setDriver(engine, 'pi', {
+      replyToQuestion: async () => {
+        throw new QuestionRequestGoneError(SESSION_ID, REQUEST_ID, 'Pi')
+      },
+      hasActiveTurn: () => false
+    })
+    // The turn that asked the question left its checkpoint open on purpose, so
+    // the answer could continue it. This driver proves it cannot.
+    const internalsRef = internals(engine)
+    const active = await internalsRef.checkpointManager.beginTurn(
+      PROJECT_ID,
+      threadId,
+      projectRoot,
+      'Turn that asked',
+      false
+    )
+    internalsRef.sessionRegistry.set(SESSION_ID, {
+      sessionId: SESSION_ID,
+      projectId: PROJECT_ID,
+      threadId,
+      projectPath: projectRoot,
+      permissionLevel: 'auto_review',
+      driverId: 'pi',
+      activeTurnId: active.id
+    })
+    registerQuestion(engine, threadId)
+    vi.spyOn(engine, 'sendPrompt').mockResolvedValue(promptMessage())
+
+    await engine.answerQuestion(PROJECT_ID, threadId, REQUEST_ID, [['#general']])
+
+    const stored = await internalsRef.checkpointManager.get(PROJECT_ID, threadId, active.id)
+    expect(stored?.status).toBe('completed')
+    expect(stored?.after).toBeDefined()
+    expect(internalsRef.sessionRegistry.get(SESSION_ID)?.activeTurnId).toBeUndefined()
+  })
+
   it('resumes an inactive-turn dismissal and keeps its visible presentation', async () => {
     const { engine, threadId } = await setup()
     setDriver(engine, 'pi', {
@@ -220,5 +281,87 @@ describe('ChatEngine question reply after the owning turn ended', () => {
     // explains the dismissal must still render.
     expect(args?.[11]).toEqual({ action: 'Dismissed agent question' })
     expect(internals(engine).pendingQuestions.has(REQUEST_ID)).toBe(false)
+  })
+})
+
+describe('ChatEngine turn attribution', () => {
+  function registerTurn(engine: ChatEngine, threadId: string, activeTurnId: string): void {
+    internals(engine).registerSession(
+      SESSION_ID,
+      PROJECT_ID,
+      threadId,
+      PROJECT_PATH,
+      'auto_review',
+      'pi',
+      activeTurnId
+    )
+  }
+
+  it('keeps an in-flight turn evidence when the same turn re-registers', async () => {
+    const { engine, threadId } = await setup()
+    registerTurn(engine, threadId, 'turn-1')
+    const session = internals(engine).sessionRegistry.get(SESSION_ID)
+    if (!session) throw new Error('session was not registered')
+    // What the live part events built up during the turn. Losing this before
+    // completion made the turn record no workspace change at all.
+    session.changedPaths = new Set(['src/edited.ts'])
+    session.preciseChangedPaths = new Map([['src/edited.ts', Date.now()]])
+    session.unboundedToolObserved = true
+
+    registerTurn(engine, threadId, 'turn-1')
+    const refreshed = internals(engine).sessionRegistry.get(SESSION_ID)
+    expect(refreshed?.unboundedToolObserved).toBe(true)
+    expect([...(refreshed?.changedPaths ?? [])]).toEqual(['src/edited.ts'])
+    expect(refreshed?.preciseChangedPaths?.has('src/edited.ts')).toBe(true)
+
+    registerTurn(engine, threadId, 'turn-2')
+    const next = internals(engine).sessionRegistry.get(SESSION_ID)
+    expect(next?.unboundedToolObserved).toBe(false)
+    expect(next?.changedPaths).toBeUndefined()
+    expect(next?.preciseChangedPaths?.size).toBe(0)
+  })
+
+  it('re-asserts the mutating tools a settled transcript proves', async () => {
+    const { engine } = await setup()
+    const session: SessionInfo = {
+      sessionId: SESSION_ID,
+      projectId: PROJECT_ID,
+      threadId: 'thread-attribution',
+      projectPath: PROJECT_PATH,
+      permissionLevel: 'auto_review',
+      driverId: 'codex'
+    }
+
+    internals(engine).reassertTurnToolEvidence(session, [
+      {
+        id: 'msg-1',
+        role: 'assistant',
+        createdAt: Date.now(),
+        parts: [
+          {
+            type: 'tool',
+            id: 'part-shell',
+            messageID: 'msg-1',
+            callID: 'call-shell',
+            tool: 'command_execution',
+            state: { status: 'completed', input: {} }
+          },
+          {
+            type: 'tool',
+            id: 'part-write',
+            messageID: 'msg-1',
+            callID: 'call-write',
+            tool: 'write_file',
+            state: { status: 'completed', input: { path: 'src/written.ts' } }
+          }
+        ]
+      }
+    ])
+
+    // A shell tool means the turn's completion must use the whole workspace
+    // diff; the file tool becomes a precise claim for the same turn.
+    expect(session.unboundedToolObserved).toBe(true)
+    expect([...(session.changedPaths ?? [])]).toEqual(['src/written.ts'])
+    expect(session.preciseChangedPaths?.has('src/written.ts')).toBe(true)
   })
 })

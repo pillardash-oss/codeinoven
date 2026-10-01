@@ -60,6 +60,18 @@
     /** Tooltip/aria label shown on the draggable header. */
     dragLabel?: string
     /**
+     * Extra header controls rendered before the minimize and close affordances,
+     * e.g. the file panel's "open full screen" action.
+     */
+    headerActions?: Snippet
+    /**
+     * Render the body without its default padding and scroll, as a flex column,
+     * for content that lays itself out and fills the panel (an editor or a
+     * full-height viewer). The default padded, scrolling body suits prose and
+     * lists.
+     */
+    flushBody?: boolean
+    /**
      * Optional content rendered before the title in the header (e.g. a project
      * icon and name), so the panel states which project it belongs to.
      */
@@ -88,6 +100,8 @@
     layer = 'surface',
     defaultHeight = 560,
     dragLabel = 'Drag to move the task panel',
+    headerActions,
+    flushBody = false,
     headerPrefix,
     onPrimaryAction
   }: Props = $props()
@@ -256,6 +270,16 @@
 
   let panelEl = $state<HTMLElement | null>(null)
 
+  // A collapsed panel is `invisible`, but the DOM keeps focus on whatever was
+  // focused inside it. Without this, keystrokes typed after a minimize land in
+  // an element the user cannot see (an editor, a terminal), so focus is released
+  // to the surface behind the chip the moment the panel collapses.
+  $effect(() => {
+    if (!minimized) return
+    const focused = document.activeElement
+    if (focused instanceof HTMLElement && panelEl?.contains(focused)) focused.blur()
+  })
+
   const occlusionKey = `dockable-modal-${crypto.randomUUID()}`
 
   // The in-app browser renders a native WebContentsView that the compositor
@@ -350,6 +374,9 @@
         <h2 class="truncate text-xs font-semibold">{title}</h2>
       </span>
       <span class="flex shrink-0 items-center gap-1">
+        {#if headerActions}
+          {@render headerActions()}
+        {/if}
         <button
           class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Minimize"
@@ -371,7 +398,13 @@
       </span>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-y-auto p-4">{@render children()}</div>
+    <div
+      class={flushBody
+        ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+        : 'min-h-0 flex-1 overflow-y-auto p-4'}
+    >
+      {@render children()}
+    </div>
 
     {#if footer}
       <!--

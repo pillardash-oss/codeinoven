@@ -1,6 +1,8 @@
 import type { AgentDefaultsConfig, AuxiliaryAgentConfig, RankingJudgeConfig } from './agent'
 import type { AgentModelSelection } from './common'
 import type { GitPullPreference, PrMergeMethod } from './git'
+import type { MediaProviderId } from '../media-generation'
+import type { BrowserSearchEngine } from '../browser-search-engines'
 
 export interface WorkflowStage {
   id: string
@@ -230,14 +232,85 @@ export interface DesignAssignment {
   produces?: DesignAssignmentOutput
   /** Standing guidance handed to the assigned model with every call. */
   instructions?: string
-  /** The model that does this work. */
-  selection: AgentModelSelection
+  /**
+   * The harness model that does this work. Required for a text craft, and absent
+   * for a media craft, which names a generated-media model instead.
+   */
+  selection?: AgentModelSelection
+  /**
+   * The generation model that produces this craft's asset, in the configured
+   * provider's own spelling (`black-forest-labs/flux-1.1-pro`). Required for a
+   * media craft, and absent for a text craft.
+   */
+  mediaModel?: string
 }
 
 /** Design work the user routed to a model of their own choosing. */
 export interface DesignConfig {
   /** User-authored assignments. Empty means nothing is delegated anywhere. */
   assignments: DesignAssignment[]
+}
+
+/**
+ * The backend that turns a prompt into an image, a clip or a track.
+ *
+ * One provider at a time, because one aggregator token already reaches many
+ * models: the user's real choice is the model they assign to each craft, which
+ * lives on the design assignment rather than here. The token itself is kept in
+ * the secure vault and never in this config.
+ */
+export interface MediaGenerationConfig {
+  /** The backend the app calls, or null while the user has not chosen one. */
+  providerId: MediaProviderId | null
+}
+
+/** Bounds for `AppConfig.browserHibernationMinutes`. */
+export const MIN_BROWSER_HIBERNATION_MINUTES = 5
+export const MAX_BROWSER_HIBERNATION_MINUTES = 120
+export const DEFAULT_BROWSER_HIBERNATION_MINUTES = 30
+
+/**
+ * Bounds for `AppConfig.browserHistoryLimit`, how many pages the browser's
+ * history keeps. Older visits evict for newer ones once the cap is reached, so
+ * the setting trades a longer memory against the size of the stored file.
+ */
+export const MIN_BROWSER_HISTORY_LIMIT = 50
+export const MAX_BROWSER_HISTORY_LIMIT = 10_000
+export const DEFAULT_BROWSER_HISTORY_LIMIT = 1_000
+
+/**
+ * How the app behaves once its last window closes.
+ *
+ * - `off` is the original behaviour: closing the last window quits the process.
+ * - `scheduled` keeps the backend alive while work is running or due inside the
+ *   wake lead, so a routine can fire on time from the menu bar.
+ * - `always` never quits on close.
+ */
+export type BackgroundMode = 'off' | 'scheduled' | 'always'
+
+/** Bounds for `AppConfig.backgroundWakeLeadMs`. */
+export const MIN_BACKGROUND_WAKE_LEAD_MS = 0
+export const MAX_BACKGROUND_WAKE_LEAD_MS = 30 * 60 * 1000
+export const DEFAULT_BACKGROUND_WAKE_LEAD_MS = 2 * 60 * 1000
+
+/** Bounds for `AppConfig.maxBackgroundWakeHoldMs`, the hard awake-time cap. */
+export const MIN_MAX_BACKGROUND_WAKE_HOLD_MS = 60 * 1000
+export const MAX_MAX_BACKGROUND_WAKE_HOLD_MS = 60 * 60 * 1000
+export const DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS = 10 * 60 * 1000
+
+/**
+ * This process's role against the shared config root's single backend.
+ *
+ * There is exactly one backend per config root (one database, one scheduler),
+ * and exactly one running process owns the scheduled work for it. A secondary
+ * instance keeps a fully usable window but schedules nothing and shows the
+ * "running in another instance" notice.
+ */
+export interface InstanceRole {
+  /** `owner` runs scheduled work; `secondary` is a window into the owner. */
+  role: 'owner' | 'secondary'
+  /** Process id of the elected owner, or 0 when it could not be resolved. */
+  ownerPid: number
 }
 
 export interface AppConfig {
@@ -274,6 +347,16 @@ export interface AppConfig {
   auxiliaryAgents: AuxiliaryAgentConfig
   /** Model the user assigned to each named design assignment (images, copy, video). */
   design: DesignConfig
+  /**
+   * Project-relative folders where authored work is written, app-wide.
+   *
+   * One value covers every project, and each project resolves it against its own
+   * root, so a user who wants designs committed sets it once. Changing it moves
+   * the work already written under the old folder into the new one.
+   */
+  workRoots: WorkRoots
+  /** Backend that generates images, clips and sound for a design or a composition. */
+  mediaGeneration: MediaGenerationConfig
   /** Model that judges ranking conversations, and whether it is pinned at all. */
   rankingJudge: RankingJudgeConfig
   /** Editable default behavior prompt for project Engineering implementation turns. */
@@ -309,6 +392,57 @@ export interface AppConfig {
   /** Route loopback development links into the app-scoped test browser. */
   openLocalhostInCioBrowser: boolean
   /**
+   * Route every other (non-loopback) link into the workspace browser of the
+   * project/thread it was activated in, instead of the system browser. Off by
+   * default. Localhost keeps its own preference because it always belongs to the
+   * surface it was clicked in, while this is the general default that a future
+   * project-less global browser will extend.
+   */
+  openAllLinksInCioBrowser: boolean
+  /**
+   * Minutes a global-browser tab may sit idle before it hibernates. Bounded to
+   * `MIN/MAX_BROWSER_HIBERNATION_MINUTES`.
+   */
+  browserHibernationMinutes: number
+  /**
+   * How many pages the browser's browsing history keeps. Bounded to
+   * `MIN/MAX_BROWSER_HISTORY_LIMIT`; older visits evict for newer ones.
+   */
+  browserHistoryLimit: number
+  /**
+   * How the app behaves once its last window closes. On by default (`scheduled`)
+   * so Assistant routines can fire while the window is closed.
+   */
+  backgroundMode: BackgroundMode
+  /**
+   * Launch CodeInOven at login so a schedule can fire after a restart. Off
+   * until the user asks for it: the app offers it once, after the first
+   * routine's how-to is saved, and never assumes the answer.
+   */
+  launchAtLogin: boolean
+  /**
+   * True once the one-time start-at-login offer has been answered. The offer is
+   * raised only when a routine gets its first how-to, and this flag is saved
+   * with the answer, so no later routine setup asks again.
+   */
+  launchAtLoginPrompted: boolean
+  /** Run assistant slots missed to sleep or a closed app when the app returns. */
+  autoRunMissedAssistantRuns: boolean
+  /** How long before a due run the app holds the machine awake. Bounded to
+   *  `MIN/MAX_BACKGROUND_WAKE_LEAD_MS`. */
+  backgroundWakeLeadMs: number
+  /** Hard cap on uninterrupted awake time held for background scheduling.
+   *  Bounded to `MIN/MAX_MAX_BACKGROUND_WAKE_HOLD_MS`. */
+  maxBackgroundWakeHoldMs: number
+  /**
+   * Search engine id used when typed address text is not a URL. Names a built-in
+   * engine or one of `browserCustomSearchEngines`; an unknown id falls back to
+   * the shipped default.
+   */
+  browserSearchEngine: string
+  /** User-added search engines, offered after the built-ins. */
+  browserCustomSearchEngines: BrowserSearchEngine[]
+  /**
    * Let prototype previews load fonts, styles, and scripts from the approved
    * CDNs. Off confines every prototype to assets inlined in its own folder.
    */
@@ -329,6 +463,8 @@ export interface BehaviorLayer {
   defaultOpen: boolean
 }
 
+import type { WorkRoots } from '../design/work-roots'
+
 /** Renderer-editable settings. Internal config fields cannot be patched over IPC. */
 export type AppConfigPatch = Partial<
   Pick<
@@ -348,6 +484,8 @@ export type AppConfigPatch = Partial<
     | 'agentDefaults'
     | 'auxiliaryAgents'
     | 'design'
+    | 'mediaGeneration'
+    | 'workRoots'
     | 'rankingJudge'
     | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'
@@ -362,6 +500,17 @@ export type AppConfigPatch = Partial<
     | 'maxDiffLines'
     | 'maxConflictFileBytes'
     | 'openLocalhostInCioBrowser'
+    | 'openAllLinksInCioBrowser'
+    | 'browserHibernationMinutes'
+    | 'browserHistoryLimit'
+    | 'backgroundMode'
+    | 'launchAtLogin'
+    | 'launchAtLoginPrompted'
+    | 'autoRunMissedAssistantRuns'
+    | 'backgroundWakeLeadMs'
+    | 'maxBackgroundWakeHoldMs'
+    | 'browserSearchEngine'
+    | 'browserCustomSearchEngines'
     | 'allowPrototypeExternalCdn'
     | 'prototypeCdnAllowlist'
     | 'inAppNotificationSound'

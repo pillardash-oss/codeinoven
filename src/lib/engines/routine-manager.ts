@@ -9,19 +9,21 @@ import {
 } from '../icon-file'
 import { ASSISTANT_SPACE_ID, isAssistantSetupThread, isAssistantRunThread } from '../types'
 import { pickColorForSeed } from '../project-colors'
+import { sortRoutines } from '../routine-order'
 import { routineOwnedDirectories } from '../thread-storage-paths'
 import { Logger } from '../../main/system/logger'
 import type { Database } from '../../main/database/database'
 import { RoutineRepo } from '../../main/database/repositories/routine-repo'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
-import type {
-  CreateRoutineInput,
-  Routine,
-  RoutineAgents,
-  RoutineDeletionResult,
-  RoutineSchedule,
-  Thread,
-  UpdateRoutineInput
+import {
+  routineFirstHowToSave,
+  type CreateRoutineInput,
+  type Routine,
+  type RoutineAgents,
+  type RoutineDeletionResult,
+  type RoutineSchedule,
+  type Thread,
+  type UpdateRoutineInput
 } from '../types'
 
 /**
@@ -67,8 +69,28 @@ export class RoutineManager {
     this.threadDeleter = deleter
   }
 
+  /**
+   * Every routine in sidebar order: pinned first, then the user's manual
+   * arrangement, then creation (newest first). `sortRoutines` is the single
+   * definition of that order, shared with the sidebar that renders it, so no
+   * routine ever moves because someone edited it.
+   */
   listRoutines(): Routine[] {
-    return this.routineRepo.list()
+    return sortRoutines(this.routineRepo.list())
+  }
+
+  /**
+   * The sidebar position a routine created right now takes: above every
+   * routine the user has already arranged, so a fresh routine still reads as
+   * the newest one whatever the arrangement looks like. Dragged positions are
+   * non-negative and start at 0, so a negative stamp sits above all of them,
+   * while two routines created minutes apart stay in creation order.
+   *
+   * Returned without reading the table: a synchronous read here would be a new
+   * main-thread SQLite read on the create path.
+   */
+  private topPosition(): number {
+    return -this.now()
   }
 
   getRoutine(routineId: string): Routine | null {
@@ -92,6 +114,7 @@ export class RoutineManager {
       priority: input.priority,
       agents: input.agents,
       paused: input.paused ?? false,
+      sortOrder: this.topPosition(),
       createdAt: now,
       updatedAt: now
     }
@@ -111,8 +134,8 @@ export class RoutineManager {
     // flow saves the how-to and the schedule in one call. A due slot before
     // this moment was never really due, so it is neither fired nor recorded as
     // missed.
-    const becameRunnable =
-      !existing.howTo.trim() && (input.howTo ?? existing.howTo).trim() !== ''
+    const nextHowTo = input.howTo ?? existing.howTo
+    const becameRunnable = routineFirstHowToSave(existing, { howTo: nextHowTo })
     const updated: Routine = {
       ...existing,
       name: input.name?.trim() || existing.name,
@@ -121,9 +144,10 @@ export class RoutineManager {
       color: 'color' in input ? (input.color ?? undefined) : existing.color,
       icon: input.icon === null ? undefined : (input.icon ?? existing.icon),
       iconType: 'iconType' in input ? (input.iconType ?? undefined) : existing.iconType,
+      customSvg: 'customSvg' in input ? (input.customSvg ?? undefined) : existing.customSvg,
       schedule: input.schedule !== undefined ? input.schedule : existing.schedule,
       scheduleUpdatedAt: scheduleChanged || becameRunnable ? now : existing.scheduleUpdatedAt,
-      howTo: input.howTo ?? existing.howTo,
+      howTo: nextHowTo,
       howToUpdatedAt: howToChanged ? now : existing.howToUpdatedAt,
       connections: input.connections ?? existing.connections,
       delivery: 'delivery' in input ? (input.delivery ?? undefined) : existing.delivery,
@@ -284,12 +308,17 @@ export class RoutineManager {
     return updated
   }
 
+  /**
+   * Apply the user's drag arrangement: the given ids in the given order, from
+   * the top down. A position is not content, so `updatedAt` stays where it was
+   * and the routine's "updated" label keeps reporting its last real edit.
+   */
   reorderRoutines(orderedIds: string[]): Routine[] {
     const result: Routine[] = []
     for (let index = 0; index < orderedIds.length; index++) {
       const existing = this.routineRepo.get(orderedIds[index])
       if (!existing) continue
-      const updated: Routine = { ...existing, sortOrder: index, updatedAt: this.now() }
+      const updated: Routine = { ...existing, sortOrder: index }
       this.routineRepo.upsert(updated)
       result.push(updated)
     }

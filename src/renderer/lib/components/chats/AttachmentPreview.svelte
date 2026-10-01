@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X, Download, FileQuestion, Loader2, Save, WrapText } from '@lucide/svelte'
+  import { X, Download, FileQuestion, FolderOpen, Loader2, Save, WrapText } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -8,10 +8,12 @@
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
+  import PreviewPager, { type PreviewPagerState } from '../ui/PreviewPager.svelte'
   import type { PromptAttachment } from '$shared/types'
   import { attachmentPreviewKind } from '$lib/mime'
   import { documentPreviewFrame } from '$lib/document-preview-frame'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { revealAttachmentFile } from '$lib/reveal-file'
 
   interface Props {
     attachment: PromptAttachment
@@ -25,6 +27,9 @@
     documentLoading?: boolean
     /** Persists edits when this is an app-owned pasted-text attachment. */
     onSaveText?: (text: string) => Promise<void>
+    /** Sibling navigation when the caller opened this preview over more than
+     *  one previewable attachment. Absent for a lone file. */
+    pager?: PreviewPagerState
     onClose: () => void
   }
 
@@ -35,6 +40,7 @@
     documentHtml,
     documentLoading = false,
     onSaveText,
+    pager,
     onClose
   }: Props = $props()
 
@@ -43,8 +49,9 @@
   const editableText = $derived(
     (kind === 'markdown' || kind === 'text') && onSaveText !== undefined
   )
-  // The preview is created anew for each selected attachment, so this is the
-  // editor's intentional local draft rather than a live mirror of the prop.
+  // The editor keeps its own draft rather than mirroring the prop on every
+  // keystroke, so typing is not interrupted by a reactive round-trip. The
+  // attachment-change effect below resets it when the pager swaps the file.
   // svelte-ignore state_referenced_locally
   let draft = $state(text ?? '')
   let saving = $state(false)
@@ -64,16 +71,49 @@
     }
   }
 
-  // The component instance is reused if the caller swaps `attachment`
-  // without unmounting (same `{#if previewFile}` block)   reset zoom/pan so
-  // it doesn't carry over onto the next image.
+  // The component instance is reused when the pager moves to the next
+  // attachment (same mounted block), so both the zoom/pan and the editor draft
+  // are reset here: neither may carry over onto another file.
   $effect(() => {
     void attachment.url
     panZoom.zoom = 1
     panZoom.panX = 0
     panZoom.panY = 0
+    draft = text ?? ''
   })
   const wrapTitle = $derived(wrapToggleLabel(wrapTextState.wrapped))
+  /** Only an attachment that is a real file on disk has a path to reveal. */
+  const revealable = $derived(attachment.url.startsWith('file://'))
+
+  /** Set while a pager step waits on the unsaved-changes prompt, so confirming
+   *  it moves to the sibling attachment instead of closing the preview. */
+  let pendingNavigation = $state<(() => void) | null>(null)
+
+  /**
+   * Step to a sibling attachment. An editable attachment with unsaved edits
+   * routes through the same discard prompt as closing, so navigating away can
+   * never throw a draft away silently.
+   */
+  function navigate(move: () => void): void {
+    if (dirty) {
+      pendingNavigation = move
+      confirmCloseOpen = true
+      return
+    }
+    move()
+  }
+
+  /** The pager as rendered: the caller owns the list, this guard owns the
+   *  unsaved-edits check that sits between a click and the step. */
+  const pagerState = $derived.by<PreviewPagerState | undefined>(() => {
+    if (!pager) return undefined
+    return {
+      index: pager.index,
+      count: pager.count,
+      onPrevious: () => navigate(pager.onPrevious),
+      onNext: () => navigate(pager.onNext)
+    }
+  })
 
   function triggerDownload(url: string, name: string): void {
     const link = document.createElement('a')
@@ -110,6 +150,17 @@
   function downloadFromButton(event: MouseEvent): void {
     event.stopPropagation()
     handleDownload()
+  }
+
+  function revealFromButton(event: MouseEvent): void {
+    event.stopPropagation()
+    // The reveal lands behind this full screen surface (the file tree, or the
+    // OS file manager), so the preview closes itself: staying open hides the
+    // result and reads as a button that did nothing. Closing still routes
+    // through requestClose, so an editable attachment with a live draft asks
+    // before the edits are dropped.
+    void revealAttachmentFile(attachment.url)
+    requestClose()
   }
 
   async function saveText(): Promise<void> {
@@ -156,6 +207,9 @@
       {#if saveError}
         <span class="max-w-80 truncate text-[0.625rem] text-danger" role="status">{saveError}</span>
       {/if}
+      {#if pagerState}
+        <PreviewPager pager={pagerState} />
+      {/if}
       <button
         type="button"
         class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
@@ -192,6 +246,17 @@
       >
         <Download size={14} />
       </button>
+      {#if revealable}
+        <button
+          type="button"
+          class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={`Reveal path of ${filename}`}
+          title="Reveal path"
+          onclick={revealFromButton}
+        >
+          <FolderOpen size={14} />
+        </button>
+      {/if}
       <button
         type="button"
         class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -263,7 +328,6 @@
               style={panZoom.transform}
             />
           </div>
-          <PanZoomToolbar {panZoom} viewport={imageViewport} class="absolute right-3 bottom-3" />
         {:else if kind === 'video' && src}
           <video
             {src}
@@ -317,24 +381,47 @@
           <span class="max-w-full truncate text-xs text-muted">{filename}</span>
         </div>
       </div>
-      <button
-        type="button"
-        class="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-        aria-label="Close preview"
-        title="Close preview (Esc)"
-        onclick={closeFromButton}
-      >
-        <X size={18} />
-      </button>
-      <button
-        type="button"
-        class="absolute right-4 top-16 flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-        aria-label="Download file"
-        title="Download file"
-        onclick={downloadFromButton}
-      >
-        <Download size={16} />
-      </button>
+      {#if pagerState || (kind === 'image' && src)}
+        <div class="absolute right-3 bottom-3 flex items-center gap-2">
+          {#if pagerState}
+            <PreviewPager pager={pagerState} />
+          {/if}
+          {#if kind === 'image' && src}
+            <PanZoomToolbar {panZoom} viewport={imageViewport} />
+          {/if}
+        </div>
+      {/if}
+      <div class="absolute right-4 top-4 flex flex-col gap-2">
+        <button
+          type="button"
+          class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
+          aria-label="Close preview"
+          title="Close preview (Esc)"
+          onclick={closeFromButton}
+        >
+          <X size={18} />
+        </button>
+        {#if revealable}
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
+            aria-label={`Reveal path of ${filename}`}
+            title="Reveal path"
+            onclick={revealFromButton}
+          >
+            <FolderOpen size={16} />
+          </button>
+        {/if}
+        <button
+          type="button"
+          class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
+          aria-label="Download file"
+          title="Download file"
+          onclick={downloadFromButton}
+        >
+          <Download size={16} />
+        </button>
+      </div>
     </div>
   </Modal>
 {/if}
@@ -342,10 +429,16 @@
 <ConfirmDialog
   open={confirmCloseOpen}
   title="Discard attachment changes?"
-  onCancel={() => (confirmCloseOpen = false)}
+  onCancel={() => {
+    confirmCloseOpen = false
+    pendingNavigation = null
+  }}
   onConfirm={() => {
     confirmCloseOpen = false
-    onClose()
+    const move = pendingNavigation
+    pendingNavigation = null
+    if (move) move()
+    else onClose()
   }}
   confirmLabel="Discard changes"
   cancelLabel="Keep editing"

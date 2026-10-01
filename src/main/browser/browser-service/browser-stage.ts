@@ -29,7 +29,7 @@
  * including while the app was in the background.
  */
 
-import { BaseWindow, screen, type WebContentsView } from 'electron'
+import { BaseWindow, screen, type WebContents, type WebContentsView } from 'electron'
 import { Logger } from '../../system/logger'
 import type { BrowserViewport } from './browser-types'
 
@@ -103,7 +103,9 @@ export class BrowserTabStage {
   }
 
   isParked(view: WebContentsView): boolean {
-    return this.parked.has(view.webContents.id)
+    const contents: WebContents | undefined = view.webContents
+    if (!contents) return false
+    return this.parked.has(contents.id)
   }
 
   /**
@@ -112,14 +114,17 @@ export class BrowserTabStage {
    * which also rescues a view whose stage was rebuilt underneath it.
    */
   park(view: WebContentsView, viewport: BrowserViewport): void {
-    if (this.disposed || view.webContents.isDestroyed()) return
+    // A view whose page destroyed itself no longer carries web contents at all,
+    // and there is nothing left to keep running offscreen.
+    const contents: WebContents | undefined = view.webContents
+    if (this.disposed || !contents || contents.isDestroyed()) return
     if (!isUsableViewport(viewport)) {
       Logger.error('Browser tab parked with an unusable viewport:', viewport)
       return
     }
     const window = this.ensureWindow()
     if (!window) return
-    const id = view.webContents.id
+    const id = contents.id
     const entry = this.parked.get(id)
     if (entry) entry.viewport = viewport
     else this.parked.set(id, { view, viewport })
@@ -133,7 +138,11 @@ export class BrowserTabStage {
    * next (the app window) or leaves it detached, which stops it rendering.
    */
   release(view: WebContentsView): void {
-    const id = view.webContents.id
+    // A view whose page destroyed itself has no web contents left to look up,
+    // and it is not in this window's parked set   nothing here owns it any more.
+    const contents: WebContents | undefined = view.webContents
+    if (!contents) return
+    const id = contents.id
     if (!this.parked.has(id)) return
     this.parked.delete(id)
     const window = this.stageWindow
@@ -146,12 +155,14 @@ export class BrowserTabStage {
    * `restart`.
    */
   async verifyVisible(view: WebContentsView): Promise<boolean> {
-    const entry = this.parked.get(view.webContents.id)
-    if (!entry || view.webContents.isDestroyed()) return false
+    const contents: WebContents | undefined = view.webContents
+    if (!contents) return false
+    const entry = this.parked.get(contents.id)
+    if (!entry || contents.isDestroyed()) return false
     if (!this.ensureWindow() || !this.ensureShown()) return false
-    this.placeView(entry.view, entry.viewport, this.tileIndexFor(view.webContents.id))
+    this.placeView(entry.view, entry.viewport, this.tileIndexFor(contents.id))
     try {
-      const state: unknown = await view.webContents.executeJavaScript('document.visibilityState')
+      const state: unknown = await contents.executeJavaScript('document.visibilityState')
       return state === 'visible'
     } catch {
       return false
@@ -204,7 +215,8 @@ export class BrowserTabStage {
 
   private placeView(view: WebContentsView, viewport: BrowserViewport, index: number): void {
     const window = this.stageWindow
-    if (!window || window.isDestroyed() || view.webContents.isDestroyed()) return
+    const contents: WebContents | undefined = view.webContents
+    if (!window || window.isDestroyed() || !contents || contents.isDestroyed()) return
     const { width, height } = window.getContentBounds()
     const position = tilePosition(index, width, height)
     try {

@@ -10,6 +10,8 @@ import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { AssignmentRepo } from '../database/repositories/assignment-repo'
 import {
+  ASSISTANT_SPACE_ID,
+  GLOBAL_BROWSER_PROJECT_ID,
   INBOX_PROJECT_ID,
   isOrchestrationChildThread,
   type Thread,
@@ -80,6 +82,34 @@ function isPermissionRefusal(error: unknown): boolean {
   return typeof error === 'string' && /not allowed/i.test(error)
 }
 
+/** One operating-system notification that did not come from a chat thread (a
+ *  browser extension's `chrome.notifications`, for instance). `id` is the
+ *  caller's namespaced key, used to retain, update and dismiss the card. */
+export interface ExternalNotificationOptions {
+  id: string
+  title: string
+  message: string
+  silent?: boolean
+  onClick?: () => void
+  onClose?: () => void
+}
+
+/**
+ * The live notification service, when one is running. Browser extension
+ * notifications do not originate in the chat pipeline, so the extension service
+ * reaches the app's notifier through this accessor rather than standing up a
+ * second OS notification mechanism of its own.
+ */
+let currentNotificationService: NotificationService | null = null
+
+function setCurrentNotificationService(service: NotificationService | null): void {
+  currentNotificationService = service
+}
+
+export function getNotificationService(): NotificationService | null {
+  return currentNotificationService
+}
+
 export class NotificationService {
   private readonly storage: StorageEngine
   private readonly projectRepo: ProjectRepo
@@ -125,6 +155,7 @@ export class NotificationService {
   start(): void {
     if (this.started) return
     this.started = true
+    setCurrentNotificationService(this)
     void this.hydrateBadge()
     void this.hydratePermissionStatus()
   }
@@ -132,6 +163,7 @@ export class NotificationService {
   stop(): void {
     if (!this.started) return
     this.started = false
+    if (getNotificationService() === this) setCurrentNotificationService(null)
     this.lastObservedStatus.clear()
     this.activeNotifications.clear()
     this.badgeThreads.clear()
@@ -418,8 +450,14 @@ export class NotificationService {
       const threads = await this.threadRepo.listAllViaWorker()
       const validKeys = new Set<string>()
       for (const thread of threads) {
+        // A failure is durable evidence of an unattended run: badge it so the
+        // app icon counts a run that failed while no window was open. `failed`
+        // already carries the `error` notification kind (so it is in
+        // NOTIFIABLE_STATUSES); naming it here keeps the durable-failure
+        // guarantee from silently regressing if that map changes.
+        const isDurableFailure = thread.status === 'failed'
         if (
-          NOTIFIABLE_STATUSES.has(thread.status) &&
+          (isDurableFailure || NOTIFIABLE_STATUSES.has(thread.status)) &&
           !thread.read &&
           !this.isSuppressedOrchestration(thread) &&
           !this.isPrematureCoordinatorCompletion(thread)
@@ -484,6 +522,11 @@ export class NotificationService {
 
     const threadKey = `${thread.projectId}:${thread.id}`
     if (this.abortingThreads.has(threadKey)) return
+    // A browser tab's assistant conversation is answered beside the page it is
+    // about, so a settled turn there is never something the user has to be told
+    // about while they are looking elsewhere. That was already true of the side
+    // chat it replaced, and it stays true of the thread it is now.
+    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID) return
     // In Achievement/Assignment mode only the Sr. Engineer (coordinator) thread
     // notifies, and only when the whole process is over or human intervention
     // is needed. Worker/auditor threads never notify, and the coordinator's
@@ -519,7 +562,7 @@ export class NotificationService {
       thread,
       projectName || APP_NAME,
       projectColor,
-      thread.projectId === INBOX_PROJECT_ID ? 'chat' : 'project'
+      this.notificationSource(thread)
     )
     await this.deliverNotification(payload, {
       retainKey: threadKey,
@@ -561,9 +604,41 @@ export class NotificationService {
     const focused = this.appFocused()
     if (focused) return
 
-    this.dispatchNotificationSound(notificationSoundKind(payload.kind), windows)
+    this.dispatchNotificationSound(notificationSoundKind(payload.kind, payload.projectId), windows)
 
-    const silent = this.appManagesSound(windows)
+    this.showNativeNotification({
+      id: payload.id,
+      title: payload.title,
+      subtitle,
+      body: payload.body,
+      urgency: payload.kind === 'error' ? 'critical' : 'normal',
+      silent: this.appManagesSound(windows),
+      retainKey: options.retainKey,
+      logLabel: options.logLabel,
+      logContext: { kind: payload.kind, projectId: payload.projectId, threadId: payload.threadId },
+      onClick: (): void => this.onThreadClicked(options.clickPayload)
+    })
+  }
+
+  /**
+   * Create, show and retain one native OS notification, recording the delivery
+   * outcome into the macOS permission state. Shared by the thread path and the
+   * external (browser extension) path, so neither re-implements the permission
+   * bookkeeping, the id compaction or the retention.
+   */
+  private showNativeNotification(options: {
+    id: string
+    title: string
+    subtitle?: string
+    body: string
+    urgency: 'normal' | 'critical'
+    silent: boolean
+    retainKey: string
+    logLabel: string
+    logContext?: Record<string, unknown>
+    onClick?: () => void
+    onClose?: () => void
+  }): void {
     if (!Notification.isSupported()) {
       if (!this.unsupportedLogged) {
         this.unsupportedLogged = true
@@ -574,25 +649,20 @@ export class NotificationService {
 
     try {
       const notification = new Notification({
-        id: compactNotificationId(payload.id),
-        groupId: compactNotificationId(payload.id),
-        title: payload.title,
-        subtitle,
-        body: payload.body,
-        urgency: payload.kind === 'error' ? 'critical' : 'normal',
-        silent
+        id: compactNotificationId(options.id),
+        groupId: compactNotificationId(options.id),
+        title: options.title,
+        ...(options.subtitle === undefined ? {} : { subtitle: options.subtitle }),
+        body: options.body,
+        urgency: options.urgency,
+        silent: options.silent
       })
 
-      notification.on('click', (): void => {
-        this.onThreadClicked(options.clickPayload)
-      })
+      if (options.onClick) notification.on('click', options.onClick)
+      if (options.onClose) notification.on('close', options.onClose)
       notification.on('show', (): void => {
         this.recordNotificationOutcome('shown')
-        Logger.info(`${options.logLabel} system notification shown`, {
-          kind: payload.kind,
-          projectId: payload.projectId,
-          threadId: payload.threadId
-        })
+        Logger.info(`${options.logLabel} system notification shown`, options.logContext ?? {})
       })
       notification.on('failed', (_event, error): void => {
         this.recordNotificationOutcome('failed', error)
@@ -603,6 +673,49 @@ export class NotificationService {
       notification.show()
     } catch (error) {
       Logger.error(`${options.logLabel} notification could not be shown:`, error)
+    }
+  }
+
+  /**
+   * Show one operating-system notification for a message that did not come from
+   * a chat thread, such as a browser extension's `chrome.notifications.create`.
+   *
+   * There is no in-app toast surface for such a message, so unlike the thread
+   * path this always reaches the OS card (focus is not a reason to drop it), and
+   * only the caller's own `silent` flag keeps it quiet. Everything else is the
+   * shared native delivery: the same permission bookkeeping, retention and id
+   * compaction.
+   */
+  notifyExternal(options: ExternalNotificationOptions): void {
+    if (!this.started) return
+    this.showNativeNotification({
+      id: options.id,
+      title: options.title,
+      body: options.message,
+      urgency: 'normal',
+      silent: options.silent === true,
+      retainKey: options.id,
+      logLabel: 'External',
+      onClick: options.onClick,
+      onClose: options.onClose
+    })
+  }
+
+  /**
+   * Close one external OS notification by its namespaced id. Listeners are
+   * detached first, so an extension clearing its own notification never reports
+   * the close back to itself as a user action.
+   */
+  dismissExternal(id: string): void {
+    const notification = this.activeNotifications.get(id)
+    if (!notification) return
+    this.activeNotifications.delete(id)
+    notification.removeAllListeners('close')
+    notification.removeAllListeners('click')
+    try {
+      notification.close()
+    } catch (error) {
+      Logger.dev('External OS notification close failed:', error)
     }
   }
 
@@ -763,6 +876,14 @@ export class NotificationService {
     })
   }
 
+  /** The source a thread's notification is routed under: the inbox is a chat,
+   *  the assistant space is its own tab, everything else is a project. */
+  private notificationSource(thread: Thread): NotificationSource {
+    if (thread.projectId === INBOX_PROJECT_ID) return 'chat'
+    if (thread.projectId === ASSISTANT_SPACE_ID) return 'assistant'
+    return 'project'
+  }
+
   private notificationPayload(
     thread: Thread,
     projectName: string,
@@ -771,7 +892,8 @@ export class NotificationService {
   ): AgentNotificationPayload {
     const kind: AgentNotificationKind =
       threadStatusPolicy(thread.status).notificationKind ?? 'error'
-    const displayName = source === 'chat' ? 'Chat' : projectName
+    const isAssistant = source === 'assistant'
+    const displayName = source === 'chat' ? 'Chat' : isAssistant ? 'Assistant' : projectName
     const title =
       kind === 'completed'
         ? `${displayName} Done`
@@ -793,14 +915,25 @@ export class NotificationService {
         : errorHeadline.length > 240
           ? `${errorHeadline.slice(0, 240).trimEnd()}…`
           : errorHeadline
+    // An assistant run says what it did; naming the hidden assistant space as
+    // the project it "finished in" would read as a project thread.
     const body =
       kind === 'completed'
-        ? `${thread.title} finished in ${projectName}.`
+        ? isAssistant
+          ? `${thread.title} finished.`
+          : `${thread.title} finished in ${projectName}.`
         : kind === 'attention'
-          ? `${thread.title} is waiting for your input in ${projectName}.`
+          ? isAssistant
+            ? `${thread.title} is waiting for your input.`
+            : `${thread.title} is waiting for your input in ${projectName}.`
           : kind === 'spec'
-            ? `${thread.title} has a reviewable engineering artifact ready in ${projectName}.`
-            : (errorBody ?? `${thread.title} stopped with an error in ${projectName}.`)
+            ? isAssistant
+              ? `${thread.title} has a reviewable engineering artifact ready.`
+              : `${thread.title} has a reviewable engineering artifact ready in ${projectName}.`
+            : (errorBody ??
+              (isAssistant
+                ? `${thread.title} stopped with an error.`
+                : `${thread.title} stopped with an error in ${projectName}.`))
 
     return {
       id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,
@@ -912,6 +1045,23 @@ export class NotificationService {
     const now = Date.now()
     if (now - this.lastNotificationSoundPlayedAt < NOTIFICATION_SOUND_DEDUP_MS) return false
     this.lastNotificationSoundPlayedAt = now
+
+    // The window is throttled while it is occluded, which is the normal state
+    // whenever the user is in another app, and this alert exists exactly for
+    // that case. Lift throttling for the dispatch so the alert lands with the OS
+    // card instead of after Chromium's next throttled turn, then let the window
+    // fall back to throttled once the alert has had time to play.
+    try {
+      soundWindow.webContents.setBackgroundThrottling(false)
+      const restore = setTimeout(() => {
+        if (soundWindow.isDestroyed() || soundWindow.webContents.isDestroyed()) return
+        soundWindow.webContents.setBackgroundThrottling(true)
+      }, NOTIFICATION_SOUND_DEDUP_MS)
+      restore.unref()
+    } catch (error) {
+      // Throttling control is best effort; the alert still dispatches.
+      Logger.dev('Could not lift background throttling for the notification alert:', error)
+    }
 
     return sendToRenderer(soundWindow.webContents, 'notification:playSound', kind)
   }

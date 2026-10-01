@@ -12,11 +12,17 @@ import { invokeUpdaterContract } from './ipc/invoke-updater'
 import { invokeSpeechContract } from './ipc/invoke-speech'
 import { invokeAssistantContract } from './ipc/invoke-assistant'
 import { invokeTypesafeContract } from './ipc/invoke-typesafe'
+import { invokeDesignContract } from './ipc/invoke-design'
+import { invokeExpertContract } from './ipc/invoke-expert'
+import { invokeMediaContract } from './ipc/invoke-media'
 import { IPC_EVENT_CONTRACT } from './ipc/events'
-import type { GitInvocation, GitRefusedOperation } from './types'
+import type { GitInvocation, GitRefusedOperation, GitRemoteUnavailable } from './types'
 
 export * from './ipc/updater'
 export * from './ipc/browser'
+export * from './ipc/design'
+export * from './ipc/expert'
+export * from './ipc/media'
 export * from './ipc/logging'
 export * from './ipc/notifications'
 export * from './ipc/events'
@@ -35,7 +41,10 @@ export const IPC_INVOKE_CONTRACT = {
   ...invokeUpdaterContract,
   ...invokeSpeechContract,
   ...invokeTypesafeContract,
-  ...invokeAssistantContract
+  ...invokeAssistantContract,
+  ...invokeDesignContract,
+  ...invokeExpertContract,
+  ...invokeMediaContract
 }
 
 export type IpcInvokeContract = typeof IPC_INVOKE_CONTRACT
@@ -81,4 +90,21 @@ export function isGitInvocationSuccess(value: unknown): value is { ok: true; val
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as { ok?: unknown; value?: unknown }
   return candidate.ok === true && 'value' in candidate
+}
+
+/**
+ * Whether a value is a remote failure a git channel reported instead of
+ * rejecting: the other end was unreachable, refused this checkout, or has no
+ * such repository for this account. Guards the decode in `invokeGit` beside the
+ * refusal guard, so both halves of the envelope are runtime-checked before the
+ * renderer acts on either.
+ */
+export function isGitRemoteUnavailable(value: unknown): value is GitRemoteUnavailable {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as { ok?: unknown; issue?: unknown }
+  if (candidate.ok !== false || typeof candidate.issue !== 'object' || candidate.issue === null) {
+    return false
+  }
+  const issue = candidate.issue as { kind?: unknown; message?: unknown }
+  return typeof issue.kind === 'string' && typeof issue.message === 'string'
 }

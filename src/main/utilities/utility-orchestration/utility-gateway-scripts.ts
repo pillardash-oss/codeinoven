@@ -4,11 +4,66 @@ import type {
   UtilityDefinitionFor
 } from '../../../lib/types'
 import { GATEWAY_TOOLS } from '../../../lib/gateway-tools'
-import { DESIGN_OUTPUT_ROOT } from '../../../lib/design-skill'
+import { workRootForKind, type WorkRoots } from '../../../lib/design/work-roots'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
 
 export const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
+
+/**
+ * The `generate` operation, shared by the design and video capabilities.
+ *
+ * One tool in two capabilities, because making an asset is the same act whether a
+ * page or a composition needs it, and the model is the user's assignment either
+ * way. It exists because the app had no way to produce media at all: a craft
+ * could only staff a text completion, so an agent that needed a music bed had to
+ * improvise one.
+ */
+export function generateMediaTool(roots: WorkRoots): McpTool {
+  const designRoot = workRootForKind(roots, 'design')
+  const videoRoot = workRootForKind(roots, 'video')
+  return {
+    name: 'generate',
+    description: `Generate an image, a video clip or an audio file with the model the user assigned to that craft, and save it into the project as a file. The user names the model in Settings, Design, so never choose one yourself: a craft with no assigned model is refused and you should ask the user to assign one. Write the complete brief in prompt. Pass options only when the model needs a provider-specific field (an aspect ratio, a duration, and so on). The reply carries the project-relative path; reference it from the markup and preview to check it renders.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['image', 'video', 'audio'],
+          description:
+            'Which craft answers: an image, a video clip, or audio such as a music bed or a voice line.'
+        },
+        prompt: {
+          type: 'string',
+          description:
+            'The complete brief for the generation model: the subject, the style, the mood, the framing, and every constraint, written as if to someone who has seen none of this work.'
+        },
+        prompt_field: {
+          type: 'string',
+          description:
+            'Only when the model documents its prompt input under another name, such as "text". The prompt is sent under this field instead of "prompt", never under both.'
+        },
+        name: {
+          type: 'string',
+          description:
+            'Optional file name without an extension, such as hero or music-bed. The model name is used when you omit it.'
+        },
+        directory: {
+          type: 'string',
+          description: `Project-relative folder to save into. Defaults to the folder of this thread's session (${videoRoot} for a video session, ${designRoot} otherwise), so name the design's or the composition's own folder when the asset belongs to one.`
+        },
+        options: {
+          type: 'object',
+          description:
+            'Provider-specific input fields passed through as written, such as an aspect ratio or a duration. Only the fields the model documents.'
+        }
+      },
+      required: ['kind', 'prompt'],
+      additionalProperties: false
+    }
+  }
+}
 
 /**
  * Absolute cap on one gateway call, enforced by the bridge itself.
@@ -35,7 +90,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
     description:
-      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. Pass attention "background" to keep it offscreen without pulling the user to it.',
+      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Pass attention "background" to keep it offscreen without pulling the user to it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -71,7 +126,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'snapshot',
     description:
-      'Read the current thread browser page title, URL, visible text, and interactive elements.',
+      'Read the current page\u2019s title, URL, visible text, and interactive elements. In a browser tab\u2019s own assistant conversation the page the user is looking at is attached for reading, so this reads that page until you open one of your own. Every other operation needs a page you opened.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -107,7 +162,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'screenshot',
     description:
-      'Capture the browser page at its current viewport, whether the tab is on screen or parked offscreen, and return it as an image the model can afford. The capture is capped in size and a page unchanged since the previous capture is reported as unchanged rather than sent again; pass {"force":true} to capture it regardless.',
+      'Capture the current page at its viewport, whether the tab is on screen or parked offscreen, and return it as an image the model can afford. In a browser tab\u2019s own assistant conversation the page the user is looking at is attached for reading, so this captures that page. The capture is capped in size and a page unchanged since the previous capture is reported as unchanged rather than sent again; pass {"force":true} to capture it regardless.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -127,7 +182,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'console',
     description:
-      'Read console messages and browser runtime errors from the current project and thread tab.',
+      'Read console messages and browser runtime errors from the page this conversation is attached to: in a browser tab\u2019s own assistant conversation that is the page the user is looking at, until you open one of your own.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   }
 ]
@@ -135,87 +190,159 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
 /**
  * Operations of the app-owned design capability (`cio:design`).
  *
- * Three, and all of them are things the agent cannot do with its own tools: show
+ * Four, and all of them are things the agent cannot do with its own tools: show
  * the design on the app's own origin, run the model the user assigned to a piece
- * of design work, and turn a generated asset into a file beside the design.
- * Looking at the result is deliberately not repeated here: the browser capability
- * already owns screenshots, viewports and console reads, and the docs point at
- * it.
+ * of design work, generate an asset with the model assigned to a media craft, and
+ * turn a generated asset into a file beside the design. Looking at the result is
+ * deliberately not repeated here: the browser capability already owns
+ * screenshots, viewports and console reads, and the docs point at it.
  */
-export const DESIGN_UTILITY_TOOLS: McpTool[] = [
-  {
-    name: 'preview',
-    description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab. The folder's own scripts and stylesheets run, so an HTML design renders as written, and the tab is mounted offscreen at a real viewport whether or not the user is looking at it. Aim it at the folder holding the design's entry file.`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        directory: {
-          type: 'string',
-          description: `Project-relative folder to serve. Defaults to ${DESIGN_OUTPUT_ROOT}.`
+export function designUtilityTools(roots: WorkRoots): McpTool[] {
+  const designRoot = workRootForKind(roots, 'design')
+  return [
+    generateMediaTool(roots),
+    {
+      name: 'preview',
+      description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab. The folder's own scripts and stylesheets run, so an HTML design renders as written, and the tab is mounted offscreen at a real viewport whether or not the user is looking at it. Aim it at the folder holding the design's entry file, and name \`entry\` to turn it to one of that design's screens.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: {
+            type: 'string',
+            description: `Project-relative folder to serve. Defaults to ${designRoot}.`
+          },
+          entry: {
+            type: 'string',
+            description:
+              'File inside that folder to load, relative to it, which is how a screen of a multi-screen design is shown: "dashboard.html". Defaults to index.html when that file exists; otherwise the folder listing is shown.'
+          },
+          attention: {
+            type: 'string',
+            enum: ['focus', 'background'],
+            description:
+              'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+          }
         },
-        entry: {
-          type: 'string',
-          description:
-            'File inside that folder to load, relative to it. Defaults to index.html when that file exists; otherwise the folder listing is shown.'
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'delegate',
+      description:
+        "Run one prompt on the model the user assigned to a named piece of design work: long-form copy, an SEO pass, a script, a storyboard. The assigned model did not see this conversation, so the prompt has to carry every detail it needs. This lane answers with text only: a craft that produces a picture, a clip or a track is made by the `generate` operation instead, which uses the model the user assigned to that craft. Assignments that share one craft are the user's own alternatives and are tried in the order they are listed. Never choose a model yourself and never stand in for one.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          assignment: {
+            type: 'string',
+            description:
+              'The design work to delegate, named by its handle or its title. The playbook lists the assignments the user set up.'
+          },
+          prompt: {
+            type: 'string',
+            description:
+              'The complete brief for the assigned model: the subject, the tone, the format, and every constraint, written as if to a stranger who has seen nothing of this work.'
+          }
         },
-        attention: {
-          type: 'string',
-          enum: ['focus', 'background'],
-          description:
-            'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
-        }
-      },
-      additionalProperties: false
+        required: ['assignment', 'prompt'],
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'save-media',
+      description: `Save a generated image, video or sound file into the project, so the design references a file of its own instead of a link that expires. Give it the https link the generation service answered with; the file is named after the source unless you name it. The reply carries the relative path to use in the markup.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          source: {
+            type: 'string',
+            description:
+              'The https link the generation service returned for the asset. Only an https link with a media type, from a public host, is accepted.'
+          },
+          name: {
+            type: 'string',
+            description:
+              'Optional file name without an extension, such as hero. Defaults to the name in the source URL.'
+          },
+          directory: {
+            type: 'string',
+            description: `Project-relative folder to save into. Defaults to ${designRoot}, so name the design's own folder when the asset belongs to a design.`
+          }
+        },
+        required: ['source'],
+        additionalProperties: false
+      }
     }
-  },
-  {
-    name: 'delegate',
-    description:
-      "Run one prompt on the model the user assigned to a named piece of design work: long-form copy, an SEO pass, a script, a storyboard, the prompts a generator will be given. The assigned model did not see this conversation, so the prompt has to carry every detail it needs. This lane answers with text only, so a picture, a clip or a track is a file rather than an answer: produce one of those with a generation capability from the utilities bank and save it with save-media. Assignments that share one craft are the user's own alternatives and are tried in the order they are listed. Never choose a model yourself and never stand in for one.",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        assignment: {
-          type: 'string',
-          description:
-            'The design work to delegate, named by its handle or its title. The playbook lists the assignments the user set up.'
+  ]
+}
+
+/**
+ * Operations of the app-owned video capability (`cio:video`).
+ *
+ * Three operations, because watching, checking and making are three different
+ * acts. `preview` serves the composition folder and opens it in the browser tab,
+ * where the page runs and the tab refreshes itself as the agent writes. `capture`
+ * freezes the composition at one second and answers with the picture, which is
+ * the only way an agent can tell whether the frame it wrote is the frame it
+ * meant. `generate` produces a clip, a still or a music bed with the model the
+ * user assigned to that craft, which is what a composition's audio track and its
+ * b-roll clips need.
+ */
+export function videoUtilityTools(roots: WorkRoots): McpTool[] {
+  const videoRoot = workRootForKind(roots, 'video')
+  return [
+    generateMediaTool(roots),
+    {
+      name: 'preview',
+      description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab, where the composition runs and is watched. The tab refreshes itself shortly after a file changes, so preview again only when you move to a different folder. Aim it at the folder holding the composition's index.html.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: {
+            type: 'string',
+            description: `Project-relative folder to serve. Defaults to ${videoRoot}.`
+          },
+          entry: {
+            type: 'string',
+            description:
+              'File inside that folder to load, relative to it. Defaults to index.html when that file exists; otherwise the folder listing is shown.'
+          },
+          attention: {
+            type: 'string',
+            enum: ['focus', 'background'],
+            description:
+              'focus (default) shows the tab to the user when they are already in this thread; background never interrupts them.'
+          }
         },
-        prompt: {
-          type: 'string',
-          description:
-            'The complete brief for the assigned model: the subject, the tone, the format, and every constraint, written as if to a stranger who has seen nothing of this work.'
-        }
-      },
-      required: ['assignment', 'prompt'],
-      additionalProperties: false
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'capture',
+      description: `Freeze the composition at one second and hand the frame back as a picture you can see. This is how you check your own work: overflowed text, colliding labels, a colour that vanishes into the background and a caption over a busy area are invisible in the code and obvious in a frame. The composition must define window.cioRenderFrame(seconds) and a composition.json declaring its length; the time is clamped to that length. Call it for the first frame, the last frame and every moment something changes.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          time: {
+            type: 'number',
+            description:
+              'Seconds on the timeline to freeze, from 0 to the manifest duration. Defaults to 0.'
+          },
+          directory: {
+            type: 'string',
+            description: `Project-relative folder holding the composition. Defaults to ${videoRoot}.`
+          },
+          entry: {
+            type: 'string',
+            description:
+              'File inside that folder to load, relative to it. Defaults to index.html when that file exists.'
+          }
+        },
+        additionalProperties: false
+      }
     }
-  },
-  {
-    name: 'save-media',
-    description: `Save a generated image, video or sound file into the project, so the design references a file of its own instead of a link that expires. Give it the https link the generation service answered with; the file is named after the source unless you name it. The reply carries the relative path to use in the markup.`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        source: {
-          type: 'string',
-          description:
-            'The https link the generation service returned for the asset. Only an https link with a media type, from a public host, is accepted.'
-        },
-        name: {
-          type: 'string',
-          description:
-            'Optional file name without an extension, such as hero. Defaults to the name in the source URL.'
-        },
-        directory: {
-          type: 'string',
-          description: `Project-relative folder to save into. Defaults to ${DESIGN_OUTPUT_ROOT}, so name the design's own folder when the asset belongs to a design.`
-        }
-      },
-      required: ['source'],
-      additionalProperties: false
-    }
-  }
-]
+  ]
+}
 
 export function gatewayUtility(
   request: GatewayTurnContext,

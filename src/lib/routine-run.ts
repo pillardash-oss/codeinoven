@@ -13,7 +13,7 @@ import {
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME
 } from './gateway-tools'
-import type { Routine } from './types'
+import { isAssistantSetupThread, type Routine, type Thread } from './types'
 
 /**
  * The row title of one run thread: the time it started. A run is listed under
@@ -22,6 +22,23 @@ import type { Routine } from './types'
  */
 export function assistantRunTitle(at: number): string {
   return `Run · ${formatDateTime(at)}`
+}
+
+/**
+ * The visible prompt one dispatched run carries.
+ *
+ * It names what the run is running. A routine's Getting started thread is its
+ * authoring host, so its fixed "Getting started" title is not a job name: a run
+ * of it is dispatched under the routine's own name, or the run reads (and gets
+ * answered) as another getting-started pass even though the how-to is already
+ * saved. A user's own task keeps its title, which is what that task is.
+ */
+export function routineRunPrompt(
+  task: Pick<Thread, 'title' | 'assistantGettingStarted'>,
+  routineName: string | undefined
+): string {
+  const label = isAssistantSetupThread(task) ? (routineName?.trim() ?? '') : task.title.trim()
+  return label.length > 0 ? `Run this scheduled task now: ${label}` : 'Run this scheduled task now.'
 }
 
 /**
@@ -55,15 +72,18 @@ export function composeRoutineInstruction(
  * asking the user for whatever only the user can supply. Pointing the user at
  * the Connections tab is the last resort, not the answer.
  *
- * The chat engine attaches this to the hidden context of every assistant task
- * turn (`routineRunHiddenContext`), so the behavior is a property of the thread
- * and not of one send path.
+ * The chat engine attaches this to the hidden context of every turn on a saved
+ * routine's task or run thread (`routineRunHiddenContext`), so the behavior is a
+ * property of the thread and not of one send path. The routine's Getting started
+ * thread is never one of them: it is the authoring and editing host, so a message
+ * there carries `routineHowToUpdateContext` instead of this contract.
  */
 export function routineRunContext(
   routine: Pick<Routine, 'name' | 'connections' | 'delivery' | 'priority'>
 ): string {
   const lines = [
     `This thread runs the routine "${routine.name}". Its how-to is your instruction set; follow it exactly.`,
+    `The routine is already set up and its how-to is agreed: run it now. Do not restart the getting-started interview, do not ask the questions that produced the how-to, and do not re-present its setup.`,
     ...reportingLines(routine),
     `Everything the routine needs should already be connected. Verify each connection the how-to relies on is actually available in this session before you use it. When one is missing, do not stop and do not send the user to another screen: as the user's assistant, supply it yourself.`,
     `How to supply a missing connection, in order:`,
@@ -120,6 +140,9 @@ function reportingLines(routine: Pick<Routine, 'delivery' | 'priority'>): string
       )
     }
     if (delivery.note) lines.push(`Delivery note from the agreement: ${delivery.note}`)
+    lines.push(
+      `However this routine delivers, make your final answer the complete report itself, never a pointer to it: the app saves that answer verbatim to a dated Markdown file under reports/ in this routine's workspace, so the full report survives even after the thread is gone.`
+    )
   }
 
   const priority = routine.priority

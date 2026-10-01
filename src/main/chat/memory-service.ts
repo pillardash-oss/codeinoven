@@ -31,6 +31,7 @@ import {
   capText,
   detectMemoryCandidates,
   estimateTokens,
+  isBareFeatureRequest,
   isTrivialUserTurn,
   normalizeText,
   readMemoryExtractionLimits,
@@ -949,10 +950,14 @@ export class MemoryService {
     })
     if (input.requireDurableCandidate ?? true) {
       if (candidates.length === 0) return skip('no-candidate', 0)
-    } else if (isTrivialUserTurn(input.candidateUserMessage ?? input.userMessage)) {
-      // Even with the pattern list out of the way, a bare acknowledgement or a
-      // one-word question is not worth sending anywhere.
-      return skip('no-candidate', 0)
+    } else {
+      // Even with the pattern list out of the way, a bare feature request is
+      // never memory: a model call on it can only produce a false positive. A
+      // message that also states a rule is still sent to the model to judge.
+      const candidateText = input.candidateUserMessage ?? input.userMessage
+      if (isTrivialUserTurn(candidateText) || isBareFeatureRequest(candidateText)) {
+        return skip('no-candidate', 0)
+      }
     }
 
     const limits = readMemoryExtractionLimits()

@@ -17,10 +17,40 @@ function rowToNote(row: ThreadNoteRow): ThreadNote {
   }
 }
 
+interface BrowserTabNoteRow {
+  tab_id: string
+  body: string
+  created_at: number
+  updated_at: number
+}
+
 /**
- * Private, user-only notes attached to threads. Rows cascade-delete with their
- * thread (ON DELETE CASCADE), so thread deletion always removes the note.
- * Notes are never read by the chat engine or any harness.
+ * A note attached to one global browser tab. It is the same scratch space a
+ * thread note is; only the subject id differs.
+ */
+export interface BrowserTabNote {
+  tabId: string
+  body: string
+  createdAt: number
+  updatedAt: number
+}
+
+function rowToBrowserTabNote(row: BrowserTabNoteRow): BrowserTabNote {
+  return {
+    tabId: row.tab_id,
+    body: row.body,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  }
+}
+
+/**
+ * Private, user-only notes. A thread's note lives in `thread_notes` and
+ * cascade-deletes with its thread; a global browser tab is not a thread, so its
+ * note lives in the sibling `browser_tab_notes` table keyed by the same id the
+ * tab carries in the browser strip. Both subjects are served by the one Notes
+ * panel and the one `note:*` IPC surface. Notes are never read by the chat
+ * engine or any harness.
  */
 export class NoteRepo {
   constructor(private db: Database) {}
@@ -58,5 +88,42 @@ export class NoteRepo {
       'SELECT thread_id FROM thread_notes ORDER BY updated_at DESC'
     )
     return rows.map((row) => row.thread_id)
+  }
+
+  // ─── Global browser tab notes ────────────────────────────────────────────
+
+  getForBrowserTab(tabId: string): BrowserTabNote | null {
+    const row = this.db.get<BrowserTabNoteRow>(
+      'SELECT * FROM browser_tab_notes WHERE tab_id = ?',
+      tabId
+    )
+    return row ? rowToBrowserTabNote(row) : null
+  }
+
+  /** Insert or replace the note for a browser tab. */
+  upsertForBrowserTab(note: BrowserTabNote): void {
+    this.db.run(
+      `INSERT INTO browser_tab_notes(tab_id, body, created_at, updated_at)
+       VALUES(?,?,?,?)
+       ON CONFLICT(tab_id) DO UPDATE SET
+         body=excluded.body,
+         updated_at=excluded.updated_at`,
+      note.tabId,
+      note.body,
+      note.createdAt,
+      note.updatedAt
+    )
+  }
+
+  deleteForBrowserTab(tabId: string): void {
+    this.db.run('DELETE FROM browser_tab_notes WHERE tab_id = ?', tabId)
+  }
+
+  /** Browser tab ids that currently have a note (renderer presence sync). */
+  listBrowserTabIds(): string[] {
+    const rows = this.db.all<{ tab_id: string }>(
+      'SELECT tab_id FROM browser_tab_notes ORDER BY updated_at DESC'
+    )
+    return rows.map((row) => row.tab_id)
   }
 }

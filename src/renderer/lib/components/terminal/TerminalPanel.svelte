@@ -1,9 +1,8 @@
 <script lang="ts">
   import type { Attachment } from 'svelte/attachments'
-  import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
+  import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
   import {
     terminalSessions,
-    terminalSpawnScopes,
     type TerminalSession,
     type TerminalSpawnBinding
   } from '$lib/terminal/sessions'
@@ -12,36 +11,57 @@
     terminalId: string
     projectId: string
     threadId: string
-    /** Scope bucket the shell must run in when it is next spawned. */
+    /** Scope bucket whose own shell this panel shows. */
     scopeBucketId?: string
+    /** Project-relative folder the shell starts in, set when the terminal was
+     *  opened at a specific path from the file tree. */
+    directory?: string
   }
 
-  let { terminalId, projectId, threadId, scopeBucketId }: Props = $props()
+  let { terminalId, projectId, threadId, scopeBucketId, directory }: Props = $props()
 
   /**
-   * Scope root the *live shell* was started in, from the session manager: the
-   * panel's own `scopeBucketId` prop is what it would spawn in now. While the
-   * two differ this panel is showing another thread's checkout. The shell is
-   * left running: navigation never kills it. The notice below offers an
-   * explicit restart into the open thread's scope, and a respawn (shell exit,
-   * Ctrl-D) lands there on its own.
+   * Every scope owns its own shell. Qualifying the session id by the scope
+   * bucket makes a scope switch mount that scope's own terminal instead of
+   * leaving one shared shell in whichever worktree it was first started in.
+   *
+   * Each scoped session is spawned in its own scope and stays there for its
+   * whole life, so navigating between scopes only swaps which live shell is on
+   * screen. No shell is ever restarted or killed by navigation, and the script
+   * a user started in one scope keeps running while they work in another.
    */
-  let spawnedScope = $derived(terminalSpawnScopes.get(terminalId) ?? null)
-  let scopeStale = $derived(spawnedScope !== null && spawnedScope !== (scopeBucketId ?? null))
-  let restarting = $state(false)
+  let scopeKey = $derived(scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+  let scopedTerminalId = $derived(`${terminalId}::${scopeKey}`)
 
-  /** Explicit, user-requested restart of the live shell in the scope this
-   *  panel wants. Never called by navigation: only this button kills a shell. */
-  async function restartInScope(): Promise<void> {
-    if (restarting) return
-    const session = terminalSessions.getSession(terminalId)
-    if (!session) return
-    restarting = true
-    try {
-      await terminalSessions.restartInBoundScope(session)
-    } finally {
-      restarting = false
+  /**
+   * One spawn binding per scoped session. A thread switch retargets only the
+   * binding of the scope currently on screen, so it can never send another
+   * scope's shell somewhere else on its next respawn. Plain (non-reactive)
+   * map: it is read at respawn time, never rendered.
+   */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  const scopeBindings = new Map<string, TerminalSpawnBinding>()
+
+  function bindingFor(
+    scopedId: string,
+    scope: string,
+    thread: string,
+    startingDirectory?: string
+  ): TerminalSpawnBinding {
+    const existing = scopeBindings.get(scopedId)
+    if (existing) {
+      existing.scopeBucketId = scope
+      existing.threadId = thread
+      existing.directory = startingDirectory
+      return existing
     }
+    const binding: TerminalSpawnBinding = {
+      threadId: thread,
+      scopeBucketId: scope,
+      directory: startingDirectory
+    }
+    scopeBindings.set(scopedId, binding)
+    return binding
   }
 
   let terminalError: string | undefined = $state(undefined)
@@ -52,42 +72,45 @@
   let firstAttach = true
   let lastRetrySequence = 0
 
-  /** Where a respawned shell must start. Held in a plain (non-reactive) object
-   *  so the attachment below never depends on it: this panel is project-scoped,
-   *  so a thread switch may only retarget the *next* respawn. Re-running the
-   *  attachment instead would refit the grid and repaint the canvas on every
-   *  switch, for a session that never went anywhere. */
-  // svelte-ignore state_referenced_locally
-  const spawnTarget: TerminalSpawnBinding = { threadId, scopeBucketId }
-
-  $effect(() => {
-    spawnTarget.threadId = threadId
-    spawnTarget.scopeBucketId = scopeBucketId
-  })
-
   function retry(): void {
     retrySequence += 1
   }
 
   function attachTerminal(
-    currentTerminalId: string,
+    currentScopedId: string,
     currentProjectId: string,
-    binding: TerminalSpawnBinding,
+    currentScopeKey: string,
+    currentThreadId: string,
+    currentDirectory: string | undefined,
     retry: number
   ): Attachment<HTMLDivElement> {
     // Focus only when the attach is user-initiated: the first mount (the user
     // opened or selected the terminal tab) or an explicit retry. The session
     // layer also drops focus requests inside the thread-switch guard window.
-    const focus = firstAttach || retry !== lastRetrySequence
+    const isRetry = retry !== lastRetrySequence
+    const focus = firstAttach || isRetry
     firstAttach = false
     lastRetrySequence = retry
+    const binding = bindingFor(currentScopedId, currentScopeKey, currentThreadId, currentDirectory)
     return (container) => {
+      // A thread switch inside one scope re-runs this attachment with the very
+      // same scoped session already in place. Leave it completely untouched:
+      // no refit, no repaint of a canvas whose shell never moved. Only refresh
+      // its respawn binding so process tracking follows the open thread.
+      const live = terminalSessions.getSession(currentScopedId)
+      if (!isRetry && live?.ptySpawned && live.host.parentElement === container) {
+        live.binding = binding
+        live.threadId = currentThreadId
+        live.scopeBucketId = currentScopeKey
+        live.directory = currentDirectory ?? null
+        return
+      }
       let cancelled = false
       loading = true
       terminalError = undefined
 
       void terminalSessions
-        .getOrCreate(currentTerminalId)
+        .getOrCreate(currentScopedId)
         .then(async (session: TerminalSession) => {
           if (cancelled) return
           await terminalSessions.attach(session, container, currentProjectId, binding, { focus })
@@ -109,24 +132,10 @@
 </script>
 
 <div class="flex h-full w-full flex-col overflow-hidden bg-terminal-background">
-  <StalePanelNotice stale={scopeStale}>
-    {#snippet action()}
-      <button
-        type="button"
-        class="ml-auto shrink-0 rounded border border-warning/40 px-2 py-0.5 text-xs font-semibold text-warning hover:bg-warning/20 disabled:opacity-50"
-        title="Stop this shell and start a new one in the open thread's scope"
-        aria-label="Restart the shell in the open thread's scope"
-        disabled={restarting}
-        onclick={restartInScope}
-      >
-        Restart in this scope
-      </button>
-    {/snippet}
-  </StalePanelNotice>
   <div tabindex="-1" class="terminal-wrap relative min-h-0 flex-1 overflow-hidden">
     <div
       class="h-full w-full overflow-hidden py-1 pl-2"
-      {@attach attachTerminal(terminalId, projectId, spawnTarget, retrySequence)}
+      {@attach attachTerminal(scopedTerminalId, projectId, scopeKey, threadId, directory, retrySequence)}
     ></div>
     {#if loading}
       <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">

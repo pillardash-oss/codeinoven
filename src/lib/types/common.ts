@@ -5,6 +5,14 @@ export interface AttachmentStorageScope {
   threadId: string
 }
 
+/** One file a composer staged before its chat existed, moved into that chat's
+ *  own scratch path: `from` is where it was staged, `to` where it lives now. The
+ *  composer repoints the attachment it still holds at `to`. */
+export interface DraftAttachmentMove {
+  from: string
+  to: string
+}
+
 export type ProviderType = 'cli' | 'api' | 'hybrid'
 
 export type HarnessExecutionTarget =

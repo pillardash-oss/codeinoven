@@ -1,12 +1,12 @@
 <script lang="ts">
   import type { SvelteMap } from 'svelte/reactivity'
+  import { fly } from 'svelte/transition'
   import type { Thread } from '$shared/types'
-  // TerminalPanel and BrowserPanel stay static on purpose: both are also
-  // statically imported by the keep-mounted fullscreen and terminal-dock
-  // wrappers, so a dynamic import here cannot move them out of the eager
-  // closure. Deferring them means deferring those wrappers too, which is the
-  // native-view mount path, not a chunk split.
-  import BrowserPanel from '$lib/components/browser/BrowserPanel.svelte'
+  import { panelReveal } from '$lib/components/layout/page-reveal'
+  // BrowserPanel is a dynamic import: terminal and browser panels are the dock's
+  // two heaviest residents, and the browser one drags the browser's whole model
+  // with it. A browser panel can only appear once a browser tab exists, which is
+  // also when its chunk is warmed, so nothing on the first paint waits for it.
   import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { Network } from '@lucide/svelte'
@@ -91,6 +91,13 @@
     activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : ''
   )
 
+  /**
+   * The browser panel is a native `WebContentsView` floating above the DOM, so it
+   * cannot ride a translate: the box it reports as the view's bounds would move
+   * with the transform. It fades instead, which leaves its geometry alone.
+   */
+  let activePanelIsBrowser = $derived(activeContextTab?.kind === 'browser')
+
   /** The thread whose own workspace the file tree mounts. Only a chat or an
    *  assistant task has one; a real project always reads the project root. */
   let filesThreadId = $derived(
@@ -155,149 +162,185 @@
   {/key}
 {/if}
 {#if activeContextTab}
-  {#key activePanelKey}
-    {#if activeContextTab.kind === 'files'}
-      {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
-        <ProjectFilesPanel
-          projectId={activeContextTab.projectId}
-          projectName={filesRootIdentity.name}
-          projectLabel={filesRootIdentity.label}
-          routineRoot={filesRootIdentity.routine}
-          projectIconUrl={filesRootIdentity.iconUrl}
-          projectAccentColor={filesRootIdentity.accentColor}
-        />
-      {/await}
-    {:else if activeContextTab.kind === 'diff'}
-      {#await import('../files/DiffSidebarPanel.svelte') then { default: DiffSidebarPanel }}
-        <DiffSidebarPanel
-          projectId={activeContextTab.projectId}
-          threadId={activeContextTab.threadId}
-          checkpointId={activeContextTab.checkpointId}
-          revealPath={activeContextTab.revealPath}
-          revealNonce={activeContextTab.revealNonce}
-        />
-      {/await}
-    {:else if activeContextTab.kind === 'terminal'}
-      {#if terminalFullscreenTabId === activeContextTab.id}
-        <div class="flex h-full items-center justify-center text-xs text-muted">
-          Terminal is open in fullscreen
-        </div>
-      {:else}
-        <TerminalPanel
-          terminalId={activeContextTab.terminalId}
-          projectId={activeContextTab.projectId}
-          threadId={activeContextTab.threadId}
-          scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
-        />
-      {/if}
-    {:else if activeContextTab.kind === 'actions'}
-      {#await import('../actions/ActionsPanel.svelte') then { default: ActionsPanel }}
-        <ActionsPanel
-          projectId={activeContextTab.projectId}
-          threadId={activeContextTab.threadId}
-          scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
-        />
-      {/await}
-    {:else if activeContextTab.kind === 'browser'}
-      {#if browserFullscreenTabId === activeContextTab.id}
-        <div class="flex h-full items-center justify-center text-xs text-muted">
-          Browser is open in fullscreen
-        </div>
-      {:else if browser.clearDataConfirmOpen && browser.clearDataProjectId === activeContextTab.projectId}
-        <div class="h-full bg-app" aria-hidden="true"></div>
-      {:else}
-        <BrowserPanel tab={activeContextTab} />
-      {/if}
-    {:else if activeContextTab.kind === 'debugger'}
-      {#await import('../debug/AgentDebugPanel.svelte') then { default: AgentDebugPanel }}
-        <AgentDebugPanel />
-      {/await}
-    {:else if activeContextTab.kind === 'sources'}
-      {#await import('../threads/SourcesPanel.svelte') then { default: SourcesPanel }}
-        <SourcesPanel
-          sources={workspaceState.sources}
-          projectId={activeContextTab.projectId}
-          threadId={activeContextTab.threadId}
-        />
-      {/await}
-    {:else if activeContextTab.kind === 'git'}
-      <!-- Rendered by the persistent, keep-mounted block above. -->
-    {:else if activeContextTab.kind === 'cloud-deployment'}
-      {#await import('../cloud/CloudDeploymentPanel.svelte') then { default: CloudDeploymentPanel }}
-        <CloudDeploymentPanel
-          projectId={activeContextTab.projectId}
-          threadId={activeContextTab.threadId}
-        />
-      {/await}
-    {:else if activeContextTab.kind === 'temporary-chat'}
-      {#await import('../chats/TemporaryChatView.svelte') then { default: TemporaryChatView }}
-        <TemporaryChatView tabId={activeContextTab.id} {onContinueInThread} />
-      {/await}
-    {:else if activeContextTab.kind === 'notifications'}
-      {#await import('../notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
-        <NotificationPanel />
-      {/await}
-    {:else if activeContextTab.kind === 'assistant-how-to'}
-      {#await import('../assistant/AssistantPanel.svelte') then { default: HowToPanel }}
-        <HowToPanel
-          projectId={activeContextTab.projectId}
-          threadId={activeContextTab.threadId}
-          routineId={activeContextTab.routineId}
-          bind:panelTab={activeContextTab.panelTab}
-          {navigate}
-          onOpenTask={onOpenAssistantTask}
-        />
-      {/await}
-    {:else if activeContextTab.kind === 'coordinator'}
-      {#if coordinator}
-        {#if coordinator.panel.component === 'assignment'}
-          {#await import('../threads/AssignmentCoordinatorPanel.svelte') then { default: AssignmentCoordinatorPanel }}
-            <AssignmentCoordinatorPanel {...coordinator.panel.props} />
+  <!-- Cross-fades the panel body when the active tool changes. Both the
+       out-going and the in-coming panel are absolutely placed in the same cell,
+       so they overlap for the length of the switch instead of one blinking off
+       before the other appears. Only the incoming panel rises: the outgoing one
+       is always positioned with no translate, because a transition's params are
+       re-read when the block is destroyed   by then the active tab is already
+       the new one, so a rising outgoing browser panel would slide the native
+       `WebContentsView` it reports the bounds of. -->
+  <div class="relative h-full">
+    {#key activePanelKey}
+      <div
+        class="absolute inset-0"
+        data-panel-kind={activeContextTab.kind}
+        in:fly={panelReveal(activePanelIsBrowser)}
+        out:fly={panelReveal(true)}
+      >
+        {#if activeContextTab.kind === 'files'}
+          {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
+            <ProjectFilesPanel
+              projectId={activeContextTab.projectId}
+              projectName={filesRootIdentity.name}
+              projectLabel={filesRootIdentity.label}
+              routineRoot={filesRootIdentity.routine}
+              projectIconUrl={filesRootIdentity.iconUrl}
+              projectAccentColor={filesRootIdentity.accentColor}
+            />
           {/await}
-        {:else if coordinator.panel.component === 'achievement'}
-          {#await import('../threads/AchievementCoordinatorPanel.svelte') then { default: AchievementCoordinatorPanel }}
-            <AchievementCoordinatorPanel {...coordinator.panel.props} />
+        {:else if activeContextTab.kind === 'diff'}
+          {#await import('../files/DiffSidebarPanel.svelte') then { default: DiffSidebarPanel }}
+            <DiffSidebarPanel
+              projectId={activeContextTab.projectId}
+              threadId={activeContextTab.threadId}
+              checkpointId={activeContextTab.checkpointId}
+              revealPath={activeContextTab.revealPath}
+              revealNonce={activeContextTab.revealNonce}
+            />
           {/await}
-        {:else}
-          {#await import('../threads/IndependentAuditCoordinatorPanel.svelte') then { default: IndependentAuditCoordinatorPanel }}
-            <IndependentAuditCoordinatorPanel {...coordinator.panel.props} />
+        {:else if activeContextTab.kind === 'terminal'}
+          {#if terminalFullscreenTabId === activeContextTab.id}
+            <div class="flex h-full items-center justify-center text-xs text-muted">
+              Terminal is open in fullscreen
+            </div>
+          {:else}
+            <TerminalPanel
+              terminalId={activeContextTab.terminalId}
+              projectId={activeContextTab.projectId}
+              threadId={activeContextTab.threadId}
+              scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
+              directory={activeContextTab.startingDirectory}
+            />
+          {/if}
+        {:else if activeContextTab.kind === 'actions'}
+          {#await import('../actions/ActionsPanel.svelte') then { default: ActionsPanel }}
+            <ActionsPanel
+              projectId={activeContextTab.projectId}
+              threadId={activeContextTab.threadId}
+              scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
+            />
+          {/await}
+        {:else if activeContextTab.kind === 'browser'}
+          {#if browserFullscreenTabId === activeContextTab.id}
+            <div class="flex h-full items-center justify-center text-xs text-muted">
+              Browser is open in fullscreen
+            </div>
+          {:else if browser.clearDataConfirmOpen && browser.clearDataProjectId === activeContextTab.projectId}
+            <div class="h-full bg-app" aria-hidden="true"></div>
+          {:else}
+            {#await import('$lib/components/browser/BrowserPanel.svelte') then { default: BrowserPanel }}
+              <BrowserPanel tab={activeContextTab} />
+            {/await}
+          {/if}
+        {:else if activeContextTab.kind === 'debugger'}
+          {#await import('../debug/AgentDebugPanel.svelte') then { default: AgentDebugPanel }}
+            <AgentDebugPanel />
+          {/await}
+        {:else if activeContextTab.kind === 'sources'}
+          {#await import('../threads/SourcesPanel.svelte') then { default: SourcesPanel }}
+            <SourcesPanel
+              sources={workspaceState.sources}
+              projectId={activeContextTab.projectId}
+              threadId={activeContextTab.threadId}
+            />
+          {/await}
+        {:else if activeContextTab.kind === 'git'}
+          <!-- Rendered by the persistent, keep-mounted block above. -->
+        {:else if activeContextTab.kind === 'cloud-deployment'}
+          {#await import('../cloud/CloudDeploymentPanel.svelte') then { default: CloudDeploymentPanel }}
+            <CloudDeploymentPanel
+              projectId={activeContextTab.projectId}
+              threadId={activeContextTab.threadId}
+            />
+          {/await}
+        {:else if activeContextTab.kind === 'temporary-chat'}
+          {#await import('../chats/TemporaryChatView.svelte') then { default: TemporaryChatView }}
+            <TemporaryChatView tabId={activeContextTab.id} {onContinueInThread} />
+          {/await}
+        {:else if activeContextTab.kind === 'notifications'}
+          {#await import('../notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
+            <NotificationPanel />
+          {/await}
+        {:else if activeContextTab.kind === 'assistant-how-to'}
+          {#await import('../assistant/AssistantPanel.svelte') then { default: HowToPanel }}
+            <HowToPanel
+              projectId={activeContextTab.projectId}
+              threadId={activeContextTab.threadId}
+              routineId={activeContextTab.routineId}
+              bind:panelTab={activeContextTab.panelTab}
+              {navigate}
+              onOpenTask={onOpenAssistantTask}
+            />
+          {/await}
+        {:else if activeContextTab.kind === 'coordinator'}
+          {#if coordinator}
+            {#if coordinator.panel.component === 'assignment'}
+              {#await import('../threads/AssignmentCoordinatorPanel.svelte') then { default: AssignmentCoordinatorPanel }}
+                <AssignmentCoordinatorPanel {...coordinator.panel.props} />
+              {/await}
+            {:else if coordinator.panel.component === 'achievement'}
+              {#await import('../threads/AchievementCoordinatorPanel.svelte') then { default: AchievementCoordinatorPanel }}
+                <AchievementCoordinatorPanel {...coordinator.panel.props} />
+              {/await}
+            {:else if coordinator.panel.component === 'design'}
+              {#await import('../design/DesignCoordinatorPanel.svelte') then { default: DesignCoordinatorPanel }}
+                <DesignCoordinatorPanel {...coordinator.panel.props} />
+              {/await}
+            {:else}
+              {#await import('../threads/IndependentAuditCoordinatorPanel.svelte') then { default: IndependentAuditCoordinatorPanel }}
+                <IndependentAuditCoordinatorPanel {...coordinator.panel.props} />
+              {/await}
+            {/if}
+          {:else}
+            <EmptyState
+              icon={Network}
+              title="Coordinator unavailable"
+              description="The coordinator for this thread is not open right now. Close this panel and reopen the coordinator from the rail."
+            >
+              {#snippet action()}
+                <button
+                  type="button"
+                  class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+                  onclick={onDismissCoordinator}
+                >
+                  Close panel
+                </button>
+              {/snippet}
+            </EmptyState>
+          {/if}
+        {:else if activeContextTab.kind === 'memory'}
+          {#await import('../memory/MemoryPanel.svelte') then { default: MemoryPanel }}
+            <MemoryPanel
+              variant="sidebar"
+              projectId={activeContextTab.projectId}
+              threadId={activeContextTab.threadId}
+              routineId={activeContextTab.routineId}
+              bind:activeSection={activeContextTab.memorySection}
+            />
+          {/await}
+        {:else if activeContextTab.kind === 'thread-note'}
+          {#await import('../threads/ThreadNotePanel.svelte') then { default: ThreadNotePanel }}
+            <ThreadNotePanel tab={activeContextTab} />
+          {/await}
+        {:else if activeContextTab.kind === 'attention'}
+          {#await import('../notifications/AttentionPanel.svelte') then { default: AttentionPanel }}
+            <AttentionPanel
+              projectId={activeContextTab.projectId}
+              threadId={activeContextTab.threadId}
+            />
+          {/await}
+        {:else if activeContextTab.kind === 'subagent'}
+          <!-- The sub-agent transcript is the only tab kind left after the branches
+            above, so it is named explicitly instead of being an `{:else}`: the
+            browser rail's downloads and popup-window tabs share the tab union but
+            are never in this sidebar's tab list, and rendering them in
+            SubagentSessionView would be wrong. -->
+          {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
+            <SubagentSessionView tab={activeContextTab} {onOpenSubagent} />
           {/await}
         {/if}
-      {:else}
-        <EmptyState
-          icon={Network}
-          title="Coordinator unavailable"
-          description="The coordinator for this thread is not open right now. Close this panel and reopen the coordinator from the rail."
-        >
-          {#snippet action()}
-            <button
-              type="button"
-              class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
-              onclick={onDismissCoordinator}
-            >
-              Close panel
-            </button>
-          {/snippet}
-        </EmptyState>
-      {/if}
-    {:else if activeContextTab.kind === 'memory'}
-      {#await import('../memory/MemoryPanel.svelte') then { default: MemoryPanel }}
-        <MemoryPanel
-          variant="sidebar"
-          projectId={activeContextTab.projectId}
-          threadId={activeContextTab.threadId}
-          routineId={activeContextTab.routineId}
-          bind:activeSection={activeContextTab.memorySection}
-        />
-      {/await}
-    {:else if activeContextTab.kind === 'thread-note'}
-      {#await import('../threads/ThreadNotePanel.svelte') then { default: ThreadNotePanel }}
-        <ThreadNotePanel tab={activeContextTab} />
-      {/await}
-    {:else}
-      {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
-        <SubagentSessionView tab={activeContextTab} {onOpenSubagent} />
-      {/await}
-    {/if}
-  {/key}
+      </div>
+    {/key}
+  </div>
 {/if}

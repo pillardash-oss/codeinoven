@@ -19,7 +19,10 @@ import type {
   HarnessLoginOptions
 } from '../drivers/driver.interface'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
-import { readOpenCodeV2ActiveCredentialIds } from '../drivers/opencode-account-usage'
+import {
+  readOpenCodeV2ActiveCredentialIds,
+  readOpenCodeV2StoredCredentials
+} from '../drivers/opencode-account-usage'
 import { antigravityModelSlugs } from '../drivers/antigravity-model-output'
 import {
   HarnessCommandError,
@@ -166,92 +169,6 @@ function parseOpenCodeStatus(output: string, succeeded: boolean): HarnessAuthSta
 }
 
 /**
- * Read `opencode auth list --format json` (V2's credential store).
- *
- * The observed shape is an array of integrations, each carrying a
- * `connections` array; one connection is one stored credential, so an
- * integration that holds two keys reports two accounts. `type: 'env'`
- * connections are not stored credentials and are skipped, matching V1's
- * `auth list`. The parser stays tolerant of the `{credentials|accounts: [...]}`
- * container form and of a flat per-credential entry, and anything it cannot
- * read reports `unknown` rather than claiming the account is signed out.
- */
-export function parseOpenCodeV2Status(output: string, succeeded: boolean): HarnessAuthStatus {
-  const clean = stripAnsi(output).trim()
-  if (clean.length === 0) {
-    return {
-      state: succeeded ? 'unauthenticated' : 'error',
-      accounts: [],
-      ...(succeeded ? {} : { detail: 'OpenCode V2 did not report a credential status.' })
-    }
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(clean) as unknown
-  } catch {
-    return {
-      state: succeeded ? 'unknown' : 'error',
-      accounts: [],
-      detail: 'OpenCode V2 did not report credentials as JSON.'
-    }
-  }
-  const accounts = openCodeV2Entries(parsed).flatMap((entry) => openCodeV2Accounts(entry))
-  return { state: accounts.length > 0 ? 'authenticated' : 'unauthenticated', accounts }
-}
-
-/** Integration objects in any of the shapes the credential list has printed. */
-function openCodeV2Entries(parsed: unknown): Record<string, unknown>[] {
-  if (Array.isArray(parsed)) return parsed.filter(isRecord)
-  if (!isRecord(parsed)) return []
-  for (const key of ['integrations', 'credentials', 'accounts'] as const) {
-    const list = parsed[key]
-    if (Array.isArray(list)) return list.filter(isRecord)
-  }
-  return []
-}
-
-/** Every stored credential one integration entry reports, as account rows. */
-function openCodeV2Accounts(entry: Record<string, unknown>): HarnessAuthAccount[] {
-  const providerId =
-    firstAuthString(entry['id']) ??
-    firstAuthString(entry['integrationID']) ??
-    firstAuthString(entry['providerID']) ??
-    firstAuthString(entry['provider'])
-  if (!providerId) return []
-  const integrationName = firstAuthString(entry['name']) ?? firstAuthString(entry['label'])
-  if (!Array.isArray(entry['connections'])) {
-    // Tolerant fallback for a flat credential row that names its provider.
-    const label = integrationName ?? providerId
-    const method = firstAuthString(entry['method'])
-    return [
-      {
-        id: accountId(label),
-        providerId,
-        label,
-        ...(method ? { method } : {}),
-        ...(entry['active'] === true || entry['activated'] === true ? { active: true } : {})
-      }
-    ]
-  }
-  return entry['connections'].filter(isRecord).flatMap((connection) => {
-    if (connection['type'] === 'env') return []
-    const label = firstAuthString(connection['label']) ?? integrationName ?? providerId
-    const credentialId = firstAuthString(connection['id'])
-    const method = firstAuthString(connection['method'])
-    return [
-      {
-        // The credential id is unique per connection, so two keys on one
-        // integration stay tellable; a slug is the fallback for older output.
-        id: credentialId ?? accountId(label),
-        providerId,
-        label,
-        ...(method ? { method } : {})
-      }
-    ]
-  })
-}
-
-/**
  * Stamp the account whose credential the harness itself has active.
  *
  * A native multi-account store (OpenCode V2) knows which credential a turn will
@@ -277,10 +194,6 @@ async function markNativeActiveAccounts(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-function firstAuthString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
 }
 
 function parseClaudeStatus(output: string, succeeded: boolean): HarnessAuthStatus {
@@ -879,16 +792,39 @@ const OPENCODE_V1_AUTH: AuthDefinition = {
 }
 
 /**
- * OpenCode V2 auth: credentials live in its own SQLite store and are read with
- * `auth list --format json`, while login/logout take a positional provider id.
+ * OpenCode V2 account status, read from its own SQLite credential store.
+ *
+ * `opencode auth list --format json` prints the same integrations the store
+ * holds, but running the client has a side effect the app cannot live with: the
+ * CLI ensures OpenCode's managed background service, so a status probe spawns
+ * `opencode serve --service`   a daemon that survives the probe, re-parents to
+ * launchd, and is then adopted by the task manager. The store is read-only and
+ * process-free, so the accounts still list and nothing is left running.
+ */
+async function readOpenCodeV2Status(
+  _projectPath?: string,
+  environment: NodeJS.ProcessEnv = {}
+): Promise<HarnessAuthStatus> {
+  const stored = await readOpenCodeV2StoredCredentials(environment)
+  const accounts: HarnessAuthAccount[] = stored.map((credential) => ({
+    id: credential.id,
+    providerId: credential.integrationId,
+    label: credential.label ?? credential.integrationId,
+    ...(credential.method ? { method: credential.method } : {})
+  }))
+  return { state: accounts.length > 0 ? 'authenticated' : 'unauthenticated', accounts }
+}
+
+/**
+ * OpenCode V2 auth: credentials live in its own SQLite store, while login and
+ * logout take a positional provider id.
  */
 function openCodeV2Auth(command: string): AuthDefinition {
   return {
     id: 'opencode',
     name: 'OpenCode',
     command,
-    statusArgs: ['auth', 'list', '--format', 'json'],
-    parseStatus: parseOpenCodeV2Status,
+    readStatus: readOpenCodeV2Status,
     loginArgs: (options) => ['auth', 'login', ...(options.providerId ? [options.providerId] : [])],
     logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
     // V2 keeps several credentials per integration and switches the active one
@@ -1079,21 +1015,28 @@ export class ProviderAccountOrchestrator {
         : fileBackedAuth
     }
     this.oauthSessions.set(loginId, session)
-    void runPiLogin(providerId, {
-      signal: controller.signal,
-      onEvent: (event) => this.broadcastOAuthEvent(loginId, { kind: 'event', event }),
-      prompt: (prompt) =>
-        new Promise<string>((resolve, reject) => {
-          const promptId = `${loginId}-p-${crypto.randomUUID()}`
-          session.pendingPrompt = resolve
-          this.broadcastOAuthEvent(loginId, { kind: 'prompt', promptId, prompt })
-          controller.signal.addEventListener(
-            'abort',
-            () => reject(new Error('Sign-in was cancelled.')),
-            { once: true }
-          )
-        })
-    })
+    void runPiLogin(
+      providerId,
+      {
+        signal: controller.signal,
+        onEvent: (event) => this.broadcastOAuthEvent(loginId, { kind: 'event', event }),
+        prompt: (prompt) =>
+          new Promise<string>((resolve, reject) => {
+            const promptId = `${loginId}-p-${crypto.randomUUID()}`
+            session.pendingPrompt = resolve
+            this.broadcastOAuthEvent(loginId, { kind: 'prompt', promptId, prompt })
+            controller.signal.addEventListener(
+              'abort',
+              () => reject(new Error('Sign-in was cancelled.')),
+              { once: true }
+            )
+          })
+      },
+      // The account's own Pi agent directory names this host: flows that
+      // register it (OpenAI's ChatGPT sign-in) then see one stable device per
+      // account instead of a new one on every sign-in.
+      { hostSeed: piAgentDir ?? 'pi-default' }
+    )
       .then(async (credential) => {
         if (credential.type === 'oauth') {
           await session.authStore.setOAuthCredential(providerId, credential)

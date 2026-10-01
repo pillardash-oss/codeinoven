@@ -89,14 +89,66 @@ if (process.platform === 'darwin') {
   for (const [name, size] of entries) {
     writeFileSync(join(setDir, name), renderPng(master, size))
   }
-  execFileSync('iconutil', [
-    '-c',
-    'icns',
-    setDir,
-    '-o',
-    join(macosDir, 'AppIcon.icns')
-  ])
+  execFileSync('iconutil', ['-c', 'icns', setDir, '-o', join(macosDir, 'AppIcon.icns')])
   rmSync(iconset, { recursive: true, force: true })
   Logger.dev('[build-app-icons] Wrote macos/AppIcon.icns.')
 }
+
+// Menu bar tray template images.
+//
+// macOS treats a `...Template.png` filename as a template image and derives its
+// own tint from the alpha channel, so the mark is rendered in solid black and a
+// matching `@2x` file is picked up automatically for Retina menu bars. The
+// artwork is the existing monochrome mark, recoloured to pure black. The
+// attention variant adds a bold exclamation mark beside the mark so the menu bar
+// can say "something needs you" without a second colour.
+//
+// The mark's own outline is a hairline at menu bar size, noticeably lighter than
+// the system glyphs it sits beside. Rendering it with a same-colour stroke adds
+// ink at the mark's own edges, which is what brings its weight up to match the
+// menu bar's own glyphs; the default stroke is tuned so the two templates read
+// as one weight beside the system clock. The attention variant scales the mark
+// down, so its stroke scales up by the same factor to keep that weight, and its
+// exclamation is drawn as a wide rounded bar over a dot so "something needs you"
+// survives at 16px instead of thinning into a speck.
+const monoBase = readFileSync(join(staticDir, 'icon-mono.svg'), 'utf8').replace(
+  'color:#a1a1aa',
+  'color:#000000'
+)
+const TRAY_STROKE_WIDTH = 24
+const TRAY_ATTENTION_SCALE = 0.78
+
+/** Thicken a template's outline with a same-colour stroke. */
+function boldenTray(svg: string, strokeWidth: number): string {
+  return svg.replace(
+    'stroke-miterlimit:2;">',
+    `stroke-miterlimit:2;stroke:#000000;stroke-width:${strokeWidth};stroke-linejoin:round;stroke-linecap:round;">`
+  )
+}
+
+const monoMaster = boldenTray(monoBase, TRAY_STROKE_WIDTH)
+// The attention variant scales the mark down and sets a bold exclamation beside
+// it, so the two shapes stay legible at menu bar size instead of overlapping.
+const attentionMaster = boldenTray(
+  monoBase
+    .replace(
+      '<g id="svg"',
+      `<g transform="matrix(${TRAY_ATTENTION_SCALE},0,0,${TRAY_ATTENTION_SCALE},6,120)"><g id="svg"`
+    )
+    .replace(
+      '</svg>',
+      '</g><g id="attention-badge"><rect x="1020" y="190" width="170" height="440" rx="85" fill="#000000"/><circle cx="1105" cy="800" r="100" fill="#000000"/></g></svg>'
+    ),
+  TRAY_STROKE_WIDTH / TRAY_ATTENTION_SCALE
+)
+const trayOutputs: Array<[string, Buffer]> = [
+  ['trayTemplate.png', renderPng(monoMaster, 16)],
+  ['trayTemplate@2x.png', renderPng(monoMaster, 32)],
+  ['trayAttentionTemplate.png', renderPng(attentionMaster, 16)],
+  ['trayAttentionTemplate@2x.png', renderPng(attentionMaster, 32)]
+]
+for (const [name, buffer] of trayOutputs) {
+  writeFileSync(join(macosDir, name), buffer)
+}
+Logger.dev(`[build-app-icons] Wrote ${trayOutputs.length} menu bar template assets to ${macosDir}.`)
 Logger.dev('[build-app-icons] Done.')

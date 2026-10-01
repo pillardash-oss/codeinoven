@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en" data-browser-overlay>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws:"
+    />
+    <title>Overlay</title>
+    <style>
+      /* The window is transparent and only the regions that draw paint. The app
+         stylesheet gives a document the app's surface colour, which here would
+         be a rectangle of app background sitting on top of the page underneath. */
+      html,
+      body {
+        background: transparent !important;
+      }
+
+      body {
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="browser-overlay"></div>
+    <script type="module" src="./browser-overlay.ts"></script>
+  </body>
+</html>

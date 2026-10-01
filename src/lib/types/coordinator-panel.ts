@@ -90,3 +90,17 @@ export interface IndependentAuditCoordinatorPanelProps {
    *  thread that owns this audit. */
   onBackToCoordinator?: () => void
 }
+
+/**
+ * Props for the design coordinator board.
+ *
+ * Deliberately just the two ids: the panel loads its own state from the design
+ * service and owns its thumbnail, so nothing has to thread a design's data
+ * through the workspace. What the thread's live turn knows is irrelevant here,
+ * which is the point   a design session stays usable after the turn that made
+ * it is long over, and after a restart.
+ */
+export interface DesignCoordinatorPanelProps {
+  projectId: string
+  threadId: string
+}

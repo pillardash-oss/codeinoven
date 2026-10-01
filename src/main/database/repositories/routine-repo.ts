@@ -16,6 +16,7 @@ interface RoutineRow {
   color: string | null
   icon: string | null
   icon_type: string | null
+  custom_svg: string | null
   schedule: string | null
   schedule_updated_at: number | null
   how_to: string
@@ -121,6 +122,7 @@ function rowToRoutine(row: RoutineRow): Routine {
     color: row.color ?? undefined,
     icon: row.icon ?? undefined,
     iconType: row.icon_type ?? undefined,
+    customSvg: row.custom_svg ?? undefined,
     schedule: parseSchedule(row.schedule),
     scheduleUpdatedAt: row.schedule_updated_at ?? undefined,
     howTo: row.how_to ?? '',
@@ -144,16 +146,17 @@ export class RoutineRepo {
   upsert(routine: Routine): void {
     this.db.run(
       `INSERT INTO routines(
-        id, name, description, color, icon, icon_type, schedule, schedule_updated_at, how_to,
+        id, name, description, color, icon, icon_type, custom_svg, schedule, schedule_updated_at, how_to,
         how_to_updated_at, connections, delivery, priority, agents, paused, pinned, pinned_at,
         sort_order, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         description = excluded.description,
         color = excluded.color,
         icon = excluded.icon,
         icon_type = excluded.icon_type,
+        custom_svg = excluded.custom_svg,
         schedule = excluded.schedule,
         schedule_updated_at = excluded.schedule_updated_at,
         how_to = excluded.how_to,
@@ -174,6 +177,7 @@ export class RoutineRepo {
       routine.color ?? null,
       routine.icon ?? null,
       routine.iconType ?? null,
+      routine.customSvg ?? null,
       routine.schedule ? JSON.stringify(routine.schedule) : null,
       routine.scheduleUpdatedAt ?? null,
       routine.howTo ?? '',
@@ -196,11 +200,15 @@ export class RoutineRepo {
     return row ? rowToRoutine(row) : null
   }
 
+  /**
+   * Every routine, in a stable storage order. Sidebar order is applied on top
+   * of this by `RoutineManager.listRoutines` through the shared comparator, so
+   * this one never has to agree with the sidebar about anything but being
+   * deterministic.
+   */
   list(): Routine[] {
     return this.db
-      .all<RoutineRow>(
-        'SELECT * FROM routines ORDER BY pinned DESC, pinned_at DESC, sort_order ASC, updated_at DESC'
-      )
+      .all<RoutineRow>('SELECT * FROM routines ORDER BY created_at DESC, id ASC')
       .map(rowToRoutine)
   }
 

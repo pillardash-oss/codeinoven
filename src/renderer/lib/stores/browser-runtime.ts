@@ -1,0 +1,79 @@
+/**
+ * The one seam that wires the in-app browser's renderer runtime.
+ *
+ * This module is deliberately reachable only through a dynamic import, from
+ * `browser-access.svelte.ts`. It statically imports every browser store, so
+ * anything that imported it statically would pull the whole browser - the strip's
+ * model, its persistence, the sidebar's tab controller, the design inspector -
+ * into the first-paint chunk. Keeping the import dynamic is what puts that code in
+ * its own chunk, fetched the first time something actually reaches for the
+ * browser.
+ *
+ * The expensive half of the browser has always behaved that way: the main process
+ * creates a tab's native view, its partition session and its download listeners
+ * only when a tab is actually shown. The renderer half did not, because the stores
+ * did their setup in their constructors and were evaluated while the renderer
+ * document evaluated. They are inert until `start` is called on them now, and this
+ * module is the one place that calls, so a launch that never touches the browser
+ * pays nothing: no listener, no timer, no stored-tab read, no `MutationObserver`.
+ */
+
+import { publishBrowserSearchEngine } from '$lib/browser-search-context'
+import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
+import { appConfigState } from './app-config.svelte'
+import { browserAssistant } from './browser-assistant.svelte'
+import { browserBookmarks } from './browser-bookmarks.svelte'
+import { browserDownloads } from './browser-downloads.svelte'
+import { browserExtensions } from './browser-extensions.svelte'
+import { browserHistory } from './browser-history.svelte'
+import { browserInspector } from './browser-inspector.svelte'
+import { browserPopupWindows } from './browser-popup-windows.svelte'
+import { contextSidebarState } from './context-sidebar.svelte'
+import { globalBrowser } from './global-browser.svelte'
+
+/** The live browser store, re-exported so the access seam needs one import. */
+export { globalBrowser }
+
+let started = false
+
+/**
+ * Wire every browser store's runtime. Idempotent, so callers never have to
+ * coordinate or check: the second and later calls are free.
+ */
+export function startBrowserRuntime(): void {
+  if (started) return
+  started = true
+  globalBrowser.start()
+  browserPopupWindows.start()
+  browserDownloads.start()
+  browserExtensions.start()
+  browserInspector.start()
+  // The history and the bookmark list are the browser's memory: one records every
+  // page a tab commits, the other is what the user saved. Both are read here, once
+  // the browser is actually wanted, so a launch that never reaches it pays nothing
+  // for them.
+  //
+  // The history keeps one list per browser surface, so it is told two things only
+  // this seam can join: which surface a conversation's tabs belong to, and whether
+  // a surface still has any. The first comes from the sidebar's own scope resolver,
+  // so a history always covers exactly the tabs its strip shows; the second is what
+  // lets a thread browser's list die with the browser.
+  browserHistory.setScopeResolver((projectId, threadId) =>
+    contextSidebarState.browserScopeIdFor(projectId, threadId)
+  )
+  browserHistory.setLiveThreadScope((scope) => contextSidebarState.browserScopeIsLive(scope))
+  browserHistory.start()
+  browserBookmarks.start()
+  // A browser tab's assistant conversation is a real chat thread, and this store
+  // is what mirrors the links between them. It subscribes only from here, so a
+  // launch that never opens the browser pays nothing for the conversations it
+  // will never show.
+  browserAssistant.start()
+  contextSidebarState.startBrowserTabs()
+  // Two pushes to main describe the browser's chrome rather than its state, and
+  // both are skipped while no browser exists (see `publishBrowserScrollbarTheme`
+  // and `appConfigState.sync`). This is where the values they held back are sent,
+  // before the first page exists to use them.
+  publishBrowserScrollbarTheme()
+  publishBrowserSearchEngine(appConfigState.browserSearchEngine)
+}

@@ -618,6 +618,13 @@ export function runProviderDeltaSync(
   }
 }
 
+/** One `agent_messages` row selected as a user message. */
+interface UserMessageRow {
+  id: string
+  parts: string
+  created_at: number
+}
+
 export class AgentMessageRepo {
   constructor(private db: Database) {}
 
@@ -860,7 +867,7 @@ export class AgentMessageRepo {
 
   /** Every user-authored conversation message, oldest to newest. */
   loadUserMessagesByThread(threadId: string): UserMessageSummary[] {
-    const rows = this.db.all<{ id: string; parts: string; created_at: number }>(
+    const rows = this.db.all<UserMessageRow>(
       `SELECT id, parts, created_at FROM agent_messages
        WHERE thread_id = ? AND session_id IS NULL AND role = 'user'
          AND visibility IN ('conversation', 'working_trace')

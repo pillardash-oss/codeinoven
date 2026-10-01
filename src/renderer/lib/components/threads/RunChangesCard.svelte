@@ -158,7 +158,12 @@
   {#if open}
     <div class="border-t border-border">
       {#if checkpoint.failure}
-        <p class="border-b border-border px-4 py-2 text-[0.625rem] leading-relaxed text-danger">
+        <p
+          class="border-b border-border px-4 py-2 text-[0.625rem] leading-relaxed {checkpoint.stopReason ===
+          'app-closed'
+            ? 'text-dimmed'
+            : 'text-danger'}"
+        >
           {checkpoint.failure}
         </p>
       {/if}

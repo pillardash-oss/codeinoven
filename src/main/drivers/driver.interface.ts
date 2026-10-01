@@ -460,6 +460,18 @@ export interface HarnessDriver {
   /** Send a prompt; responses stream back via the event callback. Non-blocking. */
   sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void>
 
+  /**
+   * Bring this session's transport up before a prompt needs it.
+   *
+   * Best-effort and optional on purpose: a driver whose transport cannot start
+   * without a prompt simply omits it, and the engine treats that as nothing to
+   * warm rather than as a failure. The caller has already created the session, so
+   * an implementation only has to start the process, establish the session's
+   * channel and leave it idle; the turn that follows must behave exactly as it
+   * would have without this call.
+   */
+  warmSession?(projectPath: string, sessionId: string): Promise<void>
+
   /** Append user input to the active turn using the harness's native steering protocol. */
   steerPrompt?(projectPath: string, opts: SteerPromptOptions): Promise<void>
 

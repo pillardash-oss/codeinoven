@@ -142,6 +142,18 @@ export class CuaBridgeService {
   private updateInFlight: Promise<CuaBridgeStatus> | null = null
 
   /**
+   * The last milestone this app's own update run published, kept in the main
+   * process for the whole run.
+   *
+   * The renderer that starts an update can be unmounted at any moment (the user
+   * leaves the Computer use settings), and a fresh mount cannot replay events it
+   * was not subscribed for. Holding the state here lets that mount read what the
+   * installer is doing, or what it finished with, instead of showing the update
+   * button again while the download is still running.
+   */
+  private updateState: CuaUpdateProgress | null = null
+
+  /**
    * Live computer-use runs, keyed by their owner, with the mode each one needs.
    *
    * The driver's authorization mode is decided when the daemon starts and is
@@ -279,13 +291,41 @@ export class CuaBridgeService {
    */
   async applyUpdate(onProgress?: (progress: CuaUpdateProgress) => void): Promise<CuaBridgeStatus> {
     if (this.updateInFlight) return this.updateInFlight
-    const run = this.runUpdate(onProgress)
+    // Every milestone is mirrored into this service as well as forwarded, so a
+    // renderer that mounts after the run started reads the same state it would
+    // have streamed live.
+    const publish = (progress: CuaUpdateProgress): void => {
+      this.updateState = progress
+      onProgress?.(progress)
+    }
+    const run = this.runUpdate(publish).catch((updateError: unknown) => {
+      // A failure raised before the installer reported one (no installation to
+      // update, for example) still has to be the state the next mount reads.
+      if (this.updateState?.state === 'updating') {
+        this.updateState = {
+          state: 'failed',
+          error: updateError instanceof Error ? updateError.message : 'Cua Driver could not be updated.'
+        }
+      }
+      throw updateError
+    })
     this.updateInFlight = run
     try {
       return await run
     } finally {
       this.updateInFlight = null
     }
+  }
+
+  /**
+   * The current, or most recently finished, update run.
+   *
+   * Read by a renderer that mounts late (the settings page is reopened while the
+   * installer runs, or after it has finished) so the update row reflects the
+   * real run instead of starting from nothing.
+   */
+  getUpdateState(): CuaUpdateProgress | null {
+    return this.updateState ? { ...this.updateState } : null
   }
 
   /**

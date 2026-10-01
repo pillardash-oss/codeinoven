@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import {
     AlertTriangle,
+    Braces,
     Eye,
     FileCode2,
     FolderOpen,
@@ -9,7 +10,9 @@
     RotateCw,
     Save
   } from '@lucide/svelte'
+  import { toast } from 'svelte-sonner'
 
+  import { beautifyFileContent, fileBeautifyLabel } from '$lib/file-beautify'
   import { documentPreviewFrame, htmlPreviewFrame } from '$lib/document-preview-frame'
   import { standaloneFilePreviewUrl } from '$lib/file-preview'
   import { invoke } from '$lib/ipc.svelte'
@@ -39,9 +42,15 @@
     path: string
     /** Display name (the basename main resolved). */
     name: string
+    /**
+     * Whether this pane owns the Cmd/Ctrl+S save chord. The docked panel turns it
+     * off while collapsed into its dock chip, so a minimized file does not keep
+     * the chord from the surface the user is actually looking at.
+     */
+    saveShortcutEnabled?: boolean
   }
 
-  let { path, name }: Props = $props()
+  let { path, name, saveShortcutEnabled = true }: Props = $props()
 
   type View = 'source' | 'preview'
 
@@ -59,6 +68,10 @@
    *  bytes to the element instead of crossing IPC. SVG is deliberately excluded:
    *  it is XML, so its source stays editable while its preview renders from a blob. */
   const binaryPreview = $derived(pdf || video || audio || documentPreview || (image && !svg))
+  /** Format this file can be beautified as ("JSON"), or null when the editor
+   *  has no beautifier for it. The label doubles as the flag, so the action is
+   *  never offered when it could not run, exactly like the project editor. */
+  const beautifyLabel = $derived(fileBeautifyLabel(path))
 
   /** The file's editable text state. Null until it is read, and null forever for
    *  kinds that have no text form. */
@@ -147,6 +160,7 @@
    *  standalone file has unsaved edits. Shift is excluded, Cmd/Ctrl+Shift+S
    *  belongs to the right-sidebar toggle alone. */
   function handleSaveShortcut(event: KeyboardEvent): void {
+    if (!saveShortcutEnabled) return
     if (!keymapState.matches('files-save', event)) return
     if (!standaloneFiles.isDirty(path)) return
     event.preventDefault()
@@ -193,6 +207,26 @@
     await standaloneFiles.reload(path)
     if (sequence !== requestSequence) return
     loading = false
+  }
+
+  /** Reformat this file's draft in place. The result is left unsaved on purpose:
+   *  the pane goes dirty, the Save button lights up, and the editor's own
+   *  history keeps the previous layout one undo away. */
+  function beautifySource(): void {
+    const label = beautifyLabel
+    if (!session || label === null) return
+    const outcome = beautifyFileContent(path, session.draft)
+    if (outcome.status === 'invalid') {
+      toast.error(`${label} could not be beautified`, { description: outcome.message })
+      return
+    }
+    if (outcome.status === 'unchanged') {
+      toast.info(`${label} is already beautified`)
+      return
+    }
+    if (outcome.status !== 'formatted') return
+    standaloneFiles.updateDraft(path, outcome.text)
+    toast.success(`${label} beautified`, { description: 'Save the file to keep the change.' })
   }
 
   async function revealInFileManager(): Promise<void> {
@@ -244,6 +278,17 @@
       title="Unsaved changes"
       aria-label="Unsaved changes"
     ></span>
+  {/if}
+  {#if session && beautifyLabel && activeView === 'source'}
+    <button
+      type="button"
+      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      aria-label={`Beautify ${beautifyLabel}`}
+      title={`Beautify ${beautifyLabel}`}
+      onclick={beautifySource}
+    >
+      <Braces size={12} />
+    </button>
   {/if}
   {#if session}
     <button

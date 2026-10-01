@@ -21,8 +21,12 @@ export interface McpConnectionRequest {
   config: McpConnectionConfig
   /** Credential variables, already resolved from the vault. */
   environment: Record<string, string>
+  /** Declared credentials, used to inject a remote server's secret into its request headers. */
+  credentials?: readonly UtilityCredentialMetadata[]
   /** Omit to keep the raw client failure, e.g. inside a turn that reports its own context. */
   owner?: McpConnectionOwner
+  /** Turn that started the server, so the task manager attributes its row. */
+  context?: { projectId?: string | null; threadId?: string | null }
 }
 
 /**
@@ -33,13 +37,26 @@ export interface McpConnectionRequest {
  */
 export async function connectMcpServer(request: McpConnectionRequest): Promise<McpClient> {
   const { config, environment, owner } = request
+  const projectId = request.context?.projectId ?? null
+  const threadId = request.context?.threadId ?? null
+  const clientOwner = {
+    ...(owner?.name ? { name: owner.name } : {}),
+    scope: threadId ? ('thread' as const) : projectId ? ('project' as const) : ('app' as const),
+    projectId,
+    threadId
+  }
   if (config.transport === 'stdio') {
     if (!config.command) throw new Error('stdio MCP command is not configured')
     try {
-      return await StdioMcpClient.connect(config.command, config.args ?? [], {
-        ...config.environment,
-        ...environment
-      })
+      return await StdioMcpClient.connect(
+        config.command,
+        config.args ?? [],
+        {
+          ...config.environment,
+          ...environment
+        },
+        clientOwner
+      )
     } catch (error) {
       if (!owner) throw error
       throw mcpStartupFailure(owner, environment, error)
@@ -48,8 +65,49 @@ export async function connectMcpServer(request: McpConnectionRequest): Promise<M
   if (!config.url) throw new Error('Remote MCP URL is not configured')
   return RemoteMcpClient.connect(
     config.url,
-    resolveEnvironmentReferences(config.headers ?? {}, environment)
+    resolveMcpHeaders(config, environment, request.credentials),
+    clientOwner
   )
+}
+
+/**
+ * The request headers a remote MCP is sent with: the configured values with
+ * their `{env:NAME}` references resolved, plus every declared credential that
+ * no configured header already carries.
+ *
+ * A remote server has no process environment to inherit, so a declared secret
+ * is inert until it reaches a header: this is where a vault value saved during
+ * setup becomes the credential the server actually receives. Most API-key
+ * servers read `Authorization: Bearer <key>`, so an unmapped credential becomes
+ * exactly that; a server that wants a different header (an `X-API-Key`, a
+ * query-shaped key) declares it explicitly in the config, and an explicit
+ * `Authorization` header is never overridden.
+ */
+export function resolveMcpHeaders(
+  config: McpConnectionConfig,
+  environment: Record<string, string>,
+  credentials: readonly UtilityCredentialMetadata[] = []
+): Record<string, string> {
+  const configured = config.headers ?? {}
+  const headers = resolveEnvironmentReferences(configured, environment)
+  // A configured header that expands a declared variable already carries that
+  // secret, whatever header it lands in.
+  const referenced = new Set<string>()
+  for (const value of Object.values(configured)) {
+    for (const match of value.matchAll(/\{env:([A-Za-z_][A-Za-z0-9_]*)\}/gu)) {
+      referenced.add(match[1] ?? '')
+    }
+  }
+  let authorizationTaken = Object.keys(headers).some(
+    (name) => name.toLowerCase() === 'authorization'
+  )
+  for (const credential of credentials) {
+    const name = credential.environmentVariable
+    if (!name || !environment[name] || referenced.has(name) || authorizationTaken) continue
+    headers['Authorization'] = `Bearer ${environment[name]}`
+    authorizationTaken = true
+  }
+  return headers
 }
 
 /**

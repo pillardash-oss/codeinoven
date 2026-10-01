@@ -334,14 +334,14 @@ export const CHAT_FILESYSTEM_BOUNDARY_LINES = [
 
 export const CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION = CHAT_FILESYSTEM_BOUNDARY_LINES.join(' ')
 
-/** File-System-off chats own one carve-out: their artifact directory is part
- *  of the conversation. Reads and writes inside it are pre-authorized and are
- *  where chat outputs belong; it never opens the broader file system. */
-export function chatFilesystemBoundaryInstruction(chatArtifactRoot?: string): string {
-  if (!chatArtifactRoot) return CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION
+/** File-System-off chats own one carve-out: their own workspace directory is
+ *  part of the conversation. Reads and writes inside it are pre-authorized and
+ *  are where chat outputs belong; it never opens the broader file system. */
+export function chatFilesystemBoundaryInstruction(chatWorkspaceRoot?: string): string {
+  if (!chatWorkspaceRoot) return CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION
   return [
     CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION,
-    `One exception: the artifact directory of this chat (${chatArtifactRoot}) is part of this conversation. You may create and read files inside it freely, and outputs you create for the user belong there. This carve-out does not extend to anything outside that directory.`
+    `One exception: the workspace directory of this chat (${chatWorkspaceRoot}) is part of this conversation. You may create and read files inside it freely, and outputs you create for the user belong there. This carve-out does not extend to anything outside that directory.`
   ].join(' ')
 }
 
@@ -358,7 +358,33 @@ export const FILE_SYSTEM_CHAT_SYSTEM_PROMPT = [
 ].join(' ')
 
 /** Tools available to a plain (web-only) chat thread   no file-system tools. */
-export const CHAT_WEB_ONLY_TOOLS = ['question', 'webfetch', 'websearch', 'gemini_quota']
+export const CHAT_WEB_ONLY_TOOLS = ['question', 'webfetch', 'websearch']
+
+/** The utility gateway's MCP transport name, as every harness registers it. */
+const CHAT_GATEWAY_TRANSPORT_NAME = 'utilities'
+
+/**
+ * The gateway's own tools as one harness gates them through a tool allowlist,
+ * appended to a web-only chat so the in-app browser (and any installed web
+ * tool) stays reachable while the chat's file-system tools remain masked.
+ *
+ * Only harnesses that gate MCP tools through this allowlist need an entry:
+ * OpenCode enables a namespaced MCP tool as `<transport>_<tool>` and
+ * claude-code as `mcp__<transport>__<tool>`. Pi and codex carry the gateway as
+ * un-gated custom tools, and the remaining harnesses ignore the list for MCP
+ * tools, so they contribute nothing here   which keeps cline's list exactly the
+ * web set its web-only approval hook keys on.
+ */
+export function chatGatewayAllowedTools(harnessId: string): string[] {
+  const names = [UTILITY_SEARCH_TOOL_NAME, UTILITY_ACTIVATE_TOOL_NAME, UTILITY_INVOKE_TOOL_NAME]
+  if (harnessId === 'opencode') {
+    return names.map((name) => `${CHAT_GATEWAY_TRANSPORT_NAME}_${name}`)
+  }
+  if (harnessId === 'claude-code') {
+    return names.map((name) => `mcp__${CHAT_GATEWAY_TRANSPORT_NAME}__${name}`)
+  }
+  return []
+}
 
 export const SPEC_IMPLEMENT_SYSTEM_PROMPT = [
   `You are implementing a user-approved ${APP_NAME} engineering specification.`,

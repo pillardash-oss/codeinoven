@@ -43,6 +43,17 @@ export const APP_ADB_UTILITY_ID = 'cio:adb'
 export const APP_DESIGN_UTILITY_ID = 'cio:design'
 
 /**
+ * Stable id of the app-owned video capability.
+ *
+ * Its kind is `skill` for the same reason the design capability's is: the edit
+ * pass is the substance of it, and the app adds two operations on top, `preview`
+ * which serves the composition folder and opens it in the browser tab, and
+ * `capture`, which freezes the composition at a second and hands the frame back
+ * as a picture the model can look at.
+ */
+export const APP_VIDEO_UTILITY_ID = 'cio:video'
+
+/**
  * App-owned knowledge a user may switch off.
  *
  * `cio:adb` is advice: an agent applies that playbook with its own shell, so a
@@ -56,6 +67,10 @@ export const APP_DESIGN_UTILITY_ID = 'cio:design'
  * preview operation together, which is what a user with their own design skill
  * wants.
  *
+ * `cio:video` is the same shape for motion: an edit pass a user may already
+ * have their own opinions about, with the preview and capture operations
+ * attached. It joins this list for the same reason.
+ *
  * Everything else the app owns stays locked, because the app supplies the
  * wiring behind it and a turn that lost it would fail in a way the user cannot
  * explain. `cio:scope` is the case to keep in mind: its kind is `skill`, but it
@@ -67,7 +82,8 @@ export const APP_DESIGN_UTILITY_ID = 'cio:design'
  */
 const DISABLEABLE_APP_OWNED_UTILITY_IDS: ReadonlySet<string> = new Set([
   APP_ADB_UTILITY_ID,
-  APP_DESIGN_UTILITY_ID
+  APP_DESIGN_UTILITY_ID,
+  APP_VIDEO_UTILITY_ID
 ])
 
 /**
