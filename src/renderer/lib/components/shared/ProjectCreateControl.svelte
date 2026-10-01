@@ -206,11 +206,11 @@
         </DropdownMenu.Item>
         <DropdownMenu.Item
           class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-          title="Connect a project over SSH"
+          title="Add a project on an Oven over SSH"
           onSelect={addSshProject}
         >
           <Globe size={14} class="shrink-0 text-muted" />
-          SSH / Remote
+          Oven / SSH
         </DropdownMenu.Item>
         <DropdownMenu.Item
           class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
@@ -242,13 +242,13 @@
       <button
         type="button"
         class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-elevated"
-        title="Connect a project over SSH"
+        title="Add a project on an Oven over SSH"
         onclick={addSshProject}
       >
         <Globe size={16} class="shrink-0 text-muted" />
         <span>
-          <span class="block text-sm font-medium">SSH / Remote</span>
-          <span class="mt-0.5 block text-xs text-dimmed">Connect a project over SSH.</span>
+          <span class="block text-sm font-medium">Oven / SSH</span>
+          <span class="mt-0.5 block text-xs text-dimmed">Add a project on an Oven over SSH.</span>
         </span>
       </button>
       <button
@@ -273,7 +273,7 @@
   {onProjectCreated}
 />
 
-<Modal open={showSshModal} title="Connect SSH Project" onClose={() => (showSshModal = false)}>
+<Modal open={showSshModal} title="Add Oven Project" onClose={() => (showSshModal = false)}>
   <form
     id={sshProjectFormId}
     class="space-y-4"
@@ -290,7 +290,7 @@
         id="shared-ssh-name"
         type="text"
         class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-        placeholder="My Remote Project"
+        placeholder="My Oven Project"
         bind:value={newProjectName}
       />
     </div>
@@ -305,7 +305,7 @@
         placeholder="user@192.168.1.10 or myserver.local"
         bind:value={newProjectHost}
       />
-      <p class="mt-1 text-xs text-dimmed">{APP_NAME} will connect to this host over SSH.</p>
+      <p class="mt-1 text-xs text-dimmed">SSH host for this Oven.</p>
     </div>
   </form>
 
@@ -322,9 +322,9 @@
       type="submit"
       form={sshProjectFormId}
       class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      title="Connect to this host over SSH"
+      title="Add this Oven project"
     >
-      Connect
+      Add project
     </button>
   {/snippet}
 </Modal>

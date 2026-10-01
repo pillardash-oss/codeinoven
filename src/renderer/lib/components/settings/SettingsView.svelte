@@ -68,6 +68,7 @@
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import MediaGenerationSettings from './MediaGenerationSettings.svelte'
+  import OvensSettings from './OvensSettings.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
@@ -1252,6 +1253,8 @@
       <GatewaySettingsTab />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
+    {:else if section === 'ovens'}
+      <OvensSettings />
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
     {:else if section === 'about'}

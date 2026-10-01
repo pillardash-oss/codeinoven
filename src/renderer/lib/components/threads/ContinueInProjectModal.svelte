@@ -113,7 +113,9 @@
         <div class="flex flex-col items-center gap-2 px-4 py-8 text-center">
           <Folder size={20} class="text-dimmed" />
           <p class="text-sm text-muted">No {query.trim() ? 'matching' : ''} projects</p>
-          <p class="text-xs text-dimmed">Add a local folder or an SSH project below to continue.</p>
+          <p class="text-xs text-dimmed">
+            Add a local folder or an Oven project below to continue.
+          </p>
         </div>
       {/if}
     </div>

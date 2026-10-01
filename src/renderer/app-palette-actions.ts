@@ -189,12 +189,12 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
     {
       id: 'app:new-project',
       title: 'Create new project',
-      description: 'Choose how to add a project   local folder or SSH',
+      description: 'Choose how to add a project   local folder or Oven over SSH',
       category: 'command',
       source: applicationSource,
       icon: FolderPlus,
       shortcut: ['Ctrl', 'Shift', 'N'],
-      keywords: ['add', 'folder', 'repository', 'ssh', 'remote']
+      keywords: ['add', 'folder', 'repository', 'oven', 'ssh', 'remote']
     },
     {
       id: 'app:switch-project',

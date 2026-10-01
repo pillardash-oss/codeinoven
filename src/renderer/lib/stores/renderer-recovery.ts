@@ -27,6 +27,7 @@ export type SettingsSection =
   | 'sound'
   | 'keymap'
   | 'cloud-deployments'
+  | 'ovens'
   | 'about'
 
 export type MainView =
@@ -52,6 +53,7 @@ export type MainView =
   | 'settings-sound'
   | 'settings-keymap'
   | 'settings-cloud-deployments'
+  | 'settings-ovens'
   | 'settings-about'
 
 export interface SelectedThreadReference {
@@ -158,6 +160,7 @@ export interface RecoveryStorage {
 }
 
 const MAIN_VIEWS: readonly MainView[] = [
+  'settings-ovens',
   'projects',
   'projects-scope',
   'chats',
@@ -179,6 +182,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-about'
 ]
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'ovens',
   'profile',
   'general',
   'browser',
