@@ -3,10 +3,14 @@ import { LOCAL_OVEN_ID, type Oven, type OvenState, type SaveOvenInput } from '..
 import type { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 
-interface StoredOven extends Omit<Oven, 'hasPrivateKey' | 'hasPassphrase' | 'hasPublicKey'> {
+interface StoredOven extends Omit<
+  Oven,
+  'hasPrivateKey' | 'hasPassphrase' | 'hasPublicKey' | 'hasPassword'
+> {
   privateKeyRef?: string
   passphraseRef?: string
   publicKeyRef?: string
+  passwordRef?: string
 }
 interface OvenRegistryFile {
   version: 1
@@ -35,6 +39,7 @@ export class OvenRegistry {
           hasPrivateKey: false,
           hasPassphrase: false,
           hasPublicKey: false,
+          hasPassword: false,
           createdAt: 0,
           updatedAt: 0
         },
@@ -85,7 +90,8 @@ export class OvenRegistry {
         for (const [field, refField] of [
           ['privateKey', 'privateKeyRef'],
           ['passphrase', 'passphraseRef'],
-          ['publicKey', 'publicKeyRef']
+          ['publicKey', 'publicKeyRef'],
+          ['password', 'passwordRef']
         ] as const) {
           const secret = input[field]
           if (secret === undefined) continue
@@ -100,6 +106,8 @@ export class OvenRegistry {
         if (oven.connection?.authentication === 'vault' && !oven.privateKeyRef) {
           throw new Error('Import a private key before using vaulted authentication.')
         }
+        if (oven.connection?.authentication === 'password' && !oven.passwordRef)
+          throw new Error('Enter the SSH account password.')
         registry.ovens = [...registry.ovens.filter((item) => item.id !== oven.id), oven]
         await this.storage.write(REGISTRY_PATH, registry)
       } catch (error) {
@@ -107,7 +115,12 @@ export class OvenRegistry {
         throw error
       }
       // Old secrets can now be discarded. They never appear in renderer responses.
-      for (const field of ['privateKeyRef', 'passphraseRef', 'publicKeyRef'] as const) {
+      for (const field of [
+        'privateKeyRef',
+        'passphraseRef',
+        'publicKeyRef',
+        'passwordRef'
+      ] as const) {
         const ref = existing?.[field]
         if (ref && ref !== oven[field]) await this.vault.remove(ref)
       }
@@ -133,7 +146,12 @@ export class OvenRegistry {
       registry.ovens = registry.ovens.filter((item) => item.id !== id)
       if (registry.defaultOvenId === id) registry.defaultOvenId = LOCAL_OVEN_ID
       await this.storage.write(REGISTRY_PATH, registry)
-      for (const ref of [oven.privateKeyRef, oven.passphraseRef, oven.publicKeyRef]) {
+      for (const ref of [
+        oven.privateKeyRef,
+        oven.passphraseRef,
+        oven.publicKeyRef,
+        oven.passwordRef
+      ]) {
         if (ref) await this.vault.remove(ref)
       }
     })
@@ -141,12 +159,13 @@ export class OvenRegistry {
   }
 
   private present(oven: StoredOven): Oven {
-    const { privateKeyRef, passphraseRef, publicKeyRef, ...metadata } = oven
+    const { privateKeyRef, passphraseRef, publicKeyRef, passwordRef, ...metadata } = oven
     return {
       ...metadata,
       hasPrivateKey: Boolean(privateKeyRef),
       hasPassphrase: Boolean(passphraseRef),
-      hasPublicKey: Boolean(publicKeyRef)
+      hasPublicKey: Boolean(publicKeyRef),
+      hasPassword: Boolean(passwordRef)
     }
   }
 

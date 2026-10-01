@@ -134,7 +134,7 @@ export class OvenSsh {
       '-o',
       'ForwardAgent=no',
       '-o',
-      'PasswordAuthentication=no',
+      `PasswordAuthentication=${connection.authentication === 'password' ? 'yes' : 'no'}`,
       '-o',
       'KbdInteractiveAuthentication=no',
       '-o',
@@ -142,7 +142,38 @@ export class OvenSsh {
     ]
     if (connection.user) args.push('-l', connection.user)
     let scratch: string | undefined
+    const configureAskpass = async (directory: string, reference: string): Promise<void> => {
+      if (process.platform === 'win32')
+        throw new Error(
+          'Password and encrypted-key connections require an SSH askpass helper on Windows. Use SSH agent authentication on this device.'
+        )
+      const helper = join(directory, 'askpass')
+      await writeFile(helper, '#!/bin/sh\nprintf \'%s\\n\' "$CIO_OVEN_KEY_PASSPHRASE"\n', {
+        mode: 0o700,
+        flag: 'wx'
+      })
+      env['SSH_ASKPASS'] = helper
+      env['SSH_ASKPASS_REQUIRE'] = 'force'
+      env['DISPLAY'] ??= ':0'
+      env['CIO_OVEN_KEY_PASSPHRASE'] = await this.registry.vault.resolve(reference)
+    }
     try {
+      if (connection.authentication === 'password') {
+        if (!oven.passwordRef) throw new Error('Save the SSH account password for this Oven.')
+        const scratchRoot = this.registry.storage.resolve('ovens/credentials')
+        await mkdir(scratchRoot, { recursive: true, mode: 0o700 })
+        scratch = await mkdtemp(join(scratchRoot, 'connection-'))
+        await writeFile(join(scratch, 'owner'), String(process.pid), { mode: 0o600, flag: 'wx' })
+        await configureAskpass(scratch, oven.passwordRef)
+        args.push(
+          '-o',
+          'PreferredAuthentications=password',
+          '-o',
+          'PubkeyAuthentication=no',
+          '-o',
+          'NumberOfPasswordPrompts=1'
+        )
+      }
       if (connection.authentication === 'identity') {
         if (!connection.identityFile) throw new Error('Select an SSH identity file.')
         args.push(
@@ -165,18 +196,7 @@ export class OvenSsh {
         })
         args.push('-i', keyPath, '-o', 'IdentitiesOnly=yes')
         if (oven.passphraseRef) {
-          // The helper contains no credential. SSH obtains it from this child's environment.
-          if (process.platform === 'win32')
-            throw new Error('Use SSH agent for passphrase-protected keys on Windows.')
-          const helper = join(scratch, 'askpass')
-          await writeFile(helper, '#!/bin/sh\nprintf \'%s\\n\' "$CIO_OVEN_KEY_PASSPHRASE"\n', {
-            mode: 0o700,
-            flag: 'wx'
-          })
-          env['SSH_ASKPASS'] = helper
-          env['SSH_ASKPASS_REQUIRE'] = 'force'
-          env['DISPLAY'] ??= ':0'
-          env['CIO_OVEN_KEY_PASSPHRASE'] = await this.registry.vault.resolve(oven.passphraseRef)
+          await configureAskpass(scratch, oven.passphraseRef)
         }
       }
       if (directPort !== undefined) args.push('-W', `127.0.0.1:${directPort}`)
@@ -263,8 +283,9 @@ export class OvenSsh {
             sshIssue =
               'This host is not trusted by OpenSSH. Verify its fingerprint and connect with OpenSSH first.'
           } else if (/Permission denied/u.test(text)) {
-            sshIssue =
-              'The host rejected the SSH credential. Check the SSH username and that the matching public key is in that user’s authorized_keys on the Oven. For SSH agent authentication, load the private key into your agent or select its identity file.'
+            sshIssue = args.includes('PreferredAuthentications=password')
+              ? 'The host rejected password login. Check the SSH username and saved password, and that this server allows password authentication.'
+              : 'The host rejected the SSH credential. Check the SSH username and that the matching public key is in that user’s authorized_keys on the Oven. For SSH agent authentication, load the private key into your agent or select its identity file.'
           } else if (/Connection refused/u.test(text)) {
             sshIssue =
               'The host refused the connection. Check that SSH is running on the selected port.'

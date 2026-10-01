@@ -67,8 +67,8 @@ export function validateSaveOven(value: unknown): SaveOvenInput {
   if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
     throw new TypeError('SSH port must be between 1 and 65535.')
   }
-  if (!['agent', 'identity', 'vault'].includes(String(raw.authentication))) {
-    throw new TypeError('Choose SSH agent, an identity file, or a vaulted key.')
+  if (!['agent', 'identity', 'vault', 'password'].includes(String(raw.authentication))) {
+    throw new TypeError('Choose password, SSH agent, an identity file, or a vaulted key.')
   }
   const authentication = raw.authentication as OvenConnection['authentication']
   const connection: OvenConnection = { host, ...(user ? { user } : {}), port, authentication }
@@ -102,6 +102,15 @@ export function validateSaveOven(value: unknown): SaveOvenInput {
       throw new TypeError('Paste a PEM or OpenSSH private key, not a public key.')
     }
     result.privateKey = `${key}\n`
+  }
+  if (input.password !== undefined) {
+    if (
+      typeof input.password !== 'string' ||
+      input.password.length > 4096 ||
+      input.password.includes('\0')
+    )
+      throw new TypeError('Invalid SSH account password.')
+    result.password = input.password
   }
   if (input.passphrase !== undefined) {
     if (

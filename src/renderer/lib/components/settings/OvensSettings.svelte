@@ -36,6 +36,7 @@
   let identityValidation = $state('')
   let privateKey = $state('')
   let passphrase = $state('')
+  let password = $state('')
   let publicKey = $state('')
   let pendingRemoval = $state<Oven | null>(null)
 
@@ -72,6 +73,7 @@
     identityValidation = ''
     privateKey = ''
     passphrase = ''
+    password = ''
     publicKey = ''
     modalError = ''
     editorOpen = true
@@ -82,6 +84,7 @@
     editorOpen = false
     privateKey = ''
     passphrase = ''
+    password = ''
     publicKey = ''
   }
 
@@ -107,11 +110,13 @@
         },
         ...(privateKey.trim() ? { privateKey } : {}),
         ...(passphrase ? { passphrase } : {}),
+        ...(authentication === 'password' && password ? { password } : {}),
         ...(publicKey.trim() ? { publicKey } : {})
       }
       await invoke('oven:save', input)
       privateKey = ''
       passphrase = ''
+      password = ''
       publicKey = ''
       await load()
       editorOpen = false
@@ -361,6 +366,7 @@
     <label class="block space-y-1 text-xs font-medium text-muted"
       >Authentication
       <select class={fieldClass} bind:value={authentication}>
+        <option value="password" disabled={!ovenState?.secureStorageAvailable}>Password</option>
         <option value="agent">SSH config / agent</option>
         <option value="identity">Existing identity file</option>
         <option value="vault" disabled={!ovenState?.secureStorageAvailable}
@@ -368,7 +374,22 @@
         >
       </select>
     </label>
-    {#if authentication === 'identity'}
+    {#if authentication === 'password'}
+      <label class="block space-y-1 text-xs font-medium text-muted"
+        >SSH account password {editing?.hasPassword ? '(saved, leave blank to keep)' : ''}
+        <input
+          class={fieldClass}
+          type="password"
+          bind:value={password}
+          autocomplete="new-password"
+          required={!editing?.hasPassword}
+          placeholder="Password for your SSH user"
+        />
+      </label>
+      <p class="text-xs text-dimmed">
+        Your password is encrypted in the secret vault and used when connecting.
+      </p>
+    {:else if authentication === 'identity'}
       <div class="space-y-2">
         <label class="block space-y-1 text-xs font-medium text-muted"
           >Identity file<input
@@ -408,18 +429,21 @@
         /></label
       >
     {/if}
-    <label class="block space-y-1 text-xs font-medium text-muted"
-      >Public key, optional {editing?.hasPublicKey ? '(stored)' : ''}<textarea
-        class={`${fieldClass} font-mono`}
-        bind:value={publicKey}
-        autocomplete="off"
-        spellcheck="false"
-        disabled={!ovenState?.secureStorageAvailable}
-        placeholder="ssh-ed25519 ..."></textarea></label
-    >
+    {#if authentication !== 'password'}
+      <label class="block space-y-1 text-xs font-medium text-muted"
+        >Public key, optional {editing?.hasPublicKey ? '(stored)' : ''}<textarea
+          class={`${fieldClass} font-mono`}
+          bind:value={publicKey}
+          autocomplete="off"
+          spellcheck="false"
+          disabled={!ovenState?.secureStorageAvailable}
+          placeholder="ssh-ed25519 ..."></textarea></label
+      >
+    {/if}
     <p class="text-xs text-dimmed">
-      Imported keys and passphrases are encrypted in the secret vault. The matching public key must
-      already be authorized on the Oven.
+      Passwords, imported keys and key passphrases are encrypted in the secret vault.
+      {#if authentication !== 'password'}The matching public key must already be authorized on the
+        Oven.{/if}
     </p>
   </form>
   {#snippet footer()}

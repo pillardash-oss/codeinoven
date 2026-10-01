@@ -8,7 +8,7 @@ export interface OvenConnection {
   host: string
   user?: string
   port: number
-  authentication: 'agent' | 'identity' | 'vault'
+  authentication: 'agent' | 'identity' | 'vault' | 'password'
   identityFile?: string
 }
 
@@ -23,6 +23,7 @@ export interface Oven {
   hasPrivateKey: boolean
   hasPassphrase: boolean
   hasPublicKey: boolean
+  hasPassword?: boolean
   createdAt: number
   updatedAt: number
 }
@@ -38,6 +39,7 @@ export interface SaveOvenInput {
   privateKey?: string
   passphrase?: string
   publicKey?: string
+  password?: string
 }
 
 export interface OvenState {
