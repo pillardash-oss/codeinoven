@@ -955,6 +955,31 @@ export class GlobalBrowserState {
     return this.contextSidebarShown && this.contextSidebarTool === 'agent'
   }
 
+  /**
+   * Put the tab that owns one assistant conversation on screen with that chat
+   * open, and report whether it landed.
+   *
+   * A conversation parked on a question is only ever reached through here: it is
+   * held out of every thread list on purpose, so the notification that says it
+   * needs an answer is the one thing that has to be able to bring it back. The
+   * conversation is resolved first (creating it if the tab's link was never
+   * followed), because the rail only knows about conversations it has seen, and
+   * the page binding is what lets the agent read the tab it is answering about.
+   *
+   * `activate` rather than `switchTo`: this is not a user tab switch, so the
+   * native page must not take the keyboard out of whatever the user was typing in.
+   */
+  async revealAssistantChat(threadId: string): Promise<boolean> {
+    const chat = browserAssistant.chatForThread(threadId)
+    if (!chat) return false
+    const tab = this.tabById(chat.browserTabId)
+    if (!tab) return false
+    await this.ensureAssistantChat(tab)
+    this.activate(tab.id)
+    this.showAgentSidebar()
+    return this.activeTabId === tab.id
+  }
+
   /** The agent conversation bound to a browser tab, or null before its first
    *  open (or while the row behind its durable link is still being resolved). */
   agentChatFor(tabId: string): BrowserAssistantChat | null {

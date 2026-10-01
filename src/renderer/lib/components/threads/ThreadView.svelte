@@ -4222,6 +4222,21 @@
     const onResize = (): void => scheduleResponseBubbleUpdate()
     window.addEventListener('resize', onResize)
 
+    // Agent events are this view's only live channel, and a controller-driven
+    // conversation needs it for the one thing it has no other surface for: the
+    // human gate. Its `handleAgentEvent` branch reconciles the pending-question
+    // queue, so a card the agent raises while the panel is mounted appears
+    // instead of leaving the turn parked on a question nobody can see. The
+    // subscription is installed before the controller branch returns because that
+    // branch is a separate return path: registering it further down made the
+    // whole controller half of `handleAgentEvent` unreachable, which is how a
+    // browser tab's assistant chat could ask a question and never show it.
+    unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
+      const event = args[0] as AgentEvent
+      if (!event) return
+      handleAgentEvent(event)
+    })
+
     if (controller) {
       controller.mount()
       void Promise.resolve(controller.load()).then(() => beginInitialPaintReveal())
@@ -4243,6 +4258,7 @@
 
       return () => {
         alive = false
+        unsubscribe?.()
         // Save scroll position so switching back snaps to the right place
         if (scrollEl) {
           threadScrollPositions.set(mountedThreadId, {
@@ -4328,12 +4344,6 @@
       void refreshCapabilitySkills()
     })
 
-    // Subscribe to agent events for streaming
-    unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
-      const event = args[0] as AgentEvent
-      if (!event) return
-      handleAgentEvent(event)
-    })
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
       if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
@@ -6250,6 +6260,15 @@
       } catch (error) {
         errorMessage = error instanceof Error ? error.message : 'The request could not be stopped.'
       }
+      // A stop is the user's own statement that the run is over, so this surface
+      // has to agree with it immediately. Main writes `interrupted` without
+      // broadcasting a session status, and a harness too wedged to answer an
+      // abort never sends an idle of its own, so waiting for an event to clear
+      // the run left the Stop control live forever and every later press did
+      // nothing visible. Settling locally is what makes the stop observable.
+      agentRuns.setIdle(controller.projectId, controller.conversationId)
+      providerStatus = null
+      clearLocalTurn()
       return
     }
 

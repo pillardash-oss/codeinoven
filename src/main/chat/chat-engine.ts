@@ -12159,7 +12159,18 @@ export class ChatEngine {
       clearNotificationAborting(projectId, threadId)
       return
     }
-    if (!thread?.sessionId) return
+    if (!thread?.sessionId) {
+      // No session binding means there is nothing for a driver to interrupt, but
+      // a Stop still has to land: the thread may be parked on a question raised
+      // before its binding was written, and returning here is what leaves such a
+      // thread reported as working with a card on screen that no press can clear.
+      if (!thread) return
+      markNotificationAborting(projectId, threadId)
+      this.releaseParkedThreadGates(projectId, threadId)
+      await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+      clearNotificationAborting(projectId, threadId)
+      return
+    }
     // Suppress any stale notification the dying agent might emit during abort.
     markNotificationAborting(projectId, threadId)
     // Remember this is a deliberate user stop so the session's idle/error
@@ -12184,7 +12195,20 @@ export class ChatEngine {
     // Workers run in their own sessions and must stop with the thread they
     // were spawned from   see stopThreadChildSessions.
     await this.stopThreadChildSessions(projectId, threadId)
-    await driver.abort(projectPath, thread.sessionId)
+    // Everything past this call is the teardown that makes the stop real: the
+    // parked question and permission are cleared, the watchdog is disarmed, and
+    // the thread is written back as `interrupted`. A driver that throws must not
+    // be able to skip any of it, because that is precisely the state no later
+    // Stop can escape: the thread keeps reporting itself as working, a card
+    // nothing owns stays on screen, and `clearNotificationAborting` below never
+    // runs so the thread stops notifying at all. Capture the failure, finish the
+    // teardown, then report it so the caller still learns the harness refused.
+    let abortFailure: unknown = null
+    try {
+      await driver.abort(projectPath, thread.sessionId)
+    } catch (error) {
+      abortFailure = error
+    }
     await this.cleanupTurnUtilities(thread.sessionId)
     updateRetryWakeWindow(thread.sessionId, null)
     // A held steer's turn is dead   undo is no longer meaningful, drop it.
@@ -12220,6 +12244,7 @@ export class ChatEngine {
     // "done (read)": it is not an error and not pending the user's attention.
     await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
     clearNotificationAborting(projectId, threadId)
+    if (abortFailure) throw abortFailure
   }
 
   /**
@@ -21069,9 +21094,23 @@ export class ChatEngine {
    * Whether the user has interacted with the app recently enough to be
    * considered "active". When the user is active, pending questions will not
    * auto-answer   the countdown is paused until they become inactive.
+   *
+   * This is app-wide activity, not attention to any one card, which is why the
+   * pause it buys is bounded by {@link pendingQuestionDeadline} rather than
+   * open-ended: working in a project keeps this true indefinitely, and a pause
+   * that never ends is a question that never clears.
    */
   private isUserActive(): boolean {
     return Date.now() - this.lastUserActivityAt < ChatEngine.USER_ACTIVITY_GRACE_PERIOD_MS
+  }
+
+  /**
+   * When a question must be settled no matter what, counted from the moment its
+   * card appeared. The activity pause can hold a card open, so this is the one
+   * deadline that survives it.
+   */
+  private pendingQuestionDeadline(pending: PendingQuestionInfo): number {
+    return pending.request.createdAt + pending.timeoutMs
   }
 
   /**
@@ -21150,18 +21189,25 @@ export class ChatEngine {
       return
     }
 
-    if (this.isUserActive()) {
-      pending.request.expiresAt = undefined
+    // The activity pause keeps a card from being answered under someone who is
+    // still reading it. It is a courtesy, not a hold: `pendingQuestionDeadline`
+    // is the backstop that the pause cannot push past, so working elsewhere in
+    // the app for the whole window no longer parks this question forever. The
+    // deadline stays visible while it runs, because a card the user cannot see
+    // the end of is a card they have no reason to answer.
+    const deadline = this.pendingQuestionDeadline(pending)
+    if (this.isUserActive() && Date.now() < deadline) {
+      pending.request.expiresAt = deadline
       pending.timer = setTimeout(
         () => this.schedulePendingQuestion(pending),
-        ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
+        Math.min(ChatEngine.INACTIVITY_CHECK_INTERVAL_MS, Math.max(0, deadline - Date.now()))
       )
       return
     }
 
     const expiresAt = pending.request.expiresAt
-    if (expiresAt === undefined) {
-      pending.request.expiresAt = Date.now() + pending.timeoutMs
+    if (expiresAt === undefined || expiresAt > deadline) {
+      pending.request.expiresAt = deadline
       this.schedulePendingQuestion(pending)
       return
     }
@@ -21176,11 +21222,15 @@ export class ChatEngine {
         return
       }
 
-      if (this.isUserActive()) {
-        pending.request.expiresAt = undefined
+      // Re-pause only while the hard deadline still lies ahead. Past it, activity
+      // anywhere in the app stops mattering: this question is answered so the
+      // turn it is blocking can finish, exactly as it would have if the user had
+      // stepped away.
+      if (this.isUserActive() && Date.now() < deadline) {
+        pending.request.expiresAt = deadline
         pending.timer = setTimeout(
           () => this.schedulePendingQuestion(pending),
-          ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
+          Math.min(ChatEngine.INACTIVITY_CHECK_INTERVAL_MS, Math.max(0, deadline - Date.now()))
         )
         return
       }
@@ -21306,6 +21356,30 @@ export class ChatEngine {
       if (pending.request.sessionId === sessionId) {
         this.clearPendingQuestion(requestId)
       }
+    }
+  }
+
+  /**
+   * Drop the human gates still parked on one thread when there is no session to
+   * abort by id.
+   *
+   * The question and permission queues are keyed by session, so a thread whose
+   * binding was never written has no key to clear them with. They are also the
+   * only things that can hold a thread open with no run behind it, so a Stop
+   * reaching this path has to reach them by thread instead of returning early.
+   * Questions go through `finalizePendingQuestion` so the card is closed and the
+   * resolution is broadcast exactly as it is for any other resolution; the
+   * permission queue is cleared the way its own teardown clears it, leaving the
+   * status write that follows as the signal a card re-reads against.
+   */
+  private releaseParkedThreadGates(projectId: string, threadId: string): void {
+    for (const [requestId, pending] of this.pendingQuestions) {
+      if (pending.request.projectId !== projectId || pending.request.threadId !== threadId) continue
+      this.finalizePendingQuestion(requestId, 'dismissed', pending.request.answers)
+    }
+    for (const [requestId, pending] of this.pendingPermissions) {
+      if (pending.session.projectId !== projectId || pending.session.threadId !== threadId) continue
+      this.pendingPermissions.delete(requestId)
     }
   }
 
