@@ -1,3 +1,11 @@
+import { extname } from 'node:path'
+import { stat } from 'node:fs/promises'
+import {
+  isSupportedIconExtension,
+  storeIconFile,
+  readIconDataUrl,
+  removeIconFile
+} from '../../lib/icon-file'
 import { randomUUID } from 'node:crypto'
 import { LOCAL_OVEN_ID, type Oven, type OvenState, type SaveOvenInput } from '../../lib/ovens'
 import type { SecretVault } from '../storage/secret-vault'
@@ -6,11 +14,12 @@ import type { OvenConnectionStatus } from '../../lib/ovens'
 
 interface StoredOven extends Omit<
   Oven,
-  'hasPrivateKey' | 'hasPassphrase' | 'hasPublicKey' | 'hasPassword'
+  'hasPrivateKey' | 'hasPassphrase' | 'hasPublicKey' | 'hasPassword' | 'imageDataUrl'
 > {
   privateKeyRef?: string
   passphraseRef?: string
   publicKeyRef?: string
+  imageFile?: string
   passwordRef?: string
 }
 interface OvenRegistryFile {
@@ -29,6 +38,8 @@ export class OvenRegistry {
 
   async state(): Promise<OvenState> {
     const stored = await this.read()
+    const ovens: Oven[] = []
+    for (const oven of stored.ovens) ovens.push(await this.present(oven))
     return {
       ovens: [
         {
@@ -44,7 +55,7 @@ export class OvenRegistry {
           createdAt: 0,
           updatedAt: 0
         },
-        ...stored.ovens.map((oven) => this.present(oven))
+        ...ovens
       ],
       defaultOvenId: stored.defaultOvenId,
       secureStorageAvailable: this.vault.isAvailable()
@@ -118,6 +129,20 @@ export class OvenRegistry {
         }
         if (oven.connection?.authentication === 'password' && !oven.passwordRef)
           throw new Error('Enter the SSH account password.')
+        const imageDirectory = this.storage.resolve(`ovens/${oven.id}`)
+        if (input.imagePath) {
+          const info = await stat(input.imagePath)
+          if (
+            !info.isFile() ||
+            info.size > 2 * 1024 * 1024 ||
+            !isSupportedIconExtension(extname(input.imagePath))
+          )
+            throw new Error('Choose an icon image smaller than 2 MiB.')
+          oven.imageFile = await storeIconFile(imageDirectory, input.imagePath, existing?.imageFile)
+        } else if (input.clearImage) {
+          if (existing?.imageFile) await removeIconFile(imageDirectory, existing.imageFile)
+          oven.imageFile = undefined
+        }
         registry.ovens = [...registry.ovens.filter((item) => item.id !== oven.id), oven]
         await this.storage.write(REGISTRY_PATH, registry)
       } catch (error) {
@@ -156,6 +181,8 @@ export class OvenRegistry {
       registry.ovens = registry.ovens.filter((item) => item.id !== id)
       if (registry.defaultOvenId === id) registry.defaultOvenId = LOCAL_OVEN_ID
       await this.storage.write(REGISTRY_PATH, registry)
+      if (oven.imageFile)
+        await removeIconFile(this.storage.resolve(`ovens/${oven.id}`), oven.imageFile)
       for (const ref of [
         oven.privateKeyRef,
         oven.passphraseRef,
@@ -168,10 +195,14 @@ export class OvenRegistry {
     return this.state()
   }
 
-  private present(oven: StoredOven): Oven {
-    const { privateKeyRef, passphraseRef, publicKeyRef, passwordRef, ...metadata } = oven
+  private async present(oven: StoredOven): Promise<Oven> {
+    const { privateKeyRef, passphraseRef, publicKeyRef, passwordRef, imageFile, ...metadata } = oven
     return {
       ...metadata,
+      imageDataUrl: imageFile
+        ? ((await readIconDataUrl(this.storage.resolve(`ovens/${oven.id}`), imageFile)) ??
+          undefined)
+        : undefined,
       hasPrivateKey: Boolean(privateKeyRef),
       hasPassphrase: Boolean(passphraseRef),
       hasPublicKey: Boolean(publicKeyRef),

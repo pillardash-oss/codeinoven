@@ -18,6 +18,7 @@ export interface Oven {
   name: string
   icon: OvenIcon
   customSvg?: string
+  imageDataUrl?: string
   color: string
   connection?: OvenConnection
   hasPrivateKey: boolean
@@ -35,6 +36,8 @@ export interface SaveOvenInput {
   name: string
   icon: OvenIcon
   customSvg?: string
+  imagePath?: string
+  clearImage?: boolean
   color: string
   connection: OvenConnection
   privateKey?: string

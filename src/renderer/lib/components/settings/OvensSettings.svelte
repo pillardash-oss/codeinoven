@@ -731,18 +731,18 @@
   </form>
   {#snippet footer()}
     <div class="flex w-full flex-wrap items-center justify-between gap-2">
-      {#if hasAppearance}
-        <button
-          type="button"
-          class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
-          title="Reset appearance"
-          disabled={Boolean(busy)}
-          onclick={resetAppearance}
-        >
-          Reset
-        </button>
-      {:else}<span></span>{/if}
-      <div class="flex flex-wrap items-center gap-2">
+      <div class="flex items-center gap-2">
+        {#if hasAppearance}
+          <button
+            type="button"
+            class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
+            title="Reset appearance"
+            disabled={Boolean(busy)}
+            onclick={resetAppearance}
+          >
+            Reset
+          </button>
+        {:else}<span></span>{/if}
         <button
           type="button"
           class="rounded-lg border px-3 py-2 text-sm hover:bg-elevated disabled:opacity-50"
@@ -750,6 +750,8 @@
           onclick={() => void testConnection()}
           >{#if busy === 'test'}<Loader2 size={14} class="animate-spin" />{/if}Test connection</button
         >
+      </div>
+      <div class="flex items-center gap-2">
         <button
           type="button"
           data-modal-dismiss

@@ -126,11 +126,12 @@
       <Monitor size={10} class="shrink-0" />
     {:else if current}
       <img
-        class="h-2.5 w-2.5 shrink-0"
+        class="h-2.5 w-2.5 shrink-0 object-contain"
         alt=""
-        src={current.customSvg
-          ? getCustomSvgDataUrl(current.customSvg, current.color)
-          : getIconSvgDataUrl(current.icon, current.color)}
+        src={current.imageDataUrl ??
+          (current.customSvg
+            ? getCustomSvgDataUrl(current.customSvg, current.color)
+            : getIconSvgDataUrl(current.icon, current.color))}
       />
     {:else}<Server size={10} class="shrink-0" />{/if}<span
       >{current?.name ??
@@ -195,9 +196,10 @@
             {:else}<img
                 class="h-3 w-3 shrink-0"
                 alt=""
-                src={oven.customSvg
-                  ? getCustomSvgDataUrl(oven.customSvg, oven.color)
-                  : getIconSvgDataUrl(oven.icon, oven.color)}
+                src={oven.imageDataUrl ??
+                  (oven.customSvg
+                    ? getCustomSvgDataUrl(oven.customSvg, oven.color)
+                    : getIconSvgDataUrl(oven.icon, oven.color))}
               />{/if}
             <span class="min-w-0 flex-1 truncate">{oven.name}</span>
             <span class="shrink-0 text-[0.625rem] text-dimmed"

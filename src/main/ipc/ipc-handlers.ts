@@ -209,7 +209,7 @@ export function registerIpcHandlers(
     onSettled: broadcastThreadBranchUpdated
   }
   const vault = options.vault ?? new SecretVault(storage)
-  registerOvenIpc(storage, vault, threadManager)
+  registerOvenIpc(storage, vault, threadManager, (value) => privilegedIpc.resolveScopedPath(value))
   const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
 
   const githubAuthService = options.githubAuthService ?? new GitHubAuthService(vault)

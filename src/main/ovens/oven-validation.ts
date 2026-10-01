@@ -96,6 +96,12 @@ export function validateSaveOven(value: unknown): SaveOvenInput {
     color,
     connection
   }
+  if (input.imagePath !== undefined)
+    result.imagePath = text(input.imagePath, 'Icon image path', 4096)
+  if (input.clearImage !== undefined) {
+    if (typeof input.clearImage !== 'boolean') throw new TypeError('Invalid image selection.')
+    result.clearImage = input.clearImage
+  }
   if (input.privateKey !== undefined) {
     const key = text(input.privateKey, 'Private key', 32_768)
     if (!/^-----BEGIN (?:OPENSSH|RSA|EC|DSA|ENCRYPTED)? ?PRIVATE KEY-----\r?\n/u.test(key)) {
