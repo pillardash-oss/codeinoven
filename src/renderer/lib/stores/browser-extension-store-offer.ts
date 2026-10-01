@@ -32,7 +32,9 @@ export interface StoreExtensionOffer {
    *  indicator meaning "there is something to install here". */
   installed: BrowserExtension | null
   /** The box the page runs in, which is where the install would land: browsing
-   *  the store inside a box is how the user says which box should have it. */
+   *  the store inside a box is how the user says which box should have it. A box
+   *  is the profile's one jar for that box, so the install is loaded while any
+   *  context uses it. */
   boxName: string
   /**
    * This extension's own install, queued or running, or null when none is.
@@ -76,8 +78,10 @@ export function storeExtensionOffer(): StoreExtensionOffer | null {
 
 /**
  * Install the extension the page on screen offers, into the box that page runs
- * in. The rail is revealed first, because an install started from the page has
- * no dialog of its own and the rail is where its progress and its result show.
+ * in. The box is the profile's one jar for that box rather than a per-context
+ * jar, so the install lands there for every context that picks it. The rail is
+ * revealed first, because an install started from the page has no dialog of its
+ * own and the rail is where its progress and its result show.
  *
  * Nothing here waits for another install: it queues behind whatever is running and
  * the page's offer row says so. The store page's name is handed over, because this

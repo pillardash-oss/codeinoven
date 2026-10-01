@@ -490,7 +490,7 @@
       title={scopedBox ? `Nothing in ${scopedBox.name} yet` : 'No extensions yet'}
       description={scopedBox
         ? 'Install one and it lands in this box. Other boxes can be turned on later from its settings.'
-        : 'An extension runs inside the boxes you choose, keeps its own storage in each, and is only loaded while a box has a tab open.'}
+        : 'An extension runs inside the boxes you choose, keeps its own storage in each, and is only loaded while a tab is open in one of them.'}
     />
   {:else}
     <ul class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
@@ -673,8 +673,8 @@
     <p
       class="shrink-0 border-t border-border px-3 py-1.5 text-[0.625rem] leading-relaxed text-dimmed"
     >
-      An extension is loaded into each box you enable it in, and only while a box has a tab open.
-      Turn it off to unload it everywhere without uninstalling.
+      An extension is loaded into each box you enable it in, and only while a tab is open in that
+      box, in any browser. Turn it off to unload it everywhere without uninstalling.
     </p>
   {/if}
 </div>

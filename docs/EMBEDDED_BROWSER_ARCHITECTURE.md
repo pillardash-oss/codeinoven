@@ -16,9 +16,23 @@ material way, and the difference is deliberate.
 - **One persistent Electron session per project**, `persist:codeinoven-browser:<projectId>`
   (`src/main/browser/browser-service.ts`). A project's conversations therefore share
   cookies, web storage and logins, which is what keeps the user signed in across
-  threads, routines and agent runs. Splitting the session per agent would be the only
-  way to give each agent its own cookie jar, and it would break that single sign-on,
-  so it is not done.
+  threads, routines and agent runs. A tab that names a box is the exception to that
+  partition, because a box is one jar for the whole profile (see the box bullet
+  below). Splitting the session per agent would be the only way to give each agent
+  its own cookie jar, and it would break that single sign-on, so it is not done.
+- **A box is one jar for the whole profile**,
+  `persist:codeinoven-browser:browser-global:box:<boxId>`
+  (`BROWSER_BOX_PARTITION_PREFIX` / `browserBoxPartitionFor`,
+  `src/main/browser/browser-service/browser-validation.ts`). It sits in the reserved
+  global context's namespace rather than a per-project one, so the global browser and
+  every conversation that picks the same box join the one Chromium profile: cookies,
+  web storage, cache and the extensions placed in it are shared in both directions,
+  and a sign-in made in a box in the global browser is the same sign-in a thread
+  browser gets when it picks that box. Clearing or deleting a box erases that jar for
+  every context using it, while clearing a project's own browser clears only that
+  project's jar   the global browser's clear still takes its boxes with it. The
+  startup sweep reclaims the per-project box jars an earlier build created, since
+  nothing resolves to them any more.
 - **Agent-to-agent isolation lives at the tab level**, which is where clashes actually
   happen:
   - The agent's target tab is addressed per `(projectId, threadId)` (`agentTabIds`), so
@@ -63,13 +77,15 @@ material way, and the difference is deliberate.
   `page: "user"`. Everything that changes a page (open, navigate, click, type, reload,
   viewport) still needs a page the agent opened itself, so an answer can never move the
   page the user is reading.
-- **Extensions belong to the global browser.** An extension record names that
-  context's own jar (the empty jar id) and its boxes, and only jars of that context
-  are reconciled (`src/main/browser/extensions/browser-extension-service.ts`). A
-  project's browser, which is the light one a conversation opens with `/browser`
-  and has no boxes and no extension chrome, shares the project's cookies by design
-  but never loads them, so no extension renderer or service worker runs behind a
-  thread browser.
+- **Extensions are installed from the global browser, but a box's set follows the
+  box.** An extension record names the global browser's own jar (the empty jar id)
+  and its boxes, and a box's set is loaded while any context uses that box
+  (`src/main/browser/extensions/browser-extension-service.ts`). A project's browser,
+  the light one a conversation opens with `/browser`, can pick a box and then runs
+  the extensions placed in it, because that box is the profile's jar. Its own project
+  jar, which has no boxes and no extension chrome, shares the project's cookies by
+  design but never loads one, so no extension renderer or service worker runs behind
+  an unboxed thread browser.
 - **An extension's worker is reached through a bridge page, and its state comes
   back through it.** Electron delivers no tab lifecycle events to an extension and
   has no API to read its action state, so the install path writes `cio-bridge.html`
@@ -257,9 +273,11 @@ Memory cannot have a universal fixed ceiling because websites control their own 
 One process-wide manager (`src/main/browser/browser-service/browser-downloads.ts`)
 owns every download a browser tab starts, and it is deliberately not window-bound:
 a window is parked to the menu bar and rebuilt on reopen, while a download
-belongs to its project's session and keeps running. The manager holds the live
-items, the durable records, and one `will-download` registration per project
-session; a parked window costs progress events and nothing else.
+belongs to the session its page runs in and keeps running, a shared box jar
+included. The manager holds the live items, the durable records, and one
+`will-download` registration per session, keyed by partition rather than by
+project so a box's jar is watched once however many contexts open it; a parked
+window costs progress events and nothing else.
 
 Records persist to `browser/downloads.json` through the storage engine, with the
 same merge-on-write shape the browser permission memory uses, so a download is
@@ -452,7 +470,7 @@ Exit gate: closing the spike leaves no browser renderer process; an unresponsive
 - HTTPS navigation, origin display, popup policy, permission default-deny, production DevTools policy, crash/reload UX, clean disposal.
 - Manual sign-in and bookmark HTML import/export.
 - Clear browsing data, delete profile, and storage-size visibility.
-- Focused tests for URL validation, sender validation, lifecycle idempotency, partition separation, permissions, popup policy, and teardown.
+- Focused tests for URL validation, sender validation, lifecycle idempotency, partition resolution (a context's own jar versus a box's shared jar), permissions, popup policy, and teardown.
 
 Exit gate: external security review of the remote-content boundary and packaged-app smoke tests on macOS, Windows, and Linux.
 

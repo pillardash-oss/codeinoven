@@ -111,9 +111,10 @@ export class GlobalBrowserState {
    */
   private closedTabs: ClosedGlobalBrowserTab[] = $state([])
   groups: GlobalBrowserGroup[] = $state([])
-  /** The profile's boxes: named cookie jars sharing the browser's one set of
-   *  extensions. A box owns no tab; the tabs that name it do, and a box nobody
-   *  uses is a row here and a profile directory on disk, nothing more. */
+  /** The profile's boxes: each one jar for the whole profile, with its own cookies,
+   *  site data and extension set, shared by every context that picks it. A box owns
+   *  no tab; the tabs that name it do, and a box nobody uses is a row here and a
+   *  profile directory on disk, nothing more. */
   boxes: GlobalBrowserBox[] = $state([])
   /** Data URLs for groups with a picked image icon, keyed by group id. Loaded
    *  lazily, because a stored icon is a file path on disk and not inline bytes. */
@@ -1236,8 +1237,10 @@ export class GlobalBrowserState {
    *
    * Cookies do not migrate between jars, so a tab cannot change boxes in place:
    * this closes the tab and opens its address in the target box, which is the only
-   * honest move and why the menu item says "Reopen" rather than "Move". Returns
-   * the new tab id, or null when the source tab is gone or already in the box.
+   * honest move and why the menu item says "Reopen" rather than "Move". The target
+   * is the profile's one jar for that box, so the page comes back with whatever
+   * that box already holds, a sign-in another context made included. Returns the
+   * new tab id, or null when the source tab is gone or already in the box.
    */
   reopenInBox(tabId: string, boxId: string | null): string | null {
     const tab = this.tabById(tabId)
@@ -1629,9 +1632,11 @@ export class GlobalBrowserState {
    * Remove a box.
    *
    * Its tabs close with it: a tab cannot change jars, so keeping them open while
-   * the jar goes away would leave rows claiming a session nothing owns. The
-   * caller erases the box's cookies separately, because that is the destructive
-   * choice and belongs behind its own confirmation.
+   * the jar goes away would leave rows claiming a session nothing owns. The box is
+   * one jar for the whole profile, so removing it takes that jar away from every
+   * context that picked it, a thread browser included. The caller erases the box's
+   * cookies separately, because that is the destructive choice and belongs behind
+   * its own confirmation.
    */
   deleteBox(id: string): void {
     // The default box is the jar the context's own pages live in, so it is the one

@@ -103,9 +103,11 @@ export interface BrowserContextTab {
    *
    * The scope's own jar is the default every conversation starts from: a
    * project's threads share the project's jar, and an assistant routine or a
-   * chat browses its own. A tab keeps the box it was created in for its whole
-   * life, because cookies cannot migrate between jars, so picking another box
-   * reopens the tab in it rather than moving it.
+   * chat browses its own. A named box is the profile's one jar for that box, not
+   * the scope's own, so a tab in it shares its cookies and logins with every other
+   * context that picks the box. A tab keeps the box it was created in for its
+   * whole life, because cookies cannot migrate between jars, so picking another
+   * box reopens the tab in it rather than moving it.
    */
   boxId: string | null
 }
