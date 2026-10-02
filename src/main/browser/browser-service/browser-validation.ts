@@ -43,6 +43,7 @@ import {
   type BrowserBoxMenuInput
 } from '../../../lib/browser/browser-box-menu'
 import type { BrowserTabSelectionMenuInput } from '../../../lib/browser/browser-tab-selection-menu'
+import type { BrowserTabContextMenuInput } from '../../../lib/browser/browser-tab-context-menu'
 import type { BrowserViewport } from './browser-types'
 import type {
   BrowserOverlayAck,
@@ -784,6 +785,90 @@ export function validateBrowserTabSelectionMenuInput(value: unknown): BrowserTab
   }
 
   return { selectedCount, groups, boxes, canCreateGroup }
+}
+
+/** Validate renderer-provided labels and destinations for a regular tab menu. */
+export function validateBrowserTabContextMenuInput(value: unknown): BrowserTabContextMenuInput {
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('Browser tab context menu input is invalid')
+  }
+  const record = value as Record<string, unknown>
+  const tabId = validateTabId(record['tabId'])
+  const title = boundedBoxLabel(record['title']).slice(0, 512)
+  const url = validateOptionalBrowserUrl(record['url'])
+  const bookmarkAvailable = record['bookmarkAvailable']
+  const bookmarked = record['bookmarked']
+  const pinned = record['pinned']
+  const canReopenClosedTab = record['canReopenClosedTab']
+  const groupId = record['groupId']
+  const boxId = validateOptionalBoxId(record['boxId'])
+  const rawGroups = record['groups']
+  const rawBoxes = record['boxes']
+  if (
+    typeof bookmarkAvailable !== 'boolean' ||
+    typeof bookmarked !== 'boolean' ||
+    typeof pinned !== 'boolean' ||
+    typeof canReopenClosedTab !== 'boolean'
+  ) {
+    throw new TypeError('Browser tab context menu flags are invalid')
+  }
+  if (
+    groupId !== null &&
+    (typeof groupId !== 'string' || !/^group:[a-zA-Z0-9:_-]{1,240}$/u.test(groupId))
+  ) {
+    throw new TypeError('Browser tab context menu group ID is invalid')
+  }
+  if (!Array.isArray(rawGroups) || rawGroups.length > MAX_GLOBAL_BROWSER_GROUPS) {
+    throw new TypeError('Browser tab context menu groups are invalid')
+  }
+  if (!Array.isArray(rawBoxes) || rawBoxes.length > MAX_BROWSER_BOX_MENU_ENTRIES) {
+    throw new TypeError('Browser tab context menu boxes are invalid')
+  }
+  const groups: BrowserTabContextMenuInput['groups'] = []
+  const seenGroups = new Set<string>()
+  for (const raw of rawGroups) {
+    if (typeof raw !== 'object' || raw === null) {
+      throw new TypeError('Browser tab context menu group is invalid')
+    }
+    const entry = raw as Record<string, unknown>
+    const id = entry['id']
+    if (typeof id !== 'string' || !/^group:[a-zA-Z0-9:_-]{1,240}$/u.test(id)) {
+      throw new TypeError('Browser tab context menu group ID is invalid')
+    }
+    if (seenGroups.has(id)) continue
+    seenGroups.add(id)
+    groups.push({
+      id,
+      name:
+        boundedBoxLabel(entry['name']).slice(0, MAX_BROWSER_GROUP_NAME_LENGTH) || 'Untitled group'
+    })
+  }
+  const boxes: BrowserTabContextMenuInput['boxes'] = []
+  const seenBoxes = new Set<string>()
+  for (const raw of rawBoxes) {
+    if (typeof raw !== 'object' || raw === null) {
+      throw new TypeError('Browser tab context menu box is invalid')
+    }
+    const entry = raw as Record<string, unknown>
+    const id = validateOptionalBoxId(entry['id'])
+    if (id === null) throw new TypeError('Browser tab context menu box ID is invalid')
+    if (seenBoxes.has(id)) continue
+    seenBoxes.add(id)
+    boxes.push({ id, name: boundedBoxLabel(entry['name']) || 'Untitled box' })
+  }
+  return {
+    tabId,
+    title,
+    url,
+    bookmarkAvailable,
+    bookmarked,
+    pinned,
+    groupId,
+    boxId,
+    canReopenClosedTab,
+    groups,
+    boxes
+  }
 }
 
 /**

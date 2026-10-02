@@ -649,7 +649,6 @@
             <BrowserTabRow
               {tab}
               selected={visibleSelectedTabIds.includes(tab.id)}
-              selectedTabIds={visibleSelectedTabIds}
               onTabClick={handleTabClick}
               onTabContextMenu={handleTabContextMenu}
               onMoveTabsToGroup={moveTabsToGroup}
@@ -769,7 +768,6 @@
                 <BrowserTabRow
                   {tab}
                   selected={visibleSelectedTabIds.includes(tab.id)}
-                  selectedTabIds={visibleSelectedTabIds}
                   onTabClick={handleTabClick}
                   onTabContextMenu={handleTabContextMenu}
                   onMoveTabsToGroup={moveTabsToGroup}
@@ -798,7 +796,6 @@
         <BrowserTabRow
           {tab}
           selected={visibleSelectedTabIds.includes(tab.id)}
-          selectedTabIds={visibleSelectedTabIds}
           onTabClick={handleTabClick}
           onTabContextMenu={handleTabContextMenu}
           onMoveTabsToGroup={moveTabsToGroup}

@@ -23,6 +23,10 @@ import type {
 } from './browser'
 import type { Contract } from './contract-helpers'
 import type { BrowserSearchEngine } from '../browser-search-engines'
+import type {
+  BrowserTabContextMenuChoice,
+  BrowserTabContextMenuInput
+} from '../browser/browser-tab-context-menu'
 import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
 import type { BrowserBookmarksSnapshot, BrowserHistorySnapshot } from '../browser/browser-library'
 import type { BrowserBoxMenuChoice, BrowserBoxMenuInput } from '../browser/browser-box-menu'
@@ -454,6 +458,11 @@ export const invokeBrowserContract = {
   'browser:tabSelectionMenu': {} as Contract<
     [input: BrowserTabSelectionMenuInput, x: number, y: number],
     BrowserTabSelectionMenuChoice | null
+  >,
+  /** Open the native menu for one regular browser tab. */
+  'browser:tabContextMenu': {} as Contract<
+    [input: BrowserTabContextMenuInput, x: number, y: number],
+    BrowserTabContextMenuChoice | null
   >,
   'browser:resolvePermission': {} as Contract<
     [requestId: string, decision: BrowserPermissionDecision],
