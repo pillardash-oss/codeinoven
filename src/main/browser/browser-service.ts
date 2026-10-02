@@ -3091,6 +3091,16 @@ export class BrowserService {
     const tab = owner.tab
     if (tab.projectId !== request.projectId || tab.boxId !== request.boxId) return
 
+    if (request.kind === 'focus-browser') {
+      if (!this.window.isDestroyed()) {
+        this.window.focus()
+        if (this.activeTabId === owner.id && !tab.view.webContents.isDestroyed()) {
+          tab.view.webContents.focus()
+        }
+      }
+      return
+    }
+
     if (request.kind === 'hide-window') {
       const cached = this.popupWindows.extensionPopupForJar(
         request.extensionId,
