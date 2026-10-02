@@ -83,6 +83,7 @@
               count={activityBadge.count}
               label={activityBadge.label}
               tone={activityBadge.tone}
+              colors={activityBadge.colors}
               class="absolute -top-1 -right-1"
             />
           {/if}

@@ -37,6 +37,13 @@ export interface InAppNotification {
   timestamp: number
 }
 
+export interface UnreadRailSummary {
+  count: number
+  label: string
+  /** All distinct unread accents, in the same order and colours as the bell. */
+  colors: string[]
+}
+
 const SUB_FILTER_KINDS: Record<Exclude<NotificationSubFilter, 'all'>, InAppNotification['kind']> = {
   done: 'completed',
   attention: 'attention',
@@ -160,6 +167,45 @@ class NotificationPanelState {
       this.assistantNotifications.findLast((n) => n.projectColor)?.projectColor ??
       assistantRoutines.spaceColor
     )
+  }
+
+  /** Unread notifications grouped for the primary view rail. */
+  unreadRailSummary(family: 'projects' | 'chats' | 'assistant'): UnreadRailSummary | null {
+    const entries = this._notifications.filter((notification) => {
+      if (family === 'projects')
+        return !this.isChat(notification) && !this.isAssistant(notification)
+      if (family === 'chats') return this.isChat(notification)
+      return this.isAssistant(notification)
+    })
+    const hasUnreadAssistantMisses =
+      family === 'assistant' && assistantRoutines.missedRuns.length > 0
+    const count =
+      entries.length + (hasUnreadAssistantMisses ? assistantRoutines.missedRuns.length : 0)
+    if (count === 0) return null
+
+    const priority: InAppNotification['kind'][] = [
+      'error',
+      'attention',
+      'spec',
+      'chat-completed',
+      'completed'
+    ]
+    const colors = priority.flatMap((kind) => {
+      if (!entries.some((entry) => entry.kind === kind)) return []
+      if (family !== 'assistant') return [NOTIFICATION_KIND_COLORS[kind]]
+      const color =
+        entries.find((entry) => entry.kind === kind)?.projectColor ?? this.assistantColor
+      return color ? [color] : []
+    })
+    if (hasUnreadAssistantMisses && !colors.includes('var(--color-missed)')) {
+      colors.push('var(--color-missed)')
+    }
+    const familyLabel = family === 'projects' ? 'project' : family === 'chats' ? 'chat' : 'routine'
+    return {
+      count,
+      label: `${count} unread ${familyLabel}${count === 1 ? '' : 's'}`,
+      colors
+    }
   }
 
   /** True when the header bell must show its assistant dot: an assistant run

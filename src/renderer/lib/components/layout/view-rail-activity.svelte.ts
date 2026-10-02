@@ -12,6 +12,7 @@ import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 import { coordinatorHasActiveDelegates, isOrchestrationChildThread } from '$shared/types'
 import { threadWorkingForIndicator } from './app-header-thread-status'
+import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
 
 /**
@@ -52,6 +53,8 @@ export interface ViewBadge {
   label: string
   /** Family glyph rendered inside the count pill. */
   icon: Component
+  /** Exact accents used for unread notification dots. */
+  colors?: string[]
 }
 
 /** The three families the rail's badges and labels are keyed by. */
@@ -239,6 +242,16 @@ export function viewBadgeFor(
   }
   const family = viewOptionFamily(optionId)
   if (family === 'projects' && optionId !== projectBadgeOption) return null
+  const unread = notificationPanelState.unreadRailSummary(family)
+  if (unread) {
+    return {
+      tone: 'attention',
+      count: unread.count,
+      label: unread.label,
+      icon: FAMILY_ICONS[family],
+      colors: unread.colors
+    }
+  }
   const activity = counts[family]
   const icon = FAMILY_ICONS[family]
   if (activity.working > 0) {
