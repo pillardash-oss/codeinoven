@@ -53,6 +53,8 @@
     /** Hide a routine's how-to thread (its row has no other state change). */
     onHideHowTo: (task: Thread) => void
     onDeleteRoutine: (routineId: string) => Promise<void>
+    onSkipNextRoutineRun: (routine: Routine) => Promise<void>
+    onSkipRoutineRunsToday: (routine: Routine) => Promise<void>
     onTogglePinRoutine: (routine: Routine) => void
     onMoveRoutine: (draggedId: string, targetId: string, position: 'before' | 'after') => void
     /** Group a dragged task into a routine. */
@@ -78,6 +80,8 @@
     onHandedOffTask,
     onHideHowTo,
     onDeleteRoutine,
+    onSkipNextRoutineRun,
+    onSkipRoutineRunsToday,
     onTogglePinRoutine,
     onMoveRoutine,
     onAssignTask
@@ -473,6 +477,8 @@
             onEdit={startEdit}
             onTogglePin={onTogglePinRoutine}
             onDelete={(r) => (deleteTarget = r)}
+            {onSkipNextRoutineRun}
+            {onSkipRoutineRunsToday}
             {onMoveRoutine}
             onDropTask={onAssignTask}
           />

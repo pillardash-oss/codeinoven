@@ -400,6 +400,22 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
 
   ipcMain.handle('assistant:listMissedRuns', () => requireScheduler().listMissedRuns())
 
+  ipcMain.handle('assistant:listSkippedRoutineRuns', () =>
+    requireScheduler().listSkippedRoutineRuns()
+  )
+
+  ipcMain.handle('assistant:skipNextRoutineRun', async (_, routineId: unknown) => {
+    const scheduler = requireScheduler()
+    await scheduler.skipNextRoutineRun(validateEntityId(routineId, 'Routine ID'))
+    return scheduler.listSkippedRoutineRuns()
+  })
+
+  ipcMain.handle('assistant:skipRoutineRunsToday', async (_, routineId: unknown) => {
+    const scheduler = requireScheduler()
+    await scheduler.skipRoutineRunsToday(validateEntityId(routineId, 'Routine ID'))
+    return scheduler.listSkippedRoutineRuns()
+  })
+
   // The durable record of unattended runs. Read from the ledger, not the thread
   // table, so a run whose thread was evicted or deleted still reports what
   // happened on the "While you were away" surfaces.

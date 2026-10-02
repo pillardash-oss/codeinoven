@@ -3,15 +3,18 @@
     AlertTriangle,
     ChevronRight,
     Ellipsis,
+    CalendarDays,
     Hammer,
     Pause,
     Pencil,
     Pin,
     PinOff,
     Plus,
+    SkipForward,
     Trash2
   } from '@lucide/svelte'
   import { DropdownMenu, Portal } from 'bits-ui'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import SidebarSearchControl from '$lib/components/workspace/SidebarSearchControl.svelte'
   import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
@@ -51,6 +54,8 @@
     onCreateTask: (routine: Routine) => void
     onOpenHowTo: (routine: Routine) => void
     onEdit: (routine: Routine) => void
+    onSkipNextRoutineRun: (routine: Routine) => Promise<void>
+    onSkipRoutineRunsToday: (routine: Routine) => Promise<void>
     onTogglePin: (routine: Routine) => void
     onDelete: (routine: Routine) => void
     /** Drag-to-reorder routines; position is relative to this row. */
@@ -76,6 +81,8 @@
     onCreateTask,
     onOpenHowTo,
     onEdit,
+    onSkipNextRoutineRun,
+    onSkipRoutineRunsToday,
     onTogglePin,
     onDelete,
     onMoveRoutine,
@@ -95,6 +102,8 @@
   const toggleTitle = $derived(`${expanded ? 'Collapse' : 'Expand'} routine: ${routine.name}`)
 
   let menuOpen = $state(false)
+  let skipConfirm = $state<'next' | 'today' | null>(null)
+  let skipBusy = $state(false)
   let dropIndicator = $state<'before' | 'after' | null>(null)
   let taskDropActive = $state(false)
 
@@ -105,6 +114,26 @@
   let showPopover = $state(false)
   let popoverTimer: ReturnType<typeof setTimeout> | undefined
   let popoverPos = $state({ x: 0, y: 0 })
+
+  const skipDialogTitle = $derived(
+    skipConfirm === 'today' ? "Skip today's runs?" : 'Skip next run?'
+  )
+  const skipConfirmLabel = $derived(skipConfirm === 'today' ? 'Skip for today' : 'Skip next run')
+
+  async function confirmSkip(): Promise<void> {
+    const action = skipConfirm
+    if (!action || skipBusy) return
+    skipBusy = true
+    try {
+      if (action === 'next') await onSkipNextRoutineRun(routine)
+      else await onSkipRoutineRunsToday(routine)
+      skipConfirm = null
+    } catch {
+      // The workspace reports the error; keep the confirmation open for retry.
+    } finally {
+      skipBusy = false
+    }
+  }
 
   async function revealPopover(): Promise<void> {
     if (!rowEl || menuOpen || !hovered) return
@@ -375,6 +404,21 @@
             <Pencil size={14} class="text-muted" />
             Edit routine
           </DropdownMenu.Item>
+          <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
+          <DropdownMenu.Item
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+            onSelect={() => (skipConfirm = 'next')}
+          >
+            <SkipForward size={14} class="text-muted" />
+            Skip next run
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+            onSelect={() => (skipConfirm = 'today')}
+          >
+            <CalendarDays size={14} class="text-muted" />
+            Skip runs for today
+          </DropdownMenu.Item>
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
             onSelect={() => onTogglePin(routine)}
@@ -407,6 +451,28 @@
     </span>
   {/if}
 </div>
+
+<ConfirmDialog
+  open={skipConfirm !== null}
+  title={skipDialogTitle}
+  confirmLabel={skipConfirmLabel}
+  busy={skipBusy}
+  variant="primary"
+  onCancel={() => (skipConfirm = null)}
+  onConfirm={confirmSkip}
+>
+  {#if skipConfirm === 'today'}
+    <p>
+      Skip all remaining scheduled runs for <strong class="text-foreground">{routine.name}</strong>
+      today? The routine will resume at its next scheduled time after today.
+    </p>
+  {:else}
+    <p>
+      Skip the closest scheduled run for <strong class="text-foreground">{routine.name}</strong>?
+      The next run after that will stay scheduled.
+    </p>
+  {/if}
+</ConfirmDialog>
 
 {#if showPopover}
   <Portal>

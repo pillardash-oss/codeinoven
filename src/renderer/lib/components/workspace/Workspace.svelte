@@ -3819,6 +3819,26 @@
     await assistantRoutines.setRoutinePinned(routine.id, !routine.pinned)
   }
 
+  async function skipNextAssistantRoutineRun(routine: Routine): Promise<void> {
+    try {
+      await assistantRoutines.skipNextRoutineRun(routine.id)
+      toast.success('Next routine run skipped', { description: routine.name })
+    } catch (error) {
+      reportError(error, 'The next scheduled run could not be skipped.')
+      throw error
+    }
+  }
+
+  async function skipAssistantRoutineRunsToday(routine: Routine): Promise<void> {
+    try {
+      await assistantRoutines.skipRoutineRunsToday(routine.id)
+      toast.success("Today's routine runs skipped", { description: routine.name })
+    } catch (error) {
+      reportError(error, "Today's scheduled runs could not be skipped.")
+      throw error
+    }
+  }
+
   /**
    * Hide a routine's how-to thread. Hiding is the only state the thread can
    * change: it stays pinned, so archiving it is what takes it out of the
@@ -4203,6 +4223,8 @@
         onHandedOffTask={handleAssistantHandoff}
         onHideHowTo={(task) => void hideAssistantHowTo(task)}
         onDeleteRoutine={deleteAssistantRoutine}
+        onSkipNextRoutineRun={skipNextAssistantRoutineRun}
+        onSkipRoutineRunsToday={skipAssistantRoutineRunsToday}
         onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
         onMoveRoutine={(draggedId, targetId, position) =>
           void moveAssistantRoutine(draggedId, targetId, position)}

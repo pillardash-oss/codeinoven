@@ -97,6 +97,10 @@ export const IPC_EVENT_CONTRACT = {
   'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
   /** The durable record of unattended runs changed (a run started or settled). */
   'assistant:backgroundRunsChanged': [] as unknown as [runs: import('../types').BackgroundRun[]],
+  /** User-skipped scheduled slots changed, so next-run labels can refresh. */
+  'assistant:skippedRoutineRunsChanged': [] as unknown as [
+    runs: import('../types').SkippedRoutineRun[]
+  ],
   /**
    * The set of gates the app resolved without the user changed: one settled, or
    * the user dismissed one or all. Drives the amber attention rail item and its
