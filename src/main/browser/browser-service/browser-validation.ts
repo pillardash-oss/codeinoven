@@ -32,13 +32,17 @@ import {
 } from '../../../lib/browser-search-engines'
 import {
   DEFAULT_BOX_ID,
-  MAX_BROWSER_BOX_NAME_LENGTH
+  MAX_BROWSER_BOX_NAME_LENGTH,
+  MAX_BROWSER_GROUP_NAME_LENGTH,
+  MAX_GLOBAL_BROWSER_GROUPS,
+  MAX_GLOBAL_BROWSER_TABS
 } from '../../../lib/browser/global-browser-tabs'
 import {
   MAX_BROWSER_BOX_MENU_ENTRIES,
   type BrowserBoxMenuEntry,
   type BrowserBoxMenuInput
 } from '../../../lib/browser/browser-box-menu'
+import type { BrowserTabSelectionMenuInput } from '../../../lib/browser/browser-tab-selection-menu'
 import type { BrowserViewport } from './browser-types'
 import type {
   BrowserOverlayAck,
@@ -718,6 +722,68 @@ export function validateBrowserBoxMenuInput(value: unknown): BrowserBoxMenuInput
     boxes,
     currentBoxId: validateOptionalBoxId(record['currentBoxId'])
   }
+}
+
+/** Validate the bounded renderer data used to build a native bulk-tab menu. */
+export function validateBrowserTabSelectionMenuInput(value: unknown): BrowserTabSelectionMenuInput {
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('Browser tab selection menu input is invalid')
+  }
+  const record = value as Record<string, unknown>
+  const selectedCount = record['selectedCount']
+  const canCreateGroup = record['canCreateGroup']
+  const rawGroups = record['groups']
+  const rawBoxes = record['boxes']
+  if (
+    typeof selectedCount !== 'number' ||
+    !Number.isInteger(selectedCount) ||
+    selectedCount < 2 ||
+    selectedCount > MAX_GLOBAL_BROWSER_TABS
+  ) {
+    throw new TypeError('Browser tab selection count is invalid')
+  }
+  if (typeof canCreateGroup !== 'boolean') {
+    throw new TypeError('Browser tab selection group action flag is invalid')
+  }
+  if (!Array.isArray(rawGroups) || rawGroups.length > MAX_GLOBAL_BROWSER_GROUPS) {
+    throw new TypeError('Browser tab selection groups are invalid')
+  }
+  if (!Array.isArray(rawBoxes) || rawBoxes.length > MAX_BROWSER_BOX_MENU_ENTRIES) {
+    throw new TypeError('Browser tab selection boxes are invalid')
+  }
+
+  const groups: BrowserTabSelectionMenuInput['groups'] = []
+  const seenGroups = new Set<string>()
+  for (const raw of rawGroups) {
+    if (typeof raw !== 'object' || raw === null) {
+      throw new TypeError('Browser tab selection group is invalid')
+    }
+    const entry = raw as Record<string, unknown>
+    const id = entry['id']
+    if (typeof id !== 'string' || !/^group:[a-zA-Z0-9:_-]{1,240}$/u.test(id)) {
+      throw new TypeError('Browser tab selection group ID is invalid')
+    }
+    if (seenGroups.has(id)) continue
+    seenGroups.add(id)
+    const name = boundedBoxLabel(entry['name']).slice(0, MAX_BROWSER_GROUP_NAME_LENGTH)
+    groups.push({ id, name: name || 'Untitled group' })
+  }
+
+  const boxes: BrowserTabSelectionMenuInput['boxes'] = []
+  const seenBoxes = new Set<string>()
+  for (const raw of rawBoxes) {
+    if (typeof raw !== 'object' || raw === null) {
+      throw new TypeError('Browser tab selection box is invalid')
+    }
+    const entry = raw as Record<string, unknown>
+    const id = validateOptionalBoxId(entry['id'])
+    if (id === null) throw new TypeError('Browser tab selection box ID is invalid')
+    if (seenBoxes.has(id)) continue
+    seenBoxes.add(id)
+    boxes.push({ id, name: boundedBoxLabel(entry['name']) || 'Untitled box' })
+  }
+
+  return { selectedCount, groups, boxes, canCreateGroup }
 }
 
 /**

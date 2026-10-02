@@ -4,16 +4,19 @@ import type { StorageEngine } from '../storage/storage-engine'
 import type { RoutineManager } from '../../lib/engines/routine-manager'
 import {
   nextRunAt,
+  nextRunAtExcluding,
   previousDueAt,
   scheduleIsActive,
   type BackgroundRun,
   type BackgroundRunReason,
   type MissedRun,
   type Routine,
+  type SkippedRoutineRun,
   type Thread,
   type ThreadStatus
 } from '../../lib/types'
 import { MissedRunStore } from './missed-run-store'
+import { RoutineSkipStore } from './routine-skip-store'
 import type { BackgroundRunLedger } from './background-run-ledger'
 
 /** How often the scheduler checks whether a configured time has come due. */
@@ -87,6 +90,7 @@ export interface RoutineSchedulerDeps {
  */
 export class RoutineSchedulerService {
   private readonly missed: MissedRunStore
+  private readonly skipped: RoutineSkipStore
   private readonly now: () => number
   private timer: ReturnType<typeof setInterval> | null = null
   private startedAt = 0
@@ -112,16 +116,18 @@ export class RoutineSchedulerService {
     private readonly deps: RoutineSchedulerDeps
   ) {
     this.missed = new MissedRunStore(storage)
+    this.skipped = new RoutineSkipStore(storage)
     this.now = deps.now ?? (() => Date.now())
   }
 
   /** Load persisted missed runs, detect app-closed misses, and arm the ticker. */
   async start(): Promise<void> {
-    await this.missed.load()
+    await Promise.all([this.missed.load(), this.skipped.load()])
     this.missed.pruneSettled()
     // Drop records that predate their schedule (or whose task is gone) before
     // anything else, so a miss written by an older build cannot keep badging.
     this.pruneStaleMisses()
+    this.pruneStaleSkips(this.deps.routines.listAssistantTasks(), this.now())
     this.startedAt = this.now()
     // Detect misses that happened while the app was closed before ticking, so a
     // slot that comes due only after startup is fired, not mis-recorded.
@@ -130,7 +136,7 @@ export class RoutineSchedulerService {
     this.notifyChange()
   }
 
-  /** Register a callback fired whenever missed-run state changes. */
+  /** Register a callback fired whenever scheduler ledger state changes. */
   attachChangeListener(callback: () => void): void {
     this.changeListener = callback
   }
@@ -146,6 +152,57 @@ export class RoutineSchedulerService {
    */
   listBackgroundRuns(): BackgroundRun[] {
     return this.deps.backgroundLedger?.list() ?? []
+  }
+
+  listSkippedRoutineRuns(): SkippedRoutineRun[] {
+    return this.skipped.list()
+  }
+
+  /** Whether a routine has any unclaimed scheduled slot left in the local day. */
+  hasRoutineRunsToday(routineId: string): boolean {
+    const routine = this.deps.routines.getRoutine(routineId)
+    if (!routine || routine.paused || !routine.howTo.trim()) return false
+    const now = this.now()
+    const endOfToday = new Date(now)
+    endOfToday.setHours(23, 59, 59, 999)
+    return this.deps.routines
+      .listRoutineTasks(routineId)
+      .some((task) => this.unskippedSlotsThrough(task, now, endOfToday.getTime()).length > 0)
+  }
+
+  /** Skip the closest unskipped occurrence across every task in a routine. */
+  async skipNextRoutineRun(routineId: string): Promise<SkippedRoutineRun> {
+    const routine = this.requireSkippableRoutine(routineId)
+    const now = this.now()
+    const candidate = this.deps.routines
+      .listRoutineTasks(routineId)
+      .map((task) => this.nextUnskippedSlot(task, now))
+      .filter((run): run is Omit<SkippedRoutineRun, 'id'> => run !== null)
+      .sort((a, b) => a.dueAt - b.dueAt)[0]
+    if (!candidate) throw new Error(`No scheduled run is available to skip for ${routine.name}.`)
+    const [saved] = await this.skipped.recordMany([candidate])
+    if (!saved) throw new Error(`The next scheduled run for ${routine.name} was already skipped.`)
+    this.notifyChange()
+    return saved
+  }
+
+  /** Skip every unclaimed scheduled occurrence remaining in the local day. */
+  async skipRoutineRunsToday(routineId: string): Promise<SkippedRoutineRun[]> {
+    const routine = this.requireSkippableRoutine(routineId)
+    const now = this.now()
+    const endOfToday = new Date(now)
+    endOfToday.setHours(23, 59, 59, 999)
+    const candidates = this.deps.routines
+      .listRoutineTasks(routineId)
+      .flatMap((task) => this.unskippedSlotsThrough(task, now, endOfToday.getTime()))
+    if (candidates.length === 0) {
+      throw new Error(`No scheduled runs remain today for ${routine.name}.`)
+    }
+    const saved = await this.skipped.recordMany(candidates)
+    if (saved.length === 0)
+      throw new Error(`Today's scheduled runs for ${routine.name} were already skipped.`)
+    this.notifyChange()
+    return saved
   }
 
   dismissMissedRun(id: string): void {
@@ -164,8 +221,8 @@ export class RoutineSchedulerService {
 
   /**
    * Forget everything the scheduler holds for a routine that is being removed:
-   * its pending missed runs, which would otherwise keep badging until the next
-   * launch, and the in-flight run bookkeeping of its tasks.
+   * its pending missed and skipped runs, which would otherwise remain after
+   * deletion, and the in-flight run bookkeeping of its tasks.
    *
    * Nothing else needs resetting. Every tick re-reads the assistant tasks from
    * the database, so a removed task is never evaluated, fired, or recorded as
@@ -177,7 +234,9 @@ export class RoutineSchedulerService {
     for (const [runThreadId, taskId] of this.inFlightRuns) {
       if (threads.has(taskId) || threads.has(runThreadId)) this.inFlightRuns.delete(runThreadId)
     }
-    if (this.missed.removeForRoutine(routineId, removedThreadIds) > 0) this.notifyChange()
+    const removedMisses = this.missed.removeForRoutine(routineId, removedThreadIds)
+    const removedSkips = this.skipped.removeForRoutine(routineId, removedThreadIds)
+    if (removedMisses > 0 || removedSkips > 0) this.notifyChange()
   }
 
   /**
@@ -290,6 +349,7 @@ export class RoutineSchedulerService {
     // does not go through this path.
     if (!instanceRegistry.isIncumbentInstance()) return
     const tasks = this.deps.routines.listAssistantTasks()
+    if (this.pruneStaleSkips(tasks, this.now()) > 0) this.notifyChange()
     for (const task of tasks) {
       try {
         this.evaluateTask(task, allowDispatch)
@@ -315,7 +375,7 @@ export class RoutineSchedulerService {
         // A slot already claimed must not be offered again, so the search starts
         // after the later of now and the task's last fire.
         const from = Math.max(now, task.lastRunAt ?? 0)
-        const candidate = nextRunAt(schedule, from)
+        const candidate = nextRunAtExcluding(schedule, from, this.skipped.timesForTask(task.id))
         if (candidate !== null && (soonest === null || candidate < soonest)) soonest = candidate
       } catch (error) {
         Logger.error('Routine next-due evaluation failed', error)
@@ -367,7 +427,7 @@ export class RoutineSchedulerService {
 
   /** Await pending missed-run writes and dispatched runs (used by shutdown and tests). */
   async flush(): Promise<void> {
-    await this.missed.flush()
+    await Promise.all([this.missed.flush(), this.skipped.flush()])
     await this.dispatchChain
     await this.deps.backgroundLedger?.flush()
   }
@@ -413,6 +473,10 @@ export class RoutineSchedulerService {
     const anchor = this.deps.routines.resolveTaskScheduleAnchor(task)
     const floor = Math.max(task.lastRunAt ?? 0, anchor)
     if (due <= floor) return
+
+    // Keep an explicitly skipped slot out of both dispatch and missed-run
+    // history without stamping it as a completed run.
+    if (this.skipped.has(task.id, due)) return
 
     const appClosed = due < this.startedAt
     const isMissed = appClosed || now - due > MISS_GRACE_MS
@@ -504,6 +568,87 @@ export class RoutineSchedulerService {
   private recordDispatch(threadId: string): void {
     const updated = this.deps.routines.markTaskRunDispatched(threadId, this.now())
     if (updated) this.deps.onTaskChanged?.(updated)
+  }
+
+  private requireSkippableRoutine(routineId: string): Routine {
+    const routine = this.deps.routines.getRoutine(routineId)
+    if (!routine) throw new Error(`Routine not found: ${routineId}`)
+    if (routine.paused) throw new Error(`Resume ${routine.name} before skipping a scheduled run.`)
+    if (!routine.howTo.trim()) {
+      throw new Error(`${routine.name} has no how-to yet, so it has no scheduled runs to skip.`)
+    }
+    return routine
+  }
+
+  /** Closest currently due (within grace) or future unskipped slot for a task. */
+  private nextUnskippedSlot(task: Thread, now: number): Omit<SkippedRoutineRun, 'id'> | null {
+    if (this.deps.routines.isTaskPaused(task)) return null
+    if (this.deps.routines.resolveTaskHowTo(task).trim() === '') return null
+    const schedule = this.deps.routines.resolveTaskSchedule(task)
+    if (!scheduleIsActive(schedule) || !task.routineId) return null
+    const anchor = this.deps.routines.resolveTaskScheduleAnchor(task)
+    const floor = Math.max(task.lastRunAt ?? 0, anchor)
+    const skippedAt = this.skipped.timesForTask(task.id)
+    const due = previousDueAt(schedule, now)
+    if (due !== null && due > floor && now - due <= MISS_GRACE_MS && !skippedAt.has(due)) {
+      return { taskId: task.id, routineId: task.routineId, dueAt: due }
+    }
+    const dueAt = nextRunAtExcluding(schedule, Math.max(now, floor), skippedAt)
+    return dueAt === null ? null : { taskId: task.id, routineId: task.routineId, dueAt }
+  }
+
+  /** Every unskipped due-in-grace or future slot through the local day's end. */
+  private unskippedSlotsThrough(
+    task: Thread,
+    now: number,
+    endOfToday: number
+  ): Omit<SkippedRoutineRun, 'id'>[] {
+    if (this.deps.routines.isTaskPaused(task)) return []
+    if (this.deps.routines.resolveTaskHowTo(task).trim() === '') return []
+    const schedule = this.deps.routines.resolveTaskSchedule(task)
+    if (!scheduleIsActive(schedule) || !task.routineId) return []
+    const anchor = this.deps.routines.resolveTaskScheduleAnchor(task)
+    const floor = Math.max(task.lastRunAt ?? 0, anchor)
+    const skippedAt = this.skipped.timesForTask(task.id)
+    const slots: Omit<SkippedRoutineRun, 'id'>[] = []
+    const due = previousDueAt(schedule, now)
+    const startOfToday = new Date(now).setHours(0, 0, 0, 0)
+    if (
+      due !== null &&
+      due > floor &&
+      due >= startOfToday &&
+      now - due <= MISS_GRACE_MS &&
+      !skippedAt.has(due)
+    ) {
+      slots.push({ taskId: task.id, routineId: task.routineId, dueAt: due })
+    }
+
+    let cursor = Math.max(now, floor)
+    let candidate = nextRunAt(schedule, cursor)
+    while (candidate !== null && candidate <= endOfToday) {
+      if (!skippedAt.has(candidate)) {
+        slots.push({ taskId: task.id, routineId: task.routineId, dueAt: candidate })
+      }
+      cursor = candidate
+      candidate = nextRunAt(schedule, cursor)
+    }
+    return slots
+  }
+
+  /** Remove skip records whose task, routine, schedule, or slot no longer exists. */
+  private pruneStaleSkips(tasks: readonly Thread[], now: number): number {
+    const byId = new Map(tasks.map((task) => [task.id, task]))
+    return this.skipped.prune((run) => {
+      const task = byId.get(run.taskId)
+      if (!task || task.routineId !== run.routineId) return true
+      const schedule = this.deps.routines.resolveTaskSchedule(task)
+      const anchor = this.deps.routines.resolveTaskScheduleAnchor(task)
+      if (!scheduleIsActive(schedule) || run.dueAt < anchor) return true
+      if (nextRunAt(schedule, run.dueAt - 1) !== run.dueAt) return true
+      if ((task.lastRunAt ?? 0) >= run.dueAt) return true
+      const latestDue = previousDueAt(schedule, now)
+      return latestDue !== null && latestDue > run.dueAt
+    })
   }
 
   private notifyChange(): void {

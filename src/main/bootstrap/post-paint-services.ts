@@ -179,7 +179,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { ThreadTransferService },
     { RoutineManager },
     { RoutineSchedulerService },
-    { broadcastMissedRunsChanged, broadcastAutoAnswersChanged, broadcastBackgroundRunsChanged },
+    {
+      broadcastMissedRunsChanged,
+      broadcastAutoAnswersChanged,
+      broadcastBackgroundRunsChanged,
+      broadcastSkippedRoutineRunsChanged
+    },
     { SkillUpdateService },
     { SecretVault },
     { GitHubAuthService }
@@ -424,6 +429,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.routineScheduler.attachChangeListener(() => {
     broadcastMissedRunsChanged(state.routineScheduler?.listMissedRuns() ?? [])
     broadcastBackgroundRunsChanged(state.routineScheduler?.listBackgroundRuns() ?? [])
+    broadcastSkippedRoutineRunsChanged(state.routineScheduler?.listSkippedRoutineRuns() ?? [])
     state.backgroundLifecycle?.refreshAttention()
   })
   // Background wake: the machine is held awake inside the lead window before a

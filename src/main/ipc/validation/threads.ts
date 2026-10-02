@@ -17,6 +17,7 @@ import {
   validateBoolean,
   validateEntityId
 } from './primitives'
+import { LOCAL_OVEN_ID } from '../../../lib/ovens'
 
 const THREAD_STATUSES = new Set<ThreadStatus>([
   'created',
@@ -147,7 +148,8 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
   if (input.accountId !== undefined) {
     settings.accountId = validateEntityId(input.accountId, 'Account ID', 256)
   }
-  if (input.ovenId !== undefined) settings.ovenId = validateEntityId(input.ovenId, 'Oven ID')
+  settings.ovenId =
+    input.ovenId === undefined ? LOCAL_OVEN_ID : validateEntityId(input.ovenId, 'Oven ID')
   if (input.ovenPath !== undefined) {
     settings.ovenPath = validateBoundedString(input.ovenPath, 'Oven workspace', 1, 4096)
     if (/[\0\r\n]/u.test(settings.ovenPath)) throw new TypeError('Invalid Oven workspace path')

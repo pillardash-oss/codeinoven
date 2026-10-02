@@ -175,6 +175,13 @@ export interface NotificationContextTab {
   title: string
 }
 
+/** Global sticky note panel, available independently of the selected thread. */
+export interface StickyNotesContextTab {
+  id: string
+  kind: 'sticky-notes'
+  title: string
+}
+
 /**
  * The rail panel that lists the gates the app resolved without the user.
 /**
@@ -262,20 +269,16 @@ export interface BrowserExtensionsContextTab {
 /**
  * One popup window on the browser's right rail.
  *
- * A popup window is a page's own `window.open` with a window in it: a sign-in, a
- * checkout, a share dialog. The app hosts it and displays it in the rail, so the
- * rail carries one tab per popup, exactly as it carries one tab per open file:
- * the tab is the popup, and closing the tab closes the window. The tab carries no
- * data of its own beyond that identity, because the popup itself lives in main and
- * the renderer's mirror of it (see `browser-popup-windows.svelte.ts`).
+ * The app hosts the popup page in the rail and carries one tab per visible popup.
+ * Dismissing an extension action popup hides its tab while retaining the page;
+ * dismissing a page-created popup closes its window. The renderer mirrors popup
+ * state from main (see `browser-popup-windows.svelte.ts`).
  */
 export interface BrowserPopupWindowContextTab {
   /** The popup window's own id, so a tab and a window are the same thing. */
   id: string
   kind: 'popup-window'
   title: string
-  /** The browser tab whose page opened it, for the label when a title is missing. */
-  openerTabId: string
   /** Live page favicon (data URL) from the browser, if the popup reported one. */
   favicon?: string
 }
@@ -385,6 +388,7 @@ export type ContextSidebarTab =
   | CloudDeploymentContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
+  | StickyNotesContextTab
   | AttentionContextTab
   | BrowserDownloadsContextTab
   | BrowserHistoryContextTab
@@ -424,6 +428,11 @@ export const NOTIFICATIONS_TAB: NotificationContextTab = {
   id: 'notifications',
   kind: 'notifications',
   title: 'Notifications'
+}
+export const STICKY_NOTES_TAB: StickyNotesContextTab = {
+  id: 'sticky-notes',
+  kind: 'sticky-notes',
+  title: 'Sticky notes'
 }
 export const ATTENTION_TAB_ID = 'attention'
 

@@ -670,6 +670,7 @@
     'actions',
     'browser',
     'thread-note',
+    'sticky-notes',
     'temporary-chat',
     'attention'
   ])
@@ -3819,6 +3820,26 @@
     await assistantRoutines.setRoutinePinned(routine.id, !routine.pinned)
   }
 
+  async function skipNextAssistantRoutineRun(routine: Routine): Promise<void> {
+    try {
+      await assistantRoutines.skipNextRoutineRun(routine.id)
+      toast.success('Next routine run skipped', { description: routine.name })
+    } catch (error) {
+      reportError(error, 'The next scheduled run could not be skipped.')
+      throw error
+    }
+  }
+
+  async function skipAssistantRoutineRunsToday(routine: Routine): Promise<void> {
+    try {
+      await assistantRoutines.skipRoutineRunsToday(routine.id)
+      toast.success("Today's routine runs skipped", { description: routine.name })
+    } catch (error) {
+      reportError(error, "Today's scheduled runs could not be skipped.")
+      throw error
+    }
+  }
+
   /**
    * Hide a routine's how-to thread. Hiding is the only state the thread can
    * change: it stays pinned, so archiving it is what takes it out of the
@@ -4203,6 +4224,9 @@
         onHandedOffTask={handleAssistantHandoff}
         onHideHowTo={(task) => void hideAssistantHowTo(task)}
         onDeleteRoutine={deleteAssistantRoutine}
+        onHasRoutineRunsToday={(routine) => assistantRoutines.hasRoutineRunsToday(routine.id)}
+        onSkipNextRoutineRun={skipNextAssistantRoutineRun}
+        onSkipRoutineRunsToday={skipAssistantRoutineRunsToday}
         onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
         onMoveRoutine={(draggedId, targetId, position) =>
           void moveAssistantRoutine(draggedId, targetId, position)}
@@ -4295,6 +4319,7 @@
       {#if sidebarVisible || sidebarHostsFullscreenEditor}
         {#snippet contextSidebarContent()}
           <WorkspaceContextPanelContent
+            {active}
             {gitPanelProjectId}
             {gitPanelScopeBucketId}
             {terminalFullscreenTabId}
@@ -4403,9 +4428,9 @@
   {/await}
 {/snippet}
 
-<!-- Every browser surface waits for `browserStore()` so its chunk is not even
-     fetched on a launch that never reaches the browser. The store arrives with
-     the runtime, which is also what warms these chunks. -->
+<!-- Global-browser surfaces wait for `browserStore()` so their chunks are not
+     fetched on a launch that never reaches the browser. Thread-browser
+     fullscreen is loaded separately below when a thread tab asks for it. -->
 {#if browserStore()}
   {#await import('./WorkspaceBrowserDataModal.svelte') then { default: WorkspaceBrowserDataModal }}
     <WorkspaceBrowserDataModal {browser} {projects} />
@@ -4434,7 +4459,7 @@
   onNewTerminal={openNewTerminal}
   onCloseTab={(id) => closeFullscreenTab('terminal', id)}
 />
-{#if browserStore()}
+{#if browserFullscreenTabId}
   {#await import('./WorkspaceFullscreenBrowser.svelte') then { default: WorkspaceFullscreenBrowser }}
     <WorkspaceFullscreenBrowser
       tabId={browserFullscreenTabId}

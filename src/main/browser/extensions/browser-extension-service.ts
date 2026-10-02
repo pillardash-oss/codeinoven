@@ -54,6 +54,8 @@ import { prepareExtensionSource } from './browser-extension-install-job'
 import { COMPAT_BRIDGE_PAGE_FILE_NAME, ensureInjectionCurrent } from './browser-extension-inject'
 import {
   BrowserExtensionBridge,
+  type BrowserExtensionActionPopupRequest,
+  type BrowserExtensionInstalledDetails,
   type BrowserExtensionMailbox,
   type BrowserExtensionNotificationRecord,
   type BrowserExtensionSidePanelMailbox,
@@ -61,7 +63,13 @@ import {
   type BrowserExtensionSidePanelRequest
 } from './browser-extension-bridge'
 import { extensionIdFromInput, isExtensionId } from './browser-extension-crx'
-import { downloadWebStoreRelease, resolveWebStoreRelease } from './browser-extension-webstore'
+import { compareBrowserExtensionVersions } from './browser-extension-version'
+import {
+  downloadWebStoreRelease,
+  resolveWebStoreRelease,
+  resolveWebStoreUpdate,
+  type WebStoreRelease
+} from './browser-extension-webstore'
 import {
   EXTENSION_MANIFEST_NAME,
   extensionPopupUrl,
@@ -86,6 +94,9 @@ import { materializeUserScriptFiles } from './browser-extension-user-scripts'
  *  of events that all say the same thing. */
 const PROGRESS_INTERVAL_MS = 200
 
+/** Give Electron time to finish initializing extension browser state after load. */
+const EXTENSION_READY_TIMEOUT_MS = 5_000
+
 /** How many installs run at once, and therefore how many downloads.
  *
  * Two is the point of the queue rather than a random number: a user installing
@@ -93,6 +104,12 @@ const PROGRESS_INTERVAL_MS = 200
  * second is even accepted, while a third download would only split the same
  * connection and disk between them. Everything else waits its turn. */
 const MAX_CONCURRENT_INSTALLS = 2
+
+/** The browser checks for newer store versions on startup and every six hours. */
+const EXTENSION_UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+
+/** Keep store checks small so many installed extensions do not flood the network. */
+const MAX_CONCURRENT_UPDATE_CHECKS = 2
 
 /** Directories inside the store root that are not extensions. */
 const STAGING_DIR = '.staging'
@@ -143,6 +160,8 @@ interface LoadedJar {
    *  extension, so the poll never raises the same request twice. Dropped when
    *  that extension's worker restarts, whose own sequence starts over. */
   sidePanelSeq: Map<string, number>
+  /** Highest `action.openPopup()` request handled, per extension. */
+  actionPopupSeq: Map<string, number>
   /** Activity already sent to the renderer, so the 500 ms mailbox poll sends a
    *  change once instead of on every read. Keyed `extensionId\u0000tabId`. */
   published: Map<string, string>
@@ -164,6 +183,8 @@ export interface BrowserExtensionHost {
   sessionFor(projectId: string, boxId: string | null): Session
   /** Every jar that currently has a live page. */
   liveJars(): { projectId: string; boxId: string | null }[]
+  /** Drop documents before Chromium invalidates their extension contexts. */
+  releaseViews(extensionId: string, projectId: string, boxId: string | null): void
   /** The app tab a browser page belongs to, for action state an extension scoped
    *  to the tab ids the runtime gave it. */
   resolveTabId(projectId: string, contentsId: number): string | null
@@ -191,6 +212,18 @@ export interface BrowserExtensionHost {
   /** Close one extension's side panel. `extensionTabId` names the tab the
    *  request was for; null closes it whatever tab it belongs to. */
   closeSidePanel(extensionId: string, extensionTabId: number | null): void
+  /** Apply a popup surface request for the tab named by the extension runtime. */
+  openPopup(request: BrowserExtensionActionPopupOpenRequest): void
+}
+
+/** One extension popup request carried from the worker to the browser host. */
+export interface BrowserExtensionActionPopupOpenRequest {
+  projectId: string
+  boxId: string | null
+  extensionId: string
+  extensionTabId: number
+  kind: BrowserExtensionActionPopupRequest['kind']
+  url?: string
 }
 
 /** One side panel a worker asked the app to raise. The extension service
@@ -272,6 +305,19 @@ export class BrowserExtensionService {
   /** Every install that is queued or running, so a caller cannot name one that is
    *  already in flight and have its progress attributed to it. */
   private readonly installIds = new Set<string>()
+  /** Store ids accepted by an install, so an update cannot replace the same files. */
+  private readonly installingWebStoreIds = new Set<string>()
+  /** Store versions found by the most recent successful check, held for the panel. */
+  private readonly availableUpdateVersions = new Map<string, string>()
+  /** Updates in progress, keyed by extension id. */
+  private readonly updatingIds = new Set<string>()
+  /** Install/update events awaiting delivery into live extension workers. */
+  private readonly pendingInstalledEvents = new Map<string, BrowserExtensionInstalledDetails>()
+  /** One recovery pass per extension if a process stopped during a directory swap. */
+  private readonly recoveringSources = new Map<string, Promise<void>>()
+  /** One scheduled check at a time, even when startup and the app updater overlap. */
+  private updateCheck: Promise<void> | null = null
+  private updateCheckTimer: ReturnType<typeof setInterval> | null = null
   /** Per-install progress gating, keyed by install id: two installs reporting at
    *  the same moment must not suppress each other's lines the way one shared
    *  clock would. */
@@ -298,6 +344,14 @@ export class BrowserExtensionService {
     this.ready = this.registry.load().catch((error: unknown) => {
       Logger.error('Browser extension registry could not be read:', error)
     })
+    void this.ready.then(() => {
+      if (this.disposed) return
+      void this.checkForUpdates()
+      this.updateCheckTimer = setInterval(
+        () => void this.checkForUpdates(),
+        EXTENSION_UPDATE_CHECK_INTERVAL_MS
+      )
+    })
   }
 
   /** Wait for the registry to have been read. */
@@ -307,7 +361,12 @@ export class BrowserExtensionService {
 
   /** The installed extensions, as the renderer draws them. */
   list(): BrowserExtension[] {
-    return this.registry.list().map((record) => toExtensionView(record, []))
+    return this.registry.list().map((record) => this.toView(record))
+  }
+
+  /** Include the latest store version found by the background check. */
+  private toView(record: BrowserExtensionRecord): BrowserExtension {
+    return toExtensionView(record, [], this.availableUpdateVersions.get(record.id) ?? null)
   }
 
   /**
@@ -341,6 +400,13 @@ export class BrowserExtensionService {
     if (this.installIds.has(input.installId)) {
       throw new Error('That install is already running')
     }
+    const webstoreId = input.source === 'webstore' ? extensionIdFromInput(input.value) : null
+    if (
+      webstoreId &&
+      (this.installingWebStoreIds.has(webstoreId) || this.updatingIds.has(webstoreId))
+    ) {
+      throw new Error('That extension is already being installed or updated')
+    }
     const context: InstallContext = {
       installId: input.installId,
       label: input.value.trim() || 'extension',
@@ -349,6 +415,7 @@ export class BrowserExtensionService {
       webstoreId: input.source === 'webstore' ? extensionIdFromInput(input.value) : null
     }
     this.installIds.add(context.installId)
+    if (context.webstoreId) this.installingWebStoreIds.add(context.webstoreId)
     return new Promise<BrowserExtension>((resolve, reject) => {
       this.installQueue.push({ input, context, resolve, reject })
       // Reported before anything starts, so a queued install shows up in the panel
@@ -384,6 +451,7 @@ export class BrowserExtensionService {
     } finally {
       this.runningInstalls -= 1
       this.installIds.delete(job.context.installId)
+      if (job.context.webstoreId) this.installingWebStoreIds.delete(job.context.webstoreId)
       this.installProgress.delete(job.context.installId)
       this.startQueuedInstalls()
     }
@@ -392,6 +460,9 @@ export class BrowserExtensionService {
   /** Uninstall an extension: stop it everywhere, then delete its files. */
   async uninstall(extensionId: string): Promise<void> {
     if (!isExtensionId(extensionId)) throw new TypeError('Browser extension ID is invalid')
+    if (this.updatingIds.has(extensionId) || this.installingWebStoreIds.has(extensionId)) {
+      throw new Error('That extension is being installed or updated')
+    }
     const record = this.registry.get(extensionId)
     if (!record) return
     await this.unloadEverywhere(extensionId)
@@ -400,6 +471,7 @@ export class BrowserExtensionService {
     // came from and be drawn for whatever is installed under the same id next.
     this.actionIcons.clear()
     await this.registry.remove(extensionId)
+    this.availableUpdateVersions.delete(extensionId)
     this.host.publish()
   }
 
@@ -415,6 +487,7 @@ export class BrowserExtensionService {
     patch: { enabled?: boolean; boxes?: string[]; pinned?: boolean }
   ): Promise<BrowserExtension> {
     if (!isExtensionId(extensionId)) throw new TypeError('Browser extension ID is invalid')
+    if (this.updatingIds.has(extensionId)) throw new Error('That extension is being updated')
     const current = this.registry.get(extensionId)
     if (!current) throw new Error('That extension is not installed')
     if (patch.pinned === true) {
@@ -432,7 +505,68 @@ export class BrowserExtensionService {
     if (!record) throw new Error('That extension is not installed')
     await this.reconcileLiveJars()
     this.host.publish()
-    return toExtensionView(record, [])
+    return this.toView(record)
+  }
+
+  /** Reorder the installed extensions and publish their new order to renderers. */
+  async reorder(orderedIds: string[]): Promise<void> {
+    await this.ready
+    await this.registry.reorder(orderedIds)
+    this.host.publish()
+  }
+
+  /** Find newer Web Store releases without downloading or replacing anything. */
+  checkForUpdates(): Promise<void> {
+    if (this.disposed) return Promise.resolve()
+    if (this.updateCheck) return this.updateCheck
+    const pass = this.runUpdateCheck()
+      .catch((error: unknown) => {
+        Logger.dev('Browser extension update checks could not finish:', error)
+      })
+      .finally(() => {
+        if (this.updateCheck === pass) this.updateCheck = null
+      })
+    this.updateCheck = pass
+    return pass
+  }
+
+  /** Download and install the newest Web Store release after the user asks. */
+  async updateFromWebStore(extensionId: string): Promise<BrowserExtension> {
+    if (!isExtensionId(extensionId)) throw new TypeError('Browser extension ID is invalid')
+    await this.ready
+    const original = this.registry.get(extensionId)
+    if (!original || original.source !== 'webstore' || !original.webstoreId) {
+      throw new Error('Only extensions installed from the Web Store can be updated here')
+    }
+    if (this.updatingIds.has(extensionId) || this.installingWebStoreIds.has(extensionId)) {
+      throw new Error('That extension is already being installed or updated')
+    }
+
+    this.updatingIds.add(extensionId)
+    try {
+      const release = await resolveWebStoreUpdate(original.webstoreId, original.version)
+      const versionOrder = release
+        ? compareBrowserExtensionVersions(original.version, release.version)
+        : null
+      if (!release || versionOrder !== -1) {
+        this.availableUpdateVersions.delete(extensionId)
+        this.host.publish()
+        return this.toView(original)
+      }
+
+      const updated = await this.installWebStoreUpdate(original, release)
+      this.availableUpdateVersions.delete(extensionId)
+      this.host.publish()
+      return this.toView(updated)
+    } finally {
+      this.updatingIds.delete(extensionId)
+      if (!this.disposed) {
+        await this.reconcileLiveJars().catch((error: unknown) => {
+          Logger.error('Browser extensions could not be reloaded after an update:', error)
+        })
+      }
+      this.pendingInstalledEvents.delete(extensionId)
+    }
   }
 
   /** Ask the user for an unpacked extension folder. */
@@ -482,18 +616,25 @@ export class BrowserExtensionService {
    * This is the memory half of containment: a box the user closed keeps its
    * cookies on disk, but it does not keep a renderer per extension loaded into it.
    */
-  async onJarEmptied(projectId: string, boxId: string | null): Promise<void> {
+  async onJarEmptied(projectId: string, boxId: string | null, force = false): Promise<void> {
     if (this.disposed) return
     const partition = browserPartitionFor(projectId, boxId)
     // A load already in flight would otherwise finish after this and leave the jar
     // loaded with nothing to show for it.
     const inFlight = this.loading.get(partition)
     if (inFlight) await inFlight.catch(() => undefined)
+    if (
+      !force &&
+      this.host
+        .liveJars()
+        .some((jar) => browserPartitionFor(jar.projectId, jar.boxId) === partition)
+    )
+      return
     const state = this.loaded.get(partition)
     if (!state) return
     for (const id of [...state.ids]) {
       this.stopBridge(state, id)
-      this.removeFromSession(state.session, id)
+      this.removeFromSession(state, id)
     }
     this.loaded.delete(partition)
   }
@@ -504,7 +645,7 @@ export class BrowserExtensionService {
    */
   async forgetBox(projectId: string, boxId: string): Promise<void> {
     const partition = browserPartitionFor(projectId, boxId)
-    await this.onJarEmptied(projectId, boxId)
+    await this.onJarEmptied(projectId, boxId, true)
     this.loaded.delete(partition)
     if (await this.registry.forgetBox(boxId)) this.host.publish()
   }
@@ -512,16 +653,21 @@ export class BrowserExtensionService {
    *  is going away. */
   async dispose(): Promise<void> {
     this.disposed = true
+    if (this.updateCheckTimer) {
+      clearInterval(this.updateCheckTimer)
+      this.updateCheckTimer = null
+    }
     // An install still waiting for a slot will never get one once the window is
     // going away, so its caller is answered instead of left pending forever.
     for (const job of this.installQueue.splice(0)) {
       this.installIds.delete(job.context.installId)
+      if (job.context.webstoreId) this.installingWebStoreIds.delete(job.context.webstoreId)
       job.reject(new Error('The browser closed before the install started'))
     }
     for (const [partition, state] of [...this.loaded]) {
       for (const id of [...state.ids]) {
         this.stopBridge(state, id)
-        this.removeFromSession(state.session, id)
+        this.removeFromSession(state, id)
       }
       this.loaded.delete(partition)
     }
@@ -591,6 +737,7 @@ export class BrowserExtensionService {
         throw new Error('The extension did not produce a usable identity')
       }
       const id = result.id
+      const previousRecord = this.registry.get(id)
       this.report(context, { phase: 'registering', detail: 'Installing' })
 
       // Move the prepared tree to its final home. A rename, not a copy: it is the
@@ -643,13 +790,179 @@ export class BrowserExtensionService {
         installedAt: Date.now()
       }
       await this.registry.upsert(record)
+      this.pendingInstalledEvents.set(
+        id,
+        previousRecord
+          ? { reason: 'update', previousVersion: previousRecord.version }
+          : { reason: 'install' }
+      )
+      this.availableUpdateVersions.delete(id)
       this.report(context, { phase: 'done', detail: `Installed ${result.name}` })
-      await this.reconcileLiveJars()
+      try {
+        await this.reconcileLiveJars()
+      } finally {
+        this.pendingInstalledEvents.delete(id)
+      }
       this.host.publish()
-      return toExtensionView(record, [])
+      return this.toView(record)
     } finally {
       await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined)
       if (crxPath) await rm(crxPath, { force: true }).catch(() => undefined)
+    }
+  }
+
+  private async runUpdateCheck(): Promise<void> {
+    await this.ready
+    if (this.disposed) return
+    let changed = false
+    const candidates = this.registry.list().filter((record) => record.source === 'webstore')
+
+    for (let offset = 0; offset < candidates.length; offset += MAX_CONCURRENT_UPDATE_CHECKS) {
+      if (this.disposed) return
+      const batch = candidates.slice(offset, offset + MAX_CONCURRENT_UPDATE_CHECKS)
+      await Promise.all(
+        batch.map(async (record) => {
+          if (!record.webstoreId || this.updatingIds.has(record.id)) return
+          if (this.installingWebStoreIds.has(record.webstoreId)) return
+          try {
+            const release = await resolveWebStoreUpdate(record.webstoreId, record.version)
+            const current = this.registry.get(record.id)
+            if (
+              !current ||
+              current.version !== record.version ||
+              this.updatingIds.has(record.id) ||
+              this.disposed
+            ) {
+              return
+            }
+            const previousVersion = this.availableUpdateVersions.get(record.id) ?? null
+            const nextVersion =
+              release && compareBrowserExtensionVersions(current.version, release.version) === -1
+                ? release.version
+                : null
+            if (previousVersion === nextVersion) return
+            if (nextVersion) this.availableUpdateVersions.set(record.id, nextVersion)
+            else this.availableUpdateVersions.delete(record.id)
+            changed = true
+          } catch (error: unknown) {
+            Logger.dev('Browser extension update check failed:', {
+              extensionId: record.id,
+              error
+            })
+          }
+        })
+      )
+    }
+
+    if (changed && !this.disposed) this.host.publish()
+  }
+
+  private async installWebStoreUpdate(
+    original: BrowserExtensionRecord,
+    release: WebStoreRelease
+  ): Promise<BrowserExtensionRecord> {
+    const stagingRoot = join(this.storeRoot(), STAGING_DIR, randomUUID())
+    const stagingSource = join(stagingRoot, BROWSER_EXTENSION_SOURCE_DIR)
+    const backupSource = join(
+      this.extensionDirectory(original.id),
+      `${BROWSER_EXTENSION_SOURCE_DIR}.previous`
+    )
+    const extensionSource = extensionSourceDirectory(this.configRoot, original.id)
+    const crxPath = join(this.downloadRoot(), `${original.id}-${randomUUID()}.crx`)
+    let previousMoved = false
+    let replacementMoved = false
+    let recordCommitted = false
+
+    try {
+      await this.restoreInterruptedSource(original.id)
+      await mkdir(this.downloadRoot(), { recursive: true })
+      await downloadWebStoreRelease(release, crxPath, () => undefined)
+      const result = await prepareExtensionSource(
+        {
+          destinationDir: stagingSource,
+          crxPath,
+          folderPath: null,
+          expectedId: original.webstoreId,
+          preamble: preambleSource
+        },
+        () => undefined
+      )
+      if (result.id !== original.id || result.version !== release.version) {
+        throw new Error('The downloaded package did not match the Web Store update')
+      }
+
+      const current = this.registry.get(original.id)
+      if (!current || current.version !== original.version) {
+        throw new Error('The installed extension changed before its update could be applied')
+      }
+
+      // Let any extension load already in progress finish. New loads skip this id
+      // until the replacement has been registered, so no worker sees half a tree.
+      await Promise.all([...this.loading.values()].map((task) => task.catch(() => undefined)))
+      await this.unloadEverywhere(original.id)
+
+      const warnings: string[] = []
+      if (result.manifestVersion === 2) {
+        warnings.push(
+          'This is a Manifest V2 extension. The runtime warns that support for it is deprecated.'
+        )
+      }
+      const declaredEnabled = result.ruleResources.filter((resource) => resource.enabled)
+      if (declaredEnabled.length > 0 && result.injected === 'none') {
+        warnings.push(
+          `It ships ${declaredEnabled.length} filter rulesets enabled by default, and this runtime ignores that flag.`
+        )
+      }
+
+      await rename(extensionSource, backupSource)
+      previousMoved = true
+      await rename(stagingSource, extensionSource)
+      replacementMoved = true
+
+      const updated: BrowserExtensionRecord = {
+        ...current,
+        name: result.name,
+        version: result.version,
+        description: result.description,
+        popupPath: result.popupPath,
+        pinned: current.pinned && result.popupPath !== null,
+        iconDataUrl: result.iconDataUrl,
+        declaredPermissions: result.declaredPermissions,
+        ruleResources: result.ruleResources,
+        manifestVersion: result.manifestVersion,
+        missingCapabilities: [...missingExtensionCapabilities(result.declaredPermissions)],
+        warnings,
+        injected: result.injected,
+        sourceHash: result.sourceHash
+      }
+      await this.registry.upsert(updated)
+      this.pendingInstalledEvents.set(original.id, {
+        reason: 'update',
+        previousVersion: original.version
+      })
+      recordCommitted = true
+      this.actionIcons.clear()
+      await rm(backupSource, { recursive: true, force: true }).catch(() => undefined)
+      return updated
+    } catch (error: unknown) {
+      if (previousMoved && !recordCommitted) {
+        try {
+          if (replacementMoved) {
+            await rm(extensionSource, { recursive: true, force: true })
+          }
+          await this.restoreInterruptedSource(original.id)
+          await this.registry.upsert(original)
+        } catch (rollbackError: unknown) {
+          Logger.error('Browser extension update could not restore its previous files:', {
+            extensionId: original.id,
+            rollbackError
+          })
+        }
+      }
+      throw error
+    } finally {
+      await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined)
+      await rm(crxPath, { force: true }).catch(() => undefined)
     }
   }
 
@@ -726,7 +1039,9 @@ export class BrowserExtensionService {
     const desiredIds = new Set(desired.map((record) => record.id))
     const current = this.loaded.get(partition)?.ids ?? new Set<string>()
     const toUnload = [...current].filter((id) => !desiredIds.has(id))
-    const toLoad = desired.filter((record) => !current.has(record.id))
+    const toLoad = desired.filter(
+      (record) => !current.has(record.id) && !this.updatingIds.has(record.id)
+    )
     if (toUnload.length === 0 && toLoad.length === 0) return
 
     // Only now is a session asked for, which is what creates its profile directory.
@@ -735,7 +1050,7 @@ export class BrowserExtensionService {
     const state = this.loadedFor(partition, session, projectId, boxId)
     for (const id of toUnload) {
       this.stopBridge(state, id)
-      this.removeFromSession(session, id)
+      this.removeFromSession(state, id)
     }
     for (const id of toUnload) state.ids.delete(id)
     if (toLoad.length === 0) return
@@ -753,10 +1068,11 @@ export class BrowserExtensionService {
   ): Promise<boolean> {
     const directory = extensionSourceDirectory(this.configRoot, record.id)
     try {
+      await this.restoreInterruptedSource(record.id)
       await this.refreshInstalledPreamble(directory, record)
       await this.refreshCapabilityReport(record)
       await this.makeManifestLoadable(directory)
-      await state.session.extensions.loadExtension(directory, { allowFileAccess: false })
+      await this.loadExtensionWhenReady(state.session, directory, record.injected !== 'none')
       state.ids.add(record.id)
       this.startBridge(state, record)
       // A successful load answers any earlier failure, so the row stops claiming
@@ -767,6 +1083,96 @@ export class BrowserExtensionService {
       const warning = `It could not be loaded (${reason})`
       Logger.error(`Browser extension ${record.id} could not be loaded:`, error)
       return this.registry.setLoadWarning(record.id, warning)
+    }
+  }
+
+  /** Restore the old source if a process stopped halfway through an update swap. */
+  private async restoreInterruptedSource(extensionId: string): Promise<void> {
+    const existing = this.recoveringSources.get(extensionId)
+    if (existing) return existing
+
+    const source = extensionSourceDirectory(this.configRoot, extensionId)
+    const backup = join(
+      this.extensionDirectory(extensionId),
+      `${BROWSER_EXTENSION_SOURCE_DIR}.previous`
+    )
+    const recovery = (async () => {
+      const [sourceExists, backupExists] = await Promise.all([
+        stat(source).then(
+          () => true,
+          () => false
+        ),
+        stat(backup).then(
+          () => true,
+          () => false
+        )
+      ])
+      if (!backupExists) return
+      if (!sourceExists) {
+        await rename(backup, source)
+        Logger.dev('Recovered a browser extension interrupted during update:', { extensionId })
+      } else {
+        await rm(backup, { recursive: true, force: true })
+      }
+    })()
+    this.recoveringSources.set(extensionId, recovery)
+    try {
+      await recovery
+    } finally {
+      this.recoveringSources.delete(extensionId)
+    }
+  }
+
+  /**
+   * Load the extension, then wait until Electron has initialized the browser
+   * state needed to start its background. The load promise only reports that the
+   * extension was loaded; starting its bridge or navigating a page in between
+   * that promise and `extension-ready` can race content-script registration.
+   */
+  private async loadExtensionWhenReady(
+    session: Session,
+    directory: string,
+    waitForReady: boolean
+  ): Promise<void> {
+    const extensions = session.extensions
+    if (!waitForReady) {
+      await extensions.loadExtension(directory, { allowFileAccess: false })
+      return
+    }
+
+    const readyExtensionIds = new Set<string>()
+    let loadedExtensionId: string | null = null
+    let resolveReady: (() => void) | null = null
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve
+    })
+    const onReady = (_event: Electron.Event, extension: Electron.Extension): void => {
+      readyExtensionIds.add(extension.id)
+      if (loadedExtensionId === extension.id) resolveReady?.()
+    }
+
+    extensions.on('extension-ready', onReady)
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      const extension = await extensions.loadExtension(directory, { allowFileAccess: false })
+      loadedExtensionId = extension.id
+      if (readyExtensionIds.has(extension.id)) return
+
+      const becameReady = await Promise.race([
+        ready.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), EXTENSION_READY_TIMEOUT_MS)
+        })
+      ])
+      if (!becameReady) {
+        Logger.dev('Browser extension did not report readiness before its startup deadline:', {
+          extensionId: extension.id,
+          timeoutMs: EXTENSION_READY_TIMEOUT_MS
+        })
+      }
+    } finally {
+      if (timer !== null) clearTimeout(timer)
+      extensions.off('extension-ready', onReady)
     }
   }
 
@@ -858,9 +1264,10 @@ export class BrowserExtensionService {
     }
   }
 
-  private removeFromSession(session: Session, extensionId: string): void {
+  private removeFromSession(state: LoadedJar, extensionId: string): void {
+    this.host.releaseViews(extensionId, state.projectId, state.boxId)
     try {
-      session.extensions.removeExtension(extensionId)
+      state.session.extensions.removeExtension(extensionId)
     } catch (error) {
       Logger.dev('Browser extension could not be unloaded:', { extensionId, error })
     }
@@ -870,7 +1277,7 @@ export class BrowserExtensionService {
     for (const [partition, state] of [...this.loaded]) {
       if (!state.ids.has(extensionId)) continue
       this.stopBridge(state, extensionId)
-      this.removeFromSession(state.session, extensionId)
+      this.removeFromSession(state, extensionId)
       state.ids.delete(extensionId)
       if (state.ids.size === 0) this.loaded.delete(partition)
     }
@@ -894,6 +1301,7 @@ export class BrowserExtensionService {
       publishedGeneration: new Map(),
       notificationSeq: new Map(),
       sidePanelSeq: new Map(),
+      actionPopupSeq: new Map(),
       published: new Map(),
       publishing: Promise.resolve()
     }
@@ -920,7 +1328,7 @@ export class BrowserExtensionService {
   ): void {
     const state = this.loaded.get(browserPartitionFor(projectId, boxId))
     if (!state || state.bridges.size === 0) return
-    for (const bridge of state.bridges.values()) bridge.push({ kind: 'tab', name, args })
+    for (const bridge of state.bridges.values()) void bridge.push({ kind: 'tab', name, args })
   }
 
   /**
@@ -942,7 +1350,7 @@ export class BrowserExtensionService {
     const state = this.loaded.get(browserPartitionFor(projectId, boxId))
     if (!state || state.bridges.size === 0) return
     for (const bridge of state.bridges.values()) {
-      bridge.push({ kind: 'web-navigation', name, args: [details] })
+      void bridge.push({ kind: 'web-navigation', name, args: [details] })
     }
   }
 
@@ -961,6 +1369,7 @@ export class BrowserExtensionService {
       session: state.session,
       extensionId: record.id,
       pageUrl,
+      installed: this.pendingInstalledEvents.get(record.id),
       onMailbox: (mail, restarted) => this.onMailbox(state, record.id, mail, restarted),
       onUnavailable: (reason) =>
         Logger.dev('Browser extension bridge unavailable:', { extensionId: record.id, reason }),
@@ -987,6 +1396,7 @@ export class BrowserExtensionService {
     state.publishedGeneration.delete(extensionId)
     state.notificationSeq.delete(extensionId)
     state.sidePanelSeq.delete(extensionId)
+    state.actionPopupSeq.delete(extensionId)
     this.dismissExtensionNotifications(extensionId)
     for (const key of [...state.published.keys()]) {
       if (key.startsWith(`${extensionId}\u0000`)) state.published.delete(key)
@@ -1023,10 +1433,12 @@ export class BrowserExtensionService {
       state.notificationSeq.delete(extensionId)
       // Nor does its side-panel request sequence.
       state.sidePanelSeq.delete(extensionId)
+      state.actionPopupSeq.delete(extensionId)
     }
     state.publishedGeneration.set(extensionId, mail.generation)
     this.handleNotifications(state, extensionId, mail)
     this.handleSidePanelRequests(state, extensionId, mail)
+    this.handleActionPopupRequests(state, extensionId, mail.actionPopups)
     // Publishing resolves each icon's bytes, so it is queued per jar: two
     // snapshots landing out of order would draw the older state over the newer.
     state.publishing = state.publishing
@@ -1160,6 +1572,30 @@ export class BrowserExtensionService {
       this.applySidePanelRequest(state, extensionId, mail.sidePanel, entry)
     }
     state.sidePanelSeq.set(extensionId, newest)
+  }
+
+  /** Apply popup requests the worker routed through the app bridge. */
+  private handleActionPopupRequests(
+    state: LoadedJar,
+    extensionId: string,
+    requests: BrowserExtensionActionPopupRequest[]
+  ): void {
+    if (requests.length === 0) return
+    const lastSeen = state.actionPopupSeq.get(extensionId) ?? 0
+    let newest = lastSeen
+    for (const request of requests) {
+      if (request.seq <= lastSeen) continue
+      newest = Math.max(newest, request.seq)
+      this.host.openPopup({
+        projectId: state.projectId,
+        boxId: state.boxId,
+        extensionId,
+        extensionTabId: request.tabId,
+        kind: request.kind,
+        ...(request.url ? { url: request.url } : {})
+      })
+    }
+    state.actionPopupSeq.set(extensionId, newest)
   }
 
   /** One side-panel request: raise the panel for its tab, or close it. */

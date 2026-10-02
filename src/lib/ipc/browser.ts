@@ -70,6 +70,8 @@ export interface BrowserPopupWindow {
   /** Favicon data URL the popup reported, or null until it declares one. */
   favicon: string | null
   loading: boolean
+  /** Changes when an extension action explicitly asks the app to show this page. */
+  activationSequence: number
   /**
    * The extension whose own popup this is, or null when a page opened it with
    * `window.open`.
@@ -155,6 +157,8 @@ export interface BrowserPageState {
    */
   projectId: string
   threadId: string
+  /** Selected cookie box, or null for this context's own jar. */
+  boxId: string | null
   url: string
   title: string
   /** Favicon data URL reported by the page, or null until the page declares one. */
@@ -610,6 +614,8 @@ export interface BrowserExtension {
   source: BrowserExtensionSource
   /** The Web Store id it was fetched by, or null for a folder install. */
   webstoreId: string | null
+  /** A newer Web Store version found by the background check, or null. */
+  updateAvailableVersion: string | null
   /** A data URL of the extension's own manifest icon, or null when it declares
    *  none. The extension supplies the bytes, so it is drawn as an image only. */
   iconDataUrl: string | null

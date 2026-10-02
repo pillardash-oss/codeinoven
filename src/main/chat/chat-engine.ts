@@ -722,7 +722,8 @@ export {
   stampHarnessId,
   stampAccount,
   restoreMirrorThinkingLevel,
-  restoreMirrorAccount
+  restoreMirrorAccount,
+  restoreMirrorOven
 } from './chat-engine/chat-engine-message-merge'
 export {
   textForMessage,
@@ -1122,6 +1123,9 @@ export class ChatEngine {
   private projectManager: ProjectManager
 
   private threadManager: ThreadManager
+
+  private threadTransferPreflight:
+    ((projectId: string, threadId: string) => Promise<ThreadTransferResult>) | null = null
 
   private checkpointManager: CheckpointManager
   private workflowOwnership: WorkflowOwnershipService
@@ -1884,6 +1888,16 @@ export class ChatEngine {
     const state = this.engineeringLifecycleEngine.get(projectId, threadId)
     if (!state?.activeStage || state.selection === 'none') return
     this.engineeringLifecycleEngine.fail(projectId, threadId, rawErrorMessage(error))
+  }
+
+  /** Install the cross-instance preflight that frees a settled Codex writer. */
+  attachThreadTransferPreflight(
+    preflight: (projectId: string, threadId: string) => Promise<ThreadTransferResult>
+  ): () => void {
+    this.threadTransferPreflight = preflight
+    return () => {
+      if (this.threadTransferPreflight === preflight) this.threadTransferPreflight = null
+    }
   }
 
   register(): void {
@@ -8418,6 +8432,16 @@ export class ChatEngine {
       await this.ensureAchievementScope(projectId, threadId)
       targetThread = await this.threadManager.getThread(projectId, threadId)
     }
+    const targetSessionDriverId = targetThread?.sessionId
+      ? (this.sessionRegistry.get(targetThread.sessionId)?.driverId ??
+        targetThread.sessionHarnessId ??
+        targetThread.settings?.harnessId ??
+        settings.harnessId)
+      : undefined
+    if (targetThread?.sessionId && targetSessionDriverId === 'codex') {
+      const transfer = await this.threadTransferPreflight?.(projectId, threadId)
+      if (transfer && !transfer.ok) throw new Error(transfer.reason)
+    }
     // This process is about to drive the workflow this thread belongs to, so it
     // records ownership for the whole group now. A peer launching between two of
     // the workflow's turns must see a live owner rather than an unowned persisted
@@ -9484,6 +9508,7 @@ export class ChatEngine {
       if (activeSession) {
         activeSession.activeTurnUserMessageId = messageId
         activeSession.activeTurnOrigin = origin
+        activeSession.activeTurnOvenId = settings.ovenId ?? 'local'
         activeSession.estimatedContextUsed = composition.totalTokens
       }
       this.markSessionWorking(sessionId)
@@ -12413,7 +12438,62 @@ export class ChatEngine {
     await this.abort(projectId, threadId, { reason: 'transfer' })
     await this.settleThreadTurnForTransfer(projectId, threadId)
     instanceRegistry.publishTurnActivity()
+    const driverId =
+      this.sessionRegistry.get(thread.sessionId)?.driverId ??
+      thread.sessionHarnessId ??
+      thread.settings.harnessId
+    if (driverId === 'codex') {
+      const accountId =
+        this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
+      const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
+      const writerRelease = await driver.releaseIdleSessionForTransfer?.(
+        projectPath,
+        thread.sessionId
+      )
+      if (writerRelease?.owner && !writerRelease.released) {
+        return { released: false, reason: writerRelease.reason }
+      }
+    }
     return { released: true }
+  }
+
+  /**
+   * Release this process's idle Codex app-server when a sibling is about to
+   * resume one of its native threads. The app-server is shared by project path,
+   * so only an entirely idle host can be stopped without interrupting another
+   * conversation.
+   */
+  async releaseIdleCodexThreadForTransfer(
+    projectId: string,
+    threadId: string
+  ): Promise<{ owner: boolean; released: boolean; reason?: string }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread?.sessionId || !thread.settings) {
+      return { owner: false, released: false }
+    }
+    const driverId =
+      this.sessionRegistry.get(thread.sessionId)?.driverId ??
+      thread.sessionHarnessId ??
+      thread.settings.harnessId
+    if (driverId !== 'codex') return { owner: false, released: false }
+    if ((await this.workflowCoordinatorFor(projectId, thread)) !== null) {
+      return { owner: false, released: false }
+    }
+    const activeOwnerPid = await this.checkpointManager.activeTurnOwnerPid(projectId, threadId)
+    if (activeOwnerPid !== null) {
+      return {
+        owner: true,
+        released: false,
+        reason: 'This Codex thread still has an active turn.'
+      }
+    }
+    const accountId =
+      this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
+    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
+    if (!driver.releaseIdleSessionForTransfer) return { owner: false, released: false }
+    return driver.releaseIdleSessionForTransfer(projectPath, thread.sessionId)
   }
 
   /**
@@ -24363,6 +24443,18 @@ export class ChatEngine {
       // The user may have changed the composer mid-turn while waiting; those
       // changes belong to the next turn and must never re-label this one.
       const latestUserIndex = messages.findLastIndex((message) => message.role === 'user')
+      const turnOvenId = info.activeTurnOvenId ?? thread?.settings?.ovenId ?? 'local'
+      const turnOvenLabel = await this.ovenChat
+        .nameFor(turnOvenId)
+        .catch(() => (turnOvenId === 'local' ? 'Local' : 'Oven'))
+      const turnOvenAppearance = await this.ovenChat
+        .appearanceFor(turnOvenId)
+        .catch(() => undefined)
+      if (latestUserIndex >= 0 && !messages[latestUserIndex].ovenId) {
+        messages[latestUserIndex].ovenId = turnOvenId
+        messages[latestUserIndex].ovenLabel = turnOvenLabel
+        if (turnOvenAppearance) messages[latestUserIndex].ovenAppearance = turnOvenAppearance
+      }
       const turnAssistant = [...messages.slice(latestUserIndex + 1)]
         .reverse()
         .find((message) => message.role === 'assistant')
@@ -24370,6 +24462,11 @@ export class ChatEngine {
       const turnThinkingLevel = turnSelection?.thinkingLevel ?? thread?.settings?.thinkingLevel
       if (turnAssistant && !turnAssistant.thinkingLevel && turnThinkingLevel) {
         turnAssistant.thinkingLevel = turnThinkingLevel
+      }
+      if (turnAssistant && !turnAssistant.ovenId) {
+        turnAssistant.ovenId = turnOvenId
+        turnAssistant.ovenLabel = turnOvenLabel
+        if (turnOvenAppearance) turnAssistant.ovenAppearance = turnOvenAppearance
       }
       // Providers that never report token usage leave assistant messages
       // without a contextUsed signal, blinding usage-based compaction and the

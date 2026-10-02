@@ -258,7 +258,8 @@ export function extensionRunsInJar(
  *  collected so far folded in. */
 export function toExtensionView(
   record: BrowserExtensionRecord,
-  runtimeWarnings: readonly string[]
+  runtimeWarnings: readonly string[],
+  updateAvailableVersion: string | null = null
 ): BrowserExtension {
   const warnings = [...record.warnings]
   for (const warning of runtimeWarnings) {
@@ -271,6 +272,7 @@ export function toExtensionView(
     description: record.description,
     source: record.source,
     webstoreId: record.webstoreId,
+    updateAvailableVersion,
     iconDataUrl: record.iconDataUrl,
     enabled: record.enabled,
     boxes: record.boxes,
@@ -316,6 +318,24 @@ export class BrowserExtensionRegistry {
 
   list(): BrowserExtensionRecord[] {
     return [...this.records.values()].sort((left, right) => left.installedAt - right.installedAt)
+  }
+
+  /** Persist a complete extension ordering without changing any extension data. */
+  async reorder(orderedIds: string[]): Promise<void> {
+    const current = this.list()
+    if (
+      orderedIds.length !== current.length ||
+      new Set(orderedIds).size !== current.length ||
+      orderedIds.some((id) => !this.records.has(id))
+    ) {
+      throw new TypeError('Extension order must contain every installed extension exactly once')
+    }
+    const installedAt = Date.now()
+    orderedIds.forEach((id, index) => {
+      const record = this.records.get(id)
+      if (record) record.installedAt = installedAt + index
+    })
+    await this.persist()
   }
 
   get(id: string): BrowserExtensionRecord | null {

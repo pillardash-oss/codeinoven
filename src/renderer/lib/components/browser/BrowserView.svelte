@@ -6,7 +6,6 @@
     Boxes,
     Clock,
     Download,
-    Globe,
     MessagesCircle,
     Puzzle,
     StickyNote
@@ -37,6 +36,7 @@
   import BrowserWorkspace from './BrowserWorkspace.svelte'
   import BrowserContextSidebar from './BrowserContextSidebar.svelte'
   import BrowserAddressSpotlight from './BrowserAddressSpotlight.svelte'
+  import { publicAssetUrl } from '$lib/static-assets'
 
   /**
    * The global browser view: the top-level workspace the app's Browser entry
@@ -59,6 +59,8 @@
 
   let addressSpotlightOpen = $derived(globalBrowser.addressSpotlightOpen)
   const activeTab = $derived(globalBrowser.activeTab)
+
+  const logoUrl = publicAssetUrl('icon-mono.svg')
 
   /** How many of the profile's downloads are unfinished: still running, or stopped
    *  with bytes kept for a resume, for the rail badge. */
@@ -114,20 +116,15 @@
    * The rail is constant, exactly as it is in every other view: the window's
    * right edge always carries the context tools. Downloads, history, bookmarks,
    * boxes and extensions belong to the profile, so they stay reachable with the
-   * strip empty. The popup windows the page opened are offered only while the
-   * tab on screen actually holds one, because a window is what the tool shows;
-   * the tab's own note and agent conversation follow.
+   * strip empty. Popup windows are browser-wide and keep their originating box
+   * session; the tab's own note and agent conversation follow the selected tab.
    */
   const dockGroups = $derived.by((): ContextDockItem[][] => {
     const tab = activeTab
     const hasNote = tab ? threadNotesState.has(tab.id) : false
     const hasAgent = tab ? globalBrowser.agentChatFor(tab.id) !== null : false
-    /** The popup windows this tab's page opened. A popup that ends leaves the list
-     *  and takes the rail's panel with it when it was the last, so the tool is only
-     *  offered while there is a window for it to show. An extension's own popup is
-     *  one of these once it is up; before that it is opened from the extension's row
-     *  in the extensions panel or from a header pin, never from an empty tool. */
-    const popupWindows = tab ? browserPopupWindows.forTab(tab.id) : []
+    /** Every visible popup remains reachable when the selected tab or box changes. */
+    const popupWindows = browserPopupWindows.all()
     const browserTools: ContextDockItem[] = [
       {
         id: 'downloads',
@@ -236,7 +233,15 @@
 
   /** Whether the right rail is on screen, for a tool of the browser's or the app's
    *  own notifications panel. */
-  const railShown = $derived(globalBrowser.contextSidebarShown || globalBrowser.notificationsShown)
+  const railShown = $derived(
+    globalBrowser.contextSidebarShown ||
+      globalBrowser.notificationsShown ||
+      globalBrowser.stickyNotesShown
+  )
+
+  $effect(() => {
+    if (globalBrowser.stickyNotesShown) globalBrowser.hideContextSidebarForAppPanel()
+  })
 
   /**
    * True while the user drags the rail's edge, so the track skips its width
@@ -330,7 +335,7 @@
     // at boot (see `browser-access.svelte`), so the view that needs it is the one
     // that asks. Idempotent, and it is also what publishes the store to the eager
     // surfaces that read it.
-    void loadBrowser()
+    void loadBrowser().then(() => browserPopupWindows.load(GLOBAL_BROWSER_PROJECT_ID))
     globalBrowser.markOpened()
     // The profile's downloads are read back here too: a download recovered from an
     // earlier run has to reach the rail's badge and list without the user having
@@ -358,13 +363,19 @@
       {/key}
     {:else}
       <div class="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-app">
-        <div class="flex flex-col items-center gap-3 px-8 text-center">
-          <Globe size={26} class="text-dimmed" />
-          <p class="max-w-sm text-sm leading-relaxed text-muted">
-            The global browser keeps its own signed-in profile, separate from the browsers your
-            agents run in. A box you make here is the same jar any thread that picks it uses, so a
-            sign-in here is that sign-in there.
+        <div class="flex h-full flex-col items-center justify-center px-6">
+          <img src={logoUrl} alt="CodeInOven" class="mb-8 h-20 w-20" draggable="false" />
+          <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">
+            CIO Global Browser
+          </h1>
+          <p class="mt-1 text-[0.8125rem] text-muted">
+            This is not by no means a complete browser, but it is good enough to browse the web
+            while you work. It is an attempt to reduce cognitive overload from context switching.
+            Try it out gradually and see if it can replace your dev browser. This is chromium after
+            all.
           </p>
+
+          <div class="mt-4 flex w-full max-w-sm flex-col gap-1"></div>
           <button
             type="button"
             class="rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
@@ -415,6 +426,7 @@
 {#if addressSpotlightOpen}
   <BrowserAddressSpotlight
     initialValue={activeTab?.url ?? ''}
+    boxId={activeTab?.boxId ?? null}
     onOpen={openAddress}
     onClose={() => globalBrowser.closeAddressSpotlight()}
   />

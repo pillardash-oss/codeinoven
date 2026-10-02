@@ -2,6 +2,7 @@ import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { GLOBAL_BROWSER_PROJECT_ID, isBrowserTabId } from '../../../lib/ipc/browser'
 import { broadcastNoteChanged } from '../../chat/thread-events'
 import { parseThreadContextUsage } from '../../database/repositories/thread-repo'
+import { messageId } from '../../../lib/id'
 import {
   validateBoundedString,
   validateBoolean,
@@ -21,6 +22,47 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
   const { threadCreation, threadManager, specEngine, repositoryService, noteRepo } = ctx
 
   const NOTE_BODY_MAX = 100_000
+  const STICKY_NOTE_TITLE_MAX = 120
+  const STICKY_NOTE_ICON_MAX = 80
+  const STICKY_NOTE_SVG_MAX = 40_000
+  const STICKY_NOTE_IMAGE_PATH_MAX = 4096
+
+  function validateStickyNoteAppearance(value: unknown) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new TypeError('Sticky note appearance is invalid')
+    }
+    const record = value as Record<string, unknown>
+    const title = validateBoundedString(
+      record['title'],
+      'Sticky note title',
+      1,
+      STICKY_NOTE_TITLE_MAX
+    ).trim()
+    if (title === '') throw new TypeError('Sticky note title cannot be empty')
+    const color = validateBoundedString(record['color'], 'Sticky note colour', 7, 7)
+    if (!/^#[\da-f]{6}$/iu.test(color)) throw new TypeError('Sticky note colour is invalid')
+    const iconType =
+      record['iconType'] === null
+        ? null
+        : validateBoundedString(record['iconType'], 'Sticky note icon', 1, STICKY_NOTE_ICON_MAX)
+    if (iconType !== null && !/^[a-z\d-]+$/iu.test(iconType)) {
+      throw new TypeError('Sticky note icon is invalid')
+    }
+    const customSvg =
+      record['customSvg'] === null
+        ? null
+        : validateBoundedString(record['customSvg'], 'Sticky note SVG', 1, STICKY_NOTE_SVG_MAX)
+    const imagePath =
+      record['imagePath'] === null
+        ? null
+        : validateBoundedString(
+            record['imagePath'],
+            'Sticky note image path',
+            1,
+            STICKY_NOTE_IMAGE_PATH_MAX
+          )
+    return { title, iconType, customSvg, imagePath, color }
+  }
 
   /**
    * Resolve a note's subject. Every project keys a note by a real thread, and
@@ -92,6 +134,36 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
     broadcastNoteChanged(subject.projectId, subject.subjectId, false)
   })
   ipcMain.handle('note:list', () => noteRepo.listThreadIds().concat(noteRepo.listBrowserTabIds()))
+  ipcMain.handle('sticky-note:list', () => noteRepo.listStickyNotesViaWorker())
+  ipcMain.handle('sticky-note:get', (_, rawId: unknown) =>
+    noteRepo.getStickyNoteViaWorker(validateEntityId(rawId, 'Sticky note ID'))
+  )
+  ipcMain.handle('sticky-note:create', (_, rawAppearance: unknown) => {
+    const appearance = validateStickyNoteAppearance(rawAppearance)
+    const now = Date.now()
+    const note = {
+      id: messageId(),
+      ...appearance,
+      body: '',
+      createdAt: now,
+      updatedAt: now
+    }
+    noteRepo.createStickyNote(note)
+    return note
+  })
+  ipcMain.handle('sticky-note:update', (_, rawId: unknown, rawAppearance: unknown) => {
+    const id = validateEntityId(rawId, 'Sticky note ID')
+    const appearance = validateStickyNoteAppearance(rawAppearance)
+    noteRepo.updateStickyNoteAppearance(id, appearance, Date.now())
+  })
+  ipcMain.handle('sticky-note:save', (_, rawId: unknown, rawBody: unknown) => {
+    const id = validateEntityId(rawId, 'Sticky note ID')
+    const body = validateBoundedString(rawBody, 'Sticky note body', 0, NOTE_BODY_MAX)
+    noteRepo.saveStickyNoteBody(id, body, Date.now())
+  })
+  ipcMain.handle('sticky-note:delete', (_, rawId: unknown) =>
+    noteRepo.deleteStickyNote(validateEntityId(rawId, 'Sticky note ID'))
+  )
   ipcMain.handle(
     'thread:dismissSpecReview',
     async (_, projectId: unknown, threadId: unknown, specId: unknown, specVersion: unknown) => {

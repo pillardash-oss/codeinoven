@@ -53,6 +53,9 @@
     /** Hide a routine's how-to thread (its row has no other state change). */
     onHideHowTo: (task: Thread) => void
     onDeleteRoutine: (routineId: string) => Promise<void>
+    onHasRoutineRunsToday: (routine: Routine) => Promise<boolean>
+    onSkipNextRoutineRun: (routine: Routine) => Promise<void>
+    onSkipRoutineRunsToday: (routine: Routine) => Promise<void>
     onTogglePinRoutine: (routine: Routine) => void
     onMoveRoutine: (draggedId: string, targetId: string, position: 'before' | 'after') => void
     /** Group a dragged task into a routine. */
@@ -78,6 +81,9 @@
     onHandedOffTask,
     onHideHowTo,
     onDeleteRoutine,
+    onHasRoutineRunsToday,
+    onSkipNextRoutineRun,
+    onSkipRoutineRunsToday,
     onTogglePinRoutine,
     onMoveRoutine,
     onAssignTask
@@ -141,6 +147,20 @@
     const ids = new SvelteSet<string>()
     for (const run of assistantRoutines.missedRuns) {
       if (run.routineId) ids.add(run.routineId)
+    }
+    return ids
+  })
+
+  /** Routine rows surface unread work without requiring each task list to open. */
+  const unreadRoutineIds = $derived.by(() => {
+    const ids = new SvelteSet<string>()
+    for (const task of tasks) {
+      if (task.routineId && !task.read) ids.add(task.routineId)
+    }
+    for (const runs of runsByRoutine.values()) {
+      for (const run of runs) {
+        if (run.routineId && !run.read) ids.add(run.routineId)
+      }
     }
     return ids
   })
@@ -383,7 +403,7 @@
     active={task.id === selectedThreadId}
     missed={missedThreadIds.has(task.id)}
     nextRunAt={assistantRoutines.nextRunForTask(task)}
-    runWorking={taskRunWorking(task.id)}
+    runWorking={nestRuns && taskRunWorking(task.id)}
     onSelect={select}
     onRename={onRenameTask}
     onTogglePin={onTogglePinTask}
@@ -444,6 +464,7 @@
             {routine}
             expanded={isExpanded}
             working={routineWorking(routine.id)}
+            unread={unreadRoutineIds.has(routine.id)}
             missed={missedRoutineIds.has(routine.id)}
             runCount={routineRunList.length}
             iconUrl={assistantRoutines.iconUrls.get(routine.id) ?? null}
@@ -458,6 +479,9 @@
             onEdit={startEdit}
             onTogglePin={onTogglePinRoutine}
             onDelete={(r) => (deleteTarget = r)}
+            {onHasRoutineRunsToday}
+            {onSkipNextRoutineRun}
+            {onSkipRoutineRunsToday}
             {onMoveRoutine}
             onDropTask={onAssignTask}
           />

@@ -9,7 +9,6 @@
  */
 import { Marked, walkTokens, type Token, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
-import hljs from 'highlight.js/lib/common'
 import {
   collectSectionKeys,
   linkifyFileCitations,
@@ -698,35 +697,4 @@ function escapeHtml(value: string): string {
  */
 function escapeHtmlAttribute(value: string): string {
   return escapeHtml(value).replace(/"/g, '&quot;')
-}
-
-/**
- * Highlight code to HTML. Unknown or missing languages fall back to escaped
- * plain text   no auto-detection, which would jitter between grammars while
- * a block is still streaming. highlight.js output is escaped text plus
- * `<span class="hljs-*">` wrappers, so it needs no further sanitizing.
- */
-/** Highlighting beyond this budget is skipped   the tail renders as plain
- *  escaped text inside the same block. Tokenizing a 100KB+ single-line dump
- *  can block the renderer for tens of milliseconds per block, and grammar
- *  coloring past the first screenful adds nothing a reader can perceive. */
-const HIGHLIGHT_BUDGET = 32 * 1024
-
-export function highlightCode(code: string, lang?: string): string {
-  if (lang && hljs.getLanguage(lang)) {
-    // Slice BEFORE highlighting: hljs tokenizes exactly the budgeted text, so
-    // every span it emits is balanced. The remainder is appended as escaped
-    // plain text   visually uniform, structurally valid HTML.
-    const budgeted = code.length > HIGHLIGHT_BUDGET ? code.slice(0, HIGHLIGHT_BUDGET) : code
-    try {
-      const highlighted = hljs.highlight(budgeted, { language: lang, ignoreIllegals: true }).value
-      if (budgeted.length < code.length) {
-        return highlighted + escapeHtml(code.slice(HIGHLIGHT_BUDGET))
-      }
-      return highlighted
-    } catch {
-      // Grammar hiccup mid-stream   plain text below is always safe.
-    }
-  }
-  return escapeHtml(code)
 }

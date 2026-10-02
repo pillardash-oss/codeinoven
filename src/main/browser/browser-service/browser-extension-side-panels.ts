@@ -77,6 +77,18 @@ export class BrowserExtensionSidePanels {
 
   constructor(private readonly viewHost: BrowserExtensionSidePanelHost) {}
 
+  /** A hidden panel keeps its extension session alive until its page closes. */
+  liveJars(): { projectId: string; boxId: string | null }[] {
+    const jars: { projectId: string; boxId: string | null }[] = []
+    for (const record of this.panels.values()) {
+      const page = pageOf(record)
+      if (page && !page.isDestroyed()) {
+        jars.push({ projectId: record.projectId, boxId: record.boxId })
+      }
+    }
+    return jars
+  }
+
   /**
    * Host one extension's side panel.
    *

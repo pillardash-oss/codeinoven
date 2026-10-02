@@ -1,3 +1,4 @@
+import type { NativeDockRequest } from './native-dock'
 /**
  * The native overlay's geometry and projections: the toast stack and the browser
  * tab strip that a frameless child window draws over a browser page.
@@ -295,6 +296,7 @@ export type BrowserStripOverlayInteraction =
  * twice would race the two answers against each other.
  */
 export interface BrowserOverlaySnapshot {
+  docks: NativeDockRequest[]
   stack: ToastOverlayRequestStack | null
   strip: BrowserStripOverlayRequest | null
 }

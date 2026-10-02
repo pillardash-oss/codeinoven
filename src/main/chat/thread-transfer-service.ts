@@ -34,7 +34,8 @@ import type { ChatEngine } from './chat-engine'
 export type ThreadTransferEngine = Pick<
   ChatEngine,
   'releaseThreadForTransfer' | 'adoptTransferredThread' | 'resolveTransferTarget'
->
+> &
+  Partial<Pick<ChatEngine, 'releaseIdleCodexThreadForTransfer' | 'attachThreadTransferPreflight'>>
 
 /**
  * Liveness probes and transport, injectable so the two-sided rule can be
@@ -44,6 +45,8 @@ export type ThreadTransferEngine = Pick<
 export interface ThreadTransferServiceOptions {
   /** Whether the process that recorded a turn is still running. */
   isRunOwnerAlive?: (pid: number) => boolean
+  /** Live app processes to ask when no active-turn row names an idle writer. */
+  liveInstancePids?: () => number[] | null
   /** The peer-to-peer bus this service asks for a release over. */
   bus?: InstanceHandoffBus
 }
@@ -52,7 +55,9 @@ export class ThreadTransferService {
   private stopRequestListener: (() => void) | null = null
   private started = false
   private readonly isRunOwnerAlive: (pid: number) => boolean
+  private readonly liveInstancePids: () => number[] | null
   private readonly bus: InstanceHandoffBus
+  private detachPromptPreflight: (() => void) | null = null
 
   constructor(
     private readonly chatEngine: ThreadTransferEngine,
@@ -60,7 +65,12 @@ export class ThreadTransferService {
   ) {
     this.isRunOwnerAlive =
       options.isRunOwnerAlive ?? ((pid) => instanceRegistry.isRunOwnerAlive(pid))
+    this.liveInstancePids = options.liveInstancePids ?? (() => instanceRegistry.liveInstancePids())
     this.bus = options.bus ?? instanceHandoffBus
+    this.detachPromptPreflight =
+      this.chatEngine.attachThreadTransferPreflight?.((projectId, threadId) =>
+        this.prepareIdleCodexThreadForPrompt(projectId, threadId)
+      ) ?? null
   }
 
   /**
@@ -85,6 +95,8 @@ export class ThreadTransferService {
 
   /** Stop answering requests and drop the invoke handler. */
   dispose(): void {
+    this.detachPromptPreflight?.()
+    this.detachPromptPreflight = null
     this.stopRequestListener?.()
     this.stopRequestListener = null
     this.started = false
@@ -128,10 +140,77 @@ export class ThreadTransferService {
     }
   }
 
+  /**
+   * Before a Codex prompt, ask a sibling to release an idle native session it
+   * still has loaded. The active-turn ledger remains authoritative: a live run
+   * is left for the explicit run-transfer flow, while a settled thread can move
+   * without an extra user action.
+   */
+  async prepareIdleCodexThreadForPrompt(
+    projectId: string,
+    threadId: string
+  ): Promise<ThreadTransferResult> {
+    try {
+      const target = await this.chatEngine.resolveTransferTarget(projectId, threadId)
+      if (target.ownerPid !== null) return { ok: true }
+
+      const pids = this.liveInstancePids()
+      if (!pids) return { ok: true }
+      const peers = pids.filter((pid) => pid !== this.bus.localPid && this.isRunOwnerAlive(pid))
+      if (peers.length === 0) return { ok: true }
+
+      const pending = new Map(
+        peers.map((pid) => [
+          pid,
+          this.bus.request(pid, projectId, target.rootThreadId, 'release-idle-codex-thread')
+        ])
+      )
+      while (pending.size > 0) {
+        const settled = await Promise.race(
+          [...pending].map(async ([pid, request]) => ({ pid, ack: await request }))
+        )
+        pending.delete(settled.pid)
+        if (settled.ack.status === 'accepted') return { ok: true }
+        if (
+          settled.ack.status === 'not-owner' ||
+          settled.ack.reason === 'This instance is no longer running that thread.'
+        ) {
+          continue
+        }
+        return {
+          ok: false,
+          reason:
+            settled.ack.reason ??
+            'The instance holding this Codex thread could not release its writer.'
+        }
+      }
+      return { ok: true }
+    } catch (error) {
+      Logger.error('Idle Codex thread transfer failed:', error)
+      return { ok: false, reason: 'The Codex thread could not be transferred to this instance.' }
+    }
+  }
+
   /** Answer a sibling that asked this process to release a thread. */
   private async handleRequest(request: HandoffRequest): Promise<void> {
     if (request.targetPid !== this.bus.localPid) return
     try {
+      if (request.operation === 'release-idle-codex-thread') {
+        if (!this.chatEngine.releaseIdleCodexThreadForTransfer) {
+          await this.bus.respond(request, 'not-owner')
+          return
+        }
+        const result = await this.chatEngine.releaseIdleCodexThreadForTransfer(
+          request.projectId,
+          request.threadId
+        )
+        await this.bus.respond(
+          request,
+          !result.owner ? 'not-owner' : result.released ? 'accepted' : 'refused',
+          result.reason
+        )
+        return
+      }
       const result = await this.chatEngine.releaseThreadForTransfer(
         request.projectId,
         request.threadId

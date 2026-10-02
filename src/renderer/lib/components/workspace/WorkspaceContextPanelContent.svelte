@@ -30,6 +30,7 @@
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
   interface Props {
+    active: boolean
     gitPanelProjectId: string | null
     gitPanelScopeBucketId: string
     terminalFullscreenTabId: string | null
@@ -51,6 +52,7 @@
   }
 
   let {
+    active,
     gitPanelProjectId,
     gitPanelScopeBucketId,
     terminalFullscreenTabId,
@@ -280,6 +282,12 @@
           {#await import('../notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
             <NotificationPanel />
           {/await}
+        {:else if activeContextTab.kind === 'sticky-notes'}
+          {#if active}
+            {#await import('../notes/StickyNotesPanel.svelte') then { default: StickyNotesPanel }}
+              <StickyNotesPanel />
+            {/await}
+          {/if}
         {:else if activeContextTab.kind === 'assistant-how-to'}
           {#await import('../assistant/AssistantPanel.svelte') then { default: HowToPanel }}
             <HowToPanel

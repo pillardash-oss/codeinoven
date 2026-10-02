@@ -12,12 +12,14 @@
     type BrowserDownloadsContextTab,
     type BrowserExtensionsContextTab,
     type BrowserHistoryContextTab,
-    type ContextSidebarTab
+    type ContextSidebarTab,
+    STICKY_NOTES_TAB
   } from '$lib/stores/context-sidebar.svelte'
   import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
   import { browserExtensionSidePanels } from '$lib/stores/browser-extension-side-panels.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
+  import { browserHistory, BROWSER_HISTORY_GLOBAL_SCOPE } from '$lib/stores/browser-history.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 
@@ -40,7 +42,7 @@
    * every workspace thread docks its panels into, and it hosts the same tools
    * the rest of the app uses, so none is re-implemented here:
    *
-   * - the popup windows the active page opened, one tab per window,
+   * - every visible popup window in the browser, one tab per window,
    * - the profile's downloads, which need no tab and keep the rail present,
    * - the active tab's note, the same note a thread has (only the subject
    *   differs),
@@ -134,18 +136,15 @@
     title: 'Extension panel'
   }
   /**
-   * The popup windows the active page opened, one tab per window.
+   * Every visible popup window in the browser, one tab per window.
    *
-   * A popup belongs to the tab whose page opened it, like the note and the agent
-   * chat do, and the list is main's: the tabs are derived from it, so a window that
-   * ends leaves the strip with no surface having to prune anything.
+   * A popup keeps the tab and box session that opened it, while its rail tab stays
+   * available as the user moves between pages and boxes.
    */
-  const popupTabs = $derived(activeTab ? browserPopupWindows.tabsFor(activeTab.id) : [])
-  /** The popup the rail is showing, or null while no popup tool is up. */
+  const popupTabs = $derived(browserPopupWindows.tabs())
+  /** The browser-wide popup the rail is showing, or null while none are open. */
   const activePopup = $derived(
-    activeTab && globalBrowser.popupsSidebarShown
-      ? browserPopupWindows.activeFor(activeTab.id)
-      : null
+    globalBrowser.popupsSidebarShown ? browserPopupWindows.active() : null
   )
   /**
    * The extension side panel of the tab on screen, or null while that tool is not
@@ -167,6 +166,9 @@
       ? contextSidebarState.sidebarActiveTab
       : null
   )
+  const stickyNotesTab = $derived(
+    contextSidebarState.sidebarActiveTab?.kind === 'sticky-notes' ? STICKY_NOTES_TAB : null
+  )
 
   const tabs = $derived([
     ...popupTabs,
@@ -178,10 +180,12 @@
     downloadsTab,
     ...(noteTab ? [noteTab] : []),
     ...(agentTab ? [agentTab] : []),
-    ...(notificationsTab ? [notificationsTab] : [])
+    ...(notificationsTab ? [notificationsTab] : []),
+    ...(stickyNotesTab ? [stickyNotesTab] : [])
   ] satisfies ContextSidebarTab[])
   const activeTabId = $derived(
     notificationsTab?.id ??
+      stickyNotesTab?.id ??
       (globalBrowser.agentSidebarShown
         ? (agentTab?.id ?? null)
         : globalBrowser.popupsSidebarShown
@@ -212,6 +216,10 @@
    *  conversation (closing the browser tab does). */
   function selectTool(tabId: string): void {
     if (notificationsTab && tabId === notificationsTab.id) return
+    if (stickyNotesTab && tabId === stickyNotesTab.id) {
+      contextSidebarState.showStickyNotes()
+      return
+    }
     if (isPopupTab(tabId)) {
       browserPopupWindows.select(tabId)
       globalBrowser.showPopupsSidebar()
@@ -247,7 +255,7 @@
       return
     }
     if (isPopupTab(tabId)) {
-      browserPopupWindows.close(tabId)
+      browserPopupWindows.dismissOrClose(tabId)
       return
     }
     if (tabId === downloadsTab.id) {
@@ -332,11 +340,9 @@
   const assistantMenuItemClass =
     'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 
-  /** End every popup the page on screen opened, from the rail's own close button.
-   *  Each window ends itself through the store, and the strip follows the list, so
-   *  there is nothing else to tidy here. */
-  function closeAllPopups(): void {
-    if (activeTab) browserPopupWindows.closeForTab(activeTab.id)
+  /** Dismiss visible popups from the rail without ending extension pages. */
+  function dismissPopups(): void {
+    browserPopupWindows.dismissAll()
   }
 </script>
 
@@ -344,6 +350,10 @@
   {#if notificationsTab}
     {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
       <NotificationPanel />
+    {/await}
+  {:else if stickyNotesTab}
+    {#await import('$lib/components/notes/StickyNotesPanel.svelte') then { default: StickyNotesPanel }}
+      <StickyNotesPanel />
     {/await}
   {:else if globalBrowser.popupsSidebarShown}
     {#await import('./BrowserPopupWindowPanel.svelte') then { default: BrowserPopupWindowPanel }}
@@ -355,7 +365,13 @@
     {/await}
   {:else if globalBrowser.historySidebarShown}
     {#await import('./BrowserHistoryPanel.svelte') then { default: BrowserHistoryPanel }}
-      <BrowserHistoryPanel />
+      <BrowserHistoryPanel
+        scopeKey={browserHistory.scopeFor(
+          BROWSER_HISTORY_GLOBAL_SCOPE,
+          '',
+          activeTab?.boxId ?? null
+        )}
+      />
     {/await}
   {:else if globalBrowser.bookmarksSidebarShown}
     {#await import('./BrowserBookmarksPanel.svelte') then { default: BrowserBookmarksPanel }}
@@ -464,7 +480,7 @@
     {tabMenu}
     onSelect={selectTool}
     onClose={closeTab}
-    onCloseAllPopupWindows={closeAllPopups}
+    onDismissPopups={dismissPopups}
     {onWidthChange}
     onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
     onTerminalPlacementChange={() => {}}

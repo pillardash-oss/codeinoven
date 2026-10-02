@@ -70,13 +70,15 @@ export interface HandoffRequest {
   projectId: string
   threadId: string
   createdAt: number
+  /** Omitted requests are legacy run transfers. */
+  operation?: 'release-run' | 'release-idle-codex-thread'
 }
 
 export interface HandoffAck {
   requestId: string
   requesterPid: number
   targetPid: number
-  status: 'accepted' | 'refused'
+  status: 'accepted' | 'refused' | 'not-owner'
   reason?: string
   createdAt: number
 }
@@ -161,7 +163,12 @@ export class InstanceHandoffBus {
    * Never rejects: a timeout or an unreadable request becomes a `refused` ack so
    * callers have exactly one failure shape to handle.
    */
-  async request(targetPid: number, projectId: string, threadId: string): Promise<HandoffAck> {
+  async request(
+    targetPid: number,
+    projectId: string,
+    threadId: string,
+    operation: HandoffRequest['operation'] = 'release-run'
+  ): Promise<HandoffAck> {
     const requestId = `${this.localPid}-${Date.now()}-${(this.sequence += 1)}`
     const request: HandoffRequest = {
       requestId,
@@ -169,7 +176,8 @@ export class InstanceHandoffBus {
       targetPid,
       projectId,
       threadId,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      ...(operation === 'release-run' ? {} : { operation })
     }
     try {
       this.writeFile(`${requestId}${REQUEST_SUFFIX}`, request)
@@ -213,7 +221,7 @@ export class InstanceHandoffBus {
   /** Answer a request (from a `request` listener) and retire its file. */
   async respond(
     request: HandoffRequest,
-    status: 'accepted' | 'refused',
+    status: HandoffAck['status'],
     reason?: string
   ): Promise<void> {
     const ack: HandoffAck = {
@@ -373,7 +381,10 @@ function isHandoffRequest(value: unknown): value is HandoffRequest {
     typeof candidate.requesterPid === 'number' &&
     typeof candidate.targetPid === 'number' &&
     typeof candidate.projectId === 'string' &&
-    typeof candidate.threadId === 'string'
+    typeof candidate.threadId === 'string' &&
+    (candidate.operation === undefined ||
+      candidate.operation === 'release-run' ||
+      candidate.operation === 'release-idle-codex-thread')
   )
 }
 
@@ -383,7 +394,9 @@ function isHandoffAck(value: unknown): value is HandoffAck {
   return (
     typeof candidate.requestId === 'string' &&
     typeof candidate.requesterPid === 'number' &&
-    (candidate.status === 'accepted' || candidate.status === 'refused')
+    (candidate.status === 'accepted' ||
+      candidate.status === 'refused' ||
+      candidate.status === 'not-owner')
   )
 }
 

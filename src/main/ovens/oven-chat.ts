@@ -11,6 +11,7 @@ import type {
   PendingAgentQuestionRequest
 } from '../../lib/types'
 import { LOCAL_OVEN_ID } from '../../lib/ovens'
+import type { OvenAppearance } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { HarnessAccountRegistry } from '../providers/harness-account-registry'
@@ -39,6 +40,8 @@ interface Binding {
   projectId: string
   threadId: string
   ovenId: string
+  ovenLabel: string
+  ovenAppearance: OvenAppearance
   root: string
   runId: string
   session: PersistentCliSession
@@ -66,6 +69,7 @@ interface Live {
 /** Remote turns bypass desktop repository work. Only transcript metadata stays here. */
 export class OvenChat {
   readonly service: OvenService
+  private readonly registry: OvenRegistry
   private readonly live = new Map<string, Live>()
   private readonly starting = new Set<string>()
   private disposed = false
@@ -77,7 +81,23 @@ export class OvenChat {
     private readonly accounts: HarnessAccountRegistry,
     private readonly publish: (event: AgentEvent) => void
   ) {
-    this.service = new OvenService(new OvenRegistry(storage, vault))
+    this.registry = new OvenRegistry(storage, vault)
+    this.service = new OvenService(this.registry)
+  }
+
+  async nameFor(ovenId: string): Promise<string> {
+    if (ovenId === LOCAL_OVEN_ID) return 'Local'
+    return (await this.registry.require(ovenId)).name
+  }
+
+  async appearanceFor(ovenId: string): Promise<OvenAppearance> {
+    const oven = (await this.registry.state()).ovens.find((item) => item.id === ovenId)
+    if (!oven) throw new Error('This Oven no longer exists.')
+    return {
+      icon: oven.icon,
+      color: oven.color,
+      ...(oven.customSvg ? { customSvg: oven.customSvg } : {})
+    }
   }
 
   remote(thread: Thread, settings = thread.settings): boolean {
@@ -139,6 +159,8 @@ export class OvenChat {
     try {
       await this.assertNotRunning(thread)
       const ovenId = settings.ovenId!
+      const ovenLabel = await this.nameFor(ovenId)
+      const ovenAppearance = await this.appearanceFor(ovenId)
       const probe = await this.service.probe(ovenId)
       const requestedRoot =
         settings.ovenPath ||
@@ -165,6 +187,12 @@ export class OvenChat {
       const user: AgentMessage = {
         id: userId,
         role: 'user',
+        ovenId,
+        ovenLabel,
+        ovenAppearance,
+        accountId: account.id,
+        accountLabel: account.label,
+        thinkingLevel: settings.thinkingLevel,
         createdAt: Date.now(),
         parts: [
           { type: 'text', id: `${userId}:text`, messageID: userId, text },
@@ -226,6 +254,8 @@ export class OvenChat {
         projectId: thread.projectId,
         threadId: thread.id,
         ovenId,
+        ovenLabel,
+        ovenAppearance,
         root,
         runId,
         session,
@@ -597,6 +627,14 @@ export class OvenChat {
     }
     if (!mapped) return
     if (mapped.nativeSessionId) binding.session.nativeSessionId = mapped.nativeSessionId
+    if (mapped.messages)
+      for (const message of mapped.messages) {
+        message.ovenId ??= binding.ovenId
+        message.ovenLabel ??= binding.ovenLabel
+        message.ovenAppearance ??= binding.ovenAppearance
+        message.accountId ??= binding.settings.accountId
+        message.thinkingLevel ??= binding.settings.thinkingLevel
+      }
     if (mapped.messages)
       mergeSessionMessages(
         binding.session,

@@ -1,7 +1,7 @@
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
-  nextRunAt,
+  nextRunAtExcluding,
   type BackgroundRun,
   type CreateRoutineInput,
   type MissedRun,
@@ -9,9 +9,12 @@ import {
   type Routine,
   type RoutineDeletionResult,
   type RoutineSchedule,
+  type SkippedRoutineRun,
   type Thread,
   type UpdateRoutineInput
 } from '$shared/types'
+
+const EMPTY_SKIP_TIMES: ReadonlySet<number> = new Set<number>()
 
 /** Value compare for two resolved icon maps, so an unchanged refresh publishes
  *  nothing and leaves icon consumers untouched. */
@@ -25,16 +28,17 @@ function mapsEqual(a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string
 
 /**
  * AssistantRoutines   the renderer's live view of assistant routines and the
- * pending missed scheduled runs.
+ * pending missed runs and user-skipped scheduled slots.
  *
- * Both lists arrive as full snapshots from the main process: routine mutations
- * broadcast the whole list, and the scheduler broadcasts the whole pending
- * missed-run list. Batched full-list replacement keeps badge counts consistent
- * without per-item reconcile churn.
+ * Routine mutations broadcast the full routine list, and the scheduler
+ * broadcasts full snapshots of its run ledgers. Batched replacement keeps
+ * state consistent without per-item reconcile churn.
  */
 class AssistantRoutinesState {
   routines: Routine[] = $state([])
   missedRuns: MissedRun[] = $state([])
+  skippedRuns: SkippedRoutineRun[] = $state([])
+  skippedRunTimesByTask: SvelteMap<string, SvelteSet<number>> = $state(new SvelteMap())
   /**
    * How much unattended-run history a panel renders. The ledger keeps up to 200
    * entries (months of runs), so a surface shows only the recent past instead of
@@ -91,6 +95,9 @@ class AssistantRoutinesState {
       subscribe('assistant:backgroundRunsChanged', (runs) => {
         this.backgroundRuns = runs
       }),
+      subscribe('assistant:skippedRoutineRunsChanged', (runs) => {
+        this.publishSkippedRuns(runs)
+      }),
       subscribe('routine:checkpointChanged', (routineId) => {
         void this.refreshCheckpoint(routineId)
       })
@@ -99,6 +106,7 @@ class AssistantRoutinesState {
     void this.refresh()
     void this.refreshMissedRuns()
     void this.refreshBackgroundRuns()
+    void this.refreshSkippedRoutineRuns()
   }
 
   dispose(): void {
@@ -166,6 +174,21 @@ class AssistantRoutinesState {
     this.backgroundRuns = await invoke('assistant:listBackgroundRuns')
   }
 
+  async refreshSkippedRoutineRuns(): Promise<void> {
+    this.publishSkippedRuns(await invoke('assistant:listSkippedRoutineRuns'))
+  }
+
+  private publishSkippedRuns(runs: SkippedRoutineRun[]): void {
+    const byTask = new SvelteMap<string, SvelteSet<number>>()
+    for (const run of runs) {
+      const times = byTask.get(run.taskId) ?? new SvelteSet<number>()
+      times.add(run.dueAt)
+      byTask.set(run.taskId, times)
+    }
+    this.skippedRuns = runs
+    this.skippedRunTimesByTask = byTask
+  }
+
   /** Ensure the hidden assistant-space container exists, and keep its accent
    *  colour so assistant notification surfaces can brand themselves with it. */
   async ensureSpace(): Promise<Project> {
@@ -187,7 +210,23 @@ class AssistantRoutinesState {
 
   /** Next intended fire for a task, or null when it is not scheduled. */
   nextRunForTask(task: Thread, now = Date.now()): number | null {
-    return nextRunAt(this.scheduleForTask(task), now)
+    return nextRunAtExcluding(
+      this.scheduleForTask(task),
+      Math.max(now, task.lastRunAt ?? 0),
+      this.skippedRunTimesByTask.get(task.id) ?? EMPTY_SKIP_TIMES
+    )
+  }
+
+  async skipNextRoutineRun(routineId: string): Promise<void> {
+    this.publishSkippedRuns(await invoke('assistant:skipNextRoutineRun', routineId))
+  }
+
+  hasRoutineRunsToday(routineId: string): Promise<boolean> {
+    return invoke('assistant:hasRoutineRunsToday', routineId)
+  }
+
+  async skipRoutineRunsToday(routineId: string): Promise<void> {
+    this.publishSkippedRuns(await invoke('assistant:skipRoutineRunsToday', routineId))
   }
 
   /** Pending missed runs belonging to one task. */

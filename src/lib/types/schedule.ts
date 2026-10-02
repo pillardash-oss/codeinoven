@@ -56,6 +56,18 @@ export interface MissedRun {
   status: 'pending' | 'dismissed' | 'run'
 }
 
+/** A scheduled slot the user explicitly skipped for an assistant task. */
+export interface SkippedRoutineRun {
+  /** Stable identity: one record per (task, intended fire time). */
+  id: string
+  /** The assistant task whose scheduled slot was skipped. */
+  taskId: string
+  /** Owning routine when the slot was skipped. */
+  routineId: string
+  /** Intended fire time (epoch ms). */
+  dueAt: number
+}
+
 /** Why an unattended (background) run was dispatched. */
 export type BackgroundRunReason = 'scheduled' | 'caught-up'
 
@@ -198,6 +210,25 @@ export function nextRunAt(
 }
 
 /**
+ * The next fire strictly after `from` that is not in `excluded`.
+ * Each skipped match advances the search past that slot, so repeated skips
+ * reveal the next scheduled occurrence without changing the schedule itself.
+ */
+export function nextRunAtExcluding(
+  schedule: RoutineSchedule | null | undefined,
+  from: number,
+  excluded: ReadonlySet<number>
+): number | null {
+  let cursor = from
+  for (let skipped = 0; skipped <= excluded.size; skipped += 1) {
+    const candidate = nextRunAt(schedule, cursor)
+    if (candidate === null || !excluded.has(candidate)) return candidate
+    cursor = candidate
+  }
+  return null
+}
+
+/**
  * The most recent intended fire at or before `now`, or null when nothing has
  * come due yet. The scheduler compares this against the task's last fire to
  * decide between dispatching a run and recording a missed run.
@@ -276,4 +307,9 @@ export function describeRelativeTime(target: number, now: number): string {
 /** Dedup key for one intended fire of one task. */
 export function missedRunId(threadId: string, dueAt: number): string {
   return `${threadId}:${dueAt}`
+}
+
+/** Dedup key for one skipped occurrence of one task. */
+export function skippedRoutineRunId(taskId: string, dueAt: number): string {
+  return `${taskId}:${dueAt}`
 }

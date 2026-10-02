@@ -21,6 +21,9 @@
 import {
   MAX_BROWSER_TAB_PAGE_TITLE_LENGTH,
   MAX_BROWSER_TAB_URL_LENGTH,
+  MAX_GLOBAL_BROWSER_BOXES,
+  DEFAULT_BOX_ID,
+  isBrowserBoxId,
   isStorableBrowserFavicon,
   parseAppearance
 } from './global-browser-tabs'
@@ -71,6 +74,8 @@ export interface BrowserHistoryEntry {
 /** The stored browsing history, newest first. */
 export interface BrowserHistorySnapshot {
   entries: BrowserHistoryEntry[]
+  /** Durable visits from named boxes, keyed by their stable box id. */
+  boxEntries?: Record<string, BrowserHistoryEntry[]>
 }
 
 /** One saved page. */
@@ -182,9 +187,22 @@ function historyEntry(value: unknown): BrowserHistoryEntry | null {
  * a value that is not a snapshot at all parses to an empty one.
  */
 export function parseBrowserHistorySnapshot(value: unknown): BrowserHistorySnapshot {
-  if (!isRecord(value) || !Array.isArray(value['entries'])) return { entries: [] }
+  if (!isRecord(value)) return { entries: [] }
+  const entries = parseHistoryEntries(Array.isArray(value['entries']) ? value['entries'] : [])
+  const boxEntries: Record<string, BrowserHistoryEntry[]> = {}
+  const rawBoxes = value['boxEntries']
+  if (isRecord(rawBoxes)) {
+    for (const [boxId, records] of Object.entries(rawBoxes).slice(0, MAX_GLOBAL_BROWSER_BOXES)) {
+      if (!isBrowserBoxId(boxId) || boxId === DEFAULT_BOX_ID || !Array.isArray(records)) continue
+      boxEntries[boxId] = parseHistoryEntries(records)
+    }
+  }
+  return Object.keys(boxEntries).length > 0 ? { entries, boxEntries } : { entries }
+}
+
+function parseHistoryEntries(records: readonly unknown[]): BrowserHistoryEntry[] {
   const byUrl = new Map<string, BrowserHistoryEntry>()
-  for (const stored of value['entries']) {
+  for (const stored of records) {
     const entry = historyEntry(stored)
     if (!entry) continue
     const existing = byUrl.get(entry.url)
@@ -192,14 +210,11 @@ export function parseBrowserHistorySnapshot(value: unknown): BrowserHistorySnaps
       byUrl.set(entry.url, entry)
       continue
     }
-    // Two records for one address in the same file: keep the latest visit and
-    // the larger count rather than counting the page twice.
     mergeHistoryEntry(existing, entry)
   }
-  const entries = [...byUrl.values()]
+  return [...byUrl.values()]
     .sort((a, b) => b.visitedAt - a.visitedAt)
     .slice(0, MAX_BROWSER_HISTORY_RECORDS)
-  return { entries }
 }
 
 /** Fold a duplicate record into the one being kept, in place. */
@@ -285,7 +300,10 @@ function librarySnapshotPayload(records: Record<string, unknown>): Record<string
 export function browserHistorySnapshotPayload(
   snapshot: BrowserHistorySnapshot
 ): Record<string, unknown> {
-  return librarySnapshotPayload({ entries: snapshot.entries })
+  return librarySnapshotPayload({
+    entries: snapshot.entries,
+    boxEntries: snapshot.boxEntries ?? {}
+  })
 }
 
 export function browserBookmarksSnapshotPayload(

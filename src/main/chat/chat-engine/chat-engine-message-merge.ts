@@ -201,7 +201,7 @@ export function restoreMirrorAccount(
 ): AgentMessage[] {
   if (mirror.length === 0) return merged
   const byId = new Map(mirror.map((message) => [message.id, message]))
-  return merged.map((message) => {
+  const restored = merged.map((message) => {
     const persisted = byId.get(message.id)
     if (!persisted) return message
     if (persisted.accountId) {
@@ -217,5 +217,23 @@ export function restoreMirrorAccount(
     return message.accountId
       ? { ...message, accountId: undefined, accountLabel: undefined }
       : message
+  })
+  return restoreMirrorOven(restored, mirror)
+}
+
+/** Preserve each historical message's Oven when a harness reloads its transcript. */
+export function restoreMirrorOven(merged: AgentMessage[], mirror: AgentMessage[]): AgentMessage[] {
+  if (mirror.length === 0) return merged
+  const byId = new Map(mirror.map((message) => [message.id, message]))
+  return merged.map((message) => {
+    const persisted = byId.get(message.id)
+    if (!persisted) return message
+    if (persisted.ovenId) {
+      return message.ovenId === persisted.ovenId
+        ? message
+        : { ...message, ovenId: persisted.ovenId }
+    }
+    if (message.ovenId) return { ...message, ovenId: undefined }
+    return message
   })
 }

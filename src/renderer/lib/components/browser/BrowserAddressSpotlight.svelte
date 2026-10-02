@@ -2,23 +2,22 @@
   import { Globe, Lock, LockOpen } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
+  import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { appConfigState } from '$lib/stores/app-config.svelte'
-  import {
-  BROWSER_HISTORY_GLOBAL_SCOPE,
-  browserHistory
-} from '$lib/stores/browser-history.svelte'
+  import { BROWSER_HISTORY_GLOBAL_SCOPE, browserHistory } from '$lib/stores/browser-history.svelte'
   import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
 
   interface Props {
     /** The address the spotlight opened on, selected and ready to replace. */
     initialValue: string
+    boxId: GlobalBrowserTab['boxId']
     /** Open a resolved address: navigate the tab this was opened from, or make a
      *  new one when it has no page yet. */
     onOpen: (url: string) => void
     onClose: () => void
   }
 
-  let { initialValue, onOpen, onClose }: Props = $props()
+  let { initialValue, boxId, onOpen, onClose }: Props = $props()
 
   /**
    * The browser view's address palette.
@@ -27,9 +26,9 @@
    * app's own palette: the whole window is available to it, so the address is
    * replaced in a palette pre-filled with the page on screen and selected, with
    * the pages the user has already been to offered underneath. Those pages are the
-   * global browser's own, because a visit belongs to the browser that made it: a
-   * page read inside a thread's browser is that thread's, and is never offered
-   * here.
+   * selected profile box's history: when a thread and the global browser use the
+   * same box, both offer the same visits. Unboxed thread history stays within its
+   * conversation and is never offered here.
    *
    * The thread browser does not use this. Its address bar is the field itself and
    * brings the same history down in a drawer under it
@@ -60,7 +59,11 @@
   let addressInput = $state<HTMLInputElement | null>(null)
 
   const suggestions = $derived(
-    browserHistory.suggestionsFor(BROWSER_HISTORY_GLOBAL_SCOPE, value, SUGGESTION_LIMIT)
+    browserHistory.suggestionsFor(
+      browserHistory.scopeFor(BROWSER_HISTORY_GLOBAL_SCOPE, '', boxId),
+      value,
+      SUGGESTION_LIMIT
+    )
   )
   const secure = $derived(initialValue.startsWith('https:'))
 

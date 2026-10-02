@@ -2,7 +2,9 @@
   import {
     AlertTriangle,
     ChevronDown,
+    Download,
     FolderOpen,
+    LoaderCircle,
     Pin,
     Plus,
     Puzzle,
@@ -59,6 +61,7 @@
   /** The extension the uninstall confirmation is for, or null. */
   let uninstallTarget = $state<BrowserExtension | null>(null)
   let uninstalling = $state(false)
+  let draggingId = $state<string | null>(null)
 
   const extensions = $derived(browserExtensions.extensions)
 
@@ -89,13 +92,10 @@
   /**
    * The box the panel is scoped to, or the all-boxes value.
    *
-   * Null means follow the page on screen, so the panel describes whichever box the
-   * tab in front of the user lives in and an install lands in that same box without
-   * them having to say so. Picking a box by hand pins that choice until they switch
-   * again, and All boxes is the one that lists everything at once.
+   * The installed inventory starts with every box. A selected box filters the
+   * list, while an install still belongs to the page's current box by default.
    */
-  let pinnedBoxId = $state<string | null>(null)
-  const selection = $derived(pinnedBoxId ?? globalBrowser.activeTabBoxId)
+  let selection = $state(ALL_BOXES_SELECTION)
   /** The box in view, or null while the all view is up. */
   const scopedBox = $derived(
     selection === ALL_BOXES_SELECTION ? null : (globalBrowser.boxById(selection) ?? null)
@@ -127,6 +127,27 @@
   /** Whether each row has to say which boxes it runs in, which is only useful when
    *  more than one box is on screen. */
   const showChips = $derived(scopedBox === null)
+
+  function dropExtension(targetId: string): void {
+    const sourceId = draggingId
+    draggingId = null
+    if (!sourceId || sourceId === targetId) return
+    const reorderedShown = [...shown]
+    const sourceIndex = reorderedShown.findIndex((extension) => extension.id === sourceId)
+    const targetIndex = reorderedShown.findIndex((extension) => extension.id === targetId)
+    if (sourceIndex < 0 || targetIndex < 0) return
+    const [source] = reorderedShown.splice(sourceIndex, 1)
+    if (!source) return
+    reorderedShown.splice(targetIndex, 0, source)
+    const orderedShownIds = reorderedShown.map((extension) => extension.id)
+    let shownIndex = 0
+    const orderedIds = browserExtensions.extensions.map((extension) =>
+      shown.some((visible) => visible.id === extension.id)
+        ? (orderedShownIds[shownIndex++] ?? extension.id)
+        : extension.id
+    )
+    void browserExtensions.reorder(orderedIds)
+  }
 
   /** What the source column calls where the extension's files came from. */
   function sourceLabel(extension: BrowserExtension): string {
@@ -389,8 +410,8 @@
 <div class="flex h-full min-h-0 flex-col">
   <div class="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
     <p class="text-xs font-medium text-muted">
-      {shown.length}
-      {shown.length === 1 ? 'extension' : 'extensions'}
+      {extensions.length}
+      {extensions.length === 1 ? 'installed extension' : 'installed extensions'}
     </p>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
@@ -443,7 +464,7 @@
     <EnumSelect
       options={boxOptions}
       value={selection}
-      onChange={(id) => (pinnedBoxId = id)}
+      onChange={(id) => (selection = id)}
       placeholder="Choose a box"
       ariaLabel="Box whose extensions are listed"
       title="Box whose extensions are listed"
@@ -497,7 +518,22 @@
       {#each shown as extension (extension.id)}
         {@const pin = pinAction(extension)}
         {@const popup = popupAction(extension)}
-        <li>
+        {@const updating = browserExtensions.isUpdating(extension.id)}
+        <li
+          draggable
+          ondragstart={(event) => {
+            draggingId = extension.id
+            event.dataTransfer?.setData('text/plain', extension.id)
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+          }}
+          ondragover={(event) => event.preventDefault()}
+          ondrop={(event) => {
+            event.preventDefault()
+            dropExtension(extension.id)
+          }}
+          ondragend={() => (draggingId = null)}
+          class:opacity-50={draggingId === extension.id}
+        >
           <div
             class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-elevated"
           >
@@ -524,12 +560,40 @@
             {#if showChips}
               <BrowserBoxChips jars={extension.boxes} />
             {/if}
+            {#if extension.updateAvailableVersion || updating}
+              {@const updateTitle = extension.updateAvailableVersion
+                ? `Update ${extension.name} to version ${extension.updateAvailableVersion}`
+                : `Updating ${extension.name}`}
+              <button
+                type="button"
+                class="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-wait disabled:opacity-60"
+                disabled={updating}
+                title={updating ? `Updating ${extension.name}` : updateTitle}
+                aria-label={updating ? `Updating ${extension.name}` : updateTitle}
+                onclick={() => void browserExtensions.updateFromWebStore(extension.id)}
+              >
+                {#if updating}
+                  <LoaderCircle size={12} class="animate-spin" />
+                  Updating
+                {:else}
+                  <Download size={12} />
+                  Update
+                {/if}
+              </button>
+            {/if}
             <Switch
               checked={extension.enabled}
-              title={extension.enabled ? `Disable ${extension.name}` : `Enable ${extension.name}`}
-              aria-label={extension.enabled
-                ? `Disable ${extension.name}`
-                : `Enable ${extension.name}`}
+              disabled={updating}
+              title={updating
+                ? `Updating ${extension.name}`
+                : extension.enabled
+                  ? `Disable ${extension.name}`
+                  : `Enable ${extension.name}`}
+              aria-label={updating
+                ? `Updating ${extension.name}`
+                : extension.enabled
+                  ? `Disable ${extension.name}`
+                  : `Enable ${extension.name}`}
               onchange={(next) => void browserExtensions.setEnabled(extension.id, next)}
             />
             <button
@@ -542,9 +606,9 @@
                     ? 'text-foreground'
                     : 'text-muted opacity-0 group-hover:opacity-100'
               ]}
-              disabled={pin.disabled}
-              title={pin.title}
-              aria-label={pin.title}
+              disabled={pin.disabled || updating}
+              title={updating ? `Updating ${extension.name}` : pin.title}
+              aria-label={updating ? `Updating ${extension.name}` : pin.title}
               onclick={() => void browserExtensions.setPinned(extension.id, !extension.pinned)}
             >
               <Pin size={13} />
@@ -585,12 +649,17 @@
                 </div>
                 <Switch
                   checked={extension.enabled}
-                  title={extension.enabled
-                    ? `Disable ${extension.name}`
-                    : `Enable ${extension.name}`}
-                  aria-label={extension.enabled
-                    ? `Disable ${extension.name}`
-                    : `Enable ${extension.name}`}
+                  disabled={updating}
+                  title={updating
+                    ? `Updating ${extension.name}`
+                    : extension.enabled
+                      ? `Disable ${extension.name}`
+                      : `Enable ${extension.name}`}
+                  aria-label={updating
+                    ? `Updating ${extension.name}`
+                    : extension.enabled
+                      ? `Disable ${extension.name}`
+                      : `Enable ${extension.name}`}
                   onchange={(next) => void browserExtensions.setEnabled(extension.id, next)}
                 />
               </div>
@@ -607,6 +676,7 @@
                       <p class="truncate text-[0.6875rem] text-foreground">{jar.name}</p>
                       <Switch
                         checked={runsInBox(extension, jar.id)}
+                        disabled={updating}
                         title={`Run in ${jar.name}`}
                         aria-label={`Run in ${jar.name}`}
                         onchange={(next) => toggleBox(extension, jar.id, next)}
@@ -658,8 +728,9 @@
               <button
                 type="button"
                 class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-danger transition-colors hover:bg-danger/10"
-                title={`Uninstall ${extension.name}`}
-                aria-label={`Uninstall ${extension.name}`}
+                disabled={updating}
+                title={updating ? `Updating ${extension.name}` : `Uninstall ${extension.name}`}
+                aria-label={updating ? `Updating ${extension.name}` : `Uninstall ${extension.name}`}
                 onclick={() => (uninstallTarget = extension)}
               >
                 <Trash2 size={13} />

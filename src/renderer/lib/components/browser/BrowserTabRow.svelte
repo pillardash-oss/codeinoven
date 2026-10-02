@@ -1,8 +1,8 @@
 <script lang="ts">
   import {
-    ArrowDown,
     ArrowUp,
     Boxes,
+    Copy,
     ChevronRight,
     FolderInput,
     FolderMinus,
@@ -21,6 +21,7 @@
     X
   } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
+  import { invoke } from '$lib/ipc.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -28,7 +29,11 @@
   import ModelPickerVendorIcons from '$lib/components/shared/ModelPickerVendorIcons.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
-  import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import {
+    browserTabLabel,
+    MAX_GLOBAL_BROWSER_GROUPS,
+    type GlobalBrowserTab
+  } from '$lib/stores/global-browser-types'
   import { browserTabAccent, browserTabIconUrl } from './browser-tab-appearance'
   import {
     browserAppearanceAccent,
@@ -39,13 +44,31 @@
 
   interface Props {
     tab: GlobalBrowserTab
+    selected: boolean
+    selectedTabIds: string[]
+    onTabClick: (tabId: string, event: MouseEvent) => void
+    onTabContextMenu: (tabId: string) => string[]
+    onMoveTabsToGroup: (tabIds: string[], groupId: string) => void
+    onCreateGroupForTabs: (tabIds: string[]) => void
+    onReopenTabsInBox: (tabIds: string[], boxId: string | null) => void
     /** Open the group editor for a group id, or with null to create one. */
     onOpenGroupEditor: (groupId: string | null) => void
     /** Open this tab's own editor (title, colour, icon). */
     onEditTab: (tabId: string) => void
   }
 
-  let { tab, onOpenGroupEditor, onEditTab }: Props = $props()
+  let {
+    tab,
+    selected,
+    selectedTabIds,
+    onTabClick,
+    onTabContextMenu,
+    onMoveTabsToGroup,
+    onCreateGroupForTabs,
+    onReopenTabsInBox,
+    onOpenGroupEditor,
+    onEditTab
+  }: Props = $props()
 
   /**
    * One row in the browser tab strip.
@@ -69,6 +92,7 @@
 
   const runtime = $derived(globalBrowser.runtimeFor(tab.id))
   const active = $derived(globalBrowser.activeTabId === tab.id)
+  const highlighted = $derived(active || selected)
   /** The label the row shows: the user's own title when set, else the page's. */
   const label = $derived(browserTabLabel(tab))
   /** The tab's custom icon as an image, or null to fall back to the favicon. */
@@ -112,6 +136,7 @@
   /** The box a pending "reopen in box" targets: undefined while none is pending,
    *  null for the default jar. */
   let reopenTarget = $state<string | null | undefined>(undefined)
+  const bulkSelection = $derived(selected && selectedTabIds.length > 1)
   const reopenTargetLabel = $derived(
     reopenTarget === undefined
       ? ''
@@ -138,10 +163,9 @@
     onOpenGroupEditor(id)
   }
 
-  /** Open a blank tab beside this one, inheriting its group and box, and take the
-   *  caret: the address field is what a new tab is for. */
-  function newSibling(position: 'before' | 'after'): void {
-    globalBrowser.createTab('', tab.groupId, tab.boxId, { tabId: tab.id, position })
+  /** Open a blank tab before this one, inheriting its group and box. */
+  function newSibling(): void {
+    globalBrowser.createTab('', tab.groupId, tab.boxId, { tabId: tab.id, position: 'before' })
     globalBrowser.openAddressSpotlight()
   }
 
@@ -189,21 +213,68 @@
     globalBrowser.reorder(dragged, tab.id, position)
     globalBrowser.endDrag()
   }
+
+  /** Selected-tab actions use an OS menu so the browser's native view cannot
+   *  cover or clip the popup. A right-click outside the selection keeps the
+   *  existing single-tab menu and selects only that row. */
+  function onContextMenu(event: MouseEvent): void {
+    const contextSelection = onTabContextMenu(tab.id)
+    if (contextSelection.length < 2) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    const row = event.currentTarget
+    const bounds = row instanceof HTMLElement ? row.getBoundingClientRect() : null
+    const x = event.clientX || (bounds ? bounds.left + Math.min(bounds.width / 2, 24) : 0)
+    const y = event.clientY || (bounds ? bounds.top + bounds.height / 2 : 0)
+    const selectedIds = [...contextSelection]
+
+    void invoke(
+      'browser:tabSelectionMenu',
+      {
+        selectedCount: selectedIds.length,
+        groups: groups.map(({ id, name }) => ({ id, name })),
+        boxes: globalBrowser.boxes.map(({ id, name }) => ({ id, name })),
+        canCreateGroup: groups.length < MAX_GLOBAL_BROWSER_GROUPS
+      },
+      x,
+      y
+    )
+      .then((choice) => {
+        if (!choice) return
+        switch (choice.action) {
+          case 'moveToGroup':
+            onMoveTabsToGroup(selectedIds, choice.groupId)
+            return
+          case 'createGroup':
+            onCreateGroupForTabs(selectedIds)
+            return
+          case 'reopenInBox':
+            onReopenTabsInBox(selectedIds, choice.boxId)
+            return
+        }
+      })
+      .catch(() => {})
+  }
 </script>
 
 <ContextMenu.Root>
-  <ContextMenu.Trigger class="contents">
+  <ContextMenu.Trigger class="contents" disabled={bulkSelection}>
     <div
       class="group flex items-center rounded-md transition-colors {dropTarget
         ? 'bg-info/10'
-        : active
+        : highlighted
           ? 'bg-elevated'
           : 'hover:bg-elevated'}"
+      role="group"
+      aria-label={`${label} tab row`}
+      oncontextmenu={onContextMenu}
     >
       <button
         type="button"
         class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left"
         aria-current={active}
+        aria-pressed={selected}
         title={tab.url || label}
         draggable="true"
         ondragstart={onDragStart}
@@ -214,7 +285,7 @@
         ondragover={onDragOver}
         ondragleave={() => (dropTarget = false)}
         ondrop={onDrop}
-        onclick={() => globalBrowser.switchTo(tab.id)}
+        onclick={(event: MouseEvent) => onTabClick(tab.id, event)}
         onauxclick={(event: MouseEvent) => {
           if (event.button === 1) closeTab(event)
         }}
@@ -232,9 +303,9 @@
         </span>
         <span class="flex min-w-0 flex-1 flex-col">
           <span
-            class="truncate text-xs {tab.hibernated ? 'text-dimmed' : 'text-foreground'} {active
-              ? 'font-medium'
-              : ''}"
+            class="truncate text-xs {tab.hibernated && !highlighted
+              ? 'text-dimmed'
+              : 'text-foreground'} {highlighted ? 'font-medium' : ''}"
             style={accent ? `color: ${accent}` : undefined}
           >
             {label}
@@ -347,7 +418,7 @@
       avoidCollisions
       collisionPadding={12}
       updatePositionStrategy="always"
-      class="z-50 max-h-[calc(100vh-1.5rem)] min-w-56 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+      class="z-50 max-h-[calc(100dvh-1.5rem)] min-w-56 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
     >
       <p
         class="truncate px-2.5 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
@@ -368,13 +439,13 @@
         {/if}
       </ContextMenu.Item>
       <ContextMenu.Separator class="my-1 h-px bg-border" />
-      <ContextMenu.Item class={itemClass} onSelect={() => newSibling('before')}>
+      <ContextMenu.Item class={itemClass} onSelect={newSibling}>
         <ArrowUp size={13} class="shrink-0 text-muted" />
         New tab before this tab
       </ContextMenu.Item>
-      <ContextMenu.Item class={itemClass} onSelect={() => newSibling('after')}>
-        <ArrowDown size={13} class="shrink-0 text-muted" />
-        New tab after this tab
+      <ContextMenu.Item class={itemClass} onSelect={() => globalBrowser.duplicateTab(tab.id)}>
+        <Copy size={13} class="shrink-0 text-muted" />
+        Duplicate tab
       </ContextMenu.Item>
       <BrowserTabPlacementItems onCreate={newPlaced} />
       <ContextMenu.Separator class="my-1 h-px bg-border" />
@@ -396,7 +467,7 @@
         </ContextMenu.Item>
       {/if}
 
-      {#if groups.some((candidate) => candidate.id !== tab.groupId)}
+      {#if !bulkSelection && groups.some((candidate) => candidate.id !== tab.groupId)}
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         {#each groups.filter((candidate) => candidate.id !== tab.groupId) as candidate (candidate.id)}
           <ContextMenu.Item
@@ -422,7 +493,7 @@
               avoidCollisions
               collisionPadding={12}
               updatePositionStrategy="always"
-              class="z-50 max-h-[calc(100vh-1.5rem)] min-w-44 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+              class="z-50 max-h-[calc(100dvh-1.5rem)] min-w-44 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
             >
               {#if tab.boxId}
                 <ContextMenu.Item class={itemClass} onSelect={() => (reopenTarget = null)}>

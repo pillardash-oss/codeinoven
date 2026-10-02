@@ -1,3 +1,4 @@
+import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
 import type {
   ComputerUseActivity,
   ComputerUsePipFrame,
@@ -42,6 +43,9 @@ import type {
 } from '../browser-overlay'
 
 export const IPC_EVENT_CONTRACT = {
+  'browser:overlay:docks': [] as unknown as [docks: NativeDockRequest[]],
+  'browser:overlay:dockEvent': [] as unknown as [report: NativeDockInteraction],
+  'browser:overlay:dockDrawn': [] as unknown as [ack: NativeDockAck],
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**
@@ -97,6 +101,10 @@ export const IPC_EVENT_CONTRACT = {
   'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
   /** The durable record of unattended runs changed (a run started or settled). */
   'assistant:backgroundRunsChanged': [] as unknown as [runs: import('../types').BackgroundRun[]],
+  /** User-skipped scheduled slots changed, so next-run labels can refresh. */
+  'assistant:skippedRoutineRunsChanged': [] as unknown as [
+    runs: import('../types').SkippedRoutineRun[]
+  ],
   /**
    * The set of gates the app resolved without the user changed: one settled, or
    * the user dismissed one or all. Drives the amber attention rail item and its

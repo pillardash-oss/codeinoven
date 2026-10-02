@@ -3,6 +3,7 @@
   import { FileSearch, FolderKanban, MessagesSquare } from '@lucide/svelte'
   import type { CommandPaletteProps } from '$lib/components/actions/CommandPalette.svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
+  import GlobalContextSidebar from '$lib/components/layout/GlobalContextSidebar.svelte'
   import InstanceRoleNotice from '$lib/components/layout/InstanceRoleNotice.svelte'
   import AppViewRail from '$lib/components/layout/AppViewRail.svelte'
   import {
@@ -1630,6 +1631,9 @@
         >
           <p class="text-sm text-dimmed">Coming soon</p>
         </div>
+      {/if}
+      {#if activeView === 'scope' || isSettingsView(activeView)}
+        <GlobalContextSidebar />
       {/if}
     </main>
   </div>

@@ -1,7 +1,7 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { Check, Copy, WrapText } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
-  import { highlightCode } from './markdown'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
 
   interface Props {
@@ -13,11 +13,22 @@
   let { code, lang }: Props = $props()
 
   let copied = $state(false)
+  let highlightCode = $state<((source: string, language?: string) => string) | null>(null)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
   const wrapped = $derived(wrapTextState.wrapped)
 
-  const html = $derived(highlightCode(code, lang))
+  const html = $derived(highlightCode ? highlightCode(code, lang) : escapeHtml(code))
+
+  onMount(() => {
+    void import('./highlight-code')
+      .then((module) => {
+        highlightCode = module.highlightCode
+      })
+      .catch(() => {
+        // Plain escaped text remains readable if the optional highlighter fails to load.
+      })
+  })
 
   $effect(() => () => clearTimeout(copyResetTimer))
 
@@ -31,11 +42,17 @@
       // Clipboard unavailable   the button simply stays idle.
     }
   }
+
+  function escapeHtml(value: string): string {
+    return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
 </script>
 
 <div class="overflow-hidden rounded-lg border bg-elevated">
   <div class="flex h-7 items-center justify-between border-b px-3">
-    <span class="font-mono text-[0.625rem] uppercase tracking-wide text-dimmed">{lang || 'text'}</span>
+    <span class="font-mono text-[0.625rem] uppercase tracking-wide text-dimmed"
+      >{lang || 'text'}</span
+    >
     <div class="flex items-center gap-1">
       <button
         class="flex items-center rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"

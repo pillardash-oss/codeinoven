@@ -5,7 +5,7 @@
   import AppRailUtilities from './AppRailUtilities.svelte'
   import RailHighlight from './RailHighlight.svelte'
   import type { HeaderViewOption, HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
-  import { ViewRailActivity, viewBadgeFor } from './view-rail-activity.svelte'
+  import { ViewRailActivity, viewBadgesFor } from './view-rail-activity.svelte'
 
   interface Props {
     /** The primary-view options, already ordered by the navigation controller. */
@@ -61,10 +61,11 @@
 
   <div class="flex flex-col items-center gap-0.5" data-onboarding="view-switcher">
     {#each options as option (option.id)}
-      {@const activityBadge = viewBadgeFor(
+      {@const badges = viewBadgesFor(
         option.id,
         projectBadgeOption,
         activity.counts,
+        activity.unreadCounts,
         activity.browserTransfers,
         activity.browserAssistant
       )}
@@ -77,14 +78,35 @@
         onHover={() => onOptionHover(option.id)}
       >
         {#snippet badge()}
-          {#if activityBadge}
-            <WorkingCountBadge
-              icon={activityBadge.icon}
-              count={activityBadge.count}
-              label={activityBadge.label}
-              tone={activityBadge.tone}
-              class="absolute -top-1 -right-1"
-            />
+          {#if badges.activity || badges.unread}
+            <span class="absolute -top-1 -right-1 flex flex-col items-end gap-0.5">
+              {#if badges.hasWorkingThreads && badges.activity}
+                <WorkingCountBadge
+                  icon={badges.activity.icon}
+                  count={badges.activity.count}
+                  label={badges.activity.label}
+                  tone={badges.activity.tone}
+                />
+              {/if}
+              {#if badges.unread}
+                <WorkingCountBadge
+                  icon={badges.unread.icon}
+                  count={badges.unread.count}
+                  label={badges.unread.label}
+                  tone={badges.unread.tone}
+                  colors={badges.unread.colors}
+                  class={badges.hasWorkingThreads ? '' : 'order-first'}
+                />
+              {/if}
+              {#if badges.activity && !badges.hasWorkingThreads}
+                <WorkingCountBadge
+                  icon={badges.activity.icon}
+                  count={badges.activity.count}
+                  label={badges.activity.label}
+                  tone={badges.activity.tone}
+                />
+              {/if}
+            </span>
           {/if}
         {/snippet}
       </AppRailButton>

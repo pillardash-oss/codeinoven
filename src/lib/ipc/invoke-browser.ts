@@ -1,3 +1,4 @@
+import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
 import type {
   BrowserCompositionPlayback,
   BrowserDownload,
@@ -26,6 +27,10 @@ import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
 import type { BrowserBookmarksSnapshot, BrowserHistorySnapshot } from '../browser/browser-library'
 import type { BrowserBoxMenuChoice, BrowserBoxMenuInput } from '../browser/browser-box-menu'
 import type {
+  BrowserTabSelectionMenuChoice,
+  BrowserTabSelectionMenuInput
+} from '../browser/browser-tab-selection-menu'
+import type {
   BrowserOverlayAck,
   BrowserOverlaySnapshot,
   BrowserStripOverlayInteraction,
@@ -36,6 +41,12 @@ import type {
 } from '../browser-overlay'
 
 export const invokeBrowserContract = {
+  'browser:setDockOverlay': {} as Contract<
+    [id: string, request: NativeDockRequest | null],
+    boolean
+  >,
+  'browser:overlayDockInteract': {} as Contract<[report: NativeDockInteraction], void>,
+  'browser:overlayDockDrawn': {} as Contract<[ack: NativeDockAck], void>,
   /**
    * The global browser's durable tab list, or null before it has ever been
    * stored. It lives in the config directory rather than the renderer's
@@ -140,6 +151,8 @@ export const invokeBrowserContract = {
   'browser:hidePopupWindow': {} as Contract<[popupId: string], void>,
   /** Give a popup window's page the keyboard, after the user picks it in the rail. */
   'browser:focusPopupWindow': {} as Contract<[popupId: string], void>,
+  /** Hide an extension action popup while keeping its page alive for reuse. */
+  'browser:dismissPopupWindow': {} as Contract<[popupId: string], void>,
   /**
    * Close a popup window on the user's behalf: its page stops and it leaves the
    * rail. A page that closes itself needs nothing here, it is reported closed.
@@ -379,6 +392,9 @@ export const invokeBrowserContract = {
     BrowserExtension
   >,
   'browser:extensionUninstall': {} as Contract<[extensionId: string], void>,
+  'browser:extensionReorder': {} as Contract<[orderedIds: string[]], void>,
+  /** Check again and apply the newest validated Web Store package for one extension. */
+  'browser:extensionUpdateFromWebStore': {} as Contract<[extensionId: string], BrowserExtension>,
   /** Enable or disable one extension, choose the jars it runs in, or pin it into
    *  the browser view's header. `boxes` is the whole replacement list, never a
    *  delta, and it is always explicit: a jar left out of it never loads the
@@ -433,6 +449,11 @@ export const invokeBrowserContract = {
   'browser:boxMenu': {} as Contract<
     [input: BrowserBoxMenuInput, x: number, y: number],
     BrowserBoxMenuChoice | null
+  >,
+  /** Open the native context menu for a multi-tab selection. */
+  'browser:tabSelectionMenu': {} as Contract<
+    [input: BrowserTabSelectionMenuInput, x: number, y: number],
+    BrowserTabSelectionMenuChoice | null
   >,
   'browser:resolvePermission': {} as Contract<
     [requestId: string, decision: BrowserPermissionDecision],

@@ -1,4 +1,10 @@
 import {
+  validateNativeDockAck,
+  validateNativeDockId,
+  validateNativeDockInteraction,
+  validateNativeDockRequest
+} from '../../lib/native-dock'
+import {
   app,
   BrowserWindow,
   clipboard,
@@ -65,6 +71,7 @@ import type {
 } from '../../lib/ipc/browser'
 import {
   BrowserExtensionService,
+  type BrowserExtensionActionPopupOpenRequest,
   type BrowserExtensionSidePanelOpenRequest,
   type BrowserExtensionTabEventName,
   type BrowserExtensionTabReplay,
@@ -83,6 +90,7 @@ import {
   type BrowserDownloadOwner
 } from './browser-service/browser-downloads'
 import { showBrowserBoxMenu } from './browser-service/browser-box-menu'
+import { showBrowserTabSelectionMenu } from './browser-service/browser-tab-selection-menu'
 import { BrowserTabHistoryStore } from './browser-tab-history-store'
 import { BrowserClosedTabHistory } from './browser-closed-tab-history'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
@@ -180,6 +188,7 @@ import {
   validateBrowserStripOverlayRequest,
   validateBrowserSwitcherBindings,
   validateBrowserUrl,
+  validateBrowserTabSelectionMenuInput,
   validateDownloadId,
   validateInspectorMarkers,
   validateInspectorReferenceId,
@@ -305,6 +314,7 @@ interface BrowserExtensionTabInfo {
   id: number
   index: number
   windowId: number
+  windowType: 'normal'
   active: boolean
   pinned: boolean
   incognito: boolean
@@ -482,6 +492,8 @@ export class BrowserService {
    * callers are waiting on it; see `BrowserLoadWaits` for why that matters.
    */
   private readonly loadWaits = new BrowserLoadWaits()
+  /** Navigation starts waiting for the extension jar before Chromium sees loadURL. */
+  private readonly pendingNavigationStarts = new Map<string, Promise<void>>()
   /**
    * The tab whose surface holds the keyboard, or null while none does.
    *
@@ -597,6 +609,8 @@ export class BrowserService {
    * is this service's own window handling.
    */
   private readonly popupWindows: BrowserPopupWindows
+  /** One in-flight extension popup creation per project, box, and extension. */
+  private readonly extensionPopupOpenings = new Map<string, Promise<string>>()
   /**
    * The extension side panels the rail hosts, over the frame it measures. A panel
    * is the extension's own document, loaded in the jar the extension runs in,
@@ -673,13 +687,26 @@ export class BrowserService {
       tabReplay: (projectId, boxId) => this.extensionTabReplay(projectId, boxId),
       publishActivity: (update) => this.publishExtensionActivity(update),
       publish: () => this.publishExtensions(),
+      releaseViews: (extensionId, projectId, boxId) => {
+        const partition = browserPartitionFor(projectId, boxId)
+        const matches = (record: {
+          extensionId: string | null
+          projectId: string
+          boxId: string | null
+        }): boolean =>
+          record.extensionId === extensionId &&
+          browserPartitionFor(record.projectId, record.boxId) === partition
+        this.popupWindows.closeWhere(matches, 'its extension was unloaded')
+        this.sidePanels.closeWhere(matches, 'its extension was unloaded')
+      },
       openSidePanel: (request) => {
         void this.openExtensionSidePanel(request).catch((error: unknown) => {
           Logger.error('An extension side panel could not be opened:', error)
         })
       },
       closeSidePanel: (extensionId, extensionTabId) =>
-        this.sidePanels.closeForExtension(extensionId, extensionTabId, 'the extension closed it')
+        this.sidePanels.closeForExtension(extensionId, extensionTabId, 'the extension closed it'),
+      openPopup: (request) => this.openExtensionPopupFromWorker(request)
     })
     this.capture = new BrowserCaptureObserver({
       // A capture change is a tab-level fact the user must see, so it is
@@ -979,8 +1006,11 @@ export class BrowserService {
     replaceHandler('browser:focusPopupWindow', (_event, rawPopupId) => {
       this.popupWindows.focus(validatePopupWindowId(rawPopupId))
     })
+    replaceHandler('browser:dismissPopupWindow', (_event, rawPopupId) => {
+      this.popupWindows.dismiss(validatePopupWindowId(rawPopupId))
+    })
     replaceHandler('browser:closePopupWindow', (_event, rawPopupId) => {
-      this.popupWindows.close(validatePopupWindowId(rawPopupId), 'the user closed it')
+      this.popupWindows.close(validatePopupWindowId(rawPopupId), 'the user closed its window')
     })
     replaceHandler('browser:getPopupWindows', (_event, rawProjectId) =>
       this.popupWindows.list(validateProjectId(rawProjectId))
@@ -1036,6 +1066,26 @@ export class BrowserService {
     replaceHandler('browser:setStripOverlay', (_event, rawRequest) =>
       this.overlay.applyStrip(validateBrowserStripOverlayRequest(rawRequest))
     )
+    replaceHandler('browser:setDockOverlay', (_event, rawId, rawRequest) => {
+      const id = validateNativeDockId(rawId)
+      const request = rawRequest === null ? null : validateNativeDockRequest(rawRequest)
+      if (request && request.id !== id) throw new TypeError('Native dock identities differ')
+      return this.overlay.applyDock(id, request)
+    })
+    replaceHandler('browser:overlayDockInteract', (_event, rawReport) => {
+      sendToRenderer(
+        this.window.webContents,
+        'browser:overlay:dockEvent',
+        validateNativeDockInteraction(rawReport)
+      )
+    })
+    replaceHandler('browser:overlayDockDrawn', (_event, rawAck) => {
+      sendToRenderer(
+        this.window.webContents,
+        'browser:overlay:dockDrawn',
+        validateNativeDockAck(rawAck)
+      )
+    })
     replaceHandler('browser:overlayReady', () => this.overlay.currentState())
     replaceHandler('browser:overlayInteract', (_event, rawReport) => {
       // The overlay carries no handlers, so an interaction is only a fact about
@@ -1225,6 +1275,16 @@ export class BrowserService {
       await this.extensions.whenReady()
       await this.extensions.uninstall(validateExtensionId(rawExtensionId))
     })
+    replaceHandler('browser:extensionReorder', async (_event, rawOrderedIds) => {
+      if (!Array.isArray(rawOrderedIds) || !rawOrderedIds.every((id) => typeof id === 'string')) {
+        throw new TypeError('Extension order is invalid')
+      }
+      await this.extensions.reorder(rawOrderedIds.map(validateExtensionId))
+    })
+    replaceHandler('browser:extensionUpdateFromWebStore', async (_event, rawExtensionId) => {
+      await this.extensions.whenReady()
+      return this.extensions.updateFromWebStore(validateExtensionId(rawExtensionId))
+    })
     replaceHandler('browser:extensionUpdate', async (_event, rawExtensionId, rawPatch) => {
       await this.extensions.whenReady()
       return this.extensions.update(
@@ -1281,6 +1341,12 @@ export class BrowserService {
       // caller reopens the tab in the box it names, so the popup's promise is
       // what carries the choice back.
       return showBrowserBoxMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:tabSelectionMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserTabSelectionMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      return showBrowserTabSelectionMenu(this.window, input, x, y)
     })
     replaceHandler('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)
@@ -1961,7 +2027,20 @@ export class BrowserService {
     if (!tab) return
     const contents: WebContents | undefined = tab.view.webContents
     if (!contents) return
-    await this.loadWaits.wait(contents, timeoutMs)
+    const startedAt = Date.now()
+    const pendingStart = this.pendingNavigationStarts.get(tabId)
+    if (pendingStart) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        pendingStart.catch(() => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, Math.max(0, timeoutMs))
+        })
+      ])
+      if (timer !== undefined) clearTimeout(timer)
+    }
+    const remaining = Math.max(0, timeoutMs - (Date.now() - startedAt))
+    await this.loadWaits.wait(contents, remaining)
   }
 
   /**
@@ -2935,6 +3014,26 @@ export class BrowserService {
     return { action: 'deny' }
   }
 
+  /** Accept only a popout page belonging to the requesting extension. */
+  private ownedExtensionPageUrl(extensionId: string, rawUrl: string | undefined): string | null {
+    if (!rawUrl) return null
+    try {
+      const url = new URL(rawUrl)
+      if (
+        url.protocol !== 'chrome-extension:' ||
+        url.host !== extensionId ||
+        url.username !== '' ||
+        url.password !== '' ||
+        url.searchParams.get('uilocation') !== 'popout'
+      ) {
+        return null
+      }
+      return url.toString()
+    } catch {
+      return null
+    }
+  }
+
   /**
    * Host the popup window a page asked for, or answer null to let the caller
    * fall back to opening it as a tab.
@@ -2976,38 +3075,73 @@ export class BrowserService {
     }
   }
 
+  /** Resolve a worker popup request and route its extension page to the rail. */
+  private openExtensionPopupFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
+    const owner = this.tabForContents(request.extensionTabId)
+    if (!owner) return
+    const tab = owner.tab
+    if (tab.projectId !== request.projectId || tab.boxId !== request.boxId) return
+
+    if (request.kind === 'hide-window') {
+      const cached = this.popupWindows.extensionPopupForJar(
+        request.extensionId,
+        request.projectId,
+        request.boxId
+      )
+      if (cached) this.popupWindows.dismiss(cached)
+      return
+    }
+
+    const requestedUrl =
+      request.kind === 'open-window' || request.kind === 'focus-window'
+        ? (this.ownedExtensionPageUrl(request.extensionId, request.url) ?? undefined)
+        : undefined
+    if ((request.kind === 'open-window' || request.kind === 'focus-window') && !requestedUrl) {
+      Logger.dev('An extension popup request used an invalid extension URL:', {
+        extensionId: request.extensionId
+      })
+      return
+    }
+    void this.openExtensionPopup(
+      request.projectId,
+      owner.id,
+      tab.threadId,
+      tab.boxId,
+      request.extensionId,
+      requestedUrl
+    ).catch((error: unknown) => {
+      Logger.dev('An extension action popup could not be opened:', {
+        extensionId: request.extensionId,
+        error
+      })
+    })
+  }
+
   /**
-   * Open an extension's own popup in the rail.
-   *
-   * Electron draws no toolbar and no action popup, so an extension's declared
-   * `action.default_popup` has no host of its own: this is the app supplying one.
-   * The page is bound to the jar the extension runs in, because an extension page
-   * resolves only inside the session that loaded the extension, and it is then a
-   * popup like any other: the rail places it, gives it the keyboard and closes it.
-   *
-   * The tab is taken from the caller's own record rather than assumed to exist:
-   * the renderer makes a tab the moment the user asks for one, and its page is
-   * only shown once there is an address to load, so a tab the user just opened has
-   * no record here yet. Refusing it would leave the popup unopenable on exactly the
-   * blank tab a user reaches for an extension on, which is what this did before.
+   * Open an extension's own popup in the rail. Its page runs in the extension's
+   * jar, remains live when hidden, and is retargeted when the extension is used in
+   * another tab in the same jar.
    */
   private async openExtensionPopup(
     projectId: string,
     tabId: string,
     threadId: string,
     boxId: string | null,
-    extensionId: string
+    extensionId: string,
+    requestedUrl?: string
   ): Promise<string | null> {
     const tab = this.ensureTab(tabId, projectId, threadId, boxId)
     // An extension can ask for its panel to open when its action is clicked, and
     // Chromium opens the panel rather than the action popup when it does. The
     // panel is a surface of the rail, so there is no popup id to answer with.
-    const actionPanel = this.extensions.sidePanelForActionClick(
-      projectId,
-      tab.boxId,
-      extensionId,
-      tab.view.webContents.id
-    )
+    const actionPanel = requestedUrl
+      ? null
+      : this.extensions.sidePanelForActionClick(
+          projectId,
+          tab.boxId,
+          extensionId,
+          tab.view.webContents.id
+        )
     if (actionPanel) {
       await this.openExtensionSidePanel({
         projectId,
@@ -3020,18 +3154,91 @@ export class BrowserService {
       })
       return null
     }
-    // One popup per extension per tab: asking again is the user coming back to the
-    // popup they already have, not asking for a second copy of it.
-    const existing = this.popupWindows.extensionPopupFor(extensionId, tabId)
-    if (existing) return existing
+    // One live popup page per extension jar: moving to another tab retargets this
+    // view instead of creating another extension document and worker connection.
+    const cached = this.popupWindows.extensionPopupForJar(extensionId, projectId, tab.boxId)
+    const activateCached = async (popupId: string): Promise<boolean> => {
+      if (
+        !this.popupWindows.retargetExtensionPopup(
+          popupId,
+          { tabId, projectId, threadId: tab.threadId, boxId: tab.boxId },
+          requestedUrl ??
+            this.extensions.popupUrlFor(extensionId, projectId, tab.boxId) ??
+            undefined
+        )
+      )
+        return false
+      if (requestedUrl) {
+        try {
+          if (!(await this.popupWindows.navigateExtensionPopup(popupId, requestedUrl))) return false
+        } catch (error: unknown) {
+          Logger.dev('A retained extension page could not navigate to its requested popup:', {
+            extensionId,
+            error
+          })
+          return true
+        }
+      }
+      this.reportExtensionPageTabs(tabId)
+      return true
+    }
+    if (cached && (await activateCached(cached))) {
+      return cached
+    }
+    const popupKey = JSON.stringify([projectId, tab.boxId, extensionId])
+    let opening = this.extensionPopupOpenings.get(popupKey)
+    while (opening) {
+      try {
+        await opening
+      } catch {
+        // A later action can retry after a failed load; the failed page cleans
+        // itself up before the next creation starts.
+      }
+      opening = this.extensionPopupOpenings.get(popupKey)
+    }
+    const openedWhileWaiting = this.popupWindows.extensionPopupForJar(
+      extensionId,
+      projectId,
+      tab.boxId
+    )
+    if (openedWhileWaiting && (await activateCached(openedWhileWaiting))) {
+      return openedWhileWaiting
+    }
+    const creation = this.createExtensionPopup(
+      projectId,
+      tabId,
+      tab.threadId,
+      tab.boxId,
+      extensionId,
+      requestedUrl
+    )
+    this.extensionPopupOpenings.set(popupKey, creation)
+    try {
+      return await creation
+    } finally {
+      if (this.extensionPopupOpenings.get(popupKey) === creation) {
+        this.extensionPopupOpenings.delete(popupKey)
+      }
+    }
+  }
+
+  /** Create the one cached action popup page after jar-level access is ready. */
+  private async createExtensionPopup(
+    projectId: string,
+    tabId: string,
+    threadId: string,
+    boxId: string | null,
+    extensionId: string,
+    requestedUrl?: string
+  ): Promise<string> {
     if (this.popupWindows.countForTab(tabId) >= MAX_POPUP_WINDOWS_PER_TAB) {
       throw new Error('This tab already holds the popups it may host')
     }
-    const url = this.extensions.popupUrlFor(extensionId, projectId, tab.boxId)
+    const url = requestedUrl ?? this.extensions.popupUrlFor(extensionId, projectId, boxId)
     if (!url) throw new Error('That extension offers no popup in this box')
     // The extension has to be loaded in the jar before its own page can resolve: a
     // jar is loaded on demand and does not wait for a popup.
-    await this.extensions.ensureJarLoaded(projectId, tab.boxId)
+    await this.extensions.ensureJarLoaded(projectId, boxId)
     // The wrappers that answer this page's `chrome.tabs.query` must be in the
     // document before the extension's own bundle reads them: a popup decides which
     // site it is on as it starts, so a push that arrives after `did-finish-load`
@@ -3040,7 +3247,7 @@ export class BrowserService {
     const preload = await this.ensureExtensionPageTabsPreload()
     const view = new WebContentsView({
       webPreferences: {
-        session: this.sessionForProject(projectId, tab.boxId),
+        session: this.sessionForProject(projectId, boxId),
         preload: preload ?? undefined,
         sandbox: true,
         contextIsolation: true,
@@ -3050,7 +3257,7 @@ export class BrowserService {
       }
     })
     const popupId = this.popupWindows.hostExtension({
-      owner: { tabId, projectId, threadId: tab.threadId, boxId: tab.boxId },
+      owner: { tabId, projectId, threadId, boxId },
       extensionId,
       url,
       view,
@@ -3060,7 +3267,10 @@ export class BrowserService {
     // document, so every document it arrives with is told which tab it acts on.
     // The preload above already answered the first document; this is what keeps the
     // answer current as the page navigates and as the tab behind it changes.
-    view.webContents.on('did-finish-load', () => this.reportExtensionPageTabs(tabId))
+    view.webContents.on('did-finish-load', () => {
+      const currentTabId = this.popupWindows.tabIdForContents(view.webContents.id)
+      if (currentTabId) this.reportExtensionPageTabs(currentTabId)
+    })
     try {
       await view.webContents.loadURL(url)
     } catch (error: unknown) {
@@ -3308,7 +3518,9 @@ export class BrowserService {
     contents.on('will-navigate', (event, url) => {
       if (!this.isAllowedPopupNavigation(record, url)) event.preventDefault()
     })
-    this.installWindowOpenPolicy(record.view, popupPageOwner(record))
+    contents.setWindowOpenHandler((details) =>
+      this.windowOpenResponse(popupPageOwner(record), details)
+    )
   }
 
   /**
@@ -3339,9 +3551,9 @@ export class BrowserService {
   /**
    * Run one browser chord pressed inside a popup window.
    *
-   * Closing a popup closes the popup and not the browser: to the user a popup is
-   * its own window, so Cmd/Ctrl+W must end it. The chords that belong to the app's
-   * own chrome (the address bar, a new tab, the note) are forwarded to the
+   * Cmd/Ctrl+W dismisses the popup surface. A page-created window ends; an
+   * extension action popup is parked for reuse. The chords that belong to the
+   * app's own chrome (the address bar, a new tab, the note) are forwarded to the
    * renderer under the owning tab, which is the tab the app would act on.
    */
   private runPopupWindowShortcut(
@@ -3503,7 +3715,7 @@ export class BrowserService {
     // Unload first, then reload: an extension holds open files and a running
     // service worker inside the storage being erased, and reloading the jar's tabs
     // then runs it again against the clean store.
-    await this.extensions.onJarEmptied(projectId, boxId)
+    await this.extensions.onJarEmptied(projectId, boxId, true)
     await this.clearJarStorage(partition)
     await this.extensions.ensureJarLoaded(projectId, boxId)
   }
@@ -3645,21 +3857,25 @@ export class BrowserService {
       partitions.add(partition)
       jars.push(jar)
     }
+    for (const owner of [...this.popupWindows.liveJars(), ...this.sidePanels.liveJars()]) {
+      const jar = browserJarFor(owner.projectId, owner.boxId)
+      const partition = browserPartitionFor(jar.projectId, jar.boxId)
+      if (partitions.has(partition)) continue
+      partitions.add(partition)
+      jars.push(jar)
+    }
     return jars
   }
 
-  /** Whether one jar still has a page alive. A hibernated tab has none, which is
-   *  what makes hibernation the point at which an extension can be released. */
-  private jarHasLiveTab(projectId: string, boxId: string | null): boolean {
+  /** Retained extension documents keep their jar alive after site tabs close. */
+  private jarHasLivePage(projectId: string, boxId: string | null): boolean {
     // Asked about the jar rather than about its owner: a box's jar is shared, so
     // the global browser reading a page in it is enough to keep its extensions
     // loaded even as a project's tab in the same box closes.
     const partition = browserPartitionFor(projectId, boxId)
-    for (const tab of this.tabs.values()) {
-      if (browserPartitionFor(tab.projectId, tab.boxId) !== partition) continue
-      if (!tab.view.webContents.isDestroyed()) return true
-    }
-    return false
+    return this.liveJars().some(
+      (jar) => browserPartitionFor(jar.projectId, jar.boxId) === partition
+    )
   }
 
   /** Every jar one context holds a session for, the context's own jar first.
@@ -3903,6 +4119,10 @@ export class BrowserService {
     if (!tab) return
     const contents: WebContents | undefined = tab.view.webContents
     if (!contents || contents.isDestroyed()) return
+    this.popupWindows.followActiveTab(
+      { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId },
+      (extensionId) => this.extensions.popupUrlFor(extensionId, tab.projectId, tab.boxId)
+    )
     this.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onActivated', [
       { tabId: contents.id, windowId: 0 }
     ])
@@ -3971,6 +4191,7 @@ export class BrowserService {
         id: -1,
         index: 0,
         windowId: 0,
+        windowType: 'normal',
         active,
         pinned: false,
         incognito: false,
@@ -3983,6 +4204,7 @@ export class BrowserService {
       id: contents.id,
       index: 0,
       windowId: 0,
+      windowType: 'normal',
       active,
       pinned: false,
       incognito: false,
@@ -4037,7 +4259,7 @@ export class BrowserService {
       id: contents.id,
       url: contents.getURL(),
       title: contents.getTitle(),
-      active: false,
+      active: this.activeTabId === page.owner.tabId,
       windowId: 0,
       index: 0
     })
@@ -4420,9 +4642,22 @@ export class BrowserService {
     // round trip does not send the user back to the first frame, and the ordering
     // cannot depend on which IPC the renderer happens to handle first.
     if (tab.composition && !tab.view.webContents.isDestroyed()) {
-      void this.rememberPlayhead(tabId, tab).then(
+      const navigationStart = this.rememberPlayhead(tabId, tab).then(
         () => this.navigateTo(tabId, url),
         () => this.navigateTo(tabId, url)
+      )
+      this.pendingNavigationStarts.set(tabId, navigationStart)
+      void navigationStart.then(
+        () => {
+          if (this.pendingNavigationStarts.get(tabId) === navigationStart) {
+            this.pendingNavigationStarts.delete(tabId)
+          }
+        },
+        () => {
+          if (this.pendingNavigationStarts.get(tabId) === navigationStart) {
+            this.pendingNavigationStarts.delete(tabId)
+          }
+        }
       )
       return
     }
@@ -4430,11 +4665,11 @@ export class BrowserService {
   }
 
   /** Start one navigation, reporting a failure rather than rejecting. */
-  private navigateTo(tabId: string, url: string): void {
+  private navigateTo(tabId: string, url: string): Promise<void> {
     const tab = this.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return
+    if (!tab || tab.view.webContents.isDestroyed()) return Promise.resolve()
     const contents = tab.view.webContents
-    void this.extensions
+    const navigationStart = this.extensions
       .ensureJarLoaded(tab.projectId, tab.boxId)
       .catch((error: unknown) => {
         // An extension load failure must not prevent the page itself from opening.
@@ -4445,11 +4680,18 @@ export class BrowserService {
       })
       .then(() => {
         if (this.tabs.get(tabId) !== tab || contents.isDestroyed()) return
-        void contents.loadURL(url).catch((error: unknown) => {
+        return contents.loadURL(url).catch((error: unknown) => {
           Logger.dev('Browser navigation did not complete:', { tabId, url, error })
           this.publishState(tabId)
         })
       })
+      .finally(() => {
+        if (this.pendingNavigationStarts.get(tabId) === navigationStart) {
+          this.pendingNavigationStarts.delete(tabId)
+        }
+      })
+    this.pendingNavigationStarts.set(tabId, navigationStart)
+    return navigationStart
   }
 
   /** Open the page-level context menu anchored at a point (the toolbar's page
@@ -4765,6 +5007,7 @@ export class BrowserService {
       // the tab up in a list the other surface's tabs are not in.
       projectId: tab.projectId,
       threadId: tab.threadId,
+      boxId: tab.boxId,
       url: contents.getURL(),
       title: contents.getTitle(),
       favicon: tab.favicon,
@@ -5272,10 +5515,9 @@ export class BrowserService {
     this.stage.release(tab.view)
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)
-    // The jar's extensions are released the moment nothing is left showing them:
-    // an extension held loaded for a box with no page is a renderer held for
-    // nothing, which is exactly what containing an extension per box is for.
-    if (!this.jarHasLiveTab(tab.projectId, tab.boxId)) {
+    // A cached popup is still a live extension document. Unloading its extension
+    // would invalidate that document even though it remains available for reuse.
+    if (!this.jarHasLivePage(tab.projectId, tab.boxId)) {
       void this.extensions.onJarEmptied(tab.projectId, tab.boxId)
     }
     for (const [contextKey, agentTabId] of this.agentTabIds) {

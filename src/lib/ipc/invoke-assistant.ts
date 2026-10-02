@@ -7,6 +7,7 @@ import type {
   Routine,
   RoutineDeletionResult,
   RoutineSchedule,
+  SkippedRoutineRun,
   Thread,
   UpdateRoutineInput
 } from '../types'
@@ -17,8 +18,8 @@ import type { Contract } from './contract-helpers'
  *
  * Assistant tasks are ordinary threads in the hidden assistant space, so task
  * creation, listing, forking, and conversation all reuse the existing thread
- * channels. These channels cover only the routine grouping layer and the
- * scheduler's missed-run surface.
+ * channels. These channels cover the routine grouping layer and the scheduler's
+ * run and skipped-slot surfaces.
  */
 export const invokeAssistantContract = {
   /** Ensure the hidden assistant-space container exists, returning it. */
@@ -73,6 +74,14 @@ export const invokeAssistantContract = {
    */
   'assistant:postSetup': {} as Contract<[routineId: string], void>,
   'assistant:listMissedRuns': {} as Contract<[], MissedRun[]>,
+  /** Read user-skipped scheduled slots used to calculate each task's next run. */
+  'assistant:listSkippedRoutineRuns': {} as Contract<[], SkippedRoutineRun[]>,
+  /** Whether a routine has any unskipped scheduled slot remaining today. */
+  'assistant:hasRoutineRunsToday': {} as Contract<[routineId: string], boolean>,
+  /** Skip the closest upcoming unskipped slot in one routine and return the new snapshot. */
+  'assistant:skipNextRoutineRun': {} as Contract<[routineId: string], SkippedRoutineRun[]>,
+  /** Skip every remaining scheduled slot today in one routine. */
+  'assistant:skipRoutineRunsToday': {} as Contract<[routineId: string], SkippedRoutineRun[]>,
   /**
    * Durable record of unattended runs, newest first. The "While you were away"
    * list and a routine's own history read this so a run whose thread was since

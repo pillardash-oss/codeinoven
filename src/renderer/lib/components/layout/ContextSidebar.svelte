@@ -21,6 +21,7 @@
     MessageCircleDashed,
     MessagesCircle,
     Network,
+    NotebookPen,
     PanelBottom,
     PanelRight,
     Plus,
@@ -75,10 +76,8 @@
      *  "+"; temporary chats are tabbed but are only ever opened from a thread. */
     onNewTerminal?: () => void
     onNewBrowser?: () => void
-    /** Close every popup window the tab's page opened. The popup rail's own close
-     *  button ends all of them at once: one tab close per window is the strip's
-     *  job, and this is the way out of a pile of them. */
-    onCloseAllPopupWindows?: () => void
+    /** Dismiss extension action popups and close page-created popup windows. */
+    onDismissPopups?: () => void
   }
 
   let {
@@ -98,7 +97,7 @@
     onTerminalDockToggle,
     onNewTerminal,
     onNewBrowser,
-    onCloseAllPopupWindows,
+    onDismissPopups,
     tabMenu
   }: Props = $props()
 
@@ -155,6 +154,7 @@
     'extensions',
     'git',
     'actions',
+    'sticky-notes',
     'thread-note',
     'coordinator',
     'assistant-how-to'
@@ -177,6 +177,11 @@
       return { projectId: tab.projectId, conversationId: tab.threadId }
     }
     return null
+  }
+
+  /** Closing a popup rail tab destroys that popup page. */
+  function closeLabel(tab: ContextSidebarTab): string {
+    return `Close ${tab.title}`
   }
 
   /** Files are headerless like the other single-panel tools right up until a
@@ -383,6 +388,8 @@
       <MessagesCircle size={12} class="shrink-0" />
     {:else if tab.kind === 'notifications'}
       <Bell size={12} class="shrink-0" />
+    {:else if tab.kind === 'sticky-notes'}
+      <NotebookPen size={12} class="shrink-0" />
     {:else if tab.kind === 'attention'}
       <TriangleAlert size={12} class="shrink-0 text-warning" />
     {:else if tab.kind === 'memory'}
@@ -491,8 +498,8 @@
       <button
         type="button"
         class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-        aria-label={`Close ${tab.title}`}
-        title={`Close ${tab.title}`}
+        aria-label={closeLabel(tab)}
+        title={closeLabel(tab)}
         onclick={() => onClose(tab.id)}
       >
         <X size={11} />
@@ -669,9 +676,9 @@
             <button
               type="button"
               class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label={popupMode ? 'Close all popup windows' : `Close ${activeTab.title}`}
-              title={popupMode ? 'Close all popup windows' : 'Close panel'}
-              onclick={() => (popupMode ? onCloseAllPopupWindows?.() : onClose(activeTab.id))}
+              aria-label={popupMode ? 'Dismiss popups' : `Close ${activeTab.title}`}
+              title={popupMode ? 'Hide extension popups and close page popups' : 'Close panel'}
+              onclick={() => (popupMode ? onDismissPopups?.() : onClose(activeTab.id))}
             >
               <X size={13} />
             </button>

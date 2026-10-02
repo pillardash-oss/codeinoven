@@ -7,11 +7,16 @@
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+  import type { OvenAppearance, OvenState } from '$shared/ovens'
+  import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import {
+    CONVERSATION_METADATA_BADGE_CLASS,
+    CONVERSATION_METADATA_ICONS
+  } from './conversation-metadata-badges'
 
   import {
     AudioLines,
     ArrowUpRight,
-    Brain,
     Check,
     ChevronDown,
     Clock,
@@ -37,6 +42,7 @@
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import ForeignRunCard from './ForeignRunCard.svelte'
+  import MessageSendErrorCard from './MessageSendErrorCard.svelte'
   import type { ComposerScopeShoe } from '../chats/ComposerShoe.svelte'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage } from '../chats/composer-mentions'
@@ -117,6 +123,8 @@
   import { StudioDocumentHistoryCollection } from '../specs/studio-document-history.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -346,6 +354,10 @@
     promptPagesBefore
   } from './thread-history'
   import { threadScrollPositions } from './thread-scroll-memory'
+
+  const ThinkingMetadataIcon = CONVERSATION_METADATA_ICONS.thinking
+  const AccountMetadataIcon = CONVERSATION_METADATA_ICONS.account
+  const LocalMetadataIcon = CONVERSATION_METADATA_ICONS.local
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -4210,6 +4222,15 @@
         })
         .catch(() => {
           if (alive) harnessAccounts = []
+        })
+    })
+    scheduleDeferredWork('threadView:ovens', () => {
+      void invoke('oven:state')
+        .then((state) => {
+          if (alive) ovensForAttribution = state
+        })
+        .catch(() => {
+          if (alive) ovensForAttribution = null
         })
     })
     if (!controller) {
@@ -10945,9 +10966,34 @@
           (account) =>
             account.id === selection.accountId && account.providerId === selection.providerId
         )?.label ?? null,
+      accountId: selection.accountId ?? null,
+      ovenLabel: ovenLabelForId(settings.ovenId),
+      ovenIsLocal: !settings.ovenId || settings.ovenId === LOCAL_OVEN_ID,
+      ovenAppearance: ovenAppearanceForId(settings.ovenId),
       isFast: fastVariantForModelId(modelId) !== null
     }
   })
+
+  let ovensForAttribution = $state.raw<OvenState | null>(null)
+  function ovenLabelForId(id?: string | null): string {
+    const ovenId = id ?? LOCAL_OVEN_ID
+    return (
+      ovensForAttribution?.ovens.find((oven) => oven.id === ovenId)?.name ??
+      (ovenId === LOCAL_OVEN_ID ? 'Local' : 'Oven')
+    )
+  }
+
+  function ovenAppearanceForId(id?: string | null): OvenAppearance {
+    const ovenId = id ?? LOCAL_OVEN_ID
+    const oven = ovensForAttribution?.ovens.find((candidate) => candidate.id === ovenId)
+    return oven
+      ? {
+          icon: oven.icon,
+          color: oven.color,
+          ...(oven.customSvg ? { customSvg: oven.customSvg } : {})
+        }
+      : { icon: 'cpu', color: '#6b7280' }
+  }
 
   function openSubagent(part: SubagentPart): void {
     contextSidebarState.openSubagent(thread.projectId, thread.id, part.id, part.activity)
@@ -11823,7 +11869,7 @@
                       {/if}
                     </div>
                     {#if msg.error}
-                      <p class="mt-1 self-end text-xs text-danger">Not sent: {msg.error}</p>
+                      <MessageSendErrorCard message={msg.error} onEdit={() => editMessage(msg)} />
                     {/if}
                     <div
                       class="mt-1 flex items-center gap-1.5 self-end opacity-0 transition-opacity group-hover:opacity-100"
@@ -11886,6 +11932,11 @@
               {@const provider = messageProvider(msg, providers)}
               {@const modelLabel = messageModelLabel(msg, allModels)}
               {@const msgThinking = messageThinkingLevel(msg, allModels)}
+              {@const msgOvenAppearance = msg.ovenAppearance ?? ovenAppearanceForId(msg.ovenId)}
+              {@const msgOvenLabel = msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}
+              {@const msgOvenIsLocal = msg.ovenId
+                ? msg.ovenId === LOCAL_OVEN_ID
+                : msg.ovenLabel === undefined || msg.ovenLabel === 'Local'}
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
               {@const harnessId = resolveMessageHarnessId(msg, messageHarnessFallback)}
               {@const harnessName = messageHarnessName(msg, messageHarnessFallback)}
@@ -11970,6 +12021,18 @@
                         accountLabel={useLiveAttribution
                           ? currentWorkingTraceAttribution.accountLabel
                           : msg.accountLabel}
+                        accountId={useLiveAttribution
+                          ? currentWorkingTraceAttribution.accountId
+                          : msg.accountId}
+                        ovenLabel={useLiveAttribution
+                          ? currentWorkingTraceAttribution.ovenLabel
+                          : (msg.ovenLabel ?? ovenLabelForId(msg.ovenId))}
+                        ovenIsLocal={useLiveAttribution
+                          ? currentWorkingTraceAttribution.ovenIsLocal
+                          : msgOvenIsLocal}
+                        ovenAppearance={useLiveAttribution
+                          ? currentWorkingTraceAttribution.ovenAppearance
+                          : msgOvenAppearance}
                         isFast={useLiveAttribution
                           ? currentWorkingTraceAttribution.isFast
                           : fastVariant !== null}
@@ -12184,24 +12247,49 @@
                                 </span>
                                 {#if msgThinking}
                                   <span
-                                    class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] capitalize text-muted"
+                                    class={`${CONVERSATION_METADATA_BADGE_CLASS} capitalize`}
                                     title={`Thinking level: ${msgThinking}`}
                                     aria-label={`Thinking level: ${msgThinking}`}
                                   >
-                                    <Brain size={9} />
+                                    <ThinkingMetadataIcon size={9} />
                                     {msgThinking}
                                   </span>
                                 {/if}
                               {/if}
-                              {#if msg.accountLabel && msg.accountLabel !== 'Default'}
+                              {#if msg.accountId || msg.accountLabel}
                                 <span
-                                  class="flex items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
-                                  title={`Account: ${msg.accountLabel}`}
-                                  aria-label={`Account: ${msg.accountLabel}`}
+                                  class={CONVERSATION_METADATA_BADGE_CLASS}
+                                  title={`Account: ${msg.accountLabel ?? 'Default'}`}
+                                  aria-label={`Account: ${msg.accountLabel ?? 'Default'}`}
                                 >
-                                  {msg.accountLabel}
+                                  <AccountMetadataIcon size={10} />
+                                  {#if msg.accountLabel && msg.accountLabel !== 'Default'}{msg.accountLabel}{/if}
                                 </span>
                               {/if}
+                              <span
+                                class={CONVERSATION_METADATA_BADGE_CLASS}
+                                title={`Oven: ${msgOvenLabel}`}
+                                aria-label={`Oven: ${msgOvenLabel}`}
+                              >
+                                {#if msgOvenIsLocal}
+                                  <LocalMetadataIcon size={10} class="shrink-0" />
+                                {:else}
+                                  <img
+                                    class="h-3 w-3 shrink-0"
+                                    alt=""
+                                    src={msgOvenAppearance.customSvg
+                                      ? getCustomSvgDataUrl(
+                                          msgOvenAppearance.customSvg,
+                                          msgOvenAppearance.color
+                                        )
+                                      : getIconSvgDataUrl(
+                                          msgOvenAppearance.icon,
+                                          msgOvenAppearance.color
+                                        )}
+                                  />
+                                {/if}
+                                {msgOvenLabel}
+                              </span>
                               <span class="text-[0.625rem] text-dimmed"
                                 >· {formatTime(msg.completedAt ?? msg.createdAt)}</span
                               >
@@ -12250,6 +12338,10 @@
               harnessId={currentWorkingTraceAttribution.harnessId}
               harnessName={currentWorkingTraceAttribution.harnessName}
               accountLabel={currentWorkingTraceAttribution.accountLabel}
+              accountId={currentWorkingTraceAttribution.accountId}
+              ovenLabel={currentWorkingTraceAttribution.ovenLabel}
+              ovenIsLocal={currentWorkingTraceAttribution.ovenIsLocal}
+              ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
               isFast={currentWorkingTraceAttribution.isFast}
               initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
               initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}

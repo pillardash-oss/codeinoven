@@ -116,6 +116,8 @@ class BrowserExtensionsState {
    * the first frame.
    */
   installs: BrowserExtensionInstall[] = $state([])
+  /** Extension ids whose user-requested update is downloading or applying. */
+  updatingIds: string[] = $state([])
   /** Action state every tab of a box sees, keyed box + extension. */
   private activityGlobal: Record<string, BrowserExtensionActivity> = $state({})
   /** Action state one tab sees, over the extension's own, keyed box + extension
@@ -146,6 +148,11 @@ class BrowserExtensionsState {
    *  door and the panel's menu read to stay out of the way. */
   get installing(): boolean {
     return this.installs.length > 0
+  }
+
+  /** Whether one extension's Web Store package is being applied. */
+  isUpdating(extensionId: string): boolean {
+    return this.updatingIds.includes(extensionId)
   }
 
   /**
@@ -359,6 +366,20 @@ class BrowserExtensionsState {
     }
   }
 
+  /** Apply a newer Web Store package after the user clicks its row action. */
+  async updateFromWebStore(extensionId: string): Promise<void> {
+    if (this.isUpdating(extensionId)) return
+    this.updatingIds = [...this.updatingIds, extensionId]
+    try {
+      const extension = await invoke('browser:extensionUpdateFromWebStore', extensionId)
+      this.apply(extension)
+    } catch (error: unknown) {
+      reportError(error, 'The extension could not be updated.')
+    } finally {
+      this.updatingIds = this.updatingIds.filter((id) => id !== extensionId)
+    }
+  }
+
   /** Load or unload an extension everywhere. Main decides where it can run, so
    *  disabling it is enough to make it inert without losing its settings. */
   async setEnabled(extensionId: string, enabled: boolean): Promise<void> {
@@ -369,6 +390,15 @@ class BrowserExtensionsState {
    *  header. Both pin rules are main's, so a refusal arrives as the error it is. */
   async setPinned(extensionId: string, pinned: boolean): Promise<void> {
     await this.patch(extensionId, { pinned }, 'The extension could not be pinned.')
+  }
+
+  /** Save a complete user-selected order for installed extensions. */
+  async reorder(orderedIds: string[]): Promise<void> {
+    try {
+      await invoke('browser:extensionReorder', orderedIds)
+    } catch (error: unknown) {
+      reportError(error, 'The extensions could not be reordered.')
+    }
   }
 
   /**

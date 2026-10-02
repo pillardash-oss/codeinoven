@@ -3,7 +3,7 @@
   import type { Snippet } from 'svelte'
   import { APP_SLUG } from '$shared/brand'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
-  import { browserVisibility, trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
@@ -423,10 +423,7 @@
   </div>
 
   {#if minimized}
-    <div
-      class="pointer-events-auto fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}"
-      {@attach trackBrowserOcclusion}
-    >
+    <div class="pointer-events-auto fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}">
       {@render dock()}
     </div>
   {/if}

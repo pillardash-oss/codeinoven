@@ -1,9 +1,20 @@
 <script lang="ts">
-  import { AppWindow, Brain, Loader2, RefreshCw, Zap } from '@lucide/svelte'
+  import { AppWindow, Loader2, RefreshCw, Zap } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { formatDurationSeconds } from '$lib/format/duration'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import type { ThinkingLevel } from '$shared/types'
+  import type { OvenAppearance } from '$shared/ovens'
+  import {
+    CONVERSATION_METADATA_BADGE_CLASS,
+    CONVERSATION_METADATA_ICONS
+  } from './conversation-metadata-badges'
+
+  const ThinkingMetadataIcon = CONVERSATION_METADATA_ICONS.thinking
+  const AccountMetadataIcon = CONVERSATION_METADATA_ICONS.account
+  const LocalMetadataIcon = CONVERSATION_METADATA_ICONS.local
 
   interface Props {
     /** True when this trace was rehydrated from persisted state instead of a live run. */
@@ -24,6 +35,10 @@
     harnessId?: string | null
     harnessName?: string | null
     accountLabel?: string | null
+    accountId?: string | null
+    ovenLabel?: string | null
+    ovenIsLocal?: boolean
+    ovenAppearance?: OvenAppearance
   }
 
   let {
@@ -38,7 +53,11 @@
     providerId,
     harnessId,
     harnessName,
-    accountLabel
+    accountLabel,
+    accountId,
+    ovenLabel,
+    ovenIsLocal = false,
+    ovenAppearance
   }: Props = $props()
 </script>
 
@@ -104,21 +123,42 @@
       {/if}
       {#if thinkingLevel}
         <span
-          class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] capitalize text-muted"
+          class={`${CONVERSATION_METADATA_BADGE_CLASS} capitalize`}
           title={`Thinking level: ${thinkingLevel}`}
           aria-label={`Thinking level: ${thinkingLevel}`}
         >
-          <Brain size={9} />
+          <ThinkingMetadataIcon size={9} />
           {thinkingLevel}
         </span>
       {/if}
-      {#if accountLabel && accountLabel !== 'Default'}
+      {#if accountId || accountLabel}
         <span
-          class="flex shrink-0 items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
-          title={`Account: ${accountLabel}`}
-          aria-label={`Account: ${accountLabel}`}
+          class={CONVERSATION_METADATA_BADGE_CLASS}
+          title={`Account: ${accountLabel ?? 'Default'}`}
+          aria-label={`Account: ${accountLabel ?? 'Default'}`}
         >
-          {accountLabel}
+          <AccountMetadataIcon size={10} />
+          {#if accountLabel && accountLabel !== 'Default'}{accountLabel}{/if}
+        </span>
+      {/if}
+      {#if ovenLabel}
+        <span
+          class={CONVERSATION_METADATA_BADGE_CLASS}
+          title={`Oven: ${ovenLabel}`}
+          aria-label={`Oven: ${ovenLabel}`}
+        >
+          {#if ovenIsLocal}
+            <LocalMetadataIcon size={10} class="shrink-0" />
+          {:else if ovenAppearance}
+            <img
+              class="h-3 w-3 shrink-0"
+              alt=""
+              src={ovenAppearance.customSvg
+                ? getCustomSvgDataUrl(ovenAppearance.customSvg, ovenAppearance.color)
+                : getIconSvgDataUrl(ovenAppearance.icon, ovenAppearance.color)}
+            />
+          {/if}
+          {ovenLabel}
         </span>
       {/if}
     </span>

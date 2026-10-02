@@ -1,4 +1,5 @@
 import type { ThinkingLevel } from './common'
+import type { OvenAppearance } from '../ovens'
 import type { PromptProjectReference, PromptReference } from './agent'
 import type {
   AgentMessageOrigin,
@@ -226,6 +227,11 @@ export interface AgentMessage {
   harnessId?: string
   /** Credential container that produced this message. */
   accountId?: string
+  /** Local or remote Oven that executed this turn. */
+  ovenId?: string
+  /** Oven name captured with the turn so renaming does not alter history. */
+  ovenLabel?: string
+  ovenAppearance?: OvenAppearance
   /** Historical label snapshot. Renaming an account does not rewrite old turns. */
   accountLabel?: string
   /** Reasoning effort in effect when this message's turn ran, when known. */

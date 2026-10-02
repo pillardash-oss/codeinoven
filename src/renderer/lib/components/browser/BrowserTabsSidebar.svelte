@@ -43,6 +43,7 @@
   import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'
   import BrowserGroupModal from './BrowserGroupModal.svelte'
   import BrowserTabModal from './BrowserTabModal.svelte'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { browserGroupAccent, browserGroupIconUrl } from './browser-group-appearance'
   import { browserSiteHost, openBrowserPageMenu, openBrowserSiteMenu } from './browser-chrome-menus'
 
@@ -74,6 +75,18 @@
   let editorGroupId = $state<string | null | undefined>(undefined)
   /** The tab whose editor is open, or null while it is closed. */
   let editorTabId = $state<string | null>(null)
+  /** Tabs chosen with Cmd/Ctrl-click or Shift-click for a group operation. */
+  let selectedTabIds = $state<string[]>([])
+  /** The fixed endpoint used by the next Shift-click range. */
+  let selectionAnchorId = $state<string | null>(null)
+  let pendingBulkBox = $state<{
+    tabIds: string[]
+    boxId: string | null
+    boxName: string
+  } | null>(null)
+  const visibleSelectedTabIds = $derived(
+    selectedTabIds.filter((id) => globalBrowser.tabById(id) !== null)
+  )
 
   const activeTab = $derived(globalBrowser.activeTab)
   const runtime = $derived(activeTab ? globalBrowser.runtimeFor(activeTab.id) : null)
@@ -176,6 +189,75 @@
 
   function tabsFor(groupId: string | null): GlobalBrowserTab[] {
     return globalBrowser.tabsInGroup(groupId).filter(matches)
+  }
+
+  function handleTabClick(tabId: string, event: MouseEvent): void {
+    const additive = event.metaKey || event.ctrlKey
+    if (event.shiftKey) {
+      const tabs = globalBrowser.tabs
+      const anchorIndex = tabs.findIndex((tab) => tab.id === selectionAnchorId)
+      const targetIndex = tabs.findIndex((tab) => tab.id === tabId)
+      if (targetIndex < 0) return
+      const start = anchorIndex < 0 ? targetIndex : Math.min(anchorIndex, targetIndex)
+      const end = anchorIndex < 0 ? targetIndex : Math.max(anchorIndex, targetIndex)
+      const rangeIds = tabs.slice(start, end + 1).map((tab) => tab.id)
+      selectedTabIds = additive ? [...new Set([...visibleSelectedTabIds, ...rangeIds])] : rangeIds
+      if (selectionAnchorId === null) selectionAnchorId = tabId
+      return
+    }
+    if (additive) {
+      selectedTabIds = visibleSelectedTabIds.includes(tabId)
+        ? visibleSelectedTabIds.filter((id) => id !== tabId)
+        : [...visibleSelectedTabIds, tabId]
+      selectionAnchorId = tabId
+      return
+    }
+    selectedTabIds = []
+    selectionAnchorId = tabId
+    globalBrowser.switchTo(tabId)
+  }
+
+  function handleTabContextMenu(tabId: string): string[] {
+    if (visibleSelectedTabIds.includes(tabId)) return [...visibleSelectedTabIds]
+    selectedTabIds = [tabId]
+    selectionAnchorId = tabId
+    return [tabId]
+  }
+
+  function moveTabsToGroup(tabIds: string[], groupId: string): void {
+    globalBrowser.moveTabsToGroup(tabIds, groupId)
+    selectedTabIds = []
+    selectionAnchorId = null
+  }
+
+  function createGroupForTabs(tabIds: string[]): void {
+    const groupId = globalBrowser.createGroup('New group')
+    if (!globalBrowser.groupById(groupId)) return
+    globalBrowser.moveTabsToGroup(tabIds, groupId)
+    selectedTabIds = []
+    selectionAnchorId = null
+    editorGroupId = groupId
+  }
+
+  function reopenTabsInBox(tabIds: string[], boxId: string | null): void {
+    for (const tabId of tabIds) globalBrowser.reopenInBox(tabId, boxId)
+    selectedTabIds = []
+    selectionAnchorId = null
+  }
+
+  function requestReopenTabsInBox(tabIds: string[], boxId: string | null): void {
+    const tabsToReopen = tabIds.filter((tabId) => {
+      const tab = globalBrowser.tabById(tabId)
+      return tab !== null && tab.boxId !== boxId
+    })
+    if (tabsToReopen.length === 0) return
+    pendingBulkBox = {
+      tabIds: tabsToReopen,
+      boxId,
+      boxName: boxId
+        ? (globalBrowser.boxById(boxId)?.name ?? 'the selected box')
+        : 'the default box'
+    }
   }
 
   function newTab(groupId: string | null = null): void {
@@ -515,7 +597,7 @@
           <input
             {@attach attachSearchInput}
             type="text"
-            class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
+            class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none"
             placeholder={scopedGroup ? `Search in ${scopedGroup.name}` : 'Search tabs'}
             aria-label={scopedGroup ? `Search tabs in ${scopedGroup.name}` : 'Search browser tabs'}
             value={query}
@@ -544,36 +626,16 @@
   {/if}
 {/snippet}
 
-<CollapsibleSidebar
-  title="Browser"
-  hideHeader
-  onboardingAnchor={false}
-  label="Browser tabs"
-  region="browser-sidebar"
-  overlayPhase={stripPhase}
-  {chrome}
->
-  {#if totalTabs === 0}
-    <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
-      <Globe size={22} class="text-dimmed" />
-      <p class="text-xs leading-relaxed text-dimmed">
-        No tabs are open. Pages here run in their own profile, separate from the browsers your
-        agents use.
-      </p>
-      <BrowserNewTabMenu>
-        {#snippet trigger()}
-          <button
-            type="button"
-            class="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-            title="Open a new browser tab"
-            onclick={() => newTab()}
-          >
-            New tab
-          </button>
-        {/snippet}
-      </BrowserNewTabMenu>
-    </div>
-  {:else}
+{#if totalTabs > 0}
+  <CollapsibleSidebar
+    title="Browser"
+    hideHeader
+    onboardingAnchor={false}
+    label="Browser tabs"
+    region="browser-sidebar"
+    overlayPhase={stripPhase}
+    {chrome}
+  >
     {#if searchGroupId === null && pinned.length > 0}
       <div class="mb-1">
         <p
@@ -586,6 +648,13 @@
           {#each pinned as tab (tab.id)}
             <BrowserTabRow
               {tab}
+              selected={visibleSelectedTabIds.includes(tab.id)}
+              selectedTabIds={visibleSelectedTabIds}
+              onTabClick={handleTabClick}
+              onTabContextMenu={handleTabContextMenu}
+              onMoveTabsToGroup={moveTabsToGroup}
+              onCreateGroupForTabs={createGroupForTabs}
+              onReopenTabsInBox={requestReopenTabsInBox}
               onEditTab={(id) => (editorTabId = id)}
               onOpenGroupEditor={(id) => (editorGroupId = id)}
             />
@@ -699,6 +768,13 @@
               {#each tabsFor(group.id) as tab (tab.id)}
                 <BrowserTabRow
                   {tab}
+                  selected={visibleSelectedTabIds.includes(tab.id)}
+                  selectedTabIds={visibleSelectedTabIds}
+                  onTabClick={handleTabClick}
+                  onTabContextMenu={handleTabContextMenu}
+                  onMoveTabsToGroup={moveTabsToGroup}
+                  onCreateGroupForTabs={createGroupForTabs}
+                  onReopenTabsInBox={requestReopenTabsInBox}
                   onEditTab={(id) => (editorTabId = id)}
                   onOpenGroupEditor={(id) => (editorGroupId = id)}
                 />
@@ -721,6 +797,13 @@
       {#each tabsFor(null) as tab (tab.id)}
         <BrowserTabRow
           {tab}
+          selected={visibleSelectedTabIds.includes(tab.id)}
+          selectedTabIds={visibleSelectedTabIds}
+          onTabClick={handleTabClick}
+          onTabContextMenu={handleTabContextMenu}
+          onMoveTabsToGroup={moveTabsToGroup}
+          onCreateGroupForTabs={createGroupForTabs}
+          onReopenTabsInBox={requestReopenTabsInBox}
           onEditTab={(id) => (editorTabId = id)}
           onOpenGroupEditor={(id) => (editorGroupId = id)}
         />
@@ -729,8 +812,8 @@
         <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">No ungrouped tabs match</p>
       {/if}
     {/if}
-  {/if}
-</CollapsibleSidebar>
+  </CollapsibleSidebar>
+{/if}
 
 {#if editorGroupId !== undefined}
   <BrowserGroupModal groupId={editorGroupId} onClose={() => (editorGroupId = undefined)} />
@@ -738,4 +821,23 @@
 
 {#if editorTabId !== null}
   <BrowserTabModal tabId={editorTabId} onClose={() => (editorTabId = null)} />
+{/if}
+
+{#if pendingBulkBox}
+  <ConfirmDialog
+    open
+    variant="primary"
+    title="Reopen selected tabs in another box?"
+    confirmLabel="Reopen tabs"
+    onCancel={() => (pendingBulkBox = null)}
+    onConfirm={() => {
+      if (pendingBulkBox) reopenTabsInBox(pendingBulkBox.tabIds, pendingBulkBox.boxId)
+      pendingBulkBox = null
+    }}
+  >
+    <p>
+      {visibleSelectedTabIds.length} tabs will close and reopen in {pendingBulkBox.boxName}. Each
+      box has separate cookies and sign-ins, and page history will not carry over.
+    </p>
+  </ConfirmDialog>
 {/if}

@@ -1,5 +1,11 @@
 import { BrowserWindow } from 'electron'
-import type { AutoAnswerItem, BackgroundRun, MissedRun, Routine } from '../../lib/types'
+import type {
+  AutoAnswerItem,
+  BackgroundRun,
+  MissedRun,
+  Routine,
+  SkippedRoutineRun
+} from '../../lib/types'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 
 /** Push the full routine list so routine rows and the how-to panel stay live. */
@@ -20,6 +26,13 @@ export function broadcastMissedRunsChanged(runs: MissedRun[]): void {
 export function broadcastBackgroundRunsChanged(runs: BackgroundRun[]): void {
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'assistant:backgroundRunsChanged', runs)
+  }
+}
+
+/** Push skipped slots so every renderer recalculates task and routine next runs. */
+export function broadcastSkippedRoutineRunsChanged(runs: SkippedRoutineRun[]): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'assistant:skippedRoutineRunsChanged', runs)
   }
 }
 
