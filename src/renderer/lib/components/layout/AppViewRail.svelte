@@ -80,7 +80,7 @@
         {#snippet badge()}
           {#if badges.activity || badges.unread}
             <span class="absolute -top-1 -right-1 flex flex-col items-end gap-0.5">
-              {#if badges.activity?.tone === 'working'}
+              {#if badges.hasWorkingThreads && badges.activity}
                 <WorkingCountBadge
                   icon={badges.activity.icon}
                   count={badges.activity.count}
@@ -95,9 +95,10 @@
                   label={badges.unread.label}
                   tone={badges.unread.tone}
                   colors={badges.unread.colors}
+                  class={badges.hasWorkingThreads ? '' : 'order-first'}
                 />
               {/if}
-              {#if badges.activity && badges.activity.tone !== 'working'}
+              {#if badges.activity && !badges.hasWorkingThreads}
                 <WorkingCountBadge
                   icon={badges.activity.icon}
                   count={badges.activity.count}

@@ -65,6 +65,8 @@ export interface ViewBadge {
 export interface ViewRailBadges {
   activity: ViewBadge | null
   unread: ViewBadge | null
+  /** The family has active work, regardless of the visible status label. */
+  hasWorkingThreads: boolean
 }
 
 /** The three families the rail's badges and labels are keyed by. */
@@ -275,12 +277,13 @@ export function viewBadgesFor(
     return {
       activity:
         browserAgentBadge(browserAssistantActivity) ?? browserTransferBadge(browserTransfers),
-      unread: null
+      unread: null,
+      hasWorkingThreads: browserAssistantActivity.working > 0
     }
   }
   const family = viewOptionFamily(optionId)
   if (family === 'projects' && optionId !== projectBadgeOption) {
-    return { activity: null, unread: null }
+    return { activity: null, unread: null, hasWorkingThreads: false }
   }
   const unread = notificationPanelState.unreadRailSummary(family)
   const threadUnreadCount = unreadCounts[family]
@@ -309,7 +312,8 @@ export function viewBadgesFor(
         label: familyActivityLabel(family, activity),
         icon
       },
-      unread: unreadBadge
+      unread: unreadBadge,
+      hasWorkingThreads: true
     }
   }
   if (activity.attention > 0) {
@@ -320,7 +324,8 @@ export function viewBadgesFor(
         label: familyActivityLabel(family, activity),
         icon
       },
-      unread: unreadBadge
+      unread: unreadBadge,
+      hasWorkingThreads: false
     }
   }
   if (activity.retry > 0) {
@@ -331,10 +336,11 @@ export function viewBadgesFor(
         label: familyActivityLabel(family, activity),
         icon
       },
-      unread: unreadBadge
+      unread: unreadBadge,
+      hasWorkingThreads: false
     }
   }
-  return { activity: null, unread: unreadBadge }
+  return { activity: null, unread: unreadBadge, hasWorkingThreads: false }
 }
 
 /**
