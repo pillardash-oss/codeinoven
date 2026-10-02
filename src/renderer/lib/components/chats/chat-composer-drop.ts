@@ -42,7 +42,7 @@ export interface ComposerDropContext {
  * be an element the composer must not capture as an attachment.
  */
 const SELF_HANDLED_DROP_REGIONS =
-  '[data-region="file-tree"], [data-drop-region="sidebar"], [data-drop-region="file-request-card"]'
+  '[data-region="file-tree"], [data-drop-region="sidebar"], [data-drop-region="file-request-card"], [data-drop-region="browser-bookmarks"]'
 
 function insideRect(rect: DOMRect, e: { clientX: number; clientY: number }): boolean {
   return (
