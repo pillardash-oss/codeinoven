@@ -482,6 +482,8 @@ export class BrowserService {
    * callers are waiting on it; see `BrowserLoadWaits` for why that matters.
    */
   private readonly loadWaits = new BrowserLoadWaits()
+  /** Navigation starts waiting for the extension jar before Chromium sees loadURL. */
+  private readonly pendingNavigationStarts = new Map<string, Promise<void>>()
   /**
    * The tab whose surface holds the keyboard, or null while none does.
    *
@@ -1961,7 +1963,20 @@ export class BrowserService {
     if (!tab) return
     const contents: WebContents | undefined = tab.view.webContents
     if (!contents) return
-    await this.loadWaits.wait(contents, timeoutMs)
+    const startedAt = Date.now()
+    const pendingStart = this.pendingNavigationStarts.get(tabId)
+    if (pendingStart) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        pendingStart.catch(() => undefined),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, Math.max(0, timeoutMs))
+        })
+      ])
+      if (timer !== undefined) clearTimeout(timer)
+    }
+    const remaining = Math.max(0, timeoutMs - (Date.now() - startedAt))
+    await this.loadWaits.wait(contents, remaining)
   }
 
   /**
@@ -4420,9 +4435,22 @@ export class BrowserService {
     // round trip does not send the user back to the first frame, and the ordering
     // cannot depend on which IPC the renderer happens to handle first.
     if (tab.composition && !tab.view.webContents.isDestroyed()) {
-      void this.rememberPlayhead(tabId, tab).then(
+      const navigationStart = this.rememberPlayhead(tabId, tab).then(
         () => this.navigateTo(tabId, url),
         () => this.navigateTo(tabId, url)
+      )
+      this.pendingNavigationStarts.set(tabId, navigationStart)
+      void navigationStart.then(
+        () => {
+          if (this.pendingNavigationStarts.get(tabId) === navigationStart) {
+            this.pendingNavigationStarts.delete(tabId)
+          }
+        },
+        () => {
+          if (this.pendingNavigationStarts.get(tabId) === navigationStart) {
+            this.pendingNavigationStarts.delete(tabId)
+          }
+        }
       )
       return
     }
@@ -4430,11 +4458,11 @@ export class BrowserService {
   }
 
   /** Start one navigation, reporting a failure rather than rejecting. */
-  private navigateTo(tabId: string, url: string): void {
+  private navigateTo(tabId: string, url: string): Promise<void> {
     const tab = this.tabs.get(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return
+    if (!tab || tab.view.webContents.isDestroyed()) return Promise.resolve()
     const contents = tab.view.webContents
-    void this.extensions
+    const navigationStart = this.extensions
       .ensureJarLoaded(tab.projectId, tab.boxId)
       .catch((error: unknown) => {
         // An extension load failure must not prevent the page itself from opening.
@@ -4445,11 +4473,18 @@ export class BrowserService {
       })
       .then(() => {
         if (this.tabs.get(tabId) !== tab || contents.isDestroyed()) return
-        void contents.loadURL(url).catch((error: unknown) => {
+        return contents.loadURL(url).catch((error: unknown) => {
           Logger.dev('Browser navigation did not complete:', { tabId, url, error })
           this.publishState(tabId)
         })
       })
+      .finally(() => {
+        if (this.pendingNavigationStarts.get(tabId) === navigationStart) {
+          this.pendingNavigationStarts.delete(tabId)
+        }
+      })
+    this.pendingNavigationStarts.set(tabId, navigationStart)
+    return navigationStart
   }
 
   /** Open the page-level context menu anchored at a point (the toolbar's page
