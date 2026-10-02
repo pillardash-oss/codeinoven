@@ -809,6 +809,9 @@ export interface HarnessDriver {
   /** Register the callback that receives streaming AgentEvents. */
   onEvent(callback: AgentEventCallback): void
 
+  /** Mark owned subprocesses as intentionally stopping before the process registry kills them. */
+  prepareForProcessCleanup?(): void
+
   /** Tear down all pooled resources (called on app quit). */
   dispose(): void
 }

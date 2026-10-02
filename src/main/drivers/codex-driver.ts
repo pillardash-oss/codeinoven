@@ -139,6 +139,7 @@ export class CodexDriver extends PersistentCliDriver {
    *  resident server; {@link stopResidentHostForPathIfIdle} stops an idle one. */
   private hostsByProjectPath = new Map<string, CodexAppServerHost>()
   private hostsStartingByProjectPath = new Map<string, Promise<CodexAppServerHost>>()
+  private appServerHosts = new Set<CodexAppServerHost>()
   private authenticationRestartsByProjectPath = new Map<string, Promise<void>>()
   private serverRequests = new Map<string, CodexServerRequest>()
 
@@ -801,14 +802,21 @@ export class CodexDriver extends PersistentCliDriver {
       waiter.resolve(undefined)
     }
     this.contextUsageByThreadId.clear()
-    for (const host of this.hostsByProjectPath.values()) {
+    for (const host of this.appServerHosts) {
       this.stopAppServerHost(host, 'Codex driver disposed')
     }
+    this.appServerHosts.clear()
     this.hostsByProjectPath.clear()
     this.hostsStartingByProjectPath.clear()
     this.authenticationRestartsByProjectPath.clear()
     this.serverRequests.clear()
     super.dispose()
+  }
+
+  prepareForProcessCleanup(): void {
+    for (const host of [...this.appServerHosts]) {
+      this.stopAppServerHost(host, 'CodeInOven is shutting down')
+    }
   }
 
   private async restartAppServer(projectPath: string, reason: string): Promise<void> {
@@ -826,6 +834,7 @@ export class CodexDriver extends PersistentCliDriver {
   private stopAppServerHost(host: CodexAppServerHost, reason: string): void {
     if (host.stopped) return
     host.stopped = true
+    this.appServerHosts.delete(host)
     for (const pending of host.pending.values()) {
       clearTimeout(pending.timer)
       pending.reject(new Error(reason))
@@ -909,17 +918,26 @@ export class CodexDriver extends PersistentCliDriver {
       stopped: false,
       pending: new Map()
     }
+    this.appServerHosts.add(host)
     this.bindAppServer(host)
     // The shared app-server is app-scoped: register it under APP_SCOPE (undefined
     // session) so thread-scoped process kills (thread deletion, SourcesPanel
     // "kill thread processes") never SIGTERM the universal session.
     this.observeHarnessProcess(undefined, child, 'codex app-server', projectPath)
-    await this.appServerRequest(host, 'initialize', {
-      clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-      capabilities: { experimentalApi: true }
-    })
-    this.appServerNotify(host, 'initialized')
-    return host
+    try {
+      await this.appServerRequest(host, 'initialize', {
+        clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
+        capabilities: { experimentalApi: true }
+      })
+      this.appServerNotify(host, 'initialized')
+      return host
+    } catch (error) {
+      this.stopAppServerHost(
+        host,
+        error instanceof Error ? error.message : 'Codex app-server initialization failed'
+      )
+      throw error
+    }
   }
 
   private async ensureAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
@@ -1708,6 +1726,7 @@ export class CodexDriver extends PersistentCliDriver {
   private async failAppServerHost(host: CodexAppServerHost, error: string): Promise<void> {
     if (host.stopped) return
     host.stopped = true
+    this.appServerHosts.delete(host)
     for (const [projectPath, candidate] of this.hostsByProjectPath) {
       if (candidate !== host) continue
       this.hostsByProjectPath.delete(projectPath)

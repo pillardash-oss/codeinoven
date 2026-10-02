@@ -3234,6 +3234,13 @@ export class ChatEngine {
     }
     // Kill agent-owned descendants before any slower session/runtime cleanup so
     // the shutdown failsafe cannot leave a development server behind.
+    for (const driver of this.allDrivers()) {
+      try {
+        driver.prepareForProcessCleanup?.()
+      } catch (error) {
+        Logger.error(`${driver.name} process cleanup preparation failed:`, error)
+      }
+    }
     await this.agentProcesses.killAll()
     await Promise.allSettled(
       [...this.temporaryChats.keys()].map((temporaryChatId) =>
