@@ -5,7 +5,8 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
-  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { findFirstTextField, findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
+  import { APP_SLUG } from '$shared/brand'
   import type {
     BaseUrlProvider,
     OfferedProvider,
@@ -16,7 +17,8 @@
     HarnessAccount
   } from '$shared/types'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
-  import Modal from '../ui/Modal.svelte'
+  import DockableModal from '../ui/DockableModal.svelte'
+  import DockRow from '../ui/DockRow.svelte'
   import AddProviderModalConnectTab from './AddProviderModalConnectTab.svelte'
   import AddProviderModalCustomTab from './AddProviderModalCustomTab.svelte'
   import AddProviderModalFooter from './AddProviderModalFooter.svelte'
@@ -145,25 +147,63 @@
   })
 
   /**
-   * Whether the docked chip stands down because the browser already is the view.
-   *
-   * The browser's page is a native `WebContentsView` the compositor paints above
-   * every DOM node, so a chip drawn while that page is on screen would be hidden
-   * behind it and would offer the user nothing to click. Anywhere else the chip
-   * is the only trace of an in-flight sign-in, so it is what stops the flow from
-   * becoming invisible the moment the user leaves the browser for their thread.
+   * Owns the panel's remembered placement, shared with the dock row below so a
+   * docked sign-in reopens on the edge the user left it on.
    */
-  const browserHoldsTheView = $derived(rendererRecovery.activeView === 'browser')
+  const PANEL_STORAGE_KEY = `${APP_SLUG}.addProviderPanel.v1`
 
-  /** Label for the chip's restore control, naming the provider being connected. */
+  /**
+   * Whether a sign-in is running, and so whether the panel may be dismissed.
+   *
+   * Dismissing an in-flight sign-in would throw away the pending account and the
+   * OAuth event subscription along with it, so the close affordance is withheld
+   * while a login is live. Escape then minimizes instead of closing, which is the
+   * same rule the harness run panel uses for a run in progress.
+   */
+  const signingIn = $derived(oauth.loginId !== null)
+
+  /** Label for the dock chip's restore control, naming what it brings back. */
   const dockRestoreLabel = $derived(
-    `Show the sign-in for ${selectedProvider?.name ?? 'this provider'}`
+    signingIn
+      ? `Show the sign-in for ${selectedProvider?.name ?? 'this provider'}`
+      : `Show the add provider panel for ${harness.name}`
   )
 
-  /** What the chip's dismiss control does: it ends the attempt, like the modal's own close. */
-  const dockDismissLabel = $derived(
-    `Cancel the sign-in for ${selectedProvider?.name ?? 'this provider'}`
+  /**
+   * The chip's heading. The panel is docked for two reasons and must not claim
+   * a sign-in it is not running: a browser handover (`oauth.docked`) and the user
+   * minimizing the panel by hand, which says nothing about any sign-in.
+   */
+  const dockTitle = $derived(
+    signingIn
+      ? `Signing in to ${selectedProvider?.name ?? 'this provider'}`
+      : `Add provider for ${harness.name}`
   )
+
+  /** What the dock chip's dismiss control does: it ends the attempt, like the panel's own close. */
+  const dockDismissLabel = $derived(
+    signingIn
+      ? `Cancel the sign-in for ${selectedProvider?.name ?? 'this provider'}`
+      : `Close the add provider panel for ${harness.name}`
+  )
+
+  /**
+   * The app's modal focus rule: the first field the user would type into, else
+   * the primary action. `ui/Modal.svelte` applies this on open for every modal,
+   * so the panel claims it explicitly rather than letting the switch to
+   * `DockableModal` quietly drop it.
+   */
+  function claimPanelInitialFocus(panel: HTMLElement): boolean {
+    const field = findFirstTextField(panel)
+    if (field) {
+      field.focus()
+      return true
+    }
+    const action = findPanelPrimaryAction(panel)
+    if (!action) return false
+    action.focus()
+    return true
+  }
 
   async function checkAuth(): Promise<void> {
     checkingAuth = true
@@ -491,59 +531,73 @@
 </script>
 
 <!--
-  The chip is the only trace of an in-flight sign-in while the modal stands down,
-  and it stands down in front of the browser view: the page the user must act on
-  is a native `WebContentsView` the compositor paints above every DOM node, so a
-  chip drawn there would be invisible. Everywhere else the chip is what stops the
-  flow from looking abandoned when the user leaves the browser for their thread.
--->
-{#if oauth.docked && !browserHoldsTheView}
-  <div
-    class="pointer-events-auto fixed right-4 bottom-4 z-50 flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl"
-    data-region="provider-sign-in-dock"
-  >
-    <button
-      type="button"
-      class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
-      title={dockRestoreLabel}
-      aria-label={dockRestoreLabel}
-      onclick={() => (oauth.docked = false)}
-    >
-      <Loader2 size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
-      <span class="flex min-w-0 flex-col">
-        <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
-          Signing in to {selectedProvider?.name ?? 'this provider'}
-        </span>
-        <span class="max-w-56 truncate text-[0.625rem] leading-tight text-muted" aria-live="polite">
-          {oauth.status || 'Finish signing in in the browser.'}
-        </span>
-      </span>
-    </button>
-    <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
-    <button
-      type="button"
-      class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label={dockDismissLabel}
-      title={dockDismissLabel}
-      onclick={() => void closeModal()}
-    >
-      <X size={14} />
-    </button>
-  </div>
-{/if}
+  This is a dockable panel, not a plain modal, because a browser sign-in has to
+  keep running while the browser is the view. The panel's own state holds the
+  OAuth controller and its event subscription, and `DockableModal` keeps the panel
+  mounted when it is minimized, so the sign-in survives the handover: device
+  codes, prompts and results still arrive while the user is off in the browser.
 
-<!--
-  `open` follows the dock, not the flow's lifetime. Standing the shell down is not
-  what ends a sign-in: the OAuth controller and its event subscription live in this
-  component, so the modal can give the view to the browser and still receive every
-  later device code, prompt and result.
+  `DockRow` publishes the chip's rectangle to `browserVisibility`, which is what
+  makes the chip work at all over the browser: the browser's page is a native
+  `WebContentsView` the compositor paints above every DOM node, so the row makes
+  that view stand down wherever the chip actually sits.
 -->
-<Modal
-  open={!oauth.docked}
-  size="lg"
+<DockableModal
+  open
   title={`Add provider   ${harness.name}`}
+  minimized={oauth.docked}
+  closable={!signingIn}
+  onMinimize={() => (oauth.docked = true)}
   onClose={() => void closeModal()}
+  storageKey={PANEL_STORAGE_KEY}
+  dragLabel="Drag to move the add provider panel"
+  defaultHeight={620}
+  claimInitialFocus={claimPanelInitialFocus}
 >
+  {#snippet dock()}
+    <DockRow storageKey={PANEL_STORAGE_KEY} label="Move docked provider sign-in">
+      <div
+        class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl"
+        data-region="provider-sign-in-dock"
+      >
+        <button
+          type="button"
+          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          title={dockRestoreLabel}
+          aria-label={dockRestoreLabel}
+          onclick={() => (oauth.docked = false)}
+        >
+          {#if signingIn}
+            <Loader2 size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+          {/if}
+          <span class="flex min-w-0 flex-col">
+            <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
+              {dockTitle}
+            </span>
+            {#if signingIn}
+              <span
+                class="max-w-56 truncate text-[0.625rem] leading-tight text-muted"
+                aria-live="polite"
+              >
+                {oauth.status || 'Finish signing in in the browser.'}
+              </span>
+            {/if}
+          </span>
+        </button>
+        <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        <button
+          type="button"
+          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={dockDismissLabel}
+          title={dockDismissLabel}
+          onclick={() => void closeModal()}
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </DockRow>
+  {/snippet}
+
   {#snippet footer()}
     <AddProviderModalFooter
       {tab}
@@ -629,7 +683,7 @@
   {:else}
     <AddProviderModalCustomTab {harness} {customProviders} {customCount} {onEditCustom} />
   {/if}
-</Modal>
+</DockableModal>
 
 <ConfirmDialog
   open={disconnectTarget !== null}

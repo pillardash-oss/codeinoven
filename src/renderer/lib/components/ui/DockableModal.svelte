@@ -84,6 +84,18 @@
      * to be enabled.
      */
     onPrimaryAction?: () => boolean
+    /**
+     * Claim the initial focus when the panel opens. Return true when you focused
+     * something.
+     *
+     * Opt-in, matching `ui/Modal.svelte`'s prop of the same name, because the
+     * canonical modal focuses its panel automatically and a docked panel has no
+     * such rule of its own: a panel whose content is a live run log or a
+     * terminal should not steal the caret. An owner that expects the app's modal
+     * convention ("focus the first input field, else the primary button") claims
+     * it here and keeps that behavior across the two shells.
+     */
+    claimInitialFocus?: (panel: HTMLElement) => boolean
   }
 
   let {
@@ -103,7 +115,8 @@
     headerActions,
     flushBody = false,
     headerPrefix,
-    onPrimaryAction
+    onPrimaryAction,
+    claimInitialFocus
   }: Props = $props()
 
   const PANEL_MARGIN = 12
@@ -278,6 +291,24 @@
     if (!minimized) return
     const focused = document.activeElement
     if (focused instanceof HTMLElement && panelEl?.contains(focused)) focused.blur()
+  })
+
+  /**
+   * The app's modal focus convention, once per open, for an owner that claims it.
+   *
+   * The flag is a plain binding rather than state: it renders nothing, and it is
+   * the `panelEl` read below that re-runs this effect once the panel is actually
+   * in the DOM. A minimized panel is skipped, so restoring from the dock does not
+   * steal the caret back.
+   */
+  let claimedInitialFocus = false
+  $effect(() => {
+    if (!open) {
+      claimedInitialFocus = false
+      return
+    }
+    if (minimized || claimedInitialFocus || !panelEl || !claimInitialFocus) return
+    if (claimInitialFocus(panelEl)) claimedInitialFocus = true
   })
 
   const occlusionKey = `dockable-modal-${crypto.randomUUID()}`
