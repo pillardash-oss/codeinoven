@@ -1433,6 +1433,19 @@ export class GlobalBrowserState {
     this.persist()
   }
 
+  /** Move several tabs into one group and persist the change once. */
+  moveTabsToGroup(tabIds: readonly string[], groupId: string | null): void {
+    const target = this.groups.some((group) => group.id === groupId) ? groupId : null
+    const selectedIds = new SvelteSet(tabIds)
+    let changed = false
+    for (const tab of this.tabs) {
+      if (!selectedIds.has(tab.id) || tab.groupId === target) continue
+      tab.groupId = target
+      changed = true
+    }
+    if (changed) this.persist()
+  }
+
   /** Move a tab beside another, within the strip. */
   reorder(tabId: string, targetId: string, position: 'before' | 'after'): void {
     const from = this.tabs.findIndex((tab) => tab.id === tabId)

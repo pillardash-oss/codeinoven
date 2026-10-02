@@ -39,13 +39,15 @@
 
   interface Props {
     tab: GlobalBrowserTab
+    selected: boolean
+    onTabClick: (tabId: string, event: MouseEvent) => void
     /** Open the group editor for a group id, or with null to create one. */
     onOpenGroupEditor: (groupId: string | null) => void
     /** Open this tab's own editor (title, colour, icon). */
     onEditTab: (tabId: string) => void
   }
 
-  let { tab, onOpenGroupEditor, onEditTab }: Props = $props()
+  let { tab, selected, onTabClick, onOpenGroupEditor, onEditTab }: Props = $props()
 
   /**
    * One row in the browser tab strip.
@@ -201,8 +203,11 @@
     >
       <button
         type="button"
-        class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left"
+        class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left {selected
+          ? 'bg-primary/15 ring-1 ring-inset ring-primary/50'
+          : ''}"
         aria-current={active}
+        aria-pressed={selected}
         title={tab.url || label}
         draggable="true"
         ondragstart={onDragStart}
@@ -213,7 +218,7 @@
         ondragover={onDragOver}
         ondragleave={() => (dropTarget = false)}
         ondrop={onDrop}
-        onclick={() => globalBrowser.switchTo(tab.id)}
+        onclick={(event: MouseEvent) => onTabClick(tab.id, event)}
         onauxclick={(event: MouseEvent) => {
           if (event.button === 1) closeTab(event)
         }}

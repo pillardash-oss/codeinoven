@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
+  import { DropdownMenu } from 'bits-ui'
   import {
     ArrowLeft,
     ArrowRight,
     Check,
+    FolderPlus,
     Globe,
     Loader2,
     Lock,
@@ -32,6 +34,7 @@
   import {
     browserTabLabel,
     DEFAULT_BOX_NAME,
+    MAX_GLOBAL_BROWSER_GROUPS,
     type GlobalBrowserTab
   } from '$lib/stores/global-browser-types'
   import {
@@ -74,6 +77,13 @@
   let editorGroupId = $state<string | null | undefined>(undefined)
   /** The tab whose editor is open, or null while it is closed. */
   let editorTabId = $state<string | null>(null)
+  /** Tabs chosen with Cmd/Ctrl-click or Shift-click for a group operation. */
+  let selectedTabIds = $state<string[]>([])
+  /** The fixed endpoint used by the next Shift-click range. */
+  let selectionAnchorId = $state<string | null>(null)
+  const visibleSelectedTabIds = $derived(
+    selectedTabIds.filter((id) => globalBrowser.tabById(id) !== null)
+  )
 
   const activeTab = $derived(globalBrowser.activeTab)
   const runtime = $derived(activeTab ? globalBrowser.runtimeFor(activeTab.id) : null)
@@ -177,6 +187,48 @@
   function tabsFor(groupId: string | null): GlobalBrowserTab[] {
     return globalBrowser.tabsInGroup(groupId).filter(matches)
   }
+
+  function handleTabClick(tabId: string, event: MouseEvent): void {
+    const additive = event.metaKey || event.ctrlKey
+    if (event.shiftKey) {
+      const tabs = globalBrowser.tabs
+      const anchorIndex = tabs.findIndex((tab) => tab.id === selectionAnchorId)
+      const targetIndex = tabs.findIndex((tab) => tab.id === tabId)
+      if (targetIndex < 0) return
+      const start = anchorIndex < 0 ? targetIndex : Math.min(anchorIndex, targetIndex)
+      const end = anchorIndex < 0 ? targetIndex : Math.max(anchorIndex, targetIndex)
+      const rangeIds = tabs.slice(start, end + 1).map((tab) => tab.id)
+      selectedTabIds = additive ? [...new Set([...visibleSelectedTabIds, ...rangeIds])] : rangeIds
+      if (selectionAnchorId === null) selectionAnchorId = tabId
+      return
+    }
+    if (additive) {
+      selectedTabIds = visibleSelectedTabIds.includes(tabId)
+        ? visibleSelectedTabIds.filter((id) => id !== tabId)
+        : [...visibleSelectedTabIds, tabId]
+      selectionAnchorId = tabId
+      return
+    }
+    selectedTabIds = []
+    selectionAnchorId = tabId
+    globalBrowser.switchTo(tabId)
+  }
+
+  function moveSelectionToGroup(groupId: string): void {
+    globalBrowser.moveTabsToGroup(visibleSelectedTabIds, groupId)
+    selectedTabIds = []
+    selectionAnchorId = null
+  }
+
+  function createGroupForSelection(): void {
+    const groupId = globalBrowser.createGroup('New group')
+    if (!globalBrowser.groupById(groupId)) return
+    globalBrowser.moveTabsToGroup(visibleSelectedTabIds, groupId)
+    selectedTabIds = []
+    selectionAnchorId = null
+    editorGroupId = groupId
+  }
+
 
   function newTab(groupId: string | null = null): void {
     onOpenAddress()
@@ -574,7 +626,71 @@
       </BrowserNewTabMenu>
     </div>
   {:else}
-    {#if searchGroupId === null && pinned.length > 0}
+      {#if visibleSelectedTabIds.length > 0}
+      <div
+        class="mx-2 mb-2 flex items-center justify-between gap-2 rounded-lg border border-border bg-elevated px-2 py-1.5"
+      >
+        <span class="min-w-0 truncate text-[0.6875rem] text-muted">
+          {visibleSelectedTabIds.length} selected
+        </span>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-overlay px-2 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-overlay/80"
+            title={`Move ${visibleSelectedTabIds.length} selected tabs to a group`}
+            aria-label={`Move ${visibleSelectedTabIds.length} selected tabs to a group`}
+          >
+            <FolderPlus size={12} />
+            Add to group
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="end"
+              sideOffset={4}
+              collisionPadding={8}
+              class="z-50 max-h-[calc(100dvh-1rem)] w-52 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+            >
+              {#each groups as group (group.id)}
+                <DropdownMenu.Item
+                  class="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-highlighted:bg-elevated"
+                  onSelect={() => moveSelectionToGroup(group.id)}
+                >
+                  <span
+                    class="h-2 w-2 shrink-0 rounded-full"
+                    style="background-color: {browserGroupAccent(group)}"
+                  ></span>
+                  <span class="min-w-0 flex-1 truncate">{group.name}</span>
+                </DropdownMenu.Item>
+              {/each}
+              {#if groups.length > 0}
+                <DropdownMenu.Separator class="my-1 h-px bg-border" />
+              {/if}
+              <DropdownMenu.Item
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                disabled={groups.length >= MAX_GLOBAL_BROWSER_GROUPS}
+                onSelect={createGroupForSelection}
+              >
+                <Plus size={13} class="shrink-0 text-muted" />
+                Create group from selection
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+        <button
+          type="button"
+          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+          title="Clear tab selection"
+          aria-label="Clear tab selection"
+          onclick={() => {
+            selectedTabIds = []
+            selectionAnchorId = null
+          }}
+        >
+          <X size={12} />
+        </button>
+      </div>
+    {/if}
+  {#if searchGroupId === null && pinned.length > 0}
       <div class="mb-1">
         <p
           class="flex items-center gap-1 px-2 pt-1 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
@@ -586,6 +702,8 @@
           {#each pinned as tab (tab.id)}
             <BrowserTabRow
               {tab}
+              selected={visibleSelectedTabIds.includes(tab.id)}
+              onTabClick={handleTabClick}
               onEditTab={(id) => (editorTabId = id)}
               onOpenGroupEditor={(id) => (editorGroupId = id)}
             />
@@ -699,6 +817,8 @@
               {#each tabsFor(group.id) as tab (tab.id)}
                 <BrowserTabRow
                   {tab}
+                  selected={visibleSelectedTabIds.includes(tab.id)}
+                  onTabClick={handleTabClick}
                   onEditTab={(id) => (editorTabId = id)}
                   onOpenGroupEditor={(id) => (editorGroupId = id)}
                 />
@@ -721,6 +841,8 @@
       {#each tabsFor(null) as tab (tab.id)}
         <BrowserTabRow
           {tab}
+          selected={visibleSelectedTabIds.includes(tab.id)}
+          onTabClick={handleTabClick}
           onEditTab={(id) => (editorTabId = id)}
           onOpenGroupEditor={(id) => (editorGroupId = id)}
         />
