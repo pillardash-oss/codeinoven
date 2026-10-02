@@ -53,8 +53,8 @@ class BrowserPopupWindowsState {
       if (!live.has(id)) this.popups.delete(id)
     }
     for (const popup of popups) this.popups.set(popup.id, popup)
-    // A popup that ended hands the rail to the newest one left rather than
-    // leaving a pick that no longer exists.
+    // A popup that leaves the visible list hands the rail to the newest one left
+    // rather than leaving a pick that is no longer available.
     if (this.selectedId !== null && !live.has(this.selectedId)) this.selectedId = null
   }
 
@@ -83,8 +83,8 @@ class BrowserPopupWindowsState {
   /**
    * One rail tab per popup a browser tab holds, in the order they opened.
    *
-   * The tab is the popup: the rail's strip is the list of windows and a popup
-   * that ends simply stops appearing here, so no surface has to prune the strip.
+   * The tab is the popup: the rail's strip is the list of visible windows. Hidden
+   * extension action popups leave the strip while their live page stays parked.
    * An extension's popup is named after the extension and wears its icon, because
    * that page is the extension's own UI and the title it sets is not its name.
    */
@@ -95,6 +95,7 @@ class BrowserPopupWindowsState {
         id: popup.id,
         kind: 'popup-window' as const,
         title: extension?.name ?? (popup.title || popup.url || 'Popup window'),
+        extensionPopup: popup.extensionId !== null,
         openerTabId: popup.tabId,
         favicon: extension?.iconDataUrl ?? popup.favicon ?? undefined
       }
@@ -179,10 +180,7 @@ class BrowserPopupWindowsState {
     this.selectedId = popupId
   }
 
-  /**
-   * Close every popup one browser tab holds, for the rail's own close control:
-   * the windows end and their tabs leave the strip with them.
-   */
+  /** Dismiss every popup in a tab: extension popups hide and page popups close. */
   closeForTab(tabId: string): void {
     for (const popup of this.forTab(tabId)) this.close(popup.id)
   }
@@ -202,7 +200,7 @@ class BrowserPopupWindowsState {
     void invoke('browser:focusPopupWindow', popupId).catch(() => {})
   }
 
-  /** Close a popup on the user's behalf: its page stops and it leaves the rail. */
+  /** Dismiss a popup: extension pages stay parked while page popups close. */
   close(popupId: string): void {
     void invoke('browser:closePopupWindow', popupId).catch((error: unknown) => {
       reportError(error, 'That popup window could not be closed.')

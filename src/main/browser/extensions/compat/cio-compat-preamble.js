@@ -929,6 +929,8 @@
   }
   state.generation = makeGeneration()
   const actionState = { global: {}, tabs: {} }
+  const actionPopupRequests = []
+  let actionPopupRequestSeq = 0
   const contextMenuItems = new Map()
   const contextMenuClicked = makeRealEvent()
   let menuSeq = 0
@@ -964,6 +966,7 @@
           options: sidePanelOptionRecords,
           requests: sidePanelRequests
         },
+        actionPopups: actionPopupRequests,
         bridgeCommands: state.bridgeCommands || 0,
         commandLog: state.commandLog || [],
         eventDispatch: state.eventDispatch || {},
@@ -1164,6 +1167,20 @@
       state.errors.push('action-wrap-' + key + ': ' + String(error))
     }
   }
+  const routeActionPopupRequest = () => {
+    try {
+      const tabId = tabActivity.activeTabId
+      if (typeof tabId === 'number' && Number.isFinite(tabId) && tabId >= 0) {
+        actionPopupRequests.push({ seq: ++actionPopupRequestSeq, tabId })
+        if (actionPopupRequests.length > 16)
+          actionPopupRequests.splice(0, actionPopupRequests.length - 16)
+        scheduleMailbox()
+      }
+    } catch (error) {
+      state.errors.push('action-open-popup: ' + String(error))
+    }
+    return Promise.resolve()
+  }
   const wrapActionApi = (api) => {
     if (!api || typeof api !== 'object') return
     wrapActionMember(api, 'setBadgeText', (details) => ({
@@ -1178,6 +1195,15 @@
     wrapActionMember(api, 'setIcon', (details) => ({
       iconUrl: details && details.imageData ? null : resolveIconPath(details && details.path)
     }))
+    try {
+      Object.defineProperty(api, 'openPopup', {
+        value: routeActionPopupRequest,
+        configurable: true,
+        writable: true
+      })
+    } catch (error) {
+      state.errors.push('action-open-popup-wrap: ' + String(error))
+    }
   }
   /**
    * A toolbar namespace built from nothing, for the extension that gets neither
@@ -1351,6 +1377,9 @@
       state.startupAt = Date.now()
       runtimeEvents.onStartup.__cioEmit([])
     } else if (command.kind === 'menu-click') {
+      if (command.tab && typeof command.tab.id === 'number' && command.tab.id >= 0) {
+        tabActivity.activeTabId = command.tab.id
+      }
       contextMenuClicked.__cioEmit([command.info || {}, command.tab || null])
     }
     scheduleMailbox()

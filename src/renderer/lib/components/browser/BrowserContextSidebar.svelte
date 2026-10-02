@@ -333,9 +333,7 @@
   const assistantMenuItemClass =
     'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 
-  /** End every popup the page on screen opened, from the rail's own close button.
-   *  Each window ends itself through the store, and the strip follows the list, so
-   *  there is nothing else to tidy here. */
+  /** Dismiss every popup from the rail: page popups close, extension popups park. */
   function closeAllPopups(): void {
     if (activeTab) browserPopupWindows.closeForTab(activeTab.id)
   }

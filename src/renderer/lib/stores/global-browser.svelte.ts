@@ -179,10 +179,12 @@ export class GlobalBrowserState {
    *  address. One per strip, because it owns the "asked at most once per address"
    *  bookkeeping that keeps the lookups bounded. */
   private readonly tabFavicons = new BrowserTabFavicons()
-  /** Popup windows this renderer has already reported on, so only the arrival of
-   *  a new one brings the rail's popup panel up. Bounded by the live list: an id
-   *  whose popup is gone is forgotten. */
-  private readonly seenPopupWindowIds = new SvelteSet<string>()
+  /** Popup windows this renderer has already reported on, so a new or reactivated
+   *  one brings the rail's popup panel up. Bounded by the live list. */
+  private readonly popupWindowState = new SvelteMap<
+    string,
+    { tabId: string; activationSequence: number }
+  >()
   /** Extension side panels this renderer has already reported on, so only the
    *  arrival of a new one brings the rail's side panel tool up. Bounded by the
    *  live list: a key whose panel is gone is forgotten. */
@@ -395,14 +397,21 @@ export class GlobalBrowserState {
     // The live ids are a list rather than a set: there are as many as the tab has
     // popups open, which is a handful, and this runs on every report about one.
     const live = popups.map((popup) => popup.id)
-    for (const id of [...this.seenPopupWindowIds]) {
-      if (!live.includes(id)) this.seenPopupWindowIds.delete(id)
+    for (const id of [...this.popupWindowState.keys()]) {
+      if (!live.includes(id)) this.popupWindowState.delete(id)
     }
     const tabId = this.activeTabId
     for (const popup of popups) {
-      if (this.seenPopupWindowIds.has(popup.id)) continue
-      this.seenPopupWindowIds.add(popup.id)
-      if (tabId !== null && popup.tabId === tabId) {
+      const previous = this.popupWindowState.get(popup.id)
+      this.popupWindowState.set(popup.id, {
+        tabId: popup.tabId,
+        activationSequence: popup.activationSequence
+      })
+      const newlyOpenedOrActivated =
+        previous === undefined ||
+        previous.tabId !== popup.tabId ||
+        previous.activationSequence !== popup.activationSequence
+      if (tabId !== null && popup.tabId === tabId && newlyOpenedOrActivated) {
         browserPopupWindows.select(popup.id)
         this.showPopupsSidebar()
       }

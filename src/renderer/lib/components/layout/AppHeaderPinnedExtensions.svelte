@@ -42,7 +42,7 @@
   function pinLabel(extension: BrowserExtension): string {
     return openPopupFor(extension.id) === null
       ? `Open the ${extension.name} popup`
-      : `Close the ${extension.name} popup`
+      : `Hide the ${extension.name} popup`
   }
 
   /** Chrome's own shape for a long badge: anything past four characters becomes
@@ -83,7 +83,7 @@
   }
 
   /**
-   * Open a pinned extension's popup in the rail, or close the one it already has.
+   * Open a pinned extension's popup in the rail, or hide the one it already has.
    *
    * The popup is hosted by the rail, which is chrome of this same view, so all the
    * click has to do is make sure that tool is the one showing.

@@ -54,6 +54,7 @@ import { prepareExtensionSource } from './browser-extension-install-job'
 import { COMPAT_BRIDGE_PAGE_FILE_NAME, ensureInjectionCurrent } from './browser-extension-inject'
 import {
   BrowserExtensionBridge,
+  type BrowserExtensionActionPopupRequest,
   type BrowserExtensionMailbox,
   type BrowserExtensionNotificationRecord,
   type BrowserExtensionSidePanelMailbox,
@@ -158,6 +159,8 @@ interface LoadedJar {
    *  extension, so the poll never raises the same request twice. Dropped when
    *  that extension's worker restarts, whose own sequence starts over. */
   sidePanelSeq: Map<string, number>
+  /** Highest `action.openPopup()` request handled, per extension. */
+  actionPopupSeq: Map<string, number>
   /** Activity already sent to the renderer, so the 500 ms mailbox poll sends a
    *  change once instead of on every read. Keyed `extensionId\u0000tabId`. */
   published: Map<string, string>
@@ -206,6 +209,16 @@ export interface BrowserExtensionHost {
   /** Close one extension's side panel. `extensionTabId` names the tab the
    *  request was for; null closes it whatever tab it belongs to. */
   closeSidePanel(extensionId: string, extensionTabId: number | null): void
+  /** Open the extension popup for the tab named by its runtime. */
+  openPopup(request: BrowserExtensionActionPopupOpenRequest): void
+}
+
+/** One action popup a worker asked the app to show. */
+export interface BrowserExtensionActionPopupOpenRequest {
+  projectId: string
+  boxId: string | null
+  extensionId: string
+  extensionTabId: number
 }
 
 /** One side panel a worker asked the app to raise. The extension service
@@ -1257,6 +1270,7 @@ export class BrowserExtensionService {
       publishedGeneration: new Map(),
       notificationSeq: new Map(),
       sidePanelSeq: new Map(),
+      actionPopupSeq: new Map(),
       published: new Map(),
       publishing: Promise.resolve()
     }
@@ -1350,6 +1364,7 @@ export class BrowserExtensionService {
     state.publishedGeneration.delete(extensionId)
     state.notificationSeq.delete(extensionId)
     state.sidePanelSeq.delete(extensionId)
+    state.actionPopupSeq.delete(extensionId)
     this.dismissExtensionNotifications(extensionId)
     for (const key of [...state.published.keys()]) {
       if (key.startsWith(`${extensionId}\u0000`)) state.published.delete(key)
@@ -1386,10 +1401,12 @@ export class BrowserExtensionService {
       state.notificationSeq.delete(extensionId)
       // Nor does its side-panel request sequence.
       state.sidePanelSeq.delete(extensionId)
+      state.actionPopupSeq.delete(extensionId)
     }
     state.publishedGeneration.set(extensionId, mail.generation)
     this.handleNotifications(state, extensionId, mail)
     this.handleSidePanelRequests(state, extensionId, mail)
+    this.handleActionPopupRequests(state, extensionId, mail.actionPopups)
     // Publishing resolves each icon's bytes, so it is queued per jar: two
     // snapshots landing out of order would draw the older state over the newer.
     state.publishing = state.publishing
@@ -1523,6 +1540,28 @@ export class BrowserExtensionService {
       this.applySidePanelRequest(state, extensionId, mail.sidePanel, entry)
     }
     state.sidePanelSeq.set(extensionId, newest)
+  }
+
+  /** Open action popups the worker requested through `chrome.action.openPopup`. */
+  private handleActionPopupRequests(
+    state: LoadedJar,
+    extensionId: string,
+    requests: BrowserExtensionActionPopupRequest[]
+  ): void {
+    if (requests.length === 0) return
+    const lastSeen = state.actionPopupSeq.get(extensionId) ?? 0
+    let newest = lastSeen
+    for (const request of requests) {
+      if (request.seq <= lastSeen) continue
+      newest = Math.max(newest, request.seq)
+      this.host.openPopup({
+        projectId: state.projectId,
+        boxId: state.boxId,
+        extensionId,
+        extensionTabId: request.tabId
+      })
+    }
+    state.actionPopupSeq.set(extensionId, newest)
   }
 
   /** One side-panel request: raise the panel for its tab, or close it. */

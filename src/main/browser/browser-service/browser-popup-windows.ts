@@ -63,6 +63,9 @@ export interface BrowserPopupWindowRecord {
   title: string
   favicon: string | null
   loading: boolean
+  activationSequence: number
+  /** An extension action popup the user dismissed stays alive off screen. */
+  hidden: boolean
   /**
    * The frame the rail last displayed this popup's page at, which is also the
    * size the page is laid out at while it is off screen. Null until the rail has
@@ -162,6 +165,8 @@ export class BrowserPopupWindows {
       title: contents.getTitle(),
       favicon: null,
       loading: true,
+      activationSequence: 0,
+      hidden: false,
       displayedBounds: null,
       requestedViewport: isUsableViewport(context.viewport)
         ? context.viewport
@@ -188,7 +193,7 @@ export class BrowserPopupWindows {
    * toolbar and no action popup for one to come from. So the caller creates the
    * view bound to the jar the extension runs in and this takes it on the same
    * terms as any other popup: parked offscreen until the rail places it, tracked
-   * while it runs, and out of the list when its page ends.
+   * while it runs, hidden off screen when dismissed, and removed if its page ends.
    */
   hostExtension(context: {
     owner: BrowserPageOwner
@@ -209,6 +214,8 @@ export class BrowserPopupWindows {
       title: '',
       favicon: null,
       loading: true,
+      activationSequence: 0,
+      hidden: false,
       displayedBounds: null,
       requestedViewport: isUsableViewport(context.viewport)
         ? context.viewport
@@ -235,6 +242,7 @@ export class BrowserPopupWindows {
     const popups: BrowserPopupWindow[] = []
     for (const record of this.popups.values()) {
       if (projectId !== undefined && record.projectId !== projectId) continue
+      if (record.extensionId !== null && record.hidden) continue
       popups.push({
         id: record.id,
         tabId: record.tabId,
@@ -243,6 +251,7 @@ export class BrowserPopupWindows {
         title: record.title,
         favicon: record.favicon,
         loading: record.loading,
+        activationSequence: record.activationSequence,
         extensionId: record.extensionId
       })
     }
@@ -252,7 +261,9 @@ export class BrowserPopupWindows {
   /** How many popup windows one tab is holding open, for the cap on new ones. */
   countForTab(tabId: string): number {
     let count = 0
-    for (const record of this.popups.values()) if (record.tabId === tabId) count += 1
+    for (const record of this.popups.values()) {
+      if (record.tabId === tabId && !record.hidden) count += 1
+    }
     return count
   }
 
@@ -299,9 +310,60 @@ export class BrowserPopupWindows {
    */
   extensionPopupFor(extensionId: string, tabId: string): string | null {
     for (const record of this.popups.values()) {
-      if (record.extensionId === extensionId && record.tabId === tabId) return record.id
+      if (record.extensionId === extensionId && record.tabId === tabId && !record.hidden) {
+        return record.id
+      }
     }
     return null
+  }
+
+  /** Find the cached action popup for one extension session, even while hidden. */
+  extensionPopupForJar(
+    extensionId: string,
+    projectId: string,
+    boxId: string | null
+  ): string | null {
+    for (const record of this.popups.values()) {
+      if (
+        record.extensionId === extensionId &&
+        record.projectId === projectId &&
+        record.boxId === boxId
+      ) {
+        return record.id
+      }
+    }
+    return null
+  }
+
+  /** Reuse one extension page in a new tab and make it visible in the rail again. */
+  retargetExtensionPopup(
+    id: string,
+    owner: { tabId: string; projectId: string; threadId: string; boxId: string | null }
+  ): boolean {
+    const record = this.popups.get(id)
+    if (!record || record.extensionId === null || record.projectId !== owner.projectId) return false
+    if (record.boxId !== owner.boxId) return false
+    if (!record.hidden && record.tabId !== owner.tabId) this.hide(id)
+    record.tabId = owner.tabId
+    record.threadId = owner.threadId
+    record.hidden = false
+    record.activationSequence += 1
+    this.viewHost.changed()
+    return true
+  }
+
+  /** Hide a user's extension popup while keeping its page alive for the next use. */
+  dismiss(id: string): void {
+    const record = this.popups.get(id)
+    if (!record) return
+    if (record.extensionId === null) {
+      this.close(id, 'the user closed its window')
+      return
+    }
+    if (record.hidden) return
+    this.hide(id)
+    record.hidden = true
+    this.viewHost.changed()
   }
 
   /**
@@ -361,10 +423,15 @@ export class BrowserPopupWindows {
     this.forget(id)
   }
 
-  /** Close every popup one tab opened, for a tab that is going away. */
+  /** Hide retained extension popups and close page popups when a tab goes away. */
   closeForTab(tabId: string, reason: string): void {
     for (const record of [...this.popups.values()]) {
-      if (record.tabId === tabId) this.close(record.id, reason)
+      if (record.tabId !== tabId) continue
+      if (record.extensionId !== null) {
+        this.dismiss(record.id)
+        continue
+      }
+      this.close(record.id, reason)
     }
   }
 

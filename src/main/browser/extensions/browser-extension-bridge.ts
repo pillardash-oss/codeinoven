@@ -74,7 +74,15 @@ export interface BrowserExtensionMailbox {
    *  Main acts only on the requests newer than the last sequence it saw, and a
    *  restarted worker starts its own sequence over with no memory. */
   sidePanel: BrowserExtensionSidePanelMailbox
+  /** Action popups the worker asked the app to open, oldest first. */
+  actionPopups: BrowserExtensionActionPopupRequest[]
   bridgeCommands: number
+}
+
+/** One `chrome.action.openPopup()` request from the extension worker. */
+export interface BrowserExtensionActionPopupRequest {
+  seq: number
+  tabId: number
 }
 
 /** The kinds of OS-notification request an extension can make through
@@ -283,6 +291,24 @@ function toSidePanelMailbox(value: unknown): BrowserExtensionSidePanelMailbox {
   }
 }
 
+/** A popup request from the mailbox, with only the fields the host needs. */
+function toActionPopupRequest(value: unknown): BrowserExtensionActionPopupRequest | null {
+  const record = asRecord(value)
+  const seq = record['seq']
+  const tabId = record['tabId']
+  if (
+    typeof seq !== 'number' ||
+    !Number.isFinite(seq) ||
+    seq <= 0 ||
+    typeof tabId !== 'number' ||
+    !Number.isFinite(tabId) ||
+    tabId < 0
+  ) {
+    return null
+  }
+  return { seq, tabId }
+}
+
 export class BrowserExtensionBridge {
   private view: WebContentsView | null = null
   private poll: ReturnType<typeof setInterval> | null = null
@@ -409,6 +435,12 @@ export class BrowserExtensionBridge {
               .filter((item): item is BrowserExtensionNotificationRecord => item !== null)
           : [],
         sidePanel: toSidePanelMailbox(parsed['sidePanel']),
+        actionPopups: Array.isArray(parsed['actionPopups'])
+          ? parsed['actionPopups']
+              .slice(-16)
+              .map(toActionPopupRequest)
+              .filter((item): item is BrowserExtensionActionPopupRequest => item !== null)
+          : [],
         bridgeCommands: typeof parsed['bridgeCommands'] === 'number' ? parsed['bridgeCommands'] : 0
       }
       this.generation = generation

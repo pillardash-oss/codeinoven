@@ -70,6 +70,8 @@ export interface BrowserPopupWindow {
   /** Favicon data URL the popup reported, or null until it declares one. */
   favicon: string | null
   loading: boolean
+  /** Changes when an extension action explicitly asks the app to show this page. */
+  activationSequence: number
   /**
    * The extension whose own popup this is, or null when a page opened it with
    * `window.open`.

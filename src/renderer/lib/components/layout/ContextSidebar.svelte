@@ -179,6 +179,13 @@
     return null
   }
 
+  /** Action popups park on dismissal; page-created popup windows close. */
+  function closeLabel(tab: ContextSidebarTab): string {
+    return tab.kind === 'popup-window' && tab.extensionPopup
+      ? `Hide ${tab.title}`
+      : `Close ${tab.title}`
+  }
+
   /** Files are headerless like the other single-panel tools right up until a
    *  second file is open   then a real tab strip is the only way back to the
    *  first one, so it earns the same tabbed treatment as terminals. */
@@ -491,8 +498,8 @@
       <button
         type="button"
         class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-        aria-label={`Close ${tab.title}`}
-        title={`Close ${tab.title}`}
+        aria-label={closeLabel(tab)}
+        title={closeLabel(tab)}
         onclick={() => onClose(tab.id)}
       >
         <X size={11} />
