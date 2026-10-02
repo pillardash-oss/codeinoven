@@ -57,6 +57,11 @@ export interface ViewBadge {
   colors?: string[]
 }
 
+export interface ViewRailBadges {
+  activity: ViewBadge | null
+  unread: ViewBadge | null
+}
+
 /** The three families the rail's badges and labels are keyed by. */
 const FAMILY_ICONS: Record<ContentThreadFamily, Component> = {
   projects: Timeline,
@@ -230,55 +235,70 @@ export class ViewRailActivity {
  * assistant conversations behind it (see {@link browserAgentBadge}) and falls
  * back to the profile's downloads (see {@link browserTransferBadge}).
  */
-export function viewBadgeFor(
+export function viewBadgesFor(
   optionId: HeaderViewOptionId,
   projectBadgeOption: HeaderViewOptionId | null,
   counts: ViewActivityCounts,
   browserTransfers: BrowserDownloadOutstanding,
   browserAssistantActivity: ViewFamilyActivity = emptyFamilyActivity()
-): ViewBadge | null {
+): ViewRailBadges {
   if (optionId === 'browser') {
-    return browserAgentBadge(browserAssistantActivity) ?? browserTransferBadge(browserTransfers)
-  }
-  const family = viewOptionFamily(optionId)
-  if (family === 'projects' && optionId !== projectBadgeOption) return null
-  const unread = notificationPanelState.unreadRailSummary(family)
-  if (unread) {
     return {
-      tone: 'attention',
-      count: unread.count,
-      label: unread.label,
-      icon: FAMILY_ICONS[family],
-      colors: unread.colors
+      activity:
+        browserAgentBadge(browserAssistantActivity) ?? browserTransferBadge(browserTransfers),
+      unread: null
     }
   }
+  const family = viewOptionFamily(optionId)
+  if (family === 'projects' && optionId !== projectBadgeOption) {
+    return { activity: null, unread: null }
+  }
+  const unread = notificationPanelState.unreadRailSummary(family)
+  const unreadBadge: ViewBadge | null = unread
+    ? {
+        tone: 'attention',
+        count: unread.count,
+        label: unread.label,
+        icon: FAMILY_ICONS[family],
+        colors: unread.colors
+      }
+    : null
   const activity = counts[family]
   const icon = FAMILY_ICONS[family]
   if (activity.working > 0) {
     return {
-      tone: 'working',
-      count: activity.working,
-      label: familyActivityLabel(family, activity),
-      icon
+      activity: {
+        tone: 'working',
+        count: activity.working,
+        label: familyActivityLabel(family, activity),
+        icon
+      },
+      unread: unreadBadge
     }
   }
   if (activity.attention > 0) {
     return {
-      tone: activity.attentionError ? 'error' : 'attention',
-      count: activity.attention,
-      label: familyActivityLabel(family, activity),
-      icon
+      activity: {
+        tone: activity.attentionError ? 'error' : 'attention',
+        count: activity.attention,
+        label: familyActivityLabel(family, activity),
+        icon
+      },
+      unread: unreadBadge
     }
   }
   if (activity.retry > 0) {
     return {
-      tone: 'retry',
-      count: activity.retry,
-      label: familyActivityLabel(family, activity),
-      icon
+      activity: {
+        tone: 'retry',
+        count: activity.retry,
+        label: familyActivityLabel(family, activity),
+        icon
+      },
+      unread: unreadBadge
     }
   }
-  return null
+  return { activity: null, unread: unreadBadge }
 }
 
 /**
