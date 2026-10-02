@@ -55,6 +55,7 @@ import { COMPAT_BRIDGE_PAGE_FILE_NAME, ensureInjectionCurrent } from './browser-
 import {
   BrowserExtensionBridge,
   type BrowserExtensionActionPopupRequest,
+  type BrowserExtensionInstalledDetails,
   type BrowserExtensionMailbox,
   type BrowserExtensionNotificationRecord,
   type BrowserExtensionSidePanelMailbox,
@@ -308,6 +309,8 @@ export class BrowserExtensionService {
   private readonly availableUpdateVersions = new Map<string, string>()
   /** Updates in progress, keyed by extension id. */
   private readonly updatingIds = new Set<string>()
+  /** Install/update events awaiting delivery into live extension workers. */
+  private readonly pendingInstalledEvents = new Map<string, BrowserExtensionInstalledDetails>()
   /** One recovery pass per extension if a process stopped during a directory swap. */
   private readonly recoveringSources = new Map<string, Promise<void>>()
   /** One scheduled check at a time, even when startup and the app updater overlap. */
@@ -560,6 +563,7 @@ export class BrowserExtensionService {
           Logger.error('Browser extensions could not be reloaded after an update:', error)
         })
       }
+      this.pendingInstalledEvents.delete(extensionId)
     }
   }
 
@@ -724,6 +728,7 @@ export class BrowserExtensionService {
         throw new Error('The extension did not produce a usable identity')
       }
       const id = result.id
+      const previousRecord = this.registry.get(id)
       this.report(context, { phase: 'registering', detail: 'Installing' })
 
       // Move the prepared tree to its final home. A rename, not a copy: it is the
@@ -776,9 +781,19 @@ export class BrowserExtensionService {
         installedAt: Date.now()
       }
       await this.registry.upsert(record)
+      this.pendingInstalledEvents.set(
+        id,
+        previousRecord
+          ? { reason: 'update', previousVersion: previousRecord.version }
+          : { reason: 'install' }
+      )
       this.availableUpdateVersions.delete(id)
       this.report(context, { phase: 'done', detail: `Installed ${result.name}` })
-      await this.reconcileLiveJars()
+      try {
+        await this.reconcileLiveJars()
+      } finally {
+        this.pendingInstalledEvents.delete(id)
+      }
       this.host.publish()
       return this.toView(record)
     } finally {
@@ -912,6 +927,10 @@ export class BrowserExtensionService {
         sourceHash: result.sourceHash
       }
       await this.registry.upsert(updated)
+      this.pendingInstalledEvents.set(original.id, {
+        reason: 'update',
+        previousVersion: original.version
+      })
       recordCommitted = true
       this.actionIcons.clear()
       await rm(backupSource, { recursive: true, force: true }).catch(() => undefined)
@@ -1299,7 +1318,7 @@ export class BrowserExtensionService {
   ): void {
     const state = this.loaded.get(browserPartitionFor(projectId, boxId))
     if (!state || state.bridges.size === 0) return
-    for (const bridge of state.bridges.values()) bridge.push({ kind: 'tab', name, args })
+    for (const bridge of state.bridges.values()) void bridge.push({ kind: 'tab', name, args })
   }
 
   /**
@@ -1321,7 +1340,7 @@ export class BrowserExtensionService {
     const state = this.loaded.get(browserPartitionFor(projectId, boxId))
     if (!state || state.bridges.size === 0) return
     for (const bridge of state.bridges.values()) {
-      bridge.push({ kind: 'web-navigation', name, args: [details] })
+      void bridge.push({ kind: 'web-navigation', name, args: [details] })
     }
   }
 
@@ -1340,6 +1359,7 @@ export class BrowserExtensionService {
       session: state.session,
       extensionId: record.id,
       pageUrl,
+      installed: this.pendingInstalledEvents.get(record.id),
       onMailbox: (mail, restarted) => this.onMailbox(state, record.id, mail, restarted),
       onUnavailable: (reason) =>
         Logger.dev('Browser extension bridge unavailable:', { extensionId: record.id, reason }),

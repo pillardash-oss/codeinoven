@@ -146,7 +146,10 @@
    * callback, and the two are used interchangeably in the wild, so a place that
    * answers only one way hangs the other silently.
    */
-  const answering = (value) => (...args) => answerWith(args[args.length - 1], value)
+  const answering =
+    (value) =>
+    (...args) =>
+      answerWith(args[args.length - 1], value)
 
   // ── Namespaces Electron does not compile in at all ───────────────────────────
   ensureNamespace('webNavigation', { getFrame: noop, getAllFrames: noop }, [
@@ -246,9 +249,7 @@
     { remove: noop, removeCache: noop, removeCookies: noop, settings: answering({}) },
     []
   )
-  ensureNamespace('sessions', { getRecentlyClosed: answering([]), restore: noop }, [
-    'onChanged'
-  ])
+  ensureNamespace('sessions', { getRecentlyClosed: answering([]), restore: noop }, ['onChanged'])
   ensureNamespace('topSites', { get: answering([]) }, ['onUpdated'])
   ensureNamespace('search', { query: noop, get: answering([]) }, [])
   ensureNamespace(
@@ -1285,6 +1286,63 @@
 
   // ── the bridge itself ───────────────────────────────────────────────────────
   const BRIDGE_PORT_NAME = '__cio:bridge'
+  let bridgePort = null
+  let frameRequestSeq = 0
+  const frameRequests = new Map()
+  const sendFrameRequest = (request) => {
+    if (!bridgePort) return
+    try {
+      bridgePort.postMessage({ kind: 'frames-query', id: request.id, tabId: request.tabId })
+    } catch {
+      bridgePort = null
+    }
+  }
+  const queryFrames = (tabId) =>
+    new Promise((resolve) => {
+      if (!Number.isInteger(tabId) || tabId < 0 || frameRequests.size >= 64) {
+        resolve(null)
+        return
+      }
+      const id = ++frameRequestSeq
+      const timer = setTimeout(() => {
+        frameRequests.delete(id)
+        resolve(null)
+      }, 5000)
+      const request = { id, tabId, resolve, timer }
+      frameRequests.set(id, request)
+      sendFrameRequest(request)
+    })
+  // Electron exposes no native frame lookup. A no-op here leaves extensions'
+  // callback-based autofill and frame-policy lookups waiting indefinitely.
+  for (const root of roots) {
+    const api = root && root.webNavigation
+    if (!api) continue
+    const getAllFrames = (details, callback) => {
+      const request = details && typeof details === 'object' ? details : {}
+      return queryFrames(request.tabId).then((frames) => answerWith(callback, frames))
+    }
+    const getFrame = (details, callback) => {
+      const request = details && typeof details === 'object' ? details : {}
+      return queryFrames(request.tabId).then((frames) => {
+        const found = frames && frames.find((frame) => frame.frameId === request.frameId)
+        return answerWith(callback, found || undefined)
+      })
+    }
+    try {
+      Object.defineProperty(api, 'getAllFrames', {
+        value: getAllFrames,
+        configurable: true,
+        writable: true
+      })
+      Object.defineProperty(api, 'getFrame', {
+        value: getFrame,
+        configurable: true,
+        writable: true
+      })
+    } catch (error) {
+      state.errors.push('webNavigation-frames: ' + String(error))
+    }
+  }
   /**
    * The tab the app says is on screen, as the runtime's own tab ids.
    *
@@ -1294,13 +1352,38 @@
    * What it announces is the truth, and it announces it twice over: an activation
    * names the tab, and every tab it describes carries the flag as it knows it.
    */
-  const tabActivity = { activeTabId: null }
+  const tabActivity = {
+    activeTabId: null,
+    tabs: Object.create(null),
+    replayComplete: false,
+    replayWaiters: [],
+    replayGate: null
+  }
+  const markTabReplayComplete = () => {
+    if (tabActivity.replayComplete) return
+    tabActivity.replayComplete = true
+    for (const resolve of tabActivity.replayWaiters.splice(0)) resolve()
+  }
+  const waitForTabReplay = () => {
+    if (tabActivity.replayComplete) return Promise.resolve()
+    if (!tabActivity.replayGate) {
+      tabActivity.replayGate = new Promise((resolve) => {
+        tabActivity.replayWaiters.push(resolve)
+        setTimeout(markTabReplayComplete, 1500)
+      })
+    }
+    return tabActivity.replayGate
+  }
   const HOSTED_POPUP_WINDOW_ID = 2147483646
   const HOSTED_POPUP_TAB_ID = 2147483645
   const hostedPopout = { url: null, focused: false }
 
   const isExtensionPopoutUrl = (url) => {
-    if (typeof url !== 'string' || !chromeApi.runtime || typeof chromeApi.runtime.getURL !== 'function') {
+    if (
+      typeof url !== 'string' ||
+      !chromeApi.runtime ||
+      typeof chromeApi.runtime.getURL !== 'function'
+    ) {
       return false
     }
     try {
@@ -1385,7 +1468,8 @@
         if (isExtensionPopoutUrl(url) && routePopupWindowRequest('open-window', url)) {
           hostedPopout.url = url
           hostedPopout.focused = true
-          const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+          const callback =
+            typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
           return answerWith(callback, hostedWindow(HOSTED_POPUP_WINDOW_ID, true))
         }
         return originalCreate.apply(this, args)
@@ -1400,7 +1484,8 @@
         if (args[0] === HOSTED_POPUP_WINDOW_ID && hostedPopout.url) {
           hostedPopout.focused = false
           if (routePopupWindowRequest('hide-window', hostedPopout.url)) {
-            const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+            const callback =
+              typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
             return answerWith(callback, undefined)
           }
         }
@@ -1416,7 +1501,8 @@
         if (args[0] === HOSTED_POPUP_WINDOW_ID && hostedPopout.url) {
           if (routePopupWindowRequest('focus-window', hostedPopout.url)) {
             hostedPopout.focused = true
-            const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+            const callback =
+              typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
             return answerWith(callback, hostedWindow(HOSTED_POPUP_WINDOW_ID, true))
           }
         }
@@ -1431,7 +1517,8 @@
         const args = Array.prototype.slice.call(arguments)
         const id = args[0]
         if (id === HOSTED_POPUP_WINDOW_ID || id === 0 || id === -1 || id === -2) {
-          const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+          const callback =
+            typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
           const result =
             id === HOSTED_POPUP_WINDOW_ID
               ? hostedWindow(id, hostedPopout.focused)
@@ -1448,8 +1535,7 @@
       if (original.__cioHostedPopoutWrapped) continue
       const wrapped = function () {
         const args = Array.prototype.slice.call(arguments)
-        const callback =
-          typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+        const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
         return answerWith(callback, hostedWindow(0, true))
       }
       wrapped.__cioHostedPopoutWrapped = true
@@ -1491,16 +1577,66 @@
       if (command.name === 'onActivated') {
         if (args[0] && typeof args[0].tabId === 'number') tabActivity.activeTabId = args[0].tabId
       } else if (command.name === 'onCreated' || command.name === 'onHighlighted') {
-        if (args[0] && typeof args[0] === 'object' && args[0].active === true && typeof args[0].id === 'number') {
+        if (
+          args[0] &&
+          typeof args[0] === 'object' &&
+          args[0].active === true &&
+          typeof args[0].id === 'number'
+        ) {
           tabActivity.activeTabId = args[0].id
         }
       } else if (command.name === 'onUpdated') {
         const info = args[2]
-        if (info && typeof info === 'object' && info.active === true && typeof info.id === 'number') {
+        if (
+          info &&
+          typeof info === 'object' &&
+          info.active === true &&
+          typeof info.id === 'number'
+        ) {
           tabActivity.activeTabId = info.id
         }
       } else if (command.name === 'onRemoved') {
         if (args[0] === tabActivity.activeTabId) tabActivity.activeTabId = null
+      }
+      if (command.name === 'onCreated') {
+        const tab = args[0]
+        if (tab && typeof tab === 'object' && typeof tab.id === 'number' && tab.id >= 0) {
+          tabActivity.tabs[String(tab.id)] = Object.assign(
+            {
+              discarded: false,
+              highlighted: tab.active === true,
+              windowType: 'normal',
+              autoDiscardable: false,
+              mutedInfo: { muted: false }
+            },
+            tab
+          )
+        }
+      } else if (command.name === 'onUpdated') {
+        const tab = args[2]
+        if (tab && typeof tab === 'object' && typeof tab.id === 'number' && tab.id >= 0) {
+          const key = String(tab.id)
+          tabActivity.tabs[key] = Object.assign(
+            {
+              discarded: false,
+              highlighted: tab.active === true,
+              windowType: 'normal',
+              autoDiscardable: false,
+              mutedInfo: { muted: false }
+            },
+            tabActivity.tabs[key] || {},
+            tab
+          )
+        }
+      } else if (command.name === 'onRemoved' && typeof args[0] === 'number') {
+        delete tabActivity.tabs[String(args[0])]
+      }
+      if (typeof tabActivity.activeTabId === 'number') {
+        for (const key of Object.keys(tabActivity.tabs)) {
+          const active = Number(key) === tabActivity.activeTabId
+          tabActivity.tabs[key].active = active
+          tabActivity.tabs[key].highlighted = active
+        }
       }
       const dispatcher = tabEvents[command.name]
       if (dispatcher) {
@@ -1511,6 +1647,8 @@
           delete actionState.tabs[String(command.args[0])]
         }
       }
+    } else if (command.kind === 'tab-replay-complete') {
+      markTabReplayComplete()
     } else if (command.kind === 'web-navigation') {
       // The details object is built on the app's side in `chrome.webNavigation`'s
       // own shape, so a listener written against the real API runs unmodified.
@@ -1540,6 +1678,17 @@
     } else if (command.kind === 'startup') {
       state.startupAt = Date.now()
       runtimeEvents.onStartup.__cioEmit([])
+    } else if (command.kind === 'installed') {
+      const rawDetails = command.details
+      const details =
+        rawDetails && typeof rawDetails === 'object' && !Array.isArray(rawDetails) ? rawDetails : {}
+      const installed = {
+        reason: details.reason === 'update' ? 'update' : 'install',
+        ...(typeof details.previousVersion === 'string'
+          ? { previousVersion: details.previousVersion }
+          : {})
+      }
+      emitRecorded('onInstalled', runtimeEvents.onInstalled, [installed])
     } else if (command.kind === 'menu-click') {
       if (command.tab && typeof command.tab.id === 'number' && command.tab.id >= 0) {
         tabActivity.activeTabId = command.tab.id
@@ -1560,8 +1709,22 @@
       runtime.onConnect.addListener((port) => {
         try {
           if (!port || port.name !== BRIDGE_PORT_NAME) return
+          bridgePort = port
+          for (const request of frameRequests.values()) sendFrameRequest(request)
+          port.onDisconnect.addListener(() => {
+            if (bridgePort === port) bridgePort = null
+          })
           port.onMessage.addListener((command) => {
             try {
+              if (command && command.kind === 'frames-result') {
+                const request = frameRequests.get(command.id)
+                if (request) {
+                  frameRequests.delete(command.id)
+                  clearTimeout(request.timer)
+                  request.resolve(Array.isArray(command.frames) ? command.frames : null)
+                }
+                return
+              }
               handleBridgeCommand(command)
             } catch (error) {
               state.errors.push('bridge: ' + String(error))
@@ -1831,32 +1994,15 @@
     state.errors.push('contexts: ' + String(error))
   }
 
-  // ── the tab that is on screen, for a query that asks ────────────────────────
+  // ── the app's browser tabs, as chrome.tabs.query answers them ───────────────
   //
-  // `chrome.tabs.query` is answered from the runtime's own focus state, and the
-  // app's browser view is in no window the runtime tracks: a query for the active
-  // tab comes back empty while a tab is plainly on screen, and every tab the
-  // runtime describes reads as inactive. The app says which tab is on screen (see
-  // tabActivity), so the answer is corrected from that.
-  //
-  // Only the activity half is repaired. A query that filters on the address, the
-  // title, the status or anything else is answered by the runtime and passed on as
-  // it is, because correcting a filter this shim cannot evaluate would mean
-  // inventing tabs the caller never asked for.
+  // The app's pages are WebContentsViews, not tabs in a Chromium window. Electron's
+  // partial tabs API therefore cannot be the whole answer: extensions which query
+  // all tabs (Dark Reader does this when first installed) would otherwise never
+  // inject into a page that was already open. The bridge replays and forwards the
+  // app's tab events, and those snapshots are merged with any tabs Electron knows.
   try {
     if (state.tabsActivityRepair !== 'installed') {
-      /** Every tab as the app's own answer, with the flag the runtime cannot see. */
-      const withActivity = (tabs) => {
-        const list = []
-        for (const tab of Array.isArray(tabs) ? tabs : []) {
-          if (!tab || typeof tab !== 'object' || Array.isArray(tab)) {
-            list.push(tab)
-            continue
-          }
-          list.push(Object.assign({}, tab, { active: tab.id === tabActivity.activeTabId }))
-        }
-        return list
-      }
       const hostedPopoutTab = () =>
         hostedPopout.url
           ? {
@@ -1890,7 +2036,11 @@
       const hostedPopoutMatchesQuery = (tab, query) => {
         if (!tab) return false
         if (query && query.windowType && query.windowType !== 'popup') return false
-        if (query && typeof query.windowId === 'number' && query.windowId !== HOSTED_POPUP_WINDOW_ID) {
+        if (
+          query &&
+          typeof query.windowId === 'number' &&
+          query.windowId !== HOSTED_POPUP_WINDOW_ID
+        ) {
           return false
         }
         if (query && typeof query.active === 'boolean' && query.active !== tab.active) return false
@@ -1899,6 +2049,139 @@
         if (query && query.title && tab.title !== query.title) return false
         return true
       }
+      const matchesQuery = (tab, query) => {
+        if (!tab || typeof tab !== 'object') return false
+        if (typeof query.active === 'boolean' && tab.active !== query.active) return false
+        if (typeof query.audible === 'boolean' && (tab.audible === true) !== query.audible) {
+          return false
+        }
+        if (
+          typeof query.autoDiscardable === 'boolean' &&
+          (tab.autoDiscardable === true) !== query.autoDiscardable
+        ) {
+          return false
+        }
+        if (typeof query.discarded === 'boolean' && (tab.discarded === true) !== query.discarded) {
+          return false
+        }
+        if (
+          typeof query.highlighted === 'boolean' &&
+          (tab.highlighted === true) !== query.highlighted
+        ) {
+          return false
+        }
+        if (typeof query.index === 'number' && tab.index !== query.index) return false
+        if (typeof query.muted === 'boolean') {
+          const muted = tab.mutedInfo && tab.mutedInfo.muted === true
+          if (muted !== query.muted) return false
+        }
+        if (typeof query.pinned === 'boolean' && (tab.pinned === true) !== query.pinned) {
+          return false
+        }
+        if (typeof query.status === 'string' && tab.status !== query.status) return false
+        if (query.title && !matchesUrlFilter(tab.title || '', query.title)) return false
+        if (query.url && !matchesUrlFilter(tab.url || '', query.url)) return false
+        if (typeof query.windowId === 'number' && tab.windowId !== query.windowId) return false
+        if (query.windowType && tab.windowType !== query.windowType) return false
+        if (
+          (query.currentWindow === true || query.lastFocusedWindow === true) &&
+          tab.windowId !== 0 &&
+          tab.windowId !== HOSTED_POPUP_WINDOW_ID
+        ) {
+          return false
+        }
+        return true
+      }
+      const withActivity = (tabs) => {
+        const byId = new Map()
+        for (const tab of Array.isArray(tabs) ? tabs : []) {
+          if (
+            !tab ||
+            typeof tab !== 'object' ||
+            Array.isArray(tab) ||
+            typeof tab.id !== 'number' ||
+            !Number.isFinite(tab.id)
+          ) {
+            continue
+          }
+          const active = tab.id === tabActivity.activeTabId
+          byId.set(tab.id, Object.assign({}, tab, { active }))
+        }
+        for (const id of Object.keys(tabActivity.tabs)) {
+          const tab = tabActivity.tabs[id]
+          if (!tab || typeof tab !== 'object' || typeof tab.id !== 'number') continue
+          byId.set(tab.id, Object.assign({}, byId.get(tab.id) || {}, tab))
+        }
+        return [...byId.values()]
+      }
+      const readNativeTabs = (nativeQuery, query) =>
+        new Promise((resolve) => {
+          let settled = false
+          let timeout = null
+          const finish = (tabs) => {
+            if (settled) return
+            settled = true
+            if (timeout !== null) clearTimeout(timeout)
+            resolve(Array.isArray(tabs) ? tabs : [])
+          }
+          timeout = setTimeout(() => finish([]), 1500)
+          try {
+            const returned = nativeQuery(query, finish)
+            if (returned && typeof returned.then === 'function') {
+              returned.then(finish, (error) => {
+                state.errors.push('tabs-query: ' + String(error))
+                finish([])
+              })
+            }
+          } catch (error) {
+            state.errors.push('tabs-query: ' + String(error))
+            try {
+              const returned = nativeQuery(query)
+              if (returned && typeof returned.then === 'function') {
+                returned.then(finish, () => finish([]))
+              } else {
+                finish([])
+              }
+            } catch (fallbackError) {
+              state.errors.push('tabs-query: ' + String(fallbackError))
+              finish([])
+            }
+          }
+        })
+      const readNativeTab = (nativeGet, id) =>
+        new Promise((resolve) => {
+          let settled = false
+          let timeout = null
+          const finish = (tab) => {
+            if (settled) return
+            settled = true
+            if (timeout !== null) clearTimeout(timeout)
+            resolve(tab && typeof tab === 'object' ? tab : null)
+          }
+          timeout = setTimeout(() => finish(null), 1500)
+          try {
+            const returned = nativeGet(id, finish)
+            if (returned && typeof returned.then === 'function') {
+              returned.then(finish, (error) => {
+                state.errors.push('tabs-active: ' + String(error))
+                finish(null)
+              })
+            }
+          } catch (error) {
+            state.errors.push('tabs-active: ' + String(error))
+            try {
+              const returned = nativeGet(id)
+              if (returned && typeof returned.then === 'function') {
+                returned.then(finish, () => finish(null))
+              } else {
+                finish(null)
+              }
+            } catch (fallbackError) {
+              state.errors.push('tabs-active: ' + String(fallbackError))
+              finish(null)
+            }
+          }
+        })
       let repairedOn = 0
       for (const root of roots) {
         const tabsApi = root && root.tabs
@@ -1909,36 +2192,34 @@
         try {
           const answerQuery = (list, query, callback) => {
             const hostedTab = hostedPopoutTab()
-            const combined = hostedPopoutMatchesQuery(hostedTab, query)
-              ? list.concat(hostedTab)
-              : list
+            const combined = list.filter((tab) => matchesQuery(tab, query))
+            if (hostedPopoutMatchesQuery(hostedTab, query) && matchesQuery(hostedTab, query)) {
+              combined.push(hostedTab)
+            }
             if (!query || query.active !== true) return answerWith(callback, combined)
             const active = combined.filter((tab) => tab && tab.active === true)
             if (active.length > 0 || tabActivity.activeTabId === null || !nativeGet) {
               return answerWith(callback, active)
             }
-            // The runtime answered without the tab the app names, so the tab is
-            // asked for by that id: this is the case an extension sees as "there is
-            // no current tab" while the user is reading one.
-            return Promise.resolve(nativeGet(tabActivity.activeTabId))
-              .then((tab) => answerWith(callback, withActivity([tab]).filter((entry) => entry && entry.active === true)))
-              .catch((error) => {
-                state.errors.push('tabs-active: ' + String(error))
-                return answerWith(callback, active)
-              })
+            return readNativeTab(nativeGet, tabActivity.activeTabId).then((tab) =>
+              answerWith(
+                callback,
+                tab ? withActivity([tab]).filter((entry) => matchesQuery(entry, query)) : active
+              )
+            )
           }
           const queryRepaired = (...args) => {
-            const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+            const callback =
+              typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
             const callArgs = callback ? args.slice(0, -1) : args
             const query = callArgs[0] && typeof callArgs[0] === 'object' ? callArgs[0] : {}
-            let pending
-            try {
-              pending = nativeQuery(...callArgs)
-            } catch (error) {
-              state.errors.push('tabs-query: ' + String(error))
-              pending = Promise.resolve([])
-            }
-            return Promise.resolve(pending).then((tabs) => answerQuery(withActivity(tabs), query, callback))
+            return waitForTabReplay()
+              .then(() => readNativeTabs(nativeQuery, query))
+              .then((tabs) => answerQuery(withActivity(tabs), query, callback))
+              .catch((error) => {
+                state.errors.push('tabs-query: ' + String(error))
+                return answerWith(callback, [])
+              })
           }
           Object.defineProperty(tabsApi, 'query', {
             value: queryRepaired,
@@ -1948,7 +2229,11 @@
           if (nativeGet) {
             const getRepaired = (id, callback) => {
               const answered = typeof callback === 'function' ? callback : null
-              return Promise.resolve(nativeGet(id)).then((tab) => answerWith(answered, withActivity([tab])[0]))
+              const tab = tabActivity.tabs[String(id)]
+              const result = tab ? Promise.resolve(tab) : readNativeTab(nativeGet, id)
+              return result.then((found) =>
+                answerWith(answered, found ? withActivity([found])[0] : undefined)
+              )
             }
             Object.defineProperty(tabsApi, 'get', {
               value: getRepaired,
