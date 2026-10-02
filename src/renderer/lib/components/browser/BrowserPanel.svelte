@@ -115,6 +115,8 @@
   }
 
   let contentElement = $state<HTMLDivElement>()
+  /** The chrome's current address, updated immediately on submit and reconciled
+   *  when the page reports its committed URL. */
   let address = $state(initialPageState().url)
   /** The address bar, which is the field the user types an address in. It is
    *  taken imperatively because taking the keyboard for a tab the user just
@@ -547,7 +549,7 @@
     {/if}
     <BrowserAddressBar
       bind:this={addressBar}
-      url={pageState.url}
+      url={address}
       projectId={tabProjectId}
       threadId={tabThreadId}
       boxId={tabBoxId}
