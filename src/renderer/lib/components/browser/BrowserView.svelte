@@ -415,6 +415,7 @@
 {#if addressSpotlightOpen}
   <BrowserAddressSpotlight
     initialValue={activeTab?.url ?? ''}
+    boxId={activeTab?.boxId ?? null}
     onOpen={openAddress}
     onClose={() => globalBrowser.closeAddressSpotlight()}
   />

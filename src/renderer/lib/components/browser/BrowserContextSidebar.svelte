@@ -18,6 +18,7 @@
   import { browserExtensionSidePanels } from '$lib/stores/browser-extension-side-panels.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
+  import { browserHistory, BROWSER_HISTORY_GLOBAL_SCOPE } from '$lib/stores/browser-history.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 
@@ -355,7 +356,13 @@
     {/await}
   {:else if globalBrowser.historySidebarShown}
     {#await import('./BrowserHistoryPanel.svelte') then { default: BrowserHistoryPanel }}
-      <BrowserHistoryPanel />
+      <BrowserHistoryPanel
+        scopeKey={browserHistory.scopeFor(
+          BROWSER_HISTORY_GLOBAL_SCOPE,
+          '',
+          activeTab?.boxId ?? null
+        )}
+      />
     {/await}
   {:else if globalBrowser.bookmarksSidebarShown}
     {#await import('./BrowserBookmarksPanel.svelte') then { default: BrowserBookmarksPanel }}

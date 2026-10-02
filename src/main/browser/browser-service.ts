@@ -4800,6 +4800,7 @@ export class BrowserService {
       // the tab up in a list the other surface's tabs are not in.
       projectId: tab.projectId,
       threadId: tab.threadId,
+      boxId: tab.boxId,
       url: contents.getURL(),
       title: contents.getTitle(),
       favicon: tab.favicon,

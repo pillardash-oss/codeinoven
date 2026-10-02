@@ -155,6 +155,8 @@ export interface BrowserPageState {
    */
   projectId: string
   threadId: string
+  /** Selected cookie box, or null for this context's own jar. */
+  boxId: string | null
   url: string
   title: string
   /** Favicon data URL reported by the page, or null until the page declares one. */

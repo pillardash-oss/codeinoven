@@ -96,6 +96,7 @@
       tabId,
       projectId: tabProjectId,
       threadId: tabThreadId,
+      boxId: tabBoxId,
       url: tabInitialUrl,
       title: tabInitialTitle,
       favicon: null,
@@ -549,6 +550,7 @@
       url={pageState.url}
       projectId={tabProjectId}
       threadId={tabThreadId}
+      boxId={tabBoxId}
       {secure}
       loading={pageState.loading}
       {siteMenuOpen}
