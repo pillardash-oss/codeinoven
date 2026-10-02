@@ -16,31 +16,14 @@ export interface MemoryLocation {
   threadId?: string
 }
 
-/**
- * Which memory surface a panel is, which decides both the scopes it offers and
- * the entries it shows.
- *
- * - `settings` is the global memory page: it owns the three audiences
- *   (`projects`, `chat`, `assistant`) and shows only audience-level entries, so
- *   a memory pinned to one place stays with that place.
- * - `sidebar-projects` is a project conversation's memory sidebar: it owns the
- *   projects audience (shown to the user as "Global"), the `project` place, and
- *   the `thread` place. Truly cross-audience memory is settings-only and is
- *   preserved untouched by a sidebar save.
- * - `sidebar-chats` is a chat conversation's memory sidebar: it owns the `chat`
- *   audience (shown as "Global") and the `thread` place.
- * - `sidebar-assistant` is an assistant task's memory sidebar: it owns the
- *   `assistant` audience, the `routine` place, and the `task` place. A routine
- *   entry only appears for tasks that belong to that routine, which is what
- *   keeps one routine's memory out of every other routine's tasks.
- */
+/** The memory panel context, which controls scope labels and visibility. */
 export type MemoryPanelSurface =
-  'settings' | 'sidebar-projects' | 'sidebar-chats' | 'sidebar-assistant'
+  'settings' | 'sidebar-projects' | 'sidebar-chats' | 'sidebar-assistant' | 'sidebar-browser'
 
 /** One selectable scope, with the pickers it needs on the surface offering it. */
 export interface MemoryScopeOption {
   value: MemoryScope
-  /** Label on this surface (sidebar surfaces say "Global" where settings says "Projects"). */
+  /** Label on this surface. */
   label: string
   /** A place inside an audience: choosing it replaces the audience toggles. */
   located: boolean
@@ -50,12 +33,7 @@ export interface MemoryScopeOption {
   needsThread: boolean
 }
 
-/**
- * The scope choices per surface. Labels are surface-specific on purpose: a
- * project sidebar calls the projects audience "Global" because that is what it
- * means to a single conversation, while the settings page names the three
- * audiences plainly so a user knows where a memory applies.
- */
+/** Audience choices are separate from Global, which uses an empty scope set. */
 export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemoryScopeOption[]> = {
   settings: [
     {
@@ -68,14 +46,27 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
     { value: 'chat', label: 'Chats', located: false, needsProject: false, needsThread: false },
     {
       value: 'assistant',
-      label: 'Assistants',
+      label: 'Assistant',
+      located: false,
+      needsProject: false,
+      needsThread: false
+    },
+    {
+      value: 'browser',
+      label: 'Browser chats',
       located: false,
       needsProject: false,
       needsThread: false
     }
   ],
   'sidebar-projects': [
-    { value: 'projects', label: 'Global', located: false, needsProject: false, needsThread: false },
+    {
+      value: 'projects',
+      label: 'All projects',
+      located: false,
+      needsProject: false,
+      needsThread: false
+    },
     {
       value: 'project',
       label: 'Specific project',
@@ -86,18 +77,34 @@ export const MEMORY_SCOPE_OPTIONS: Record<MemoryPanelSurface, readonly MemorySco
     { value: 'thread', label: 'Thread', located: true, needsProject: true, needsThread: true }
   ],
   'sidebar-chats': [
-    { value: 'chat', label: 'Global', located: false, needsProject: false, needsThread: false },
-    { value: 'thread', label: 'Thread', located: true, needsProject: false, needsThread: true }
+    { value: 'chat', label: 'All chats', located: false, needsProject: false, needsThread: false },
+    { value: 'thread', label: 'This chat', located: true, needsProject: false, needsThread: false }
   ],
-  'sidebar-assistant': [
+  'sidebar-browser': [
     {
-      value: 'assistant',
-      label: 'Assistant',
+      value: 'browser',
+      label: 'All browser chats',
       located: false,
       needsProject: false,
       needsThread: false
     },
-    { value: 'routine', label: 'Routine', located: true, needsProject: false, needsThread: false },
+    { value: 'thread', label: 'This chat', located: true, needsProject: false, needsThread: false }
+  ],
+  'sidebar-assistant': [
+    {
+      value: 'assistant',
+      label: 'All routines',
+      located: false,
+      needsProject: false,
+      needsThread: false
+    },
+    {
+      value: 'routine',
+      label: 'Specific routine',
+      located: true,
+      needsProject: false,
+      needsThread: false
+    },
     { value: 'task', label: 'Task', located: true, needsProject: false, needsThread: false }
   ]
 }
@@ -122,6 +129,7 @@ export function defaultScopesForSurface(surface: MemoryPanelSurface): MemoryScop
  *  context check (it shows every audience-level entry), so it falls back to
  *  projects. */
 export function surfaceContextAudience(surface: MemoryPanelSurface): MemoryAudience {
+  if (surface === 'sidebar-browser') return 'browser'
   if (surface === 'sidebar-chats') return 'chat'
   if (surface === 'sidebar-assistant') return 'assistant'
   return 'projects'
@@ -309,4 +317,29 @@ export function planMemorySaveGroups(
     )
   }
   return [...groups.values()]
+}
+
+/** Compare editable values, ignoring timestamps and display order. */
+export function memoryEntriesHaveChanges(
+  entries: readonly MemoryEntry[],
+  baseline: readonly MemoryEntry[]
+): boolean {
+  if (entries.length !== baseline.length) return true
+  const originals = new Map(baseline.map((entry) => [entry.id, entry]))
+  return entries.some((entry) => {
+    const original = originals.get(entry.id)
+    if (!original) return true
+    return (
+      entry.label !== original.label ||
+      entry.content !== original.content ||
+      entry.enabled !== original.enabled ||
+      entry.category !== original.category ||
+      entry.priority !== original.priority ||
+      entry.projectId !== original.projectId ||
+      entry.threadId !== original.threadId ||
+      entry.routineId !== original.routineId ||
+      entry.scopes.join(',') !== original.scopes.join(',') ||
+      (entry.modelKeys ?? []).join('\0') !== (original.modelKeys ?? []).join('\0')
+    )
+  })
 }

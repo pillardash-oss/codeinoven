@@ -1,4 +1,4 @@
-import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '../types'
+import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID, INBOX_PROJECT_ID } from '../types'
 import type { MemoryAudience, MemoryEntry, MemoryScope } from '../types'
 
 /**
@@ -8,7 +8,7 @@ import type { MemoryAudience, MemoryEntry, MemoryScope } from '../types'
  * A memory entry carries a set of scopes:
  *
  * - **Audience-level** - any subset of `MEMORY_AUDIENCES`, possibly empty. An
- *   empty set means every audience, which is what the UI calls "All audiences".
+ *   empty set means every audience, which is what the UI calls "Global".
  *   These entries live in their audience's own memory file.
  * - **Located** - exactly one of `MEMORY_LOCATION_SCOPES`, which pins the entry
  *   to one project, one thread, one routine, or one assistant task.
@@ -17,7 +17,12 @@ import type { MemoryAudience, MemoryEntry, MemoryScope } from '../types'
  * being re-derived in the engine and the panel.
  */
 
-export const MEMORY_AUDIENCES: readonly MemoryAudience[] = ['projects', 'chat', 'assistant']
+export const MEMORY_AUDIENCES: readonly MemoryAudience[] = [
+  'projects',
+  'chat',
+  'assistant',
+  'browser'
+]
 
 export const MEMORY_LOCATION_SCOPES = ['project', 'thread', 'routine', 'task'] as const
 
@@ -52,9 +57,11 @@ export function locationScopeOf(scopes: readonly MemoryScope[]): MemoryLocationS
 
 /**
  * The audience a container id addresses: the inbox holds chats, the assistant
- * container holds assistant tasks, and everything else is a project.
+ * container holds assistant tasks, the browser container holds browser chats,
+ * and everything else is a project.
  */
 export function memoryAudienceForContainer(projectId?: string): MemoryAudience {
+  if (projectId === GLOBAL_BROWSER_PROJECT_ID) return 'browser'
   if (projectId === INBOX_PROJECT_ID) return 'chat'
   if (projectId === ASSISTANT_SPACE_ID) return 'assistant'
   return 'projects'
@@ -67,8 +74,7 @@ export function memoryAudienceForContainer(projectId?: string): MemoryAudience {
  * the place it names, which is also what keeps a routine's memory out of every
  * other routine's tasks.
  *
- * `thread` covers a conversation in either conversational audience (a project
- * thread and a chat thread are the same idea), while `task` is the assistant's
+ * `thread` covers a conversation in projects, chats, and browser chats, while `task` is the assistant's
  * own thread level.
  */
 export function memoryScopesMatchContext(
@@ -86,7 +92,9 @@ export function memoryScopesMatchContext(
       return context.audience === 'projects' && entry.projectId === context.projectId
     case 'thread':
       return (
-        (context.audience === 'projects' || context.audience === 'chat') &&
+        (context.audience === 'projects' ||
+          context.audience === 'chat' ||
+          context.audience === 'browser') &&
         entry.projectId === context.projectId &&
         entry.threadId === context.threadId
       )
@@ -200,7 +208,8 @@ export function readMemoryScopes(input: {
 export const MEMORY_AUDIENCE_SCOPES: Record<MemoryAudience, readonly MemoryScope[]> = {
   projects: ['projects', 'project', 'thread'],
   chat: ['chat', 'thread'],
-  assistant: ['assistant', 'routine', 'task']
+  assistant: ['assistant', 'routine', 'task'],
+  browser: ['browser', 'thread']
 }
 
 /** A stable key for a scope set, so two equal sets always compare equal. */
@@ -215,7 +224,7 @@ export function writeMemoryScopes(scopes: readonly MemoryScope[]): string {
 
 /** A short human summary of a scope set, for logs and proposal rows. */
 export function memoryScopeSummary(scopes: readonly MemoryScope[]): string {
-  if (scopes.length === 0) return 'All audiences'
+  if (scopes.length === 0) return 'Global'
   const location = locationScopeOf(scopes)
   if (location) {
     switch (location) {
@@ -230,6 +239,14 @@ export function memoryScopeSummary(scopes: readonly MemoryScope[]): string {
     }
   }
   return scopes
-    .map((scope) => (scope === 'projects' ? 'Projects' : scope === 'chat' ? 'Chats' : 'Assistants'))
+    .map((scope) =>
+      scope === 'projects'
+        ? 'Projects'
+        : scope === 'chat'
+          ? 'Chats'
+          : scope === 'browser'
+            ? 'Browser chats'
+            : 'Assistant'
+    )
     .join(' + ')
 }
