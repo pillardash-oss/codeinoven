@@ -405,6 +405,18 @@
   let connectionSetupTarget = $state<UtilityEditorTarget | null>(null)
   let connectionSetupSeed = $state('')
 
+  function openConnectionDetails(view: ConnectionView): void {
+    if (view.entry?.utility) {
+      connectionSetupTarget = { kind: 'registry', utility: view.entry.utility }
+    } else if (view.entry?.capability) {
+      connectionSetupTarget = { kind: 'native', entry: view.entry.capability }
+    } else {
+      return
+    }
+    connectionSetupSeed = ''
+    connectionSetupOpen = true
+  }
+
   function openConnectionSetup(view: ConnectionView): void {
     connectionSetupSeed = view.connection.setup ?? ''
     if (view.entry?.utility) {
@@ -1116,7 +1128,12 @@
             </p>
           {:else}
             {#each connectionViews as view (view.connection.utilityId)}
-              <ConnectionRow {view} onRemove={removeConnection} onSetup={openConnectionSetup} />
+              <ConnectionRow
+                {view}
+                onRemove={removeConnection}
+                onSetup={openConnectionSetup}
+                onView={openConnectionDetails}
+              />
             {/each}
           {/if}
           <UtilityPicker

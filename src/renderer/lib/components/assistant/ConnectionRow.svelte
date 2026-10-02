@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, Check, Settings2, X } from '@lucide/svelte'
+  import { AlertTriangle, Check, Eye, Settings2, X } from '@lucide/svelte'
   import type { RoutineConnection } from '$shared/types'
   import type { ConnectionStatus, ConnectionView } from './assistant-view'
   import { utilityKindIcon, utilityKindLabel } from './utility-kind'
@@ -9,9 +9,11 @@
     onRemove: (connection: RoutineConnection) => void
     /** Open the capability modal for this row, seeded with its setup prompt. */
     onSetup: (view: ConnectionView) => void
+    /** Open the resolved utility details in its editor. */
+    onView: (view: ConnectionView) => void
   }
 
-  let { view, onRemove, onSetup }: Props = $props()
+  let { view, onRemove, onSetup, onView }: Props = $props()
 
   const KindIcon = $derived(
     utilityKindIcon(view.entry?.kind ?? view.connection.kind ?? view.utility?.kind)
@@ -69,6 +71,17 @@
   </div>
 
   <div class="flex shrink-0 items-center gap-0.5">
+    {#if view.entry}
+      <button
+        type="button"
+        class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        title="View {view.connection.label} details"
+        aria-label="View {view.connection.label} details"
+        onclick={() => onView(view)}
+      >
+        <Eye size={12} strokeWidth={1.8} />
+      </button>
+    {/if}
     {#if needsSetup || view.status === 'disabled'}
       <button
         type="button"
