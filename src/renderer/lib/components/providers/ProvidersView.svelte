@@ -11,6 +11,7 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { APP_NAME } from '$shared/brand'
   import { canRestartHarness, canUninstallHarness } from '$shared/harness-actions'
@@ -52,7 +53,6 @@
   import TypesafeDecisionsCard from './TypesafeDecisionsCard.svelte'
 
   import OpenCodeV2CatalogPanel from './OpenCodeV2CatalogPanel.svelte'
-  import ProviderConnectFlow from './ProviderConnectFlow.svelte'
 
   /** How often the "last checked" relative label re-renders. */
   const RELATIVE_TIME_TICK_MS = 20_000
@@ -62,7 +62,6 @@
   const BACKGROUND_BATCH_DELAY_MS = 50
 
   let authStatuses = $state.raw<Record<string, ProviderAccountAuthStatus>>({})
-  let addTarget = $state<ProviderConnectionInfo | null>(null)
   /** Harness awaiting uninstall confirmation, with its resolved handoff command. */
   let uninstallTarget = $state<ProviderConnectionInfo | null>(null)
   let uninstallCommand = $state<string>('')
@@ -885,7 +884,7 @@
                     ? `Add a provider to ${provider.name}`
                     : 'Install the harness first, then re-check to add providers'}
                   disabled={!canAddProvider(provider)}
-                  onclick={() => (addTarget = provider)}
+                  onclick={() => providerConnectFlow.open(provider.id)}
                 >
                   <Plug2 size={13} /> Manage providers
                 </button>
@@ -1041,10 +1040,6 @@
     <BaseUrlProvidersPanel providers={providerStore.providers} />
   {/if}
 </div>
-
-{#if addTarget}
-  <ProviderConnectFlow harness={addTarget} onClose={() => (addTarget = null)} />
-{/if}
 
 {#if restartTarget}
   <ConfirmDialog
