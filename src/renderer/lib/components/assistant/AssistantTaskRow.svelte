@@ -101,11 +101,14 @@
   const iconKey = $derived(taskRowIconKey(task))
   const howToThread = $derived(isAssistantSetupThread(task))
 
-  /** Line 2: next-run time for scheduled tasks, last-run time for unscheduled
-   *  tasks, and the run's own last activity for a run row. */
+  /** Line 2: task schedule/activity, run activity, or the setup thread's role. */
   const runLine = $derived.by(() => {
+    if (isRun) {
+      subscribeMinute()
+      return runRowLine(task, Date.now())
+    }
+    if (howToThread) return 'How-to conversation'
     subscribeMinute()
-    if (isRun) return runRowLine(task, Date.now())
     return taskRunLine(task, nextRunAt, Date.now())
   })
 

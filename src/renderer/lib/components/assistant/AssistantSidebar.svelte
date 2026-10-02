@@ -145,6 +145,20 @@
     return ids
   })
 
+  /** Routine rows surface unread work without requiring each task list to open. */
+  const unreadRoutineIds = $derived.by(() => {
+    const ids = new SvelteSet<string>()
+    for (const task of tasks) {
+      if (task.routineId && !task.read) ids.add(task.routineId)
+    }
+    for (const runs of runsByRoutine.values()) {
+      for (const run of runs) {
+        if (run.routineId && !run.read) ids.add(run.routineId)
+      }
+    }
+    return ids
+  })
+
   /**
    * Pinned routines first, then the user's manual arrangement, then creation
    * (newest first). `sortRoutines` is the same order the main process lists
@@ -383,7 +397,7 @@
     active={task.id === selectedThreadId}
     missed={missedThreadIds.has(task.id)}
     nextRunAt={assistantRoutines.nextRunForTask(task)}
-    runWorking={taskRunWorking(task.id)}
+    runWorking={nestRuns && taskRunWorking(task.id)}
     onSelect={select}
     onRename={onRenameTask}
     onTogglePin={onTogglePinTask}
@@ -444,6 +458,7 @@
             {routine}
             expanded={isExpanded}
             working={routineWorking(routine.id)}
+            unread={unreadRoutineIds.has(routine.id)}
             missed={missedRoutineIds.has(routine.id)}
             runCount={routineRunList.length}
             iconUrl={assistantRoutines.iconUrls.get(routine.id) ?? null}

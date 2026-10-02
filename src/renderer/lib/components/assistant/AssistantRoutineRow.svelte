@@ -12,6 +12,7 @@
     Trash2
   } from '@lucide/svelte'
   import { DropdownMenu, Portal } from 'bits-ui'
+  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import SidebarSearchControl from '$lib/components/workspace/SidebarSearchControl.svelte'
   import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
   import type { Routine } from '$shared/types'
@@ -30,6 +31,8 @@
     expanded: boolean
     /** True while any task in the routine is running. */
     working: boolean
+    /** At least one task or run in the routine has unread activity. */
+    unread: boolean
     /** Any task carries a pending missed run. */
     missed: boolean
     /** How many times this routine has run: one row per execution. The routine's
@@ -60,6 +63,7 @@
     routine,
     expanded,
     working,
+    unread,
     missed,
     runCount,
     iconUrl = null,
@@ -269,6 +273,9 @@
           <Pin size={11} class="shrink-0 text-accent" aria-hidden="true" />
         {/if}
         <span class="truncate text-[0.8125rem] text-foreground">{routine.name}</span>
+        {#if unread}
+          <StatusBadge stage="unread" title="Unread task or run" size="sm" />
+        {/if}
       </span>
       <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
         <span class="shrink-0">{routineRunCountLabel(runCount)}</span>
