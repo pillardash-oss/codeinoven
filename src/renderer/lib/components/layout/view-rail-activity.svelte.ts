@@ -10,7 +10,12 @@ import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
-import { coordinatorHasActiveDelegates, isOrchestrationChildThread } from '$shared/types'
+import {
+  coordinatorHasActiveDelegates,
+  coordinatorHasUnreadWorkers,
+  isOrchestrationChildThread,
+  threadTracksReadStatus
+} from '$shared/types'
 import { threadWorkingForIndicator } from './app-header-thread-status'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
@@ -168,6 +173,29 @@ export class ViewRailActivity {
     return counts
   })
 
+  /** Persisted unread threads, rebuilt from the same startup-hydrated thread
+   *  snapshot used by the sidebar. This survives app restarts and includes
+   *  routine execution threads stored in the assistant space. */
+  unreadCounts: Record<ContentThreadFamily, number> = $derived.by(() => {
+    const threads = scopeState.allScopeThreads
+    const unread: Record<ContentThreadFamily, number> = {
+      projects: 0,
+      chats: 0,
+      assistant: 0
+    }
+    const unreadById = new SvelteSet(
+      threads
+        .filter((thread) => !thread.archived && threadTracksReadStatus(thread) && !thread.read)
+        .map((thread) => thread.id)
+    )
+    for (const thread of threads) {
+      if (thread.archived || isOrchestrationChildThread(thread)) continue
+      const hasUnread = unreadById.has(thread.id) || coordinatorHasUnreadWorkers(thread, threads)
+      if (hasUnread) unread[contentThreadFamily(thread)] += 1
+    }
+    return unread
+  })
+
   /**
    * A browser tab's assistant conversation, counted apart from every other family.
    *
@@ -239,6 +267,7 @@ export function viewBadgesFor(
   optionId: HeaderViewOptionId,
   projectBadgeOption: HeaderViewOptionId | null,
   counts: ViewActivityCounts,
+  unreadCounts: Record<ContentThreadFamily, number>,
   browserTransfers: BrowserDownloadOutstanding,
   browserAssistantActivity: ViewFamilyActivity = emptyFamilyActivity()
 ): ViewRailBadges {
@@ -254,15 +283,22 @@ export function viewBadgesFor(
     return { activity: null, unread: null }
   }
   const unread = notificationPanelState.unreadRailSummary(family)
-  const unreadBadge: ViewBadge | null = unread
-    ? {
-        tone: 'attention',
-        count: unread.count,
-        label: unread.label,
-        icon: FAMILY_ICONS[family],
-        colors: unread.colors
-      }
-    : null
+  const threadUnreadCount = unreadCounts[family]
+  const unreadCount = Math.max(unread?.count ?? 0, threadUnreadCount)
+  const unreadBadge: ViewBadge | null =
+    unreadCount > 0
+      ? {
+          tone: 'attention',
+          count: unreadCount,
+          label: `${unreadCount} unread ${FAMILY_NOUN[family]}${unreadCount === 1 ? '' : 's'}`,
+          icon: FAMILY_ICONS[family],
+          colors:
+            unread?.colors ??
+            (family === 'assistant'
+              ? [notificationPanelState.assistantColor ?? 'var(--color-dimmed)']
+              : [family === 'chats' ? 'var(--color-chat-success)' : 'var(--color-success)'])
+        }
+      : null
   const activity = counts[family]
   const icon = FAMILY_ICONS[family]
   if (activity.working > 0) {
