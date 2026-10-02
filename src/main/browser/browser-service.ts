@@ -13,6 +13,7 @@ import {
   Menu,
   screen,
   session,
+  systemPreferences,
   webFrameMain,
   WebContentsView,
   type MenuItemConstructorOptions,
@@ -4400,7 +4401,13 @@ export class BrowserService {
         () => this.resolvePermission(id, permissionResolutions.dismiss),
         PERMISSION_TIMEOUT_MS
       )
-      this.pendingPermissions.set(id, { request, callback, timer, partition })
+      this.pendingPermissions.set(id, {
+        request,
+        callback,
+        timer,
+        partition,
+        systemAccessDenied: false
+      })
       // Nothing in this instance's ledgers covers the request, but the durable
       // memory is shared with every other running instance: re-read it before
       // asking, and answer from it when the decision is already there. The
@@ -4453,7 +4460,8 @@ export class BrowserService {
       {
         request: remaining.request,
         queueSize: this.pendingPermissions.size,
-        projectLabel: tab ? this.permissionLabel(tab) : null
+        projectLabel: tab ? this.permissionLabel(tab) : null,
+        systemAccessDenied: remaining.systemAccessDenied
       },
       this.promptAnchor()
     )
@@ -4511,22 +4519,25 @@ export class BrowserService {
     if (!pending) return
     clearTimeout(pending.timer)
     this.pendingPermissions.delete(requestId)
-    if (resolution.rememberGrant || resolution.rememberDeny) {
+    if (resolution.rememberDeny) {
       const grants = this.permissionGrants.get(pending.partition)
       const denies = this.permissionDenies.get(pending.partition)
       for (const key of permissionGrantKeys(pending.request)) {
-        if (resolution.rememberDeny) {
-          grants?.delete(key)
-          denies?.add(key)
-        } else if (resolution.rememberGrant) {
-          denies?.delete(key)
-          grants?.add(key)
-        }
+        grants?.delete(key)
+        denies?.add(key)
       }
       this.persistPermissionMemory()
     }
-    pending.callback(resolution.granted)
-    // Show the next queued request, or drop the prompt when the queue is empty.
+    if (resolution.granted) {
+      void this.grantBrowserPermission(pending, resolution.rememberGrant)
+    } else {
+      pending.callback(false)
+    }
+    this.showNextPermissionPrompt()
+  }
+
+  /** Show the next queued request, or drop the prompt when the queue is empty. */
+  private showNextPermissionPrompt(): void {
     const next = this.pendingPermissions.values().next()
     if (next.done) {
       this.promptWindow.hide()
@@ -4537,7 +4548,60 @@ export class BrowserService {
       {
         request: next.value.request,
         queueSize: this.pendingPermissions.size,
-        projectLabel: nextTab ? this.permissionLabel(nextTab) : null
+        projectLabel: nextTab ? this.permissionLabel(nextTab) : null,
+        systemAccessDenied: next.value.systemAccessDenied
+      },
+      this.promptAnchor()
+    )
+  }
+
+  /** Ask macOS for capture access only after the user allows the site. The
+   * browser's callback stays pending while the OS prompt is open, which lets
+   * Chromium resume `getUserMedia` only after both decisions have succeeded. */
+  private async grantBrowserPermission(
+    pending: PendingBrowserPermission,
+    rememberGrant: boolean
+  ): Promise<void> {
+    const mediaTypes = pending.request.permission === 'media' ? pending.request.mediaTypes : []
+    if (process.platform === 'darwin') {
+      try {
+        for (const mediaType of new Set(mediaTypes)) {
+          const accessType =
+            mediaType === 'audio' ? 'microphone' : mediaType === 'video' ? 'camera' : null
+          if (accessType && !(await systemPreferences.askForMediaAccess(accessType))) {
+            pending.systemAccessDenied = true
+            pending.callback(false)
+            this.promptSystemAccessDenied(pending)
+            return
+          }
+        }
+      } catch (error: unknown) {
+        Logger.error('macOS browser media access request failed:', error)
+        pending.callback(false)
+        return
+      }
+    }
+    if (rememberGrant) {
+      const grants = this.permissionGrants.get(pending.partition)
+      const denies = this.permissionDenies.get(pending.partition)
+      for (const key of permissionGrantKeys(pending.request)) {
+        denies?.delete(key)
+        grants?.add(key)
+      }
+      this.persistPermissionMemory()
+    }
+    pending.callback(true)
+  }
+
+  /** Keep the denied request visible until the user dismisses it or retries. */
+  private promptSystemAccessDenied(pending: PendingBrowserPermission): void {
+    const tab = this.tabs.get(pending.request.tabId)
+    this.promptWindow.show(
+      {
+        request: pending.request,
+        queueSize: this.pendingPermissions.size,
+        projectLabel: tab ? this.permissionLabel(tab) : null,
+        systemAccessDenied: true
       },
       this.promptAnchor()
     )

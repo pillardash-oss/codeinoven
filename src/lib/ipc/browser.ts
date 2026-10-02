@@ -505,6 +505,8 @@ export interface BrowserPermissionPromptContext {
   queueSize: number
   /** Owning project (and thread) label; null shows only the website. */
   projectLabel: string | null
+  /** macOS denied access after the user allowed the site-level request. */
+  systemAccessDenied: boolean
 }
 
 /** A permission requested by a page inside the project-scoped browser session. */
