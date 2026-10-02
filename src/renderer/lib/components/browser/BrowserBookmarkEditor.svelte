@@ -2,6 +2,7 @@
   import { Check } from '@lucide/svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { pickAppearanceImage } from '$lib/appearance-image.svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import {
@@ -85,14 +86,12 @@
   )
 
   async function uploadImage(): Promise<void> {
-    const imagePath = await invoke('dialog:pickImage')
-    if (!imagePath) return
-    // Read the file for local preview only; nothing is persisted until Save.
-    const dataUrl = await invoke('file:readAsDataUrl', imagePath)
-    if (!dataUrl) return
+    // The app-owned copy, not the picked path: this editor persists what it returns.
+    const picked = await pickAppearanceImage()
+    if (!picked) return
     customSvgSelected = false
     iconCleared = false
-    pendingIcon = { path: imagePath, dataUrl }
+    pendingIcon = picked
   }
 
   /** Give the page its own icon back: every icon field comes off, the saved image

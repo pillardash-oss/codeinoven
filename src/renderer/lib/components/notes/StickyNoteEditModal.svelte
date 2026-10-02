@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '$lib/ipc.svelte'
+  import { pickAppearanceImage } from '$lib/appearance-image.svelte'
   import type { CustomIcon, StickyNoteAppearance } from '$shared/types'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -69,12 +70,11 @@
   }
 
   async function uploadImage(): Promise<void> {
-    const path = await invoke('dialog:pickImage')
-    if (!path) return
-    const dataUrl = await invoke('file:readAsDataUrl', path)
-    if (!dataUrl) return
-    imagePath = path
-    pendingImage = { path, dataUrl }
+    // The app-owned copy, not the picked path: this modal persists what it returns.
+    const picked = await pickAppearanceImage()
+    if (!picked) return
+    imagePath = picked.path
+    pendingImage = picked
   }
 
   function resetAppearance(): void {
@@ -103,7 +103,7 @@
   }
 </script>
 
-<Modal open={open} title="Edit sticky note" onClose={onClose} size="lg">
+<Modal {open} title="Edit sticky note" {onClose} size="lg">
   <div class="space-y-4">
     <div>
       <label class="mb-1 block text-xs font-medium text-muted" for={`sticky-note-title-${noteId}`}>

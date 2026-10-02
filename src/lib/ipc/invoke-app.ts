@@ -27,6 +27,11 @@ export const invokeAppContract = {
   'dialog:pickFile': {} as Contract<[scope?: AttachmentStorageScope], string | null>,
   'dialog:pickFiles': {} as Contract<[scope?: AttachmentStorageScope], string[]>,
   'dialog:pickImage': {} as Contract<[], string | null>,
+  /** Store a picked appearance image (a browser tab, group, box, bookmark or
+   *  sticky note icon) as an app-owned copy and answer with that copy's path and
+   *  its data URL. A picked path is authorized for one process only, so it is
+   *  never what an appearance record keeps. */
+  'appearance:storeImage': {} as Contract<[sourcePath: string], { path: string; dataUrl: string }>,
   'diagnostics:export': {} as Contract<[], string | null>,
   'file:read': {} as Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>,
   'file:readAsDataUrl': {} as Contract<[filePath: string], string | null>,
