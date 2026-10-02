@@ -475,6 +475,15 @@ export interface HarnessDriver {
    */
   releaseProjectResources?(projectPath: string): Promise<void> | void
 
+  /**
+   * Release an idle native session before another app instance resumes it.
+   * Drivers that do not hold cross-process native writers omit this operation.
+   */
+  releaseIdleSessionForTransfer?(
+    projectPath: string,
+    sessionId: string
+  ): Promise<IdleNativeSessionReleaseResult>
+
   /** Send a prompt; responses stream back via the event callback. Non-blocking. */
   sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void>
 
@@ -803,6 +812,12 @@ export interface HarnessDriver {
   /** Tear down all pooled resources (called on app quit). */
   dispose(): void
 }
+
+/** Result of asking one process to release a native session it may own. */
+export type IdleNativeSessionReleaseResult =
+  | { owner: false; released: false }
+  | { owner: true; released: true }
+  | { owner: true; released: false; reason: string }
 
 /** Main-process observer used by drivers to attribute process trees to sessions. */
 export interface AgentProcessObserver {

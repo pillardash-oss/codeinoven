@@ -30,6 +30,7 @@ import type {
   GenerateTitleOptions,
   GradeTurnOptions,
   HarnessCapabilities,
+  IdleNativeSessionReleaseResult,
   SendPromptOptions,
   SteerPromptOptions,
   UtilityRuntimeOverlay,
@@ -717,6 +718,73 @@ export class CodexDriver extends PersistentCliDriver {
     this.stopResidentHostForPathIfIdle(projectPath)
   }
 
+  /**
+   * Hand an idle native thread to another CodeInOven process. Codex holds its
+   * writer lock for the lifetime of the loaded app-server thread, so closing
+   * only the project host can release it without deleting or forking history.
+   */
+  async releaseIdleSessionForTransfer(
+    projectPath: string,
+    sessionId: string
+  ): Promise<IdleNativeSessionReleaseResult> {
+    const session = await this.requireSession(projectPath, sessionId)
+    const nativeThreadId = session.nativeSessionId
+    if (!nativeThreadId) return { owner: false, released: false }
+
+    const binding = this.threadSessionsByNativeId.get(nativeThreadId)
+    const host = this.hostsByProjectPath.get(projectPath)
+    if (
+      !host ||
+      !binding ||
+      binding.sessionId !== sessionId ||
+      binding.projectPath !== projectPath
+    ) {
+      return { owner: false, released: false }
+    }
+
+    if (this.activeTurns.has(sessionId)) {
+      return {
+        owner: true,
+        released: false,
+        reason: 'This Codex thread still has an active turn.'
+      }
+    }
+    const hostBusy =
+      [...this.activeTurns.values()].some((active) => active.host === host) ||
+      [...this.compactionsByThreadId.values()].some((compaction) => compaction.host === host) ||
+      [...this.contextUsageByThreadId.values()].some((waiter) => waiter.host === host) ||
+      [...this.serverRequests.values()].some(
+        (request) => request.host === host && request.sessionId !== sessionId
+      ) ||
+      host.pending.size > 0
+    if (hostBusy) {
+      return {
+        owner: true,
+        released: false,
+        reason: 'Another Codex operation is still using this app-server.'
+      }
+    }
+
+    if (this.hostsByProjectPath.get(projectPath) === host) {
+      this.hostsByProjectPath.delete(projectPath)
+    }
+    const stopped = await this.stopAppServerHostAndWait(
+      host,
+      'Codex app-server handed an idle thread to another instance'
+    )
+    if (!stopped) {
+      return {
+        owner: true,
+        released: false,
+        reason: 'The Codex app-server did not exit, so its thread writer is still held.'
+      }
+    }
+    for (const [threadId, sessionOwner] of this.threadSessionsByNativeId) {
+      if (sessionOwner.projectPath === projectPath) this.threadSessionsByNativeId.delete(threadId)
+    }
+    return { owner: true, released: true }
+  }
+
   override dispose(): void {
     for (const active of this.activeTurns.values()) {
       active.finished = true
@@ -764,6 +832,41 @@ export class CodexDriver extends PersistentCliDriver {
     }
     host.pending.clear()
     if (!host.child.killed) host.child.kill()
+  }
+
+  private async stopAppServerHostAndWait(
+    host: CodexAppServerHost,
+    reason: string
+  ): Promise<boolean> {
+    const exited = this.waitForAppServerExit(host.child)
+    this.stopAppServerHost(host, reason)
+    return exited
+  }
+
+  private waitForAppServerExit(
+    child: CodexAppServerHost['child'],
+    timeoutMs = 5_000
+  ): Promise<boolean> {
+    if (typeof child.exitCode === 'number' || typeof child.signalCode === 'string') {
+      return Promise.resolve(true)
+    }
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      const finish = (exited: boolean): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        child.removeListener('exit', onExit)
+        resolve(exited)
+      }
+      const onExit = (): void => finish(true)
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      timer.unref?.()
+      child.once('exit', onExit)
+      if (typeof child.exitCode === 'number' || typeof child.signalCode === 'string') {
+        finish(true)
+      }
+    })
   }
 
   private stopResidentHostForPathIfIdle(projectPath: string): void {
