@@ -1865,7 +1865,7 @@
 
     <div
       class={`flex min-w-0 shrink items-center ${
-        readOnlyMode || !hidePermissionSelector || resolved.fileSystemMode === true ? 'gap-2' : ''
+        readOnlyMode || !hidePermissionSelector || resolved.fileSystemMode === true ? 'gap-3' : ''
       }`}
     >
       <ChatComposerPermissionPicker
