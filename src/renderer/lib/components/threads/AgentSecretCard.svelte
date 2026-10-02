@@ -3,9 +3,6 @@
     ChevronLeft,
     ChevronRight,
     Clock,
-    CornerDownRight,
-    Eye,
-    EyeOff,
     KeyRound,
     Loader2,
     ShieldCheck,
@@ -13,12 +10,15 @@
   } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
+  import { formatKeyCombo } from '$lib/keymap/keymap'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import { formatRemaining } from '../shared/card-timer'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
   import AgentCardChatActions from './AgentCardChatActions.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type {
@@ -31,12 +31,6 @@
     request: PendingAgentQuestionRequest
     /** Sends the pasted values to the main process; they never enter the transcript. */
     onSubmit: (requestId: string, secrets: AgentSecretSubmission[]) => Promise<void>
-    /**
-     * Sends an instruction instead of a value: the main process reuses whatever
-     * the device already holds for the requested names and hands the instruction
-     * to the agent, so a value the user cannot reach any more is never re-asked.
-     */
-    onAlternative: (requestId: string, alternative: string) => Promise<void>
     onDismiss: (requestId: string) => Promise<void>
     scope: SpeechScope
     /** Opens the explain side chat for the current secret, pausing its timeout. */
@@ -52,37 +46,42 @@
     onPause?: (requestId: string, questionIndex: number) => Promise<void>
   }
 
-  let {
-    request,
-    onSubmit,
-    onAlternative,
-    onDismiss,
-    scope,
-    onExplain,
-    onQuickChat,
-    onPause
-  }: Props = $props()
+  let { request, onSubmit, onDismiss, scope, onExplain, onQuickChat, onPause }: Props = $props()
 
   // The parent keys this component by request id, so these drafts belong to one
   // authoritative pending request for the lifetime of the component.
   let currentIndex = $state(0)
   // svelte-ignore state_referenced_locally
   let values = $state<string[]>(request.questions.map(() => ''))
+  // Each secret is answered on its own: a value, or an instruction that lets the
+  // main process reuse one the device already holds. One card can mix the two.
+  // svelte-ignore state_referenced_locally
+  let alternatives = $state<string[]>(request.questions.map(() => ''))
+  // svelte-ignore state_referenced_locally
+  let alternativeModes = $state<boolean[]>(request.questions.map(() => false))
   let revealedIndex = $state<number | null>(null)
   let working = $state(false)
   let actionError = $state('')
   let folded = $state(false)
-  let showingAlternative = $state(false)
-  let alternative = $state('')
   let alternativeEditor = $state<RichMarkdownEditor>()
 
   let total = $derived(request.questions.length)
   let question = $derived(request.questions[currentIndex])
-  let currentValue = $derived(values[currentIndex] ?? '')
   let currentRevealed = $derived(revealedIndex === currentIndex)
-  let filledCount = $derived(values.filter((value) => value.trim().length > 0).length)
+  let showingAlternative = $derived(alternativeModes[currentIndex] ?? false)
+
+  /** Whether one entry is answerable: a pasted value or a written instruction. */
+  function entryAnswered(index: number): boolean {
+    if (alternativeModes[index]) return (alternatives[index] ?? '').trim().length > 0
+    return (values[index] ?? '').trim().length > 0
+  }
+
+  let filledCount = $derived(request.questions.filter((_, index) => entryAnswered(index)).length)
   let allFilled = $derived(filledCount === total)
-  let canSubmitAlternative = $derived(alternative.trim().length > 0 && !working)
+  let currentAnswered = $derived(entryAnswered(currentIndex))
+  // The send key resolved through the user's keymap overrides, so the Next and
+  // Submit buttons advertise whichever combination actually advances the card.
+  let advanceShortcutLabel = $derived(formatKeyCombo(keymapState.keysFor('chat-send')))
   // The request carries its own deadline, so the countdown is the same one the
   // main process is running: the card closes when it reaches zero. Time is an
   // external system, so it is subscribed to rather than tracked in an effect.
@@ -103,13 +102,8 @@
     if (remainingMs !== null) return formatRemaining(remainingMs)
     return timerPaused ? 'Paused' : 'No deadline'
   })
-  /** Every variable this request asks for, so reuse is stated before it happens. */
-  let requestedVariables = $derived(
-    request.questions.flatMap((entry) =>
-      entry.secretEnvironmentVariable ? [entry.secretEnvironmentVariable] : []
-    )
-  )
-  const alternativeTargetId = $derived(`secret-alternative-${request.requestId}`)
+  /** Id of the current entry's alternative editor, unique per entry. */
+  const alternativeTargetId = $derived(`secret-alternative-${request.requestId}-${currentIndex}`)
 
   function alternativeSpeechTarget() {
     return alternativeEditor?.speechEditorTarget(alternativeTargetId) ?? null
@@ -138,14 +132,13 @@
     })
   }
 
-  function showAlternative(): void {
+  /**
+   * Switch the current entry between a pasted value and an instruction. The
+   * countdown is held either way: both are the user working on the card.
+   */
+  function toggleAlternativeMode(): void {
     pauseCountdown()
-    showingAlternative = true
-  }
-
-  function cancelAlternative(): void {
-    showingAlternative = false
-    alternative = ''
+    alternativeModes[currentIndex] = !alternativeModes[currentIndex]
   }
 
   /**
@@ -159,18 +152,31 @@
     onOpen(request.requestId, question)
   }
 
-  async function handleAlternative(): Promise<void> {
-    const instruction = alternative.trim()
-    if (!instruction || working) return
-    working = true
-    actionError = ''
-    try {
-      await onAlternative(request.requestId, instruction)
-    } catch (error) {
-      working = false
-      actionError =
-        error instanceof Error ? error.message : 'The alternative instruction could not be sent.'
+  /**
+   * Move to the next entry, or submit when the current one is the last. Used by
+   * the footer button, by Cmd/Ctrl+Enter in the alternative editor, and by the
+   * same combination in the value field.
+   */
+  function advance(): void {
+    if (working || !currentAnswered) return
+    if (currentIndex < total - 1) {
+      currentIndex += 1
+      return
     }
+    void handleSubmit()
+  }
+
+  /**
+   * The value field's own send shortcut, read from the keymap like every other
+   * keyboard action in the app: the same key that advances the question card
+   * moves to the next secret here, and submits on the last one, so a whole
+   * request can be answered from the keyboard. A plain input has no editor to
+   * route it, so the field reports it itself.
+   */
+  function handleValueKeydown(event: KeyboardEvent): void {
+    if (event.isComposing || !keymapState.matches('chat-send', event)) return
+    event.preventDefault()
+    advance()
   }
 
   function toggleReveal(): void {
@@ -195,7 +201,11 @@
           'This request is missing a secret identifier. Dismiss it and ask the agent again.'
         return
       }
-      secrets.push({ secretId, value: (values[index] ?? '').trim() })
+      if (alternativeModes[index]) {
+        secrets.push({ secretId, alternative: (alternatives[index] ?? '').trim() })
+      } else {
+        secrets.push({ secretId, value: (values[index] ?? '').trim() })
+      }
     }
     working = true
     actionError = ''
@@ -297,45 +307,47 @@
           {/if}
         </div>
 
-        {#if showingAlternative}
-          <div class="space-y-1.5">
-            <label class="block text-xs font-medium text-muted" for={alternativeTargetId}>
-              Alternative instruction
-            </label>
-            <div class="flex items-start gap-2">
-              <RichMarkdownEditor
-                bind:this={alternativeEditor}
-                id={alternativeTargetId}
-                bind:value={alternative}
-                autofocus
-                disabled={working}
-                placeholder="Say what the agent should use instead, or name the variable you already provided…"
-                onValueChange={pauseCountdown}
-                class="w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary disabled:opacity-50"
-                containerClass="min-w-0 flex-1"
-                ariaLabel="Alternative instruction"
-                onSubmit={() => void handleAlternative()}
-              />
-              <VoiceInputButton
-                targetId={alternativeTargetId}
-                getTarget={alternativeSpeechTarget}
-                {scope}
-                disabled={working}
-              />
+        {#key currentIndex}
+          {#if showingAlternative}
+            <div class="space-y-1.5">
+              <label class="block text-xs font-medium text-muted" for={alternativeTargetId}>
+                Alternative instruction
+              </label>
+              <div class="flex items-start gap-2">
+                <RichMarkdownEditor
+                  bind:this={alternativeEditor}
+                  id={alternativeTargetId}
+                  bind:value={alternatives[currentIndex]}
+                  autofocus
+                  disabled={working}
+                  placeholder="Say what the agent should use instead, or name the variable you already provided…"
+                  onValueChange={pauseCountdown}
+                  class="w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary disabled:opacity-50"
+                  containerClass="min-w-0 flex-1"
+                  ariaLabel="Alternative instruction"
+                  onSubmit={advance}
+                />
+                <VoiceInputButton
+                  targetId={alternativeTargetId}
+                  getTarget={alternativeSpeechTarget}
+                  {scope}
+                  disabled={working}
+                />
+              </div>
+              <p class="text-xs text-dimmed">
+                No value is stored for this secret. Whatever the device already holds for
+                {#if question.secretEnvironmentVariable}
+                  <span class="font-mono text-foreground"
+                    >${question.secretEnvironmentVariable}</span
+                  >
+                {:else}
+                  this secret
+                {/if}
+                is reused from your encrypted vault and handed to the agent, and your instruction reaches
+                it as written.
+              </p>
             </div>
-            <p class="text-xs text-dimmed">
-              No value is stored from this card. Whatever the device already holds for
-              {#if requestedVariables.length > 0}
-                <span class="font-mono text-foreground">{requestedVariables.join(', ')}</span>
-              {:else}
-                this request
-              {/if}
-              is reused from your encrypted vault and handed to the agent, and your instruction reaches
-              it as written.
-            </p>
-          </div>
-        {:else}
-          {#key currentIndex}
+          {:else}
             <div class="space-y-1.5">
               <label
                 class="block text-xs font-medium text-muted"
@@ -362,22 +374,16 @@
                   placeholder="Paste the value"
                   bind:value={values[currentIndex]}
                   oninput={pauseCountdown}
+                  onkeydown={handleValueKeydown}
                 />
-                <button
-                  class="absolute top-1/2 right-1.5 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-40"
-                  type="button"
-                  disabled={working}
-                  aria-pressed={currentRevealed}
-                  title={currentRevealed ? 'Hide the value' : 'Show the value'}
-                  aria-label={currentRevealed ? 'Hide the value' : 'Show the value'}
-                  onclick={toggleReveal}
-                >
-                  {#if currentRevealed}
-                    <EyeOff size={14} />
-                  {:else}
-                    <Eye size={14} />
-                  {/if}
-                </button>
+                <div class="absolute top-1/2 right-1 -translate-y-1/2">
+                  <SecretVisibilityButton
+                    revealed={currentRevealed}
+                    disabled={working}
+                    title={currentRevealed ? 'Hide the value' : 'Show the value'}
+                    onclick={toggleReveal}
+                  />
+                </div>
               </div>
               {#if question.secretEnvironmentVariable}
                 <p class="text-xs text-dimmed">
@@ -388,8 +394,8 @@
                 </p>
               {/if}
             </div>
-          {/key}
-        {/if}
+          {/if}
+        {/key}
 
         {#if actionError}
           <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
@@ -420,57 +426,43 @@
       </p>
     </div>
     <div class="flex min-w-0 shrink items-center justify-end gap-2">
-      {#if showingAlternative}
-        <button
-          class="min-h-8 shrink-0 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
-          disabled={working}
-          onclick={cancelAlternative}
-        >
-          Cancel
-        </button>
+      {#if total > 1}
+        <span class="shrink-0 text-xs tabular-nums text-dimmed">{filledCount} of {total}</span>
+      {/if}
+      <button
+        class="min-h-8 shrink-0 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+        disabled={working}
+        onclick={toggleAlternativeMode}
+      >
+        {showingAlternative ? 'Use a value instead' : 'Provide alternative'}
+      </button>
+      {#if currentIndex < total - 1}
         <button
           class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={!canSubmitAlternative}
-          onclick={() => void handleAlternative()}
+          disabled={working || !currentAnswered}
+          onclick={advance}
+          title={advanceShortcutLabel ? `Next secret (${advanceShortcutLabel})` : 'Next secret'}
         >
-          Send alternative
-          <CornerDownRight size={13} />
+          Next
+          <ChevronRight size={13} />
         </button>
       {:else}
-        {#if total > 1}
-          <span class="shrink-0 text-xs tabular-nums text-dimmed">{filledCount} of {total}</span>
-        {/if}
         <button
-          class="min-h-8 shrink-0 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
-          disabled={working}
-          onclick={showAlternative}
+          class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          disabled={working || !allFilled}
+          onclick={() => void handleSubmit()}
+          title={advanceShortcutLabel
+            ? `Store the secret and answer the agent (${advanceShortcutLabel})`
+            : 'Store the secret and answer the agent'}
         >
-          Provide alternative
+          {#if working}
+            <Loader2 size={13} class="animate-spin" />
+            Storing…
+          {:else}
+            <ShieldCheck size={13} />
+            Submit
+          {/if}
         </button>
-        {#if currentIndex < total - 1}
-          <button
-            class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={working || !currentValue.trim()}
-            onclick={goNext}
-          >
-            Next
-            <ChevronRight size={13} />
-          </button>
-        {:else}
-          <button
-            class="flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={working || !allFilled}
-            onclick={() => void handleSubmit()}
-          >
-            {#if working}
-              <Loader2 size={13} class="animate-spin" />
-              Storing…
-            {:else}
-              <ShieldCheck size={13} />
-              Submit
-            {/if}
-          </button>
-        {/if}
       {/if}
     </div>
   </div>

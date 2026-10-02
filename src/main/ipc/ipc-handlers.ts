@@ -37,6 +37,7 @@ import { RepositoryService } from '../git/repository-service'
 import { GitService } from '../git/git-service'
 import { SyncPeerService, syncPeerGit } from '../git/sync-peer-service'
 import { SecretVault } from '../storage/secret-vault'
+import { registerOvenIpc } from '../ovens/oven-ipc'
 import { GitHubAuthService } from '../git/github-auth-service'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { MemoryService } from '../chat/memory-service'
@@ -208,6 +209,7 @@ export function registerIpcHandlers(
     onSettled: broadcastThreadBranchUpdated
   }
   const vault = options.vault ?? new SecretVault(storage)
+  registerOvenIpc(storage, vault, threadManager, (value) => privilegedIpc.resolveScopedPath(value))
   const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
 
   const githubAuthService = options.githubAuthService ?? new GitHubAuthService(vault)

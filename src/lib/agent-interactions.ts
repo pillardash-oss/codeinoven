@@ -85,7 +85,8 @@ const CODE_MODE_TOOL_NAMES = new Set([
   'codeinterpreter',
   'interpreter',
   'repl',
-  'notebook'
+  'notebook',
+  'execute'
 ])
 
 export function isCodeModeToolName(value: string): boolean {

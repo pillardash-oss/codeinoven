@@ -95,6 +95,7 @@
     type Thread
   } from '$shared/types'
   import type { CloseConfirmationPayload, CloseConfirmationProject } from '$shared/ipc-contract'
+  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import { initVoiceShortcutListener } from '$lib/speech/voice-shortcut'
   import {
     actionId,
@@ -968,6 +969,16 @@
       activeView === 'scope' ||
       activeView === 'projects-scope' ||
       (activeView === 'projects' && Boolean(scopeState.sidebarContext))
+
+    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      // A browser tab's conversation has no workspace thread and is deliberately
+      // in no thread list, so the browser view is the only thing that can show
+      // it. Handing it to `workspaceState.openThread` below would select a thread
+      // no view owns, which is the dead button this branch exists to avoid.
+      navigate('browser')
+      await withBrowser((store) => store.revealAssistantChat(thread.id))
+      return
+    }
 
     if (family === 'chats') {
       // A chat is only ever shown by the chats view.

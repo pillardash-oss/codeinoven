@@ -83,7 +83,7 @@ export class ThreadSettingsStore {
     private readonly storageKey: string,
     private readonly defaults: ThreadSettings
   ) {
-    this.lastUsed = load(storageKey, defaults)
+    this.lastUsed = { ...load(storageKey, defaults), ovenId: undefined, ovenPath: undefined }
   }
 
   /** Initial settings for a thread: its own persisted values, else the last-used ones. */
@@ -95,7 +95,7 @@ export class ThreadSettingsStore {
 
   /** Remember these settings as the default for future threads. */
   commit(settings: ThreadSettings): void {
-    this.lastUsed = { ...settings }
+    this.lastUsed = { ...settings, ovenId: undefined, ovenPath: undefined }
     persist(this.storageKey, this.lastUsed)
   }
 }

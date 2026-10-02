@@ -47,6 +47,7 @@ import { ClineDriver } from '../drivers/cline-driver'
 import { AntigravityDriver } from '../drivers/antigravity-driver'
 import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
+import { OvenChat } from '../ovens/oven-chat'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import { formatTime } from '../../lib/date-time-format'
@@ -84,7 +85,8 @@ import {
 import {
   InactiveQuestionTurnError,
   PermissionRequestGoneError,
-  QuestionRequestGoneError
+  QuestionRequestGoneError,
+  SteerDeliveryFailedError
 } from '../drivers/driver.interface'
 import type {
   AuxiliaryModelCandidate,
@@ -758,6 +760,7 @@ interface UserTerminalWindow {
 }
 
 export class ChatEngine {
+  private readonly ovenChat: OvenChat
   /** Close deadline: an untouched conversation is graded after this much inactivity. */
   private static readonly RANKING_INACTIVITY_CLOSE_MS = 24 * 60 * 60_000
 
@@ -1548,6 +1551,25 @@ export class ChatEngine {
     })
     this.baseUrlProviders = new BaseUrlProviderService(storage)
     this.accountRegistry = new HarnessAccountRegistry(storage)
+    this.ovenChat = new OvenChat(
+      storage,
+      this.secretVault,
+      this.threadManager,
+      this.accountRegistry,
+      (event) => {
+        if (event.type === 'session.status') this.sessionStatuses.set(event.sessionId, event.status)
+        if (event.type === 'session.idle')
+          this.sessionStatuses.set(event.sessionId, { state: 'idle' })
+        if (event.type === 'message.part.updated' || event.type === 'message.part.delta') {
+          const owner = this.sessionRegistry.get(event.sessionId)
+          if (owner)
+            void this.persistTurnStreamEvent(owner, event).catch((error: unknown) =>
+              Logger.dev('Oven working trace write failed', error)
+            )
+        }
+        this.broadcast(event)
+      }
+    )
     this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
     this.brainstormAlignmentNotes = new BrainstormAlignmentNotes(storage)
     this.routineAuthoringCheckpoints = new RoutineAuthoringCheckpoints(storage)
@@ -2317,11 +2339,6 @@ export class ChatEngine {
       ) => this.answerSecret(projectId, threadId, requestId, secrets)
     )
     ipcMain.handle(
-      'agent:answerSecretAlternative',
-      (_, projectId: string, threadId: string, requestId: string, alternative: string) =>
-        this.answerSecretAlternative(projectId, threadId, requestId, alternative)
-    )
-    ipcMain.handle(
       'agent:dismissQuestion',
       (_, projectId: string, threadId: string, requestId: string) =>
         this.dismissQuestion(projectId, threadId, requestId)
@@ -2506,6 +2523,12 @@ export class ChatEngine {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    const ovenThread = await this.threadManager.getThread(projectId, threadId)
+    if (ovenThread && this.ovenChat.remote(ovenThread)) {
+      await this.ovenChat.answer(ovenThread, requestId, answers)
+      return
+    }
+
     requestId = validateEntityId(requestId, 'Question request ID', 256)
     const pending = this.requirePendingQuestion(projectId, threadId, requestId)
     const safeAnswers = validateQuestionAnswers(answers, pending.request.questions)
@@ -2559,10 +2582,12 @@ export class ChatEngine {
   }
 
   /**
-   * Store the secrets a user pasted into a `cio_ask_secret` card and settle the
-   * gateway tool call that asked for them. The values never reach the transcript
-   * or the model: the card is resolved with a placeholder, and the tool answers
-   * with the variable names only.
+   * Store the secrets a user answered into a `cio_ask_secret` card and settle
+   * the gateway tool call that asked for them. Each secret is answered on its
+   * own, either with a pasted value or with an instruction that lets the app
+   * reuse a value the device already holds, so one card can mix the two. Values
+   * never reach the transcript or the model: the card is resolved with a
+   * placeholder, and the tool answers with the variable names only.
    */
   async answerSecret(
     projectId: string,
@@ -2577,74 +2602,47 @@ export class ChatEngine {
     const pending = this.requirePendingQuestion(projectId, threadId, requestId)
     const submissions = validateSecretSubmissions(secrets, pending.request.questions)
     const stored: AgentStoredSecret[] = []
+    const unresolved: string[] = []
+    const instructions: string[] = []
     for (const submission of submissions) {
       const question = pending.request.questions.find(
         (candidate) => candidate.secretId === submission.secretId
       )
       const environmentVariable = question?.secretEnvironmentVariable
       if (!question || !environmentVariable) continue
-      stored.push(
-        await this.agentSecrets.store({
-          secretId: submission.secretId,
-          environmentVariable,
-          value: submission.value,
-          label: question.header ?? question.prompt,
-          ...(question.secretUtilityId ? { utilityId: question.secretUtilityId } : {}),
-          threadId
-        })
+      const label = question.header ?? question.prompt
+      const utilityId = question.secretUtilityId
+      if ('value' in submission) {
+        stored.push(
+          await this.agentSecrets.store({
+            secretId: submission.secretId,
+            environmentVariable,
+            value: submission.value,
+            label,
+            ...(utilityId ? { utilityId } : {}),
+            threadId
+          })
+        )
+        continue
+      }
+      // An instruction instead of a value: the name the user wrote is only a
+      // candidate. The value is still adopted under the variable the agent
+      // asked for, and a name with nothing stored behind it is reported back so
+      // the agent can adapt instead of asking for the same value again.
+      const instruction = validateBoundedString(
+        submission.alternative,
+        'Alternative instruction',
+        1,
+        20_000
       )
-    }
-    const answers = pending.request.questions.map(() => [SECRET_ANSWER_PLACEHOLDER])
-    await this.resolvePendingQuestion(pending, 'answered', answers, async () => {
-      pending.settleSecret?.({
-        status: stored.length > 0 ? 'set' : 'dismissed',
-        secrets: stored
-      })
-    })
-  }
-
-  /**
-   * Settle a `cio_ask_secret` card with an instruction instead of a pasted value.
-   *
-   * The user is answering the request without handing over a value: typically the
-   * value already exists somewhere on this device and they no longer have it at
-   * hand. Every requested name is therefore resolved from state the user already
-   * stored (this thread, a credential bound to an installed utility, or another
-   * thread), adopted by this thread so later turns re-expose it, and settled on
-   * the waiting tool call together with the user's own words. Names with nothing
-   * stored behind them are reported back so the agent can adapt instead of asking
-   * for the same value again.
-   */
-  async answerSecretAlternative(
-    projectId: string,
-    threadId: string,
-    requestId: string,
-    alternative: string
-  ): Promise<void> {
-    this.touchUserActivity()
-    projectId = validateEntityId(projectId, 'Project ID')
-    threadId = validateEntityId(threadId, 'Thread ID')
-    requestId = validateEntityId(requestId, 'Question request ID', 256)
-    const instruction = validateBoundedString(alternative, 'Alternative instruction', 1, 20_000)
-    const pending = this.requirePendingQuestion(projectId, threadId, requestId)
-    const secretQuestions = pending.request.questions.filter(isSecretQuestion)
-    if (secretQuestions.length === 0) throw new TypeError('This request is not a secret request')
-    // Only names the user actually wrote are treated as extra candidates: the
-    // value is still adopted under the variable the agent asked for.
-    const candidateNames = alternativeSecretNames(instruction)
-    const stored: AgentStoredSecret[] = []
-    const unresolved: string[] = []
-    for (const question of secretQuestions) {
-      const environmentVariable = question.secretEnvironmentVariable
-      const secretId = question.secretId
-      if (!environmentVariable || !secretId) continue
+      instructions.push(instruction)
       const reused = await this.agentSecrets.reuse({
-        secretId,
+        secretId: submission.secretId,
         environmentVariable,
-        label: question.header ?? question.prompt,
+        label,
         threadId,
-        ...(question.secretUtilityId ? { utilityId: question.secretUtilityId } : {}),
-        candidateNames
+        ...(utilityId ? { utilityId } : {}),
+        candidateNames: alternativeSecretNames(instruction)
       })
       if (reused) stored.push(reused)
       else unresolved.push(environmentVariable)
@@ -2652,9 +2650,9 @@ export class ChatEngine {
     const answers = pending.request.questions.map(() => [SECRET_ANSWER_PLACEHOLDER])
     await this.resolvePendingQuestion(pending, 'answered', answers, async () => {
       pending.settleSecret?.({
-        status: 'alternative',
+        status: instructions.length > 0 ? 'alternative' : stored.length > 0 ? 'set' : 'dismissed',
         secrets: stored,
-        alternative: instruction,
+        ...(instructions.length > 0 ? { alternative: instructions.join('\n\n') } : {}),
         ...(unresolved.length > 0 ? { unresolved } : {})
       })
     })
@@ -2787,6 +2785,12 @@ export class ChatEngine {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    const ovenThread = await this.threadManager.getThread(projectId, threadId)
+    if (ovenThread && this.ovenChat.remote(ovenThread)) {
+      await this.ovenChat.answer(ovenThread, requestId, null)
+      return
+    }
+
     requestId = validateEntityId(requestId, 'Question request ID', 256)
     const pending = this.pendingQuestions.get(requestId)
     if (
@@ -2992,6 +2996,9 @@ export class ChatEngine {
   async listQuestions(projectId: string, threadId: string): Promise<PendingAgentQuestionRequest[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    const ovenThread = await this.threadManager.getThread(projectId, threadId)
+    if (ovenThread && this.ovenChat.remote(ovenThread)) return this.ovenChat.questions(ovenThread)
+
     await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.sessionId) return []
@@ -3194,6 +3201,7 @@ export class ChatEngine {
 
   /** Kill all pooled driver resources (called on app quit). */
   async dispose(): Promise<void> {
+    this.ovenChat.dispose()
     if (this.streamBroadcastTimer) {
       clearTimeout(this.streamBroadcastTimer)
       this.streamBroadcastTimer = null
@@ -5026,6 +5034,10 @@ export class ChatEngine {
     try {
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread) return false
+      if (this.ovenChat.remote(thread)) {
+        await this.ensureSession(projectId, threadId)
+        return true
+      }
       const driverId = thread.settings?.harnessId || DEFAULT_HARNESS
       if (driverId === 'opencode' && this.openCodeDriverIsV2) return false
       const account = await this.accountRegistry.resolveForProvider(
@@ -5058,6 +5070,29 @@ export class ChatEngine {
     await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
+    if (this.ovenChat.remote(thread)) {
+      const sessionId = thread.sessionId?.startsWith('oven-')
+        ? thread.sessionId
+        : `oven-${randomUUID()}`
+      if (sessionId !== thread.sessionId)
+        await this.threadManager.setSessionId(
+          projectId,
+          threadId,
+          sessionId,
+          thread.settings?.harnessId,
+          thread.settings?.accountId
+        )
+      this.registerSession(
+        sessionId,
+        projectId,
+        threadId,
+        thread.settings?.ovenPath ?? '',
+        thread.settings?.permissionLevel ?? 'auto_review',
+        thread.settings?.harnessId ?? DEFAULT_HARNESS
+      )
+      await this.ovenChat.restore(thread)
+      return sessionId
+    }
 
     const driverId = requestedDriverId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
     const account = await this.accountRegistry.resolveForProvider(
@@ -5433,6 +5468,7 @@ export class ChatEngine {
     await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return []
+    if (this.ovenChat.remote(thread)) return this.ovenChat.messages(thread)
     if (!thread.sessionId) {
       const messages = await this.threadManager.loadMessages(projectId, threadId)
       const projectPath = await this.resolveProjectPath(projectId)
@@ -6767,6 +6803,13 @@ export class ChatEngine {
     await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return null
+    if (this.ovenChat.remote(thread)) {
+      await this.ovenChat.restore(thread)
+      return thread.sessionId
+        ? (this.sessionStatuses.get(thread.sessionId) ?? { state: 'idle' })
+        : null
+    }
+
     if (!thread.sessionId) {
       return thread.status === 'working-paused'
         ? this.restoredRetryWaitStatus(thread, threadId)
@@ -7709,6 +7752,24 @@ export class ChatEngine {
     const messageId = validateEntityId(userMessageId, 'Message ID', 256)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
+    if (this.ovenChat.remote(thread)) {
+      await this.ovenChat.stop(thread)
+      return this.sendPrompt(
+        projectId,
+        threadId,
+        thread.settings!,
+        text,
+        attachments,
+        undefined,
+        messageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        'user',
+        presentation,
+        taskReferences
+      )
+    }
     const brainstormKey = `${projectId}:${threadId}`
     const activeBrainstorm = this.activeBrainstormSessions.get(brainstormKey)
     const activeSessionId = activeBrainstorm?.sessionId ?? thread.sessionId
@@ -8000,6 +8061,7 @@ export class ChatEngine {
     try {
       await deliverNow()
     } catch (error) {
+      if (error instanceof SteerDeliveryFailedError) throw error
       // The turn can settle inside the race window between the working check
       // above and this delivery (auto-compaction, silent continue, retry)
       // pi considers compaction part of the working trace but the driver's
@@ -8293,6 +8355,42 @@ export class ChatEngine {
     await this.threadCreation?.awaitReady(threadId)
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 0, 200_000)
+    const ovenThread = await this.threadManager.getThread(projectId, threadId)
+    if (ovenThread && this.ovenChat.remote(ovenThread, settings)) {
+      await this.threadManager.updateSettings(projectId, threadId, settings)
+      const sessionId = await this.ensureSession(projectId, threadId)
+      this.registerSession(
+        sessionId,
+        projectId,
+        threadId,
+        settings.ovenPath ?? '',
+        settings.permissionLevel,
+        settings.harnessId
+      )
+      const remoteContext = [
+        promptContext ? validateBoundedString(promptContext, 'Prompt context', 1, 100_000) : '',
+        ...validatePromptReferences(promptReferences).map(
+          (reference) =>
+            `${reference.label}:\n${reference.text}${reference.comment ? `\nUser comment: ${reference.comment}` : ''}`
+        ),
+        ...(projectReferences ?? []).map(
+          (reference) =>
+            `Workspace reference: ${validateBoundedString(reference.path, 'Reference path', 1, 4096)}`
+        )
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+      const bound = await this.threadManager.getThread(projectId, threadId)
+      return this.ovenChat.send(
+        bound ?? ovenThread,
+        settings,
+        text,
+        attachments,
+        userMessageId,
+        remoteContext
+      )
+    }
+
     // A continuation relay re-sends a request the user made earlier, and its
     // files can be gone from disk by the time the retry runs. A vanished file
     // drops from the relay so the turn still carries the request; failing it
@@ -12086,9 +12184,7 @@ export class ChatEngine {
     // applies instead.
     const reportedWindow = contextWindow ?? 0
     const outputTokens =
-      maxOutputTokens !== undefined &&
-      reportedWindow > 0 &&
-      maxOutputTokens < reportedWindow / 2
+      maxOutputTokens !== undefined && reportedWindow > 0 && maxOutputTokens < reportedWindow / 2
         ? maxOutputTokens
         : undefined
     return computePromptBudget({ contextWindow, outputTokens }).availableInputTokens
@@ -12111,6 +12207,12 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
+    if (thread && this.ovenChat.remote(thread)) {
+      await this.threadManager.markStoppedByUser(projectId, threadId)
+      await this.ovenChat.stop(thread)
+      return
+    }
+
     // Latch the stop immediately so a failure that arrives mid-teardown cannot
     // re-track an auto-retry between this point and the status write below. A
     // transfer deliberately skips the latch: the run continues elsewhere.
@@ -12189,7 +12291,18 @@ export class ChatEngine {
       clearNotificationAborting(projectId, threadId)
       return
     }
-    if (!thread?.sessionId) return
+    if (!thread?.sessionId) {
+      // No session binding means there is nothing for a driver to interrupt, but
+      // a Stop still has to land: the thread may be parked on a question raised
+      // before its binding was written, and returning here is what leaves such a
+      // thread reported as working with a card on screen that no press can clear.
+      if (!thread) return
+      markNotificationAborting(projectId, threadId)
+      this.releaseParkedThreadGates(projectId, threadId)
+      await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+      clearNotificationAborting(projectId, threadId)
+      return
+    }
     // Suppress any stale notification the dying agent might emit during abort.
     markNotificationAborting(projectId, threadId)
     // Remember this is a deliberate user stop so the session's idle/error
@@ -12214,7 +12327,20 @@ export class ChatEngine {
     // Workers run in their own sessions and must stop with the thread they
     // were spawned from   see stopThreadChildSessions.
     await this.stopThreadChildSessions(projectId, threadId)
-    await driver.abort(projectPath, thread.sessionId)
+    // Everything past this call is the teardown that makes the stop real: the
+    // parked question and permission are cleared, the watchdog is disarmed, and
+    // the thread is written back as `interrupted`. A driver that throws must not
+    // be able to skip any of it, because that is precisely the state no later
+    // Stop can escape: the thread keeps reporting itself as working, a card
+    // nothing owns stays on screen, and `clearNotificationAborting` below never
+    // runs so the thread stops notifying at all. Capture the failure, finish the
+    // teardown, then report it so the caller still learns the harness refused.
+    let abortFailure: unknown = null
+    try {
+      await driver.abort(projectPath, thread.sessionId)
+    } catch (error) {
+      abortFailure = error
+    }
     await this.cleanupTurnUtilities(thread.sessionId)
     updateRetryWakeWindow(thread.sessionId, null)
     // A held steer's turn is dead   undo is no longer meaningful, drop it.
@@ -12250,6 +12376,7 @@ export class ChatEngine {
     // "done (read)": it is not an error and not pending the user's attention.
     await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
     clearNotificationAborting(projectId, threadId)
+    if (abortFailure) throw abortFailure
   }
 
   /**
@@ -12552,6 +12679,21 @@ export class ChatEngine {
     // anything else: neither may outlive the file.
     await this.forgetThreadStream(projectId, threadId)
 
+    if (await this.ovenChat.release(projectId, threadId)) {
+      let localSession = false
+      for (const [sessionId, owner] of this.sessionRegistry) {
+        if (owner.projectId === projectId && owner.threadId === threadId) {
+          if (!sessionId.startsWith('oven-')) {
+            localSession = true
+            continue
+          }
+          this.sessionRegistry.delete(sessionId)
+          this.sessionStatuses.delete(sessionId)
+        }
+      }
+      if (!localSession) return
+    }
+
     const tearDownSession = async (
       sessionId: string,
       info?: { driverId?: string; projectPath?: string; accountId?: string }
@@ -12690,6 +12832,7 @@ export class ChatEngine {
     if (alternativeInstruction !== undefined && reply !== 'reject') {
       throw new TypeError('An alternative instruction must reject the requested action')
     }
+    if (await this.ovenChat.permission(projectId, requestId, reply, alternativeInstruction)) return
     const pending = this.pendingPermissions.get(requestId)
     if (!pending || pending.session.projectId !== projectId) {
       Logger.dev(`Ignoring reply for resolved permission request: ${requestId}`)
@@ -12831,6 +12974,9 @@ export class ChatEngine {
   async listPermissions(projectId: string, threadId: string): Promise<PermissionRequest[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    const ovenThread = await this.threadManager.getThread(projectId, threadId)
+    if (ovenThread && this.ovenChat.remote(ovenThread)) return this.ovenChat.permissions(ovenThread)
+
     return [...this.pendingPermissions.values()]
       .filter((pending) => {
         if (pending.session.projectId !== projectId) return false
@@ -19225,9 +19371,13 @@ export class ChatEngine {
    */
   async resumeRecoveredThreads(recovered: Thread[]): Promise<void> {
     const config = await this.storage.getConfig()
-    if (config.resumeWorkOnRestart === false) return
     for (const thread of recovered) {
       try {
+        if (this.ovenChat.remote(thread)) {
+          await this.ensureSession(thread.projectId, thread.id)
+          continue
+        }
+        if (config.resumeWorkOnRestart === false) continue
         await this.resumeThreadFromPersistedSession(thread)
       } catch (error) {
         // Leave the thread in its interrupted state; the user can still Retry manually.
@@ -21099,9 +21249,23 @@ export class ChatEngine {
    * Whether the user has interacted with the app recently enough to be
    * considered "active". When the user is active, pending questions will not
    * auto-answer   the countdown is paused until they become inactive.
+   *
+   * This is app-wide activity, not attention to any one card, which is why the
+   * pause it buys is bounded by {@link pendingQuestionDeadline} rather than
+   * open-ended: working in a project keeps this true indefinitely, and a pause
+   * that never ends is a question that never clears.
    */
   private isUserActive(): boolean {
     return Date.now() - this.lastUserActivityAt < ChatEngine.USER_ACTIVITY_GRACE_PERIOD_MS
+  }
+
+  /**
+   * When a question must be settled no matter what, counted from the moment its
+   * card appeared. The activity pause can hold a card open, so this is the one
+   * deadline that survives it.
+   */
+  private pendingQuestionDeadline(pending: PendingQuestionInfo): number {
+    return pending.request.createdAt + pending.timeoutMs
   }
 
   /**
@@ -21180,18 +21344,25 @@ export class ChatEngine {
       return
     }
 
-    if (this.isUserActive()) {
-      pending.request.expiresAt = undefined
+    // The activity pause keeps a card from being answered under someone who is
+    // still reading it. It is a courtesy, not a hold: `pendingQuestionDeadline`
+    // is the backstop that the pause cannot push past, so working elsewhere in
+    // the app for the whole window no longer parks this question forever. The
+    // deadline stays visible while it runs, because a card the user cannot see
+    // the end of is a card they have no reason to answer.
+    const deadline = this.pendingQuestionDeadline(pending)
+    if (this.isUserActive() && Date.now() < deadline) {
+      pending.request.expiresAt = deadline
       pending.timer = setTimeout(
         () => this.schedulePendingQuestion(pending),
-        ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
+        Math.min(ChatEngine.INACTIVITY_CHECK_INTERVAL_MS, Math.max(0, deadline - Date.now()))
       )
       return
     }
 
     const expiresAt = pending.request.expiresAt
-    if (expiresAt === undefined) {
-      pending.request.expiresAt = Date.now() + pending.timeoutMs
+    if (expiresAt === undefined || expiresAt > deadline) {
+      pending.request.expiresAt = deadline
       this.schedulePendingQuestion(pending)
       return
     }
@@ -21206,11 +21377,15 @@ export class ChatEngine {
         return
       }
 
-      if (this.isUserActive()) {
-        pending.request.expiresAt = undefined
+      // Re-pause only while the hard deadline still lies ahead. Past it, activity
+      // anywhere in the app stops mattering: this question is answered so the
+      // turn it is blocking can finish, exactly as it would have if the user had
+      // stepped away.
+      if (this.isUserActive() && Date.now() < deadline) {
+        pending.request.expiresAt = deadline
         pending.timer = setTimeout(
           () => this.schedulePendingQuestion(pending),
-          ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
+          Math.min(ChatEngine.INACTIVITY_CHECK_INTERVAL_MS, Math.max(0, deadline - Date.now()))
         )
         return
       }
@@ -21336,6 +21511,30 @@ export class ChatEngine {
       if (pending.request.sessionId === sessionId) {
         this.clearPendingQuestion(requestId)
       }
+    }
+  }
+
+  /**
+   * Drop the human gates still parked on one thread when there is no session to
+   * abort by id.
+   *
+   * The question and permission queues are keyed by session, so a thread whose
+   * binding was never written has no key to clear them with. They are also the
+   * only things that can hold a thread open with no run behind it, so a Stop
+   * reaching this path has to reach them by thread instead of returning early.
+   * Questions go through `finalizePendingQuestion` so the card is closed and the
+   * resolution is broadcast exactly as it is for any other resolution; the
+   * permission queue is cleared the way its own teardown clears it, leaving the
+   * status write that follows as the signal a card re-reads against.
+   */
+  private releaseParkedThreadGates(projectId: string, threadId: string): void {
+    for (const [requestId, pending] of this.pendingQuestions) {
+      if (pending.request.projectId !== projectId || pending.request.threadId !== threadId) continue
+      this.finalizePendingQuestion(requestId, 'dismissed', pending.request.answers)
+    }
+    for (const [requestId, pending] of this.pendingPermissions) {
+      if (pending.session.projectId !== projectId || pending.session.threadId !== threadId) continue
+      this.pendingPermissions.delete(requestId)
     }
   }
 

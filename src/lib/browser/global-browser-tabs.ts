@@ -85,6 +85,19 @@ const COLOR_PATTERN = /^#[0-9a-fA-F]{3,8}$/u
 const ENTITY_ID_PATTERN = /^[a-zA-Z0-9:_-]+$/u
 
 /**
+ * The box every context has without making one: the profile's own jar, the one
+ * the global browser's unboxed pages live in.
+ *
+ * A literal rather than a minted id, and named here rather than in either
+ * process, because both resolve it by name: the interface reads it as "the box
+ * the browser's own pages belong to", and the main process turns it into the
+ * global context's own partition instead of a jar of its own (see
+ * `browserPartitionFor`). It is also the id a stored extension record keeps
+ * pointing at across releases.
+ */
+export const DEFAULT_BOX_ID = 'box:default'
+
+/**
  * Whether a stored value is a legal box id.
  *
  * A box id becomes part of a session partition, so a value that cannot be

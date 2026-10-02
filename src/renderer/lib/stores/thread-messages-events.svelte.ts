@@ -83,7 +83,9 @@ export class ThreadMessagesEvents {
     // leaves the part untouched; skip the re-render entirely.
     if (updated === msg.parts[partIndex]) return
     msg.parts[partIndex] = updated
-    entry.messages = [...entry.messages]
+    // notifyStreaming republishes this thread once per frame. Keep the live
+    // message-array reference stable so token-sized deltas don't copy the full
+    // transcript each time one arrives.
     this.cache.notifyStreaming(projectId, threadId)
   }
 

@@ -35,6 +35,20 @@ class FakeChild extends EventEmitter {
       const method = typeof payload['method'] === 'string' ? payload['method'] : undefined
       if (id === undefined || !method) return true
       const params = payload['params'] as Record<string, unknown> | undefined
+      // Simulate a Codex installation whose native history projection is
+      // unavailable. Resuming without requesting turns must still work.
+      if (method === 'thread/resume' && params?.['excludeTurns'] !== true) {
+        queueMicrotask(() =>
+          this.emitPayload({
+            id,
+            error: {
+              message:
+                'failed to list thread history: thread-store internal error: failed to access thread history: error returned from database: (code: 1) no such table: thread_turns'
+            }
+          })
+        )
+        return true
+      }
       const result =
         method === 'thread/start' || method === 'thread/resume'
           ? {
@@ -503,6 +517,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       method: 'thread/resume',
       params: {
         threadId: 'native-1',
+        excludeTurns: true,
         developerInstructions: codexQuestionInstruction,
         dynamicTools: expect.arrayContaining([
           expect.objectContaining({ name: 'cio_ask_user' }),
@@ -1404,6 +1419,7 @@ describe.skipIf(process.platform === 'win32')('mapCodexRateLimits', () => {
         method: 'thread/resume',
         params: {
           threadId: 'native-1',
+          excludeTurns: true,
           developerInstructions: null
         }
       })

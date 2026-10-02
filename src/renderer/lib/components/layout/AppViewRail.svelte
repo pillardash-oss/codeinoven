@@ -46,8 +46,9 @@
   settings) that used to sit in the project sidebar footer. Each view item
   carries the activity badge of its own family, so the project family's shared
   badge rides the last project view the user was on while Chat, Assistant or
-  Browser is on screen. The Browser has no thread family, so its item carries the
-  browser profile's outstanding downloads instead.
+  Browser is on screen. The Browser owns no listed thread family, so its item
+  carries the tab assistant conversations behind it, falling back to the browser
+  profile's outstanding downloads.
 -->
 <nav
   class="relative flex h-full w-10 shrink-0 flex-col items-center gap-0.5 bg-surface py-2"
@@ -64,7 +65,8 @@
         option.id,
         projectBadgeOption,
         activity.counts,
-        activity.browserTransfers
+        activity.browserTransfers,
+        activity.browserAssistant
       )}
       <AppRailButton
         label={option.label}

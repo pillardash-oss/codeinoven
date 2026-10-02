@@ -7,10 +7,10 @@ import {
 } from '../../lib/experts'
 import type { ExpertDecisionInput, ThreadExpertState } from '../../lib/ipc/expert'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
-import { requireLocalProjectViaWorker } from '../../lib/project-artifacts'
 import type { AppConfig } from '../../lib/types'
 import type { Database } from '../database/database'
 import { ExpertSettingsRepo } from '../database/repositories/expert-settings-repo'
+import { ProjectRepo } from '../database/repositories/project-repo'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 
 /**
@@ -52,9 +52,11 @@ function requireId(value: unknown, label: string): string {
 
 export class ExpertSettingsService {
   private readonly repo: ExpertSettingsRepo
+  private readonly projects: ProjectRepo
 
   constructor(private readonly options: ExpertSettingsOptions) {
     this.repo = new ExpertSettingsRepo(options.database)
+    this.projects = new ProjectRepo(options.database)
   }
 
   registerIpc(): void {
@@ -88,7 +90,7 @@ export class ExpertSettingsService {
 
   /** Everything a surface needs about one thread's experts, right now. */
   async stateFor(projectId: string, threadId: string): Promise<ThreadExpertState> {
-    await requireLocalProjectViaWorker(this.options.database, projectId)
+    await this.requireProject(projectId)
     const assignments = (await this.options.config()).design?.assignments
     return {
       threadId,
@@ -114,7 +116,7 @@ export class ExpertSettingsService {
     threadId: string,
     input: ExpertDecisionInput
   ): Promise<ThreadExpertState> {
-    await requireLocalProjectViaWorker(this.options.database, projectId)
+    await this.requireProject(projectId)
     const assignments = (await this.options.config()).design?.assignments
     this.repo.upsert(threadId, {
       choice: input.choice,
@@ -128,6 +130,12 @@ export class ExpertSettingsService {
   /** Forget a thread's answer when the thread itself is gone. */
   forgetThread(threadId: string): void {
     this.repo.deleteThread(threadId)
+  }
+
+  private async requireProject(projectId: string): Promise<void> {
+    if (!(await this.projects.getViaWorker(projectId))) {
+      throw new Error(`Project not found: ${projectId}`)
+    }
   }
 }
 

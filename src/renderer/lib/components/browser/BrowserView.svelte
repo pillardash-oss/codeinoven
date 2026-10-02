@@ -362,7 +362,8 @@
           <Globe size={26} class="text-dimmed" />
           <p class="max-w-sm text-sm leading-relaxed text-muted">
             The global browser keeps its own signed-in profile, separate from the browsers your
-            agents run in.
+            agents run in. A box you make here is the same jar any thread that picks it uses, so a
+            sign-in here is that sign-in there.
           </p>
           <button
             type="button"

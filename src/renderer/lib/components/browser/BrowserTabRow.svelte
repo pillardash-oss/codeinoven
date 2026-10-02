@@ -475,8 +475,8 @@
   >
     <p>
       This tab closes and its address opens again in {reopenTargetLabel}. Cookies stay in their own
-      boxes, so the page opens signed out unless that box is already signed in, and the tab's back
-      and forward history is not carried over.
+      boxes, so the page opens signed out unless that box is already signed in, no matter which
+      browser signed it in. The tab's back and forward history is not carried over.
     </p>
   </ConfirmDialog>
 {/if}

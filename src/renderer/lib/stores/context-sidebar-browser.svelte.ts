@@ -113,10 +113,13 @@ export class SidebarBrowserTabs {
    * The box a scope's next tabs are created in, keyed by conversation scope.
    *
    * Absent (or null) means the scope's own jar, which is where every scope
-   * starts. The choice lives for the sidebar session only and is deliberately
-   * not persisted: a scope reverts to its own box once its last tab is closed,
-   * so reopening the thread browser starts from the scope again. Tabs already on
-   * screen keep the box they were created in, because a jar cannot be migrated.
+   * starts. A named box is the profile's one jar for that box rather than the
+   * scope's own, so a tab created in it shares the box's cookies and logins with
+   * every other context that picks it. The choice lives for the sidebar session
+   * only and is deliberately not persisted: a scope reverts to its own box once
+   * its last tab is closed, so reopening the thread browser starts from the scope
+   * again. Tabs already on screen keep the box they were created in, because a jar
+   * cannot be migrated.
    */
   private readonly scopeBoxChoices = new SvelteMap<string, string | null>()
 
@@ -313,7 +316,8 @@ export class SidebarBrowserTabs {
 
   /**
    * The box a scope's next tab runs in: the box the user picked for it this
-   * session, or null for the scope's own jar.
+   * session, or null for the scope's own jar. A named box is the profile's jar
+   * for that box, shared with every other context that picks it.
    */
   private boxForScope(scopeId: string): string | null {
     return this.scopeBoxChoices.get(scopeId) ?? null
@@ -325,8 +329,10 @@ export class SidebarBrowserTabs {
    * A jar cannot move between boxes, so the tab cannot either: this is a close
    * plus an open. The chosen box becomes the scope's own for new tabs, the tab on
    * screen is replaced in place by an equivalent tab in the new box, and every
-   * other open tab keeps the box it was created in. Returns the new tab id, or
-   * null when the tab is gone or already in the box.
+   * other open tab keeps the box it was created in. The target is the profile's
+   * one jar for that box, so the reopened page comes back with whatever the box
+   * already holds, a sign-in another context made included. Returns the new tab
+   * id, or null when the tab is gone or already in the box.
    */
   reopenInBox(tabId: string, boxId: string | null): string | null {
     const index = this.tabs.findIndex((tab) => tab.id === tabId)

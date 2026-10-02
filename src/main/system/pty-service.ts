@@ -14,11 +14,32 @@ import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 import { scopeRootProvider, type ScopeRootResolver } from '../workspaces/scope-root-resolver'
 
+export interface PtyRemoteLaunch {
+  ovenId: string
+  executable: string
+  args: string[]
+  environment: Record<string, string>
+  localCwd: string
+  remoteCwd: string
+  dispose: () => Promise<void>
+}
+export interface PtyRemoteLaunchHook {
+  (
+    projectId: string,
+    threadId: string,
+    directory?: string,
+    script?: string,
+    variables?: Record<string, string>
+  ): Promise<PtyRemoteLaunch | null>
+}
+
 interface PtySession {
   id: string
   projectId: string
   cwd: string
   shell: string
+  remote?: boolean
+  ovenId?: string
   createdAt: number
   process: pty.IPty
   /** When set, the session is killed after this long with zero output or input. */
@@ -185,7 +206,8 @@ export class PtyService {
     _database: Database,
     scopeResolver?: ScopeRootResolver,
     private readonly trackProcess?: (process: PtyTrackedProcess) => void,
-    private readonly onUserInput?: PtyUserInputHook
+    private readonly onUserInput?: PtyUserInputHook,
+    private readonly remoteLaunch?: PtyRemoteLaunchHook
   ) {
     this.projectManager = new ProjectManager(_database)
     this.scopeRoots = scopeResolver ? scopeRootProvider(scopeResolver) : undefined
@@ -269,6 +291,18 @@ export class PtyService {
     return { id, pid: session.process.pid }
   }
 
+  private async reuseOvenSession(
+    id: string,
+    remote: PtyRemoteLaunch | null | undefined
+  ): Promise<{ id: string; pid: number } | null> {
+    const session = this.sessions.get(id)
+    if (!session) return null
+    if (remote) await remote.dispose()
+    if (session.ovenId !== remote?.ovenId || (remote && session.cwd !== remote.remoteCwd))
+      throw new Error('This terminal belongs to another Oven or directory. Open a new terminal.')
+    return this.reuseLiveSession(id)
+  }
+
   private async create(
     id: string,
     projectId: string,
@@ -278,8 +312,10 @@ export class PtyService {
     scopeBucketId?: string,
     directory?: string
   ): Promise<{ id: string; pid: number }> {
-    const reused = this.reuseLiveSession(id)
+    const remote = await this.remoteLaunch?.(projectId, threadId, directory)
+    const reused = await this.reuseOvenSession(id, remote)
     if (reused) return reused
+    if (remote) return this.createRemote(id, projectId, threadId, cols, rows, remote)
 
     const project = await this.projectManager.getProject(projectId)
     if (!project || project.hidden || project.source !== 'local' || !project.path) {
@@ -355,6 +391,80 @@ export class PtyService {
       shell,
       pid: proc.pid,
       source: 'user_terminal',
+      timestamp: createdAt
+    })
+    return { id, pid: proc.pid }
+  }
+
+  private async createRemote(
+    id: string,
+    projectId: string,
+    threadId: string,
+    cols: number,
+    rows: number,
+    launch: PtyRemoteLaunch
+  ): Promise<{ id: string; pid: number }> {
+    let proc: pty.IPty
+    try {
+      proc = pty.spawn(launch.executable, launch.args, {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd: launch.localCwd,
+        env: { ...launch.environment, TERM: 'xterm-256color', COLORTERM: 'truecolor' }
+      })
+    } catch (error) {
+      await launch.dispose()
+      throw error
+    }
+    const createdAt = Date.now()
+    this.trackProcess?.({
+      scopeId: `pty:${id}`,
+      projectId,
+      threadId,
+      pid: proc.pid,
+      command: 'ssh',
+      cwd: launch.remoteCwd
+    })
+    proc.onData((data) => {
+      const session = this.sessions.get(id)
+      if (session) session.lastActivityAt = Date.now()
+      sendToRenderer(this.sender, `pty:data:${id}`, data)
+    })
+    proc.onExit(({ exitCode }) => {
+      this.sessions.delete(id)
+      sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
+      void launch.dispose().catch(() => Logger.dev('Oven terminal credential cleanup failed'))
+      void this.recordEvent({
+        type: 'exit',
+        terminalId: id,
+        projectId,
+        cwd: launch.remoteCwd,
+        shell: 'ssh',
+        pid: proc.pid,
+        exitCode,
+        timestamp: Date.now()
+      })
+    })
+    this.sessions.set(id, {
+      id,
+      projectId,
+      process: proc,
+      cwd: launch.remoteCwd,
+      shell: 'ssh',
+      remote: true,
+      ovenId: launch.ovenId,
+      createdAt,
+      lastActivityAt: createdAt
+    })
+    await this.recordEvent({
+      type: 'create',
+      terminalId: id,
+      projectId,
+      cwd: launch.remoteCwd,
+      shell: 'ssh',
+      pid: proc.pid,
+      source: 'oven_terminal',
       timestamp: createdAt
     })
     return { id, pid: proc.pid }
@@ -492,8 +602,10 @@ export class PtyService {
     rows: number,
     scopeBucketId?: string
   ): Promise<{ id: string; pid: number }> {
-    const reused = this.reuseLiveSession(id)
+    const remote = await this.remoteLaunch?.(projectId, threadId, undefined, script, variables)
+    const reused = await this.reuseOvenSession(id, remote)
     if (reused) return reused
+    if (remote) return this.createRemote(id, projectId, threadId, cols, rows, remote)
 
     const project = await this.projectManager.getProject(projectId)
     if (!project || project.hidden || project.source !== 'local' || !project.path) {
@@ -582,7 +694,7 @@ export class PtyService {
     // open so their commands' file writes are never claimed by an agent turn.
     // Command sessions (harness logins/updates) carry no project, so there is
     // nothing to attribute and the hook is skipped entirely.
-    if (data.length > 0 && this.onUserInput && session.projectId) {
+    if (data.length > 0 && this.onUserInput && session.projectId && !session.remote) {
       try {
         this.onUserInput(session.projectId, session.cwd)
       } catch (error) {

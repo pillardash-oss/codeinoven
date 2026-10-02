@@ -237,7 +237,8 @@ function readYamlString(configText: string, key: string): string | null {
   return null
 }
 
-function getAppCacheDir(platform: NodeJS.Platform, homedir: string): string {
+/** Per-user cache root electron-updater derives its cache dir from. */
+export function getAppCacheDir(platform: NodeJS.Platform, homedir: string): string {
   if (platform === 'win32') {
     return process.env['LOCALAPPDATA'] ?? path.join(homedir, 'AppData', 'Local')
   }

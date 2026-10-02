@@ -197,6 +197,7 @@ function mapAssistantContent(
         messageID: messageId,
         callID: callId,
         tool: name,
+        ...(name === 'execute' ? { codeMode: true } : {}),
         state: withTime
       }
     }

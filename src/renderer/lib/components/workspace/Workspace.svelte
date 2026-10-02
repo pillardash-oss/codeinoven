@@ -576,6 +576,10 @@
 
   async function openFiles(): Promise<void> {
     if (!selectedThread) return
+    if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') {
+      contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
+      return
+    }
     // Conversations browse their own app-owned workspace directory instead of a
     // project root (a chat's artifact directory, an assistant task's working
     // directory); the mount must be registered before the root listing.
@@ -592,7 +596,12 @@
   }
 
   function openDiff(): void {
-    if (!selectedThread || activeProject?.source !== 'local' || !activeProject.path) return
+    if (!selectedThread) return
+    if (
+      !(selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') &&
+      (activeProject?.source !== 'local' || !activeProject.path)
+    )
+      return
     contextSidebarState.openDiff(selectedThread.projectId, selectedThread.id)
   }
 
@@ -906,9 +915,12 @@
         )
   )
 
-  /** Project files and diffs only exist for local projects with a real path. */
+  /** Workspace tools target either a local project or the selected Oven. */
   let projectToolsAvailable = $derived(
-    Boolean(activeProject?.source === 'local' && activeProject.path)
+    Boolean(
+      (activeProject?.source === 'local' && activeProject.path) ||
+      (selectedThread?.settings?.ovenId && selectedThread.settings.ovenId !== 'local')
+    )
   )
 
   /** Whether the file tree can be opened for the thread on screen: a local
@@ -4288,6 +4300,7 @@
             {terminalFullscreenTabId}
             {browserFullscreenTabId}
             {activeProject}
+            {selectedThread}
             {projectIcons}
             {browser}
             {coordinator}

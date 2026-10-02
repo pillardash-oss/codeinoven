@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { Boxes, Check, ChevronDown, Globe } from '@lucide/svelte'
-  import { DropdownMenu } from 'bits-ui'
+  import { Boxes, ChevronDown, Globe } from '@lucide/svelte'
+  import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import type { GlobalBrowserBox } from '$lib/stores/global-browser-types'
+  import { openBrowserBoxMenu } from './browser-chrome-menus'
   import {
     browserAppearanceAccent,
     browserAppearanceHasIcon,
@@ -16,9 +17,16 @@
    * A box is a named cookie jar, so this is where a conversation says whose
    * sign-ins its pages run against. Every conversation starts in its own scope's
    * jar   a project's box, a routine's box, a chat's box   and the control names
-   * that as the default. Picking one of the profile's shared boxes lets the agent
-   * reuse the sign-ins the user already has in the global browser, which is the
-   * whole point of the control.
+   * that as the default. Picking one of the profile's boxes runs this
+   * conversation's pages in that box's jar instead, which is how a run can face a
+   * site as a different identity than the scope's own. The profile's own box, the
+   * one the global browser's everyday pages live in, is offered beside them, so a
+   * conversation can also browse as the person rather than as the conversation.
+   *
+   * The menu is an OS-native popup, like the downloads and site menus beside it:
+   * the page underneath is a `WebContentsView` that composites above the
+   * renderer, so a document menu opened under the toolbar would be drawn behind
+   * it and never seen.
    *
    * The choice is a reopen rather than a move: a tab cannot change jars in place,
    * so the tab on screen is replaced by an equivalent one in the chosen box and
@@ -29,7 +37,8 @@
   interface Props {
     projectId: string
     threadId: string
-    /** The box the tab on screen runs in, or null for the scope's own jar. */
+    /** The box the tab on screen runs in, or null for the scope's own jar. The
+     *  profile's own box arrives here as its id, like any other box. */
     boxId: string | null
     /** Name the current box beside the icon, which the full screen toolbar has room for. */
     labelled?: boolean
@@ -39,103 +48,87 @@
   let { projectId, threadId, boxId, labelled = false, onChange }: Props = $props()
 
   const scopeLabel = $derived(contextSidebarState.browserScopeBoxLabel(projectId, threadId))
-  const boxes = $derived(globalBrowser.boxes)
   const current = $derived(boxId ? globalBrowser.boxById(boxId) : null)
   const currentName = $derived(current?.name ?? scopeLabel)
   const currentAccent = $derived(current ? browserAppearanceAccent(current) : null)
   /**
    * The chosen box's own icon, worn in place of the generic box glyph so the
-   * trigger shows which jar is in use at a glance. Null for the scope's own jar
-   * (which has no appearance to draw) and for a box that was only given a colour,
-   * which falls back to an accent dot exactly like the tab row's box badge.
+   * trigger shows which jar is in use at a glance. The profile's own box draws the
+   * appearance the boxes panel gave it, exactly as a named box does. Null for the
+   * scope's own jar, which has no appearance to draw, and for a box that was only
+   * given a colour, which falls back to an accent dot exactly like the tab row's
+   * box badge.
    */
   const currentIcon = $derived(
     current && browserAppearanceHasIcon(current)
       ? browserAppearanceIconUrl(current, globalBrowser.boxIconUrl(current.id))
       : null
   )
+  const usesProfileDefault = $derived(current?.id === DEFAULT_BOX_ID)
 
-  const itemClass =
-    'flex cursor-pointer items-start gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated'
+  /** Whether the native menu is on screen, for the trigger's expanded state. */
+  let menuOpen = $state(false)
 
-  function boxIconUrl(box: GlobalBrowserBox): string | null {
-    return browserAppearanceIconUrl(box, globalBrowser.boxIconUrl(box.id))
+  /**
+   * The boxes the menu offers, read at the click rather than derived up front.
+   *
+   * The list belongs to the global browser's store, so it is asked for through the
+   * access seam: that is what wires the store and waits for the stored tab list
+   * even when this button is the first thing in the window to reach for the
+   * browser. A thread browser with no boxes on offer would look broken rather than
+   * empty.
+   *
+   * The profile's default box is offered with the rest, under the name and
+   * appearance the boxes panel gives it. It is not a second row for the scope's own
+   * jar: picking it browses the global browser's own jar, the one its unboxed pages
+   * live in, which is the profile the person is signed in as everywhere else.
+   */
+  async function menuBoxes(): Promise<{ id: string; name: string }[]> {
+    const browser = await loadBrowser()
+    return browser.boxes.map((box) => ({
+      id: box.id,
+      name: box.id === DEFAULT_BOX_ID ? `${box.name} (global browser)` : box.name
+    }))
+  }
+
+  async function openMenu(anchor: HTMLElement): Promise<void> {
+    const boxes = await menuBoxes()
+    menuOpen = true
+    // The call answers when the popup closes, so the trigger's expanded state
+    // lasts exactly as long as the menu does. It never rejects, which is why the
+    // clear can sit between the answer and the pick without a try.
+    const choice = await openBrowserBoxMenu({ scopeLabel, boxes, currentBoxId: boxId }, anchor)
+    menuOpen = false
+    if (!choice || choice.boxId === boxId) return
+    onChange(choice.boxId)
   }
 </script>
 
-<DropdownMenu.Root>
-  <DropdownMenu.Trigger
-    class={[
-      'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
-      labelled ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
-      'text-dimmed hover:bg-elevated hover:text-foreground'
-    ]}
-    aria-label={`Box: ${currentName}. Choose which box this tab and new tabs use`}
-    title={`Box: ${currentName}`}
-  >
-    {#if current && currentIcon}
-      <img src={currentIcon} alt="" class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain" />
-    {:else if current}
-      <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background-color: {currentAccent}"
-      ></span>
-    {:else}
-      <Boxes size={13} />
-    {/if}
-    {#if labelled}
-      <span class="max-w-32 truncate">{currentName}</span>
-      <ChevronDown size={12} />
-    {/if}
-  </DropdownMenu.Trigger>
-
-  <DropdownMenu.Portal>
-    <DropdownMenu.Content
-      side="bottom"
-      align="end"
-      sideOffset={6}
-      class="z-60 max-h-[calc(100vh-1.5rem)] w-64 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg"
-    >
-      <DropdownMenu.Item class={itemClass} textValue={scopeLabel} onSelect={() => onChange(null)}>
-        <Globe size={13} class="mt-0.5 shrink-0 text-muted" />
-        <span class="min-w-0 flex-1">
-          <span class="block truncate text-xs font-medium text-foreground">{scopeLabel}</span>
-          <span class="mt-0.5 block text-[0.625rem] leading-relaxed text-dimmed">
-            This conversation's own sign-ins
-          </span>
-        </span>
-        {#if boxId === null}
-          <Check size={12} class="mt-0.5 shrink-0 text-primary" />
-        {/if}
-      </DropdownMenu.Item>
-
-      {#if boxes.length > 0}
-        <DropdownMenu.Separator class="my-1 h-px bg-border" />
-        {#each boxes as box (box.id)}
-          {@const url = boxIconUrl(box)}
-          <DropdownMenu.Item
-            class={itemClass}
-            textValue={box.name}
-            onSelect={() => onChange(box.id)}
-          >
-            {#if url}
-              <img src={url} alt="" class="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-sm object-contain" />
-            {:else}
-              <span
-                class="mt-1 h-2 w-2 shrink-0 rounded-full"
-                style="background-color: {browserAppearanceAccent(box)}"
-              ></span>
-            {/if}
-            <span class="min-w-0 flex-1">
-              <span class="block truncate text-xs font-medium text-foreground">{box.name}</span>
-              <span class="mt-0.5 block text-[0.625rem] leading-relaxed text-dimmed">
-                Shared with the global browser
-              </span>
-            </span>
-            {#if box.id === boxId}
-              <Check size={12} class="mt-0.5 shrink-0 text-primary" />
-            {/if}
-          </DropdownMenu.Item>
-        {/each}
-      {/if}
-    </DropdownMenu.Content>
-  </DropdownMenu.Portal>
-</DropdownMenu.Root>
+<button
+  type="button"
+  class={[
+    'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
+    labelled ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
+    menuOpen ? 'bg-elevated text-foreground' : 'text-dimmed hover:bg-elevated hover:text-foreground'
+  ]}
+  aria-label={`Box: ${currentName}. Choose which box this tab and new tabs use`}
+  aria-expanded={menuOpen}
+  aria-haspopup="menu"
+  title={`Box: ${currentName}`}
+  onclick={(event) => void openMenu(event.currentTarget)}
+>
+  {#if current && currentIcon}
+    <img src={currentIcon} alt="" class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain" />
+  {:else if usesProfileDefault}
+    <Globe size={13} />
+  {:else if current}
+    <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background-color: {currentAccent}"
+    ></span>
+  {:else}
+    <Boxes size={13} />
+  {/if}
+  {#if labelled}
+    <span class="max-w-32 truncate">{currentName}</span>
+    <ChevronDown size={12} />
+  {/if}
+</button>

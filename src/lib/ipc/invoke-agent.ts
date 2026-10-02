@@ -83,10 +83,6 @@ export const invokeAgentContract = {
     [projectId: string, threadId: string, requestId: string, secrets: AgentSecretSubmission[]],
     void
   >,
-  'agent:answerSecretAlternative': {} as Contract<
-    [projectId: string, threadId: string, requestId: string, alternative: string],
-    void
-  >,
   'agent:dismissQuestion': {} as Contract<
     [projectId: string, threadId: string, requestId: string],
     void

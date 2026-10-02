@@ -529,8 +529,14 @@ export class NotificationService {
     // A browser tab's assistant conversation is answered beside the page it is
     // about, so a settled turn there is never something the user has to be told
     // about while they are looking elsewhere. That was already true of the side
-    // chat it replaced, and it stays true of the thread it is now.
-    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID) return
+    // chat it replaced, and it stays true of the thread it is now. A thread
+    // parked on the user is the exception and always notifies: it can only be
+    // waiting because they moved on, and the conversation they left behind has
+    // no other surface to ask them from, so staying silent made an agent
+    // question indistinguishable from an idle tab.
+    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID && thread.status !== 'awaiting_approval') {
+      return
+    }
     // In Achievement/Assignment mode only the Sr. Engineer (coordinator) thread
     // notifies, and only when the whole process is over or human intervention
     // is needed. Worker/auditor threads never notify, and the coordinator's

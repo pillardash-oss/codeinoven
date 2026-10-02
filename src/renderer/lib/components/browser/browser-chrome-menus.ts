@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import type { BrowserBoxMenuChoice, BrowserBoxMenuInput } from '$shared/browser/browser-box-menu'
 
 /**
  * The browser chrome's native popup menus, opened from one place.
@@ -28,6 +29,19 @@ function anchorBelow(element: HTMLElement): { x: number; y: number } {
 export function openBrowserDownloadsMenu(projectId: string, anchor: HTMLElement): void {
   const { x, y } = anchorBelow(anchor)
   void invoke('browser:downloadsMenu', projectId, x, y).catch(() => {})
+}
+
+/** Open the thread browser's box menu under the button that opened it.
+ *
+ * The profile's boxes are the renderer's list, so they travel with the call.
+ * Resolves with the chosen box   `null` for the scope's own jar   or null when
+ * the menu was dismissed, which is the caller's cue to leave the tab alone. */
+export function openBrowserBoxMenu(
+  input: BrowserBoxMenuInput,
+  anchor: HTMLElement
+): Promise<BrowserBoxMenuChoice | null> {
+  const { x, y } = anchorBelow(anchor)
+  return invoke('browser:boxMenu', input, x, y).catch(() => null)
 }
 
 /** Open the page-level menu (soft and hard reload, save, print, view source,

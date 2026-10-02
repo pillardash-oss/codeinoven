@@ -4,6 +4,7 @@
  * validators before the service touches it.
  */
 
+import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/types'
 import type {
   BrowserInspectorMarker,
   BrowserInspectorTheme,
@@ -29,7 +30,15 @@ import {
   MAX_BROWSER_SEARCH_URL_TEMPLATE_LENGTH,
   type BrowserSearchEngine
 } from '../../../lib/browser-search-engines'
-import { MAX_BROWSER_BOX_NAME_LENGTH } from '../../../lib/browser/global-browser-tabs'
+import {
+  DEFAULT_BOX_ID,
+  MAX_BROWSER_BOX_NAME_LENGTH
+} from '../../../lib/browser/global-browser-tabs'
+import {
+  MAX_BROWSER_BOX_MENU_ENTRIES,
+  type BrowserBoxMenuEntry,
+  type BrowserBoxMenuInput
+} from '../../../lib/browser/browser-box-menu'
 import type { BrowserViewport } from './browser-types'
 import type {
   BrowserOverlayAck,
@@ -58,15 +67,62 @@ export const LEGACY_BROWSER_PARTITION = 'persist:codeinoven-browser'
 
 /** Session partition one browser context runs in, boxed or not. The download
  *  manager has to reach the same session the browser's tabs use, so the naming
- *  lives here rather than being spelled out at each caller. */
+ *  lives here rather than being spelled out at each caller.
+ *
+ *  A context's own jar is named by its project id. A box's jar is named by the
+ *  box instead, under the reserved global context id: a box is one identity of
+ *  the profile, so every context that picks it joins the one Chromium profile
+ *  the global browser made it in, cookies, cache and extensions included.
+ *
+ *  The default box is the profile's own jar rather than a jar of its own, which
+ *  is how the interface reads it too: it is where the global browser's unboxed
+ *  pages live. A conversation that picks it therefore browses as the person, and
+ *  a jar of its own would have been empty and had no page's sign-ins in it. */
 export function browserPartitionFor(projectId: string, boxId: string | null = null): string {
-  return boxId === null
-    ? `${BROWSER_PARTITION_PREFIX}${projectId}`
-    : `${BROWSER_PARTITION_PREFIX}${projectId}${BROWSER_BOX_PARTITION_INFIX}${boxId}`
+  if (boxId === null) return `${BROWSER_PARTITION_PREFIX}${projectId}`
+  if (boxId === DEFAULT_BOX_ID) return browserPartitionFor(GLOBAL_BROWSER_PROJECT_ID)
+  return browserBoxPartitionFor(boxId)
 }
 
-/** Separates one box's jar from the context's own jar inside a partition name. */
-export const BROWSER_BOX_PARTITION_INFIX = ':box:'
+/** The jar a context's box choice names, as the pair the rest of the browser
+ *  identifies jars by.
+ *
+ *  A jar is named by the context that made it plus the box it is, and the profile
+ *  has exactly one jar that two such pairs can describe: the global browser
+ *  browsing unboxed, and any context that picked the profile's default box. They
+ *  are the same cookies, the same session and the same extensions, so everywhere
+ *  that asks a jar a question rather than for a partition   which extensions it
+ *  runs, which contexts feed activity under it, what the interface calls it   the
+ *  default box has to be answered as the global context, unboxed. Answering it as
+ *  the context that picked it would have a conversation's own jar set applied to
+ *  the profile's, unloading the very extensions the global browser is running.
+ *
+ *  {@link browserPartitionFor} resolves the same id to the same session, so the
+ *  two answers cannot disagree. */
+export function browserJarFor(
+  projectId: string,
+  boxId: string | null
+): { projectId: string; boxId: string | null } {
+  if (boxId === DEFAULT_BOX_ID) return { projectId: GLOBAL_BROWSER_PROJECT_ID, boxId: null }
+  return { projectId, boxId }
+}
+
+/** The namespace the profile's shared box jars live in. It is the global
+ *  browser's, because a box is made there and every other context that picks one
+ *  joins the jar that box already has. A box id carries its own `box:` prefix, so
+ *  a box's partition spells `box` twice: the namespace, then the id. */
+export const BROWSER_BOX_PARTITION_PREFIX = `${BROWSER_PARTITION_PREFIX}${GLOBAL_BROWSER_PROJECT_ID}:box:`
+
+/** The partition of one shared box jar. A box belongs to the profile rather than
+ *  to a context, so this takes no project id: every context that picks that box
+ *  resolves to the one jar here.
+ *
+ *  The profile's own box is not one of these. Its jar predates the namespace   it
+ *  is the global context's own   so {@link browserPartitionFor} answers it
+ *  directly and only a named box reaches this function. */
+export function browserBoxPartitionFor(boxId: string): string {
+  return `${BROWSER_BOX_PARTITION_PREFIX}${boxId}`
+}
 
 /** Ceiling on a box id. The renderer's store mints these, so the shape is an id,
  *  never a name the user typed. */
@@ -77,7 +133,10 @@ const BOX_ID_PATTERN = new RegExp(`^[a-zA-Z0-9:._-]{1,${MAX_BOX_ID_LENGTH}}$`, '
  *
  *  Null is deliberately not a special case downstream: it is what every tab that
  *  predates boxes already is, and it produces today's exact partition string, so
- *  \"no box whatsoever\" is the same code path rather than a branch of its own. */
+ *  "no box whatsoever" is the same code path rather than a branch of its own.
+ *
+ *  The profile's own box is an id like any other at this point; what makes it
+ *  mean the profile rather than the context is {@link browserPartitionFor}. */
 export function validateOptionalBoxId(value: unknown): string | null {
   if (value === null || value === undefined || value === '') return null
   if (typeof value !== 'string' || !BOX_ID_PATTERN.test(value)) {
@@ -86,27 +145,26 @@ export function validateOptionalBoxId(value: unknown): string | null {
   return value
 }
 
-/** Whether a partition string belongs to one context's browser, boxed or not.
- *  Context ids can be prefixes of each other, so this is an exact match plus the
- *  infix, never a bare prefix test. */
+/** Whether a partition is one of the profile's shared box jars. */
+export function isBrowserBoxPartition(partition: string): boolean {
+  return partition.startsWith(BROWSER_BOX_PARTITION_PREFIX)
+}
+
+/** Whether a partition is one context's own jar. A box jar is shared by every
+ *  context that picks that box, so it belongs to no single context. */
 export function partitionBelongsToProject(partition: string, projectId: string): boolean {
-  const own = browserPartitionFor(projectId)
-  return partition === own || partition.startsWith(`${own}${BROWSER_BOX_PARTITION_INFIX}`)
+  return partition === browserPartitionFor(projectId)
 }
 
 /**
- * The box id a partition names, or null for the context's own jar.
+ * The box id a partition names, or null for a context's own jar.
  *
- * A partition that does not belong to the context also answers null, which is why
- * callers are expected to filter with {@link partitionBelongsToProject} first: the
- * two together are how a context-wide operation enumerates its own jars without
- * ever reaching another context's storage.
+ * A partition that is not a box jar answers null, which is what lets a caller
+ * sweep the sessions of a window and keep only the ones a box owns.
  */
-export function boxIdFromPartition(partition: string, projectId: string): string | null {
-  const own = browserPartitionFor(projectId)
-  const prefix = `${own}${BROWSER_BOX_PARTITION_INFIX}`
-  if (!partition.startsWith(prefix)) return null
-  const boxId = partition.slice(prefix.length)
+export function boxIdFromPartition(partition: string): string | null {
+  if (!isBrowserBoxPartition(partition)) return null
+  const boxId = partition.slice(BROWSER_BOX_PARTITION_PREFIX.length)
   return boxId.length > 0 ? boxId : null
 }
 export const MAX_BROWSER_URL_LENGTH = 8192
@@ -622,6 +680,44 @@ export function validateBoundedHost(value: unknown): string {
     throw new TypeError('Browser site menu host is invalid')
   }
   return value
+}
+
+/**
+ * Validate the whole input of the thread browser's box menu.
+ *
+ * The profile's boxes are the renderer's list, so the entries arrive over IPC
+ * and are checked here rather than trusted: an id has to be a legal box id and a
+ * name is bounded, exactly as the site menu bounds the box name it is handed.
+ * Duplicate ids collapse, so a profile that somehow offered one box twice cannot
+ * put the same jar on the menu twice.
+ */
+export function validateBrowserBoxMenuInput(value: unknown): BrowserBoxMenuInput {
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('Browser box menu input is invalid')
+  }
+  const record = value as Record<string, unknown>
+  const rawBoxes = record['boxes']
+  if (!Array.isArray(rawBoxes) || rawBoxes.length > MAX_BROWSER_BOX_MENU_ENTRIES) {
+    throw new TypeError('Browser box menu boxes are invalid')
+  }
+  const boxes: BrowserBoxMenuEntry[] = []
+  const seen = new Set<string>()
+  for (const raw of rawBoxes) {
+    if (typeof raw !== 'object' || raw === null) {
+      throw new TypeError('Browser box menu box is invalid')
+    }
+    const entry = raw as Record<string, unknown>
+    const id = validateOptionalBoxId(entry['id'])
+    if (id === null) throw new TypeError('Browser box menu box ID is invalid')
+    if (seen.has(id)) continue
+    seen.add(id)
+    boxes.push({ id, name: boundedBoxLabel(entry['name']) || 'Untitled box' })
+  }
+  return {
+    scopeLabel: boundedBoxLabel(record['scopeLabel']) || 'This conversation',
+    boxes,
+    currentBoxId: validateOptionalBoxId(record['currentBoxId'])
+  }
 }
 
 /**

@@ -65,6 +65,10 @@ export interface AgentDefaultsConfig {
 
 /** Per-thread agent configuration. Active-thread settings seed siblings; last-used is the fallback. */
 export interface ThreadSettings {
+  /** Execution environment. Missing means this computer. */
+  ovenId?: string
+  /** Absolute workspace on the selected Oven, independent of the local project path. */
+  ovenPath?: string
   /** Agent harness responsible for the session, e.g. opencode or codex. */
   harnessId: string
   /** Model provider exposed by the harness, e.g. anthropic or openai. */

@@ -56,6 +56,8 @@ const CHANGE_TRACKING_MODES = new Set<NonNullable<CreateProjectInput['changeTrac
 const THREAD_TITLE_SOURCES = new Set<ThreadTitleSource>(['default', 'auto', 'manual'])
 
 const THREAD_SETTINGS_FIELDS = new Set([
+  'ovenId',
+  'ovenPath',
   'harnessId',
   'providerId',
   'accountId',
@@ -144,6 +146,11 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
   }
   if (input.accountId !== undefined) {
     settings.accountId = validateEntityId(input.accountId, 'Account ID', 256)
+  }
+  if (input.ovenId !== undefined) settings.ovenId = validateEntityId(input.ovenId, 'Oven ID')
+  if (input.ovenPath !== undefined) {
+    settings.ovenPath = validateBoundedString(input.ovenPath, 'Oven workspace', 1, 4096)
+    if (/[\0\r\n]/u.test(settings.ovenPath)) throw new TypeError('Invalid Oven workspace path')
   }
   if (input.inferenceMode !== undefined) {
     settings.inferenceMode = assertEnum(input.inferenceMode, INFERENCE_MODES, 'inference mode')

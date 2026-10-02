@@ -134,6 +134,7 @@
     saveIndependentAuditIntent,
     clearIndependentAuditIntent
   } from '$lib/stores/lifecycle-intent'
+  import type OvenControls from './OvenControls.svelte'
   import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
     initialSettingsFor,
@@ -1189,6 +1190,12 @@
   let project = $state<Project | null>(null)
   let projectIconUrl = $state<string | null>(null)
   /** Composer scope shoe data   project mode only (ChatComposer hides it in chat mode). */
+  let ovenControl: OvenControls | undefined = $state(undefined)
+  async function openOvenPicker(): Promise<void> {
+    await import('./OvenControls.svelte')
+    await tick()
+    await ovenControl?.openPicker()
+  }
   let scopeShoe = $derived.by((): ComposerScopeShoe | undefined => {
     if (chatMode) return undefined
     const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
@@ -1202,6 +1209,8 @@
       bucket,
       source: project?.source,
       host: project?.host,
+      oven: ovenPicker,
+      onOpenOven: () => void openOvenPicker(),
       project: project
         ? {
             name: project.name,
@@ -4222,6 +4231,21 @@
     const onResize = (): void => scheduleResponseBubbleUpdate()
     window.addEventListener('resize', onResize)
 
+    // Agent events are this view's only live channel, and a controller-driven
+    // conversation needs it for the one thing it has no other surface for: the
+    // human gate. Its `handleAgentEvent` branch reconciles the pending-question
+    // queue, so a card the agent raises while the panel is mounted appears
+    // instead of leaving the turn parked on a question nobody can see. The
+    // subscription is installed before the controller branch returns because that
+    // branch is a separate return path: registering it further down made the
+    // whole controller half of `handleAgentEvent` unreachable, which is how a
+    // browser tab's assistant chat could ask a question and never show it.
+    unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
+      const event = args[0] as AgentEvent
+      if (!event) return
+      handleAgentEvent(event)
+    })
+
     if (controller) {
       controller.mount()
       void Promise.resolve(controller.load()).then(() => beginInitialPaintReveal())
@@ -4243,6 +4267,7 @@
 
       return () => {
         alive = false
+        unsubscribe?.()
         // Save scroll position so switching back snaps to the right place
         if (scrollEl) {
           threadScrollPositions.set(mountedThreadId, {
@@ -4328,12 +4353,6 @@
       void refreshCapabilitySkills()
     })
 
-    // Subscribe to agent events for streaming
-    unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
-      const event = args[0] as AgentEvent
-      if (!event) return
-      handleAgentEvent(event)
-    })
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
       if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
@@ -6250,6 +6269,15 @@
       } catch (error) {
         errorMessage = error instanceof Error ? error.message : 'The request could not be stopped.'
       }
+      // A stop is the user's own statement that the run is over, so this surface
+      // has to agree with it immediately. Main writes `interrupted` without
+      // broadcasting a session status, and a harness too wedged to answer an
+      // abort never sends an idle of its own, so waiting for an event to clear
+      // the run left the Stop control live forever and every later press did
+      // nothing visible. Settling locally is what makes the stop observable.
+      agentRuns.setIdle(controller.projectId, controller.conversationId)
+      providerStatus = null
+      clearLocalTurn()
       return
     }
 
@@ -10688,27 +10716,6 @@
   }
 
   /**
-   * Answer a secret request with an instruction instead of a value. The main
-   * process reuses whatever the device already holds for the requested names
-   * (this thread, another thread, or a utility credential) and hands the
-   * instruction to the agent, so a value the user cannot reach any more never has
-   * to be asked for twice.
-   */
-  async function handleSecretAlternative(requestId: string, alternative: string): Promise<void> {
-    await invoke(
-      'agent:answerSecretAlternative',
-      thread.projectId,
-      thread.id,
-      requestId,
-      alternative
-    )
-    resolvedQuestionRequestIds.add(requestId)
-    pendingQuestionRequests = pendingQuestionRequests.filter(
-      (request) => request.requestId !== requestId
-    )
-  }
-
-  /**
    * Hold a secret card's countdown while the user works on it: the same
    * interaction that pauses a question (an update with no next index) clears the
    * request's deadline. The card owns the best-effort handling, so a pause that
@@ -11175,6 +11182,20 @@
     publishDraftActivity(thread.projectId, thread.id, false)
   })
 </script>
+
+{#snippet ovenPicker()}
+  {#await import('./OvenControls.svelte') then { default: OvenControlsComponent }}
+    <OvenControlsComponent
+      bind:this={ovenControl}
+      {thread}
+      {settings}
+      {busy}
+      onSettingsChange={updateSettings}
+    />
+  {:catch}
+    <span class="text-xs text-danger" role="alert">Oven controls could not be loaded.</span>
+  {/await}
+{/snippet}
 
 {#if messageViewer}
   {@const viewerItem = messageViewer.items[messageViewer.index]}
@@ -12849,7 +12870,6 @@
                     request={pendingRequest}
                     scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
                     onSubmit={handleSecretSubmit}
-                    onAlternative={handleSecretAlternative}
                     onDismiss={handleQuestionDismiss}
                     onExplain={handleQuestionExplain}
                     onQuickChat={handleQuestionQuickChat}

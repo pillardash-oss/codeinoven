@@ -12,12 +12,14 @@
  *      cross-session extension, so each box that enables one gets its own copy with
  *      its own storage. That is the point of containing an extension: two boxes can
  *      run different extensions, or the same one with separate state.
- *   3. **The jars are the global browser's.** Only that context's jars are
- *      reconciled: the panel that installs an extension, the boxes it can be placed
- *      in and the pins in the header all belong to that browser. A project's browser,
- *      which is the light one a conversation opens beside itself with no boxes and
- *      no extension chrome, never loads one, so no third-party code or extension
- *      renderer sits behind a thread browser.
+ *   3. **The extensions follow the jar, and only the global browser's jars carry
+ *      them.** The panel that installs an extension, the boxes it can be placed in
+ *      and the pins in the header all belong to that browser. A box is one identity
+ *      of the profile, so its extension set is the box's and it stays loaded while
+ *      any context is using that box. A project's own jar, the light browser a
+ *      conversation opens beside itself, never loads one, so no extension renderer
+ *      runs behind a thread browser that is not already using one of the user's
+ *      boxes.
  *   4. **It costs a renderer per jar it lives in, so it is unloaded the moment its
  *      jar has no live page.** An extension left loaded for a box the user closed
  *      is a renderer held for nothing.
@@ -47,7 +49,7 @@ import type {
 } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
 import { getNotificationService } from '../../notifications/notification-service'
-import { browserPartitionFor } from '../browser-service/browser-validation'
+import { browserJarFor, browserPartitionFor } from '../browser-service/browser-validation'
 import { prepareExtensionSource } from './browser-extension-install-job'
 import { COMPAT_BRIDGE_PAGE_FILE_NAME, ensureInjectionCurrent } from './browser-extension-inject'
 import {
@@ -316,10 +318,12 @@ export class BrowserExtensionService {
    * host one: an extension the jar does not run is not loaded there, so its own
    * page would have no extension behind it.
    */
-  popupUrlFor(extensionId: string, boxId: string | null): string | null {
+  popupUrlFor(extensionId: string, projectId: string, boxId: string | null): string | null {
     const record = this.registry.get(extensionId)
     if (!record || !record.enabled) return null
-    if (!extensionRunsInJar(record, boxId)) return null
+    // The jar, not the choice: a context in the profile's default box is in the
+    // global browser's own jar, which is the set a popup can be hosted from.
+    if (!extensionRunsInJar(record, browserJarFor(projectId, boxId).boxId)) return null
     return extensionPopupUrl(record.id, record.popupPath)
   }
 
@@ -454,10 +458,14 @@ export class BrowserExtensionService {
   async ensureJarLoaded(projectId: string, boxId: string | null): Promise<void> {
     if (this.disposed) return
     await this.ready
-    const partition = browserPartitionFor(projectId, boxId)
+    // Loaded as the jar it is, not as the context that reached for it: the
+    // profile's default box is the global browser's own jar, and this pair is what
+    // the loaded state remembers.
+    const jar = browserJarFor(projectId, boxId)
+    const partition = browserPartitionFor(jar.projectId, jar.boxId)
     const inFlight = this.loading.get(partition)
     if (inFlight) return inFlight
-    const task = this.reconcileJar(projectId, boxId, partition).catch((error: unknown) => {
+    const task = this.reconcileJar(jar.projectId, jar.boxId, partition).catch((error: unknown) => {
       Logger.error('Browser extensions could not be reconciled for a jar:', error)
     })
     this.loading.set(partition, task)
@@ -680,22 +688,33 @@ export class BrowserExtensionService {
   /**
    * The extensions one jar should be running, given what is installed.
    *
-   * Only the global browser's context has jars that extensions may live in. An
-   * extension is third-party code that browser runs, and the panel that installs it,
-   * the boxes it can be placed in and the pins in the header are all that browser's,
-   * so a project's browser (the light one a conversation opens beside itself, with
-   * no boxes and no extension chrome) must never load one.
+   * The global browser's own jar and the profile's boxes are the jars an extension
+   * may live in. A box's set is the box's, not the caller's: a box is one identity
+   * of the profile, so the extensions the user placed in it are loaded while any
+   * context uses that box. That is also what keeps a shared jar intact: answering
+   * "nothing" for a project's boxed tab would unload the extensions the personal
+   * browser is running in the very same session.
    *
-   * The empty jar id is what makes this a rule rather than a filter: it names "the
+   * A project's own jar loads none. An extension is third-party code that browser
+   * runs, and the panel that installs it, the boxes it can be placed in and the pins
+   * in the header are all the global browser's, so the light browser a conversation
+   * opens beside itself stays free of them.
+   *
+   * The empty jar id is what makes that a rule rather than a filter: it names "the
    * context's own jar", which read without the context matches every project's jar
    * too, so a record placed in "No box" would otherwise put an extension renderer,
    * its service worker and its load warnings behind every thread browser.
    */
   private desiredForJar(projectId: string, boxId: string | null): BrowserExtensionRecord[] {
-    if (projectId !== GLOBAL_BROWSER_PROJECT_ID) return []
+    // Answered about the jar rather than about the choice, for the same reason the
+    // partitions agree: a context in the profile's default box is browsing the
+    // global browser's own jar, and answering "a project's own jar" for it would
+    // unload the set that jar is running.
+    const jar = browserJarFor(projectId, boxId)
+    if (jar.boxId === null && jar.projectId !== GLOBAL_BROWSER_PROJECT_ID) return []
     return this.registry
       .list()
-      .filter((record) => record.enabled && extensionRunsInJar(record, boxId))
+      .filter((record) => record.enabled && extensionRunsInJar(record, jar.boxId))
   }
 
   private async reconcileJar(

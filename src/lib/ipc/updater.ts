@@ -9,6 +9,12 @@ export interface UpdaterStatus {
   availableVersion?: string
   downloadProgress?: number
   errorMessage?: string
+  /**
+   * Set while an update is available but its automatic install is on hold
+   * because earlier installs of that exact version were rejected. The update
+   * stays installable by hand.
+   */
+  blockedReason?: string
 }
 
 /** Release notes of the newest published release for the configured channel. */

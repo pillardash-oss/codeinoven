@@ -18,6 +18,14 @@ import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 /** Callback invoked whenever the harness emits a streaming event. */
 export type AgentEventCallback = (event: AgentEvent) => void
 
+/** A steer failed because its transport is gone; do not resend it as a new turn. */
+export class SteerDeliveryFailedError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
+    this.name = 'SteerDeliveryFailedError'
+  }
+}
+
 /**
  * A provider kept an interactive question after the turn process that owned it
  * exited. The chat engine can recover by resuming the persisted session with

@@ -79,6 +79,22 @@ class BrowserAssistantState {
   }
 
   /**
+   * Every conversation this store currently knows about, as live thread rows.
+   *
+   * These rows are deliberately absent from `scopeState.allScopeThreads`, because
+   * no workspace list may show them as phantom threads. That same exclusion is
+   * what removed them from the view rail's activity badge, so an assistant chat
+   * could work or sit parked on a question with nothing anywhere saying so. This
+   * is the read that lets the rail count them on its own terms.
+   *
+   * Reactive in both directions: a `thread:updated` broadcast replaces the row in
+   * `byThread`, and a tab closing removes it.
+   */
+  get threads(): Thread[] {
+    return [...this.byThread.values()].map((chat) => chat.thread)
+  }
+
+  /**
    * Resolve a browser tab's assistant conversation, creating it on first use.
    *
    * `existingThreadId` is the durable link the tab carries: when that thread is

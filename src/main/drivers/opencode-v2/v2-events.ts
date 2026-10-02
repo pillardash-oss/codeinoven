@@ -75,6 +75,7 @@ function toolPartFor(
     messageID: messageId,
     callID: callId,
     tool,
+    ...(tool === 'execute' ? { codeMode: true } : {}),
     state
   }
 }

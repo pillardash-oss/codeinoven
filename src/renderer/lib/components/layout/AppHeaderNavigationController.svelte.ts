@@ -356,12 +356,12 @@ export class AppHeaderNavigationController {
    *  was on. Chat, Assistant and Browser are on screen with a family of their
    *  own (or none at all), so they never take the project badge   without this
    *  fallback a working project thread would have no rail item to report on and
-   *  the activity would vanish from the rail entirely. Null on takeover pages
-   *  (Settings and friends), which carry no badge at all. Declared after
+   *  the activity would vanish from the rail entirely. Settings and other
+   *  takeover pages keep the badge on the last project view too. Declared after
    *  `shownHeaderViewOption` because a class field initializer cannot read a
    *  later field. */
   projectBadgeOption = $derived<HeaderViewOptionId | null>(
-    this.shownHeaderViewOption === null ||
+    this.shownHeaderViewOption !== null &&
       PROJECT_FAMILY_VIEW_OPTIONS.includes(this.shownHeaderViewOption)
       ? this.shownHeaderViewOption
       : this.lastProjectViewOption

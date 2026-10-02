@@ -2,11 +2,14 @@
  * The reserved ownership context of the global (personal) browser workspace.
  *
  * Every browser tab is keyed by a `(projectId, threadId)` pair in the main
- * process, and the session partition is derived from `projectId`. The global
- * browser deliberately rides the same machinery with one reserved pair, which
- * gives it a single durable profile (`persist:codeinoven-browser:browser-global`)
- * shared by every global tab, isolated from every project's browser and from
- * the agent-controlled project sessions.
+ * process, and its session partition is normally derived from `projectId`. A tab
+ * that names a box is the exception: a box is one jar for the whole profile, so
+ * every context that picks it joins the one Chromium profile it names. The
+ * global browser deliberately rides the same machinery with one reserved pair,
+ * which gives its own jar a single durable profile
+ * (`persist:codeinoven-browser:browser-global`) shared by every global tab,
+ * isolated from every project's own jar and from the agent-controlled project
+ * sessions.
  *
  * The pair names no user-visible project or thread, so `BrowserService` treats
  * a global tab as project-less and main resolves its dialog and permission
@@ -102,7 +105,8 @@ export interface BrowserExtensionSidePanel {
   extensionName: string
   /** The app browser tab this panel belongs to. */
   appTabId: string
-  /** The project and box the panel's jar belongs to, so the rail scopes it. */
+  /** The project whose tab hosts the panel, so the rail scopes it. The panel's
+   *  jar is whatever that tab runs in, the project's own or a shared box. */
   projectId: string
   /** The extension-relative path it asked to show. */
   path: string
@@ -613,7 +617,9 @@ export interface BrowserExtension {
   enabled: boolean
   /**
    * The jars it runs in: box ids, with the empty string standing for the
-   * context's own jar (no box). A jar it is not listed in never loads it, which is
+   * context's own jar (no box). A box id is one identity of the profile rather
+   * than of a context, so every context that picks that box loads the extension
+   * in the same shared jar. A jar it is not listed in never loads it, which is
    * the whole point of containing an extension per box: an extension costs a
    * renderer in each jar that loads it. An empty list means installed but loaded
    * nowhere yet, which is how every install starts.

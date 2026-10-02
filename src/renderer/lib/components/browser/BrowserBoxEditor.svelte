@@ -141,9 +141,11 @@
     }
     deleting = true
     try {
-      // Remove the row first: it closes the box's tabs, so nothing is left
-      // holding the partition when the erase below runs. The erase is the forgetting
-      // one: the row is gone for good, so its whole profile directory goes with it.
+      // Remove the row first: it closes this browser's tabs in the box, so the
+      // erase below can take the profile. The box is one jar for the whole
+      // profile, so other contexts that picked it lose the box with it. The erase
+      // is the forgetting one: the row is gone for good, so its whole profile
+      // directory goes with it.
       globalBrowser.deleteBox(target.id)
       if (eraseData) await globalBrowser.forgetBox(target.id)
       confirmDelete = false
@@ -292,7 +294,9 @@
   >
     <p>
       Every sign-in and every stored site preference in {existing?.name ?? 'this box'} is erased, and
-      its tabs reload signed out. The box itself stays, and nothing in another box is touched.
+      its tabs reload signed out. This box is one jar everywhere it is used, so every thread and global
+      tab running in it comes back signed out, not only the ones here. The box itself stays, and nothing
+      in another box is touched.
     </p>
   </ConfirmDialog>
 {/if}

@@ -15,6 +15,7 @@ import { invokeTypesafeContract } from './ipc/invoke-typesafe'
 import { invokeDesignContract } from './ipc/invoke-design'
 import { invokeExpertContract } from './ipc/invoke-expert'
 import { invokeMediaContract } from './ipc/invoke-media'
+import { invokeOvenContract } from './ipc/invoke-oven'
 import { IPC_EVENT_CONTRACT } from './ipc/events'
 import type { GitInvocation, GitRefusedOperation, GitRemoteUnavailable } from './types'
 
@@ -44,7 +45,8 @@ export const IPC_INVOKE_CONTRACT = {
   ...invokeAssistantContract,
   ...invokeDesignContract,
   ...invokeExpertContract,
-  ...invokeMediaContract
+  ...invokeMediaContract,
+  ...invokeOvenContract
 }
 
 export type IpcInvokeContract = typeof IPC_INVOKE_CONTRACT

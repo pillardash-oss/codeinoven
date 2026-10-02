@@ -29,6 +29,8 @@
      *  focus back and resume typing at the saved caret. */
     onScopeMenuClosed?: () => void
     /** Worker reporting control; absent on every non-worker thread. */
+    oven?: import('svelte').Snippet
+    onOpenOven?: () => void
     report?: ComposerWorkerReport
   }
 </script>
@@ -85,6 +87,7 @@
     onScopeMenuClosed?: () => void
     /** Worker reporting control; absent on every non-worker thread. */
     report?: ComposerWorkerReport
+    oven?: import('svelte').Snippet
   }
 
   let {
@@ -99,7 +102,8 @@
     onSwitchProject,
     onOpenScopeView,
     onScopeMenuClosed,
-    report
+    report,
+    oven
   }: Props = $props()
 
   let menuOpen = $state(false)
@@ -342,21 +346,25 @@
     </ProjectSwitch>
   {/if}
 
-  <!-- Project type: where the agent's work runs (SSH box support arrives with remote projects) -->
-  <span
-    class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted"
-    title={source === 'ssh'
-      ? `Remote project${host ? ` on ${host}` : ''}   the agent will work on this box`
-      : 'Project runs locally on this machine'}
-  >
-    {#if source === 'ssh'}
-      <Globe size={10} class="shrink-0" />
-      <span class="max-w-24 truncate">{host ?? 'Remote'}</span>
-    {:else}
-      <Monitor size={10} class="shrink-0" />
-      <span>Local</span>
-    {/if}
-  </span>
+  {#if oven}
+    {@render oven()}
+  {:else}
+    <!-- Project type: where the agent's work runs (SSH box support arrives with remote projects) -->
+    <span
+      class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted"
+      title={source === 'ssh'
+        ? `Remote project${host ? ` on ${host}` : ''}   the agent will work on this box`
+        : 'Project runs locally on this machine'}
+    >
+      {#if source === 'ssh'}
+        <Globe size={10} class="shrink-0" />
+        <span class="max-w-24 truncate">{host ?? 'Remote'}</span>
+      {:else}
+        <Monitor size={10} class="shrink-0" />
+        <span>Local</span>
+      {/if}
+    </span>
+  {/if}
 
   {#if project?.branch}
     <span

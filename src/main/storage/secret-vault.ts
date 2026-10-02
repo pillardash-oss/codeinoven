@@ -9,6 +9,7 @@ interface EncryptedSecretRecord {
 }
 
 type EncryptedSecretStore = Record<string, EncryptedSecretRecord>
+const vaultWriteTails = new WeakMap<StorageEngine, Promise<unknown>>()
 
 /**
  * Deterministic SecretVault ref under which a provider account's token is
@@ -41,17 +42,18 @@ export class SecretVault {
     }
     if (!value) throw new TypeError('Credential value must not be empty')
 
-    const store = await this.load()
-    const ref = existingRef ?? `secret_${uuidv7()}`
-    const existing = store[ref]
-    const now = Date.now()
-    store[ref] = {
-      value: safeStorage.encryptString(value).toString('base64'),
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now
-    }
-    await this.storage.write(this.storePath, store)
-    return ref
+    return this.mutate(async (store) => {
+      const ref = existingRef ?? `secret_${uuidv7()}`
+      const existing = store[ref]
+      const now = Date.now()
+      store[ref] = {
+        value: safeStorage.encryptString(value).toString('base64'),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now
+      }
+      await this.storage.write(this.storePath, store)
+      return ref
+    })
   }
 
   /**
@@ -107,10 +109,11 @@ export class SecretVault {
   }
 
   async remove(ref: string): Promise<void> {
-    const store = await this.load()
-    if (!(ref in store)) return
-    delete store[ref]
-    await this.storage.write(this.storePath, store)
+    await this.mutate(async (store) => {
+      if (!(ref in store)) return
+      delete store[ref]
+      await this.storage.write(this.storePath, store)
+    })
   }
 
   async exists(ref: string): Promise<boolean> {
@@ -119,5 +122,13 @@ export class SecretVault {
 
   private async load(): Promise<EncryptedSecretStore> {
     return (await this.storage.read<EncryptedSecretStore>(this.storePath)) ?? {}
+  }
+
+  /** All vault users share this queue so saving Oven keys cannot lose an account token. */
+  private async mutate<T>(operation: (store: EncryptedSecretStore) => Promise<T>): Promise<T> {
+    const previous = vaultWriteTails.get(this.storage) ?? Promise.resolve()
+    const current = previous.catch(() => undefined).then(async () => operation(await this.load()))
+    vaultWriteTails.set(this.storage, current)
+    return current
   }
 }

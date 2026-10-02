@@ -8,11 +8,12 @@
   /**
    * The browser boxes panel, docked in the browser's right rail.
    *
-   * A box is a named cookie jar, so this is where the profile's identities live:
-   * one row per box, its colour and icon, how many tabs use it, and which one the
-   * tab on screen is in. It belongs to the profile rather than to a page, so it is
-   * present with the strip empty, which is also where a user makes their first
-   * box before any tab exists.
+   * A box is the profile's named jar, one Chromium session every context that
+   * picks it shares, so this is where the profile's identities live: one row per
+   * box, its colour and icon, how many tabs use it, and which one the tab on
+   * screen is in. It belongs to the profile rather than to a page or a context, so
+   * it is present with the strip empty, which is also where a user makes their
+   * first box before any tab exists.
    *
    * Making a box is a page of the panel, not a dialog: the list sits one chevron
    * back, and the form is the panel's own work. Changing one is a fold on its row,
