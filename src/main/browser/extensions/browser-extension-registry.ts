@@ -258,7 +258,8 @@ export function extensionRunsInJar(
  *  collected so far folded in. */
 export function toExtensionView(
   record: BrowserExtensionRecord,
-  runtimeWarnings: readonly string[]
+  runtimeWarnings: readonly string[],
+  updateAvailableVersion: string | null = null
 ): BrowserExtension {
   const warnings = [...record.warnings]
   for (const warning of runtimeWarnings) {
@@ -271,6 +272,7 @@ export function toExtensionView(
     description: record.description,
     source: record.source,
     webstoreId: record.webstoreId,
+    updateAvailableVersion,
     iconDataUrl: record.iconDataUrl,
     enabled: record.enabled,
     boxes: record.boxes,

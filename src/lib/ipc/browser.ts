@@ -612,6 +612,8 @@ export interface BrowserExtension {
   source: BrowserExtensionSource
   /** The Web Store id it was fetched by, or null for a folder install. */
   webstoreId: string | null
+  /** A newer Web Store version found by the background check, or null. */
+  updateAvailableVersion: string | null
   /** A data URL of the extension's own manifest icon, or null when it declares
    *  none. The extension supplies the bytes, so it is drawn as an image only. */
   iconDataUrl: string | null

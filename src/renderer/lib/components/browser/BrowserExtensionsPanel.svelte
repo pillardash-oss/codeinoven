@@ -2,7 +2,9 @@
   import {
     AlertTriangle,
     ChevronDown,
+    Download,
     FolderOpen,
+    LoaderCircle,
     Pin,
     Plus,
     Puzzle,
@@ -497,6 +499,7 @@
       {#each shown as extension (extension.id)}
         {@const pin = pinAction(extension)}
         {@const popup = popupAction(extension)}
+        {@const updating = browserExtensions.isUpdating(extension.id)}
         <li>
           <div
             class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-elevated"
@@ -524,12 +527,40 @@
             {#if showChips}
               <BrowserBoxChips jars={extension.boxes} />
             {/if}
+            {#if extension.updateAvailableVersion || updating}
+              {@const updateTitle = extension.updateAvailableVersion
+                ? `Update ${extension.name} to version ${extension.updateAvailableVersion}`
+                : `Updating ${extension.name}`}
+              <button
+                type="button"
+                class="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-wait disabled:opacity-60"
+                disabled={updating}
+                title={updating ? `Updating ${extension.name}` : updateTitle}
+                aria-label={updating ? `Updating ${extension.name}` : updateTitle}
+                onclick={() => void browserExtensions.updateFromWebStore(extension.id)}
+              >
+                {#if updating}
+                  <LoaderCircle size={12} class="animate-spin" />
+                  Updating
+                {:else}
+                  <Download size={12} />
+                  Update
+                {/if}
+              </button>
+            {/if}
             <Switch
               checked={extension.enabled}
-              title={extension.enabled ? `Disable ${extension.name}` : `Enable ${extension.name}`}
-              aria-label={extension.enabled
-                ? `Disable ${extension.name}`
-                : `Enable ${extension.name}`}
+              disabled={updating}
+              title={updating
+                ? `Updating ${extension.name}`
+                : extension.enabled
+                  ? `Disable ${extension.name}`
+                  : `Enable ${extension.name}`}
+              aria-label={updating
+                ? `Updating ${extension.name}`
+                : extension.enabled
+                  ? `Disable ${extension.name}`
+                  : `Enable ${extension.name}`}
               onchange={(next) => void browserExtensions.setEnabled(extension.id, next)}
             />
             <button
@@ -542,9 +573,9 @@
                     ? 'text-foreground'
                     : 'text-muted opacity-0 group-hover:opacity-100'
               ]}
-              disabled={pin.disabled}
-              title={pin.title}
-              aria-label={pin.title}
+              disabled={pin.disabled || updating}
+              title={updating ? `Updating ${extension.name}` : pin.title}
+              aria-label={updating ? `Updating ${extension.name}` : pin.title}
               onclick={() => void browserExtensions.setPinned(extension.id, !extension.pinned)}
             >
               <Pin size={13} />
@@ -585,12 +616,17 @@
                 </div>
                 <Switch
                   checked={extension.enabled}
-                  title={extension.enabled
-                    ? `Disable ${extension.name}`
-                    : `Enable ${extension.name}`}
-                  aria-label={extension.enabled
-                    ? `Disable ${extension.name}`
-                    : `Enable ${extension.name}`}
+                  disabled={updating}
+                  title={updating
+                    ? `Updating ${extension.name}`
+                    : extension.enabled
+                      ? `Disable ${extension.name}`
+                      : `Enable ${extension.name}`}
+                  aria-label={updating
+                    ? `Updating ${extension.name}`
+                    : extension.enabled
+                      ? `Disable ${extension.name}`
+                      : `Enable ${extension.name}`}
                   onchange={(next) => void browserExtensions.setEnabled(extension.id, next)}
                 />
               </div>
@@ -607,6 +643,7 @@
                       <p class="truncate text-[0.6875rem] text-foreground">{jar.name}</p>
                       <Switch
                         checked={runsInBox(extension, jar.id)}
+                        disabled={updating}
                         title={`Run in ${jar.name}`}
                         aria-label={`Run in ${jar.name}`}
                         onchange={(next) => toggleBox(extension, jar.id, next)}
@@ -658,8 +695,9 @@
               <button
                 type="button"
                 class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-danger transition-colors hover:bg-danger/10"
-                title={`Uninstall ${extension.name}`}
-                aria-label={`Uninstall ${extension.name}`}
+                disabled={updating}
+                title={updating ? `Updating ${extension.name}` : `Uninstall ${extension.name}`}
+                aria-label={updating ? `Updating ${extension.name}` : `Uninstall ${extension.name}`}
                 onclick={() => (uninstallTarget = extension)}
               >
                 <Trash2 size={13} />

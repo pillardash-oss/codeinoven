@@ -116,6 +116,8 @@ class BrowserExtensionsState {
    * the first frame.
    */
   installs: BrowserExtensionInstall[] = $state([])
+  /** Extension ids whose user-requested update is downloading or applying. */
+  updatingIds: string[] = $state([])
   /** Action state every tab of a box sees, keyed box + extension. */
   private activityGlobal: Record<string, BrowserExtensionActivity> = $state({})
   /** Action state one tab sees, over the extension's own, keyed box + extension
@@ -146,6 +148,11 @@ class BrowserExtensionsState {
    *  door and the panel's menu read to stay out of the way. */
   get installing(): boolean {
     return this.installs.length > 0
+  }
+
+  /** Whether one extension's Web Store package is being applied. */
+  isUpdating(extensionId: string): boolean {
+    return this.updatingIds.includes(extensionId)
   }
 
   /**
@@ -356,6 +363,20 @@ class BrowserExtensionsState {
       this.extensions = this.extensions.filter((extension) => extension.id !== extensionId)
     } catch (error: unknown) {
       reportError(error, 'The extension could not be removed.')
+    }
+  }
+
+  /** Apply a newer Web Store package after the user clicks its row action. */
+  async updateFromWebStore(extensionId: string): Promise<void> {
+    if (this.isUpdating(extensionId)) return
+    this.updatingIds = [...this.updatingIds, extensionId]
+    try {
+      const extension = await invoke('browser:extensionUpdateFromWebStore', extensionId)
+      this.apply(extension)
+    } catch (error: unknown) {
+      reportError(error, 'The extension could not be updated.')
+    } finally {
+      this.updatingIds = this.updatingIds.filter((id) => id !== extensionId)
     }
   }
 

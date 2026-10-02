@@ -379,6 +379,8 @@ export const invokeBrowserContract = {
     BrowserExtension
   >,
   'browser:extensionUninstall': {} as Contract<[extensionId: string], void>,
+  /** Check again and apply the newest validated Web Store package for one extension. */
+  'browser:extensionUpdateFromWebStore': {} as Contract<[extensionId: string], BrowserExtension>,
   /** Enable or disable one extension, choose the jars it runs in, or pin it into
    *  the browser view's header. `boxes` is the whole replacement list, never a
    *  delta, and it is always explicit: a jar left out of it never loads the

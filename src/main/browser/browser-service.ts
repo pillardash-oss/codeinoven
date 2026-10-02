@@ -1227,6 +1227,10 @@ export class BrowserService {
       await this.extensions.whenReady()
       await this.extensions.uninstall(validateExtensionId(rawExtensionId))
     })
+    replaceHandler('browser:extensionUpdateFromWebStore', async (_event, rawExtensionId) => {
+      await this.extensions.whenReady()
+      return this.extensions.updateFromWebStore(validateExtensionId(rawExtensionId))
+    })
     replaceHandler('browser:extensionUpdate', async (_event, rawExtensionId, rawPatch) => {
       await this.extensions.whenReady()
       return this.extensions.update(
