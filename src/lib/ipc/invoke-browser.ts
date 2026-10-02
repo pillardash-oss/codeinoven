@@ -379,6 +379,7 @@ export const invokeBrowserContract = {
     BrowserExtension
   >,
   'browser:extensionUninstall': {} as Contract<[extensionId: string], void>,
+  'browser:extensionReorder': {} as Contract<[orderedIds: string[]], void>,
   /** Check again and apply the newest validated Web Store package for one extension. */
   'browser:extensionUpdateFromWebStore': {} as Contract<[extensionId: string], BrowserExtension>,
   /** Enable or disable one extension, choose the jars it runs in, or pin it into

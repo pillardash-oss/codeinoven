@@ -61,6 +61,7 @@
   /** The extension the uninstall confirmation is for, or null. */
   let uninstallTarget = $state<BrowserExtension | null>(null)
   let uninstalling = $state(false)
+  let draggingId = $state<string | null>(null)
 
   const extensions = $derived(browserExtensions.extensions)
 
@@ -129,6 +130,27 @@
   /** Whether each row has to say which boxes it runs in, which is only useful when
    *  more than one box is on screen. */
   const showChips = $derived(scopedBox === null)
+
+  function dropExtension(targetId: string): void {
+    const sourceId = draggingId
+    draggingId = null
+    if (!sourceId || sourceId === targetId) return
+    const reorderedShown = [...shown]
+    const sourceIndex = reorderedShown.findIndex((extension) => extension.id === sourceId)
+    const targetIndex = reorderedShown.findIndex((extension) => extension.id === targetId)
+    if (sourceIndex < 0 || targetIndex < 0) return
+    const [source] = reorderedShown.splice(sourceIndex, 1)
+    if (!source) return
+    reorderedShown.splice(targetIndex, 0, source)
+    const orderedShownIds = reorderedShown.map((extension) => extension.id)
+    let shownIndex = 0
+    const orderedIds = browserExtensions.extensions.map((extension) =>
+      shown.some((visible) => visible.id === extension.id)
+        ? (orderedShownIds[shownIndex++] ?? extension.id)
+        : extension.id
+    )
+    void browserExtensions.reorder(orderedIds)
+  }
 
   /** What the source column calls where the extension's files came from. */
   function sourceLabel(extension: BrowserExtension): string {
@@ -500,7 +522,21 @@
         {@const pin = pinAction(extension)}
         {@const popup = popupAction(extension)}
         {@const updating = browserExtensions.isUpdating(extension.id)}
-        <li>
+        <li
+          draggable
+          ondragstart={(event) => {
+            draggingId = extension.id
+            event.dataTransfer?.setData('text/plain', extension.id)
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+          }}
+          ondragover={(event) => event.preventDefault()}
+          ondrop={(event) => {
+            event.preventDefault()
+            dropExtension(extension.id)
+          }}
+          ondragend={() => (draggingId = null)}
+          class:opacity-50={draggingId === extension.id}
+        >
           <div
             class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-elevated"
           >

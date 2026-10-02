@@ -1227,6 +1227,12 @@ export class BrowserService {
       await this.extensions.whenReady()
       await this.extensions.uninstall(validateExtensionId(rawExtensionId))
     })
+    replaceHandler('browser:extensionReorder', async (_event, rawOrderedIds) => {
+      if (!Array.isArray(rawOrderedIds) || !rawOrderedIds.every((id) => typeof id === 'string')) {
+        throw new TypeError('Extension order is invalid')
+      }
+      await this.extensions.reorder(rawOrderedIds.map(validateExtensionId))
+    })
     replaceHandler('browser:extensionUpdateFromWebStore', async (_event, rawExtensionId) => {
       await this.extensions.whenReady()
       return this.extensions.updateFromWebStore(validateExtensionId(rawExtensionId))

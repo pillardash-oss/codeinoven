@@ -488,6 +488,13 @@ export class BrowserExtensionService {
     return this.toView(record)
   }
 
+  /** Reorder the installed extensions and publish their new order to renderers. */
+  async reorder(orderedIds: string[]): Promise<void> {
+    await this.ready
+    await this.registry.reorder(orderedIds)
+    this.host.publish()
+  }
+
   /** Find newer Web Store releases without downloading or replacing anything. */
   checkForUpdates(): Promise<void> {
     if (this.disposed) return Promise.resolve()

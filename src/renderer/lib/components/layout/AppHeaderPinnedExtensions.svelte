@@ -61,6 +61,26 @@
    * that fails to decode must never be what the user sees.
    */
   const undrawableIcons = new SvelteSet<string>()
+  let draggingId = $state<string | null>(null)
+
+  function dropPinned(targetId: string): void {
+    const sourceId = draggingId
+    draggingId = null
+    if (!sourceId || sourceId === targetId) return
+    const reordered = [...pinned]
+    const sourceIndex = reordered.findIndex((extension) => extension.id === sourceId)
+    const targetIndex = reordered.findIndex((extension) => extension.id === targetId)
+    if (sourceIndex < 0 || targetIndex < 0) return
+    const [source] = reordered.splice(sourceIndex, 1)
+    if (!source) return
+    reordered.splice(targetIndex, 0, source)
+    const ids = reordered.map((extension) => extension.id)
+    let index = 0
+    const orderedIds = browserExtensions.extensions.map((extension) =>
+      pinned.some((pin) => pin.id === extension.id) ? (ids[index++] ?? extension.id) : extension.id
+    )
+    void browserExtensions.reorder(orderedIds)
+  }
 
   /**
    * Open a pinned extension's popup in the rail, or close the one it already has.
@@ -102,6 +122,19 @@
           : extension.iconDataUrl}
       <button
         type="button"
+        draggable
+        ondragstart={(event) => {
+          draggingId = extension.id
+          event.dataTransfer?.setData('text/plain', extension.id)
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+        }}
+        ondragover={(event) => event.preventDefault()}
+        ondrop={(event) => {
+          event.preventDefault()
+          dropPinned(extension.id)
+        }}
+        ondragend={() => (draggingId = null)}
+        class:opacity-50={draggingId === extension.id}
         class="relative flex h-8 w-8 items-center justify-center transition-colors duration-150 hover:bg-elevated focus-visible:bg-elevated {openPopupFor(
           extension.id
         )

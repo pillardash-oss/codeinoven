@@ -392,6 +392,15 @@ class BrowserExtensionsState {
     await this.patch(extensionId, { pinned }, 'The extension could not be pinned.')
   }
 
+  /** Save a complete user-selected order for installed extensions. */
+  async reorder(orderedIds: string[]): Promise<void> {
+    try {
+      await invoke('browser:extensionReorder', orderedIds)
+    } catch (error: unknown) {
+      reportError(error, 'The extensions could not be reordered.')
+    }
+  }
+
   /**
    * Replace the whole set of jars an extension runs in.
    *
