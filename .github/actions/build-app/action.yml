@@ -37,10 +37,9 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Check out repository
+    - name: Set up Bun and dependencies
       uses: ./.github/actions/setup
       with:
-        fetch-depth: '0'
         install: 'true'
 
     # Note: scripts/patch-binary-data.ts is NOT invoked here. The postinstall

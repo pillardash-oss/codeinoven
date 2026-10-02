@@ -89,6 +89,9 @@ jobs:
       # No dependency install: the script uses Bun's built-in S3 client and the
       # repo's own TypeScript modules.
       - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
         uses: ./.github/actions/setup
       - name: Mirror the release
         run: |

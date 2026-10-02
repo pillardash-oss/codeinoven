@@ -58,9 +58,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: ./.github/actions/setup
+        uses: actions/checkout@v6
         with:
-          fetch-depth: '0'
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup
 
       - name: Read promotion versions
         env:
@@ -91,6 +94,9 @@ jobs:
 
     steps:
       - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun and dependencies
         uses: ./.github/actions/setup
         with:
           install: 'true'
@@ -107,6 +113,9 @@ jobs:
 
     steps:
       - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun and dependencies
         uses: ./.github/actions/setup
         with:
           install: 'true'
@@ -123,6 +132,9 @@ jobs:
 
     steps:
       - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun and dependencies
         uses: ./.github/actions/setup
         with:
           install: 'true'
@@ -141,6 +153,9 @@ jobs:
 
     steps:
       - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun and dependencies
         uses: ./.github/actions/setup
         with:
           install: 'true'
@@ -165,6 +180,9 @@ jobs:
 
     steps:
       - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun and dependencies
         uses: ./.github/actions/setup
         with:
           install: 'true'
@@ -213,6 +231,9 @@ jobs:
 
     steps:
       - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun and dependencies
         uses: ./.github/actions/setup
         with:
           install: 'true'
@@ -257,6 +278,9 @@ jobs:
 
     steps:
       - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun and dependencies
         uses: ./.github/actions/setup
         with:
           install: 'true'

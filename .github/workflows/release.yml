@@ -20,9 +20,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: ./.github/actions/setup
+        uses: actions/checkout@v6
         with:
-          fetch-depth: '0'
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup
 
       - name: Validate package version
         env:
@@ -95,6 +98,11 @@ jobs:
             app_dir: dist/linux-unpacked
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Build and package ${{ matrix.name }}
         uses: ./.github/actions/build-app
         with:
@@ -126,9 +134,12 @@ jobs:
       # and handed to .github/actions/publish-release, which is otherwise the
       # same action nightly.yml runs.
       - name: Check out repository
-        uses: ./.github/actions/setup
+        uses: actions/checkout@v6
         with:
-          fetch-depth: '0'
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup
 
       - name: Determine release tag
         id: tag

@@ -23,10 +23,8 @@ runs:
   steps:
     # No dependency install: the release scripts use Bun's built-in capabilities
     # and the repository's own TypeScript modules, exactly as before.
-    - name: Check out repository
+    - name: Set up Bun
       uses: ./.github/actions/setup
-      with:
-        fetch-depth: '0'
 
     - name: Download build artifacts
       uses: actions/download-artifact@v7

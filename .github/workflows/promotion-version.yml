@@ -27,10 +27,13 @@ jobs:
 
     steps:
       - name: Check out dev
-        uses: ./.github/actions/setup
+        uses: actions/checkout@v6
         with:
           ref: dev
-          fetch-depth: '0'
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup
 
       - name: Validate nightly promotion version (semver-correct)
         env:
