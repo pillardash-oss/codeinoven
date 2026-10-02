@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import { Eye, Maximize2, NotebookPen, Redo2, SquarePen, Undo2, X } from '@lucide/svelte'
+  import { Eye, Maximize2, NotebookPen, Plus, Redo2, SquarePen, Undo2, X } from '@lucide/svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
@@ -303,7 +303,7 @@
           title="New sticky note"
           onclick={() => void createNote()}
         >
-          <NotebookPen size={13} />
+          <Plus size={13} />
         </button>
         <button
           type="button"
