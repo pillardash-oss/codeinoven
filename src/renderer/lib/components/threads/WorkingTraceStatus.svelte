@@ -24,6 +24,7 @@
     harnessId?: string | null
     harnessName?: string | null
     accountLabel?: string | null
+    ovenLabel?: string | null
   }
 
   let {
@@ -38,7 +39,8 @@
     providerId,
     harnessId,
     harnessName,
-    accountLabel
+    accountLabel,
+    ovenLabel
   }: Props = $props()
 </script>
 
@@ -119,6 +121,15 @@
           aria-label={`Account: ${accountLabel}`}
         >
           {accountLabel}
+        </span>
+      {/if}
+      {#if ovenLabel}
+        <span
+          class="flex shrink-0 items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+          title={`Oven: ${ovenLabel}`}
+          aria-label={`Oven: ${ovenLabel}`}
+        >
+          {ovenLabel}
         </span>
       {/if}
     </span>

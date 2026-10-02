@@ -24366,8 +24366,12 @@ export class ChatEngine {
       // changes belong to the next turn and must never re-label this one.
       const latestUserIndex = messages.findLastIndex((message) => message.role === 'user')
       const turnOvenId = info.activeTurnOvenId ?? thread?.settings?.ovenId ?? 'local'
+      const turnOvenLabel = await this.ovenChat
+        .nameFor(turnOvenId)
+        .catch(() => (turnOvenId === 'local' ? 'Local' : 'Oven'))
       if (latestUserIndex >= 0 && !messages[latestUserIndex].ovenId) {
         messages[latestUserIndex].ovenId = turnOvenId
+        messages[latestUserIndex].ovenLabel = turnOvenLabel
       }
       const turnAssistant = [...messages.slice(latestUserIndex + 1)]
         .reverse()
@@ -24377,7 +24381,10 @@ export class ChatEngine {
       if (turnAssistant && !turnAssistant.thinkingLevel && turnThinkingLevel) {
         turnAssistant.thinkingLevel = turnThinkingLevel
       }
-      if (turnAssistant && !turnAssistant.ovenId) turnAssistant.ovenId = turnOvenId
+      if (turnAssistant && !turnAssistant.ovenId) {
+        turnAssistant.ovenId = turnOvenId
+        turnAssistant.ovenLabel = turnOvenLabel
+      }
       // Providers that never report token usage leave assistant messages
       // without a contextUsed signal, blinding usage-based compaction and the
       // context indicator. Fall back to the composed-request occupancy captured

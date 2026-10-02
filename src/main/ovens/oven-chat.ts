@@ -39,6 +39,7 @@ interface Binding {
   projectId: string
   threadId: string
   ovenId: string
+  ovenLabel: string
   root: string
   runId: string
   session: PersistentCliSession
@@ -66,6 +67,7 @@ interface Live {
 /** Remote turns bypass desktop repository work. Only transcript metadata stays here. */
 export class OvenChat {
   readonly service: OvenService
+  private readonly registry: OvenRegistry
   private readonly live = new Map<string, Live>()
   private readonly starting = new Set<string>()
   private disposed = false
@@ -77,7 +79,13 @@ export class OvenChat {
     private readonly accounts: HarnessAccountRegistry,
     private readonly publish: (event: AgentEvent) => void
   ) {
-    this.service = new OvenService(new OvenRegistry(storage, vault))
+    this.registry = new OvenRegistry(storage, vault)
+    this.service = new OvenService(this.registry)
+  }
+
+  async nameFor(ovenId: string): Promise<string> {
+    if (ovenId === LOCAL_OVEN_ID) return 'Local'
+    return (await this.registry.require(ovenId)).name
   }
 
   remote(thread: Thread, settings = thread.settings): boolean {
@@ -139,6 +147,7 @@ export class OvenChat {
     try {
       await this.assertNotRunning(thread)
       const ovenId = settings.ovenId!
+      const ovenLabel = await this.nameFor(ovenId)
       const probe = await this.service.probe(ovenId)
       const requestedRoot =
         settings.ovenPath ||
@@ -166,6 +175,7 @@ export class OvenChat {
         id: userId,
         role: 'user',
         ovenId,
+        ovenLabel,
         accountId: account.id,
         accountLabel: account.label,
         thinkingLevel: settings.thinkingLevel,
@@ -230,6 +240,7 @@ export class OvenChat {
         projectId: thread.projectId,
         threadId: thread.id,
         ovenId,
+        ovenLabel,
         root,
         runId,
         session,
@@ -604,6 +615,7 @@ export class OvenChat {
     if (mapped.messages)
       for (const message of mapped.messages) {
         message.ovenId ??= binding.ovenId
+        message.ovenLabel ??= binding.ovenLabel
         message.accountId ??= binding.settings.accountId
         message.thinkingLevel ??= binding.settings.thinkingLevel
       }

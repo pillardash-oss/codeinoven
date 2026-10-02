@@ -851,6 +851,7 @@ export class Database {
       this.migrateAgentMessageGenerationColumn(connection)
       this.migrateAgentMessageAccountColumns(connection)
       this.migrateAgentMessageOvenColumn(connection)
+      this.migrateAgentMessageOvenLabelColumn(connection)
       this.migrateAgentMessageContextEstimatedColumn(connection)
       this.migrateAgentMessageNormalizedUsageColumn(connection)
       this.migrateActiveTurnOwnerColumn(connection)
@@ -1499,6 +1500,17 @@ export class Database {
     )
     if (!columns.has('oven_id')) {
       connection.exec('ALTER TABLE agent_messages ADD COLUMN oven_id TEXT')
+    }
+  }
+
+  private migrateAgentMessageOvenLabelColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('oven_label')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN oven_label TEXT')
     }
   }
 

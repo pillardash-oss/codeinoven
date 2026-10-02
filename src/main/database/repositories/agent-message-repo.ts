@@ -73,6 +73,7 @@ export interface PersistedMessageRow {
   account_id: string | null
   account_label: string | null
   oven_id: string | null
+  oven_label: string | null
   thinking_level: string | null
   references_json: string | null
   project_references_json: string | null
@@ -112,6 +113,7 @@ export function hashPersistedRow(row: PersistedMessageRow): string {
     row.account_id ?? '',
     row.account_label ?? '',
     row.oven_id ?? '',
+    row.oven_label ?? '',
     row.thinking_level ?? '',
     row.references_json ?? '',
     row.project_references_json ?? '',
@@ -150,6 +152,7 @@ export interface AgentMessageRow {
   account_id: string | null
   account_label: string | null
   oven_id: string | null
+  oven_label: string | null
   thinking_level: string | null
   references_json: string | null
   project_references_json: string | null
@@ -218,6 +221,7 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
     accountId: row.account_id ?? undefined,
     accountLabel: row.account_label ?? undefined,
     ovenId: row.oven_id ?? undefined,
+    ovenLabel: row.oven_label ?? undefined,
     thinkingLevel: row.thinking_level ? (row.thinking_level as ThinkingLevel) : undefined,
     references: row.references_json ? JSON.parse(row.references_json) : undefined,
     projectReferences: row.project_references_json
@@ -269,6 +273,7 @@ export interface EncodedAgentMessage {
   accountId: string | null
   accountLabel: string | null
   ovenId: string | null
+  ovenLabel: string | null
   thinkingLevel: string | null
   referencesJson: string | null
   projectReferencesJson: string | null
@@ -311,6 +316,7 @@ export function encodeAgentMessage(
   const accountId = message.accountId ?? null
   const accountLabel = message.accountLabel ?? null
   const ovenId = message.ovenId ?? null
+  const ovenLabel = message.ovenLabel ?? null
   const thinkingLevel = message.thinkingLevel ?? null
   const referencesJson = message.references ? JSON.stringify(message.references) : null
   const projectReferencesJson = message.projectReferences
@@ -347,6 +353,7 @@ export function encodeAgentMessage(
     account_id: accountId,
     account_label: accountLabel,
     oven_id: ovenId,
+    oven_label: ovenLabel,
     thinking_level: thinkingLevel,
     references_json: referencesJson,
     project_references_json: projectReferencesJson,
@@ -382,6 +389,7 @@ export function encodeAgentMessage(
     accountId,
     accountLabel,
     ovenId,
+    ovenLabel,
     thinkingLevel,
     referencesJson,
     projectReferencesJson,
@@ -411,12 +419,12 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
     sql: `INSERT INTO agent_messages(
       id, thread_id, session_id, role, origin, visibility, parts, search_text, content_hash,
       transport_parts, transport_origin,
-      model_id, provider_id, harness_id, account_id, account_label, oven_id, thinking_level,
+      model_id, provider_id, harness_id, account_id, account_label, oven_id, oven_label, thinking_level,
       references_json, project_references_json,
       created_at, completed_at, cost,
       tokens_json, normalized_usage_json, tokens_total, rate_limits_json, usage_credits_json,
       context_window, context_used, context_estimated, generation_ms, error, structured_output
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       role = excluded.role,
       origin = excluded.origin,
@@ -432,6 +440,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       account_id = excluded.account_id,
       account_label = excluded.account_label,
       oven_id = excluded.oven_id,
+      oven_label = excluded.oven_label,
       thinking_level = excluded.thinking_level,
       references_json = excluded.references_json,
       project_references_json = excluded.project_references_json,
@@ -467,6 +476,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       encoded.accountId,
       encoded.accountLabel,
       encoded.ovenId,
+      encoded.ovenLabel,
       encoded.thinkingLevel,
       encoded.referencesJson,
       encoded.projectReferencesJson,
@@ -963,7 +973,7 @@ function afterCursor(after: ThreadMessageCursor | undefined): string {
  */
 const MESSAGE_READ_COLUMNS = `id, thread_id, session_id, role, origin, visibility, parts,
   content_hash, transport_parts, transport_origin, model_id, provider_id, harness_id,
-  account_id, account_label, oven_id,
+  account_id, account_label, oven_id, oven_label,
   thinking_level, references_json, project_references_json, created_at, completed_at, cost,
   tokens_json, normalized_usage_json, rate_limits_json, usage_credits_json, context_window, context_used,
   context_estimated, generation_ms, error, structured_output`

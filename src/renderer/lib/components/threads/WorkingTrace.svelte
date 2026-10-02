@@ -65,6 +65,7 @@
     harnessId?: string | null
     harnessName?: string | null
     accountLabel?: string | null
+    ovenLabel?: string | null
     isFast?: boolean
     projectId?: string
     threadId?: string
@@ -96,6 +97,7 @@
     harnessId,
     harnessName,
     accountLabel,
+    ovenLabel,
     isFast = false,
     projectId,
     threadId,
@@ -451,6 +453,7 @@
           {harnessId}
           {harnessName}
           {accountLabel}
+          {ovenLabel}
         />
       {/if}
     </div>

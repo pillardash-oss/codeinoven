@@ -7,6 +7,8 @@
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+  import type { OvenState } from '$shared/ovens'
+  import { LOCAL_OVEN_ID } from '$shared/ovens'
 
   import {
     AudioLines,
@@ -4210,6 +4212,15 @@
         })
         .catch(() => {
           if (alive) harnessAccounts = []
+        })
+    })
+    scheduleDeferredWork('threadView:ovens', () => {
+      void invoke('oven:state')
+        .then((state) => {
+          if (alive) ovensForAttribution = state
+        })
+        .catch(() => {
+          if (alive) ovensForAttribution = null
         })
     })
     if (!controller) {
@@ -10945,9 +10956,19 @@
           (account) =>
             account.id === selection.accountId && account.providerId === selection.providerId
         )?.label ?? null,
+      ovenLabel: ovenLabelForId(settings.ovenId),
       isFast: fastVariantForModelId(modelId) !== null
     }
   })
+
+  let ovensForAttribution = $state.raw<OvenState | null>(null)
+  function ovenLabelForId(id?: string | null): string {
+    const ovenId = id ?? LOCAL_OVEN_ID
+    return (
+      ovensForAttribution?.ovens.find((oven) => oven.id === ovenId)?.name ??
+      (ovenId === LOCAL_OVEN_ID ? 'Local' : 'Oven')
+    )
+  }
 
   function openSubagent(part: SubagentPart): void {
     contextSidebarState.openSubagent(thread.projectId, thread.id, part.id, part.activity)
@@ -11970,6 +11991,9 @@
                         accountLabel={useLiveAttribution
                           ? currentWorkingTraceAttribution.accountLabel
                           : msg.accountLabel}
+                        ovenLabel={useLiveAttribution
+                          ? currentWorkingTraceAttribution.ovenLabel
+                          : (msg.ovenLabel ?? ovenLabelForId(msg.ovenId))}
                         isFast={useLiveAttribution
                           ? currentWorkingTraceAttribution.isFast
                           : fastVariant !== null}
@@ -12202,6 +12226,13 @@
                                   {msg.accountLabel}
                                 </span>
                               {/if}
+                              <span
+                                class="flex items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+                                title={`Oven: ${msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}`}
+                                aria-label={`Oven: ${msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}`}
+                              >
+                                {msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}
+                              </span>
                               <span class="text-[0.625rem] text-dimmed"
                                 >· {formatTime(msg.completedAt ?? msg.createdAt)}</span
                               >
@@ -12250,6 +12281,7 @@
               harnessId={currentWorkingTraceAttribution.harnessId}
               harnessName={currentWorkingTraceAttribution.harnessName}
               accountLabel={currentWorkingTraceAttribution.accountLabel}
+              ovenLabel={currentWorkingTraceAttribution.ovenLabel}
               isFast={currentWorkingTraceAttribution.isFast}
               initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
               initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}

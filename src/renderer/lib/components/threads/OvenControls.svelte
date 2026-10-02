@@ -60,13 +60,8 @@
     void invoke('oven:state')
       .then((result) => {
         ovens = result
-        if (
-          !settings.ovenId &&
-          !thread.sessionId &&
-          thread.status === 'created' &&
-          result.defaultOvenId !== LOCAL_OVEN_ID
-        ) {
-          onSettingsChange({ ...settings, ovenId: result.defaultOvenId, ovenPath: undefined })
+        if (!settings.ovenId && !thread.sessionId && thread.status === 'created') {
+          onSettingsChange({ ...settings, ovenId: LOCAL_OVEN_ID, ovenPath: undefined })
         }
       })
       .catch(

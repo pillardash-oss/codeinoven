@@ -1,6 +1,7 @@
 import { sanitizeThreadSettings, type Thread, type ThreadSettings } from '$shared/types'
 import { APP_SLUG } from '$shared/brand'
 import { DEFAULT_HARNESS } from '$shared/harness-default'
+import { LOCAL_OVEN_ID } from '$shared/ovens'
 
 const THREAD_SETTINGS_KEY = `${APP_SLUG}.threadSettings.lastUsed`
 const CHAT_SETTINGS_KEY = `${APP_SLUG}.chatSettings.lastUsed`
@@ -8,6 +9,7 @@ const ASSISTANT_SETTINGS_KEY = `${APP_SLUG}.assistantSettings.lastUsed`
 
 /** Fallback settings used before anything has been persisted. */
 export const DEFAULT_SETTINGS: ThreadSettings = {
+  ovenId: LOCAL_OVEN_ID,
   harnessId: DEFAULT_HARNESS,
   accountId: `${DEFAULT_HARNESS}.default`,
   providerId: '',
