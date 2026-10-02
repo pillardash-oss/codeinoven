@@ -45,15 +45,20 @@ export class AddProviderModalOAuthController {
   promptAnswer = $state('')
   starting = $state(false)
   /**
-   * Whether the modal has stood down so the app-wide browser can hold the view.
+   * Whether the panel has stood down so the app-wide browser can hold the view.
    *
    * The authorization page is a native `WebContentsView` the compositor paints
-   * above every DOM node, and a canonical modal's scrim covers the whole window,
-   * so a modal left open during sign-in hides the one page the user has to act
-   * on. Docking hides this modal's shell without unmounting it, which is what
-   * keeps the flow alive: the controller and its event subscription live in the
-   * component, not in the shell, so every later device code, prompt and result
-   * still arrives while the browser is in front.
+   * above every DOM node, so a panel left open during sign-in covers the one page
+   * the user has to act on, and a modal scrim would cover all of it. Docking hides
+   * this panel's shell without unmounting it, which is what keeps the flow alive:
+   * the controller and its event subscription live in the component, not in the
+   * shell, so every later device code, prompt and result still arrives while the
+   * browser is in front.
+   *
+   * Set by the flow here (`auth_url` docks before the page is even asked for,
+   * `prompt` gives the panel back because the flow is blocked on the user) and by
+   * the host, which also docks on the app switching to the browser, since routes
+   * to that view exist that emit no event at all.
    */
   docked = $state(false)
 

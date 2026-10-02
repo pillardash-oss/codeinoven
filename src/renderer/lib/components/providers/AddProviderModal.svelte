@@ -5,6 +5,7 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { findFirstTextField, findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { APP_SLUG } from '$shared/brand'
   import type {
@@ -162,6 +163,30 @@
    */
   const signingIn = $derived(oauth.loginId !== null)
 
+  /**
+   * Docking follows the view, not only the `auth_url` event.
+   *
+   * The event is the earliest signal and still has to dock first, but it is not
+   * the only route to the browser. A device-code link reveals the browser without
+   * one, and a harness that prints its own authorization URL asks the user to go
+   * and open it. Whenever the app actually switches to the browser mid sign-in
+   * the panel has to get out of the way, or it sits over the one page the user
+   * has to act on. A settled flow is exempt: `reset()` clears the login id, so a
+   * panel that finished while the user browsed does not follow them out.
+   *
+   * The transition guard is what stops this fighting the user. Restoring the panel
+   * from the dock chip does not change the view, so a panel restored to read the
+   * device code stays restored until the app leaves the browser and comes back.
+   */
+  let previousView = rendererRecovery.activeView
+  $effect(() => {
+    const view = rendererRecovery.activeView
+    const enteredBrowser = view !== previousView && view === 'browser'
+    previousView = view
+    if (!enteredBrowser || oauth.loginId === null) return
+    oauth.docked = true
+  })
+
   /** Label for the dock chip's restore control, naming what it brings back. */
   const dockRestoreLabel = $derived(
     signingIn
@@ -178,6 +203,22 @@
     signingIn
       ? `Signing in to ${selectedProvider?.name ?? 'this provider'}`
       : `Add provider for ${harness.name}`
+  )
+
+  /**
+   * What the chip says while a sign-in is running.
+   *
+   * A device-code flow is what makes the chip carry its weight: docking hides the
+   * panel body where the code is printed, and that code is the one thing left to
+   * type into the page the browser just opened. So the chip repeats it, rather
+   * than leaving the user to restore the panel to read a string they are already
+   * expected to copy. The verification URL is not repeated: the browser is
+   * already sitting on it.
+   */
+  const dockStatus = $derived(
+    oauth.deviceCode
+      ? `Enter ${oauth.deviceCode.userCode} to finish signing in.`
+      : oauth.status || 'Finish signing in in the browser.'
   )
 
   /** What the dock chip's dismiss control does: it ends the attempt, like the panel's own close. */
@@ -579,7 +620,7 @@
                 class="max-w-56 truncate text-[0.625rem] leading-tight text-muted"
                 aria-live="polite"
               >
-                {oauth.status || 'Finish signing in in the browser.'}
+                {dockStatus}
               </span>
             {/if}
           </span>
