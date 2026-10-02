@@ -152,40 +152,6 @@
       <SquarePen size={14} />
     </button>
   {/if}
-  {#if activeNote?.loaded && activeIsEditing && canUndo}
-    <span class="flex h-7 w-7 shrink-0 items-center justify-center">
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Undo"
-        aria-label="Undo sticky note edit"
-        onclick={() => historyController?.undo()}
-        in:fade={{ duration: 120 }}
-        out:fade={{ duration: 120 }}
-      >
-        <Undo2 size={14} />
-      </button>
-    </span>
-  {:else}
-    <span class="h-7 w-7 shrink-0" aria-hidden="true"></span>
-  {/if}
-  {#if activeNote?.loaded && activeIsEditing && canRedo}
-    <span class="flex h-7 w-7 shrink-0 items-center justify-center">
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Redo"
-        aria-label="Redo sticky note edit"
-        onclick={() => historyController?.redo()}
-        in:fade={{ duration: 120 }}
-        out:fade={{ duration: 120 }}
-      >
-        <Redo2 size={14} />
-      </button>
-    </span>
-  {:else}
-    <span class="h-7 w-7 shrink-0" aria-hidden="true"></span>
-  {/if}
 {/snippet}
 
 {#snippet noteBody(note: StickyNoteEntry)}
@@ -326,6 +292,32 @@
         </div>
       </div>
       <div class="flex shrink-0 items-center border-l border-border px-1">
+        {#if activeNote?.loaded && activeIsEditing && canUndo}
+          <button
+            type="button"
+            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            title="Undo"
+            aria-label="Undo sticky note edit"
+            onclick={() => historyController?.undo()}
+            in:fade={{ duration: 120 }}
+            out:fade={{ duration: 120 }}
+          >
+            <Undo2 size={14} />
+          </button>
+        {/if}
+        {#if activeNote?.loaded && activeIsEditing && canRedo}
+          <button
+            type="button"
+            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            title="Redo"
+            aria-label="Redo sticky note edit"
+            onclick={() => historyController?.redo()}
+            in:fade={{ duration: 120 }}
+            out:fade={{ duration: 120 }}
+          >
+            <Redo2 size={14} />
+          </button>
+        {/if}
         <VoiceInputButton
           targetId={speechTargetId}
           getTarget={getSpeechTarget}
