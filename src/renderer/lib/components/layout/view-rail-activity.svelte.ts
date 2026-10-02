@@ -12,7 +12,6 @@ import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 import {
   coordinatorHasActiveDelegates,
-  coordinatorHasUnreadWorkers,
   isOrchestrationChildThread,
   threadTracksReadStatus
 } from '$shared/types'
@@ -187,12 +186,22 @@ export class ViewRailActivity {
     }
     const unreadById = new SvelteSet(
       threads
-        .filter((thread) => !thread.archived && threadTracksReadStatus(thread) && !thread.read)
+        .filter(
+          (thread) =>
+            !thread.archived &&
+            thread.status === 'completed' &&
+            threadTracksReadStatus(thread) &&
+            !thread.read
+        )
         .map((thread) => thread.id)
     )
     for (const thread of threads) {
       if (thread.archived || isOrchestrationChildThread(thread)) continue
-      const hasUnread = unreadById.has(thread.id) || coordinatorHasUnreadWorkers(thread, threads)
+      const hasUnread =
+        unreadById.has(thread.id) ||
+        threads.some(
+          (candidate) => candidate.coordinatorThreadId === thread.id && unreadById.has(candidate.id)
+        )
       if (hasUnread) unread[contentThreadFamily(thread)] += 1
     }
     return unread

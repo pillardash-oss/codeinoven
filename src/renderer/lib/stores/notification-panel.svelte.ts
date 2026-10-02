@@ -169,27 +169,23 @@ class NotificationPanelState {
     )
   }
 
-  /** Unread notifications grouped for the primary view rail. */
+  /** Completed-but-unread notifications grouped for the primary view rail.
+   *  Attention, errors, specs, and missed runs belong to their activity/status
+   *  indicators, not the unread-completion dot. */
   unreadRailSummary(family: 'projects' | 'chats' | 'assistant'): UnreadRailSummary | null {
     const entries = this._notifications.filter((notification) => {
+      if (notification.kind !== 'completed' && notification.kind !== 'chat-completed') {
+        return false
+      }
       if (family === 'projects')
         return !this.isChat(notification) && !this.isAssistant(notification)
       if (family === 'chats') return this.isChat(notification)
       return this.isAssistant(notification)
     })
-    const hasUnreadAssistantMisses =
-      family === 'assistant' && assistantRoutines.missedRuns.length > 0
-    const count =
-      entries.length + (hasUnreadAssistantMisses ? assistantRoutines.missedRuns.length : 0)
+    const count = entries.length
     if (count === 0) return null
 
-    const priority: InAppNotification['kind'][] = [
-      'error',
-      'attention',
-      'spec',
-      'chat-completed',
-      'completed'
-    ]
+    const priority: InAppNotification['kind'][] = ['chat-completed', 'completed']
     const colors = priority.flatMap((kind) => {
       if (!entries.some((entry) => entry.kind === kind)) return []
       if (family !== 'assistant') return [NOTIFICATION_KIND_COLORS[kind]]
@@ -197,9 +193,6 @@ class NotificationPanelState {
         entries.find((entry) => entry.kind === kind)?.projectColor ?? this.assistantColor
       return color ? [color] : []
     })
-    if (hasUnreadAssistantMisses && !colors.includes('var(--color-missed)')) {
-      colors.push('var(--color-missed)')
-    }
     const familyLabel = family === 'projects' ? 'project' : family === 'chats' ? 'chat' : 'routine'
     return {
       count,
