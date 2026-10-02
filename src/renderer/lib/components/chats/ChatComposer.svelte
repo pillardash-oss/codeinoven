@@ -1863,49 +1863,55 @@
       />
     {/if}
 
-    <ChatComposerPermissionPicker
-      {readOnlyMode}
-      {hidePermissionSelector}
-      fileSystemMode={resolved.fileSystemMode}
-      permissionLevel={resolved.permissionLevel}
-      {working}
-      menuOpen={permissionMenuOpen}
-      onToggle={() => {
-        permissionMenuOpen = !permissionMenuOpen
-        plusMenuOpen = false
-        modelMenuOpen = false
-        thinkingMenuOpen = false
-      }}
-      onClose={closeAllMenus}
-      onSelect={selectPermission}
-    />
+    <div
+      class={`flex min-w-0 shrink items-center ${
+        readOnlyMode || !hidePermissionSelector || resolved.fileSystemMode === true ? 'gap-2' : ''
+      }`}
+    >
+      <ChatComposerPermissionPicker
+        {readOnlyMode}
+        {hidePermissionSelector}
+        fileSystemMode={resolved.fileSystemMode}
+        permissionLevel={resolved.permissionLevel}
+        {working}
+        menuOpen={permissionMenuOpen}
+        onToggle={() => {
+          permissionMenuOpen = !permissionMenuOpen
+          plusMenuOpen = false
+          modelMenuOpen = false
+          thinkingMenuOpen = false
+        }}
+        onClose={closeAllMenus}
+        onSelect={selectPermission}
+      />
 
-    <!-- Shared model selector   model + thinking level in one control -->
-    <ModelPicker
-      {providers}
-      {projectId}
-      {harnessId}
-      providerId={resolved.providerId}
-      modelId={resolved.modelId}
-      accountId={resolved.accountId}
-      {favoriteModels}
-      {recentModels}
-      {onRemoveRecent}
-      bind:open={modelMenuOpen}
-      bind:thinkingMenuOpen
-      bind:accountMenuOpen
-      onAccountPickerVisibleChange={(visible) => {
-        accountPickerVisible = visible
-      }}
-      onSelect={selectModel}
-      onSelectAccount={onAccountSelected}
-      {onToggleFavorite}
-      {onReorderFavorite}
-      fast={inferenceMode === 'fast'}
-      thinkingLevel={resolved.thinkingLevel}
-      {thinkingPresets}
-      onSelectThinking={(level) => selectThinking({ id: level, label: level })}
-    />
+      <!-- Shared model selector   model + thinking level in one control -->
+      <ModelPicker
+        {providers}
+        {projectId}
+        {harnessId}
+        providerId={resolved.providerId}
+        modelId={resolved.modelId}
+        accountId={resolved.accountId}
+        {favoriteModels}
+        {recentModels}
+        {onRemoveRecent}
+        bind:open={modelMenuOpen}
+        bind:thinkingMenuOpen
+        bind:accountMenuOpen
+        onAccountPickerVisibleChange={(visible) => {
+          accountPickerVisible = visible
+        }}
+        onSelect={selectModel}
+        onSelectAccount={onAccountSelected}
+        {onToggleFavorite}
+        {onReorderFavorite}
+        fast={inferenceMode === 'fast'}
+        thinkingLevel={resolved.thinkingLevel}
+        {thinkingPresets}
+        onSelectThinking={(level) => selectThinking({ id: level, label: level })}
+      />
+    </div>
 
     {#if fastVariant}
       <ChatComposerInferencePicker
