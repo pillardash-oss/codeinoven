@@ -1,6 +1,6 @@
 <script lang="ts">
   import { CheckCircle2, KeyRound, Loader2, RefreshCw, Search, Unplug, X } from '@lucide/svelte'
-  import { openInGlobalCioBrowserWhenReady } from '$lib/open-in-browser'
+
   import type {
     HarnessAccount,
     OfferedProvider,
@@ -378,10 +378,7 @@
                       type="button"
                       title="Open {oauth.deviceCode.verificationUri}"
                       data-external-url={oauth.deviceCode.verificationUri}
-                      onclick={() =>
-                        void openInGlobalCioBrowserWhenReady(
-                          oauth.deviceCode?.verificationUri ?? ''
-                        )}
+                      onclick={() => void oauth.openDeviceCodePage()}
                     >
                       {oauth.deviceCode.verificationUri}
                     </button>

@@ -184,6 +184,11 @@
     const enteredBrowser = view !== previousView && view === 'browser'
     previousView = view
     if (!enteredBrowser || oauth.loginId === null) return
+    // Only when the app browser is where the sign-in actually is. A user who
+    // turned the link preference off has the page in their real browser, so the
+    // app browser taking the view is nothing to clear the way for, and the panel
+    // holds the flow's status instead.
+    if (!oauth.authPageInAppBrowser) return
     oauth.docked = true
   })
 
