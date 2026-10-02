@@ -14,6 +14,7 @@ import {
   ASSISTANT_SPACE_ID,
   GLOBAL_BROWSER_PROJECT_ID,
   INBOX_PROJECT_ID,
+  isAssistantRunThread,
   isAssistantSetupThread,
   isOrchestrationChildThread,
   type Thread,
@@ -894,19 +895,23 @@ export class NotificationService {
     return 'project'
   }
 
-  /**
-   * The routine name a completed assistant run reports for, or an empty string
-   * when the thread is not a routine's run/task (a routine-less task or the
-   * authoring thread). Read through the worker so naming a notification never
-   * holds the main thread on a synchronous SQLite read.
-   */
-  private async assistantRoutineName(thread: Thread): Promise<string> {
-    if (!thread.routineId || isAssistantSetupThread(thread)) return ''
+  /** Resolve the user-facing assistant task or routine title without holding
+   *  the main thread on synchronous SQLite reads. */
+  private async assistantCompletionName(thread: Thread): Promise<string> {
+    if (isAssistantSetupThread(thread)) return ''
     try {
-      return (await this.routineRepo.getViaWorker(thread.routineId))?.name.trim() ?? ''
+      if (isAssistantRunThread(thread) && thread.assistantTaskId) {
+        const task = await this.threadRepo.getViaWorker(thread.assistantTaskId)
+        if (task && !isAssistantSetupThread(task) && task.title.trim()) return task.title.trim()
+      }
+      if (thread.routineId) {
+        const routineName = (await this.routineRepo.getViaWorker(thread.routineId))?.name.trim()
+        if (routineName) return routineName
+      }
+      return thread.title.trim()
     } catch (error) {
-      Logger.dev('Notification routine name resolution failed:', error)
-      return ''
+      Logger.dev('Notification assistant task name resolution failed:', error)
+      return thread.title.trim()
     }
   }
 
@@ -920,16 +925,13 @@ export class NotificationService {
       threadStatusPolicy(thread.status).notificationKind ?? 'error'
     const isAssistant = source === 'assistant'
     const displayName = source === 'chat' ? 'Chat' : isAssistant ? 'Assistant' : projectName
-    // A completed routine run produces a written report, so its notification
-    // names that report and whose routine it is instead of a bare "Assistant
-    // Done". The routine's name is the run's identity the user actually
-    // recognises, so it becomes the body, right under the title.
-    const routineName =
-      isAssistant && kind === 'completed' ? await this.assistantRoutineName(thread) : ''
+    // Name assistant completions after the task or routine the user recognizes.
+    const completionName =
+      isAssistant && kind === 'completed' ? await this.assistantCompletionName(thread) : ''
     const title =
       kind === 'completed'
-        ? routineName
-          ? 'Routine report ready'
+        ? completionName
+          ? completionName
           : `${displayName} Done`
         : kind === 'attention'
           ? `${displayName} needs attention`
@@ -953,8 +955,8 @@ export class NotificationService {
     // the project it "finished in" would read as a project thread.
     const body =
       kind === 'completed'
-        ? routineName
-          ? routineName
+        ? completionName
+          ? `${completionName} finished.`
           : isAssistant
             ? `${thread.title} finished.`
             : `${thread.title} finished in ${projectName}.`
