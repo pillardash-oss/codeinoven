@@ -236,7 +236,15 @@
 
   /** Whether the right rail is on screen, for a tool of the browser's or the app's
    *  own notifications panel. */
-  const railShown = $derived(globalBrowser.contextSidebarShown || globalBrowser.notificationsShown)
+  const railShown = $derived(
+    globalBrowser.contextSidebarShown ||
+      globalBrowser.notificationsShown ||
+      globalBrowser.stickyNotesShown
+  )
+
+  $effect(() => {
+    if (globalBrowser.stickyNotesShown) globalBrowser.hideContextSidebarForAppPanel()
+  })
 
   /**
    * True while the user drags the rail's edge, so the track skips its width

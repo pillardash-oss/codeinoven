@@ -15,7 +15,16 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
-  import { Bell, ChevronLeft, ChevronRight, FileText, Globe, Loader2, Search } from '@lucide/svelte'
+  import {
+    Bell,
+    ChevronLeft,
+    ChevronRight,
+    FileText,
+    Globe,
+    Loader2,
+    NotebookPen,
+    Search
+  } from '@lucide/svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
@@ -76,6 +85,17 @@
   let notificationsPanelActive = $derived(
     contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'
   )
+  let stickyNotesPanelActive = $derived(
+    contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'sticky-notes'
+  )
+
+  async function toggleStickyNotes(): Promise<void> {
+    if (onBrowser) {
+      const { globalBrowser } = await import('$lib/stores/global-browser.svelte')
+      globalBrowser.hideContextSidebarForAppPanel()
+    }
+    contextSidebarState.toggleStickyNotes()
+  }
 
   /** The assistant dot's colour is the assistant space's own accent colour,
    *  carried on its notifications, so an assistant run never reads as a
@@ -367,7 +387,19 @@
       {/await}
     {/if}
 
-    <!-- Notification bell   available in all views -->
+    <!-- Sticky notes and notifications stay available in every view. -->
+    <button
+      class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {stickyNotesPanelActive
+        ? 'bg-elevated text-foreground'
+        : ''}"
+      aria-label={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
+      aria-pressed={stickyNotesPanelActive}
+      title={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
+      onclick={() => void toggleStickyNotes()}
+    >
+      <NotebookPen size={16} />
+    </button>
+
     <button
       class="relative flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {notificationsPanelActive
         ? 'bg-elevated text-foreground'

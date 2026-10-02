@@ -948,6 +948,22 @@ CREATE TABLE IF NOT EXISTS browser_tab_notes (
   updated_at INTEGER NOT NULL
 );`
 
+/** User-created notes available across every app view. */
+export const STICKY_NOTES_SQL = `
+-- ─── Sticky notes (user-only scratch space) ─────────────────────────────
+CREATE TABLE IF NOT EXISTS sticky_notes (
+  id          TEXT PRIMARY KEY NOT NULL,
+  title       TEXT NOT NULL,
+  icon_type   TEXT,
+  custom_svg  TEXT,
+  color       TEXT NOT NULL,
+  body        TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sticky_notes_updated ON sticky_notes(updated_at DESC);`
+
 /**
  * Assistant routines: the top-level grouping for assistant tasks. A routine
  * owns the agent-authored how-to, a default schedule, and its connection picks;
@@ -1047,6 +1063,7 @@ export const DATABASE_SCHEMA_SQL = [
   HARNESS_USAGE_SQL,
   THREAD_NOTES_SQL,
   BROWSER_TAB_NOTES_SQL,
+  STICKY_NOTES_SQL,
   THREAD_DESIGNS_SQL,
   THREAD_EXPERTS_SQL,
   ROUTINES_SQL

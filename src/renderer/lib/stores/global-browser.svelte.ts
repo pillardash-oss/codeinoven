@@ -531,6 +531,11 @@ export class GlobalBrowserState {
     return contextSidebarState.sidebarActiveTab?.kind === 'notifications'
   }
 
+  /** Whether the app-wide sticky notes own this view's right rail. */
+  get stickyNotesShown(): boolean {
+    return contextSidebarState.sidebarActiveTab?.kind === 'sticky-notes'
+  }
+
   /**
    * Whether the right rail is on screen for one of the browser's own tools.
    *
@@ -733,6 +738,11 @@ export class GlobalBrowserState {
     this.dockActiveTabNote()
   }
 
+  /** Hide browser-owned rail tools before the app-wide sticky note panel opens. */
+  hideContextSidebarForAppPanel(): void {
+    this.contextSidebarVisible = false
+  }
+
   /** Reveal the rail on the browser's downloads. Downloads are the one browser
    *  tool that needs no tab, so this is also how the rail stays present with the
    *  strip empty. */
@@ -931,6 +941,10 @@ export class GlobalBrowserState {
    * screen.
    */
   private dismissNotifications(): void {
+    if (contextSidebarState.sidebarActiveTab?.kind === 'sticky-notes') {
+      contextSidebarState.hide()
+      return
+    }
     if (this.notificationsShown) contextSidebarState.toggleNotifications()
   }
 

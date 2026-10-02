@@ -175,6 +175,13 @@ export interface NotificationContextTab {
   title: string
 }
 
+/** Global sticky note panel, available independently of the selected thread. */
+export interface StickyNotesContextTab {
+  id: string
+  kind: 'sticky-notes'
+  title: string
+}
+
 /**
  * The rail panel that lists the gates the app resolved without the user.
 /**
@@ -385,6 +392,7 @@ export type ContextSidebarTab =
   | CloudDeploymentContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
+  | StickyNotesContextTab
   | AttentionContextTab
   | BrowserDownloadsContextTab
   | BrowserHistoryContextTab
@@ -424,6 +432,11 @@ export const NOTIFICATIONS_TAB: NotificationContextTab = {
   id: 'notifications',
   kind: 'notifications',
   title: 'Notifications'
+}
+export const STICKY_NOTES_TAB: StickyNotesContextTab = {
+  id: 'sticky-notes',
+  kind: 'sticky-notes',
+  title: 'Sticky notes'
 }
 export const ATTENTION_TAB_ID = 'attention'
 

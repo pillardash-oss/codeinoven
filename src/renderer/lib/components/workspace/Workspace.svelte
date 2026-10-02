@@ -670,6 +670,7 @@
     'actions',
     'browser',
     'thread-note',
+    'sticky-notes',
     'temporary-chat',
     'attention'
   ])
@@ -4318,6 +4319,7 @@
       {#if sidebarVisible || sidebarHostsFullscreenEditor}
         {#snippet contextSidebarContent()}
           <WorkspaceContextPanelContent
+            {active}
             {gitPanelProjectId}
             {gitPanelScopeBucketId}
             {terminalFullscreenTabId}

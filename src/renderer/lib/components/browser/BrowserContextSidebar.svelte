@@ -12,7 +12,8 @@
     type BrowserDownloadsContextTab,
     type BrowserExtensionsContextTab,
     type BrowserHistoryContextTab,
-    type ContextSidebarTab
+    type ContextSidebarTab,
+    STICKY_NOTES_TAB
   } from '$lib/stores/context-sidebar.svelte'
   import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
   import { browserExtensionSidePanels } from '$lib/stores/browser-extension-side-panels.svelte'
@@ -168,6 +169,9 @@
       ? contextSidebarState.sidebarActiveTab
       : null
   )
+  const stickyNotesTab = $derived(
+    contextSidebarState.sidebarActiveTab?.kind === 'sticky-notes' ? STICKY_NOTES_TAB : null
+  )
 
   const tabs = $derived([
     ...popupTabs,
@@ -179,10 +183,12 @@
     downloadsTab,
     ...(noteTab ? [noteTab] : []),
     ...(agentTab ? [agentTab] : []),
-    ...(notificationsTab ? [notificationsTab] : [])
+    ...(notificationsTab ? [notificationsTab] : []),
+    ...(stickyNotesTab ? [stickyNotesTab] : [])
   ] satisfies ContextSidebarTab[])
   const activeTabId = $derived(
     notificationsTab?.id ??
+      stickyNotesTab?.id ??
       (globalBrowser.agentSidebarShown
         ? (agentTab?.id ?? null)
         : globalBrowser.popupsSidebarShown
@@ -213,6 +219,10 @@
    *  conversation (closing the browser tab does). */
   function selectTool(tabId: string): void {
     if (notificationsTab && tabId === notificationsTab.id) return
+    if (stickyNotesTab && tabId === stickyNotesTab.id) {
+      contextSidebarState.showStickyNotes()
+      return
+    }
     if (isPopupTab(tabId)) {
       browserPopupWindows.select(tabId)
       globalBrowser.showPopupsSidebar()
@@ -343,6 +353,10 @@
   {#if notificationsTab}
     {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
       <NotificationPanel />
+    {/await}
+  {:else if stickyNotesTab}
+    {#await import('$lib/components/notes/StickyNotesPanel.svelte') then { default: StickyNotesPanel }}
+      <StickyNotesPanel />
     {/await}
   {:else if globalBrowser.popupsSidebarShown}
     {#await import('./BrowserPopupWindowPanel.svelte') then { default: BrowserPopupWindowPanel }}

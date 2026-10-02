@@ -21,6 +21,7 @@
     MessageCircleDashed,
     MessagesCircle,
     Network,
+    NotebookPen,
     PanelBottom,
     PanelRight,
     Plus,
@@ -155,6 +156,7 @@
     'extensions',
     'git',
     'actions',
+    'sticky-notes',
     'thread-note',
     'coordinator',
     'assistant-how-to'
@@ -390,6 +392,8 @@
       <MessagesCircle size={12} class="shrink-0" />
     {:else if tab.kind === 'notifications'}
       <Bell size={12} class="shrink-0" />
+    {:else if tab.kind === 'sticky-notes'}
+      <NotebookPen size={12} class="shrink-0" />
     {:else if tab.kind === 'attention'}
       <TriangleAlert size={12} class="shrink-0 text-warning" />
     {:else if tab.kind === 'memory'}
