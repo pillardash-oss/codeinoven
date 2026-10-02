@@ -1,9 +1,9 @@
 <script lang="ts">
   import {
-    ArrowDown,
     ArrowUp,
     Boxes,
     ChevronRight,
+    Copy,
     FolderInput,
     FolderMinus,
     FolderPlus,
@@ -138,10 +138,9 @@
     onOpenGroupEditor(id)
   }
 
-  /** Open a blank tab beside this one, inheriting its group and box, and take the
-   *  caret: the address field is what a new tab is for. */
-  function newSibling(position: 'before' | 'after'): void {
-    globalBrowser.createTab('', tab.groupId, tab.boxId, { tabId: tab.id, position })
+  /** Open a blank tab before this one, inheriting its group and box. */
+  function newSibling(): void {
+    globalBrowser.createTab('', tab.groupId, tab.boxId, { tabId: tab.id, position: 'before' })
     globalBrowser.openAddressSpotlight()
   }
 
@@ -347,7 +346,7 @@
       avoidCollisions
       collisionPadding={12}
       updatePositionStrategy="always"
-      class="z-50 max-h-[calc(100vh-1.5rem)] min-w-56 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+      class="z-50 max-h-[calc(100dvh-1.5rem)] min-w-56 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
     >
       <p
         class="truncate px-2.5 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
@@ -368,13 +367,13 @@
         {/if}
       </ContextMenu.Item>
       <ContextMenu.Separator class="my-1 h-px bg-border" />
-      <ContextMenu.Item class={itemClass} onSelect={() => newSibling('before')}>
+      <ContextMenu.Item class={itemClass} onSelect={newSibling}>
         <ArrowUp size={13} class="shrink-0 text-muted" />
         New tab before this tab
       </ContextMenu.Item>
-      <ContextMenu.Item class={itemClass} onSelect={() => newSibling('after')}>
-        <ArrowDown size={13} class="shrink-0 text-muted" />
-        New tab after this tab
+      <ContextMenu.Item class={itemClass} onSelect={() => globalBrowser.duplicateTab(tab.id)}>
+        <Copy size={13} class="shrink-0 text-muted" />
+        Duplicate tab
       </ContextMenu.Item>
       <BrowserTabPlacementItems onCreate={newPlaced} />
       <ContextMenu.Separator class="my-1 h-px bg-border" />
@@ -422,7 +421,7 @@
               avoidCollisions
               collisionPadding={12}
               updatePositionStrategy="always"
-              class="z-50 max-h-[calc(100vh-1.5rem)] min-w-44 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+              class="z-50 max-h-[calc(100dvh-1.5rem)] min-w-44 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
             >
               {#if tab.boxId}
                 <ContextMenu.Item class={itemClass} onSelect={() => (reopenTarget = null)}>

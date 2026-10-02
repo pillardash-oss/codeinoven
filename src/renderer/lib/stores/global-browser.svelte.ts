@@ -1261,6 +1261,24 @@ export class GlobalBrowserState {
     return tab.id
   }
 
+  /** Duplicate a tab beside its source, carrying its address and appearance. */
+  duplicateTab(tabId: string): string | null {
+    const source = this.tabById(tabId)
+    if (!source) return null
+    const duplicateId = this.createTab(source.url, source.groupId, source.boxId, {
+      tabId,
+      position: 'after'
+    })
+    this.updateTab(duplicateId, {
+      customTitle: source.customTitle,
+      color: source.color,
+      iconType: source.iconType,
+      customSvg: source.customSvg,
+      imagePath: source.imagePath
+    })
+    return duplicateId
+  }
+
   /**
    * Reopen a tab in another box.
    *
