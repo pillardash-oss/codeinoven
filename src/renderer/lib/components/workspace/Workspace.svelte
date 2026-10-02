@@ -610,14 +610,45 @@
     return contextSidebarState.openNewTerminal(selectedThread.projectId, selectedThread.id)
   }
 
-  function openNewBrowser(): string | null {
-    // A new tab starts blank: no URL is loaded, the address bar stays empty,
-    // and the page only loads once the user types an address. It takes the
-    // keyboard with it, so the user can start typing without reaching for the
-    // address bar first.
-    const tabId = contextSidebarState.openBrowser('')
-    if (tabId) browserAddressFocus.request(tabId)
-    return tabId
+  /**
+   * Open one new browser tab and settle every surface that shows a browser tab
+   * on it: the sidebar strip, the full screen overlay while it is up, and the
+   * caret in the address bar.
+   *
+   * The strip's create button and the browser's own new-tab chord are the same
+   * request, so they share this. They could not always: the chord is claimed in
+   * the page's `before-input-event` and comes back as a panel shortcut, because
+   * a key pressed in a native page never arrives as a DOM event. Answering it
+   * separately is how it came to open a tab the full screen overlay never
+   * showed, and every step below would have to be written twice from then on.
+   *
+   * A new tab starts blank: no URL is loaded, the address bar stays empty, and
+   * the page only loads once the user types an address. It takes the keyboard
+   * with it, so the user can start typing without reaching for the address bar
+   * first.
+   *
+   * `sourceTab` names the container when the request came from a page: the tab
+   * the chord was pressed in owns the conversation the new tab joins, so a key
+   * can never open a tab in a strip the user is not looking at. A click, and a
+   * chord pressed in the sidebar's own chrome, name nothing and take the
+   * conversation on screen.
+   */
+  function openNewBrowserTab(sourceTab?: Extract<ContextSidebarTab, { kind: 'browser' }>): void {
+    const tabId = sourceTab
+      ? contextSidebarState.openBrowserForContext(
+          '',
+          sourceTab.projectId,
+          sourceTab.threadId,
+          undefined,
+          true
+        )
+      : contextSidebarState.openBrowser('')
+    if (!tabId) return
+    // The overlay records the tab it is showing separately from the strip, so it
+    // has to be told. It is up only while one of its tabs is on screen, which is
+    // exactly when this is the surface the user is looking at.
+    if (browserFullscreenTabId) browserFullscreenTabId = tabId
+    browserAddressFocus.request(tabId)
   }
 
   function openDebugger(): void {
@@ -2027,24 +2058,9 @@
         return
       }
       if (action !== 'new-tab') return
-      // A new tab opens in the container the focused tab belongs to, so a key
-      // pressed in a thread's browser can never open a tab the strip is not
-      // showing. It takes the keyboard like one opened from the strip does.
-      const newTabId = contextSidebarState.openBrowserForContext(
-        '',
-        tab.projectId,
-        tab.threadId,
-        undefined,
-        true
-      )
-      // The full screen surface records separately which tab it is showing, and
-      // revealing on the strip above moves only the sidebar's record. While that
-      // overlay is up it is the surface the chord was pressed on and the one the
-      // user is looking at, so it has to follow the new tab the way the strip's
-      // own create button does, or the tab opens beside the page on screen and
-      // the overlay keeps painting the old one.
-      if (browserFullscreenTabId) browserFullscreenTabId = newTabId
-      browserAddressFocus.request(newTabId)
+      // The tab that held the keyboard names the container, so a chord can never
+      // open a tab in a strip the user is not looking at.
+      openNewBrowserTab(tab)
     })
   })
 
@@ -4374,7 +4390,7 @@
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
             onNewTerminal={openNewTerminal}
-            onNewBrowser={openNewBrowser}
+            onNewBrowser={openNewBrowserTab}
           />
         </div>
       {/if}
@@ -4471,7 +4487,7 @@
     <WorkspaceFullscreenBrowser
       tabId={browserFullscreenTabId}
       onTabIdChange={(id) => (browserFullscreenTabId = id)}
-      onNewBrowser={openNewBrowser}
+      onNewBrowser={openNewBrowserTab}
       onCloseTab={(id) => closeFullscreenTab('browser', id)}
     />
   {/await}
