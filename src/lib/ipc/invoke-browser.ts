@@ -140,6 +140,8 @@ export const invokeBrowserContract = {
   'browser:hidePopupWindow': {} as Contract<[popupId: string], void>,
   /** Give a popup window's page the keyboard, after the user picks it in the rail. */
   'browser:focusPopupWindow': {} as Contract<[popupId: string], void>,
+  /** Hide an extension action popup while keeping its page alive for reuse. */
+  'browser:dismissPopupWindow': {} as Contract<[popupId: string], void>,
   /**
    * Close a popup window on the user's behalf: its page stops and it leaves the
    * rail. A page that closes itself needs nothing here, it is reported closed.

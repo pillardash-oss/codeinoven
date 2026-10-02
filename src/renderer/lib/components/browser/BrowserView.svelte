@@ -114,20 +114,15 @@
    * The rail is constant, exactly as it is in every other view: the window's
    * right edge always carries the context tools. Downloads, history, bookmarks,
    * boxes and extensions belong to the profile, so they stay reachable with the
-   * strip empty. The popup windows the page opened are offered only while the
-   * tab on screen actually holds one, because a window is what the tool shows;
-   * the tab's own note and agent conversation follow.
+   * strip empty. Popup windows are browser-wide and keep their originating box
+   * session; the tab's own note and agent conversation follow the selected tab.
    */
   const dockGroups = $derived.by((): ContextDockItem[][] => {
     const tab = activeTab
     const hasNote = tab ? threadNotesState.has(tab.id) : false
     const hasAgent = tab ? globalBrowser.agentChatFor(tab.id) !== null : false
-    /** The popup windows this tab's page opened. A popup that ends leaves the list
-     *  and takes the rail's panel with it when it was the last, so the tool is only
-     *  offered while there is a window for it to show. An extension's own popup is
-     *  one of these once it is up; before that it is opened from the extension's row
-     *  in the extensions panel or from a header pin, never from an empty tool. */
-    const popupWindows = tab ? browserPopupWindows.forTab(tab.id) : []
+    /** Every visible popup remains reachable when the selected tab or box changes. */
+    const popupWindows = browserPopupWindows.all()
     const browserTools: ContextDockItem[] = [
       {
         id: 'downloads',
@@ -338,7 +333,7 @@
     // at boot (see `browser-access.svelte`), so the view that needs it is the one
     // that asks. Idempotent, and it is also what publishes the store to the eager
     // surfaces that read it.
-    void loadBrowser()
+    void loadBrowser().then(() => browserPopupWindows.load(GLOBAL_BROWSER_PROJECT_ID))
     globalBrowser.markOpened()
     // The profile's downloads are read back here too: a download recovered from an
     // earlier run has to reach the rail's badge and list without the user having

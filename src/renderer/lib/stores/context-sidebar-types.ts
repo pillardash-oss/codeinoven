@@ -279,10 +279,6 @@ export interface BrowserPopupWindowContextTab {
   id: string
   kind: 'popup-window'
   title: string
-  /** Action popups hide in place when dismissed; page popups close. */
-  extensionPopup: boolean
-  /** The browser tab whose page opened it, for the label when a title is missing. */
-  openerTabId: string
   /** Live page favicon (data URL) from the browser, if the popup reported one. */
   favicon?: string
 }

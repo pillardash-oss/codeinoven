@@ -93,7 +93,7 @@
     if (!current) return
     const open = browserPopupWindows.extensionPopupFor(extensionId, current.id)
     if (open !== null) {
-      browserPopupWindows.close(open)
+      browserPopupWindows.dismiss(open)
       return
     }
     const popupId = await browserPopupWindows.openExtension(

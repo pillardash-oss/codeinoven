@@ -181,11 +181,9 @@
     return null
   }
 
-  /** Action popups park on dismissal; page-created popup windows close. */
+  /** Closing a popup rail tab destroys that popup page. */
   function closeLabel(tab: ContextSidebarTab): string {
-    return tab.kind === 'popup-window' && tab.extensionPopup
-      ? `Hide ${tab.title}`
-      : `Close ${tab.title}`
+    return `Close ${tab.title}`
   }
 
   /** Files are headerless like the other single-panel tools right up until a

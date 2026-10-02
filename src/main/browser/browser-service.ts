@@ -985,8 +985,11 @@ export class BrowserService {
     replaceHandler('browser:focusPopupWindow', (_event, rawPopupId) => {
       this.popupWindows.focus(validatePopupWindowId(rawPopupId))
     })
-    replaceHandler('browser:closePopupWindow', (_event, rawPopupId) => {
+    replaceHandler('browser:dismissPopupWindow', (_event, rawPopupId) => {
       this.popupWindows.dismiss(validatePopupWindowId(rawPopupId))
+    })
+    replaceHandler('browser:closePopupWindow', (_event, rawPopupId) => {
+      this.popupWindows.close(validatePopupWindowId(rawPopupId), 'the user closed its window')
     })
     replaceHandler('browser:getPopupWindows', (_event, rawProjectId) =>
       this.popupWindows.list(validateProjectId(rawProjectId))
@@ -3487,7 +3490,7 @@ export class BrowserService {
         void this.savePage(contents)
         return
       case 'closeTab':
-        this.popupWindows.dismiss(record.id)
+        this.popupWindows.close(record.id, 'the user closed its window')
         return
       case 'focusAddress':
       case 'newTab':

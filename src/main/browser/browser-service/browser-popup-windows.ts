@@ -343,7 +343,6 @@ export class BrowserPopupWindows {
     const record = this.popups.get(id)
     if (!record || record.extensionId === null || record.projectId !== owner.projectId) return false
     if (record.boxId !== owner.boxId) return false
-    if (!record.hidden && record.tabId !== owner.tabId) this.hide(id)
     record.tabId = owner.tabId
     record.threadId = owner.threadId
     record.hidden = false

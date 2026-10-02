@@ -42,7 +42,7 @@
    * every workspace thread docks its panels into, and it hosts the same tools
    * the rest of the app uses, so none is re-implemented here:
    *
-   * - the popup windows the active page opened, one tab per window,
+   * - every visible popup window in the browser, one tab per window,
    * - the profile's downloads, which need no tab and keep the rail present,
    * - the active tab's note, the same note a thread has (only the subject
    *   differs),
@@ -136,18 +136,15 @@
     title: 'Extension panel'
   }
   /**
-   * The popup windows the active page opened, one tab per window.
+   * Every visible popup window in the browser, one tab per window.
    *
-   * A popup belongs to the tab whose page opened it, like the note and the agent
-   * chat do, and the list is main's: the tabs are derived from it, so a window that
-   * ends leaves the strip with no surface having to prune anything.
+   * A popup keeps the tab and box session that opened it, while its rail tab stays
+   * available as the user moves between pages and boxes.
    */
-  const popupTabs = $derived(activeTab ? browserPopupWindows.tabsFor(activeTab.id) : [])
-  /** The popup the rail is showing, or null while no popup tool is up. */
+  const popupTabs = $derived(browserPopupWindows.tabs())
+  /** The browser-wide popup the rail is showing, or null while none are open. */
   const activePopup = $derived(
-    activeTab && globalBrowser.popupsSidebarShown
-      ? browserPopupWindows.activeFor(activeTab.id)
-      : null
+    globalBrowser.popupsSidebarShown ? browserPopupWindows.active() : null
   )
   /**
    * The extension side panel of the tab on screen, or null while that tool is not
@@ -343,9 +340,9 @@
   const assistantMenuItemClass =
     'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 
-  /** Dismiss every popup from the rail: page popups close, extension popups park. */
+  /** Close every visible popup from the rail. */
   function closeAllPopups(): void {
-    if (activeTab) browserPopupWindows.closeForTab(activeTab.id)
+    browserPopupWindows.closeAll()
   }
 </script>
 

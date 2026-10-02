@@ -388,19 +388,14 @@ export class GlobalBrowserState {
    *
    * A popup opened by the tab on screen is shown, because the user asked for it by
    * clicking something: the rail comes up on it and the tab it just opened reads as
-   * current. A popup opened by a background tab is not a reason to move the user
-   * away from what they are reading, so it waits in its own tab's strip. A further
-   * popup only joins the list, so a page cannot move the panel under the user's
-   * hands while they are using the one already up.
+   * current. A popup opened by a background tab joins the browser-wide strip without
+   * moving the user's focus away from the popup already on screen.
    */
   private applyPopupWindows(popups: BrowserPopupWindow[]): void {
-    // The live ids are a list rather than a set: there are as many as the tab has
-    // popups open, which is a handful, and this runs on every report about one.
-    const live = popups.map((popup) => popup.id)
+    const live = new SvelteSet(popups.map((popup) => popup.id))
     for (const id of [...this.popupWindowState.keys()]) {
-      if (!live.includes(id)) this.popupWindowState.delete(id)
+      if (!live.has(id)) this.popupWindowState.delete(id)
     }
-    const tabId = this.activeTabId
     for (const popup of popups) {
       const previous = this.popupWindowState.get(popup.id)
       this.popupWindowState.set(popup.id, {
@@ -411,47 +406,40 @@ export class GlobalBrowserState {
         previous === undefined ||
         previous.tabId !== popup.tabId ||
         previous.activationSequence !== popup.activationSequence
-      if (tabId !== null && popup.tabId === tabId && newlyOpenedOrActivated) {
+      if (popup.tabId === this.activeTabId && newlyOpenedOrActivated) {
         browserPopupWindows.select(popup.id)
         this.showPopupsSidebar()
       }
     }
-    // The panel belongs to one tab's windows, so when that tab holds none there is
-    // nothing left for the rail to show and it closes with the last of them rather
-    // than sitting there as an empty strip.
+    // The panel belongs to the browser's visible popup windows, so it closes only
+    // when the last one leaves the shared list.
     //
     // The answer comes from this report and not from the popup store's mirror of
     // it: this listener is registered before the popup store's own, so inside this
     // dispatch the mirror still holds the previous list. Reading it here would undo
     // the open above, and it would leave the panel up after the last window closed:
     // the two are the same mistake in opposite directions.
-    this.closePopupsWithNoWindows(tabId !== null && popups.some((popup) => popup.tabId === tabId))
+    this.closePopupsWithNoWindows(popups.length > 0)
   }
 
-  /** Close the popup tool once the tab on screen holds no popup window: the panel
-   *  exists to show a window and the rail only offers the tool while the tab has
-   *  one, so it leaves with the last window rather than lingering as an empty
-   *  strip. An extension's own popup is a popup window too, so the same rule
-   *  covers both doors.
+  /** Close the popup tool once the browser has no visible popup windows.
    *
-   *  `activeTabHoldsWindow` is passed in rather than read here because the report
+   *  `hasOpenPopups` is passed in rather than read here because the report
    *  handler runs inside the popup report's own dispatch, where the popup store's
    *  mirror is still one report behind. Callers outside that dispatch answer with
-   *  {@link activeTabHoldsPopupWindow}. */
-  private closePopupsWithNoWindows(activeTabHoldsWindow: boolean): void {
+   *  {@link hasOpenPopupWindows}. */
+  private closePopupsWithNoWindows(hasOpenPopups: boolean): void {
     if (!this.contextSidebarVisible) return
     if (this.contextSidebarTool !== 'popups') return
-    if (activeTabHoldsWindow) return
+    if (hasOpenPopups) return
     this.contextSidebarVisible = false
   }
 
-  /** Whether the tab on screen holds a popup window in the popup store's mirror.
+  /** Whether the browser has a visible popup in the popup store's mirror.
    *  Only for callers outside a popup report's own dispatch: the report handler
    *  answers from the report itself, because the mirror lags one event there. */
-  private activeTabHoldsPopupWindow(): boolean {
-    const tab = this.activeTab
-    if (!tab) return false
-    return browserPopupWindows.forTab(tab.id).length > 0
+  private hasOpenPopupWindows(): boolean {
+    return browserPopupWindows.all().length > 0
   }
 
   /**
@@ -548,24 +536,20 @@ export class GlobalBrowserState {
   get contextSidebarShown(): boolean {
     if (this.notificationsShown) return false
     if (!this.contextSidebarVisible) return false
-    // The browser library tools (downloads, history, bookmarks) belong to the
-    // person rather than to a tab, so they are what keeps the rail present with
-    // the strip empty; every other tool needs a tab to have a subject.
+    // Browser library tools and popup windows belong to the browser rather than
+    // the selected tab, so they keep the rail present across tab changes.
     if (this.railToolNeedsNoTab) return true
     return this.activeTab !== null
   }
 
-  /** Whether the tool on the rail is one of the browser library tools, which are
-   *  the entries that can stay open with no tab on screen. A box is a property of
-   *  the profile rather than of a page, so it belongs in the same set. An
-   *  extension is managed from the same place for the same reason: it is installed
-   *  once and then loaded into the jars the user picks, with its own storage in
-   *  each, and it has no tab of its own. */
+  /** Whether the active rail tool belongs to the browser rather than its selected
+   *  tab. This includes the profile's library tools and the global popup list. */
   private get railToolNeedsNoTab(): boolean {
     return (
       this.contextSidebarTool === 'downloads' ||
       this.contextSidebarTool === 'history' ||
       this.contextSidebarTool === 'bookmarks' ||
+      this.contextSidebarTool === 'popups' ||
       this.contextSidebarTool === 'boxes' ||
       this.contextSidebarTool === 'extensions'
     )
@@ -879,16 +863,13 @@ export class GlobalBrowserState {
   }
 
   /**
-   * Reveal the rail on the active tab's popup windows.
+   * Reveal the rail on the browser's popup windows.
    *
    * A popup window is a window the user asked for by clicking something in the
-   * page, so it is shown rather than parked in silence. The panel belongs to the
-   * tab on screen, which is the tab whose page opened it in every flow that has
-   * one (a sign-in, a checkout), and a popup opened by a background tab waits in
-   * its own tab's panel until the user goes back to it.
+   * page, so it is shown rather than parked in silence. Its page stays in the
+   * session of the tab and box that opened it while the rail remains browser-wide.
    */
   showPopupsSidebar(): void {
-    if (!this.activeTab) return
     this.dismissNotifications()
     this.contextSidebarTool = 'popups'
     this.contextSidebarVisible = true
@@ -1055,9 +1036,9 @@ export class GlobalBrowserState {
     // asked the agent about shows its start state instead of being given a
     // conversation nobody asked for; the rail's own action creates it.
     if (this.contextSidebarTool === 'popups') {
-      // An activation is not a popup report, so the mirror already holds every
-      // list it was sent and is the right thing to answer from.
-      this.closePopupsWithNoWindows(this.activeTabHoldsPopupWindow())
+      // Popup windows belong to the browser, so changing tabs leaves the rail
+      // open while any popup remains in its shared list.
+      this.closePopupsWithNoWindows(this.hasOpenPopupWindows())
     }
     if (this.contextSidebarTool === 'extension-side-panel') {
       // The same rule as popups: the panel belongs to one tab's visit, so moving

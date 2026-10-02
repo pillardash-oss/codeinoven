@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
+  import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { AppWindow } from '@lucide/svelte'
-  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
@@ -25,11 +24,9 @@
    * reports that, which takes the window's tab out of the strip with it. An
    * extension's popup is closed the same way, from the rail's own strip.
    *
-   * The panel exists only while the tab on screen holds a window, because the tool
-   * is only offered then: a window is what it shows, and an extension's own popup
-   * is opened from the extension's own row in the extensions panel or from a
-   * header pin. The empty state below is only the frame or two between the last
-   * window ending and the rail closing after it.
+   * The panel follows the browser-wide popup rail, independent of the selected tab
+   * or box. The empty state below is only the frame between the last window ending
+   * and the rail closing after it.
    */
 
   interface Props {
@@ -238,12 +235,6 @@
       }
     }
   }
-
-  onMount(() => {
-    // Read the authoritative list once: a popup that opened before this panel did
-    // (or while another tool held the rail) is only reconciled by asking.
-    void browserPopupWindows.load(GLOBAL_BROWSER_PROJECT_ID)
-  })
 </script>
 
 {#if popup}
