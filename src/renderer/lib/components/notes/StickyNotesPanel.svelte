@@ -1,12 +1,10 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import { SvelteSet } from 'svelte/reactivity'
-  import { Eye, Maximize2, NotebookPen, Redo2, SquarePen, Undo2 } from '@lucide/svelte'
+  import { Maximize2, NotebookPen, Redo2, SquarePen, Undo2, X } from '@lucide/svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
-  import PanelTabStrip from '$lib/components/workspace/PanelTabStrip.svelte'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { stickyNotes, type StickyNoteEntry } from '$lib/stores/sticky-notes.svelte'
@@ -19,7 +17,10 @@
   let deleting = $state(false)
   let deleteError = $state<string | null>(null)
   let fullscreen = $state(false)
-  const editingIds = new SvelteSet<string>()
+  let activeNoteMode = $state<{ noteId: string | null; mode: 'edit' | 'read' }>({
+    noteId: null,
+    mode: 'edit'
+  })
   let historyController = $state<{ undo: () => void; redo: () => void } | null>(null)
   let canUndo = $state(false)
   let canRedo = $state(false)
@@ -27,7 +28,10 @@
   const activeNote = $derived(stickyNotes.activeNote)
   const deletingNote = $derived(deletingNoteId ? stickyNotes.note(deletingNoteId) : null)
   const tabs = $derived(stickyNotes.entries.map(({ id, title }) => ({ id, title })))
-  const activeIsEditing = $derived(activeNote ? editingIds.has(activeNote.id) : false)
+  const activeIsEditing = $derived(
+    activeNote !== null &&
+      (activeNoteMode.noteId !== activeNote.id || activeNoteMode.mode === 'edit')
+  )
 
   void stickyNotes.load().catch(() => {})
 
@@ -41,7 +45,7 @@
     createError = null
     try {
       const note = await stickyNotes.create()
-      editingIds.add(note.id)
+      activeNoteMode = { noteId: note.id, mode: 'edit' }
       await focusEditor(note.id)
     } catch (error) {
       createError = error instanceof Error ? error.message : 'Could not create a sticky note'
@@ -49,12 +53,22 @@
   }
 
   function startEditing(noteId: string): void {
-    editingIds.add(noteId)
+    stickyNotes.select(noteId)
+    activeNoteMode = { noteId, mode: 'edit' }
     void focusEditor(noteId)
   }
 
   function stopEditing(noteId: string): void {
-    editingIds.delete(noteId)
+    if (stickyNotes.activeNoteId === noteId) activeNoteMode = { noteId, mode: 'read' }
+  }
+
+  function selectNote(noteId: string): void {
+    stickyNotes.select(noteId)
+    activeNoteMode = { noteId, mode: 'edit' }
+    canUndo = false
+    canRedo = false
+    historyController = null
+    void focusEditor(noteId)
   }
 
   function editNote(note: StickyNoteEntry): void {
@@ -80,7 +94,6 @@
     deleteError = null
     try {
       await stickyNotes.delete(noteId)
-      stopEditing(noteId)
       deletingNoteId = null
     } catch (error) {
       deleteError = error instanceof Error ? error.message : 'Could not delete this sticky note'
@@ -108,7 +121,7 @@
         aria-pressed={!activeIsEditing}
         onclick={() => stopEditing(activeNote.id)}
       >
-        <Eye size={14} />
+        <NotebookPen size={14} />
       </button>
     {:else}
       <button
@@ -159,7 +172,7 @@
           class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs text-foreground hover:bg-overlay"
           title="Retry loading this note"
           aria-label="Retry loading this note"
-          onclick={() => stickyNotes.select(note.id)}
+          onclick={() => selectNote(note.id)}
         >
           Retry
         </button>
@@ -238,32 +251,72 @@
       {#if createError}<p class="text-xs text-danger" role="alert">{createError}</p>{/if}
     </div>
   {:else}
-    <PanelTabStrip
-      {tabs}
-      activeTabId={stickyNotes.activeNoteId}
-      trailingLabel="View sticky note fullscreen"
-      onTrailingAction={() => (fullscreen = true)}
-      onSelect={stickyNotes.select.bind(stickyNotes)}
-      newLabel="New sticky note"
-      onNew={() => void createNote()}
-      onCloseTab={requestDelete}
-      onTabContextMenu={(id) => {
-        const note = stickyNotes.note(id)
-        if (note) editNote(note)
-      }}
-    >
-      {#snippet actions()}{@render noteActions()}{/snippet}
-      {#snippet trailingIcon()}<Maximize2 size={14} />{/snippet}
-      {#snippet tabIcon(tab)}
-        {@const note = stickyNotes.note(tab.id)}
-        {@const icon = note ? noteIcon(note) : null}
-        {#if icon}
-          <img src={icon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
-        {:else}
-          <NotebookPen size={13} class="shrink-0" />
-        {/if}
-      {/snippet}
-    </PanelTabStrip>
+    <div class="flex h-10 shrink-0 items-center border-b border-border">
+      <div class="min-w-0 flex-1 overflow-x-auto" role="list" aria-label="Sticky note tabs">
+        <div class="flex h-10 min-w-max items-stretch">
+          {#each stickyNotes.entries as note (note.id)}
+            {@const icon = noteIcon(note)}
+            <div
+              class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {stickyNotes.activeNoteId ===
+              note.id
+                ? 'bg-app text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground'}"
+              role="listitem"
+            >
+              <button
+                type="button"
+                class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
+                aria-current={stickyNotes.activeNoteId === note.id ? 'page' : undefined}
+                data-active-tab={stickyNotes.activeNoteId === note.id ? 'true' : undefined}
+                title={note.title}
+                onclick={() => selectNote(note.id)}
+                oncontextmenu={(event) => {
+                  event.preventDefault()
+                  selectNote(note.id)
+                  editNote(note)
+                }}
+              >
+                {#if icon}
+                  <img src={icon} alt="" class="h-3 w-3 shrink-0 object-contain" />
+                {:else}
+                  <NotebookPen size={12} class="shrink-0" />
+                {/if}
+                <span class="truncate text-[0.6875rem] font-medium">{note.title}</span>
+              </button>
+              <button
+                type="button"
+                class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                aria-label={`Close ${note.title}`}
+                title={`Close ${note.title}`}
+                onclick={() => requestDelete(note.id)}
+              >
+                <X size={11} />
+              </button>
+            </div>
+          {/each}
+        </div>
+      </div>
+      <div class="flex shrink-0 items-center border-l border-border px-1">
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="New sticky note"
+          title="New sticky note"
+          onclick={() => void createNote()}
+        >
+          <NotebookPen size={13} />
+        </button>
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Fullscreen"
+          title="Fullscreen"
+          onclick={() => (fullscreen = true)}
+        >
+          <Maximize2 size={13} />
+        </button>
+      </div>
+    </div>
 
     {#if activeNote}
       {@render noteBody(activeNote)}
@@ -280,7 +333,7 @@
     minimizeLabel="Exit fullscreen"
     onNew={() => void createNote()}
     onMinimize={() => (fullscreen = false)}
-    onSelect={stickyNotes.select.bind(stickyNotes)}
+    onSelect={selectNote}
     onCloseTab={requestDelete}
   >
     {#snippet actions()}{@render noteActions()}{/snippet}
