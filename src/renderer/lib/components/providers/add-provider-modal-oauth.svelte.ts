@@ -1,5 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
-import { openInBrowser } from '$lib/open-in-browser'
+import { openInGlobalCioBrowserWhenReady } from '$lib/open-in-browser'
 import type { HarnessAccount, OfferedProvider } from '$shared/types'
 
 export interface OAuthDeviceCode {
@@ -44,6 +44,18 @@ export class AddProviderModalOAuthController {
   prompt = $state<OAuthPrompt | null>(null)
   promptAnswer = $state('')
   starting = $state(false)
+  /**
+   * Whether the modal has stood down so the app-wide browser can hold the view.
+   *
+   * The authorization page is a native `WebContentsView` the compositor paints
+   * above every DOM node, and a canonical modal's scrim covers the whole window,
+   * so a modal left open during sign-in hides the one page the user has to act
+   * on. Docking hides this modal's shell without unmounting it, which is what
+   * keeps the flow alive: the controller and its event subscription live in the
+   * component, not in the shell, so every later device code, prompt and result
+   * still arrives while the browser is in front.
+   */
+  docked = $state(false)
 
   #host: AddProviderModalOAuthHost
   /**
@@ -67,6 +79,7 @@ export class AddProviderModalOAuthController {
     this.prompt = null
     this.promptAnswer = ''
     this.starting = false
+    this.docked = false
   }
 
   handlePayload(payload: unknown): void {
@@ -87,8 +100,12 @@ export class AddProviderModalOAuthController {
       const event = data['event'] as Record<string, unknown> | undefined
       if (!event) return
       if (event['type'] === 'auth_url') {
-        this.status = 'A browser window opened   finish signing in there.'
-        void openInBrowser(String(event['url']))
+        // Dock first, then ask for the page: the modal must already be out of
+        // the way by the time the browser takes the view, not after the browser
+        // reports that it has the page.
+        this.docked = true
+        this.status = 'Finish signing in in the browser.'
+        void this.#openAuthPage(String(event['url']))
       } else if (event['type'] === 'device_code') {
         this.deviceCode = {
           userCode: String(event['userCode']),
@@ -101,6 +118,10 @@ export class AddProviderModalOAuthController {
     } else if (data['kind'] === 'prompt') {
       const prompt = data['prompt'] as Record<string, unknown> | undefined
       if (!prompt) return
+      // A prompt is the one event that needs the modal back: the flow is
+      // blocked until the user answers it, so the browser can wait while the
+      // modal takes the view again.
+      this.docked = false
       this.prompt = {
         promptId: String(data['promptId']),
         type:
@@ -131,6 +152,47 @@ export class AddProviderModalOAuthController {
       void this.#host.finishAuthentication(providerId, providerName)
     } else if (data['kind'] === 'failed') {
       this.#host.setActionError(String(data['error'] ?? 'The sign-in failed.'))
+      this.reset()
+      void this.#host.discardPendingAccount()
+    }
+  }
+
+  /**
+   * Put the provider's authorization page in the app-wide global browser and
+   * report whether it really got there.
+   *
+   * This page is not a link. It is the next thing the user has to do, so it must
+   * not follow the "open links in the app browser" preference into a project
+   * thread's tab, where the user would have no reason to look for it. The global
+   * browser is project-less and takes the page from any surface, including the
+   * settings page the connect flow was opened from.
+   *
+   * The `WhenReady` form is the one that matters here. A sign-in that silently
+   * lands nowhere is the worst outcome of this flow, so the wait is what lets
+   * the failure be reported instead of assumed. When the global browser cannot
+   * take the page, the modal undocks and the URL goes to the operating-system
+   * browser: a sign-in the user cannot reach is worse than one that left the
+   * app, and the status line names where it went so nothing was silent.
+   */
+  async #openAuthPage(url: string): Promise<void> {
+    // The wait below outlives a flow that finishes or is cancelled underneath
+    // it, so the login id is captured first: a fallback for a login that is no
+    // longer running would put a stale status line back on a settled flow and
+    // open a browser at a page nobody is waiting for.
+    const loginId = this.loginId
+    if (await openInGlobalCioBrowserWhenReady(url)) return
+    if (this.loginId !== loginId) return
+    this.docked = false
+    this.status =
+      'The app browser could not open the sign-in page. Opening it in your system browser instead.'
+    try {
+      await invoke('shell:openExternal', url)
+    } catch (openError) {
+      this.#host.setActionError(
+        openError instanceof Error
+          ? openError.message
+          : 'The sign-in page could not be opened anywhere.'
+      )
       this.reset()
       void this.#host.discardPendingAccount()
     }

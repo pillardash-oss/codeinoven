@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Plug, Server } from '@lucide/svelte'
+  import { Loader2, Plug, Server, X } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import type {
     BaseUrlProvider,
     OfferedProvider,
@@ -142,6 +143,27 @@
       finishAuthentication(providerId, providerName),
     discardPendingAccount: () => discardPendingAccount()
   })
+
+  /**
+   * Whether the docked chip stands down because the browser already is the view.
+   *
+   * The browser's page is a native `WebContentsView` the compositor paints above
+   * every DOM node, so a chip drawn while that page is on screen would be hidden
+   * behind it and would offer the user nothing to click. Anywhere else the chip
+   * is the only trace of an in-flight sign-in, so it is what stops the flow from
+   * becoming invisible the moment the user leaves the browser for their thread.
+   */
+  const browserHoldsTheView = $derived(rendererRecovery.activeView === 'browser')
+
+  /** Label for the chip's restore control, naming the provider being connected. */
+  const dockRestoreLabel = $derived(
+    `Show the sign-in for ${selectedProvider?.name ?? 'this provider'}`
+  )
+
+  /** What the chip's dismiss control does: it ends the attempt, like the modal's own close. */
+  const dockDismissLabel = $derived(
+    `Cancel the sign-in for ${selectedProvider?.name ?? 'this provider'}`
+  )
 
   async function checkAuth(): Promise<void> {
     checkingAuth = true
@@ -468,7 +490,60 @@
   })
 </script>
 
-<Modal open size="lg" title={`Add provider   ${harness.name}`} onClose={() => void closeModal()}>
+<!--
+  The chip is the only trace of an in-flight sign-in while the modal stands down,
+  and it stands down in front of the browser view: the page the user must act on
+  is a native `WebContentsView` the compositor paints above every DOM node, so a
+  chip drawn there would be invisible. Everywhere else the chip is what stops the
+  flow from looking abandoned when the user leaves the browser for their thread.
+-->
+{#if oauth.docked && !browserHoldsTheView}
+  <div
+    class="pointer-events-auto fixed right-4 bottom-4 z-50 flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl"
+    data-region="provider-sign-in-dock"
+  >
+    <button
+      type="button"
+      class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+      title={dockRestoreLabel}
+      aria-label={dockRestoreLabel}
+      onclick={() => (oauth.docked = false)}
+    >
+      <Loader2 size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+      <span class="flex min-w-0 flex-col">
+        <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
+          Signing in to {selectedProvider?.name ?? 'this provider'}
+        </span>
+        <span class="max-w-56 truncate text-[0.625rem] leading-tight text-muted" aria-live="polite">
+          {oauth.status || 'Finish signing in in the browser.'}
+        </span>
+      </span>
+    </button>
+    <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
+    <button
+      type="button"
+      class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      aria-label={dockDismissLabel}
+      title={dockDismissLabel}
+      onclick={() => void closeModal()}
+    >
+      <X size={14} />
+    </button>
+  </div>
+{/if}
+
+<!--
+  `open` follows the dock, not the flow's lifetime. Standing the shell down is not
+  what ends a sign-in: the OAuth controller and its event subscription live in this
+  component, so the modal can give the view to the browser and still receive every
+  later device code, prompt and result.
+-->
+<Modal
+  open={!oauth.docked}
+  size="lg"
+  title={`Add provider   ${harness.name}`}
+  onClose={() => void closeModal()}
+>
   {#snippet footer()}
     <AddProviderModalFooter
       {tab}
