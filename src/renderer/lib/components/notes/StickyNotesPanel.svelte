@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import { Maximize2, NotebookPen, Redo2, SquarePen, Undo2, X } from '@lucide/svelte'
+  import { Eye, Maximize2, NotebookPen, Redo2, SquarePen, Undo2, X } from '@lucide/svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
@@ -120,7 +120,7 @@
         aria-pressed={!activeIsEditing}
         onclick={() => stopEditing(activeNote.id)}
       >
-        <NotebookPen size={14} />
+        <Eye size={14} />
       </button>
   {:else if activeNote}
       <button
