@@ -45,7 +45,8 @@ const validSettings = {
   thinkingLevel: 'high',
   permissionLevel: 'auto_review',
   assignmentMode: false,
-  loopMode: false
+  loopMode: false,
+  ovenId: 'local'
 }
 
 describe('IPC primitive validation', () => {

@@ -6,7 +6,6 @@
     Boxes,
     Clock,
     Download,
-    Globe,
     MessagesCircle,
     Puzzle,
     StickyNote

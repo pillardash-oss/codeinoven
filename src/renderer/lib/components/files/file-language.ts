@@ -1,4 +1,4 @@
-import { highlightCode } from '../markdown/markdown'
+import { highlightCode } from '../markdown/highlight-code'
 
 const MAX_HIGHLIGHTED_CHARACTERS = 250_000
 
