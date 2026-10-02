@@ -312,6 +312,7 @@ interface BrowserExtensionTabInfo {
   id: number
   index: number
   windowId: number
+  windowType: 'normal'
   active: boolean
   pinned: boolean
   incognito: boolean
@@ -4161,6 +4162,7 @@ export class BrowserService {
         id: -1,
         index: 0,
         windowId: 0,
+        windowType: 'normal',
         active,
         pinned: false,
         incognito: false,
@@ -4173,6 +4175,7 @@ export class BrowserService {
       id: contents.id,
       index: 0,
       windowId: 0,
+      windowType: 'normal',
       active,
       pinned: false,
       incognito: false,
