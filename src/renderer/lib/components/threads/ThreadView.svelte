@@ -9,11 +9,14 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import type { OvenAppearance, OvenState } from '$shared/ovens'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import {
+    CONVERSATION_METADATA_BADGE_CLASS,
+    CONVERSATION_METADATA_ICONS
+  } from './conversation-metadata-badges'
 
   import {
     AudioLines,
     ArrowUpRight,
-    Brain,
     Check,
     ChevronDown,
     Clock,
@@ -350,6 +353,10 @@
     promptPagesBefore
   } from './thread-history'
   import { threadScrollPositions } from './thread-scroll-memory'
+
+  const ThinkingMetadataIcon = CONVERSATION_METADATA_ICONS.thinking
+  const AccountMetadataIcon = CONVERSATION_METADATA_ICONS.account
+  const LocalMetadataIcon = CONVERSATION_METADATA_ICONS.local
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -10960,6 +10967,7 @@
         )?.label ?? null,
       accountId: selection.accountId ?? null,
       ovenLabel: ovenLabelForId(settings.ovenId),
+      ovenIsLocal: !settings.ovenId || settings.ovenId === LOCAL_OVEN_ID,
       ovenAppearance: ovenAppearanceForId(settings.ovenId),
       isFast: fastVariantForModelId(modelId) !== null
     }
@@ -11924,6 +11932,10 @@
               {@const modelLabel = messageModelLabel(msg, allModels)}
               {@const msgThinking = messageThinkingLevel(msg, allModels)}
               {@const msgOvenAppearance = msg.ovenAppearance ?? ovenAppearanceForId(msg.ovenId)}
+              {@const msgOvenLabel = msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}
+              {@const msgOvenIsLocal = msg.ovenId
+                ? msg.ovenId === LOCAL_OVEN_ID
+                : msg.ovenLabel === undefined || msg.ovenLabel === 'Local'}
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
               {@const harnessId = resolveMessageHarnessId(msg, messageHarnessFallback)}
               {@const harnessName = messageHarnessName(msg, messageHarnessFallback)}
@@ -12014,6 +12026,9 @@
                         ovenLabel={useLiveAttribution
                           ? currentWorkingTraceAttribution.ovenLabel
                           : (msg.ovenLabel ?? ovenLabelForId(msg.ovenId))}
+                        ovenIsLocal={useLiveAttribution
+                          ? currentWorkingTraceAttribution.ovenIsLocal
+                          : msgOvenIsLocal}
                         ovenAppearance={useLiveAttribution
                           ? currentWorkingTraceAttribution.ovenAppearance
                           : msgOvenAppearance}
@@ -12231,49 +12246,48 @@
                                 </span>
                                 {#if msgThinking}
                                   <span
-                                    class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] capitalize text-muted"
+                                    class={`${CONVERSATION_METADATA_BADGE_CLASS} capitalize`}
                                     title={`Thinking level: ${msgThinking}`}
                                     aria-label={`Thinking level: ${msgThinking}`}
                                   >
-                                    <Brain size={9} />
+                                    <ThinkingMetadataIcon size={9} />
                                     {msgThinking}
                                   </span>
                                 {/if}
                               {/if}
                               {#if msg.accountId || msg.accountLabel}
                                 <span
-                                  class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+                                  class={CONVERSATION_METADATA_BADGE_CLASS}
                                   title={`Account: ${msg.accountLabel ?? 'Default'}`}
                                   aria-label={`Account: ${msg.accountLabel ?? 'Default'}`}
                                 >
-                                  <VendorIcon
-                                    name={provider?.name ?? msg.providerId ?? 'Account'}
-                                    id={msg.providerId ?? undefined}
-                                    size={11}
-                                  />
+                                  <AccountMetadataIcon size={10} />
                                   {#if msg.accountLabel && msg.accountLabel !== 'Default'}{msg.accountLabel}{/if}
                                 </span>
                               {/if}
                               <span
-                                class="flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[0.5625rem] text-muted"
-                                style={`background-color: color-mix(in srgb, ${msgOvenAppearance.color} 10%, transparent); border-color: color-mix(in srgb, ${msgOvenAppearance.color} 25%, transparent);`}
-                                title={`Oven: ${msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}`}
-                                aria-label={`Oven: ${msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}`}
+                                class={CONVERSATION_METADATA_BADGE_CLASS}
+                                title={`Oven: ${msgOvenLabel}`}
+                                aria-label={`Oven: ${msgOvenLabel}`}
                               >
-                                <img
-                                  class="h-3 w-3 shrink-0"
-                                  alt=""
-                                  src={msgOvenAppearance.customSvg
-                                    ? getCustomSvgDataUrl(
-                                        msgOvenAppearance.customSvg,
-                                        msgOvenAppearance.color
-                                      )
-                                    : getIconSvgDataUrl(
-                                        msgOvenAppearance.icon,
-                                        msgOvenAppearance.color
-                                      )}
-                                />
-                                {msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}
+                                {#if msgOvenIsLocal}
+                                  <LocalMetadataIcon size={10} class="shrink-0" />
+                                {:else}
+                                  <img
+                                    class="h-3 w-3 shrink-0"
+                                    alt=""
+                                    src={msgOvenAppearance.customSvg
+                                      ? getCustomSvgDataUrl(
+                                          msgOvenAppearance.customSvg,
+                                          msgOvenAppearance.color
+                                        )
+                                      : getIconSvgDataUrl(
+                                          msgOvenAppearance.icon,
+                                          msgOvenAppearance.color
+                                        )}
+                                  />
+                                {/if}
+                                {msgOvenLabel}
                               </span>
                               <span class="text-[0.625rem] text-dimmed"
                                 >· {formatTime(msg.completedAt ?? msg.createdAt)}</span
@@ -12325,6 +12339,7 @@
               accountLabel={currentWorkingTraceAttribution.accountLabel}
               accountId={currentWorkingTraceAttribution.accountId}
               ovenLabel={currentWorkingTraceAttribution.ovenLabel}
+              ovenIsLocal={currentWorkingTraceAttribution.ovenIsLocal}
               ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
               isFast={currentWorkingTraceAttribution.isFast}
               initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}

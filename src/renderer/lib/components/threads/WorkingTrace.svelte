@@ -68,6 +68,7 @@
     accountLabel?: string | null
     accountId?: string | null
     ovenLabel?: string | null
+    ovenIsLocal?: boolean
     ovenAppearance?: OvenAppearance
     isFast?: boolean
     projectId?: string
@@ -102,6 +103,7 @@
     accountLabel,
     accountId,
     ovenLabel,
+    ovenIsLocal,
     ovenAppearance,
     isFast = false,
     projectId,
@@ -460,6 +462,7 @@
           {accountLabel}
           {accountId}
           {ovenLabel}
+          {ovenIsLocal}
           {ovenAppearance}
         />
       {/if}
