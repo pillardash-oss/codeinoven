@@ -502,6 +502,10 @@ export class CodexDriver extends PersistentCliDriver {
     ) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
+    if (!this.serverRequestTurnIsLive(request)) {
+      this.serverRequests.delete(requestId)
+      throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
+    }
     if (isCodexDynamicQuestion(request)) {
       this.completeDynamicQuestion(request, answers)
       return
@@ -533,6 +537,10 @@ export class CodexDriver extends PersistentCliDriver {
     ) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
+    if (!this.serverRequestTurnIsLive(request)) {
+      this.serverRequests.delete(requestId)
+      throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
+    }
     if (isCodexDynamicQuestion(request)) {
       this.completeDynamicQuestion(request)
       return
@@ -552,7 +560,9 @@ export class CodexDriver extends PersistentCliDriver {
    *  conversation, so the caller reports the turn as inactive instead. */
   private serverRequestTurnIsLive(request: CodexServerRequest): boolean {
     const active = this.activeTurns.get(request.sessionId)
-    return Boolean(active && !active.finished && active.host === request.host)
+    return Boolean(
+      active && !active.finished && !active.completionReceived && active.host === request.host
+    )
   }
 
   private completeDynamicQuestion(request: CodexServerRequest, answers?: string[][]): void {
@@ -631,7 +641,8 @@ export class CodexDriver extends PersistentCliDriver {
    *  settled without finalization (stale working state) from one that is
    *  legitimately streaming a long turn. */
   hasActiveTurn(sessionId: string): boolean {
-    return this.activeTurns.has(sessionId)
+    const active = this.activeTurns.get(sessionId)
+    return Boolean(active && !active.finished && !active.completionReceived)
   }
 
   /** Codex runs as a shared app-server daemon, so the base implementation's
@@ -641,7 +652,7 @@ export class CodexDriver extends PersistentCliDriver {
    *  already finished is probed as idle (letting the watchdog reconcile or
    *  abort it) while a genuinely active silent turn stays preserved. */
   override async isSessionBusy(_projectPath: string, sessionId: string): Promise<boolean> {
-    return this.activeTurns.has(sessionId)
+    return this.hasActiveTurn(sessionId)
   }
 
   override async abort(projectPath: string, sessionId: string): Promise<void> {
@@ -1269,6 +1280,10 @@ export class CodexDriver extends PersistentCliDriver {
       status === 'failed'
         ? (codexUsageLimitIssue(error, message ?? '') ?? active.failureIssue)
         : active.failureIssue
+    // Mark the native turn terminal before the async telemetry refresh below.
+    // A card answer arriving during that refresh must resume from persisted
+    // history instead of being written into the completed turn.
+    active.completionReceived = true
     void this.completeAppServerTurn(active, message, issue)
   }
 
@@ -1341,6 +1356,12 @@ export class CodexDriver extends PersistentCliDriver {
         return
       }
       void this.callUtilityTool(active, params).then((result) => {
+        if (
+          params['tool'] === ASK_SECRET_TOOL_NAME &&
+          (active.finished || active.completionReceived)
+        ) {
+          return
+        }
         host.child.stdin?.write(`${JSON.stringify({ id, result })}\n`)
       })
       return
