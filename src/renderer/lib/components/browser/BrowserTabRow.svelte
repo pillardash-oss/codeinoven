@@ -2,8 +2,8 @@
   import {
     ArrowUp,
     Boxes,
-    ChevronRight,
     Copy,
+    ChevronRight,
     FolderInput,
     FolderMinus,
     FolderPlus,
@@ -28,7 +28,11 @@
   import ModelPickerVendorIcons from '$lib/components/shared/ModelPickerVendorIcons.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
-  import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import {
+    browserTabLabel,
+    MAX_GLOBAL_BROWSER_GROUPS,
+    type GlobalBrowserTab
+  } from '$lib/stores/global-browser-types'
   import { browserTabAccent, browserTabIconUrl } from './browser-tab-appearance'
   import {
     browserAppearanceAccent,
@@ -40,14 +44,30 @@
   interface Props {
     tab: GlobalBrowserTab
     selected: boolean
+    selectedTabIds: string[]
     onTabClick: (tabId: string, event: MouseEvent) => void
+    onTabContextMenu: (tabId: string) => void
+    onMoveTabsToGroup: (tabIds: string[], groupId: string) => void
+    onCreateGroupForTabs: (tabIds: string[]) => void
+    onReopenTabsInBox: (tabIds: string[], boxId: string | null) => void
     /** Open the group editor for a group id, or with null to create one. */
     onOpenGroupEditor: (groupId: string | null) => void
     /** Open this tab's own editor (title, colour, icon). */
     onEditTab: (tabId: string) => void
   }
 
-  let { tab, selected, onTabClick, onOpenGroupEditor, onEditTab }: Props = $props()
+  let {
+    tab,
+    selected,
+    selectedTabIds,
+    onTabClick,
+    onTabContextMenu,
+    onMoveTabsToGroup,
+    onCreateGroupForTabs,
+    onReopenTabsInBox,
+    onOpenGroupEditor,
+    onEditTab
+  }: Props = $props()
 
   /**
    * One row in the browser tab strip.
@@ -114,6 +134,7 @@
   /** The box a pending "reopen in box" targets: undefined while none is pending,
    *  null for the default jar. */
   let reopenTarget = $state<string | null | undefined>(undefined)
+  const bulkSelection = $derived(selected && selectedTabIds.length > 1)
   const reopenTargetLabel = $derived(
     reopenTarget === undefined
       ? ''
@@ -197,15 +218,18 @@
     <div
       class="group flex items-center rounded-md transition-colors {dropTarget
         ? 'bg-info/10'
-        : active
-          ? 'bg-elevated'
-          : 'hover:bg-elevated'}"
+        : selected
+          ? 'bg-primary/25'
+          : active
+            ? 'bg-elevated'
+            : 'hover:bg-elevated'}"
+      role="group"
+      aria-label={`${label} tab row`}
+      oncontextmenu={() => onTabContextMenu(tab.id)}
     >
       <button
         type="button"
-        class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left {selected
-          ? 'bg-primary/15 ring-1 ring-inset ring-primary/50'
-          : ''}"
+        class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left"
         aria-current={active}
         aria-pressed={selected}
         title={tab.url || label}
@@ -382,11 +406,50 @@
       </ContextMenu.Item>
       <BrowserTabPlacementItems onCreate={newPlaced} />
       <ContextMenu.Separator class="my-1 h-px bg-border" />
-      <ContextMenu.Item class={itemClass} onSelect={createGroupFromTab}>
-        <FolderPlus size={13} class="shrink-0 text-muted" />
-        New tab group
-      </ContextMenu.Item>
-      {#if group}
+      {#if !bulkSelection}
+        <ContextMenu.Item class={itemClass} onSelect={createGroupFromTab}>
+          <FolderPlus size={13} class="shrink-0 text-muted" />
+          New tab group
+        </ContextMenu.Item>
+      {/if}
+      {#if bulkSelection}
+        <ContextMenu.Sub>
+          <ContextMenu.SubTrigger class={itemClass}>
+            <FolderPlus size={13} class="shrink-0 text-muted" />
+            Add selected tabs to group
+            <ChevronRight size={13} class="ml-auto text-muted" />
+          </ContextMenu.SubTrigger>
+          <ContextMenu.Portal>
+            <ContextMenu.SubContent
+              avoidCollisions
+              collisionPadding={12}
+              updatePositionStrategy="always"
+              class="z-50 max-h-[calc(100dvh-1.5rem)] min-w-44 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+            >
+              {#each groups as candidate (candidate.id)}
+                <ContextMenu.Item
+                  class={itemClass}
+                  onSelect={() => onMoveTabsToGroup(selectedTabIds, candidate.id)}
+                >
+                  <FolderInput size={13} class="shrink-0 text-muted" />
+                  <span class="truncate">{candidate.name}</span>
+                </ContextMenu.Item>
+              {/each}
+              {#if groups.length > 0}
+                <ContextMenu.Separator class="my-1 h-px bg-border" />
+              {/if}
+              <ContextMenu.Item
+                class={itemClass}
+                disabled={groups.length >= MAX_GLOBAL_BROWSER_GROUPS}
+                onSelect={() => onCreateGroupForTabs(selectedTabIds)}
+              >
+                <FolderPlus size={13} class="shrink-0 text-muted" />
+                Create group from selection
+              </ContextMenu.Item>
+            </ContextMenu.SubContent>
+          </ContextMenu.Portal>
+        </ContextMenu.Sub>
+      {:else if group}
         <ContextMenu.Item class={itemClass} onSelect={() => onOpenGroupEditor(tab.groupId)}>
           <Pencil size={13} class="shrink-0 text-muted" />
           Edit {group.name}
@@ -400,7 +463,7 @@
         </ContextMenu.Item>
       {/if}
 
-      {#if groups.some((candidate) => candidate.id !== tab.groupId)}
+      {#if !bulkSelection && groups.some((candidate) => candidate.id !== tab.groupId)}
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         {#each groups.filter((candidate) => candidate.id !== tab.groupId) as candidate (candidate.id)}
           <ContextMenu.Item
@@ -414,11 +477,11 @@
       {/if}
 
       <ContextMenu.Separator class="my-1 h-px bg-border" />
-      {#if globalBrowser.boxes.length > 0 || tab.boxId}
+      {#if bulkSelection || globalBrowser.boxes.length > 0 || tab.boxId}
         <ContextMenu.Sub>
           <ContextMenu.SubTrigger class={itemClass}>
             <Boxes size={13} class="shrink-0 text-muted" />
-            Reopen in box
+            {bulkSelection ? 'Add selected tabs to box' : 'Reopen in box'}
             <ChevronRight size={13} class="ml-auto text-muted" />
           </ContextMenu.SubTrigger>
           <ContextMenu.Portal>
@@ -428,7 +491,27 @@
               updatePositionStrategy="always"
               class="z-50 max-h-[calc(100dvh-1.5rem)] min-w-44 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
             >
-              {#if tab.boxId}
+              {#if bulkSelection}
+                <ContextMenu.Item
+                  class={itemClass}
+                  onSelect={() => onReopenTabsInBox(selectedTabIds, null)}
+                >
+                  <Globe size={13} class="shrink-0 text-muted" />
+                  No box
+                </ContextMenu.Item>
+                {#each globalBrowser.boxes as candidate (candidate.id)}
+                  <ContextMenu.Item
+                    class={itemClass}
+                    onSelect={() => onReopenTabsInBox(selectedTabIds, candidate.id)}
+                  >
+                    <span
+                      class="h-2 w-2 shrink-0 rounded-full"
+                      style="background-color: {browserAppearanceAccent(candidate)}"
+                    ></span>
+                    <span class="truncate">{candidate.name}</span>
+                  </ContextMenu.Item>
+                {/each}
+              {:else if tab.boxId}
                 <ContextMenu.Item class={itemClass} onSelect={() => (reopenTarget = null)}>
                   <Globe size={13} class="shrink-0 text-muted" />
                   No box
