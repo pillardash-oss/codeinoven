@@ -850,6 +850,7 @@ export class Database {
       this.migrateThreadFailureColumns(connection)
       this.migrateAgentMessageGenerationColumn(connection)
       this.migrateAgentMessageAccountColumns(connection)
+      this.migrateAgentMessageOvenColumn(connection)
       this.migrateAgentMessageContextEstimatedColumn(connection)
       this.migrateAgentMessageNormalizedUsageColumn(connection)
       this.migrateActiveTurnOwnerColumn(connection)
@@ -1486,6 +1487,18 @@ export class Database {
     }
     if (!columns.has('account_label')) {
       connection.exec('ALTER TABLE agent_messages ADD COLUMN account_label TEXT')
+    }
+  }
+
+  /** Existing transcript mirrors predate per-turn Oven attribution. */
+  private migrateAgentMessageOvenColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(agent_messages)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('oven_id')) {
+      connection.exec('ALTER TABLE agent_messages ADD COLUMN oven_id TEXT')
     }
   }
 

@@ -722,7 +722,8 @@ export {
   stampHarnessId,
   stampAccount,
   restoreMirrorThinkingLevel,
-  restoreMirrorAccount
+  restoreMirrorAccount,
+  restoreMirrorOven
 } from './chat-engine/chat-engine-message-merge'
 export {
   textForMessage,
@@ -9484,6 +9485,7 @@ export class ChatEngine {
       if (activeSession) {
         activeSession.activeTurnUserMessageId = messageId
         activeSession.activeTurnOrigin = origin
+        activeSession.activeTurnOvenId = settings.ovenId ?? 'local'
         activeSession.estimatedContextUsed = composition.totalTokens
       }
       this.markSessionWorking(sessionId)
@@ -24363,6 +24365,10 @@ export class ChatEngine {
       // The user may have changed the composer mid-turn while waiting; those
       // changes belong to the next turn and must never re-label this one.
       const latestUserIndex = messages.findLastIndex((message) => message.role === 'user')
+      const turnOvenId = info.activeTurnOvenId ?? thread?.settings?.ovenId ?? 'local'
+      if (latestUserIndex >= 0 && !messages[latestUserIndex].ovenId) {
+        messages[latestUserIndex].ovenId = turnOvenId
+      }
       const turnAssistant = [...messages.slice(latestUserIndex + 1)]
         .reverse()
         .find((message) => message.role === 'assistant')
@@ -24371,6 +24377,7 @@ export class ChatEngine {
       if (turnAssistant && !turnAssistant.thinkingLevel && turnThinkingLevel) {
         turnAssistant.thinkingLevel = turnThinkingLevel
       }
+      if (turnAssistant && !turnAssistant.ovenId) turnAssistant.ovenId = turnOvenId
       // Providers that never report token usage leave assistant messages
       // without a contextUsed signal, blinding usage-based compaction and the
       // context indicator. Fall back to the composed-request occupancy captured

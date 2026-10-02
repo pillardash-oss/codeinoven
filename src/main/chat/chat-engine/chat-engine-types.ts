@@ -90,6 +90,8 @@ export interface SessionInfo {
   driverId: string
   /** Credential container that owns this native session. */
   accountId?: string
+  /** Oven selected when the active turn was dispatched. */
+  activeTurnOvenId?: string
   activeTurnId?: string
   /** Stable user message that starts the active provider turn. */
   activeTurnUserMessageId?: string

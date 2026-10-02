@@ -165,6 +165,10 @@ export class OvenChat {
       const user: AgentMessage = {
         id: userId,
         role: 'user',
+        ovenId,
+        accountId: account.id,
+        accountLabel: account.label,
+        thinkingLevel: settings.thinkingLevel,
         createdAt: Date.now(),
         parts: [
           { type: 'text', id: `${userId}:text`, messageID: userId, text },
@@ -597,6 +601,12 @@ export class OvenChat {
     }
     if (!mapped) return
     if (mapped.nativeSessionId) binding.session.nativeSessionId = mapped.nativeSessionId
+    if (mapped.messages)
+      for (const message of mapped.messages) {
+        message.ovenId ??= binding.ovenId
+        message.accountId ??= binding.settings.accountId
+        message.thinkingLevel ??= binding.settings.thinkingLevel
+      }
     if (mapped.messages)
       mergeSessionMessages(
         binding.session,

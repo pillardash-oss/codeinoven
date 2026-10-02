@@ -248,6 +248,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   harness_id      TEXT,
   account_id      TEXT,
   account_label   TEXT,
+  oven_id         TEXT,
   thinking_level  TEXT,
   references_json TEXT,
   project_references_json TEXT,
