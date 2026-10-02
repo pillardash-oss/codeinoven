@@ -217,10 +217,11 @@
     globalBrowser.switchTo(tabId)
   }
 
-  function handleTabContextMenu(tabId: string): void {
-    if (visibleSelectedTabIds.includes(tabId)) return
+  function handleTabContextMenu(tabId: string): string[] {
+    if (visibleSelectedTabIds.includes(tabId)) return [...visibleSelectedTabIds]
     selectedTabIds = [tabId]
     selectionAnchorId = tabId
+    return [tabId]
   }
 
   function moveTabsToGroup(tabIds: string[], groupId: string): void {

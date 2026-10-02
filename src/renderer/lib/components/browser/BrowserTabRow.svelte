@@ -21,6 +21,7 @@
     X
   } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
+  import { invoke } from '$lib/ipc.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -46,7 +47,7 @@
     selected: boolean
     selectedTabIds: string[]
     onTabClick: (tabId: string, event: MouseEvent) => void
-    onTabContextMenu: (tabId: string) => void
+    onTabContextMenu: (tabId: string) => string[]
     onMoveTabsToGroup: (tabIds: string[], groupId: string) => void
     onCreateGroupForTabs: (tabIds: string[]) => void
     onReopenTabsInBox: (tabIds: string[], boxId: string | null) => void
@@ -91,6 +92,7 @@
 
   const runtime = $derived(globalBrowser.runtimeFor(tab.id))
   const active = $derived(globalBrowser.activeTabId === tab.id)
+  const highlighted = $derived(active || selected)
   /** The label the row shows: the user's own title when set, else the page's. */
   const label = $derived(browserTabLabel(tab))
   /** The tab's custom icon as an image, or null to fall back to the favicon. */
@@ -211,21 +213,62 @@
     globalBrowser.reorder(dragged, tab.id, position)
     globalBrowser.endDrag()
   }
+
+  /** Selected-tab actions use an OS menu so the browser's native view cannot
+   *  cover or clip the popup. A right-click outside the selection keeps the
+   *  existing single-tab menu and selects only that row. */
+  function onContextMenu(event: MouseEvent): void {
+    const contextSelection = onTabContextMenu(tab.id)
+    if (contextSelection.length < 2) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    const row = event.currentTarget
+    const bounds = row instanceof HTMLElement ? row.getBoundingClientRect() : null
+    const x = event.clientX || (bounds ? bounds.left + Math.min(bounds.width / 2, 24) : 0)
+    const y = event.clientY || (bounds ? bounds.top + bounds.height / 2 : 0)
+    const selectedIds = [...contextSelection]
+
+    void invoke(
+      'browser:tabSelectionMenu',
+      {
+        selectedCount: selectedIds.length,
+        groups: groups.map(({ id, name }) => ({ id, name })),
+        boxes: globalBrowser.boxes.map(({ id, name }) => ({ id, name })),
+        canCreateGroup: groups.length < MAX_GLOBAL_BROWSER_GROUPS
+      },
+      x,
+      y
+    )
+      .then((choice) => {
+        if (!choice) return
+        switch (choice.action) {
+          case 'moveToGroup':
+            onMoveTabsToGroup(selectedIds, choice.groupId)
+            return
+          case 'createGroup':
+            onCreateGroupForTabs(selectedIds)
+            return
+          case 'reopenInBox':
+            onReopenTabsInBox(selectedIds, choice.boxId)
+            return
+        }
+      })
+      .catch(() => {})
+  }
 </script>
 
 <ContextMenu.Root>
-  <ContextMenu.Trigger class="contents">
+  <ContextMenu.Trigger class="contents" disabled={bulkSelection}>
     <div
       class="group flex items-center rounded-md transition-colors {dropTarget
         ? 'bg-info/10'
-        : selected
-          ? 'bg-primary/25'
-          : active
-            ? 'bg-elevated'
-            : 'hover:bg-elevated'}"
+        : highlighted
+          ? 'bg-elevated'
+          : 'hover:bg-elevated'}"
       role="group"
       aria-label={`${label} tab row`}
-      oncontextmenu={() => onTabContextMenu(tab.id)}
+      oncontextmenu={onContextMenu}
     >
       <button
         type="button"
@@ -260,9 +303,9 @@
         </span>
         <span class="flex min-w-0 flex-1 flex-col">
           <span
-            class="truncate text-xs {tab.hibernated ? 'text-dimmed' : 'text-foreground'} {active
-              ? 'font-medium'
-              : ''}"
+            class="truncate text-xs {tab.hibernated && !highlighted
+              ? 'text-dimmed'
+              : 'text-foreground'} {highlighted ? 'font-medium' : ''}"
             style={accent ? `color: ${accent}` : undefined}
           >
             {label}
@@ -406,50 +449,11 @@
       </ContextMenu.Item>
       <BrowserTabPlacementItems onCreate={newPlaced} />
       <ContextMenu.Separator class="my-1 h-px bg-border" />
-      {#if !bulkSelection}
-        <ContextMenu.Item class={itemClass} onSelect={createGroupFromTab}>
-          <FolderPlus size={13} class="shrink-0 text-muted" />
-          New tab group
-        </ContextMenu.Item>
-      {/if}
-      {#if bulkSelection}
-        <ContextMenu.Sub>
-          <ContextMenu.SubTrigger class={itemClass}>
-            <FolderPlus size={13} class="shrink-0 text-muted" />
-            Add selected tabs to group
-            <ChevronRight size={13} class="ml-auto text-muted" />
-          </ContextMenu.SubTrigger>
-          <ContextMenu.Portal>
-            <ContextMenu.SubContent
-              avoidCollisions
-              collisionPadding={12}
-              updatePositionStrategy="always"
-              class="z-50 max-h-[calc(100dvh-1.5rem)] min-w-44 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
-            >
-              {#each groups as candidate (candidate.id)}
-                <ContextMenu.Item
-                  class={itemClass}
-                  onSelect={() => onMoveTabsToGroup(selectedTabIds, candidate.id)}
-                >
-                  <FolderInput size={13} class="shrink-0 text-muted" />
-                  <span class="truncate">{candidate.name}</span>
-                </ContextMenu.Item>
-              {/each}
-              {#if groups.length > 0}
-                <ContextMenu.Separator class="my-1 h-px bg-border" />
-              {/if}
-              <ContextMenu.Item
-                class={itemClass}
-                disabled={groups.length >= MAX_GLOBAL_BROWSER_GROUPS}
-                onSelect={() => onCreateGroupForTabs(selectedTabIds)}
-              >
-                <FolderPlus size={13} class="shrink-0 text-muted" />
-                Create group from selection
-              </ContextMenu.Item>
-            </ContextMenu.SubContent>
-          </ContextMenu.Portal>
-        </ContextMenu.Sub>
-      {:else if group}
+      <ContextMenu.Item class={itemClass} onSelect={createGroupFromTab}>
+        <FolderPlus size={13} class="shrink-0 text-muted" />
+        New tab group
+      </ContextMenu.Item>
+      {#if group}
         <ContextMenu.Item class={itemClass} onSelect={() => onOpenGroupEditor(tab.groupId)}>
           <Pencil size={13} class="shrink-0 text-muted" />
           Edit {group.name}
@@ -477,11 +481,11 @@
       {/if}
 
       <ContextMenu.Separator class="my-1 h-px bg-border" />
-      {#if bulkSelection || globalBrowser.boxes.length > 0 || tab.boxId}
+      {#if globalBrowser.boxes.length > 0 || tab.boxId}
         <ContextMenu.Sub>
           <ContextMenu.SubTrigger class={itemClass}>
             <Boxes size={13} class="shrink-0 text-muted" />
-            {bulkSelection ? 'Add selected tabs to box' : 'Reopen in box'}
+            Reopen in box
             <ChevronRight size={13} class="ml-auto text-muted" />
           </ContextMenu.SubTrigger>
           <ContextMenu.Portal>
@@ -491,27 +495,7 @@
               updatePositionStrategy="always"
               class="z-50 max-h-[calc(100dvh-1.5rem)] min-w-44 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
             >
-              {#if bulkSelection}
-                <ContextMenu.Item
-                  class={itemClass}
-                  onSelect={() => onReopenTabsInBox(selectedTabIds, null)}
-                >
-                  <Globe size={13} class="shrink-0 text-muted" />
-                  No box
-                </ContextMenu.Item>
-                {#each globalBrowser.boxes as candidate (candidate.id)}
-                  <ContextMenu.Item
-                    class={itemClass}
-                    onSelect={() => onReopenTabsInBox(selectedTabIds, candidate.id)}
-                  >
-                    <span
-                      class="h-2 w-2 shrink-0 rounded-full"
-                      style="background-color: {browserAppearanceAccent(candidate)}"
-                    ></span>
-                    <span class="truncate">{candidate.name}</span>
-                  </ContextMenu.Item>
-                {/each}
-              {:else if tab.boxId}
+              {#if tab.boxId}
                 <ContextMenu.Item class={itemClass} onSelect={() => (reopenTarget = null)}>
                   <Globe size={13} class="shrink-0 text-muted" />
                   No box

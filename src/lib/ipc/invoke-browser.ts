@@ -27,6 +27,10 @@ import type { GlobalBrowserTabsSnapshot } from '../browser/global-browser-tabs'
 import type { BrowserBookmarksSnapshot, BrowserHistorySnapshot } from '../browser/browser-library'
 import type { BrowserBoxMenuChoice, BrowserBoxMenuInput } from '../browser/browser-box-menu'
 import type {
+  BrowserTabSelectionMenuChoice,
+  BrowserTabSelectionMenuInput
+} from '../browser/browser-tab-selection-menu'
+import type {
   BrowserOverlayAck,
   BrowserOverlaySnapshot,
   BrowserStripOverlayInteraction,
@@ -445,6 +449,11 @@ export const invokeBrowserContract = {
   'browser:boxMenu': {} as Contract<
     [input: BrowserBoxMenuInput, x: number, y: number],
     BrowserBoxMenuChoice | null
+  >,
+  /** Open the native context menu for a multi-tab selection. */
+  'browser:tabSelectionMenu': {} as Contract<
+    [input: BrowserTabSelectionMenuInput, x: number, y: number],
+    BrowserTabSelectionMenuChoice | null
   >,
   'browser:resolvePermission': {} as Contract<
     [requestId: string, decision: BrowserPermissionDecision],
