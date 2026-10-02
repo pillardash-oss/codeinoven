@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Globe } from '@lucide/svelte'
+  import { Files, Globe } from '@lucide/svelte'
   import ThreadView from '../threads/ThreadView.svelte'
   import { BrowserAssistantChatController } from './BrowserAssistantChatController.svelte'
   import { browserAssistant, type BrowserAssistantChat } from '$lib/stores/browser-assistant.svelte'
@@ -10,9 +10,10 @@
   interface Props {
     /** The conversation thread this panel shows. */
     threadId: string
+    onShowFiles: () => void
   }
 
-  let { threadId }: Props = $props()
+  let { threadId, onShowFiles }: Props = $props()
 
   /**
    * A browser tab's assistant conversation, rendered in the browser's right rail.
@@ -103,6 +104,20 @@
 {/snippet}
 
 <div class="browser-assistant-chat bg-app flex h-full min-h-0 w-full flex-col overflow-hidden">
+  {#if thread}
+    <div class="flex h-9 shrink-0 items-center justify-end border-b border-border px-2">
+      <button
+        type="button"
+        class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-foreground"
+        title="Open files created in this conversation"
+        aria-label="Open files created in this conversation"
+        onclick={onShowFiles}
+      >
+        <Files size={13} />
+        Files
+      </button>
+    </div>
+  {/if}
   {#if thread && controller}
     <ThreadView
       {thread}

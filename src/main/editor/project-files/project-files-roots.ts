@@ -8,7 +8,11 @@
 import { realpathSync, statSync, type Stats } from 'node:fs'
 import { lstat, realpath, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { ASSISTANT_SPACE_ID, usesThreadWorkspaceMount } from '../../../lib/types'
+import {
+  ASSISTANT_SPACE_ID,
+  GLOBAL_BROWSER_PROJECT_ID,
+  usesThreadWorkspaceMount
+} from '../../../lib/types'
 import type { Project, ProjectFileEntry } from '../../../lib/types'
 import {
   isWithinRoot,
@@ -49,6 +53,7 @@ export interface ProjectFilesAssistantRootLookup {
 export interface ProjectFilesThreadWorkspaceRoots {
   chatWorkspace?: ProjectFilesChatWorkspaceRootLookup
   assistant?: ProjectFilesAssistantRootLookup
+  browser?: ProjectFilesChatWorkspaceRootLookup
 }
 
 export class ProjectFilesRootResolver {
@@ -69,7 +74,9 @@ export class ProjectFilesRootResolver {
       const lookup =
         projectId === ASSISTANT_SPACE_ID
           ? this.threadWorkspaces.assistant
-          : this.threadWorkspaces.chatWorkspace
+          : projectId === GLOBAL_BROWSER_PROJECT_ID
+            ? this.threadWorkspaces.browser
+            : this.threadWorkspaces.chatWorkspace
       if (lookup) {
         const cacheKey = `${projectId}::thread:${threadId}`
         const cached = this.projectRoots.get(cacheKey)

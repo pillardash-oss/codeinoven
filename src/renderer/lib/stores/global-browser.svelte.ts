@@ -326,6 +326,7 @@ export class GlobalBrowserState {
       }
     }
     this.hydrated = true
+    void browserAssistant.restoreChats(this.tabs)
     // A box's icon is a file on disk, so its bytes are read once, here rather than
     // by whichever surface happens to show a box first: the rail, a tab row and
     // the boxes panel all draw the same icon, and none of them should have to wait

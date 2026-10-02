@@ -147,6 +147,35 @@ class BrowserAssistantState {
     return this.register(input.browserTabId, created)
   }
 
+  /** Reconnect the durable tab links after the browser snapshot is restored.
+   *  Only linked conversations are fetched, keeping startup work bounded by the
+   *  browser's tab cap and avoiding a full hidden-project thread scan. */
+  async restoreChats(
+    tabs: readonly { id: string; assistantThreadId: string | null }[]
+  ): Promise<void> {
+    const linked = tabs.filter(
+      (tab): tab is { id: string; assistantThreadId: string } =>
+        typeof tab.assistantThreadId === 'string' && tab.assistantThreadId.length > 0
+    )
+    await Promise.all(
+      linked.map(async (tab) => {
+        try {
+          const thread = await invoke(
+            'thread:get',
+            GLOBAL_BROWSER_PROJECT_ID,
+            tab.assistantThreadId
+          )
+          if (!thread || thread.archived) return
+          this.register(tab.id, thread)
+          void invoke('browser:bindAssistantPage', thread.id, tab.id).catch(() => {})
+        } catch {
+          // A deleted thread leaves a stale tab link; opening Ask the agent can
+          // create a replacement through the existing ensureChat path.
+        }
+      })
+    )
+  }
+
   /** Rename one conversation. The user's own title is manual, so the model never
    *  overwrites it on a later turn. */
   async renameChat(threadId: string, title: string): Promise<void> {

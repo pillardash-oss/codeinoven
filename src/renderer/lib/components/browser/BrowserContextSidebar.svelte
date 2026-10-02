@@ -401,7 +401,13 @@
            conversation, including the controller, which binds once at mount. -->
       {#key agentChat.threadId}
         {#await import('./BrowserAssistantChatView.svelte') then { default: BrowserAssistantChatView }}
-          <BrowserAssistantChatView threadId={agentChat.threadId} />
+          <BrowserAssistantChatView
+            threadId={agentChat.threadId}
+            onShowFiles={() => {
+              contextSidebarState.openFiles(agentChat.thread.projectId, agentChat.thread.id)
+              globalBrowser.showAgentSidebar()
+            }}
+          />
         {/await}
       {/key}
     {:else}
