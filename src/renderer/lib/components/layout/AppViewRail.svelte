@@ -79,8 +79,8 @@
       >
         {#snippet badge()}
           {#if badges.activity || badges.unread}
-            <span class="absolute -top-1 -right-1 flex items-center gap-0.5">
-              {#if badges.activity}
+            <span class="absolute -top-1 -right-1 flex flex-col items-end gap-0.5">
+              {#if badges.activity?.tone === 'working'}
                 <WorkingCountBadge
                   icon={badges.activity.icon}
                   count={badges.activity.count}
@@ -95,6 +95,14 @@
                   label={badges.unread.label}
                   tone={badges.unread.tone}
                   colors={badges.unread.colors}
+                />
+              {/if}
+              {#if badges.activity && badges.activity.tone !== 'working'}
+                <WorkingCountBadge
+                  icon={badges.activity.icon}
+                  count={badges.activity.count}
+                  label={badges.activity.label}
+                  tone={badges.activity.tone}
                 />
               {/if}
             </span>
