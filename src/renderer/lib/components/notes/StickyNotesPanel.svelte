@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import { fade } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
   import { Eye, Maximize2, NotebookPen, Plus, Redo2, SquarePen, Undo2, X } from '@lucide/svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
@@ -9,6 +9,7 @@
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { motionDuration, slideWidth } from '$lib/motion'
   import { stickyNotes, type StickyNoteEntry } from '$lib/stores/sticky-notes.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import type { StickyNoteAppearance } from '$shared/types'
@@ -299,8 +300,9 @@
             title="Undo"
             aria-label="Undo sticky note edit"
             onclick={() => historyController?.undo()}
-            in:fade={{ duration: 120 }}
-            out:fade={{ duration: 120 }}
+            in:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
+            out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
+            style="width: 1.75rem"
           >
             <Undo2 size={14} />
           </button>
@@ -312,8 +314,9 @@
             title="Redo"
             aria-label="Redo sticky note edit"
             onclick={() => historyController?.redo()}
-            in:fade={{ duration: 120 }}
-            out:fade={{ duration: 120 }}
+            in:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
+            out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
+            style="width: 1.75rem"
           >
             <Redo2 size={14} />
           </button>
