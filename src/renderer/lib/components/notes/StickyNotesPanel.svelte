@@ -326,7 +326,7 @@
           getTarget={getSpeechTarget}
           scope={speechScope}
           disabled={speechDisabled}
-          class="h-7 w-7"
+          class="h-7 w-7 text-dimmed"
         />
         {@render noteActions()}
         <button
