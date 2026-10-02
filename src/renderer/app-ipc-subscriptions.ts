@@ -116,12 +116,15 @@ function showAgentNotification(
   // (the user is already on this thread) stays silent.
   playInAppAlert(notificationSoundKind(payload.kind, payload.projectId))
   notificationPanelState.add(payload)
-  const id = payload.id
+  // No `onDismiss`: a toast is a transient announcement that expires on its own,
+  // so letting its expiry retire the panel entry would drop exactly the
+  // notifications the user walked away from. The panel is the durable inbox and
+  // a toast is not; the two are retired separately, the panel entry only by
+  // opening its thread (see `reconcileThread`) or by the user dismissing it.
   const options = {
-    id,
+    id: payload.id,
     description: payload.body,
     duration: 8_000,
-    onDismiss: () => notificationPanelState.dismiss(id),
     action: {
       label: 'Open thread',
       onClick: (): void => {

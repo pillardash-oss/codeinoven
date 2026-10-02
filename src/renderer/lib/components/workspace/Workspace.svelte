@@ -2522,6 +2522,11 @@
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
       historyOffset = uniqueThreadList(threadList).length
       hasMoreHistory = false
+      // Restore what the last session left in the durable inbox, alongside the
+      // thread-state hydration below. Deliberately not awaited: hydration
+      // already refills the statuses it can see on its own, and the restored
+      // entries merge in whenever the read lands (both paths dedupe on id).
+      void notificationPanelState.restoreFromStore()
       notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       // Publish the workspace with deterministic fallback icons immediately.
