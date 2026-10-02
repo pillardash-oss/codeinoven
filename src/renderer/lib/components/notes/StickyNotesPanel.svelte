@@ -111,8 +111,7 @@
 </script>
 
 {#snippet noteActions()}
-  {#if activeNote?.loaded}
-    {#if activeIsEditing}
+  {#if activeNote && activeIsEditing}
       <button
         type="button"
         class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -123,7 +122,7 @@
       >
         <NotebookPen size={14} />
       </button>
-    {:else}
+  {:else if activeNote}
       <button
         type="button"
         class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -134,29 +133,28 @@
       >
         <SquarePen size={14} />
       </button>
-    {/if}
-    {#if activeIsEditing && canUndo}
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Undo"
-        aria-label="Undo sticky note edit"
-        onclick={() => historyController?.undo()}
-      >
-        <Undo2 size={14} />
-      </button>
-    {/if}
-    {#if activeIsEditing && canRedo}
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Redo"
-        aria-label="Redo sticky note edit"
-        onclick={() => historyController?.redo()}
-      >
-        <Redo2 size={14} />
-      </button>
-    {/if}
+  {/if}
+  {#if activeNote?.loaded && activeIsEditing && canUndo}
+    <button
+      type="button"
+      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Undo"
+      aria-label="Undo sticky note edit"
+      onclick={() => historyController?.undo()}
+    >
+      <Undo2 size={14} />
+    </button>
+  {/if}
+  {#if activeNote?.loaded && activeIsEditing && canRedo}
+    <button
+      type="button"
+      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Redo"
+      aria-label="Redo sticky note edit"
+      onclick={() => historyController?.redo()}
+    >
+      <Redo2 size={14} />
+    </button>
   {/if}
 {/snippet}
 
@@ -297,6 +295,7 @@
         </div>
       </div>
       <div class="flex shrink-0 items-center border-l border-border px-1">
+        {@render noteActions()}
         <button
           type="button"
           class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
