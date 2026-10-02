@@ -4403,9 +4403,9 @@
   {/await}
 {/snippet}
 
-<!-- Every browser surface waits for `browserStore()` so its chunk is not even
-     fetched on a launch that never reaches the browser. The store arrives with
-     the runtime, which is also what warms these chunks. -->
+<!-- Global-browser surfaces wait for `browserStore()` so their chunks are not
+     fetched on a launch that never reaches the browser. Thread-browser
+     fullscreen is loaded separately below when a thread tab asks for it. -->
 {#if browserStore()}
   {#await import('./WorkspaceBrowserDataModal.svelte') then { default: WorkspaceBrowserDataModal }}
     <WorkspaceBrowserDataModal {browser} {projects} />
@@ -4434,7 +4434,7 @@
   onNewTerminal={openNewTerminal}
   onCloseTab={(id) => closeFullscreenTab('terminal', id)}
 />
-{#if browserStore()}
+{#if browserFullscreenTabId}
   {#await import('./WorkspaceFullscreenBrowser.svelte') then { default: WorkspaceFullscreenBrowser }}
     <WorkspaceFullscreenBrowser
       tabId={browserFullscreenTabId}
