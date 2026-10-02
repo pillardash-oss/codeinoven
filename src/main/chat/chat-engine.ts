@@ -24369,9 +24369,13 @@ export class ChatEngine {
       const turnOvenLabel = await this.ovenChat
         .nameFor(turnOvenId)
         .catch(() => (turnOvenId === 'local' ? 'Local' : 'Oven'))
+      const turnOvenAppearance = await this.ovenChat
+        .appearanceFor(turnOvenId)
+        .catch(() => undefined)
       if (latestUserIndex >= 0 && !messages[latestUserIndex].ovenId) {
         messages[latestUserIndex].ovenId = turnOvenId
         messages[latestUserIndex].ovenLabel = turnOvenLabel
+        if (turnOvenAppearance) messages[latestUserIndex].ovenAppearance = turnOvenAppearance
       }
       const turnAssistant = [...messages.slice(latestUserIndex + 1)]
         .reverse()
@@ -24384,6 +24388,7 @@ export class ChatEngine {
       if (turnAssistant && !turnAssistant.ovenId) {
         turnAssistant.ovenId = turnOvenId
         turnAssistant.ovenLabel = turnOvenLabel
+        if (turnOvenAppearance) turnAssistant.ovenAppearance = turnOvenAppearance
       }
       // Providers that never report token usage leave assistant messages
       // without a contextUsed signal, blinding usage-based compaction and the

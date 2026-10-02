@@ -5,6 +5,7 @@
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import { isCodeModeToolName } from '$shared/agent-interactions'
   import type { AgentPart, ThinkingLevel } from '$shared/types'
+  import type { OvenAppearance } from '$shared/ovens'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type { SubagentPart } from '$lib/working-trace-parts'
@@ -65,7 +66,9 @@
     harnessId?: string | null
     harnessName?: string | null
     accountLabel?: string | null
+    accountId?: string | null
     ovenLabel?: string | null
+    ovenAppearance?: OvenAppearance
     isFast?: boolean
     projectId?: string
     threadId?: string
@@ -97,7 +100,9 @@
     harnessId,
     harnessName,
     accountLabel,
+    accountId,
     ovenLabel,
+    ovenAppearance,
     isFast = false,
     projectId,
     threadId,
@@ -453,7 +458,9 @@
           {harnessId}
           {harnessName}
           {accountLabel}
+          {accountId}
           {ovenLabel}
+          {ovenAppearance}
         />
       {/if}
     </div>

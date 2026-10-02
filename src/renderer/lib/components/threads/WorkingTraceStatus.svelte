@@ -3,7 +3,10 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { formatDurationSeconds } from '$lib/format/duration'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import type { ThinkingLevel } from '$shared/types'
+  import type { OvenAppearance } from '$shared/ovens'
 
   interface Props {
     /** True when this trace was rehydrated from persisted state instead of a live run. */
@@ -24,7 +27,9 @@
     harnessId?: string | null
     harnessName?: string | null
     accountLabel?: string | null
+    accountId?: string | null
     ovenLabel?: string | null
+    ovenAppearance?: OvenAppearance
   }
 
   let {
@@ -40,7 +45,9 @@
     harnessId,
     harnessName,
     accountLabel,
-    ovenLabel
+    accountId,
+    ovenLabel,
+    ovenAppearance
   }: Props = $props()
 </script>
 
@@ -114,21 +121,32 @@
           {thinkingLevel}
         </span>
       {/if}
-      {#if accountLabel && accountLabel !== 'Default'}
+      {#if accountId || accountLabel}
         <span
-          class="flex shrink-0 items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
-          title={`Account: ${accountLabel}`}
-          aria-label={`Account: ${accountLabel}`}
+          class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+          title={`Account: ${accountLabel ?? 'Default'}`}
+          aria-label={`Account: ${accountLabel ?? 'Default'}`}
         >
-          {accountLabel}
+          <VendorIcon name={providerName ?? 'Account'} id={providerId ?? undefined} size={11} />
+          {#if accountLabel && accountLabel !== 'Default'}{accountLabel}{/if}
         </span>
       {/if}
       {#if ovenLabel}
         <span
-          class="flex shrink-0 items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+          class="flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[0.5625rem] text-muted"
+          style={`background-color: color-mix(in srgb, ${ovenAppearance?.color ?? '#6b7280'} 10%, transparent); border-color: color-mix(in srgb, ${ovenAppearance?.color ?? '#6b7280'} 25%, transparent);`}
           title={`Oven: ${ovenLabel}`}
           aria-label={`Oven: ${ovenLabel}`}
         >
+          {#if ovenAppearance}
+            <img
+              class="h-3 w-3 shrink-0"
+              alt=""
+              src={ovenAppearance.customSvg
+                ? getCustomSvgDataUrl(ovenAppearance.customSvg, ovenAppearance.color)
+                : getIconSvgDataUrl(ovenAppearance.icon, ovenAppearance.color)}
+            />
+          {/if}
           {ovenLabel}
         </span>
       {/if}

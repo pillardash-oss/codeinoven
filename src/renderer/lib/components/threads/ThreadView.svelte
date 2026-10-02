@@ -7,7 +7,7 @@
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import type { OvenState } from '$shared/ovens'
+  import type { OvenAppearance, OvenState } from '$shared/ovens'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
 
   import {
@@ -119,6 +119,8 @@
   import { StudioDocumentHistoryCollection } from '../specs/studio-document-history.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -10956,7 +10958,9 @@
           (account) =>
             account.id === selection.accountId && account.providerId === selection.providerId
         )?.label ?? null,
+      accountId: selection.accountId ?? null,
       ovenLabel: ovenLabelForId(settings.ovenId),
+      ovenAppearance: ovenAppearanceForId(settings.ovenId),
       isFast: fastVariantForModelId(modelId) !== null
     }
   })
@@ -10968,6 +10972,18 @@
       ovensForAttribution?.ovens.find((oven) => oven.id === ovenId)?.name ??
       (ovenId === LOCAL_OVEN_ID ? 'Local' : 'Oven')
     )
+  }
+
+  function ovenAppearanceForId(id?: string | null): OvenAppearance {
+    const ovenId = id ?? LOCAL_OVEN_ID
+    const oven = ovensForAttribution?.ovens.find((candidate) => candidate.id === ovenId)
+    return oven
+      ? {
+          icon: oven.icon,
+          color: oven.color,
+          ...(oven.customSvg ? { customSvg: oven.customSvg } : {})
+        }
+      : { icon: 'cpu', color: '#6b7280' }
   }
 
   function openSubagent(part: SubagentPart): void {
@@ -11907,6 +11923,7 @@
               {@const provider = messageProvider(msg, providers)}
               {@const modelLabel = messageModelLabel(msg, allModels)}
               {@const msgThinking = messageThinkingLevel(msg, allModels)}
+              {@const msgOvenAppearance = msg.ovenAppearance ?? ovenAppearanceForId(msg.ovenId)}
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
               {@const harnessId = resolveMessageHarnessId(msg, messageHarnessFallback)}
               {@const harnessName = messageHarnessName(msg, messageHarnessFallback)}
@@ -11991,9 +12008,15 @@
                         accountLabel={useLiveAttribution
                           ? currentWorkingTraceAttribution.accountLabel
                           : msg.accountLabel}
+                        accountId={useLiveAttribution
+                          ? currentWorkingTraceAttribution.accountId
+                          : msg.accountId}
                         ovenLabel={useLiveAttribution
                           ? currentWorkingTraceAttribution.ovenLabel
                           : (msg.ovenLabel ?? ovenLabelForId(msg.ovenId))}
+                        ovenAppearance={useLiveAttribution
+                          ? currentWorkingTraceAttribution.ovenAppearance
+                          : msgOvenAppearance}
                         isFast={useLiveAttribution
                           ? currentWorkingTraceAttribution.isFast
                           : fastVariant !== null}
@@ -12217,20 +12240,39 @@
                                   </span>
                                 {/if}
                               {/if}
-                              {#if msg.accountLabel && msg.accountLabel !== 'Default'}
+                              {#if msg.accountId || msg.accountLabel}
                                 <span
-                                  class="flex items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
-                                  title={`Account: ${msg.accountLabel}`}
-                                  aria-label={`Account: ${msg.accountLabel}`}
+                                  class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+                                  title={`Account: ${msg.accountLabel ?? 'Default'}`}
+                                  aria-label={`Account: ${msg.accountLabel ?? 'Default'}`}
                                 >
-                                  {msg.accountLabel}
+                                  <VendorIcon
+                                    name={provider?.name ?? msg.providerId ?? 'Account'}
+                                    id={msg.providerId ?? undefined}
+                                    size={11}
+                                  />
+                                  {#if msg.accountLabel && msg.accountLabel !== 'Default'}{msg.accountLabel}{/if}
                                 </span>
                               {/if}
                               <span
-                                class="flex items-center rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-muted"
+                                class="flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[0.5625rem] text-muted"
+                                style={`background-color: color-mix(in srgb, ${msgOvenAppearance.color} 10%, transparent); border-color: color-mix(in srgb, ${msgOvenAppearance.color} 25%, transparent);`}
                                 title={`Oven: ${msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}`}
                                 aria-label={`Oven: ${msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}`}
                               >
+                                <img
+                                  class="h-3 w-3 shrink-0"
+                                  alt=""
+                                  src={msgOvenAppearance.customSvg
+                                    ? getCustomSvgDataUrl(
+                                        msgOvenAppearance.customSvg,
+                                        msgOvenAppearance.color
+                                      )
+                                    : getIconSvgDataUrl(
+                                        msgOvenAppearance.icon,
+                                        msgOvenAppearance.color
+                                      )}
+                                />
                                 {msg.ovenLabel ?? ovenLabelForId(msg.ovenId)}
                               </span>
                               <span class="text-[0.625rem] text-dimmed"
@@ -12281,7 +12323,9 @@
               harnessId={currentWorkingTraceAttribution.harnessId}
               harnessName={currentWorkingTraceAttribution.harnessName}
               accountLabel={currentWorkingTraceAttribution.accountLabel}
+              accountId={currentWorkingTraceAttribution.accountId}
               ovenLabel={currentWorkingTraceAttribution.ovenLabel}
+              ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
               isFast={currentWorkingTraceAttribution.isFast}
               initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
               initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}

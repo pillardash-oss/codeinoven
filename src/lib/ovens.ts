@@ -3,6 +3,12 @@ export const LOCAL_OVEN_ID = 'local'
 export const OVEN_PROTOCOL_VERSION = 1
 export type OvenIcon = string
 
+export interface OvenAppearance {
+  icon: OvenIcon
+  color: string
+  customSvg?: string
+}
+
 export interface OvenConnection {
   /** SSH config alias, DNS name, or IP address. Never a shell command. */
   host: string
