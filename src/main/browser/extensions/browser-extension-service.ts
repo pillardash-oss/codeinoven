@@ -86,6 +86,9 @@ import { materializeUserScriptFiles } from './browser-extension-user-scripts'
  *  of events that all say the same thing. */
 const PROGRESS_INTERVAL_MS = 200
 
+/** Give Electron time to finish initializing extension browser state after load. */
+const EXTENSION_READY_TIMEOUT_MS = 5_000
+
 /** How many installs run at once, and therefore how many downloads.
  *
  * Two is the point of the queue rather than a random number: a user installing
@@ -756,7 +759,7 @@ export class BrowserExtensionService {
       await this.refreshInstalledPreamble(directory, record)
       await this.refreshCapabilityReport(record)
       await this.makeManifestLoadable(directory)
-      await state.session.extensions.loadExtension(directory, { allowFileAccess: false })
+      await this.loadExtensionWhenReady(state.session, directory, record.injected !== 'none')
       state.ids.add(record.id)
       this.startBridge(state, record)
       // A successful load answers any earlier failure, so the row stops claiming
@@ -767,6 +770,59 @@ export class BrowserExtensionService {
       const warning = `It could not be loaded (${reason})`
       Logger.error(`Browser extension ${record.id} could not be loaded:`, error)
       return this.registry.setLoadWarning(record.id, warning)
+    }
+  }
+
+  /**
+   * Load the extension, then wait until Electron has initialized the browser
+   * state needed to start its background. The load promise only reports that the
+   * extension was loaded; starting its bridge or navigating a page in between
+   * that promise and `extension-ready` can race content-script registration.
+   */
+  private async loadExtensionWhenReady(
+    session: Session,
+    directory: string,
+    waitForReady: boolean
+  ): Promise<void> {
+    const extensions = session.extensions
+    if (!waitForReady) {
+      await extensions.loadExtension(directory, { allowFileAccess: false })
+      return
+    }
+
+    const readyExtensionIds = new Set<string>()
+    let loadedExtensionId: string | null = null
+    let resolveReady: (() => void) | null = null
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve
+    })
+    const onReady = (_event: Electron.Event, extension: Electron.Extension): void => {
+      readyExtensionIds.add(extension.id)
+      if (loadedExtensionId === extension.id) resolveReady?.()
+    }
+
+    extensions.on('extension-ready', onReady)
+    let timer: ReturnType<typeof setTimeout> | null = null
+    try {
+      const extension = await extensions.loadExtension(directory, { allowFileAccess: false })
+      loadedExtensionId = extension.id
+      if (readyExtensionIds.has(extension.id)) return
+
+      const becameReady = await Promise.race([
+        ready.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), EXTENSION_READY_TIMEOUT_MS)
+        })
+      ])
+      if (!becameReady) {
+        Logger.dev('Browser extension did not report readiness before its startup deadline:', {
+          extensionId: extension.id,
+          timeoutMs: EXTENSION_READY_TIMEOUT_MS
+        })
+      }
+    } finally {
+      if (timer !== null) clearTimeout(timer)
+      extensions.off('extension-ready', onReady)
     }
   }
 
