@@ -31,10 +31,11 @@
   /** The pins this box can act on, in the order they were installed. */
   const pinned = $derived(tab ? browserExtensions.pinnedExtensionsInJar(tab.boxId ?? '') : [])
 
-  /** The popup one pinned extension already has open, or null when it has none. */
+  /** The popup this pin is currently displaying, rather than a retained page. */
   function openPopupFor(extensionId: string): string | null {
-    if (!tab) return null
-    return browserPopupWindows.extensionPopupFor(extensionId, tab.id)
+    if (!tab || !globalBrowser.popupsSidebarShown) return null
+    const popupId = browserPopupWindows.extensionPopupFor(extensionId, tab.id)
+    return browserPopupWindows.active()?.id === popupId ? popupId : null
   }
 
   /** What one pin's control says, the same words for the tooltip and for a reader
@@ -91,7 +92,7 @@
   async function toggle(extensionId: string): Promise<void> {
     const current = tab
     if (!current) return
-    const open = browserPopupWindows.extensionPopupFor(extensionId, current.id)
+    const open = openPopupFor(extensionId)
     if (open !== null) {
       browserPopupWindows.dismiss(open)
       return

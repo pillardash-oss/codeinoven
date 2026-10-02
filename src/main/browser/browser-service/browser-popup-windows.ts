@@ -139,6 +139,18 @@ export class BrowserPopupWindows {
 
   constructor(private readonly viewHost: BrowserPopupWindowHost) {}
 
+  /** Retained pages still own their extension session while hidden. */
+  liveJars(): { projectId: string; boxId: string | null }[] {
+    const jars: { projectId: string; boxId: string | null }[] = []
+    for (const record of this.popups.values()) {
+      const page = pageOf(record)
+      if (page && !page.isDestroyed()) {
+        jars.push({ projectId: record.projectId, boxId: record.boxId })
+      }
+    }
+    return jars
+  }
+
   /**
    * Take ownership of one popup window's page.
    *
@@ -348,17 +360,44 @@ export class BrowserPopupWindows {
   /** Reuse one extension page in a new tab and make it visible in the rail again. */
   retargetExtensionPopup(
     id: string,
-    owner: { tabId: string; projectId: string; threadId: string; boxId: string | null }
+    owner: { tabId: string; projectId: string; threadId: string; boxId: string | null },
+    targetUrl?: string
   ): boolean {
     const record = this.popups.get(id)
     if (!record || record.extensionId === null || record.projectId !== owner.projectId) return false
     if (record.boxId !== owner.boxId) return false
+    const changedTab = record.tabId !== owner.tabId
+    if (changedTab) this.hide(id)
     record.tabId = owner.tabId
     record.threadId = owner.threadId
     record.hidden = false
     record.activationSequence += 1
+    if (changedTab) {
+      // Action popups assume a fresh document on a different tab. Bitwarden keeps
+      // its first tab and collected form details in application observables; API
+      // snapshots alone cannot update those caches. Reuse the native view and
+      // refresh its document against the new owner before it can autofill.
+      const page = pageOf(record)
+      if (page && !page.isDestroyed()) {
+        void page.loadURL(targetUrl ?? page.getURL()).catch((error: unknown) => {
+          Logger.dev('A retained extension popup could not refresh for its tab:', { id, error })
+        })
+      }
+    }
     this.viewHost.changed()
     return true
+  }
+
+  /** Visible action popups follow tab switches within their existing session. */
+  followActiveTab(
+    owner: { tabId: string; projectId: string; threadId: string; boxId: string | null },
+    popupUrl: (extensionId: string) => string | null
+  ): void {
+    for (const record of this.popups.values()) {
+      if (!record.extensionId || record.hidden || record.tabId === owner.tabId) continue
+      if (record.projectId !== owner.projectId || record.boxId !== owner.boxId) continue
+      this.retargetExtensionPopup(record.id, owner, popupUrl(record.extensionId) ?? undefined)
+    }
   }
 
   /** Hide a user's extension popup while keeping its page alive for the next use. */

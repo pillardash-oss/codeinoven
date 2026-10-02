@@ -183,6 +183,8 @@ export interface BrowserExtensionHost {
   sessionFor(projectId: string, boxId: string | null): Session
   /** Every jar that currently has a live page. */
   liveJars(): { projectId: string; boxId: string | null }[]
+  /** Drop documents before Chromium invalidates their extension contexts. */
+  releaseViews(extensionId: string, projectId: string, boxId: string | null): void
   /** The app tab a browser page belongs to, for action state an extension scoped
    *  to the tab ids the runtime gave it. */
   resolveTabId(projectId: string, contentsId: number): string | null
@@ -614,18 +616,25 @@ export class BrowserExtensionService {
    * This is the memory half of containment: a box the user closed keeps its
    * cookies on disk, but it does not keep a renderer per extension loaded into it.
    */
-  async onJarEmptied(projectId: string, boxId: string | null): Promise<void> {
+  async onJarEmptied(projectId: string, boxId: string | null, force = false): Promise<void> {
     if (this.disposed) return
     const partition = browserPartitionFor(projectId, boxId)
     // A load already in flight would otherwise finish after this and leave the jar
     // loaded with nothing to show for it.
     const inFlight = this.loading.get(partition)
     if (inFlight) await inFlight.catch(() => undefined)
+    if (
+      !force &&
+      this.host
+        .liveJars()
+        .some((jar) => browserPartitionFor(jar.projectId, jar.boxId) === partition)
+    )
+      return
     const state = this.loaded.get(partition)
     if (!state) return
     for (const id of [...state.ids]) {
       this.stopBridge(state, id)
-      this.removeFromSession(state.session, id)
+      this.removeFromSession(state, id)
     }
     this.loaded.delete(partition)
   }
@@ -636,7 +645,7 @@ export class BrowserExtensionService {
    */
   async forgetBox(projectId: string, boxId: string): Promise<void> {
     const partition = browserPartitionFor(projectId, boxId)
-    await this.onJarEmptied(projectId, boxId)
+    await this.onJarEmptied(projectId, boxId, true)
     this.loaded.delete(partition)
     if (await this.registry.forgetBox(boxId)) this.host.publish()
   }
@@ -658,7 +667,7 @@ export class BrowserExtensionService {
     for (const [partition, state] of [...this.loaded]) {
       for (const id of [...state.ids]) {
         this.stopBridge(state, id)
-        this.removeFromSession(state.session, id)
+        this.removeFromSession(state, id)
       }
       this.loaded.delete(partition)
     }
@@ -1041,7 +1050,7 @@ export class BrowserExtensionService {
     const state = this.loadedFor(partition, session, projectId, boxId)
     for (const id of toUnload) {
       this.stopBridge(state, id)
-      this.removeFromSession(session, id)
+      this.removeFromSession(state, id)
     }
     for (const id of toUnload) state.ids.delete(id)
     if (toLoad.length === 0) return
@@ -1255,9 +1264,10 @@ export class BrowserExtensionService {
     }
   }
 
-  private removeFromSession(session: Session, extensionId: string): void {
+  private removeFromSession(state: LoadedJar, extensionId: string): void {
+    this.host.releaseViews(extensionId, state.projectId, state.boxId)
     try {
-      session.extensions.removeExtension(extensionId)
+      state.session.extensions.removeExtension(extensionId)
     } catch (error) {
       Logger.dev('Browser extension could not be unloaded:', { extensionId, error })
     }
@@ -1267,7 +1277,7 @@ export class BrowserExtensionService {
     for (const [partition, state] of [...this.loaded]) {
       if (!state.ids.has(extensionId)) continue
       this.stopBridge(state, extensionId)
-      this.removeFromSession(state.session, extensionId)
+      this.removeFromSession(state, extensionId)
       state.ids.delete(extensionId)
       if (state.ids.size === 0) this.loaded.delete(partition)
     }

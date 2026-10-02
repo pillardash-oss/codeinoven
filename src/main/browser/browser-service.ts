@@ -685,6 +685,18 @@ export class BrowserService {
       tabReplay: (projectId, boxId) => this.extensionTabReplay(projectId, boxId),
       publishActivity: (update) => this.publishExtensionActivity(update),
       publish: () => this.publishExtensions(),
+      releaseViews: (extensionId, projectId, boxId) => {
+        const partition = browserPartitionFor(projectId, boxId)
+        const matches = (record: {
+          extensionId: string | null
+          projectId: string
+          boxId: string | null
+        }): boolean =>
+          record.extensionId === extensionId &&
+          browserPartitionFor(record.projectId, record.boxId) === partition
+        this.popupWindows.closeWhere(matches, 'its extension was unloaded')
+        this.sidePanels.closeWhere(matches, 'its extension was unloaded')
+      },
       openSidePanel: (request) => {
         void this.openExtensionSidePanel(request).catch((error: unknown) => {
           Logger.error('An extension side panel could not be opened:', error)
@@ -3139,12 +3151,13 @@ export class BrowserService {
     const cached = this.popupWindows.extensionPopupForJar(extensionId, projectId, tab.boxId)
     const activateCached = async (popupId: string): Promise<boolean> => {
       if (
-        !this.popupWindows.retargetExtensionPopup(popupId, {
-          tabId,
-          projectId,
-          threadId: tab.threadId,
-          boxId: tab.boxId
-        })
+        !this.popupWindows.retargetExtensionPopup(
+          popupId,
+          { tabId, projectId, threadId: tab.threadId, boxId: tab.boxId },
+          requestedUrl ??
+            this.extensions.popupUrlFor(extensionId, projectId, tab.boxId) ??
+            undefined
+        )
       )
         return false
       if (requestedUrl) {
@@ -3694,7 +3707,7 @@ export class BrowserService {
     // Unload first, then reload: an extension holds open files and a running
     // service worker inside the storage being erased, and reloading the jar's tabs
     // then runs it again against the clean store.
-    await this.extensions.onJarEmptied(projectId, boxId)
+    await this.extensions.onJarEmptied(projectId, boxId, true)
     await this.clearJarStorage(partition)
     await this.extensions.ensureJarLoaded(projectId, boxId)
   }
@@ -3836,21 +3849,25 @@ export class BrowserService {
       partitions.add(partition)
       jars.push(jar)
     }
+    for (const owner of [...this.popupWindows.liveJars(), ...this.sidePanels.liveJars()]) {
+      const jar = browserJarFor(owner.projectId, owner.boxId)
+      const partition = browserPartitionFor(jar.projectId, jar.boxId)
+      if (partitions.has(partition)) continue
+      partitions.add(partition)
+      jars.push(jar)
+    }
     return jars
   }
 
-  /** Whether one jar still has a page alive. A hibernated tab has none, which is
-   *  what makes hibernation the point at which an extension can be released. */
-  private jarHasLiveTab(projectId: string, boxId: string | null): boolean {
+  /** Retained extension documents keep their jar alive after site tabs close. */
+  private jarHasLivePage(projectId: string, boxId: string | null): boolean {
     // Asked about the jar rather than about its owner: a box's jar is shared, so
     // the global browser reading a page in it is enough to keep its extensions
     // loaded even as a project's tab in the same box closes.
     const partition = browserPartitionFor(projectId, boxId)
-    for (const tab of this.tabs.values()) {
-      if (browserPartitionFor(tab.projectId, tab.boxId) !== partition) continue
-      if (!tab.view.webContents.isDestroyed()) return true
-    }
-    return false
+    return this.liveJars().some(
+      (jar) => browserPartitionFor(jar.projectId, jar.boxId) === partition
+    )
   }
 
   /** Every jar one context holds a session for, the context's own jar first.
@@ -4094,6 +4111,10 @@ export class BrowserService {
     if (!tab) return
     const contents: WebContents | undefined = tab.view.webContents
     if (!contents || contents.isDestroyed()) return
+    this.popupWindows.followActiveTab(
+      { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId },
+      (extensionId) => this.extensions.popupUrlFor(extensionId, tab.projectId, tab.boxId)
+    )
     this.notifyExtensionTab(tabId, tab.projectId, tab.boxId, 'onActivated', [
       { tabId: contents.id, windowId: 0 }
     ])
@@ -5486,10 +5507,9 @@ export class BrowserService {
     this.stage.release(tab.view)
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)
-    // The jar's extensions are released the moment nothing is left showing them:
-    // an extension held loaded for a box with no page is a renderer held for
-    // nothing, which is exactly what containing an extension per box is for.
-    if (!this.jarHasLiveTab(tab.projectId, tab.boxId)) {
+    // A cached popup is still a live extension document. Unloading its extension
+    // would invalidate that document even though it remains available for reuse.
+    if (!this.jarHasLivePage(tab.projectId, tab.boxId)) {
       void this.extensions.onJarEmptied(tab.projectId, tab.boxId)
     }
     for (const [contextKey, agentTabId] of this.agentTabIds) {

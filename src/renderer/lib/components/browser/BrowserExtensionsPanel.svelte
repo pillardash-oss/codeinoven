@@ -92,13 +92,10 @@
   /**
    * The box the panel is scoped to, or the all-boxes value.
    *
-   * Null means follow the page on screen, so the panel describes whichever box the
-   * tab in front of the user lives in and an install lands in that same box without
-   * them having to say so. Picking a box by hand pins that choice until they switch
-   * again, and All boxes is the one that lists everything at once.
+   * The installed inventory starts with every box. A selected box filters the
+   * list, while an install still belongs to the page's current box by default.
    */
-  let pinnedBoxId = $state<string | null>(null)
-  const selection = $derived(pinnedBoxId ?? globalBrowser.activeTabBoxId)
+  let selection = $state(ALL_BOXES_SELECTION)
   /** The box in view, or null while the all view is up. */
   const scopedBox = $derived(
     selection === ALL_BOXES_SELECTION ? null : (globalBrowser.boxById(selection) ?? null)
@@ -413,8 +410,8 @@
 <div class="flex h-full min-h-0 flex-col">
   <div class="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
     <p class="text-xs font-medium text-muted">
-      {shown.length}
-      {shown.length === 1 ? 'extension' : 'extensions'}
+      {extensions.length}
+      {extensions.length === 1 ? 'installed extension' : 'installed extensions'}
     </p>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
@@ -467,7 +464,7 @@
     <EnumSelect
       options={boxOptions}
       value={selection}
-      onChange={(id) => (pinnedBoxId = id)}
+      onChange={(id) => (selection = id)}
       placeholder="Choose a box"
       ariaLabel="Box whose extensions are listed"
       title="Box whose extensions are listed"
