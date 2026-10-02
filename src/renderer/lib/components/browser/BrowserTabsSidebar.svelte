@@ -259,7 +259,6 @@
     }
   }
 
-
   function newTab(groupId: string | null = null): void {
     onOpenAddress()
     globalBrowser.createTab('', groupId)
@@ -597,7 +596,7 @@
           <input
             {@attach attachSearchInput}
             type="text"
-            class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
+            class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none"
             placeholder={scopedGroup ? `Search in ${scopedGroup.name}` : 'Search tabs'}
             aria-label={scopedGroup ? `Search tabs in ${scopedGroup.name}` : 'Search browser tabs'}
             value={query}
@@ -626,37 +625,17 @@
   {/if}
 {/snippet}
 
-<CollapsibleSidebar
-  title="Browser"
-  hideHeader
-  onboardingAnchor={false}
-  label="Browser tabs"
-  region="browser-sidebar"
-  overlayPhase={stripPhase}
-  {chrome}
->
-  {#if totalTabs === 0}
-    <div class="flex flex-col items-center gap-3 px-4 py-10 text-center">
-      <Globe size={22} class="text-dimmed" />
-      <p class="text-xs leading-relaxed text-dimmed">
-        No tabs are open. Pages here run in their own profile, separate from the browsers your
-        agents use.
-      </p>
-      <BrowserNewTabMenu>
-        {#snippet trigger()}
-          <button
-            type="button"
-            class="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
-            title="Open a new browser tab"
-            onclick={() => newTab()}
-          >
-            New tab
-          </button>
-        {/snippet}
-      </BrowserNewTabMenu>
-    </div>
-  {:else}
-  {#if searchGroupId === null && pinned.length > 0}
+{#if totalTabs > 0}
+  <CollapsibleSidebar
+    title="Browser"
+    hideHeader
+    onboardingAnchor={false}
+    label="Browser tabs"
+    region="browser-sidebar"
+    overlayPhase={stripPhase}
+    {chrome}
+  >
+    {#if searchGroupId === null && pinned.length > 0}
       <div class="mb-1">
         <p
           class="flex items-center gap-1 px-2 pt-1 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
@@ -670,11 +649,11 @@
               {tab}
               selected={visibleSelectedTabIds.includes(tab.id)}
               selectedTabIds={visibleSelectedTabIds}
+              onTabClick={handleTabClick}
               onTabContextMenu={handleTabContextMenu}
               onMoveTabsToGroup={moveTabsToGroup}
               onCreateGroupForTabs={createGroupForTabs}
               onReopenTabsInBox={requestReopenTabsInBox}
-              onTabClick={handleTabClick}
               onEditTab={(id) => (editorTabId = id)}
               onOpenGroupEditor={(id) => (editorGroupId = id)}
             />
@@ -790,11 +769,11 @@
                   {tab}
                   selected={visibleSelectedTabIds.includes(tab.id)}
                   selectedTabIds={visibleSelectedTabIds}
+                  onTabClick={handleTabClick}
                   onTabContextMenu={handleTabContextMenu}
                   onMoveTabsToGroup={moveTabsToGroup}
                   onCreateGroupForTabs={createGroupForTabs}
                   onReopenTabsInBox={requestReopenTabsInBox}
-                  onTabClick={handleTabClick}
                   onEditTab={(id) => (editorTabId = id)}
                   onOpenGroupEditor={(id) => (editorGroupId = id)}
                 />
@@ -819,11 +798,11 @@
           {tab}
           selected={visibleSelectedTabIds.includes(tab.id)}
           selectedTabIds={visibleSelectedTabIds}
+          onTabClick={handleTabClick}
           onTabContextMenu={handleTabContextMenu}
           onMoveTabsToGroup={moveTabsToGroup}
           onCreateGroupForTabs={createGroupForTabs}
           onReopenTabsInBox={requestReopenTabsInBox}
-          onTabClick={handleTabClick}
           onEditTab={(id) => (editorTabId = id)}
           onOpenGroupEditor={(id) => (editorGroupId = id)}
         />
@@ -832,8 +811,8 @@
         <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">No ungrouped tabs match</p>
       {/if}
     {/if}
-  {/if}
-</CollapsibleSidebar>
+  </CollapsibleSidebar>
+{/if}
 
 {#if editorGroupId !== undefined}
   <BrowserGroupModal groupId={editorGroupId} onClose={() => (editorGroupId = undefined)} />
@@ -856,8 +835,8 @@
     }}
   >
     <p>
-      {pendingBulkBox.tabIds.length} tabs will close and reopen in {pendingBulkBox.boxName}. Each box
-      has separate cookies and sign-ins, and page history will not carry over.
+      {visibleSelectedTabIds.length} tabs will close and reopen in {pendingBulkBox.boxName}. Each
+      box has separate cookies and sign-ins, and page history will not carry over.
     </p>
   </ConfirmDialog>
 {/if}

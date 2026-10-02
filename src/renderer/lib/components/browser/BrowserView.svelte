@@ -37,6 +37,7 @@
   import BrowserWorkspace from './BrowserWorkspace.svelte'
   import BrowserContextSidebar from './BrowserContextSidebar.svelte'
   import BrowserAddressSpotlight from './BrowserAddressSpotlight.svelte'
+  import { publicAssetUrl } from '$lib/static-assets'
 
   /**
    * The global browser view: the top-level workspace the app's Browser entry
@@ -59,6 +60,8 @@
 
   let addressSpotlightOpen = $derived(globalBrowser.addressSpotlightOpen)
   const activeTab = $derived(globalBrowser.activeTab)
+
+  const logoUrl = publicAssetUrl('icon-mono.svg')
 
   /** How many of the profile's downloads are unfinished: still running, or stopped
    *  with bytes kept for a resume, for the rail badge. */
@@ -361,13 +364,19 @@
       {/key}
     {:else}
       <div class="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-app">
-        <div class="flex flex-col items-center gap-3 px-8 text-center">
-          <Globe size={26} class="text-dimmed" />
-          <p class="max-w-sm text-sm leading-relaxed text-muted">
-            The global browser keeps its own signed-in profile, separate from the browsers your
-            agents run in. A box you make here is the same jar any thread that picks it uses, so a
-            sign-in here is that sign-in there.
+        <div class="flex h-full flex-col items-center justify-center px-6">
+          <img src={logoUrl} alt="CodeInOven" class="mb-8 h-20 w-20" draggable="false" />
+          <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">
+            CIO Global Browser
+          </h1>
+          <p class="mt-1 text-[0.8125rem] text-muted">
+            This is not by no means a complete browser, but it is good enough to browse the web
+            while you work. It is an attempt to reduce cognitive overload from context switching.
+            Try it out gradually and see if it can replace your dev browser. This is chromium after
+            all.
           </p>
+
+          <div class="mt-4 flex w-full max-w-sm flex-col gap-1"></div>
           <button
             type="button"
             class="rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
