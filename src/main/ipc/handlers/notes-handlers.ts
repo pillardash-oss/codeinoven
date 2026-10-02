@@ -25,6 +25,7 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
   const STICKY_NOTE_TITLE_MAX = 120
   const STICKY_NOTE_ICON_MAX = 80
   const STICKY_NOTE_SVG_MAX = 40_000
+  const STICKY_NOTE_IMAGE_PATH_MAX = 4096
 
   function validateStickyNoteAppearance(value: unknown) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -51,7 +52,16 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
       record['customSvg'] === null
         ? null
         : validateBoundedString(record['customSvg'], 'Sticky note SVG', 1, STICKY_NOTE_SVG_MAX)
-    return { title, iconType, customSvg, color }
+    const imagePath =
+      record['imagePath'] === null
+        ? null
+        : validateBoundedString(
+            record['imagePath'],
+            'Sticky note image path',
+            1,
+            STICKY_NOTE_IMAGE_PATH_MAX
+          )
+    return { title, iconType, customSvg, imagePath, color }
   }
 
   /**

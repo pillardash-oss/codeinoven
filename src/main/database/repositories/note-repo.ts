@@ -54,6 +54,7 @@ interface StickyNoteRow {
   title: string
   icon_type: string | null
   custom_svg: string | null
+  image_path: string | null
   color: string
   body: string
   created_at: number
@@ -68,6 +69,7 @@ function rowToStickyNoteSummary(row: StickyNoteSummaryRow): StickyNoteSummary {
     title: row.title,
     iconType: row.icon_type,
     customSvg: row.custom_svg,
+    imagePath: row.image_path,
     color: row.color,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -164,7 +166,7 @@ export class NoteRepo {
   /** Load the small tab strip records on the database worker. */
   async listStickyNotesViaWorker(): Promise<StickyNoteSummary[]> {
     const result = await this.db.queryViaWorker(
-      `SELECT id, title, icon_type, custom_svg, color, created_at, updated_at
+      `SELECT id, title, icon_type, custom_svg, image_path, color, created_at, updated_at
        FROM sticky_notes ORDER BY created_at ASC`,
       [],
       0
@@ -183,12 +185,13 @@ export class NoteRepo {
 
   createStickyNote(note: StickyNote): void {
     this.db.run(
-      `INSERT INTO sticky_notes(id, title, icon_type, custom_svg, color, body, created_at, updated_at)
-       VALUES(?,?,?,?,?,?,?,?)`,
+      `INSERT INTO sticky_notes(id, title, icon_type, custom_svg, image_path, color, body, created_at, updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?)`,
       note.id,
       note.title,
       note.iconType,
       note.customSvg,
+      note.imagePath,
       note.color,
       note.body,
       note.createdAt,
@@ -198,11 +201,12 @@ export class NoteRepo {
 
   updateStickyNoteAppearance(id: string, appearance: StickyNoteAppearance, updatedAt: number): void {
     this.db.run(
-      `UPDATE sticky_notes SET title = ?, icon_type = ?, custom_svg = ?, color = ?, updated_at = ?
+      `UPDATE sticky_notes SET title = ?, icon_type = ?, custom_svg = ?, image_path = ?, color = ?, updated_at = ?
        WHERE id = ?`,
       appearance.title,
       appearance.iconType,
       appearance.customSvg,
+      appearance.imagePath,
       appearance.color,
       updatedAt,
       id

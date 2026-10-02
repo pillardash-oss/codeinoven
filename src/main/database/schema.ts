@@ -956,6 +956,7 @@ CREATE TABLE IF NOT EXISTS sticky_notes (
   title       TEXT NOT NULL,
   icon_type   TEXT,
   custom_svg  TEXT,
+  image_path  TEXT,
   color       TEXT NOT NULL,
   body        TEXT NOT NULL DEFAULT '',
   created_at  INTEGER NOT NULL,

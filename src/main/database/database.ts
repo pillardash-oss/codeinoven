@@ -864,6 +864,7 @@ export class Database {
       this.migrateRoutineDescription(connection)
       this.migrateRoutineReporting(connection)
       this.migrateCustomSvgIcons(connection)
+      this.migrateStickyNoteImagePath(connection)
       this.migrateCustomIconLibrary(connection)
       this.migrateRoutineScheduleAnchor(connection)
       this.migrateThreadDesignKind(connection)
@@ -881,6 +882,17 @@ export class Database {
       if (!columns.has('custom_svg')) {
         connection.exec(`ALTER TABLE ${table} ADD COLUMN custom_svg TEXT`)
       }
+    }
+  }
+
+  private migrateStickyNoteImagePath(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(sticky_notes)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size > 0 && !columns.has('image_path')) {
+      connection.exec('ALTER TABLE sticky_notes ADD COLUMN image_path TEXT')
     }
   }
 

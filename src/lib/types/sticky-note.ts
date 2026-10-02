@@ -3,6 +3,7 @@ export interface StickyNoteAppearance {
   title: string
   iconType: string | null
   customSvg: string | null
+  imagePath: string | null
   color: string
 }
 

@@ -2,33 +2,23 @@ import { invoke } from '$lib/ipc.svelte'
 import { PROJECT_COLORS } from '$lib/project-colors'
 import type { StickyNoteAppearance, StickyNoteSummary } from '$shared/types'
 
-export type StickyNoteSaveState = 'saved' | 'pending' | 'saving' | 'error'
-
 export interface StickyNoteEntry extends StickyNoteSummary {
   body: string
+  imageUrl: string | null
   loaded: boolean
   loading: boolean
-  saveState: StickyNoteSaveState
   saveError: string | null
 }
 
-interface NoteHistory {
-  undo: string[]
-  redo: string[]
-  lastRecordedAt: number
-}
-
 const AUTOSAVE_DELAY_MS = 3000
-const HISTORY_GROUP_DELAY_MS = 700
-const MAX_HISTORY_ENTRIES = 100
 
 function asEntry(summary: StickyNoteSummary): StickyNoteEntry {
   return {
     ...summary,
     body: '',
+    imageUrl: null,
     loaded: false,
     loading: false,
-    saveState: 'saved',
     saveError: null
   }
 }
@@ -39,10 +29,9 @@ class StickyNotesState {
   private loaded = $state(false)
   private loading = $state(false)
   private loadError = $state<string | null>(null)
-  private historyRevision = $state(0)
-  private histories = new Map<string, NoteHistory>()
   private saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private inFlightSaves = new Set<string>()
+  private loadingImages = new Set<string>()
   private hydration: Promise<void> | null = null
 
   get entries(): StickyNoteEntry[] {
@@ -80,6 +69,9 @@ class StickyNotesState {
         this.activeId = this.notes[0]?.id ?? null
         this.loaded = true
         if (this.activeId) void this.loadBody(this.activeId)
+        for (const note of this.notes) {
+          if (note.imagePath) void this.loadImage(note.id)
+        }
       })
       .catch((error: unknown) => {
         this.loadError = error instanceof Error ? error.message : 'Could not load sticky notes'
@@ -105,76 +97,46 @@ class StickyNotesState {
       title,
       iconType: null,
       customSvg: null,
+      imagePath: null,
       color: PROJECT_COLORS[0].value
     }
     const created = await invoke('sticky-note:create', appearance)
-    const entry: StickyNoteEntry = { ...created, loaded: true, loading: false, saveState: 'saved', saveError: null }
+    const entry: StickyNoteEntry = {
+      ...created,
+      imageUrl: null,
+      loaded: true,
+      loading: false,
+      saveError: null
+    }
     this.notes = [...this.notes, entry]
     this.activeId = entry.id
-    this.histories.set(entry.id, { undo: [], redo: [], lastRecordedAt: 0 })
-    this.historyRevision += 1
     return entry
   }
 
-  async updateAppearance(id: string, appearance: StickyNoteAppearance): Promise<void> {
+  async updateAppearance(
+    id: string,
+    appearance: StickyNoteAppearance,
+    imageUrl: string | null
+  ): Promise<void> {
     const note = this.note(id)
     if (!note) return
     await invoke('sticky-note:update', id, appearance)
     note.title = appearance.title
     note.iconType = appearance.iconType
     note.customSvg = appearance.customSvg
+    note.imagePath = appearance.imagePath
+    note.imageUrl = imageUrl
     note.color = appearance.color
     note.updatedAt = Date.now()
+    if (note.imagePath && !note.imageUrl) void this.loadImage(id)
   }
 
   setBody(id: string, body: string): void {
     const note = this.note(id)
     if (!note?.loaded || note.body === body) return
-    const now = Date.now()
-    const history = this.historyFor(id)
-    if (history.lastRecordedAt === 0 || now - history.lastRecordedAt > HISTORY_GROUP_DELAY_MS) {
-      history.undo.push(note.body)
-      if (history.undo.length > MAX_HISTORY_ENTRIES) history.undo.shift()
-    }
-    history.redo = []
-    history.lastRecordedAt = now
-    this.historyRevision += 1
     note.body = body
-    note.saveState = 'pending'
     note.saveError = null
     this.scheduleSave(id)
-  }
-
-  canUndo(id: string): boolean {
-    void this.historyRevision
-    return (this.histories.get(id)?.undo.length ?? 0) > 0
-  }
-
-  canRedo(id: string): boolean {
-    void this.historyRevision
-    return (this.histories.get(id)?.redo.length ?? 0) > 0
-  }
-
-  undo(id: string): void {
-    const note = this.note(id)
-    const history = this.histories.get(id)
-    if (!note || !history || history.undo.length === 0) return
-    history.redo.push(note.body)
-    note.body = history.undo.pop() ?? note.body
-    history.lastRecordedAt = 0
-    this.historyRevision += 1
-    this.noteBodyChanged(note)
-  }
-
-  redo(id: string): void {
-    const note = this.note(id)
-    const history = this.histories.get(id)
-    if (!note || !history || history.redo.length === 0) return
-    history.undo.push(note.body)
-    note.body = history.redo.pop() ?? note.body
-    history.lastRecordedAt = 0
-    this.historyRevision += 1
-    this.noteBodyChanged(note)
   }
 
   async delete(id: string): Promise<void> {
@@ -184,8 +146,7 @@ class StickyNotesState {
     const timer = this.saveTimers.get(id)
     if (timer) clearTimeout(timer)
     this.saveTimers.delete(id)
-    this.histories.delete(id)
-    this.historyRevision += 1
+    this.loadingImages.delete(id)
     this.notes = this.notes.filter((note) => note.id !== id)
     if (this.activeId === id) {
       this.activeId = this.notes[Math.min(index, this.notes.length - 1)]?.id ?? null
@@ -211,31 +172,25 @@ class StickyNotesState {
       note.body = loaded.body
       note.updatedAt = loaded.updatedAt
       note.loaded = true
-      note.saveState = 'saved'
       note.saveError = null
-      this.histories.set(id, { undo: [], redo: [], lastRecordedAt: 0 })
-      this.historyRevision += 1
     } catch (error) {
       note.saveError = error instanceof Error ? error.message : 'Could not load this sticky note'
-      note.saveState = 'error'
     } finally {
       note.loading = false
     }
   }
 
-  private historyFor(id: string): NoteHistory {
-    let history = this.histories.get(id)
-    if (!history) {
-      history = { undo: [], redo: [], lastRecordedAt: 0 }
-      this.histories.set(id, history)
+  private async loadImage(id: string): Promise<void> {
+    const note = this.note(id)
+    if (!note?.imagePath || note.imageUrl || this.loadingImages.has(id)) return
+    this.loadingImages.add(id)
+    try {
+      note.imageUrl = await invoke('file:readAsDataUrl', note.imagePath)
+    } catch {
+      note.imageUrl = null
+    } finally {
+      this.loadingImages.delete(id)
     }
-    return history
-  }
-
-  private noteBodyChanged(note: StickyNoteEntry): void {
-    note.saveState = 'pending'
-    note.saveError = null
-    this.scheduleSave(note.id)
   }
 
   private scheduleSave(id: string): void {
@@ -259,18 +214,13 @@ class StickyNotesState {
     }
     this.inFlightSaves.add(id)
     const body = note.body
-    note.saveState = 'saving'
     note.saveError = null
     try {
       await invoke('sticky-note:save', id, body)
       if (note.body === body) {
-        note.saveState = 'saved'
         note.updatedAt = Date.now()
-      } else {
-        note.saveState = 'pending'
       }
     } catch (error) {
-      note.saveState = 'error'
       note.saveError = error instanceof Error ? error.message : 'Could not save this sticky note'
     } finally {
       this.inFlightSaves.delete(id)
