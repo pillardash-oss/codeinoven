@@ -255,7 +255,14 @@
   ensureNamespace(
     'fontSettings',
     {
-      getFontList: answering({}),
+      getFontList: answering([
+        { fontId: 'serif', displayName: 'serif' },
+        { fontId: 'sans-serif', displayName: 'sans-serif' },
+        { fontId: 'monospace', displayName: 'monospace' },
+        { fontId: 'cursive', displayName: 'cursive' },
+        { fontId: 'fantasy', displayName: 'fantasy' },
+        { fontId: 'system-ui', displayName: 'system-ui' }
+      ]),
       getDefaultFontSize: answering(16),
       setDefaultFontSize: noop,
       getFont: noop,
