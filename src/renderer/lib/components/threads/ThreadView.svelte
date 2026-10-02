@@ -134,7 +134,7 @@
     saveIndependentAuditIntent,
     clearIndependentAuditIntent
   } from '$lib/stores/lifecycle-intent'
-  import OvenControls from './OvenControls.svelte'
+  import type OvenControls from './OvenControls.svelte'
   import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
     initialSettingsFor,
@@ -1191,6 +1191,11 @@
   let projectIconUrl = $state<string | null>(null)
   /** Composer scope shoe data   project mode only (ChatComposer hides it in chat mode). */
   let ovenControl: OvenControls | undefined = $state(undefined)
+  async function openOvenPicker(): Promise<void> {
+    await import('./OvenControls.svelte')
+    await tick()
+    await ovenControl?.openPicker()
+  }
   let scopeShoe = $derived.by((): ComposerScopeShoe | undefined => {
     if (chatMode) return undefined
     const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
@@ -1205,7 +1210,7 @@
       source: project?.source,
       host: project?.host,
       oven: ovenPicker,
-      onOpenOven: () => void ovenControl?.openPicker(),
+      onOpenOven: () => void openOvenPicker(),
       project: project
         ? {
             name: project.name,
@@ -11179,13 +11184,17 @@
 </script>
 
 {#snippet ovenPicker()}
-  <OvenControls
-    bind:this={ovenControl}
-    {thread}
-    {settings}
-    {busy}
-    onSettingsChange={updateSettings}
-  />
+  {#await import('./OvenControls.svelte') then { default: OvenControlsComponent }}
+    <OvenControlsComponent
+      bind:this={ovenControl}
+      {thread}
+      {settings}
+      {busy}
+      onSettingsChange={updateSettings}
+    />
+  {:catch}
+    <span class="text-xs text-danger" role="alert">Oven controls could not be loaded.</span>
+  {/await}
 {/snippet}
 
 {#if messageViewer}

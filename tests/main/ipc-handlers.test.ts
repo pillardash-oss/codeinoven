@@ -19,7 +19,8 @@ const { handlers, listeners, showOpenDialog, showSaveDialog, safeStorage } = vi.
 vi.mock('electron', () => ({
   app: {
     getName: vi.fn(() => 'CodeInOven'),
-    getVersion: vi.fn(() => '0.1.0')
+    getVersion: vi.fn(() => '0.1.0'),
+    once: vi.fn()
   },
   BrowserWindow: {
     getAllWindows: vi.fn(() => []),
