@@ -76,6 +76,8 @@ export const invokeAssistantContract = {
   'assistant:listMissedRuns': {} as Contract<[], MissedRun[]>,
   /** Read user-skipped scheduled slots used to calculate each task's next run. */
   'assistant:listSkippedRoutineRuns': {} as Contract<[], SkippedRoutineRun[]>,
+  /** Whether a routine has any unskipped scheduled slot remaining today. */
+  'assistant:hasRoutineRunsToday': {} as Contract<[routineId: string], boolean>,
   /** Skip the closest upcoming unskipped slot in one routine and return the new snapshot. */
   'assistant:skipNextRoutineRun': {} as Contract<[routineId: string], SkippedRoutineRun[]>,
   /** Skip every remaining scheduled slot today in one routine. */

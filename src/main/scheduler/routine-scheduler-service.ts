@@ -158,6 +158,18 @@ export class RoutineSchedulerService {
     return this.skipped.list()
   }
 
+  /** Whether a routine has any unclaimed scheduled slot left in the local day. */
+  hasRoutineRunsToday(routineId: string): boolean {
+    const routine = this.deps.routines.getRoutine(routineId)
+    if (!routine || routine.paused || !routine.howTo.trim()) return false
+    const now = this.now()
+    const endOfToday = new Date(now)
+    endOfToday.setHours(23, 59, 59, 999)
+    return this.deps.routines
+      .listRoutineTasks(routineId)
+      .some((task) => this.unskippedSlotsThrough(task, now, endOfToday.getTime()).length > 0)
+  }
+
   /** Skip the closest unskipped occurrence across every task in a routine. */
   async skipNextRoutineRun(routineId: string): Promise<SkippedRoutineRun> {
     const routine = this.requireSkippableRoutine(routineId)

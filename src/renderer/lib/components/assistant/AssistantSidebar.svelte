@@ -53,6 +53,7 @@
     /** Hide a routine's how-to thread (its row has no other state change). */
     onHideHowTo: (task: Thread) => void
     onDeleteRoutine: (routineId: string) => Promise<void>
+    onHasRoutineRunsToday: (routine: Routine) => Promise<boolean>
     onSkipNextRoutineRun: (routine: Routine) => Promise<void>
     onSkipRoutineRunsToday: (routine: Routine) => Promise<void>
     onTogglePinRoutine: (routine: Routine) => void
@@ -80,6 +81,7 @@
     onHandedOffTask,
     onHideHowTo,
     onDeleteRoutine,
+    onHasRoutineRunsToday,
     onSkipNextRoutineRun,
     onSkipRoutineRunsToday,
     onTogglePinRoutine,
@@ -477,6 +479,7 @@
             onEdit={startEdit}
             onTogglePin={onTogglePinRoutine}
             onDelete={(r) => (deleteTarget = r)}
+            {onHasRoutineRunsToday}
             {onSkipNextRoutineRun}
             {onSkipRoutineRunsToday}
             {onMoveRoutine}

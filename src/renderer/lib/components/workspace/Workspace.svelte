@@ -4223,6 +4223,7 @@
         onHandedOffTask={handleAssistantHandoff}
         onHideHowTo={(task) => void hideAssistantHowTo(task)}
         onDeleteRoutine={deleteAssistantRoutine}
+        onHasRoutineRunsToday={(routine) => assistantRoutines.hasRoutineRunsToday(routine.id)}
         onSkipNextRoutineRun={skipNextAssistantRoutineRun}
         onSkipRoutineRunsToday={skipAssistantRoutineRunsToday}
         onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}

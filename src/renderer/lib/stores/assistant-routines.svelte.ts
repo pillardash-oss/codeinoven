@@ -221,6 +221,10 @@ class AssistantRoutinesState {
     this.publishSkippedRuns(await invoke('assistant:skipNextRoutineRun', routineId))
   }
 
+  hasRoutineRunsToday(routineId: string): Promise<boolean> {
+    return invoke('assistant:hasRoutineRunsToday', routineId)
+  }
+
   async skipRoutineRunsToday(routineId: string): Promise<void> {
     this.publishSkippedRuns(await invoke('assistant:skipRoutineRunsToday', routineId))
   }

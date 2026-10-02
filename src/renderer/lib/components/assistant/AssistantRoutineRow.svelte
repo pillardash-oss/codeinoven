@@ -54,6 +54,7 @@
     onCreateTask: (routine: Routine) => void
     onOpenHowTo: (routine: Routine) => void
     onEdit: (routine: Routine) => void
+    onHasRoutineRunsToday: (routine: Routine) => Promise<boolean>
     onSkipNextRoutineRun: (routine: Routine) => Promise<void>
     onSkipRoutineRunsToday: (routine: Routine) => Promise<void>
     onTogglePin: (routine: Routine) => void
@@ -81,6 +82,7 @@
     onCreateTask,
     onOpenHowTo,
     onEdit,
+    onHasRoutineRunsToday,
     onSkipNextRoutineRun,
     onSkipRoutineRunsToday,
     onTogglePin,
@@ -102,6 +104,7 @@
   const toggleTitle = $derived(`${expanded ? 'Collapse' : 'Expand'} routine: ${routine.name}`)
 
   let menuOpen = $state(false)
+  let hasRunsToday = $state(false)
   let skipConfirm = $state<'next' | 'today' | null>(null)
   let skipBusy = $state(false)
   let dropIndicator = $state<'before' | 'after' | null>(null)
@@ -114,6 +117,7 @@
   let showPopover = $state(false)
   let popoverTimer: ReturnType<typeof setTimeout> | undefined
   let popoverPos = $state({ x: 0, y: 0 })
+  let todayRunsCheck = 0
 
   const skipDialogTitle = $derived(
     skipConfirm === 'today' ? "Skip today's runs?" : 'Skip next run?'
@@ -133,6 +137,25 @@
     } finally {
       skipBusy = false
     }
+  }
+
+  function onMenuOpenChange(open: boolean): void {
+    menuOpen = open
+    if (!open) {
+      todayRunsCheck += 1
+      hasRunsToday = false
+      return
+    }
+
+    const check = ++todayRunsCheck
+    hasRunsToday = false
+    void onHasRoutineRunsToday(routine)
+      .then((hasRuns) => {
+        if (menuOpen && check === todayRunsCheck) hasRunsToday = hasRuns
+      })
+      .catch(() => {
+        if (check === todayRunsCheck) hasRunsToday = false
+      })
   }
 
   async function revealPopover(): Promise<void> {
@@ -170,7 +193,7 @@
     event.preventDefault()
     showPopover = false
     clearTimeout(popoverTimer)
-    menuOpen = true
+    onMenuOpenChange(true)
   }
 
   function capturePopoverElement(element: HTMLElement): void {
@@ -373,7 +396,7 @@
     >
       <Plus size={12} />
     </button>
-    <DropdownMenu.Root bind:open={menuOpen}>
+    <DropdownMenu.Root bind:open={menuOpen} onOpenChange={onMenuOpenChange}>
       <DropdownMenu.Trigger
         class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
         aria-label="Options for {routine.name}"
@@ -412,13 +435,15 @@
             <SkipForward size={14} class="text-muted" />
             Skip next run
           </DropdownMenu.Item>
-          <DropdownMenu.Item
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-            onSelect={() => (skipConfirm = 'today')}
-          >
-            <CalendarDays size={14} class="text-muted" />
-            Skip runs for today
-          </DropdownMenu.Item>
+          {#if hasRunsToday}
+            <DropdownMenu.Item
+              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+              onSelect={() => (skipConfirm = 'today')}
+            >
+              <CalendarDays size={14} class="text-muted" />
+              Skip runs for today
+            </DropdownMenu.Item>
+          {/if}
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
             onSelect={() => onTogglePin(routine)}

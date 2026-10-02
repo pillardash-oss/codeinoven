@@ -404,6 +404,10 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     requireScheduler().listSkippedRoutineRuns()
   )
 
+  ipcMain.handle('assistant:hasRoutineRunsToday', (_, routineId: unknown) =>
+    requireScheduler().hasRoutineRunsToday(validateEntityId(routineId, 'Routine ID'))
+  )
+
   ipcMain.handle('assistant:skipNextRoutineRun', async (_, routineId: unknown) => {
     const scheduler = requireScheduler()
     await scheduler.skipNextRoutineRun(validateEntityId(routineId, 'Routine ID'))
