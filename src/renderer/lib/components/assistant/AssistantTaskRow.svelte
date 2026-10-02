@@ -6,6 +6,9 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
+  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
@@ -132,6 +135,22 @@
   const isRetryPaused = $derived(task.status === 'working-paused')
   const isForeignRun = $derived(foreignRuns.isForeign(task.projectId, task.id))
   const stageLabel = $derived(threadStatusPolicy(task.status).label)
+  const isRecording = $derived(speechController.isRecordingThread(task.id))
+  const isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(task.id))
+  const isTranscribing = $derived(
+    !isRecording && !isSpeaking && speechController.isTranscribingThread(task.id)
+  )
+  const voiceSendStage = $derived(
+    isTranscribing ? speechController.voiceSendStageForThread(task.id) : null
+  )
+  const indicator = $derived.by((): ThreadIndicator | null => {
+    if (isRecording) return 'recording'
+    if (isSpeaking) return 'speaking'
+    if (!isTranscribing) return null
+    if (voiceSendStage === 'steer') return 'transcribing-steer'
+    if (voiceSendStage === 'send') return 'transcribing-send'
+    return 'transcribing'
+  })
 
   /** A task's own menu only; a run keeps the identical thread menu (rename, pin,
    *  fork, notes, copy id, delete), since a run is a thread too. */
@@ -325,7 +344,7 @@
           </span>
         {/if}
       </span>
-      <span class="mt-0.5 flex items-center gap-1.5">
+      <span class="mt-0.5 flex min-w-0 items-center gap-1.5">
         <StatusBadge
           stage={missed ? undefined : statusBadge.stage}
           tone={missed ? 'missed' : statusBadge.tone}
@@ -335,9 +354,15 @@
           size="sm"
           title={missed ? 'A scheduled run was missed' : statusBadge.label}
         />
-        <span class="truncate text-[0.625rem] text-dimmed" title={scheduleLabel ?? undefined}>
+        <span
+          class="min-w-0 flex-1 truncate text-[0.625rem] text-dimmed"
+          title={scheduleLabel ?? undefined}
+        >
           {runLine}
         </span>
+        {#if indicator}
+          <ThreadIndicatorSlot {indicator} />
+        {/if}
       </span>
     </span>
   </button>
