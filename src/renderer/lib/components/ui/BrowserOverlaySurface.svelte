@@ -13,6 +13,8 @@
     type ToastOverlayRequestStack,
     type ToastOverlayToast
   } from '$shared/browser-overlay'
+  import type { NativeDockRequest } from '$shared/native-dock'
+  import BrowserOverlayDock from './BrowserOverlayDock.svelte'
   import ToastStack from './ToastStack.svelte'
   import BrowserOverlayStrip from './BrowserOverlayStrip.svelte'
 
@@ -33,6 +35,21 @@
    * card's auto-close timer on every update, so replaying the whole stack on each
    * publish would keep extending the life of the cards that did not change.
    */
+
+  let docks = $state.raw<NativeDockRequest[]>([])
+  let dockDragging = false
+
+  function applyDocks(next: NativeDockRequest[]): void {
+    docks = next.map(
+      (incoming) =>
+        docks.find(
+          (current) => current.id === incoming.id && current.revision === incoming.revision
+        ) ?? incoming
+    )
+    const theme = next.at(-1)?.theme
+    if (theme) document.documentElement.classList.toggle('dark', theme === 'dark')
+    void tick().then(afterDraw)
+  }
 
   let theme = $state<'light' | 'dark'>('light')
 
@@ -227,7 +244,7 @@
    */
   function afterDraw(): void {
     pointerOverContent = false
-    setPointerWatch(drawn.size > 0 || strip !== null)
+    setPointerWatch(drawn.size > 0 || strip !== null || docks.length > 0)
     syncPointerFromCursor(true)
     reportDrawn()
   }
@@ -254,7 +271,19 @@
 
   function reportPointer(force = false): void {
     if (!pointer.known) return
-    const over = overCard(pointer.x, pointer.y) || overStrip(pointer.x, pointer.y)
+    const overDock = [...document.querySelectorAll('[data-native-overlay-dock]')].some(
+      (element) => {
+        const rect = element.getBoundingClientRect()
+        return (
+          pointer.x >= rect.left &&
+          pointer.x <= rect.right &&
+          pointer.y >= rect.top &&
+          pointer.y <= rect.bottom
+        )
+      }
+    )
+    const over =
+      dockDragging || overDock || overCard(pointer.x, pointer.y) || overStrip(pointer.x, pointer.y)
     if (!force && over === pointerOverContent) return
     pointerOverContent = over
     void invoke('browser:overlayPointer', over).catch(() => {})
@@ -353,12 +382,14 @@
   }
 
   onMount(() => {
+    const unsubscribeDocks = subscribe('browser:overlay:docks', applyDocks)
     const unsubscribeStack = subscribe('browser:overlay:stack', (next) => applyStack(next))
     const unsubscribeStrip = subscribe('browser:overlay:strip', (next) => applyStrip(next))
     // First delivery is a pull, exactly as the permission popup does it: a push
     // straight after `loadURL` loses the race against these subscriptions.
     void invoke('browser:overlayReady')
       .then((snapshot) => {
+        applyDocks(snapshot.docks)
         if (snapshot.stack) applyStack(snapshot.stack)
         if (snapshot.strip) applyStrip(snapshot.strip)
       })
@@ -367,6 +398,7 @@
     document.addEventListener('mouseout', leaveDocument)
     return () => {
       setPointerWatch(false)
+      unsubscribeDocks()
       unsubscribeStack()
       unsubscribeStrip()
       window.removeEventListener('mousemove', trackPointer)
@@ -385,3 +417,13 @@
     onAction={(action, x, y) => reportStrip({ kind: 'action', action, x, y })}
   />
 {/if}
+
+{#each docks as dock (dock.id)}
+  <BrowserOverlayDock
+    {dock}
+    onDragging={(active) => {
+      dockDragging = active
+      reportPointer(true)
+    }}
+  />
+{/each}

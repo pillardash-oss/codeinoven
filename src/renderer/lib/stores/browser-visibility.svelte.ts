@@ -155,6 +155,18 @@ class BrowserVisibilityState {
     this.nativeFrames.delete(key)
   }
 
+  /** A dock may use the native window while a browser surface owns a page.
+   * Dock occlusion is deliberately excluded to avoid a hide/show feedback loop. */
+  get canUseNativeDock(): boolean {
+    const surface = this.owningSurface
+    if (surface === null) return false
+    for (const reason of this.blocks.values()) {
+      if (reason === 'workspace-inactive' && surface === 'workspace') continue
+      return false
+    }
+    return true
+  }
+
   /** Every native rectangle currently on screen, in viewport CSS pixels. */
   get onScreenFrames(): BrowserViewBounds[] {
     return [...this.nativeFrames.values()]

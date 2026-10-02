@@ -1,3 +1,4 @@
+import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
 import type {
   BrowserCompositionPlayback,
   BrowserDownload,
@@ -36,6 +37,12 @@ import type {
 } from '../browser-overlay'
 
 export const invokeBrowserContract = {
+  'browser:setDockOverlay': {} as Contract<
+    [id: string, request: NativeDockRequest | null],
+    boolean
+  >,
+  'browser:overlayDockInteract': {} as Contract<[report: NativeDockInteraction], void>,
+  'browser:overlayDockDrawn': {} as Contract<[ack: NativeDockAck], void>,
   /**
    * The global browser's durable tab list, or null before it has ever been
    * stored. It lives in the config directory rather than the renderer's

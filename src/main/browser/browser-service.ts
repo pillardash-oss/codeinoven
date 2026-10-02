@@ -1,4 +1,10 @@
 import {
+  validateNativeDockAck,
+  validateNativeDockId,
+  validateNativeDockInteraction,
+  validateNativeDockRequest
+} from '../../lib/native-dock'
+import {
   app,
   BrowserWindow,
   clipboard,
@@ -1045,6 +1051,26 @@ export class BrowserService {
     replaceHandler('browser:setStripOverlay', (_event, rawRequest) =>
       this.overlay.applyStrip(validateBrowserStripOverlayRequest(rawRequest))
     )
+    replaceHandler('browser:setDockOverlay', (_event, rawId, rawRequest) => {
+      const id = validateNativeDockId(rawId)
+      const request = rawRequest === null ? null : validateNativeDockRequest(rawRequest)
+      if (request && request.id !== id) throw new TypeError('Native dock identities differ')
+      return this.overlay.applyDock(id, request)
+    })
+    replaceHandler('browser:overlayDockInteract', (_event, rawReport) => {
+      sendToRenderer(
+        this.window.webContents,
+        'browser:overlay:dockEvent',
+        validateNativeDockInteraction(rawReport)
+      )
+    })
+    replaceHandler('browser:overlayDockDrawn', (_event, rawAck) => {
+      sendToRenderer(
+        this.window.webContents,
+        'browser:overlay:dockDrawn',
+        validateNativeDockAck(rawAck)
+      )
+    })
     replaceHandler('browser:overlayReady', () => this.overlay.currentState())
     replaceHandler('browser:overlayInteract', (_event, rawReport) => {
       // The overlay carries no handlers, so an interaction is only a fact about

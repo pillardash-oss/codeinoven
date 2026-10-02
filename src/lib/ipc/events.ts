@@ -1,3 +1,4 @@
+import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
 import type {
   ComputerUseActivity,
   ComputerUsePipFrame,
@@ -42,6 +43,9 @@ import type {
 } from '../browser-overlay'
 
 export const IPC_EVENT_CONTRACT = {
+  'browser:overlay:docks': [] as unknown as [docks: NativeDockRequest[]],
+  'browser:overlay:dockEvent': [] as unknown as [report: NativeDockInteraction],
+  'browser:overlay:dockDrawn': [] as unknown as [ack: NativeDockAck],
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**
