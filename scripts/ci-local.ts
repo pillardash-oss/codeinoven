@@ -104,7 +104,11 @@ function parseArgs(argv: string[]): StageOptions {
   return options
 }
 
-async function runStep(command: string[], label: string, env: Record<string, string> = {}): Promise<number> {
+async function runStep(
+  command: string[],
+  label: string,
+  env: Record<string, string> = {}
+): Promise<number> {
   const capture = activeCapture
   const startedAt = performance.now()
   process.stdout.write(`\n[ci-local] ▶ ${label}\n`)
@@ -157,7 +161,13 @@ function buildEnv(): Record<string, string> {
   return env
 }
 
-async function stage(id: string, label: string, command: string[], hint?: string, env: Record<string, string> = {}): Promise<Stage> {
+async function stage(
+  id: string,
+  label: string,
+  command: string[],
+  hint?: string,
+  env: Record<string, string> = {}
+): Promise<Stage> {
   return {
     id,
     hint,
@@ -189,7 +199,11 @@ interface SmokeStageConfig {
   useXvfb: boolean
 }
 
-async function runSmokeStage(config: SmokeStageConfig, target: SmokeTarget, appDir: string): Promise<number> {
+async function runSmokeStage(
+  config: SmokeStageConfig,
+  target: SmokeTarget,
+  appDir: string
+): Promise<number> {
   const label = `Packaged-app startup smoke (${target})`
   const xvfb = config.useXvfb
   if (xvfb && !(await hasBinary('xvfb-run'))) {
@@ -233,10 +247,15 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
   const stages: Stage[] = []
 
   if (options.install) {
+    // quality.yml has no dedicated install job any more: each of its jobs
+    // installs through .github/actions/setup. One install up front is still the
+    // right local behaviour, because a single node_modules serves every stage
+    // here where each CI job gets its own runner.
     stages.push(await stage('install', 'Frozen install', installCommand))
   }
 
-  // Mirrors quality.yml jobs: check, lint, test, audit, build (shared runtime).
+  // Mirrors the quality.yml jobs check, lint, test, build (shared runtime) plus
+  // the audit job, which now lives in security.yml.
   // The test stage pins CI=true because GitHub Actions always sets it — running
   // vitest with the exact CI environment keeps the local mirror faithful, so a
   // green local test stage means the CI Tests job sees the same behavior.
@@ -257,7 +276,11 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
       ])
     )
     stages.push(
-      await stage('speech-coreml', 'Build CoreML speech worker', ['bun', 'run', 'speech:build-coreml'])
+      await stage('speech-coreml', 'Build CoreML speech worker', [
+        'bun',
+        'run',
+        'speech:build-coreml'
+      ])
     )
     stages.push(
       await stage('speech-capture', 'Build native speech capture', [
@@ -354,16 +377,17 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
   stages.push({
     id: 'smoke',
     label: 'Packaged-app startup smoke',
-    run: () => runSmokeStage(
-      {
-        retries: 3,
-        retryDelayMs: 10_000,
-        softFail: target === 'win',
-        useXvfb: target === 'linux'
-      },
-      target,
-      appDirFor(target)
-    )
+    run: () =>
+      runSmokeStage(
+        {
+          retries: 3,
+          retryDelayMs: 10_000,
+          softFail: target === 'win',
+          useXvfb: target === 'linux'
+        },
+        target,
+        appDirFor(target)
+      )
   })
 
   return stages
@@ -412,7 +436,8 @@ async function writeGateReports(
     `- Stages run: ${stageCount}, failed stages: ${failures.length}`,
     '',
     ...failures.map(
-      (failure) => `- \`${failure.id}\` — ${failure.label} (exit ${failure.exitCode}) → [report](${failure.id}.md)`
+      (failure) =>
+        `- \`${failure.id}\` — ${failure.label} (exit ${failure.exitCode}) → [report](${failure.id}.md)`
     ),
     ''
   ].join('\n')
@@ -430,12 +455,13 @@ async function main(): Promise<void> {
 
   const plan = await buildStagePlan(options, target)
   const selected = select(plan, options)
-  const unknown = [
-    ...options.skip,
-    ...(options.only ?? [])
-  ].filter((id) => !plan.some((stage) => stage.id === id))
+  const unknown = [...options.skip, ...(options.only ?? [])].filter(
+    (id) => !plan.some((stage) => stage.id === id)
+  )
   if (unknown.length > 0) {
-    fail(`Unknown stage(s): ${unknown.join(', ')}. Available: ${plan.map((stage) => stage.id).join(', ')}`)
+    fail(
+      `Unknown stage(s): ${unknown.join(', ')}. Available: ${plan.map((stage) => stage.id).join(', ')}`
+    )
   }
 
   process.stdout.write(`[ci-local] host platform: ${target} — mirroring the ${target} CI jobs\n`)
@@ -474,16 +500,18 @@ async function main(): Promise<void> {
 
   if (options.gate) {
     if (gateFailures.length === 0) {
-      process.stdout.write('\n[ci-local] gate passed ✅ — local run mirrors CI green; safe to deploy\n')
+      process.stdout.write(
+        '\n[ci-local] gate passed ✅ — local run mirrors CI green; safe to deploy\n'
+      )
       return
     }
     const reportDir = join(projectRoot, '.cio', 'git', 'ci', String(gateStartedAt))
     await writeGateReports(reportDir, gateFailures, target, gateStartedAt, selected.length)
     process.stderr.write(
       '\n[ci-local] ::error:: ' +
-      `${gateFailures.length} CI stage(s) failed:\n  - ${gateFailures.map((failure) => failure.id).join('\n  - ')}\n` +
-      `[ci-local] reports: ${toPosixPath(relative(projectRoot, reportDir))}\n` +
-      '[ci-local] Deployment is blocked until every stage passes.\n'
+        `${gateFailures.length} CI stage(s) failed:\n  - ${gateFailures.map((failure) => failure.id).join('\n  - ')}\n` +
+        `[ci-local] reports: ${toPosixPath(relative(projectRoot, reportDir))}\n` +
+        '[ci-local] Deployment is blocked until every stage passes.\n'
     )
     process.exit(1)
   }

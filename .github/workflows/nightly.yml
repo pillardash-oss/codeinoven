@@ -20,14 +20,9 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: ./.github/actions/setup
         with:
-          fetch-depth: 0
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.10
+          fetch-depth: '0'
 
       - name: Require dev ancestry and a version bump
         env:
@@ -62,9 +57,9 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: ./.github/actions/setup
         with:
-          fetch-depth: 0
+          fetch-depth: '0'
 
       - name: Determine nightly version
         id: version
@@ -101,6 +96,10 @@ jobs:
           echo "full=${base}-nightly.${next}" >> "$GITHUB_OUTPUT"
           echo "Resolved nightly tag v${base}-nightly.${next} (base $base, max existing $max_n)"
 
+  # The build body and the publish body live in .github/actions/build-app and
+  # .github/actions/publish-release. release.yml runs the same two actions with
+  # the stable channel; the only channel-specific parts of this file are the
+  # nightly tag resolution above and the channel passed to publish.
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -133,105 +132,22 @@ jobs:
             app_dir: dist/linux-unpacked
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
+      - name: Build and package ${{ matrix.name }}
+        uses: ./.github/actions/build-app
         with:
-          fetch-depth: 0
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.10
-
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Patch binary-data bare specifiers
-        run: bun scripts/patch-binary-data.ts
-
-      - name: Install Linux native launcher headers
-        if: matrix.target == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
-
-      - name: Build Pi harness
-        run: bun run harness:build-pi
-
-      - name: Build Apple Silicon speech workers
-        if: matrix.target == 'mac'
-        run: |
-          bun run speech:build-mlx
-          bun run speech:build-coreml
-          bun run speech:build-native-capture
-
-      - name: Build production bundle
-        run: bun run build:production
-
-      - name: Clean stale packaged output
-        shell: bash
-        run: |
-          # Leftover artifacts from earlier builds (stale .bin symlinks, old app
-          # bundles) collide with electron-builder's dependency traversal and
-          # fail packaging with EEXIST. Packaging must start from a clean dist/.
-          rm -rf dist
-
-      - name: Package ${{ matrix.name }}
-        shell: bash
+          name: ${{ matrix.name }}
+          target: ${{ matrix.target }}
+          arch: ${{ matrix.arch }}
+          artifact: ${{ matrix.artifact }}
+          app-dir: ${{ matrix.app_dir }}
+          publish-channel: nightly
+          build-version: ${{ needs.version.outputs.full }}
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
-            echo "::error::Missing signing credentials: CSC_LINK and CSC_KEY_PASSWORD are required"
-            exit 1
-          fi
-          if [ "${{ matrix.target }}" = "mac" ]; then
-            if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
-              echo "::error::Missing mac notarization credentials: APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID"
-              exit 1
-            fi
-          fi
-          bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never -c.publish.channel=nightly -c.forceCodeSigning=true -c.extraMetadata.version="$CODEINOVEN_BUILD_VERSION"
-
-      - name: Verify packaged artifacts
-        run: bun run verify:packaged-app --target ${{ matrix.target }} --artifact-dir dist
-
-      - name: Launch packaged application through workspace readiness
-        shell: bash
-        run: |
-          command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output ".cio/tmp/startup-smoke-${{ matrix.target }}.json")
-          exit_code=0
-          for attempt in 1 2 3; do
-            if [ "${{ matrix.target }}" = "linux" ]; then
-              xvfb-run -a "${command[@]}" || exit_code=$?
-            else
-              "${command[@]}" || exit_code=$?
-            fi
-            if [ "$exit_code" -eq 0 ]; then
-              break
-            fi
-            echo "startup smoke attempt $attempt failed with exit $exit_code; retrying"
-            sleep 10
-            exit_code=0
-          done
-          exit "$exit_code"
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: codeinoven-${{ matrix.artifact }}
-          path: |
-            dist/*.dmg
-            dist/*.zip
-            dist/*.exe
-            dist/*.AppImage
-            dist/*.deb
-            dist/*.blockmap
-            dist/*.yml
-            .cio/tmp/startup-smoke-*.json
-          if-no-files-found: error
 
   publish:
     name: Publish nightly prerelease
@@ -240,104 +156,17 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
-      # The mirror run is dispatched at the end of this job (workflow_dispatch
-      # needs Actions write on the token).
+      # The mirror run is dispatched by .github/actions/publish-release
+      # (workflow_dispatch needs Actions write on the token).
       actions: write
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
+      - name: Publish the nightly release
+        uses: ./.github/actions/publish-release
         with:
-          fetch-depth: 0
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.10
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v7
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Generate checksums
-        run: |
-          cd artifacts
-          find . -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' \) -print0 \
-            | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
-          echo "artifacts listing:"
-          find . -type f | sort
-          echo "SHA256SUMS.txt:"
-          cat SHA256SUMS.txt
-
-      - name: Generate release notes
+          tag: ${{ needs.version.outputs.tag }}
+          version: ${{ needs.version.outputs.version }}
+          channel: nightly
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Notes cover every commit since the newest published nightly tag of
-          # this base version (else the last stable release). The file feeds
-          # the GitHub release body below, which the in-app updater also
-          # surfaces via electron-updater's releaseNotes.
-          if ! bun scripts/generate-release-notes.ts --channel nightly --to "$GITHUB_SHA" --out release-notes.md; then
-            echo "::error::Failed to generate release notes"
-            exit 1
-          fi
-          cat release-notes.md
-
-      - name: Create or update nightly release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          version="${{ needs.version.outputs.version }}"
-          tag="${{ needs.version.outputs.tag }}"
-          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
-            tagged_commit="$(git rev-list -n 1 "$tag")"
-            if [ "$tagged_commit" != "$GITHUB_SHA" ]; then
-              echo "::error::Tag $tag already points to $tagged_commit instead of $GITHUB_SHA"
-              exit 1
-            fi
-          fi
-          files=()
-          while IFS= read -r f; do
-            files+=("$f")
-          done < <(find artifacts -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.blockmap' -o -name '*.yml' -o -name 'SHA256SUMS.txt' \) | sort)
-          publish_attempt=0
-          while [ "$publish_attempt" -lt 3 ]; do
-            publish_attempt=$((publish_attempt + 1))
-            if gh release view "$tag" >/dev/null 2>&1; then
-              gh release upload "$tag" "${files[@]}" --clobber
-              gh release edit "$tag" --title "CodeInOven $version nightly" --notes-file release-notes.md --prerelease
-            else
-              gh release create "$tag" "${files[@]}" \
-                --target "$GITHUB_SHA" \
-                --title "CodeInOven $version nightly" \
-                --notes-file release-notes.md \
-                --prerelease \
-                --latest=false
-            fi
-            publish_exit=$?
-            if [ "$publish_exit" -eq 0 ]; then
-              break
-            fi
-            echo "release publish attempt $publish_attempt failed with exit $publish_exit; retrying"
-            sleep 10
-          done
-          exit "$publish_exit"
-
-      - name: Dispatch the download mirror
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.version.outputs.tag }}
-        run: |
-          # The nightly release is published with GITHUB_TOKEN, and GitHub does
-          # not start a workflow from an event a GITHUB_TOKEN caused, so the
-          # mirror workflow's `release: published` trigger never fires for it.
-          # workflow_dispatch is the documented exception, so ask for the mirror
-          # run explicitly (see .github/workflows/download-mirror.yml).
-          if [ -z "${{ vars.DOWNLOAD_MIRROR_S3_ENDPOINT }}" ]; then
-            echo "::warning::Download mirror: DOWNLOAD_MIRROR_S3_ENDPOINT is not set, so $TAG was not mirrored."
-            exit 0
-          fi
-          gh workflow run download-mirror.yml -f tag="$TAG" -f channel=nightly
-          echo "::notice::Download mirror: dispatched for $TAG (nightly)."
+          DOWNLOAD_MIRROR_S3_ENDPOINT: ${{ vars.DOWNLOAD_MIRROR_S3_ENDPOINT }}

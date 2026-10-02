@@ -4,6 +4,9 @@ name: Security
 # side. Nightly -> main promotion PRs skip the scan jobs (identical content
 # was just scanned on the nightly push), and pushes to main are excluded
 # because main only ever receives nightly promotion merges.
+#
+# This workflow owns `bun audit`. quality.yml ran the identical command as a
+# separate job, so every push paid for the same audit twice.
 on:
   push:
     branches:
@@ -19,9 +22,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The skip decision lives here rather than in .github/actions/setup because a
+  # composite action cannot set a job-level `if`.
+  policy:
+    name: Determine suite scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.scope.outputs.skip }}
+
+    steps:
+      - name: Decide whether the heavy suite runs
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          skip=false
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" = "main" ] && [ "$HEAD_REF" = "nightly" ]; then
+            skip=true
+            echo "::notice::nightly -> main promotion re-delivers content the nightly push just fully scanned, so the scan jobs are skipped."
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   secrets:
     name: Detect leaked secrets
-    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
+    needs: [policy]
+    if: needs.policy.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -41,17 +69,18 @@ jobs:
 
   audit:
     name: Audit dependencies
-    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
+    needs: [policy]
+    if: needs.policy.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: ./.github/actions/setup
         with:
-          bun-version: 1.3.14
+          install: 'true'
 
-      - name: Audit production dependencies
+      # `bun audit` audits every dependency, not only the production tree, so
+      # this job is named for what it does. The old "Audit production
+      # dependencies" name implied a --production flag it never passed.
+      - name: Audit dependencies
         run: bun audit

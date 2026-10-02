@@ -1,0 +1,133 @@
+name: Publish release
+description: >-
+  Turn the downloaded build artifacts into a GitHub release for either channel.
+  The nightly and stable workflows ran byte-identical copies of checksums, notes,
+  a publish retry loop, and a mirror dispatch; only the tag, the channel string,
+  and the prerelease flags differed. Those three differences are inputs here.
+
+inputs:
+  tag:
+    description: Release tag to create or update (for example `v0.5.58`).
+    required: true
+  version:
+    description: Version shown in the release title, without the leading `v`.
+    required: true
+  channel:
+    description: >-
+      `nightly` publishes a prerelease and keeps the stable release as latest.
+      `stable` publishes a full release and moves latest onto it.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # No dependency install: the release scripts use Bun's built-in capabilities
+    # and the repository's own TypeScript modules, exactly as before.
+    - name: Check out repository
+      uses: ./.github/actions/setup
+      with:
+        fetch-depth: '0'
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v7
+      with:
+        path: artifacts
+        merge-multiple: true
+
+    - name: Generate checksums
+      shell: bash
+      run: bun scripts/release-artifacts.ts checksums --dir artifacts
+
+    - name: Generate release notes
+      shell: bash
+      env:
+        GH_TOKEN: ${{ env.GH_TOKEN }}
+        RELEASE_CHANNEL: ${{ inputs.channel }}
+      run: |
+        # Notes cover every commit since the last published release of this
+        # channel, i.e. for a nightly the newest prerelease of this base version
+        # (else the last stable release). The file feeds the GitHub release body
+        # below, which the in-app updater also surfaces via electron-updater's
+        # releaseNotes.
+        if ! bun scripts/generate-release-notes.ts --channel "$RELEASE_CHANNEL" --to "$GITHUB_SHA" --out release-notes.md; then
+          echo "::error::Failed to generate release notes"
+          exit 1
+        fi
+        cat release-notes.md
+
+    - name: Create or update release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ env.GH_TOKEN }}
+        RELEASE_TAG: ${{ inputs.tag }}
+        RELEASE_VERSION: ${{ inputs.version }}
+        RELEASE_CHANNEL: ${{ inputs.channel }}
+      run: |
+        if [ "$RELEASE_CHANNEL" = "nightly" ]; then
+          title="CodeInOven $RELEASE_VERSION nightly"
+          create_flags=(--prerelease --latest=false)
+          edit_flags=(--prerelease)
+        else
+          title="CodeInOven $RELEASE_VERSION"
+          create_flags=(--latest)
+          edit_flags=(--prerelease=false --latest)
+        fi
+
+        if git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null; then
+          tagged_commit="$(git rev-list -n 1 "$RELEASE_TAG")"
+          if [ "$tagged_commit" != "$GITHUB_SHA" ]; then
+            echo "::error::Tag $RELEASE_TAG already points to $tagged_commit instead of $GITHUB_SHA"
+            exit 1
+          fi
+        fi
+
+        files=()
+        while IFS= read -r f; do
+          files+=("$f")
+        done < <(bun scripts/release-artifacts.ts paths --dir artifacts)
+
+        publish_attempt=0
+        publish_exit=1
+        while [ "$publish_attempt" -lt 3 ]; do
+          publish_attempt=$((publish_attempt + 1))
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            # Chained so a failed upload cannot be masked by a succeeding edit:
+            # `publish_exit` reflects only the last command in the branch.
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber \
+              && gh release edit "$RELEASE_TAG" --title "$title" --notes-file release-notes.md "${edit_flags[@]}"
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --notes-file release-notes.md \
+              "${create_flags[@]}"
+          fi
+          publish_exit=$?
+          if [ "$publish_exit" -eq 0 ]; then
+            break
+          fi
+          if [ "$publish_attempt" -lt 3 ]; then
+            echo "release publish attempt $publish_attempt of 3 failed with exit $publish_exit; retrying"
+            sleep 10
+          fi
+        done
+        exit "$publish_exit"
+
+    - name: Dispatch the download mirror
+      shell: bash
+      env:
+        GH_TOKEN: ${{ env.GH_TOKEN }}
+        RELEASE_TAG: ${{ inputs.tag }}
+        RELEASE_CHANNEL: ${{ inputs.channel }}
+      run: |
+        # This release is published with GITHUB_TOKEN, and GitHub does not start a
+        # workflow from an event a GITHUB_TOKEN caused, so the mirror workflow's
+        # `release: published` trigger never fires for it. workflow_dispatch is
+        # the documented exception, so ask for the mirror run explicitly (see
+        # .github/workflows/download-mirror.yml).
+        if [ -z "$DOWNLOAD_MIRROR_S3_ENDPOINT" ]; then
+          echo "::warning::Download mirror: DOWNLOAD_MIRROR_S3_ENDPOINT is not set, so $RELEASE_TAG was not mirrored."
+          exit 0
+        fi
+        gh workflow run download-mirror.yml -f tag="$RELEASE_TAG" -f channel="$RELEASE_CHANNEL"
+        echo "::notice::Download mirror: dispatched for $RELEASE_TAG ($RELEASE_CHANNEL)."

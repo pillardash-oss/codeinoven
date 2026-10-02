@@ -1,0 +1,50 @@
+name: Set up repository
+description: >-
+  Check out the repository and install the one pinned Bun version. Every bun
+  job in this repository goes through here so there is a single place that
+  decides which toolchain runs and that refuses to install one the repo
+  declares unsupported.
+
+inputs:
+  ref:
+    description: >-
+      Branch, tag, or SHA to check out. Leave empty to use the ref the workflow
+      event already selected.
+    required: false
+    default: ''
+  fetch-depth:
+    description: >-
+      Git history depth for the checkout. Use `0` only for jobs that resolve
+      tags, history, or another branch, because a full clone is slower.
+    required: false
+    default: '1'
+  install:
+    description: Run `bun install --frozen-lockfile` once Bun is on PATH.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Check out repository
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ inputs.ref }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        # .bun-version is the single source of truth for the toolchain version.
+        # Never pass bun-version here: a literal in a workflow is how Bun 1.3.10
+        # outlived the 1.3.14 floor in engines.bun for a month.
+        bun-version-file: .bun-version
+
+    - name: Require the pinned Bun to satisfy package.json
+      shell: bash
+      run: bun scripts/check-bun-version.ts
+
+    - name: Install locked dependencies
+      if: inputs.install == 'true'
+      shell: bash
+      run: bun install --frozen-lockfile
