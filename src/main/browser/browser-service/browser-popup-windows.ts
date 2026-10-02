@@ -335,6 +335,16 @@ export class BrowserPopupWindows {
     return null
   }
 
+  /** Navigate the retained extension view to one of its own pages. */
+  async navigateExtensionPopup(id: string, url: string): Promise<boolean> {
+    const record = this.popups.get(id)
+    const page = record ? pageOf(record) : undefined
+    if (!record || record.extensionId === null || !page || page.isDestroyed()) return false
+    if (record.url === url || page.getURL() === url) return true
+    await page.loadURL(url)
+    return true
+  }
+
   /** Reuse one extension page in a new tab and make it visible in the rail again. */
   retargetExtensionPopup(
     id: string,

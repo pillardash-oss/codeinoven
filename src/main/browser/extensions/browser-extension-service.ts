@@ -209,16 +209,18 @@ export interface BrowserExtensionHost {
   /** Close one extension's side panel. `extensionTabId` names the tab the
    *  request was for; null closes it whatever tab it belongs to. */
   closeSidePanel(extensionId: string, extensionTabId: number | null): void
-  /** Open the extension popup for the tab named by its runtime. */
+  /** Apply a popup surface request for the tab named by the extension runtime. */
   openPopup(request: BrowserExtensionActionPopupOpenRequest): void
 }
 
-/** One action popup a worker asked the app to show. */
+/** One extension popup request carried from the worker to the browser host. */
 export interface BrowserExtensionActionPopupOpenRequest {
   projectId: string
   boxId: string | null
   extensionId: string
   extensionTabId: number
+  kind: BrowserExtensionActionPopupRequest['kind']
+  url?: string
 }
 
 /** One side panel a worker asked the app to raise. The extension service
@@ -1542,7 +1544,7 @@ export class BrowserExtensionService {
     state.sidePanelSeq.set(extensionId, newest)
   }
 
-  /** Open action popups the worker requested through `chrome.action.openPopup`. */
+  /** Apply popup requests the worker routed through the app bridge. */
   private handleActionPopupRequests(
     state: LoadedJar,
     extensionId: string,
@@ -1558,7 +1560,9 @@ export class BrowserExtensionService {
         projectId: state.projectId,
         boxId: state.boxId,
         extensionId,
-        extensionTabId: request.tabId
+        extensionTabId: request.tabId,
+        kind: request.kind,
+        ...(request.url ? { url: request.url } : {})
       })
     }
     state.actionPopupSeq.set(extensionId, newest)

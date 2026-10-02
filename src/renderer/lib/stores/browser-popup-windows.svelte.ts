@@ -172,11 +172,6 @@ class BrowserPopupWindowsState {
     this.selectedId = popupId
   }
 
-  /** Close every visible popup window in the browser. */
-  closeAll(): void {
-    for (const popup of this.all()) this.close(popup.id)
-  }
-
   /** Place a popup's page over the frame the panel measured for it. */
   show(popupId: string, bounds: BrowserViewBounds): void {
     void invoke('browser:showPopupWindow', popupId, bounds).catch(() => {})
@@ -197,6 +192,19 @@ class BrowserPopupWindowsState {
     void invoke('browser:dismissPopupWindow', popupId).catch((error: unknown) => {
       reportError(error, 'That popup window could not be hidden.')
     })
+  }
+
+  /** Hide an extension popup; close a page-created popup window. */
+  dismissOrClose(popupId: string): void {
+    const popup = this.find(popupId)
+    if (!popup) return
+    if (popup.extensionId !== null) this.dismiss(popupId)
+    else this.close(popupId)
+  }
+
+  /** Dismiss visible popups without destroying extension action pages. */
+  dismissAll(): void {
+    for (const popup of this.all()) this.dismissOrClose(popup.id)
   }
 
   /** Close a popup and destroy its page. */

@@ -79,10 +79,12 @@ export interface BrowserExtensionMailbox {
   bridgeCommands: number
 }
 
-/** One `chrome.action.openPopup()` request from the extension worker. */
+/** One popup surface request from the extension worker. */
 export interface BrowserExtensionActionPopupRequest {
   seq: number
   tabId: number
+  kind: 'action' | 'open-window' | 'hide-window' | 'focus-window'
+  url?: string
 }
 
 /** The kinds of OS-notification request an extension can make through
@@ -296,6 +298,12 @@ function toActionPopupRequest(value: unknown): BrowserExtensionActionPopupReques
   const record = asRecord(value)
   const seq = record['seq']
   const tabId = record['tabId']
+  const rawKind = record['kind']
+  const kind =
+    rawKind === 'open-window' || rawKind === 'hide-window' || rawKind === 'focus-window'
+      ? rawKind
+      : 'action'
+  const rawUrl = record['url']
   if (
     typeof seq !== 'number' ||
     !Number.isFinite(seq) ||
@@ -306,7 +314,11 @@ function toActionPopupRequest(value: unknown): BrowserExtensionActionPopupReques
   ) {
     return null
   }
-  return { seq, tabId }
+  if (typeof rawUrl === 'string' && rawUrl.length > 4096) return null
+  const request: BrowserExtensionActionPopupRequest = { seq, tabId, kind }
+  if (typeof rawUrl === 'string') request.url = rawUrl
+  if ((kind === 'open-window' || kind === 'focus-window') && !request.url) return null
+  return request
 }
 
 export class BrowserExtensionBridge {

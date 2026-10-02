@@ -1171,7 +1171,7 @@
     try {
       const tabId = tabActivity.activeTabId
       if (typeof tabId === 'number' && Number.isFinite(tabId) && tabId >= 0) {
-        actionPopupRequests.push({ seq: ++actionPopupRequestSeq, tabId })
+        actionPopupRequests.push({ seq: ++actionPopupRequestSeq, tabId, kind: 'action' })
         if (actionPopupRequests.length > 16)
           actionPopupRequests.splice(0, actionPopupRequests.length - 16)
         scheduleMailbox()
@@ -1295,6 +1295,170 @@
    * names the tab, and every tab it describes carries the flag as it knows it.
    */
   const tabActivity = { activeTabId: null }
+  const HOSTED_POPUP_WINDOW_ID = 2147483646
+  const HOSTED_POPUP_TAB_ID = 2147483645
+  const hostedPopout = { url: null, focused: false }
+
+  const isExtensionPopoutUrl = (url) => {
+    if (typeof url !== 'string' || !chromeApi.runtime || typeof chromeApi.runtime.getURL !== 'function') {
+      return false
+    }
+    try {
+      const root = new URL(chromeApi.runtime.getURL(''))
+      const candidate = new URL(url)
+      return (
+        candidate.protocol === root.protocol &&
+        candidate.host === root.host &&
+        candidate.searchParams.get('uilocation') === 'popout'
+      )
+    } catch {
+      return false
+    }
+  }
+
+  const routePopupWindowRequest = (kind, url) => {
+    const tabId = tabActivity.activeTabId
+    if (typeof tabId !== 'number' || !Number.isFinite(tabId) || tabId < 0) return false
+    const request = { seq: ++actionPopupRequestSeq, tabId, kind }
+    if (typeof url === 'string') request.url = url
+    actionPopupRequests.push(request)
+    if (actionPopupRequests.length > 16) {
+      actionPopupRequests.splice(0, actionPopupRequests.length - 16)
+    }
+    scheduleMailbox()
+    return true
+  }
+
+  const hostedWindow = (id, focused) => ({
+    id,
+    focused,
+    type: id === HOSTED_POPUP_WINDOW_ID ? 'popup' : 'normal',
+    state: 'normal',
+    left: 0,
+    top: 0,
+    width: 1280,
+    height: 800,
+    alwaysOnTop: false,
+    tabs:
+      id === HOSTED_POPUP_WINDOW_ID && hostedPopout.url
+        ? [
+            {
+              id: HOSTED_POPUP_TAB_ID,
+              index: 0,
+              windowId: HOSTED_POPUP_WINDOW_ID,
+              active: false,
+              highlighted: false,
+              pinned: false,
+              incognito: false,
+              discarded: false,
+              status: 'complete',
+              url: hostedPopout.url,
+              title: ''
+            }
+          ]
+        : []
+  })
+
+  const wrapWindowsApi = (api) => {
+    if (!api || typeof api !== 'object') return
+    const originals = {
+      create: typeof api.create === 'function' ? api.create : noop,
+      remove: typeof api.remove === 'function' ? api.remove : noop,
+      update: typeof api.update === 'function' ? api.update : noop,
+      get: typeof api.get === 'function' ? api.get : noop,
+      getCurrent: typeof api.getCurrent === 'function' ? api.getCurrent : noop,
+      getLastFocused: typeof api.getLastFocused === 'function' ? api.getLastFocused : noop
+    }
+    const install = (name, wrapped) => {
+      try {
+        Object.defineProperty(api, name, { value: wrapped, configurable: true, writable: true })
+      } catch (error) {
+        state.errors.push('windows-' + name + '-wrap: ' + String(error))
+      }
+    }
+    const originalCreate = originals.create
+    if (!originalCreate.__cioHostedPopoutWrapped) {
+      const wrapped = function () {
+        const args = Array.prototype.slice.call(arguments)
+        const data = args[0] && typeof args[0] === 'object' ? args[0] : {}
+        const url = typeof data.url === 'string' ? data.url : ''
+        if (isExtensionPopoutUrl(url) && routePopupWindowRequest('open-window', url)) {
+          hostedPopout.url = url
+          hostedPopout.focused = true
+          const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+          return answerWith(callback, hostedWindow(HOSTED_POPUP_WINDOW_ID, true))
+        }
+        return originalCreate.apply(this, args)
+      }
+      wrapped.__cioHostedPopoutWrapped = true
+      install('create', wrapped)
+    }
+    const originalRemove = originals.remove
+    if (!originalRemove.__cioHostedPopoutWrapped) {
+      const wrapped = function () {
+        const args = Array.prototype.slice.call(arguments)
+        if (args[0] === HOSTED_POPUP_WINDOW_ID && hostedPopout.url) {
+          hostedPopout.focused = false
+          if (routePopupWindowRequest('hide-window', hostedPopout.url)) {
+            const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+            return answerWith(callback, undefined)
+          }
+        }
+        return originalRemove.apply(this, args)
+      }
+      wrapped.__cioHostedPopoutWrapped = true
+      install('remove', wrapped)
+    }
+    const originalUpdate = originals.update
+    if (!originalUpdate.__cioHostedPopoutWrapped) {
+      const wrapped = function () {
+        const args = Array.prototype.slice.call(arguments)
+        if (args[0] === HOSTED_POPUP_WINDOW_ID && hostedPopout.url) {
+          if (routePopupWindowRequest('focus-window', hostedPopout.url)) {
+            hostedPopout.focused = true
+            const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+            return answerWith(callback, hostedWindow(HOSTED_POPUP_WINDOW_ID, true))
+          }
+        }
+        return originalUpdate.apply(this, args)
+      }
+      wrapped.__cioHostedPopoutWrapped = true
+      install('update', wrapped)
+    }
+    const originalGet = originals.get
+    if (!originalGet.__cioHostedPopoutWrapped) {
+      const wrapped = function () {
+        const args = Array.prototype.slice.call(arguments)
+        const id = args[0]
+        if (id === HOSTED_POPUP_WINDOW_ID || id === 0 || id === -1 || id === -2) {
+          const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+          const result =
+            id === HOSTED_POPUP_WINDOW_ID
+              ? hostedWindow(id, hostedPopout.focused)
+              : hostedWindow(0, true)
+          return answerWith(callback, result)
+        }
+        return originalGet.apply(this, args)
+      }
+      wrapped.__cioHostedPopoutWrapped = true
+      install('get', wrapped)
+    }
+    for (const name of ['getCurrent', 'getLastFocused']) {
+      const original = originals[name]
+      if (original.__cioHostedPopoutWrapped) continue
+      const wrapped = function () {
+        const args = Array.prototype.slice.call(arguments)
+        const callback =
+          typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+        return answerWith(callback, hostedWindow(0, true))
+      }
+      wrapped.__cioHostedPopoutWrapped = true
+      install(name, wrapped)
+    }
+  }
+
+  for (const root of roots) wrapWindowsApi(root && root.windows)
+
   const handleBridgeCommand = (command) => {
     if (!command || typeof command !== 'object') return
     state.bridgeCommands = (state.bridgeCommands || 0) + 1
@@ -1693,6 +1857,48 @@
         }
         return list
       }
+      const hostedPopoutTab = () =>
+        hostedPopout.url
+          ? {
+              id: HOSTED_POPUP_TAB_ID,
+              index: 0,
+              windowId: HOSTED_POPUP_WINDOW_ID,
+              active: hostedPopout.focused,
+              highlighted: hostedPopout.focused,
+              pinned: false,
+              incognito: false,
+              discarded: false,
+              autoDiscardable: false,
+              status: 'complete',
+              url: hostedPopout.url,
+              title: ''
+            }
+          : null
+      const matchesUrlFilter = (url, filter) => {
+        if (!filter) return true
+        const patterns = Array.isArray(filter) ? filter : [filter]
+        return patterns.some((pattern) => {
+          if (typeof pattern !== 'string') return false
+          try {
+            const source = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^]*')
+            return new RegExp('^' + source + '$').test(url)
+          } catch {
+            return false
+          }
+        })
+      }
+      const hostedPopoutMatchesQuery = (tab, query) => {
+        if (!tab) return false
+        if (query && query.windowType && query.windowType !== 'popup') return false
+        if (query && typeof query.windowId === 'number' && query.windowId !== HOSTED_POPUP_WINDOW_ID) {
+          return false
+        }
+        if (query && typeof query.active === 'boolean' && query.active !== tab.active) return false
+        if (query && typeof query.status === 'string' && query.status !== tab.status) return false
+        if (query && query.url && !matchesUrlFilter(tab.url, query.url)) return false
+        if (query && query.title && tab.title !== query.title) return false
+        return true
+      }
       let repairedOn = 0
       for (const root of roots) {
         const tabsApi = root && root.tabs
@@ -1702,8 +1908,12 @@
         const nativeGet = typeof tabsApi.get === 'function' ? tabsApi.get.bind(tabsApi) : null
         try {
           const answerQuery = (list, query, callback) => {
-            if (!query || query.active !== true) return answerWith(callback, list)
-            const active = list.filter((tab) => tab && tab.active === true)
+            const hostedTab = hostedPopoutTab()
+            const combined = hostedPopoutMatchesQuery(hostedTab, query)
+              ? list.concat(hostedTab)
+              : list
+            if (!query || query.active !== true) return answerWith(callback, combined)
+            const active = combined.filter((tab) => tab && tab.active === true)
             if (active.length > 0 || tabActivity.activeTabId === null || !nativeGet) {
               return answerWith(callback, active)
             }

@@ -2967,6 +2967,26 @@ export class BrowserService {
     return { action: 'deny' }
   }
 
+  /** Accept only a popout page belonging to the requesting extension. */
+  private ownedExtensionPageUrl(extensionId: string, rawUrl: string | undefined): string | null {
+    if (!rawUrl) return null
+    try {
+      const url = new URL(rawUrl)
+      if (
+        url.protocol !== 'chrome-extension:' ||
+        url.host !== extensionId ||
+        url.username !== '' ||
+        url.password !== '' ||
+        url.searchParams.get('uilocation') !== 'popout'
+      ) {
+        return null
+      }
+      return url.toString()
+    } catch {
+      return null
+    }
+  }
+
   /**
    * Host the popup window a page asked for, or answer null to let the caller
    * fall back to opening it as a tab.
@@ -3008,18 +3028,40 @@ export class BrowserService {
     }
   }
 
-  /** Resolve the worker's active tab and route its action popup to the rail. */
+  /** Resolve a worker popup request and route its extension page to the rail. */
   private openExtensionPopupFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
     const owner = this.tabForContents(request.extensionTabId)
     if (!owner) return
     const tab = owner.tab
     if (tab.projectId !== request.projectId || tab.boxId !== request.boxId) return
+
+    if (request.kind === 'hide-window') {
+      const cached = this.popupWindows.extensionPopupForJar(
+        request.extensionId,
+        request.projectId,
+        request.boxId
+      )
+      if (cached) this.popupWindows.dismiss(cached)
+      return
+    }
+
+    const requestedUrl =
+      request.kind === 'open-window' || request.kind === 'focus-window'
+        ? (this.ownedExtensionPageUrl(request.extensionId, request.url) ?? undefined)
+        : undefined
+    if ((request.kind === 'open-window' || request.kind === 'focus-window') && !requestedUrl) {
+      Logger.dev('An extension popup request used an invalid extension URL:', {
+        extensionId: request.extensionId
+      })
+      return
+    }
     void this.openExtensionPopup(
       request.projectId,
       owner.id,
       tab.threadId,
       tab.boxId,
-      request.extensionId
+      request.extensionId,
+      requestedUrl
     ).catch((error: unknown) => {
       Logger.dev('An extension action popup could not be opened:', {
         extensionId: request.extensionId,
@@ -3038,18 +3080,21 @@ export class BrowserService {
     tabId: string,
     threadId: string,
     boxId: string | null,
-    extensionId: string
+    extensionId: string,
+    requestedUrl?: string
   ): Promise<string | null> {
     const tab = this.ensureTab(tabId, projectId, threadId, boxId)
     // An extension can ask for its panel to open when its action is clicked, and
     // Chromium opens the panel rather than the action popup when it does. The
     // panel is a surface of the rail, so there is no popup id to answer with.
-    const actionPanel = this.extensions.sidePanelForActionClick(
-      projectId,
-      tab.boxId,
-      extensionId,
-      tab.view.webContents.id
-    )
+    const actionPanel = requestedUrl
+      ? null
+      : this.extensions.sidePanelForActionClick(
+          projectId,
+          tab.boxId,
+          extensionId,
+          tab.view.webContents.id
+        )
     if (actionPanel) {
       await this.openExtensionSidePanel({
         projectId,
@@ -3065,16 +3110,31 @@ export class BrowserService {
     // One live popup page per extension jar: moving to another tab retargets this
     // view instead of creating another extension document and worker connection.
     const cached = this.popupWindows.extensionPopupForJar(extensionId, projectId, tab.boxId)
-    if (
-      cached &&
-      this.popupWindows.retargetExtensionPopup(cached, {
-        tabId,
-        projectId,
-        threadId: tab.threadId,
-        boxId: tab.boxId
-      })
-    ) {
+    const activateCached = async (popupId: string): Promise<boolean> => {
+      if (
+        !this.popupWindows.retargetExtensionPopup(popupId, {
+          tabId,
+          projectId,
+          threadId: tab.threadId,
+          boxId: tab.boxId
+        })
+      )
+        return false
+      if (requestedUrl) {
+        try {
+          if (!(await this.popupWindows.navigateExtensionPopup(popupId, requestedUrl))) return false
+        } catch (error: unknown) {
+          Logger.dev('A retained extension page could not navigate to its requested popup:', {
+            extensionId,
+            error
+          })
+          return true
+        }
+      }
       this.reportExtensionPageTabs(tabId)
+      return true
+    }
+    if (cached && (await activateCached(cached))) {
       return cached
     }
     const popupKey = JSON.stringify([projectId, tab.boxId, extensionId])
@@ -3093,16 +3153,7 @@ export class BrowserService {
       projectId,
       tab.boxId
     )
-    if (
-      openedWhileWaiting &&
-      this.popupWindows.retargetExtensionPopup(openedWhileWaiting, {
-        tabId,
-        projectId,
-        threadId: tab.threadId,
-        boxId: tab.boxId
-      })
-    ) {
-      this.reportExtensionPageTabs(tabId)
+    if (openedWhileWaiting && (await activateCached(openedWhileWaiting))) {
       return openedWhileWaiting
     }
     const creation = this.createExtensionPopup(
@@ -3110,7 +3161,8 @@ export class BrowserService {
       tabId,
       tab.threadId,
       tab.boxId,
-      extensionId
+      extensionId,
+      requestedUrl
     )
     this.extensionPopupOpenings.set(popupKey, creation)
     try {
@@ -3128,12 +3180,13 @@ export class BrowserService {
     tabId: string,
     threadId: string,
     boxId: string | null,
-    extensionId: string
+    extensionId: string,
+    requestedUrl?: string
   ): Promise<string> {
     if (this.popupWindows.countForTab(tabId) >= MAX_POPUP_WINDOWS_PER_TAB) {
       throw new Error('This tab already holds the popups it may host')
     }
-    const url = this.extensions.popupUrlFor(extensionId, projectId, boxId)
+    const url = requestedUrl ?? this.extensions.popupUrlFor(extensionId, projectId, boxId)
     if (!url) throw new Error('That extension offers no popup in this box')
     // The extension has to be loaded in the jar before its own page can resolve: a
     // jar is loaded on demand and does not wait for a popup.
