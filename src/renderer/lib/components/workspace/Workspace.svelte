@@ -2037,6 +2037,13 @@
         undefined,
         true
       )
+      // The full screen surface records separately which tab it is showing, and
+      // revealing on the strip above moves only the sidebar's record. While that
+      // overlay is up it is the surface the chord was pressed on and the one the
+      // user is looking at, so it has to follow the new tab the way the strip's
+      // own create button does, or the tab opens beside the page on screen and
+      // the overlay keeps painting the old one.
+      if (browserFullscreenTabId) browserFullscreenTabId = newTabId
       browserAddressFocus.request(newTabId)
     })
   })
