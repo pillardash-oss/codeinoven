@@ -197,7 +197,11 @@ export class GitPullRequestOperations {
       this.access.refreshConflictIndicators(projectId, true)
       return reference
     } catch (reason) {
-      this.access.setError(errorMessage(reason, 'Pull request could not be merged'))
+      this.access.setError(
+        errorMessage(reason, 'Pull request could not be merged')
+          .replace(/^Error invoking remote method 'pr:merge':\s*/u, '')
+          .replace(/^ProviderHttpError:\s*Provider returned HTTP \d+:\s*/u, '')
+      )
       return null
     } finally {
       this.access.markBusy('pr-merge', false)

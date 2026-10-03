@@ -1,29 +1,9 @@
 <script lang="ts">
-  import {
-    ArrowUp,
-    Boxes,
-    Copy,
-    ChevronRight,
-    FolderInput,
-    FolderMinus,
-    FolderPlus,
-    Globe,
-    Loader2,
-    Mic,
-    Moon,
-    Pencil,
-    Pin,
-    PinOff,
-    RotateCcw,
-    StickyNote,
-    Volume2,
-    VolumeX,
-    X
-  } from '@lucide/svelte'
-  import { ContextMenu } from 'bits-ui'
+  import { Globe, Loader2, Mic, Moon, Pin, StickyNote, Volume2, VolumeX, X } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { harnessName } from '$lib/components/shared/model-picker-helpers'
   import ModelPickerVendorIcons from '$lib/components/shared/ModelPickerVendorIcons.svelte'
@@ -40,12 +20,10 @@
     browserAppearanceHasIcon,
     browserAppearanceIconUrl
   } from './browser-group-appearance'
-  import BrowserTabPlacementItems from './BrowserTabPlacementItems.svelte'
 
   interface Props {
     tab: GlobalBrowserTab
     selected: boolean
-    selectedTabIds: string[]
     onTabClick: (tabId: string, event: MouseEvent) => void
     onTabContextMenu: (tabId: string) => string[]
     onMoveTabsToGroup: (tabIds: string[], groupId: string) => void
@@ -60,7 +38,6 @@
   let {
     tab,
     selected,
-    selectedTabIds,
     onTabClick,
     onTabContextMenu,
     onMoveTabsToGroup,
@@ -121,7 +98,6 @@
     return { harnessId, providerId, providerName }
   })
   const groups = $derived(globalBrowser.groups)
-  const group = $derived(tab.groupId ? globalBrowser.groupById(tab.groupId) : null)
   /** The box this tab runs in, or null in the default jar. Drives the row's box
    *  badge and the menu's reopen targets. */
   const box = $derived(tab.boxId ? globalBrowser.boxById(tab.boxId) : null)
@@ -136,7 +112,6 @@
   /** The box a pending "reopen in box" targets: undefined while none is pending,
    *  null for the default jar. */
   let reopenTarget = $state<string | null | undefined>(undefined)
-  const bulkSelection = $derived(selected && selectedTabIds.length > 1)
   const reopenTargetLabel = $derived(
     reopenTarget === undefined
       ? ''
@@ -144,9 +119,6 @@
         ? 'no box'
         : (globalBrowser.boxById(reopenTarget)?.name ?? 'that box')
   )
-
-  const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 
   function closeTab(event: MouseEvent): void {
     event.preventDefault()
@@ -161,22 +133,6 @@
     const id = globalBrowser.createGroup('New group')
     globalBrowser.moveToGroup(tab.id, id)
     onOpenGroupEditor(id)
-  }
-
-  /** Open a blank tab before this one, inheriting its group and box. */
-  function newSibling(): void {
-    globalBrowser.createTab('', tab.groupId, tab.boxId, { tabId: tab.id, position: 'before' })
-    globalBrowser.openAddressSpotlight()
-  }
-
-  /** Open a blank tab from the placement submenus, defaulting each unnamed side to
-   *  this tab's own group and box. */
-  function newPlaced(choice: { boxId?: string | null; groupId?: string | null }): void {
-    globalBrowser.createTab('', choice.groupId ?? tab.groupId, choice.boxId ?? tab.boxId, {
-      tabId: tab.id,
-      position: 'after'
-    })
-    globalBrowser.openAddressSpotlight()
   }
 
   /** Close this tab and open its page in the chosen box. Confirmed first: a tab
@@ -214,20 +170,108 @@
     globalBrowser.endDrag()
   }
 
-  /** Selected-tab actions use an OS menu so the browser's native view cannot
-   *  cover or clip the popup. A right-click outside the selection keeps the
-   *  existing single-tab menu and selects only that row. */
+  /** Both regular and multi-tab actions use OS menus above the native page view. */
   function onContextMenu(event: MouseEvent): void {
     const contextSelection = onTabContextMenu(tab.id)
-    if (contextSelection.length < 2) return
-
     event.preventDefault()
     event.stopPropagation()
-    const row = event.currentTarget
-    const bounds = row instanceof HTMLElement ? row.getBoundingClientRect() : null
-    const x = event.clientX || (bounds ? bounds.left + Math.min(bounds.width / 2, 24) : 0)
-    const y = event.clientY || (bounds ? bounds.top + bounds.height / 2 : 0)
+    const currentTarget = event.currentTarget
+    const bounds =
+      currentTarget instanceof HTMLElement ? currentTarget.getBoundingClientRect() : null
+    if (!bounds) return
+    const x = event.clientX || bounds.left + Math.min(bounds.width / 2, 24)
+    const y = event.clientY || bounds.top + bounds.height / 2
     const selectedIds = [...contextSelection]
+
+    if (selectedIds.length === 1) {
+      const currentTab = globalBrowser.tabById(tab.id)
+      if (!currentTab) return
+      void invoke(
+        'browser:tabContextMenu',
+        {
+          tabId: currentTab.id,
+          title: browserTabLabel(currentTab),
+          url: currentTab.url,
+          bookmarkAvailable: currentTab.url !== '',
+          bookmarked: currentTab.url !== '' && browserBookmarks.isBookmarked(currentTab.url),
+          pinned: currentTab.pinned,
+          groupId: currentTab.groupId,
+          boxId: currentTab.boxId,
+          canReopenClosedTab: globalBrowser.canReopenClosedTab,
+          groups: groups.map(({ id, name }) => ({ id, name })),
+          boxes: globalBrowser.boxes.map(({ id, name }) => ({ id, name }))
+        },
+        x,
+        y
+      )
+        .then((choice) => {
+          if (!choice) return
+          switch (choice.action) {
+            case 'edit':
+              onEditTab(tab.id)
+              return
+            case 'togglePin':
+              globalBrowser.toggleTabPin(tab.id)
+              return
+            case 'toggleBookmark':
+              if (currentTab.url !== '') {
+                browserBookmarks.toggle(
+                  currentTab.url,
+                  browserTabLabel(currentTab),
+                  currentTab.favicon
+                )
+              }
+              return
+            case 'duplicate':
+              globalBrowser.duplicateTab(tab.id)
+              return
+            case 'newBefore':
+              globalBrowser.createTab('', tab.groupId, tab.boxId, {
+                tabId: tab.id,
+                position: 'before'
+              })
+              globalBrowser.openAddressSpotlight()
+              return
+            case 'newTab':
+              globalBrowser.createTab('', tab.groupId, tab.boxId, {
+                tabId: tab.id,
+                position: 'after'
+              })
+              globalBrowser.openAddressSpotlight()
+              return
+            case 'newPlaced':
+              globalBrowser.createTab('', choice.groupId, choice.boxId, {
+                tabId: tab.id,
+                position: 'after'
+              })
+              globalBrowser.openAddressSpotlight()
+              return
+            case 'createGroup':
+              createGroupFromTab()
+              return
+            case 'editGroup':
+              if (tab.groupId) onOpenGroupEditor(tab.groupId)
+              return
+            case 'removeFromGroup':
+              globalBrowser.moveToGroup(tab.id, null)
+              return
+            case 'moveToGroup':
+              globalBrowser.moveToGroup(tab.id, choice.groupId)
+              return
+            case 'reopenInBox':
+              reopenTarget = choice.boxId
+              return
+            case 'reopenClosed':
+              globalBrowser.reopenLastClosedTab()
+              return
+            case 'close':
+              globalBrowser.close(tab.id)
+              return
+          }
+        })
+        .catch(() => {})
+      return
+    }
 
     void invoke(
       'browser:tabSelectionMenu',
@@ -258,282 +302,157 @@
   }
 </script>
 
-<ContextMenu.Root>
-  <ContextMenu.Trigger class="contents" disabled={bulkSelection}>
-    <div
-      class="group flex items-center rounded-md transition-colors {dropTarget
-        ? 'bg-info/10'
-        : highlighted
-          ? 'bg-elevated'
-          : 'hover:bg-elevated'}"
-      role="group"
-      aria-label={`${label} tab row`}
-      oncontextmenu={onContextMenu}
-    >
-      <button
-        type="button"
-        class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left"
-        aria-current={active}
-        aria-pressed={selected}
-        title={tab.url || label}
-        draggable="true"
-        ondragstart={onDragStart}
-        ondragend={() => {
-          dropTarget = false
-          globalBrowser.endDrag()
-        }}
-        ondragover={onDragOver}
-        ondragleave={() => (dropTarget = false)}
-        ondrop={onDrop}
-        onclick={(event: MouseEvent) => onTabClick(tab.id, event)}
-        onauxclick={(event: MouseEvent) => {
-          if (event.button === 1) closeTab(event)
-        }}
-      >
-        <span class="flex h-4 w-4 shrink-0 items-center justify-center">
-          {#if customIconUrl}
-            <img src={customIconUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
-          {:else if runtime.loading}
-            <Loader2 size={13} class="animate-spin text-muted" />
-          {:else if tab.favicon}
-            <img src={tab.favicon} alt="" class="h-4 w-4 rounded-sm object-contain" />
-          {:else}
-            <Globe size={12} class="text-dimmed" />
-          {/if}
-        </span>
-        <span class="flex min-w-0 flex-1 flex-col">
-          <span
-            class="truncate text-xs {tab.hibernated && !highlighted
-              ? 'text-dimmed'
-              : 'text-foreground'} {highlighted ? 'font-medium' : ''}"
-            style={accent ? `color: ${accent}` : undefined}
-          >
-            {label}
-          </span>
-          {#if agentModel}
-            <span
-              role="img"
-              class="flex items-center gap-0.5"
-              title={`${harnessName(agentModel.harnessId)} \u00b7 ${agentModel.providerName || 'No provider'}`}
-              aria-label={`Agent conversation on ${harnessName(agentModel.harnessId)}${agentModel.providerName ? ` with ${agentModel.providerName}` : ''}`}
-            >
-              <ModelPickerVendorIcons
-                harnessId={agentModel.harnessId}
-                providerId={agentModel.providerId}
-                providerName={agentModel.providerName}
-              />
-            </span>
-          {/if}
-        </span>
-      </button>
-
-      <div class="flex shrink-0 items-center gap-0.5 pr-1">
-        {#if box}
-          <span
-            role="img"
-            class="flex h-6 w-6 items-center justify-center"
-            title={`In box: ${box.name}`}
-            aria-label={`In box ${box.name}`}
-          >
-            {#if boxIcon}
-              <img src={boxIcon} alt="" class="h-3 w-3 rounded-sm object-contain" />
-            {:else}
-              <span class="h-2.5 w-2.5 rounded-full" style="background-color: {boxAccent}"></span>
-            {/if}
-          </span>
-        {/if}
-        {#if tab.pinned}
-          <span
-            role="img"
-            class="flex h-6 w-6 items-center justify-center text-accent"
-            title="Pinned tab"
-            aria-label="Pinned tab"
-          >
-            <Pin size={12} />
-          </span>
-        {/if}
-        {#if threadNotesState.has(tab.id)}
-          <span
-            role="img"
-            class="flex h-6 w-6 items-center justify-center text-dimmed"
-            title="This tab has a note"
-            aria-label="Tab has a note"
-          >
-            <StickyNote size={12} />
-          </span>
-        {/if}
-        {#if runtime.capturing}
-          <span
-            role="img"
-            class="flex h-6 w-6 items-center justify-center text-accent"
-            title={BROWSER_TAB_CAPTURE_LABEL}
-            aria-label={BROWSER_TAB_CAPTURE_LABEL}
-          >
-            <Mic size={12} />
-          </span>
-        {/if}
-        {#if runtime.audible || runtime.muted}
-          <button
-            type="button"
-            class="flex h-6 w-6 items-center justify-center rounded-md text-accent transition-colors hover:bg-overlay"
-            aria-pressed={runtime.muted}
-            title={browserTabMuteLabel(runtime.muted)}
-            aria-label={browserTabMuteLabel(runtime.muted)}
-            onclick={(event: MouseEvent) => {
-              event.stopPropagation()
-              globalBrowser.toggleMute(tab.id)
-            }}
-          >
-            {#if runtime.muted}
-              <VolumeX size={12} />
-            {:else}
-              <Volume2 size={12} />
-            {/if}
-          </button>
-        {:else if tab.hibernated}
-          <span
-            role="img"
-            class="flex h-6 w-6 items-center justify-center text-dimmed"
-            title="Hibernated to save memory. Open the tab to reload it."
-            aria-label="Hibernated tab"
-          >
-            <Moon size={12} />
-          </span>
-        {/if}
-        <button
-          type="button"
-          class="flex h-6 w-6 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
-          aria-label={`Close ${label}`}
-          title={`Close ${label}`}
-          onclick={closeTab}
-        >
-          <X size={12} />
-        </button>
-      </div>
-    </div>
-  </ContextMenu.Trigger>
-
-  <ContextMenu.Portal>
-    <ContextMenu.Content
-      avoidCollisions
-      collisionPadding={12}
-      updatePositionStrategy="always"
-      class="z-50 max-h-[calc(100dvh-1.5rem)] min-w-56 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
-    >
-      <p
-        class="truncate px-2.5 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+<div
+  class="group flex items-center rounded-md transition-colors {dropTarget
+    ? 'bg-info/10'
+    : highlighted
+      ? 'bg-elevated'
+      : 'hover:bg-elevated'}"
+  role="group"
+  aria-label={`${label} tab row`}
+  oncontextmenu={onContextMenu}
+>
+  <button
+    type="button"
+    class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left"
+    aria-current={active}
+    aria-pressed={selected}
+    title={tab.url || label}
+    draggable="true"
+    ondragstart={onDragStart}
+    ondragend={() => {
+      dropTarget = false
+      globalBrowser.endDrag()
+    }}
+    ondragover={onDragOver}
+    ondragleave={() => (dropTarget = false)}
+    ondrop={onDrop}
+    onclick={(event: MouseEvent) => onTabClick(tab.id, event)}
+    onauxclick={(event: MouseEvent) => {
+      if (event.button === 1) closeTab(event)
+    }}
+  >
+    <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+      {#if customIconUrl}
+        <img src={customIconUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+      {:else if runtime.loading}
+        <Loader2 size={13} class="animate-spin text-muted" />
+      {:else if tab.favicon}
+        <img src={tab.favicon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+      {:else}
+        <Globe size={12} class="text-dimmed" />
+      {/if}
+    </span>
+    <span class="flex min-w-0 flex-1 flex-col">
+      <span
+        class="truncate text-xs {tab.hibernated && !highlighted
+          ? 'text-dimmed'
+          : 'text-foreground'} {highlighted ? 'font-medium' : ''}"
+        style={accent ? `color: ${accent}` : undefined}
       >
         {label}
-      </p>
-      <ContextMenu.Item class={itemClass} onSelect={() => onEditTab(tab.id)}>
-        <Pencil size={13} class="shrink-0 text-muted" />
-        Edit tab
-      </ContextMenu.Item>
-      <ContextMenu.Item class={itemClass} onSelect={() => globalBrowser.toggleTabPin(tab.id)}>
-        {#if tab.pinned}
-          <PinOff size={13} class="shrink-0 text-muted" />
-          Unpin tab
-        {:else}
-          <Pin size={13} class="shrink-0 text-muted" />
-          Pin tab
-        {/if}
-      </ContextMenu.Item>
-      <ContextMenu.Separator class="my-1 h-px bg-border" />
-      <ContextMenu.Item class={itemClass} onSelect={newSibling}>
-        <ArrowUp size={13} class="shrink-0 text-muted" />
-        New tab before this tab
-      </ContextMenu.Item>
-      <ContextMenu.Item class={itemClass} onSelect={() => globalBrowser.duplicateTab(tab.id)}>
-        <Copy size={13} class="shrink-0 text-muted" />
-        Duplicate tab
-      </ContextMenu.Item>
-      <BrowserTabPlacementItems onCreate={newPlaced} />
-      <ContextMenu.Separator class="my-1 h-px bg-border" />
-      <ContextMenu.Item class={itemClass} onSelect={createGroupFromTab}>
-        <FolderPlus size={13} class="shrink-0 text-muted" />
-        New tab group
-      </ContextMenu.Item>
-      {#if group}
-        <ContextMenu.Item class={itemClass} onSelect={() => onOpenGroupEditor(tab.groupId)}>
-          <Pencil size={13} class="shrink-0 text-muted" />
-          Edit {group.name}
-        </ContextMenu.Item>
-        <ContextMenu.Item
-          class={itemClass}
-          onSelect={() => globalBrowser.moveToGroup(tab.id, null)}
+      </span>
+      {#if agentModel}
+        <span
+          role="img"
+          class="flex items-center gap-0.5"
+          title={`${harnessName(agentModel.harnessId)} \u00b7 ${agentModel.providerName || 'No provider'}`}
+          aria-label={`Agent conversation on ${harnessName(agentModel.harnessId)}${agentModel.providerName ? ` with ${agentModel.providerName}` : ''}`}
         >
-          <FolderMinus size={13} class="shrink-0 text-muted" />
-          Remove from group
-        </ContextMenu.Item>
+          <ModelPickerVendorIcons
+            harnessId={agentModel.harnessId}
+            providerId={agentModel.providerId}
+            providerName={agentModel.providerName}
+          />
+        </span>
       {/if}
+    </span>
+  </button>
 
-      {#if !bulkSelection && groups.some((candidate) => candidate.id !== tab.groupId)}
-        <ContextMenu.Separator class="my-1 h-px bg-border" />
-        {#each groups.filter((candidate) => candidate.id !== tab.groupId) as candidate (candidate.id)}
-          <ContextMenu.Item
-            class={itemClass}
-            onSelect={() => globalBrowser.moveToGroup(tab.id, candidate.id)}
-          >
-            <FolderInput size={13} class="shrink-0 text-muted" />
-            Move to {candidate.name}
-          </ContextMenu.Item>
-        {/each}
-      {/if}
-
-      <ContextMenu.Separator class="my-1 h-px bg-border" />
-      {#if globalBrowser.boxes.length > 0 || tab.boxId}
-        <ContextMenu.Sub>
-          <ContextMenu.SubTrigger class={itemClass}>
-            <Boxes size={13} class="shrink-0 text-muted" />
-            Reopen in box
-            <ChevronRight size={13} class="ml-auto text-muted" />
-          </ContextMenu.SubTrigger>
-          <ContextMenu.Portal>
-            <ContextMenu.SubContent
-              avoidCollisions
-              collisionPadding={12}
-              updatePositionStrategy="always"
-              class="z-50 max-h-[calc(100dvh-1.5rem)] min-w-44 max-w-[calc(100vw-1.5rem)] overflow-x-hidden overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
-            >
-              {#if tab.boxId}
-                <ContextMenu.Item class={itemClass} onSelect={() => (reopenTarget = null)}>
-                  <Globe size={13} class="shrink-0 text-muted" />
-                  No box
-                </ContextMenu.Item>
-              {/if}
-              {#each globalBrowser.boxes.filter((candidate) => candidate.id !== tab.boxId) as candidate (candidate.id)}
-                <ContextMenu.Item class={itemClass} onSelect={() => (reopenTarget = candidate.id)}>
-                  <span
-                    class="h-2 w-2 shrink-0 rounded-full"
-                    style="background-color: {browserAppearanceAccent(candidate)}"
-                  ></span>
-                  <span class="truncate">{candidate.name}</span>
-                </ContextMenu.Item>
-              {/each}
-            </ContextMenu.SubContent>
-          </ContextMenu.Portal>
-        </ContextMenu.Sub>
-      {/if}
-      <ContextMenu.Separator class="my-1 h-px bg-border" />
-      <ContextMenu.Item
-        class={itemClass}
-        disabled={!globalBrowser.canReopenClosedTab}
-        onSelect={() => globalBrowser.reopenLastClosedTab()}
+  <div class="flex shrink-0 items-center gap-0.5 pr-1">
+    {#if box}
+      <span
+        role="img"
+        class="flex h-6 w-6 items-center justify-center"
+        title={`In box: ${box.name}`}
+        aria-label={`In box ${box.name}`}
       >
-        <RotateCcw size={13} class="shrink-0 text-muted" />
-        Reopen closed tab
-      </ContextMenu.Item>
-      <ContextMenu.Separator class="my-1 h-px bg-border" />
-      <ContextMenu.Item
-        class="{itemClass} text-danger data-[highlighted]:bg-danger/10"
-        onSelect={() => globalBrowser.close(tab.id)}
+        {#if boxIcon}
+          <img src={boxIcon} alt="" class="h-3 w-3 rounded-sm object-contain" />
+        {:else}
+          <span class="h-2.5 w-2.5 rounded-full" style="background-color: {boxAccent}"></span>
+        {/if}
+      </span>
+    {/if}
+    {#if tab.pinned}
+      <span
+        role="img"
+        class="flex h-6 w-6 items-center justify-center text-accent"
+        title="Pinned tab"
+        aria-label="Pinned tab"
       >
-        <X size={13} class="shrink-0" />
-        Close tab
-      </ContextMenu.Item>
-    </ContextMenu.Content>
-  </ContextMenu.Portal>
-</ContextMenu.Root>
+        <Pin size={12} />
+      </span>
+    {/if}
+    {#if threadNotesState.has(tab.id)}
+      <span
+        role="img"
+        class="flex h-6 w-6 items-center justify-center text-dimmed"
+        title="This tab has a note"
+        aria-label="Tab has a note"
+      >
+        <StickyNote size={12} />
+      </span>
+    {/if}
+    {#if runtime.capturing}
+      <span
+        role="img"
+        class="flex h-6 w-6 items-center justify-center text-accent"
+        title={BROWSER_TAB_CAPTURE_LABEL}
+        aria-label={BROWSER_TAB_CAPTURE_LABEL}
+      >
+        <Mic size={12} />
+      </span>
+    {/if}
+    {#if runtime.audible || runtime.muted}
+      <button
+        type="button"
+        class="flex h-6 w-6 items-center justify-center rounded-md text-accent transition-colors hover:bg-overlay"
+        aria-pressed={runtime.muted}
+        title={browserTabMuteLabel(runtime.muted)}
+        aria-label={browserTabMuteLabel(runtime.muted)}
+        onclick={(event: MouseEvent) => {
+          event.stopPropagation()
+          globalBrowser.toggleMute(tab.id)
+        }}
+      >
+        {#if runtime.muted}
+          <VolumeX size={12} />
+        {:else}
+          <Volume2 size={12} />
+        {/if}
+      </button>
+    {:else if tab.hibernated}
+      <span
+        role="img"
+        class="flex h-6 w-6 items-center justify-center text-dimmed"
+        title="Hibernated to save memory. Open the tab to reload it."
+        aria-label="Hibernated tab"
+      >
+        <Moon size={12} />
+      </span>
+    {/if}
+    <button
+      type="button"
+      class="flex h-6 w-6 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
+      aria-label={`Close ${label}`}
+      title={`Close ${label}`}
+      onclick={closeTab}
+    >
+      <X size={12} />
+    </button>
+  </div>
+</div>
 
 {#if reopenTarget !== undefined}
   <ConfirmDialog

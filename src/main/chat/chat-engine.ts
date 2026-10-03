@@ -2662,6 +2662,7 @@ export class ChatEngine {
       else unresolved.push(environmentVariable)
     }
     const answers = pending.request.questions.map(() => [SECRET_ANSWER_PLACEHOLDER])
+    pending.resumeSecretAfterSettlement = true
     await this.resolvePendingQuestion(pending, 'answered', answers, async () => {
       pending.settleSecret?.({
         status: instructions.length > 0 ? 'alternative' : stored.length > 0 ? 'set' : 'dismissed',
@@ -2721,7 +2722,70 @@ export class ChatEngine {
       requestId,
       questions: pending.request.questions
     })
-    return settled
+    const resolution = await settled
+    const driver = this.driverForRuntime(
+      context.harnessId,
+      this.sessionRegistry.get(context.sessionId)?.accountId
+    )
+    if (
+      pending.resumeSecretAfterSettlement &&
+      driver &&
+      !this.questionAnswerCanReachLiveTurn(pending, driver)
+    ) {
+      await this.resumeAfterInactiveSecretRequest(pending, resolution)
+    }
+    return resolution
+  }
+
+  /** Resume the thread when a secret card settles after its Codex turn ended. */
+  private async resumeAfterInactiveSecretRequest(
+    pending: PendingQuestionInfo,
+    resolution: AgentSecretResolution
+  ): Promise<void> {
+    await this.awaitSessionIdleFinalization(pending.request.sessionId)
+    await this.settleUnresumableQuestionTurn(pending.request.sessionId).catch((error: unknown) =>
+      Logger.error('Secret request turn settlement failed:', error)
+    )
+
+    const thread = await this.threadManager.getThread(
+      pending.request.projectId,
+      pending.request.threadId
+    )
+    if (!thread?.settings) {
+      throw new Error(`Thread settings are unavailable: ${pending.request.threadId}`)
+    }
+
+    const secretReferences = resolution.secrets.map((secret) => ({
+      environmentVariable: secret.environmentVariable,
+      ...(secret.boundUtilityId ? { boundUtilityId: secret.boundUtilityId } : {}),
+      ...(secret.reusedFrom ? { reusedFrom: secret.reusedFrom } : {})
+    }))
+    const prompt = [
+      'Your previous turn ended while waiting for the user to resolve a secret request.',
+      resolution.status === 'dismissed'
+        ? 'The user dismissed the request. Continue without those secrets, and ask again only if one is essential.'
+        : resolution.status === 'alternative'
+          ? 'The user answered with an alternative. Its free text is omitted here to keep this prompt free of possible secret values. Use the available references below, adapt around unresolved names, and do not ask for resolved secrets again.'
+          : 'The user resolved the request. Secret values remain in the encrypted vault and are not included here. Use the available references below, never print or expose their values, and do not ask for resolved secrets again.',
+      JSON.stringify({
+        status: resolution.status,
+        secrets: secretReferences,
+        ...(resolution.unresolved ? { unresolvedEnvironmentVariables: resolution.unresolved } : {})
+      })
+    ].join('\n\n')
+    await this.sendPrompt(
+      pending.request.projectId,
+      pending.request.threadId,
+      thread.settings,
+      prompt,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'internal'
+    )
   }
 
   /**
@@ -2822,6 +2886,7 @@ export class ChatEngine {
     if (pending.request.questions.some(isSecretQuestion)) {
       // An app-owned secret card has no harness side to reject: settle the
       // waiting tool call so the agent continues without the value.
+      pending.resumeSecretAfterSettlement = true
       await this.resolvePendingQuestion(pending, 'dismissed', undefined, async () => {
         pending.settleSecret?.({ status: 'dismissed', secrets: [] })
       })
@@ -2871,7 +2936,7 @@ export class ChatEngine {
    */
   private async reconcileUnanswerableQuestion(
     pending: PendingQuestionInfo,
-    resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed'>,
+    resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed' | 'timed_out'>,
     answers: string[][] | undefined,
     error: unknown,
     driver: HarnessDriver
@@ -2894,7 +2959,7 @@ export class ChatEngine {
   /** Resume a persisted session when its provider process exited while waiting for a question. */
   private async resumeAfterInactiveQuestion(
     pending: PendingQuestionInfo,
-    resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed'>,
+    resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed' | 'timed_out'>,
     answers?: string[][]
   ): Promise<void> {
     await this.awaitSessionIdleFinalization(pending.request.sessionId)
@@ -2914,7 +2979,11 @@ export class ChatEngine {
     if (!thread?.settings) {
       throw new Error(`Thread settings are unavailable: ${pending.request.threadId}`)
     }
-    const decision = inactiveQuestionDecision(pending.request.questions, resolution, answers)
+    const decision = inactiveQuestionDecision(
+      pending.request.questions,
+      resolution === 'timed_out' ? 'answered' : resolution,
+      answers
+    )
     await this.sendPrompt(
       pending.request.projectId,
       pending.request.threadId,
@@ -3234,6 +3303,13 @@ export class ChatEngine {
     }
     // Kill agent-owned descendants before any slower session/runtime cleanup so
     // the shutdown failsafe cannot leave a development server behind.
+    for (const driver of this.allDrivers()) {
+      try {
+        driver.prepareForProcessCleanup?.()
+      } catch (error) {
+        Logger.error(`${driver.name} process cleanup preparation failed:`, error)
+      }
+    }
     await this.agentProcesses.killAll()
     await Promise.allSettled(
       [...this.temporaryChats.keys()].map((temporaryChatId) =>
@@ -21367,6 +21443,7 @@ export class ChatEngine {
   private expireSecretQuestion(pending: PendingQuestionInfo): void {
     if (this.pendingQuestions.get(pending.request.requestId) !== pending) return
     pending.timer = undefined
+    pending.resumeSecretAfterSettlement = true
     this.reportAutoAnswer({
       id: pending.request.requestId,
       kind: 'secret',
@@ -21514,11 +21591,20 @@ export class ChatEngine {
           answers
         )
       ).catch((error) => {
-        if (error instanceof QuestionRequestGoneError) {
-          this.finalizePendingQuestion(pending.request.requestId, 'timed_out', answers)
-          return
+        if (
+          error instanceof InactiveQuestionTurnError ||
+          error instanceof QuestionRequestGoneError
+        ) {
+          if (pending.timer) clearTimeout(pending.timer)
+          pending.timer = undefined
         }
-        Logger.error('Automatic question resolution failed:', error)
+        void this.reconcileUnanswerableQuestion(pending, 'timed_out', answers, error, driver)
+          .then((handled) => {
+            if (!handled) Logger.error('Automatic question resolution failed:', error)
+          })
+          .catch((recoveryError: unknown) => {
+            Logger.error('Automatic question recovery failed:', recoveryError)
+          })
       })
     }, delay)
   }

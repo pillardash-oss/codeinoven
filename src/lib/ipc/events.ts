@@ -270,7 +270,7 @@ export const IPC_EVENT_CONTRACT = {
    */
   'browser:popup:permission': [] as unknown as [
     request: BrowserPermissionRequest,
-    context: { queueSize: number; projectLabel: string | null }
+    context: { queueSize: number; projectLabel: string | null; systemAccessDenied: boolean }
   ],
   /**
    * The toast stack the native overlay should draw, delivered to the overlay

@@ -1,5 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
-import { openInBrowser } from '$lib/open-in-browser'
+import { openSignInPage, prefersCioBrowser } from '$lib/open-in-browser'
 import type { HarnessAccount, OfferedProvider } from '$shared/types'
 
 export interface OAuthDeviceCode {
@@ -44,6 +44,35 @@ export class AddProviderModalOAuthController {
   prompt = $state<OAuthPrompt | null>(null)
   promptAnswer = $state('')
   starting = $state(false)
+  /**
+   * Whether the panel has stood down so the app-wide browser can hold the view.
+   *
+   * The authorization page is a native `WebContentsView` the compositor paints
+   * above every DOM node, so a panel left open during sign-in covers the one page
+   * the user has to act on, and a modal scrim would cover all of it. Docking hides
+   * this panel's shell without unmounting it, which is what keeps the flow alive:
+   * the controller and its event subscription live in the component, not in the
+   * shell, so every later device code, prompt and result still arrives while the
+   * browser is in front.
+   *
+   * Set by the flow here (`auth_url` docks before the page is even asked for,
+   * `prompt` gives the panel back because the flow is blocked on the user) and by
+   * the host, which also docks on the app switching to the browser, since routes
+   * to that view exist that emit no event at all.
+   */
+  docked = $state(false)
+
+  /**
+   * Whether the app-wide browser is the one holding the page for this sign-in.
+   *
+   * Distinct from {@link docked} on purpose. Docking is a presentation decision
+   * and the user can override it by hand, whereas this records which application
+   * the authorization page is actually in, and it is what lets the host dock on a
+   * view switch only when the app browser is where the user has to go. A user who
+   * turned the link preference off has the page in their real browser, so the app
+   * browser gaining the view is nothing to them and nothing should collapse.
+   */
+  authPageInAppBrowser = $state(false)
 
   #host: AddProviderModalOAuthHost
   /**
@@ -67,6 +96,8 @@ export class AddProviderModalOAuthController {
     this.prompt = null
     this.promptAnswer = ''
     this.starting = false
+    this.docked = false
+    this.authPageInAppBrowser = false
   }
 
   handlePayload(payload: unknown): void {
@@ -87,8 +118,14 @@ export class AddProviderModalOAuthController {
       const event = data['event'] as Record<string, unknown> | undefined
       if (!event) return
       if (event['type'] === 'auth_url') {
-        this.status = 'A browser window opened   finish signing in there.'
-        void openInBrowser(String(event['url']))
+        // Dock first when the page is going to the app browser: the panel must
+        // already be out of the way by the time the browser takes the view, not
+        // after the browser reports that it has the page. That answer is not
+        // known yet, so the dock is unconditional here and corrected by
+        // `#openAuthPage` the moment the page turns out to be going elsewhere.
+        this.docked = true
+        this.status = 'Finish signing in in the browser.'
+        void this.#openAuthPage(String(event['url']))
       } else if (event['type'] === 'device_code') {
         this.deviceCode = {
           userCode: String(event['userCode']),
@@ -101,6 +138,10 @@ export class AddProviderModalOAuthController {
     } else if (data['kind'] === 'prompt') {
       const prompt = data['prompt'] as Record<string, unknown> | undefined
       if (!prompt) return
+      // A prompt is the one event that needs the modal back: the flow is
+      // blocked until the user answers it, so the browser can wait while the
+      // modal takes the view again.
+      this.docked = false
       this.prompt = {
         promptId: String(data['promptId']),
         type:
@@ -133,6 +174,89 @@ export class AddProviderModalOAuthController {
       this.#host.setActionError(String(data['error'] ?? 'The sign-in failed.'))
       this.reset()
       void this.#host.discardPendingAccount()
+    }
+  }
+
+  /**
+   * Put the provider's authorization page wherever the user's link routing says,
+   * and leave the panel consistent with where it landed.
+   *
+   * The user never chose a destination for this page: there is no context menu to
+   * pick from and no button labelled for one browser, so it follows the same
+   * preference as any other link. When the app-wide browser takes it, the panel
+   * docks and the browser holds the view. When it goes to the operating system,
+   * the panel comes back, because the app browser has no page to get out of the way
+   * for and the user is being sent somewhere else entirely.
+   *
+   * That is also why the status line names where the page went. A sign-in the user
+   * cannot reach, or one they were sent out of the app for without being told, are
+   * both failures, and both are avoided by saying it.
+   */
+  async #openAuthPage(url: string): Promise<void> {
+    // The wait below outlives a flow that finishes or is cancelled underneath
+    // it, so the login id is captured first: a fallback for a login that is no
+    // longer running would put a stale status line back on a settled flow and
+    // open a browser at a page nobody is waiting for.
+    const loginId = this.loginId
+    const sentToAppBrowser = prefersCioBrowser(url)
+    try {
+      const destination = await openSignInPage(url)
+      if (this.loginId !== loginId) return
+      this.docked = destination === 'app-browser'
+      this.authPageInAppBrowser = destination === 'app-browser'
+      this.status =
+        destination === 'app-browser'
+          ? 'Finish signing in in the browser.'
+          : sentToAppBrowser
+            ? 'The app browser could not open the sign-in page. Opening it in your system browser instead.'
+            : 'Opening the sign-in page in your system browser.'
+    } catch (openError) {
+      if (this.loginId !== loginId) return
+      this.docked = false
+      this.#host.setActionError(
+        openError instanceof Error
+          ? openError.message
+          : 'The sign-in page could not be opened anywhere.'
+      )
+      this.reset()
+      void this.#host.discardPendingAccount()
+    }
+  }
+
+  /**
+   * Open the device-code verification page where the user's link routing says.
+   *
+   * On the controller rather than in the tab's template for the reason every other
+   * side effect lives here: it owns the status line and the error surface, so a page
+   * that will not open anywhere is reported in the panel instead of escaping as an
+   * unhandled rejection from a discarded promise.
+   *
+   * The panel does not dock either way. A device code lives in its body and is the
+   * one thing the user still has to type into the page being opened, so hiding the
+   * panel here would hide the thing they came for.
+   */
+  async openDeviceCodePage(): Promise<void> {
+    const uri = this.deviceCode?.verificationUri
+    if (!uri) return
+    const loginId = this.loginId
+    const sentToAppBrowser = prefersCioBrowser(uri)
+    try {
+      const destination = await openSignInPage(uri)
+      if (this.loginId !== loginId) return
+      this.authPageInAppBrowser = destination === 'app-browser'
+      this.status =
+        destination === 'app-browser'
+          ? 'Finish signing in in the browser.'
+          : sentToAppBrowser
+            ? 'The app browser could not open the verification page. Opening it in your system browser instead.'
+            : 'Opening the verification page in your system browser.'
+    } catch (openError) {
+      if (this.loginId !== loginId) return
+      this.#host.setActionError(
+        openError instanceof Error
+          ? openError.message
+          : 'The verification page could not be opened.'
+      )
     }
   }
 

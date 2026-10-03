@@ -24,6 +24,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # One job decides whether the heavy suite runs. A composite action cannot set
+  # a job-level `if`, so this decision cannot live in .github/actions/setup; it
+  # used to be restated verbatim on all nine heavy jobs, which meant changing
+  # the policy meant nine coordinated edits.
+  policy:
+    name: Determine suite scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.scope.outputs.skip }}
+
+    steps:
+      - name: Decide whether the heavy suite runs
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          skip=false
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" = "main" ] && [ "$HEAD_REF" = "nightly" ]; then
+            skip=true
+            echo "::notice::nightly -> main promotion re-delivers content the nightly push just fully checked and built, so the heavy suite is skipped and only the promotion policy runs."
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   promotion-policy:
     name: Release promotion policy
     if: github.event_name == 'pull_request'
@@ -37,9 +63,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
+        uses: ./.github/actions/setup
 
       - name: Read promotion versions
         env:
@@ -54,120 +78,76 @@ jobs:
           HEAD_BRANCH: ${{ github.head_ref }}
         run: bun scripts/validate-release-promotion.ts
 
-  # Nightly -> main promotion PRs skip the heavy jobs below: the identical
-  # content was fully checked (and built) by the nightly workflow moments ago.
-  install:
-    name: Frozen install
-    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
-    runs-on: macos-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
+  # Dependency auditing lives in security.yml. It used to run here as well,
+  # which meant every push paid for the same `bun audit` twice.
+  #
+  # Every job below sets up through .github/actions/setup, so there is no
+  # separate install job: each one installs the locked dependency tree itself,
+  # exactly as the old `install` gate's dependents already did.
 
   check:
     name: Type check
-    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
+    needs: [policy]
+    if: needs.policy.outputs.skip != 'true'
     runs-on: macos-latest
     timeout-minutes: 15
-    needs: install
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Set up Bun and dependencies
+        uses: ./.github/actions/setup
         with:
-          bun-version: 1.3.14
-
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
+          install: 'true'
 
       - name: Type check
         run: bun run check
 
   lint:
     name: Lint
-    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
+    needs: [policy]
+    if: needs.policy.outputs.skip != 'true'
     runs-on: macos-latest
     timeout-minutes: 15
-    needs: install
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Set up Bun and dependencies
+        uses: ./.github/actions/setup
         with:
-          bun-version: 1.3.14
-
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
+          install: 'true'
 
       - name: Lint
         run: bun run lint .
 
   test:
     name: Tests
-    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
+    needs: [policy]
+    if: needs.policy.outputs.skip != 'true'
     runs-on: macos-latest
     timeout-minutes: 15
-    needs: install
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Set up Bun and dependencies
+        uses: ./.github/actions/setup
         with:
-          bun-version: 1.3.14
-
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
+          install: 'true'
 
       - name: Tests
         run: bun run test
 
-  audit:
-    name: Dependency audit
-    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
-    runs-on: macos-latest
-    timeout-minutes: 15
-    needs: install
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Dependency audit
-        run: bun audit
-
   build:
     name: Production build
-    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
+    needs: [policy]
+    if: needs.policy.outputs.skip != 'true'
     runs-on: macos-latest
     timeout-minutes: 20
-    needs: install
     env:
       CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
 
@@ -175,13 +155,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Set up Bun and dependencies
+        uses: ./.github/actions/setup
         with:
-          bun-version: 1.3.14
-
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
+          install: 'true'
 
       - name: Production build
         run: bun run build:production
@@ -191,7 +168,8 @@ jobs:
 
   windows-runtime:
     name: Windows quality and packaged startup
-    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
+    needs: [policy]
+    if: needs.policy.outputs.skip != 'true'
     runs-on: windows-latest
     timeout-minutes: 40
     env:
@@ -204,13 +182,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Set up Bun and dependencies
+        uses: ./.github/actions/setup
         with:
-          bun-version: 1.3.14
-
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
+          install: 'true'
 
       - name: Type check
         run: bun run check
@@ -233,27 +208,11 @@ jobs:
         run: bunx electron-builder --win --x64 --dir -c.forceCodeSigning=false
 
       - name: Launch packaged application through workspace readiness
-        shell: bash
-        run: |
-          # Windows packaged-app startup is known-flaky on CI runners (see the
-          # nightly workflow, which treats it as non-blocking). Retry a few times,
-          # then fail soft with a warning so a flaky launch never blocks promotion.
-          command=(bun run smoke:packaged --target win --app-dir dist/win-unpacked --output .cio/tmp/windows-startup-smoke.json)
-          exit_code=0
-          for attempt in 1 2 3; do
-            "${command[@]}" || exit_code=$?
-            if [ "$exit_code" -eq 0 ]; then
-              break
-            fi
-            echo "Windows startup smoke attempt $attempt failed with exit $exit_code; retrying"
-            sleep 10
-            exit_code=0
-          done
-          if [ "$exit_code" -ne 0 ]; then
-            echo "::warning::Windows startup smoke failed with exit $exit_code (known flaky, not blocking)"
-            exit 0
-          fi
-          exit "$exit_code"
+        uses: ./.github/actions/startup-smoke
+        with:
+          target: win
+          app-dir: dist/win-unpacked
+          output: .cio/tmp/windows-startup-smoke.json
 
       - name: Upload Windows startup evidence
         if: always()
@@ -265,7 +224,8 @@ jobs:
 
   linux-runtime:
     name: Linux quality and packaged startup
-    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
+    needs: [policy]
+    if: needs.policy.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -273,19 +233,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Set up Bun and dependencies
+        uses: ./.github/actions/setup
         with:
-          bun-version: 1.3.14
+          install: 'true'
 
       - name: Install native launcher headers
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
-
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Patch binary-data bare specifiers
-        run: bun scripts/patch-binary-data.ts
 
       - name: Build Pi harness
         run: bun run harness:build-pi
@@ -299,9 +253,11 @@ jobs:
         run: bunx electron-builder --linux --x64 --dir -c.forceCodeSigning=false
 
       - name: Launch packaged application through workspace readiness
-        run: >-
-          xvfb-run -a bun run smoke:packaged --target linux --app-dir dist/linux-unpacked
-          --output .cio/tmp/linux-startup-smoke.json
+        uses: ./.github/actions/startup-smoke
+        with:
+          target: linux
+          app-dir: dist/linux-unpacked
+          output: .cio/tmp/linux-startup-smoke.json
 
       - name: Upload Linux startup evidence
         if: always()
@@ -313,10 +269,10 @@ jobs:
 
   verify-release:
     name: Release verification
-    if: github.event_name != 'pull_request' || github.base_ref != 'main' || github.head_ref != 'nightly'
+    needs: [policy, check, lint, test, build, windows-runtime, linux-runtime]
+    if: needs.policy.outputs.skip != 'true'
     runs-on: macos-latest
     timeout-minutes: 30
-    needs: [check, lint, test, audit, build, windows-runtime, linux-runtime]
     env:
       CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
 
@@ -324,13 +280,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Set up Bun and dependencies
+        uses: ./.github/actions/setup
         with:
-          bun-version: 1.3.14
-
-      - name: Install locked dependencies
-        run: bun install --frozen-lockfile
+          install: 'true'
 
       - name: Release verification
         run: bun run verify:release

@@ -155,6 +155,7 @@ export interface PendingBrowserPermission {
   request: BrowserPermissionRequest
   callback: (granted: boolean) => void
   timer: ReturnType<typeof setTimeout>
+  systemAccessDenied: boolean
   /**
    * The partition the prompt belongs to: a decision is remembered against the jar
    * the request came from, not against the context, so a box keeps its own

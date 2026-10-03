@@ -83,7 +83,7 @@ export interface BrowserExtensionMailbox {
 export interface BrowserExtensionActionPopupRequest {
   seq: number
   tabId: number
-  kind: 'action' | 'open-window' | 'hide-window' | 'focus-window'
+  kind: 'action' | 'open-window' | 'hide-window' | 'focus-window' | 'focus-browser'
   url?: string
 }
 
@@ -308,7 +308,10 @@ function toActionPopupRequest(value: unknown): BrowserExtensionActionPopupReques
   const tabId = record['tabId']
   const rawKind = record['kind']
   const kind =
-    rawKind === 'open-window' || rawKind === 'hide-window' || rawKind === 'focus-window'
+    rawKind === 'open-window' ||
+    rawKind === 'hide-window' ||
+    rawKind === 'focus-window' ||
+    rawKind === 'focus-browser'
       ? rawKind
       : 'action'
   const rawUrl = record['url']

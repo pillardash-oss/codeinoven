@@ -108,21 +108,35 @@ export function openInGlobalBrowserTabOnScreen(url: string): void {
 }
 
 /**
+ * Whether a link the user activated normally belongs in an app browser.
+ *
+ * Named rather than inlined so the callers that must agree do not each grow their
+ * own copy of the rule. Local development links stay inside the workspace when
+ * that preference is on and a project thread can own the tab, and they never fall
+ * through to the general preference: they always belong to the surface they were
+ * clicked in. Every other link follows the general preference.
+ *
+ * This is a routing decision only. Whether a thread can actually take the tab is
+ * {@link openInCioBrowser}'s answer, and where the page ends up when it cannot is
+ * {@link openSignInPage}'s.
+ */
+export function prefersCioBrowser(url: string): boolean {
+  return (
+    (appConfigState.openLocalhostInCioBrowser && isLocalDevelopmentUrl(url)) ||
+    appConfigState.openAllLinksInCioBrowser
+  )
+}
+
+/**
  * Route a link the user activated normally (a click, an agent's suggested URL,
  * an "open the docs" control) to whichever browser belongs to it.
  *
- * Local development links stay inside the workspace when that preference is on
- * and a project thread can own the tab, and they never fall through to the
- * general preference: they always belong to the surface they were clicked in.
- * When the general preference is on, every other link takes the same route.
- * Otherwise, and whenever no project thread can own the tab, the operating
- * system browser is the fallback instead of a silent no-op.
+ * When the preference says an app browser and a project thread can own the tab,
+ * the page stays in the workspace; otherwise the operating system browser is the
+ * fallback rather than a silent no-op.
  */
 export async function openInBrowser(url: string): Promise<void> {
-  const wantsCioBrowser =
-    (appConfigState.openLocalhostInCioBrowser && isLocalDevelopmentUrl(url)) ||
-    appConfigState.openAllLinksInCioBrowser
-  if (wantsCioBrowser) {
+  if (prefersCioBrowser(url)) {
     // A link opened while the app-wide browser is the view on screen belongs to
     // that browser: the thread browser would put the page in a project thread's
     // tab behind a workspace the reader is not looking at, so it takes a tab
@@ -134,4 +148,33 @@ export async function openInBrowser(url: string): Promise<void> {
     if (openInCioBrowser(url)) return
   }
   await invoke('shell:openExternal', url)
+}
+
+/**
+ * Where a sign-in page actually landed, so the caller knows who is holding the
+ * rest of the flow. `system-browser` covers both the user turning the preference
+ * off and the app browser failing to take the page: from here they are the same
+ * situation, the page is in another application and this one has to say so.
+ */
+export type SignInPageDestination = 'app-browser' | 'system-browser'
+
+/**
+ * Open a sign-in page where the user's link routing says, and report where it went.
+ *
+ * A provider authorization page is not a link the user picked a destination for.
+ * There is no context menu to choose from and no button labelled for one browser,
+ * so it follows the same preference every other link follows: off sends it to the
+ * user's default browser, on sends it to the app-wide global browser.
+ *
+ * The report is the point. A sign-in that silently lands nowhere is the worst
+ * outcome of this flow, so a caller has to be able to dock for a page the app
+ * browser really holds rather than assume it, and one handed off to the system has
+ * to be able to say so instead of pretending the app still has it.
+ */
+export async function openSignInPage(url: string): Promise<SignInPageDestination> {
+  if (prefersCioBrowser(url) && (await openInGlobalCioBrowserWhenReady(url))) {
+    return 'app-browser'
+  }
+  await invoke('shell:openExternal', url)
+  return 'system-browser'
 }

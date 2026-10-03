@@ -14,8 +14,15 @@
   interface Props {
     tabId: string | null
     onTabIdChange: (id: string | null) => void
-    /** Opens a fresh browser tab and returns its tab id, or null when unavailable. */
-    onNewBrowser: () => string | null
+    /**
+     * Opens a fresh browser tab.
+     *
+     * The workspace settles this overlay onto the new tab itself, because the
+     * same handler answers the strip's create button and the browser's new-tab
+     * chord, and only one of them is a click here. It returns nothing for the
+     * same reason: an id this surface would forward has already been applied.
+     */
+    onNewBrowser: () => void
     onCloseTab: (id: string) => void
   }
 
@@ -131,10 +138,7 @@
       hostsBrowserView
       onSelect={(id) => onTabIdChange(id)}
       onCloseTab={(id) => onCloseTab(id)}
-      onNew={() => {
-        const id = onNewBrowser()
-        if (id) onTabIdChange(id)
-      }}
+      onNew={onNewBrowser}
       onMinimize={() => onTabIdChange(null)}
     >
       {#snippet tabIcon(entry)}

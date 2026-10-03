@@ -145,7 +145,7 @@
   }
 </script>
 
-<div class="flex h-full min-h-0 flex-col">
+<div class="flex h-full min-h-0 flex-col" data-drop-region="browser-bookmarks">
   <div class="shrink-0 border-b border-border px-3 py-2">
     <div class="flex items-center gap-1.5 rounded-lg bg-elevated px-2.5">
       <Search size={13} class="shrink-0 text-dimmed" />

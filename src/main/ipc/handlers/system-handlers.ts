@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
 import { APP_NAME, APP_SLUG } from '../../../lib/brand'
 import { atomicWrite } from '../../../lib/utils'
+import { ICON_MIME, storeAppearanceImage } from '../../../lib/icon-file'
 import { Logger } from '../../system/logger'
 import { resolveFavicons } from '../../editor/favicon-service'
 import { resolveAvatars } from '../../git/github-avatars'
@@ -278,6 +279,21 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     }
   })
 
+  privileged('appearance:storeImage', async (_event, sourcePath: unknown) => {
+    // A picked path is authorized for this process only, so it cannot be the
+    // path an appearance record keeps: that record outlives the process, and
+    // the next launch would read the stored path as out of scope. Copy the
+    // image into the app-owned appearance directory (registered as an artifact
+    // root) and answer with that copy plus its data URL, so the editor
+    // previews the very image it is about to persist.
+    const source = await privilegedIpc.resolveScopedPath(sourcePath)
+    const stored = await storeAppearanceImage(source)
+    await privilegedIpc.registerUserSelectedFile(stored)
+    const mime = ICON_MIME[extname(stored).toLowerCase()] ?? 'image/png'
+    const buffer = await readFile(stored)
+    return { path: stored, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` }
+  })
+
   privileged('shell:openExternal', (_event, url: unknown) => {
     try {
       const safeUrl = privilegedIpc.validateExternalUrl(url)
@@ -525,7 +541,12 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       return `data:${mime};base64,${buffer.toString('base64')}`
     } catch (error) {
       if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
-      Logger.error('file:readAsDataUrl rejected out-of-scope path:', error)
+      // A display-only read, so a refusal is one informational line rather than
+      // an error with a stack: an appearance record written before picked images
+      // were copied into the app's own directory legitimately holds a path the
+      // next launch cannot authorize, and the row falls back to its favicon.
+      const reason = error instanceof Error ? error.message : String(error)
+      Logger.info('file:readAsDataUrl refused an unscoped path:', reason)
       return null
     }
   })

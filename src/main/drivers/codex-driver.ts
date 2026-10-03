@@ -139,6 +139,7 @@ export class CodexDriver extends PersistentCliDriver {
    *  resident server; {@link stopResidentHostForPathIfIdle} stops an idle one. */
   private hostsByProjectPath = new Map<string, CodexAppServerHost>()
   private hostsStartingByProjectPath = new Map<string, Promise<CodexAppServerHost>>()
+  private appServerHosts = new Set<CodexAppServerHost>()
   private authenticationRestartsByProjectPath = new Map<string, Promise<void>>()
   private serverRequests = new Map<string, CodexServerRequest>()
 
@@ -501,6 +502,10 @@ export class CodexDriver extends PersistentCliDriver {
     ) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
+    if (!this.serverRequestTurnIsLive(request)) {
+      this.serverRequests.delete(requestId)
+      throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
+    }
     if (isCodexDynamicQuestion(request)) {
       this.completeDynamicQuestion(request, answers)
       return
@@ -532,6 +537,10 @@ export class CodexDriver extends PersistentCliDriver {
     ) {
       throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
+    if (!this.serverRequestTurnIsLive(request)) {
+      this.serverRequests.delete(requestId)
+      throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
+    }
     if (isCodexDynamicQuestion(request)) {
       this.completeDynamicQuestion(request)
       return
@@ -551,7 +560,9 @@ export class CodexDriver extends PersistentCliDriver {
    *  conversation, so the caller reports the turn as inactive instead. */
   private serverRequestTurnIsLive(request: CodexServerRequest): boolean {
     const active = this.activeTurns.get(request.sessionId)
-    return Boolean(active && !active.finished && active.host === request.host)
+    return Boolean(
+      active && !active.finished && !active.completionReceived && active.host === request.host
+    )
   }
 
   private completeDynamicQuestion(request: CodexServerRequest, answers?: string[][]): void {
@@ -630,7 +641,8 @@ export class CodexDriver extends PersistentCliDriver {
    *  settled without finalization (stale working state) from one that is
    *  legitimately streaming a long turn. */
   hasActiveTurn(sessionId: string): boolean {
-    return this.activeTurns.has(sessionId)
+    const active = this.activeTurns.get(sessionId)
+    return Boolean(active && !active.finished && !active.completionReceived)
   }
 
   /** Codex runs as a shared app-server daemon, so the base implementation's
@@ -640,7 +652,7 @@ export class CodexDriver extends PersistentCliDriver {
    *  already finished is probed as idle (letting the watchdog reconcile or
    *  abort it) while a genuinely active silent turn stays preserved. */
   override async isSessionBusy(_projectPath: string, sessionId: string): Promise<boolean> {
-    return this.activeTurns.has(sessionId)
+    return this.hasActiveTurn(sessionId)
   }
 
   override async abort(projectPath: string, sessionId: string): Promise<void> {
@@ -801,14 +813,21 @@ export class CodexDriver extends PersistentCliDriver {
       waiter.resolve(undefined)
     }
     this.contextUsageByThreadId.clear()
-    for (const host of this.hostsByProjectPath.values()) {
+    for (const host of this.appServerHosts) {
       this.stopAppServerHost(host, 'Codex driver disposed')
     }
+    this.appServerHosts.clear()
     this.hostsByProjectPath.clear()
     this.hostsStartingByProjectPath.clear()
     this.authenticationRestartsByProjectPath.clear()
     this.serverRequests.clear()
     super.dispose()
+  }
+
+  prepareForProcessCleanup(): void {
+    for (const host of [...this.appServerHosts]) {
+      this.stopAppServerHost(host, 'CodeInOven is shutting down')
+    }
   }
 
   private async restartAppServer(projectPath: string, reason: string): Promise<void> {
@@ -826,6 +845,7 @@ export class CodexDriver extends PersistentCliDriver {
   private stopAppServerHost(host: CodexAppServerHost, reason: string): void {
     if (host.stopped) return
     host.stopped = true
+    this.appServerHosts.delete(host)
     for (const pending of host.pending.values()) {
       clearTimeout(pending.timer)
       pending.reject(new Error(reason))
@@ -909,17 +929,26 @@ export class CodexDriver extends PersistentCliDriver {
       stopped: false,
       pending: new Map()
     }
+    this.appServerHosts.add(host)
     this.bindAppServer(host)
     // The shared app-server is app-scoped: register it under APP_SCOPE (undefined
     // session) so thread-scoped process kills (thread deletion, SourcesPanel
     // "kill thread processes") never SIGTERM the universal session.
     this.observeHarnessProcess(undefined, child, 'codex app-server', projectPath)
-    await this.appServerRequest(host, 'initialize', {
-      clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-      capabilities: { experimentalApi: true }
-    })
-    this.appServerNotify(host, 'initialized')
-    return host
+    try {
+      await this.appServerRequest(host, 'initialize', {
+        clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
+        capabilities: { experimentalApi: true }
+      })
+      this.appServerNotify(host, 'initialized')
+      return host
+    } catch (error) {
+      this.stopAppServerHost(
+        host,
+        error instanceof Error ? error.message : 'Codex app-server initialization failed'
+      )
+      throw error
+    }
   }
 
   private async ensureAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
@@ -1251,6 +1280,10 @@ export class CodexDriver extends PersistentCliDriver {
       status === 'failed'
         ? (codexUsageLimitIssue(error, message ?? '') ?? active.failureIssue)
         : active.failureIssue
+    // Mark the native turn terminal before the async telemetry refresh below.
+    // A card answer arriving during that refresh must resume from persisted
+    // history instead of being written into the completed turn.
+    active.completionReceived = true
     void this.completeAppServerTurn(active, message, issue)
   }
 
@@ -1323,6 +1356,12 @@ export class CodexDriver extends PersistentCliDriver {
         return
       }
       void this.callUtilityTool(active, params).then((result) => {
+        if (
+          params['tool'] === ASK_SECRET_TOOL_NAME &&
+          (active.finished || active.completionReceived)
+        ) {
+          return
+        }
         host.child.stdin?.write(`${JSON.stringify({ id, result })}\n`)
       })
       return
@@ -1708,6 +1747,7 @@ export class CodexDriver extends PersistentCliDriver {
   private async failAppServerHost(host: CodexAppServerHost, error: string): Promise<void> {
     if (host.stopped) return
     host.stopped = true
+    this.appServerHosts.delete(host)
     for (const [projectPath, candidate] of this.hostsByProjectPath) {
       if (candidate !== host) continue
       this.hostsByProjectPath.delete(projectPath)

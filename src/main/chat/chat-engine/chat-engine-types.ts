@@ -340,6 +340,8 @@ export interface PendingQuestionInfo {
    * harness: the values never travel to a driver.
    */
   settleSecret?: (resolution: AgentSecretResolution) => void
+  /** The secret card was explicitly answered, dismissed, or timed out. */
+  resumeSecretAfterSettlement?: boolean
 }
 
 /**

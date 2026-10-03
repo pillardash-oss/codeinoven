@@ -3,6 +3,7 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { join } from 'path'
 import { getConfigRoot, getScopeRootPath } from '../../lib/utils'
+import { appearanceImagesDirectory } from '../../lib/icon-file'
 import { threadAttachmentDirectory } from '../../lib/thread-storage-paths'
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
 import { Logger } from '../system/logger'
@@ -297,6 +298,10 @@ export function registerIpcHandlers(
           join(getConfigRoot(), 'assistant-cwd'),
           // The browser workspace: one directory per tab's agent chat.
           join(getConfigRoot(), 'browser-cwd'),
+          // Picked appearance images (browser tabs, groups, boxes, bookmarks and
+          // sticky notes). The entity keeps that path in a record that outlives
+          // the process, so it has to be a path the app owns and can still read.
+          appearanceImagesDirectory(),
           ...projects.flatMap((project) => [
             join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments'),
             join(getConfigRoot(), 'projects', project.id, 'threads')

@@ -4,6 +4,7 @@
   import Switch from '$lib/components/ui/Switch.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { pickAppearanceImage } from '$lib/appearance-image.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import {
     DEFAULT_BOX_ID,
@@ -84,13 +85,11 @@
   const canSave = $derived(name.trim() !== '')
 
   async function uploadImage(): Promise<void> {
-    const imagePath = await invoke('dialog:pickImage')
-    if (!imagePath) return
-    // Read the file for local preview only; nothing is persisted until Save.
-    const dataUrl = await invoke('file:readAsDataUrl', imagePath)
-    if (!dataUrl) return
+    // The app-owned copy, not the picked path: this editor persists what it returns.
+    const picked = await pickAppearanceImage()
+    if (!picked) return
     customSvgSelected = false
-    pendingIcon = { path: imagePath, dataUrl }
+    pendingIcon = picked
   }
 
   function resetAppearance(): void {

@@ -1505,6 +1505,17 @@
     if (!originalUpdate.__cioHostedPopoutWrapped) {
       const wrapped = function () {
         const args = Array.prototype.slice.call(arguments)
+        const update = args[1] && typeof args[1] === 'object' ? args[1] : {}
+        // Browser tabs belong to the app's window 0. Bitwarden awaits this
+        // callback in its passkey request's finally block before returning the
+        // assertion to the site. Electron has no windows.update implementation,
+        // so falling through to its placeholder leaves the response pending.
+        if ((args[0] === 0 || args[0] === -2) && typeof update.focused === 'boolean') {
+          if (update.focused) routePopupWindowRequest('focus-browser')
+          const callback =
+            typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+          return answerWith(callback, hostedWindow(0, update.focused))
+        }
         if (args[0] === HOSTED_POPUP_WINDOW_ID && hostedPopout.url) {
           if (routePopupWindowRequest('focus-window', hostedPopout.url)) {
             hostedPopout.focused = true

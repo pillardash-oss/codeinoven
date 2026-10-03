@@ -1,14 +1,20 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import { cubicOut } from 'svelte/easing'
   import { Eye, Maximize2, NotebookPen, Plus, Redo2, SquarePen, Undo2, X } from '@lucide/svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '$lib/components/speech/VoiceInputButton.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { motionDuration, slideWidth } from '$lib/motion'
   import { stickyNotes, type StickyNoteEntry } from '$lib/stores/sticky-notes.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import type { StickyNoteAppearance } from '$shared/types'
+  import type { SpeechScope } from '../../../../lib/speech/types'
+  import type { SpeechEditorTarget } from '../../speech/editor-target'
 
   let createError = $state<string | null>(null)
   let editingNoteId = $state<string | null>(null)
@@ -22,6 +28,7 @@
     mode: 'edit'
   })
   let historyController = $state<{ undo: () => void; redo: () => void } | null>(null)
+  let richEditor = $state<RichMarkdownEditor>()
   let canUndo = $state(false)
   let canRedo = $state(false)
 
@@ -32,6 +39,18 @@
     activeNote !== null &&
       (activeNoteMode.noteId !== activeNote.id || activeNoteMode.mode === 'edit')
   )
+  const speechTargetId = $derived(`sticky-note-${activeNote?.id ?? 'none'}`)
+  const speechDisabled = $derived(!activeNote?.loaded || !activeIsEditing)
+  const speechScope = $derived.by((): SpeechScope => {
+    const thread = workspaceState.selectedThread
+    return thread
+      ? { kind: 'project', projectId: thread.projectId, threadId: thread.id }
+      : { kind: 'global' }
+  })
+
+  function getSpeechTarget(): SpeechEditorTarget | null {
+    return richEditor?.speechEditorTarget(speechTargetId) ?? null
+  }
 
   void stickyNotes.load().catch(() => {})
 
@@ -112,48 +131,26 @@
 
 {#snippet noteActions()}
   {#if activeNote && activeIsEditing}
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="View sticky note"
-        aria-label="View sticky note"
-        aria-pressed={!activeIsEditing}
-        onclick={() => stopEditing(activeNote.id)}
-      >
-        <Eye size={14} />
-      </button>
-  {:else if activeNote}
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Edit sticky note"
-        aria-label="Edit sticky note"
-        aria-pressed={activeIsEditing}
-        onclick={() => startEditing(activeNote.id)}
-      >
-        <SquarePen size={14} />
-      </button>
-  {/if}
-  {#if activeNote?.loaded && activeIsEditing && canUndo}
     <button
       type="button"
       class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      title="Undo"
-      aria-label="Undo sticky note edit"
-      onclick={() => historyController?.undo()}
+      title="View sticky note"
+      aria-label="View sticky note"
+      aria-pressed={!activeIsEditing}
+      onclick={() => stopEditing(activeNote.id)}
     >
-      <Undo2 size={14} />
+      <Eye size={14} />
     </button>
-  {/if}
-  {#if activeNote?.loaded && activeIsEditing && canRedo}
+  {:else if activeNote}
     <button
       type="button"
       class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      title="Redo"
-      aria-label="Redo sticky note edit"
-      onclick={() => historyController?.redo()}
+      title="Edit sticky note"
+      aria-label="Edit sticky note"
+      aria-pressed={activeIsEditing}
+      onclick={() => startEditing(activeNote.id)}
     >
-      <Redo2 size={14} />
+      <SquarePen size={14} />
     </button>
   {/if}
 {/snippet}
@@ -178,6 +175,7 @@
     {:else}
       {#key note.id}
         <RichMarkdownEditor
+          bind:this={richEditor}
           id={`sticky-note-editor-${note.id}`}
           value={note.body}
           onValueChange={(body) => stickyNotes.setBody(note.id, body)}
@@ -295,6 +293,41 @@
         </div>
       </div>
       <div class="flex shrink-0 items-center border-l border-border px-1">
+        {#if activeNote?.loaded && activeIsEditing && canUndo}
+          <button
+            type="button"
+            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            title="Undo"
+            aria-label="Undo sticky note edit"
+            onclick={() => historyController?.undo()}
+            in:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
+            out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
+            style="width: 1.75rem"
+          >
+            <Undo2 size={14} />
+          </button>
+        {/if}
+        {#if activeNote?.loaded && activeIsEditing && canRedo}
+          <button
+            type="button"
+            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            title="Redo"
+            aria-label="Redo sticky note edit"
+            onclick={() => historyController?.redo()}
+            in:slideWidth={{ duration: motionDuration(160), easing: cubicOut }}
+            out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
+            style="width: 1.75rem"
+          >
+            <Redo2 size={14} />
+          </button>
+        {/if}
+        <VoiceInputButton
+          targetId={speechTargetId}
+          getTarget={getSpeechTarget}
+          scope={speechScope}
+          disabled={speechDisabled}
+          class="h-7 w-7 text-dimmed"
+        />
         {@render noteActions()}
         <button
           type="button"
@@ -324,7 +357,7 @@
   {/if}
 </div>
 
-{#if activeNote?.loaded && fullscreen}
+  {#if activeNote?.loaded && fullscreen}
     <FullscreenPanelDialog
     {tabs}
     activeTabId={stickyNotes.activeNoteId}

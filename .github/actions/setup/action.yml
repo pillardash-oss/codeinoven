@@ -1,0 +1,30 @@
+name: Set up Bun
+description: >-
+  Install the one pinned Bun version and optionally the locked dependencies.
+  Workflows must check out the repository before invoking this local action.
+
+inputs:
+  install:
+    description: Run `bun install --frozen-lockfile` once Bun is on PATH.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        # .bun-version is the single source of truth for the toolchain version.
+        # Never pass bun-version here: a literal in a workflow is how Bun 1.3.10
+        # outlived the 1.3.14 floor in engines.bun for a month.
+        bun-version-file: .bun-version
+
+    - name: Require the pinned Bun to satisfy package.json
+      shell: bash
+      run: bun scripts/check-bun-version.ts
+
+    - name: Install locked dependencies
+      if: inputs.install == 'true'
+      shell: bash
+      run: bun install --frozen-lockfile

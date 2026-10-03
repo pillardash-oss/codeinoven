@@ -73,11 +73,11 @@ export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'prefe
 export type MemoryPriority = 'critical' | 'high' | 'medium' | 'low'
 
 /**
- * An audience a memory can be loaded for: the three surfaces that receive
+ * An audience a memory can be loaded for: the surfaces that receive
  * persistent memory. An entry applies to every audience when its scope set is
  * empty.
  */
-export type MemoryAudience = 'projects' | 'chat' | 'assistant'
+export type MemoryAudience = 'projects' | 'chat' | 'assistant' | 'browser'
 
 /**
  * One scope a memory carries: an audience, or a single place inside an

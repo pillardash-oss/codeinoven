@@ -122,6 +122,41 @@ export interface AgentNotificationPayload extends ThreadClickedPayload {
   errorDetail?: string
 }
 
+/**
+ * A notification as the panel stores it, and as it survives a restart.
+ *
+ * The payload alone is not enough once the entry outlives the window that
+ * received it: the panel renders each entry's age ("3h ago"), and that age is
+ * measured from when the notification reached the app, not from when the
+ * renderer that restores it happens to boot.
+ */
+export interface PersistedAgentNotification extends AgentNotificationPayload {
+  /** When the notification reached the app, in epoch milliseconds. */
+  timestamp: number
+}
+
+/**
+ * Which top-level panel tab a notification belongs to, as the durable store
+ * groups them. The store needs it because clearing a tab is a main-process
+ * mutation now, and it must not have to re-derive the tab from a payload that
+ * only carries a source and a project id.
+ */
+export type NotificationFamily = 'project' | 'chat' | 'assistant'
+
+/**
+ * What the durable inbox holds at the moment a window asks for it.
+ *
+ * The tombstones travel with the entries because the renderer's thread-state
+ * hydration can rebuild an entry from a thread row that still says the same
+ * thing (a thread parked on the user, or one that failed while no window was
+ * open). Without the ids the user already dismissed, hydration would put a
+ * cleared or dismissed entry straight back on the panel.
+ */
+export interface NotificationInboxSnapshot {
+  notifications: PersistedAgentNotification[]
+  dismissed: string[]
+}
+
 export type SystemNotificationTestResult =
   | { status: 'shown'; message: string }
   | { status: 'unsupported'; message: string }

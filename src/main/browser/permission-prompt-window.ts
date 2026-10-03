@@ -22,6 +22,7 @@ export interface PromptRequestContext {
   request: BrowserPermissionRequest
   queueSize: number
   projectLabel: string | null
+  systemAccessDenied: boolean
 }
 
 /** The card is as wide as a toast card, plus the translucent margins its shadow
@@ -166,7 +167,8 @@ export class PermissionPromptWindow {
     if (!context) return
     sendToRenderer(popup.webContents, 'browser:popup:permission', context.request, {
       queueSize: context.queueSize,
-      projectLabel: context.projectLabel
+      projectLabel: context.projectLabel,
+      systemAccessDenied: context.systemAccessDenied
     })
   }
 

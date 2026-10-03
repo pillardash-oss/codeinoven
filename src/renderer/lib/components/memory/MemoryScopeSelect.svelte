@@ -1,11 +1,12 @@
 <script lang="ts">
   import { Check, ChevronDown } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { orderMemoryScopes } from '$shared/memory/memory-scopes'
+  import { memoryScopeSummary, orderMemoryScopes } from '$shared/memory/memory-scopes'
   import type { MemoryScope } from '$shared/types'
   import type { MemoryScopeOption } from './memory-routing'
 
   interface Props {
+    native?: boolean
     scopes: readonly MemoryScope[]
     options: readonly MemoryScopeOption[]
     onScopesChange: (scopes: MemoryScope[]) => void
@@ -18,10 +19,11 @@
   }
 
   let {
+    native = false,
     scopes,
     options,
     onScopesChange,
-    allLabel = 'All audiences',
+    allLabel = 'Global',
     disabled = false,
     ariaLabel,
     title,
@@ -60,54 +62,74 @@
   }
 </script>
 
-<DropdownMenu.Root>
-  <DropdownMenu.Trigger
-    class="flex w-full items-center gap-2 rounded-lg border bg-elevated px-2.5 py-1.5 text-left text-sm text-foreground outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 {className}"
+{#if native}
+  <select
+    class="w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary {className}"
+    value={scopes.length > 1 ? 'custom' : (scopes[0] ?? '')}
     aria-label={ariaLabel}
     {title}
     {disabled}
+    onchange={(event) =>
+      onScopesChange(event.currentTarget.value ? [event.currentTarget.value as MemoryScope] : [])}
   >
-    <span class="min-w-0 flex-1 truncate">{triggerLabel}</span>
-    <ChevronDown size={14} class="shrink-0 text-dimmed" />
-  </DropdownMenu.Trigger>
-
-  <DropdownMenu.Portal>
-    <DropdownMenu.Content
-      side="bottom"
-      align="start"
-      sideOffset={6}
-      class="z-60 min-w-56 rounded-xl border border-border bg-surface p-1 shadow-lg"
+    <option value="">{allLabel}</option>
+    {#if scopes.length > 1}
+      <option value="custom" disabled>{memoryScopeSummary(scopes)}</option>
+    {/if}
+    {#each options as option (option.value)}
+      <option value={option.value}>{option.label}</option>
+    {/each}
+  </select>
+{:else}
+  <DropdownMenu.Root>
+    <DropdownMenu.Trigger
+      class="flex w-full items-center gap-2 rounded-lg border bg-elevated px-2.5 py-1.5 text-left text-sm text-foreground outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 {className}"
+      aria-label={ariaLabel}
+      {title}
+      {disabled}
     >
-      <DropdownMenu.Item
-        class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
-        textValue={allLabel}
-        onSelect={(event) => {
-          event.preventDefault()
-          chooseAll()
-        }}
-      >
-        <span class="min-w-0 flex-1 truncate text-xs font-medium">{allLabel}</span>
-        {#if scopes.length === 0}
-          <Check size={12} class="shrink-0 text-primary" />
-        {/if}
-      </DropdownMenu.Item>
-      <div class="mx-1 my-1 border-t border-border" aria-hidden="true"></div>
+      <span class="min-w-0 flex-1 truncate">{triggerLabel}</span>
+      <ChevronDown size={14} class="shrink-0 text-dimmed" />
+    </DropdownMenu.Trigger>
 
-      {#each options as option (option.value)}
+    <DropdownMenu.Portal>
+      <DropdownMenu.Content
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        class="z-60 min-w-56 rounded-xl border border-border bg-surface p-1 shadow-lg"
+      >
         <DropdownMenu.Item
           class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
-          textValue={option.label}
+          textValue={allLabel}
           onSelect={(event) => {
             event.preventDefault()
-            chooseOption(option)
+            chooseAll()
           }}
         >
-          <span class="min-w-0 flex-1 truncate text-xs font-medium">{option.label}</span>
-          {#if selectedSet.has(option.value)}
+          <span class="min-w-0 flex-1 truncate text-xs font-medium">{allLabel}</span>
+          {#if scopes.length === 0}
             <Check size={12} class="shrink-0 text-primary" />
           {/if}
         </DropdownMenu.Item>
-      {/each}
-    </DropdownMenu.Content>
-  </DropdownMenu.Portal>
-</DropdownMenu.Root>
+        <div class="mx-1 my-1 border-t border-border" aria-hidden="true"></div>
+
+        {#each options as option (option.value)}
+          <DropdownMenu.Item
+            class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+            textValue={option.label}
+            onSelect={(event) => {
+              event.preventDefault()
+              chooseOption(option)
+            }}
+          >
+            <span class="min-w-0 flex-1 truncate text-xs font-medium">{option.label}</span>
+            {#if selectedSet.has(option.value)}
+              <Check size={12} class="shrink-0 text-primary" />
+            {/if}
+          </DropdownMenu.Item>
+        {/each}
+      </DropdownMenu.Content>
+    </DropdownMenu.Portal>
+  </DropdownMenu.Root>
+{/if}

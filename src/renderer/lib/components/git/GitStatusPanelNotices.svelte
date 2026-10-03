@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { TriangleAlert, Unplug } from '@lucide/svelte'
+  import { TriangleAlert, Unplug, X } from '@lucide/svelte'
   import type { Snippet } from 'svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState } from '$lib/stores/git.svelte'
@@ -64,12 +64,23 @@
     <ScopeHealthNotice {projectId} {scopeBucketId} variant="panel" {onRepaired} />
   </div>
 {:else if gitState.error}
-  <div class="mx-2 mt-2">
-    <p
-      class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
-    >
+  <div
+    class="mx-2 mt-2 flex items-start gap-2 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-danger"
+    role="alert"
+  >
+    <TriangleAlert size={13} class="mt-0.5 shrink-0" />
+    <p class="min-w-0 flex-1 text-[0.625rem] leading-relaxed break-words">
       {gitState.error}
     </p>
+    <button
+      type="button"
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md hover:bg-danger/10"
+      title="Dismiss Git error"
+      aria-label="Dismiss Git error"
+      onclick={() => (gitState.error = null)}
+    >
+      <X size={13} />
+    </button>
   </div>
 {:else if remoteIssue}
   <!--

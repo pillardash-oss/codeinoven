@@ -2,6 +2,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import {
     ASSISTANT_SPACE_ID,
+    GLOBAL_BROWSER_PROJECT_ID,
     INBOX_PROJECT_ID,
     type MemoryCategory,
     type MemoryEntry,
@@ -9,6 +10,12 @@
     type MemoryProposal,
     type MemoryScope
   } from '$shared/types'
+  import {
+    cacheMemoryDraft,
+    clearMemoryDraft,
+    readMemoryDraft,
+    restoreMemoryDraft
+  } from './memory-drafts'
   import MemoryEntryComponent from './MemoryEntry.svelte'
   import MemoryTransfer from './MemoryTransfer.svelte'
   import {
@@ -16,6 +23,7 @@
     entryVisibleOnSurface,
     locationForScopeChange,
     planMemorySaveGroups,
+    memoryEntriesHaveChanges,
     proposalVisibleOnSurface,
     MEMORY_SCOPE_OPTIONS,
     type MemoryLocation,
@@ -68,6 +76,7 @@
   let entries = $state<MemoryEntry[]>([])
   /** Snapshot of what load() last fetched, for stale-save reconciliation. */
   let loadedEntries = $state<MemoryEntry[]>([])
+  let hasUnsavedChanges = $derived(memoryEntriesHaveChanges(entries, loadedEntries))
   let proposals = $state<PendingProposal[]>([])
   let loading = $state(true)
   let saving = $state(false)
@@ -78,11 +87,9 @@
   let loadedChatEnabled = $state(true)
   let proposalBusyIds = $state<string[]>([])
   let loadRequest = 0
-  /** Which surface (`surface:project`) and thread the panel state was read
-   *  for, so a thread switch can be served by re-reading only that thread's own
-   *  memory instead of the whole panel. */
+  /** Context owning the currently displayed entries and draft. */
   let loadedContextKey = ''
-  let loadedThreadId = ''
+  let loadedContainerKey = ''
   let searchQuery = $state('')
   let filterCategory = $state<MemoryCategory | ''>('')
   let filterPriority = $state<MemoryPriority | ''>('')
@@ -113,9 +120,11 @@
       ? 'settings'
       : projectId === INBOX_PROJECT_ID
         ? 'sidebar-chats'
-        : projectId === ASSISTANT_SPACE_ID
-          ? 'sidebar-assistant'
-          : 'sidebar-projects'
+        : projectId === GLOBAL_BROWSER_PROJECT_ID
+          ? 'sidebar-browser'
+          : projectId === ASSISTANT_SPACE_ID
+            ? 'sidebar-assistant'
+            : 'sidebar-projects'
   )
 
   let scopeOptions = $derived(MEMORY_SCOPE_OPTIONS[surface])
@@ -147,12 +156,14 @@
 
   let headerDescription = $derived(
     variant === 'settings'
-      ? 'Choose whether each memory applies to projects, chats, or assistants.'
+      ? 'Choose where each memory applies.'
       : projectId === INBOX_PROJECT_ID
-        ? 'Global, chat, and thread preferences active in this conversation.'
-        : projectId === ASSISTANT_SPACE_ID
-          ? 'Assistant, routine, and task preferences active in this conversation.'
-          : 'Global, project, and thread preferences active in this conversation.'
+        ? 'Global, all chats, and this chat’s preferences.'
+        : projectId === GLOBAL_BROWSER_PROJECT_ID
+          ? 'Global, all browser chats, and this chat’s preferences.'
+          : projectId === ASSISTANT_SPACE_ID
+            ? 'Global, routine, and task preferences active in this conversation.'
+            : 'Global, project, and thread preferences active in this conversation.'
   )
 
   /** The audience named in the "memory is disabled" notice. It names the config
@@ -216,7 +227,7 @@
     if (variant === 'settings') {
       return {
         title: 'No global memories yet.',
-        body: 'Add a preference and choose whether it applies to projects, chats, or assistants.'
+        body: 'Add a preference and choose where it applies.'
       }
     }
     return {
@@ -229,13 +240,17 @@
    *  the assistant surface) the task's routine, so a task regrouped into
    *  another routine reloads even though its thread id stayed the same. */
   function currentContextKey(): string {
+    return `${surface}:${projectId ?? ''}:${routineId ?? ''}:${threadId ?? ''}`
+  }
+
+  function currentContainerKey(): string {
     return `${surface}:${projectId ?? ''}:${routineId ?? ''}`
   }
 
   async function load(): Promise<void> {
     const request = ++loadRequest
     const contextKey = currentContextKey()
-    const thread = threadId ?? ''
+    const containerKey = currentContainerKey()
     loading = true
     error = ''
     try {
@@ -338,27 +353,45 @@
       nextEntries = [...nextEntries].sort((a, b) => b.updatedAt - a.updatedAt)
       if (request !== loadRequest) return
       loadedContextKey = contextKey
-      loadedThreadId = thread
-      entries = nextEntries
-      loadedEntries = nextEntries
+      loadedContainerKey = containerKey
+      const draft = restoreMemoryDraft(contextKey, nextEntries)
+      entries = draft?.entries ?? nextEntries
+      loadedEntries = draft?.baseline ?? nextEntries
+      lastAddedId = draft?.expandedId ?? null
       proposals = nextProposals
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load memory entries.'
+      if (request === loadRequest)
+        error = e instanceof Error ? e.message : 'Failed to load memory entries.'
     } finally {
       if (request === loadRequest) loading = false
     }
   }
 
   async function save(): Promise<void> {
-    if (saving || loading) return
+    if (saving || loading || !hasUnsavedChanges) return
+    const saveContextKey = loadedContextKey
+    const submittedDraft = readMemoryDraft(saveContextKey)
+    const saveEntries = $state.snapshot(entries)
+    const saveBaseline = $state.snapshot(loadedEntries)
+    const saveContext = { ...surfaceContext }
     saving = true
     error = ''
     saved = false
     try {
       if (variant === 'settings' || (projectId && threadId)) {
-        const fallback: MemoryLocation = variant === 'sidebar' ? { projectId, threadId } : {}
-        await saveGrouped(entries, loadedEntries, fallback, surfaceContext)
-        saved = true
+        const fallback: MemoryLocation = variant === 'sidebar' ? saveContext : {}
+        await saveGrouped(saveEntries, saveBaseline, fallback, saveContext)
+        const remainingDraft = readMemoryDraft(saveContextKey)
+        if (remainingDraft?.revision === submittedDraft?.revision) {
+          clearMemoryDraft(saveContextKey)
+        } else if (remainingDraft) {
+          cacheMemoryDraft(saveContextKey, {
+            entries: remainingDraft.entries,
+            baseline: saveEntries,
+            expandedId: remainingDraft.expandedId
+          })
+        }
+        saved = currentContextKey() === saveContextKey && !readMemoryDraft(saveContextKey)
         if (savedTimeout) clearTimeout(savedTimeout)
         savedTimeout = setTimeout(() => {
           saved = false
@@ -421,6 +454,7 @@
     // then inserts the persisted entry at the top and expands it.
     if (variant === 'settings') settingsSection = 'active'
     else activeSection = 'active'
+    const addContextKey = loadedContextKey
     const entryScopes = defaultScopesForSurface(surface)
     const location = locationForScopeChange(entryScopes, {}, surfaceContext)
     const placeholderSuffix = Math.random().toString(36).slice(2, 6)
@@ -438,11 +472,21 @@
         threadId: location.threadId,
         routineId: location.routineId
       })
-      lastAddedId = created.id
       // Prepend and keep load baseline in sync so a following bulk Save
       // treats this as already-known (not newSinceLoad/duplicate).
+      if (currentContextKey() !== addContextKey) {
+        const draft = readMemoryDraft(addContextKey)
+        cacheMemoryDraft(addContextKey, {
+          entries: [created, ...(draft?.entries ?? [])],
+          baseline: [created, ...(draft?.baseline ?? [])],
+          expandedId: created.id
+        })
+        return
+      }
+      lastAddedId = created.id
       entries = [created, ...entries]
       loadedEntries = [created, ...loadedEntries]
+      cacheDraft()
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to add memory.'
     } finally {
@@ -502,6 +546,7 @@
 
   function removeEntry(index: number): void {
     entries = entries.filter((_, i) => i !== index)
+    cacheDraft()
   }
 
   function updateEntry(
@@ -534,6 +579,21 @@
         updatedAt: Date.now()
       }
     })
+    cacheDraft()
+  }
+
+  function cacheDraft(): void {
+    if (!loadedContextKey) return
+    saved = false
+    if (!saving && !memoryEntriesHaveChanges(entries, loadedEntries)) {
+      clearMemoryDraft(loadedContextKey)
+      return
+    }
+    cacheMemoryDraft(loadedContextKey, {
+      entries: $state.snapshot(entries),
+      baseline: $state.snapshot(loadedEntries),
+      expandedId: lastAddedId
+    })
   }
 
   /** The project whose threads the Thread picker should offer for an entry. */
@@ -564,60 +624,62 @@
     activeSection = 'proposed'
   }
 
-  /** Re-read only the given thread's own memory and splice it into the panel
-   *  state. Global, project and proposal state stay exactly as they were, so an
-   *  unsaved edit made before the switch is still there afterwards   which a
-   *  full reload would have discarded along with five unnecessary reads. */
-  async function loadThreadEntries(contextKey: string, thread: string): Promise<void> {
+  /** Within a container, only the conversation's own file needs re-reading. */
+  async function loadThreadEntries(contextKey: string): Promise<void> {
     const project = projectId
-    if (!project) return
+    const thread = threadId
+    if (!project || !thread) return
     const request = ++loadRequest
+    loading = true
+    error = ''
     try {
       const threadEntries = await invoke('memory:getEntries', project, thread)
-      if (request !== loadRequest) return
-      if (projectId !== project || threadId !== thread) return
-      // What this read replaces: the conversation-scoped memory the panel
-      // showed for the thread the user just left, which is a project thread or
-      // an assistant task (both live in a thread file of the same container).
-      const isShownThreadMemory = (entry: MemoryEntry): boolean => {
+      if (request !== loadRequest || contextKey !== currentContextKey()) return
+      const isConversationMemory = (entry: MemoryEntry): boolean => {
         const location = locationScopeOf(entry.scopes)
-        if (location !== 'thread' && location !== 'task') return false
-        return entry.threadId !== undefined && entry.threadId !== thread
+        return location === 'thread' || location === 'task'
       }
-      const sortByRecency = (list: MemoryEntry[]): MemoryEntry[] =>
-        [...list].sort((a, b) => b.updatedAt - a.updatedAt)
-      entries = sortByRecency([
-        ...entries.filter((entry) => !isShownThreadMemory(entry)),
-        ...threadEntries
-      ])
-      loadedEntries = [
-        ...loadedEntries.filter((entry) => !isShownThreadMemory(entry)),
+      const nextBaseline = [
+        ...loadedEntries.filter((entry) => !isConversationMemory(entry)),
         ...threadEntries
       ]
+      const draft = restoreMemoryDraft(contextKey, nextBaseline)
+      entries =
+        draft?.entries ??
+        [...entries.filter((entry) => !isConversationMemory(entry)), ...threadEntries].sort(
+          (a, b) => b.updatedAt - a.updatedAt
+        )
+      loadedEntries = nextBaseline
+      lastAddedId = draft?.expandedId ?? null
       loadedContextKey = contextKey
-      loadedThreadId = thread
-    } catch {
-      // A thread-scoped read must never blank a panel that already shows the
-      // project's memory: keep what is on screen and let the next switch retry.
+    } catch (e) {
+      if (request === loadRequest)
+        error = e instanceof Error ? e.message : 'Failed to load memory entries.'
+    } finally {
+      if (request === loadRequest) loading = false
     }
   }
 
-  $effect(() => {
+  function loadForContext(): void {
     const contextKey = currentContextKey()
-    if (!contextKey) return
-    const thread = threadId ?? ''
-    // A thread switch inside one project changes that thread's memory and
-    // nothing else, so it is served by the thread-scoped read alone.
-    if (thread && contextKey === loadedContextKey && thread !== loadedThreadId) {
-      void loadThreadEntries(contextKey, thread)
+    if (
+      surface !== 'settings' &&
+      surface !== 'sidebar-assistant' &&
+      threadId &&
+      currentContainerKey() === loadedContainerKey &&
+      contextKey !== loadedContextKey
+    ) {
+      void loadThreadEntries(contextKey)
       return
     }
     void load()
-  })
+  }
+
+  $effect(loadForContext)
 
   /** Keep the Thread picker's list warm for the projects an entry can choose. */
-  $effect(() => {
-    if (surface === 'settings') return
+  function warmThreadPickers(): void {
+    if (surface !== 'sidebar-projects') return
     // `ensureThreads` dedupes in-flight loads and caches per project, so asking
     // once per entry is cheap and needs no local bookkeeping.
     if (projectId) void memoryScopeOptions.ensureThreads(projectId)
@@ -625,7 +687,9 @@
       if (locationScopeOf(entry.scopes) !== 'thread') continue
       void memoryScopeOptions.ensureThreads(entryThreadProjectId(entry))
     }
-  })
+  }
+
+  $effect(warmThreadPickers)
 </script>
 
 <div
@@ -767,7 +831,7 @@
         {#if currentSection !== 'proposed'}
           <button
             class="memory-action-btn flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={saving || loading}
+            disabled={saving || loading || !hasUnsavedChanges}
             title={saved ? 'All memories saved' : 'Save all memory entries'}
             aria-label={saved ? 'All memories saved' : 'Save all memory entries'}
             type="button"
@@ -914,6 +978,7 @@
             index={entries.indexOf(entry)}
             {projectId}
             {scopeOptions}
+            nativeScope={variant === 'sidebar'}
             projects={pickerProjects}
             threads={threadsForEntry(entry)}
             threadsLoading={threadsLoadingForEntry(entry)}

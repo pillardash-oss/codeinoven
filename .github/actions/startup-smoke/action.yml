@@ -1,0 +1,90 @@
+name: Packaged startup smoke
+description: >-
+  Launch the packaged application until workspace readiness, retrying the flaky
+  runner startup. This loop existed three times (quality.yml, nightly.yml,
+  release.yml) and every copy shared one defect: it reset `exit_code=0` at the
+  end of each failed attempt, so after the final attempt the code was always 0
+  and the smoke test could never fail a job. It now decides correctly, and
+  whether a surviving failure blocks the run is an explicit input instead of an
+  accident of loop bookkeeping.
+
+inputs:
+  target:
+    description: Platform under test (`mac`, `win`, or `linux`).
+    required: true
+  app-dir:
+    description: Directory holding the unpacked packaged application.
+    required: true
+  output:
+    description: Where to write the startup evidence JSON.
+    required: false
+    default: ''
+  attempts:
+    description: Total launch attempts, including the first.
+    required: false
+    default: '3'
+  retry-delay-seconds:
+    description: Pause between attempts.
+    required: false
+    default: '10'
+  soft-fail:
+    description: >-
+      `true` reports a surviving failure as a `::warning::` annotation and lets
+      the run pass, which is what the release channels have always intended for
+      a known-flaky runner startup. `false` makes the failure block the job.
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Launch packaged application through workspace readiness
+      shell: bash
+      env:
+        SMOKE_TARGET: ${{ inputs.target }}
+        SMOKE_APP_DIR: ${{ inputs.app-dir }}
+        SMOKE_OUTPUT: ${{ inputs.output }}
+        SMOKE_ATTEMPTS: ${{ inputs.attempts }}
+        SMOKE_RETRY_DELAY: ${{ inputs.retry-delay-seconds }}
+        SMOKE_SOFT_FAIL: ${{ inputs.soft-fail }}
+      run: |
+        args=(bun run smoke:packaged --target "$SMOKE_TARGET" --app-dir "$SMOKE_APP_DIR")
+        if [ -n "$SMOKE_OUTPUT" ]; then
+          args+=(--output "$SMOKE_OUTPUT")
+        fi
+
+        exit_code=0
+        attempt=0
+        while [ "$attempt" -lt "$SMOKE_ATTEMPTS" ]; do
+          attempt=$((attempt + 1))
+          # Reset per attempt. Assigning only on failure leaves the previous
+          # attempt's status in place, so a retry that succeeds would still read
+          # as a failure and the loop would burn every remaining attempt.
+          exit_code=0
+          if [ "$SMOKE_TARGET" = "linux" ]; then
+            xvfb-run -a "${args[@]}" || exit_code=$?
+          else
+            "${args[@]}" || exit_code=$?
+          fi
+
+          if [ "$exit_code" -eq 0 ]; then
+            break
+          fi
+
+          # Announce a retry only when one is actually left. The previous copies
+          # printed "retrying" after the final attempt, reset the status to 0,
+          # and exited 0 regardless of what the packaged app did.
+          if [ "$attempt" -lt "$SMOKE_ATTEMPTS" ]; then
+            echo "startup smoke attempt $attempt of $SMOKE_ATTEMPTS failed with exit $exit_code; retrying"
+            sleep "$SMOKE_RETRY_DELAY"
+          fi
+        done
+
+        if [ "$exit_code" -ne 0 ]; then
+          if [ "$SMOKE_SOFT_FAIL" = "true" ]; then
+            echo "::warning::$SMOKE_TARGET startup smoke failed $attempt time(s) with exit $exit_code (known-flaky runner startup, not blocking)"
+            exit 0
+          fi
+          echo "::error::$SMOKE_TARGET startup smoke failed $attempt time(s) with exit $exit_code"
+        fi
+        exit "$exit_code"

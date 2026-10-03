@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, Clock1, Hammer, RotateCcw, Search, X } from '@lucide/svelte'
+  import { AlertTriangle, Clock1, Hammer, Search, X } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import { RoutineDefaultIcon, getRoutineIcon } from '$lib/routine-icons'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
@@ -68,6 +68,16 @@
    *  default mark. */
   function routineIcon(routine: Routine): string | null {
     return getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null)
+  }
+
+  function runRoutine(run: Thread): Routine | null {
+    return assistantRoutines.routineForTask(run)
+  }
+
+  function runIcon(run: Thread): string | null {
+    const routine = runRoutine(run)
+    if (!routine) return null
+    return routineIcon(routine)
   }
 </script>
 
@@ -184,12 +194,25 @@
               Runs
             </div>
             {#each runResults as run (run.id)}
+              {@const routine = runRoutine(run)}
+              {@const icon = runIcon(run)}
               <button
                 type="button"
                 class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
                 onclick={() => selectTask(run)}
               >
-                <RotateCcw size={13} strokeWidth={1.8} class="shrink-0 text-muted" />
+                <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+                  {#if icon}
+                    <img src={icon} alt="" class="h-4 w-4 object-contain" draggable="false" />
+                  {:else if routine}
+                    <RoutineDefaultIcon
+                      size={14}
+                      style="color: {routine.color ?? 'var(--color-muted)'}"
+                    />
+                  {:else}
+                    <Clock1 size={14} strokeWidth={1.8} class="text-muted" />
+                  {/if}
+                </span>
                 <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
                   >{run.title}</span
                 >
