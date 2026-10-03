@@ -5,6 +5,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { Brain, Check, Cpu, Star, UserRound, Zap } from '@lucide/svelte'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
+  import { isGeneratedAccountLabelFor } from '$shared/account-label'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { modelKey } from '$lib/model-keys'
@@ -206,7 +207,34 @@
   let selectedAccount = $derived(
     providerAccounts.find((account) => account.id === effectiveAccountId)
   )
+  /**
+   * Whether the account menu has a real choice in it.
+   *
+   * One account means there is nothing to switch to, so the menu stays hidden. That
+   * is a statement about switching, not about the account having a name, which is
+   * why it does not also decide whether the chip is drawn.
+   */
   let showAccountPicker = $derived(!multiSelect && providerAccounts.length > 1)
+  /**
+   * Whether the lone account carries a label worth putting on screen.
+   *
+   * Every account has a label, but a generated one (`OpenAI-1`) only repeats the
+   * provider name with a sequence number on it, so drawing it adds a chip that says
+   * nothing. A label the user typed is the opposite: it is how they tell this
+   * account apart from another one they add later, and hiding it left them unable
+   * to confirm the name they had just chosen. The accounts tab has always shown it;
+   * this is the composer catching up.
+   */
+  let showSoleAccountLabel = $derived(
+    !multiSelect &&
+      providerAccounts.length === 1 &&
+      !isGeneratedAccountLabelFor(providerAccounts[0].label, [
+        providerAccounts[0].providerName,
+        providerAccounts[0].providerId,
+        providerAccounts[0].harnessId
+      ])
+  )
+  let soleAccountLabel = $derived(providerAccounts.length === 1 ? providerAccounts[0].label : '')
 
   $effect(() => {
     onAccountPickerVisibleChange?.(showAccountPicker)
@@ -567,6 +595,22 @@
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
+      {:else if showSoleAccountLabel}
+        <!--
+          One account, no switch to make, so this is a label and not a menu: same
+          chrome as the trigger so the composer does not change shape, without the
+          hover affordances and the `cursor-pointer` that would promise a menu that
+          does not exist. A tooltip carrying the full label matters because the text
+          is truncated to the same width the menu trigger uses.
+        -->
+        <span
+          class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+          title={`Account: ${soleAccountLabel}`}
+          aria-label={`Account: ${soleAccountLabel}`}
+        >
+          <UserRound size={10} class="shrink-0" aria-hidden="true" />
+          <span class="min-w-0 max-w-24 truncate">{soleAccountLabel}</span>
+        </span>
       {/if}
     </div>
 
