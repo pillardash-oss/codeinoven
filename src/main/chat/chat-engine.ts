@@ -1194,6 +1194,14 @@ export class ChatEngine {
   private sessionStatuses = new Map<string, AgentSessionStatus>()
 
   /**
+   * Sessions the last {@link reconcileUnverifiedWork} sweep saw idle but has not
+   * yet seen idle twice. A single quiet poll can land inside a compaction or
+   * provider-retry gap, so a turn is only settled once its harness has reported
+   * it idle on two consecutive sweeps.
+   */
+  private ghostWorkingCandidates = new Set<string>()
+
+  /**
    * Signature of the threads this process last announced as running.
    *
    * A turn emits several lifecycle transitions, and only the ones that move the
@@ -7015,12 +7023,36 @@ export class ChatEngine {
    * AppHeader pulse.
    */
   activeSessionCount(): number {
-    const active = new Set<string>()
+    const active = this.engineDrivenSessions()
     const add = (id: string) => active.add(id)
 
     for (const [sessionId, status] of this.sessionStatuses) {
       if (status.state === 'working' || status.state === 'waiting') add(sessionId)
     }
+    for (const [sessionId, info] of this.sessionRegistry) {
+      if (info.activeTurnId || (info.openUnboundedTools && info.openUnboundedTools.size > 0)) {
+        add(sessionId)
+      }
+    }
+    return active.size
+  }
+
+  /**
+   * Sessions this engine is still driving for a reason the status map does not
+   * record: a specification or Brainstorm generating in a disposable session, a
+   * workflow sitting between its steps, a card the user has not answered, a
+   * compaction, a child sub-agent, a loop iteration, an awaited completion.
+   *
+   * Shared so the count above and {@link reconcileUnverifiedWork} can never
+   * disagree about what the engine itself is doing. A session named here has
+   * work in flight that no harness turn accounts for, so a quiet probe from the
+   * thread's own session says nothing about it and must never be read as a
+   * finished turn.
+   */
+  private engineDrivenSessions(): Set<string> {
+    const active = new Set<string>()
+    const add = (id: string) => active.add(id)
+
     for (const pending of this.pendingPermissions.values()) {
       add(pending.request.sessionId)
     }
@@ -7029,11 +7061,6 @@ export class ChatEngine {
     }
     for (const pending of this.pendingImageDescriptorDecisions.values()) {
       add(pending.sessionId)
-    }
-    for (const [sessionId, info] of this.sessionRegistry) {
-      if (info.activeTurnId || (info.openUnboundedTools && info.openUnboundedTools.size > 0)) {
-        add(sessionId)
-      }
     }
     for (const sessionId of this.childSessionOwners.keys()) add(sessionId)
     for (const sessionId of this.completionWaiters.keys()) add(sessionId)
@@ -7045,7 +7072,10 @@ export class ChatEngine {
     for (const sessionId of this.pendingAssignmentTurns.keys()) add(sessionId)
     for (const sessionId of this.pendingBrainstormTurns.keys()) add(sessionId)
     for (const sessionId of this.activeLoopRuns) add(sessionId)
-    return active.size
+    // A planning turn shows `working` on the thread's own session while the
+    // engine runs the actual generation somewhere else entirely.
+    for (const sessionId of this.planningSessions) add(sessionId)
+    return active
   }
 
   /**
@@ -7061,6 +7091,116 @@ export class ChatEngine {
       if (status.state === 'working') count++
     }
     return count
+  }
+
+  /**
+   * Settle sessions this engine reports as `working` that no harness is actually
+   * running, and return how many were settled.
+   *
+   * `working` is an optimistic status: {@link markSessionWorking} records it when
+   * a turn is *dispatched*, before the harness has confirmed anything. The turn's
+   * real end arrives as a driver event, so a session whose driver never emits one
+   * stays `working` for the life of the process. That ghost is invisible to every
+   * consumer of the status map at once: the sidebar pulses, the header badge
+   * spins, and the updater's install gate never opens.
+   *
+   * The gate is where it bites. An update that deferred its install persisted
+   * `installPending`, and the next launch dispatches the recovered turns before
+   * the updater asks anything, so those threads are `working` before the first
+   * question is put to them. When one of them is unrunnable (the harness changed
+   * under the session across the update, the per-turn server never starts, the
+   * provider is signed out) `sendPrompt` resolved, so no failure path runs, and
+   * the app waits for ghosts to let the update through. The update is the only
+   * thing that would have cleared them.
+   *
+   * Only the harness's own account of the session settles it. A driver that
+   * reports the session busy, a session with an in-flight tool or child
+   * sub-agent, work the engine is running outside that turn at all (see
+   * {@link engineDrivenSessions}), and a session parked on a card the user has
+   * not settled are all left running. The verdict must also repeat across two
+   * consecutive sweeps: compaction and provider-retry gaps leave a live turn
+   * briefly idle by the harness's own account, and one quiet poll in that
+   * window is not evidence the turn is over.
+   *
+   * This is the `SessionActivitySource.reconcileUnverifiedWork` the updater's
+   * install gate calls, so the gate's "is anything running?" is the same verified
+   * answer the sidebar and header badges show rather than a second, looser one.
+   */
+  async reconcileUnverifiedWork(): Promise<number> {
+    const driven = this.engineDrivenSessions()
+    const candidates: Array<{
+      sessionId: string
+      info: SessionInfo
+      driver: HarnessDriver
+    }> = []
+    for (const [sessionId, status] of [...this.sessionStatuses]) {
+      if (status.state !== 'working') continue
+      // Work the engine is running outside this harness turn, and a card the
+      // user has not answered, both outrank a quiet probe.
+      if (driven.has(sessionId)) continue
+      const info = this.sessionRegistry.get(sessionId)
+      // An unregistered session has no driver, project or harness to ask, so
+      // nothing here can be corroborated. Leave it to the paths that own it.
+      if (!info) continue
+      if (this.hasInFlightWork(sessionId, info)) continue
+      if (this.sessionAwaitsUserInput(sessionId)) continue
+      const driver = this.driverForRuntime(info.driverId, info.accountId)
+      // A driver that cannot answer is not evidence of anything, in either
+      // direction: never read silence from a harness that was not asked.
+      if (!driver?.isSessionBusy) continue
+      candidates.push({ sessionId, info, driver })
+    }
+
+    // Asked together, never one after another. Each probe is bounded by its own
+    // timeout and a launch can hold several stale sessions at once, so a serial
+    // sweep would make settling the slowest one the price of every other.
+    const probes = await Promise.all(
+      candidates.map(async (candidate) => ({
+        ...candidate,
+        probe: await probeSessionLiveness(candidate.driver, candidate.info, candidate.sessionId)
+      }))
+    )
+
+    const idleAgain: Set<string> = new Set()
+    const ghosts: Array<{ sessionId: string; info: SessionInfo }> = []
+    for (const { sessionId, info, probe } of probes) {
+      // Busy, and a probe that could not answer, are both "leave it alone": only
+      // the harness saying the session is idle is a claim worth weighing.
+      if (probe !== 'idle') continue
+      // First quiet observation: remember it, but let the turn keep its status.
+      if (!this.ghostWorkingCandidates.delete(sessionId)) {
+        this.ghostWorkingCandidates.add(sessionId)
+        idleAgain.add(sessionId)
+        continue
+      }
+      ghosts.push({ sessionId, info })
+    }
+
+    // Whatever stayed quiet this sweep is what the next one has to confirm.
+    this.ghostWorkingCandidates = idleAgain
+
+    for (const { sessionId, info } of ghosts) {
+      Logger.info('Settling a session no harness is running', {
+        sessionId,
+        projectId: info.projectId,
+        threadId: info.threadId,
+        driverId: info.driverId
+      })
+      // The idle finalization recovers an unfinished turn by auto-continuing it
+      // once. That is right for a turn the harness dropped and wrong here: this
+      // turn was just proven unrunnable, so a hidden prompt would spend a real
+      // provider call on it, mark the session `working` again, and hand the gate
+      // the same ghost one sweep later. Spending the attempt instead lets the
+      // finalization record the honest outcome   an interrupted turn with a Retry
+      // affordance   which is what the silence watchdog does for the same fact.
+      this.incompleteTurnRecoveryAttempts.set(sessionId, 1)
+      // Route through the driver-event pipeline so every idle consumer (status
+      // broadcast, thread finalization, checkpoint, notifications) settles
+      // exactly as it would have from a real driver idle, instead of this pass
+      // inventing a second, divergent definition of "the turn ended".
+      this.handleDriverEvent(info.driverId, { type: 'session.idle', sessionId })
+    }
+    return ghosts.length
   }
 
   /** Publish one canonical working state to session and task consumers. */

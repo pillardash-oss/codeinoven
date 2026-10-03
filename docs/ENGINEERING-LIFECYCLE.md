@@ -156,7 +156,7 @@ possible and must not be conflated:
   "CodeInOven stopped before the harness reported completion". This is the only
   case that blames the harness, because only here did the harness actually fail
   to report.
-- **Deliberate close** (the menu bar Quit item, the Cmd/Ctrl+Shift+Q direct
+- **Deliberate close** (the menu bar Quit item, the Cmd/Ctrl+Shift+D direct
   quit, or a confirmed force close):
   `runShutdownPipeline` writes a durable clean-shutdown marker
   (`src/main/system/clean-shutdown-store.ts`) before it kills the harness, and

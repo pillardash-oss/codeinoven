@@ -49,6 +49,20 @@ const { autoUpdater } = electronUpdater
 /** Anything that can report how much interactive work would be interrupted by a restart. */
 export interface SessionActivitySource {
   activeSessionCount(): number
+  /**
+   * Optional narrower count: only the work actively being produced, leaving the
+   * waiting, queued and child work {@link activeSessionCount} also includes out
+   * of it. The chat engine implements it so the install gate mirrors the header
+   * pulse instead of blocking on a card the user has not answered yet.
+   */
+  workingSessionCount?(): number
+  /**
+   * Optional authoritative sweep run before an install decision: settle the work
+   * this source believes is running but cannot corroborate, and return how much
+   * it settled. A source whose count is a direct observation of live resources
+   * (a terminal session) has nothing to reconcile and omits this.
+   */
+  reconcileUnverifiedWork?(): Promise<number>
 }
 
 interface PendingInstallState {
@@ -64,6 +78,8 @@ export class UpdaterService {
   private _status: UpdaterStatus
   private statusListeners: Set<(status: UpdaterStatus) => void> = new Set()
   private deferredInstallPoll: ReturnType<typeof setInterval> | null = null
+  /** True while a deferred-install decision is reconciling its activity sources. */
+  private deferredInstallDeciding = false
   private installPending = false
   private installApproved = false
   /** True while the user explicitly asked for a check (Settings)   its failure is reportable. */
@@ -547,7 +563,7 @@ export class UpdaterService {
     if (this._status.state !== 'downloaded') return
     this.installPending = true
     await this.persistPendingInstall()
-    this.performDeferredInstall()
+    await this.evaluateDeferredInstall()
   }
 
   private async handleAutoDownload(): Promise<void> {
@@ -602,7 +618,7 @@ export class UpdaterService {
       // The resume is unattended, so a version that already failed stays out.
       if (!this.forceUpdateInBackground && this._status.state === 'downloaded') {
         if (!this.installPermittedForTarget()) return
-        this.performDeferredInstall()
+        await this.evaluateDeferredInstall()
       }
     } catch (error: unknown) {
       Logger.error('Updater: failed to resume pending install', error)
@@ -720,27 +736,63 @@ export class UpdaterService {
     }
   }
 
-  private performDeferredInstall(): void {
-    if (!this.installPending) return
-    const activeCount = this.activeSessionCount()
-    if (activeCount === 0) {
-      this.quitAndInstallNow()
-      return
-    }
+  /**
+   * Decide whether the deferred install can run now, and keep watching if not.
+   * A no-op unless an install is actually pending.
+   *
+   * The decision is reconciled before it is taken, never after: a source that
+   * infers work from an optimistic status has to be asked to settle what it
+   * cannot corroborate first, or a session the app calls "working" with no
+   * harness behind it holds the gate open forever. That is the shape of the
+   * deadlock this gate could reach after an update   the launch that resumes the
+   * interrupted threads runs before this one, so the recovered threads are
+   * `working` before the first question is even asked, and an update whose
+   * install was still pending waits for threads that will never finish.
+   */
+  private async evaluateDeferredInstall(): Promise<void> {
+    // One decision at a time. Reconciling is asynchronous, so a poll landing
+    // mid-reconcile would otherwise run a second decision beside the first and
+    // hand the same payload to the platform installer twice.
+    if (!this.installPending || this.deferredInstallDeciding) return
+    this.deferredInstallDeciding = true
+    try {
+      await this.reconcileUnverifiedWork()
 
-    this.updateState({ state: 'waiting' })
-    this.broadcastWaitingForThreads(activeCount)
-
-    this.clearDeferredInstall()
-    this.deferredInstallPoll = setInterval(() => {
-      const remaining = this.activeSessionCount()
-      if (remaining === 0) {
-        this.clearDeferredInstall()
+      const activeCount = this.activeSessionCount()
+      if (activeCount === 0) {
         this.quitAndInstallNow()
         return
       }
-      this.broadcastWaitingForThreads(remaining)
-    }, DEFERRED_POLL_MS)
+
+      this.updateState({ state: 'waiting' })
+      this.broadcastWaitingForThreads(activeCount)
+
+      this.clearDeferredInstall()
+      this.deferredInstallPoll = setInterval(() => {
+        void this.evaluateDeferredInstall()
+      }, DEFERRED_POLL_MS)
+    } finally {
+      this.deferredInstallDeciding = false
+    }
+  }
+
+  /**
+   * Ask every source that infers activity to settle what it cannot corroborate.
+   * A source that fails is left exactly as it reported itself: this narrows a
+   * count that may be wrong, it never invents one.
+   */
+  private async reconcileUnverifiedWork(): Promise<void> {
+    for (const source of [this.chatEngine, ...this.activitySources]) {
+      if (!source?.reconcileUnverifiedWork) continue
+      try {
+        const settled = await source.reconcileUnverifiedWork()
+        if (settled > 0) {
+          Logger.info('Updater: settled uncorroborated active work before installing', { settled })
+        }
+      } catch (error: unknown) {
+        Logger.error('Updater: failed to reconcile active work', error)
+      }
+    }
   }
 
   private activeSessionCount(): number {
@@ -749,9 +801,14 @@ export class UpdaterService {
     // `waiting` sessions, pending permissions/questions, compactions,
     // brainstorm/loop runs do not pulse the header and must not block
     // "Restart to update".
-    const engine = this.chatEngine as unknown as { workingSessionCount?: () => number } | null
-    if (engine?.workingSessionCount) return engine.workingSessionCount()
-    let count = this.chatEngine?.activeSessionCount() ?? 0
+    //
+    // The extra sources count on top of the engine's answer rather than being
+    // replaced by it. A live terminal is real work a restart would destroy, and
+    // the engine's working-session badge cannot see one; returning the badge
+    // alone silently dropped every terminal from this gate.
+    let count = this.chatEngine?.workingSessionCount
+      ? this.chatEngine.workingSessionCount()
+      : (this.chatEngine?.activeSessionCount() ?? 0)
     for (const source of this.activitySources) {
       count += source.activeSessionCount()
     }

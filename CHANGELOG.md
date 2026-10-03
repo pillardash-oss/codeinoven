@@ -177,6 +177,20 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- An update can no longer hang on ghost active threads. The install gate read the
+  chat engine's `working` status, which is recorded when a turn is dispatched and
+  never revised unless the harness reports the turn's end, so a turn the harness
+  could not run stayed "working" for the life of the process and the app waited on
+  it forever. After an update that is exactly what happens: the launch resumes the
+  interrupted threads before the deferred install asks anything, and a session
+  whose harness changed under it never comes back. The gate now asks the harness
+  what it is actually running before it decides, settles the sessions nothing is
+  running through the normal turn-end path (status, thread, checkpoint and
+  notifications all settle together), and needs that answer twice in a row so a
+  compaction or retry gap is never mistaken for a finished thread. A live terminal
+  now also blocks the install again: the engine's narrower working count used to
+  replace the terminal count instead of adding to it.
+
 - Automatic memory proposals no longer treat feature requests as durable
   preferences. The deterministic gate stops recognising request phrasing
   (`i want you to`, `make sure to`) and task imperatives as standing vocabulary,
