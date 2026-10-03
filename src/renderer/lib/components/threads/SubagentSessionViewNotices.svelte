@@ -1,6 +1,8 @@
 <script lang="ts">
   import { CheckCircle2, X } from '@lucide/svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
+  import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
+  import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
   import type {
     SubagentProviderStatus,
     SubagentRecoveryNotice
@@ -27,6 +29,11 @@
     onRetry,
     onDismissRecovery
   }: Props = $props()
+
+  /** Keyed to the error text, so the next failed action raises its own notice
+   *  rather than hiding under the dismissal of this one. */
+  const actionErrorId = 'subagent.actionError'
+  const actionErrorCondition = $derived(actionError)
 </script>
 
 {#if providerStatus}
@@ -66,9 +73,19 @@
   </div>
 {/if}
 
-{#if actionError}
+{#if actionError && !noticeDismissals.isDismissed(actionErrorId, actionErrorCondition)}
   <div class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5" role="alert">
-    <p class="text-xs font-medium text-danger">Sub-agent action failed</p>
-    <p class="mt-1 text-[0.6875rem] text-muted">{actionError}</p>
+    <div class="flex items-start gap-2.5">
+      <div class="min-w-0 flex-1">
+        <p class="text-xs font-medium text-danger">Sub-agent action failed</p>
+        <p class="mt-1 text-[0.6875rem] text-muted">{actionError}</p>
+      </div>
+      <NoticeDismissButton
+        id={actionErrorId}
+        condition={actionErrorCondition}
+        title="Dismiss the sub-agent action error"
+        tone="danger"
+      />
+    </div>
   </div>
 {/if}

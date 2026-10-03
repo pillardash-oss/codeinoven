@@ -8,6 +8,8 @@
     scopeWorktreeHealthGuidance
   } from '$shared/scope-worktree-health'
   import { ipcErrorMessage } from '$lib/ipc-errors'
+  import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
+  import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
   import type { ScopeWorktreeHealth } from '$shared/types'
 
   interface Props {
@@ -47,6 +49,18 @@
   let expectedPath = $derived(unhealthy ? health?.expectedPath : undefined)
 
   let scopeLabel = $derived(name ? `"${name}"` : 'this scope')
+
+  /**
+   * One key for both variants: this is one condition about one scope, so closing
+   * it in the panel closes it on the scope card too. The signature is the
+   * category plus the path it expected, so a worktree that recovers and breaks
+   * again, or breaks in a different way, raises its own notice instead of
+   * staying silent under the dismissal.
+   */
+  const noticeId = $derived(`scope.health:${targetProjectId ?? ''}:${scopeBucketId}`)
+  const noticeCondition = $derived(
+    visible ? `${health?.category ?? 'setup'}|${expectedPath ?? ''}|${setupStale}` : ''
+  )
 
   let title = $derived(
     unhealthy && guidance ? guidance.cause : 'Setup has to run again in this worktree'
@@ -144,7 +158,7 @@
   </div>
 {/snippet}
 
-{#if visible}
+{#if visible && !noticeDismissals.isDismissed(noticeId, noticeCondition)}
   {#if variant === 'inline'}
     <div
       class="flex min-w-0 items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-2 py-1.5"
@@ -158,6 +172,12 @@
         {/if}
       </div>
       {@render actions()}
+      <NoticeDismissButton
+        id={noticeId}
+        condition={noticeCondition}
+        title="Dismiss the worktree health notice"
+        size="sm"
+      />
     </div>
   {:else}
     <div
@@ -178,6 +198,11 @@
         {/if}
         {@render actions()}
       </div>
+      <NoticeDismissButton
+        id={noticeId}
+        condition={noticeCondition}
+        title="Dismiss the worktree health notice"
+      />
     </div>
   {/if}
 {/if}

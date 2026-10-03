@@ -5,6 +5,8 @@
   import { gitState } from '$lib/stores/git.svelte'
   import type { GitFileChange } from '$shared/types'
   import { REMOTE_ISSUE_ICONS, REMOTE_ISSUE_TITLES } from './git-remote-issue'
+  import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
+  import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
   import ScopeHealthNotice from '../scope/ScopeHealthNotice.svelte'
 
   interface Props {
@@ -40,9 +42,30 @@
     remoteIssue ? REMOTE_ISSUE_ICONS[remoteIssue.kind] : REMOTE_ISSUE_ICONS.unknown
   )
   const retrying = $derived(gitState.isBusy('fetch'))
+
+  /**
+   * One signature per notice here. Each is the text the notice is about, so a
+   * dismissal holds while the same problem stands and releases by itself the
+   * moment a different problem takes its place: a second remote verdict, or a
+   * new rebase stopping on a different set of conflicts. Every one is
+   * non-empty while its notice is drawn, because an empty condition is never
+   * dismissible.
+   */
+  const permissionId = $derived(`git.githubPermission:${projectId}`)
+  const permissionCondition = $derived(gitState.githubPermission?.message ?? '')
+
+  const remoteIssueId = $derived(`git.remoteIssue:${projectId}`)
+  const remoteIssueCondition = $derived(
+    remoteIssue ? `${remoteIssue.kind}|${remoteIssue.detail}` : ''
+  )
+
+  const rebaseId = $derived(`git.rebase:${projectId}`)
+  const rebaseCondition = $derived(
+    conflictState === 'rebase' ? `rebase\n${conflicted.map((file) => file.path).join('\n')}` : ''
+  )
 </script>
 
-{#if gitState.githubPermission}
+{#if gitState.githubPermission && !noticeDismissals.isDismissed(permissionId, permissionCondition)}
   <div
     class="mx-2 mt-2 flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2"
   >
@@ -58,6 +81,12 @@
     >
       Update GitHub access
     </button>
+    <NoticeDismissButton
+      id={permissionId}
+      condition={permissionCondition}
+      title="Dismiss the GitHub access notice"
+      size="sm"
+    />
   </div>
 {:else if scopeUnhealthy}
   <div class="mx-2 mt-2">
@@ -82,7 +111,7 @@
       <X size={13} />
     </button>
   </div>
-{:else if remoteIssue}
+{:else if remoteIssue && !noticeDismissals.isDismissed(remoteIssueId, remoteIssueCondition)}
   <!--
     A remote the checkout cannot reach, authenticate against, or find is the
     state of the round trip, not a failure of the app: it belongs here, as a
@@ -109,6 +138,12 @@
       >
         {retrying ? 'Retrying...' : 'Try again'}
       </button>
+      <NoticeDismissButton
+        id={remoteIssueId}
+        condition={remoteIssueCondition}
+        title="Dismiss the remote notice"
+        size="sm"
+      />
     </div>
   </div>
 {/if}
@@ -121,11 +156,17 @@
   no control anywhere. It sits above every view because the state blocks
   every view's next step.
 -->
-{#if conflictState === 'rebase'}
+{#if conflictState === 'rebase' && !noticeDismissals.isDismissed(rebaseId, rebaseCondition)}
   <div class="mx-2 mt-2 rounded-lg border border-warning/25 bg-warning/10 px-3 py-2">
     <div class="flex items-center gap-1.5">
       <TriangleAlert size={13} class="shrink-0 text-warning" />
-      <p class="text-[0.625rem] font-semibold text-warning">Rebase in progress</p>
+      <p class="flex-1 text-[0.625rem] font-semibold text-warning">Rebase in progress</p>
+      <NoticeDismissButton
+        id={rebaseId}
+        condition={rebaseCondition}
+        title="Dismiss the rebase notice"
+        size="sm"
+      />
     </div>
     <p class="mt-1 text-[0.5625rem] leading-relaxed text-muted">
       {#if conflicted.length > 0}

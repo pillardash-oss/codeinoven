@@ -1,10 +1,12 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import { TriangleAlert } from '@lucide/svelte'
+  import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
+  import NoticeDismissButton from './NoticeDismissButton.svelte'
 
   /**
-   * Canonical, non-dismissible notice for a panel whose content belongs to
-   * another scope than the open thread's.
+   * Canonical notice for a panel whose content belongs to another scope than the
+   * open thread's.
    *
    * A few panels are deliberately project-scoped: they survive a thread switch
    * instead of remounting, so switching to a thread in a different worktree
@@ -17,10 +19,15 @@
    * warning with the same remedy shape, so it borrows this toolbar and passes the
    * sentence its own reading produced.
    *
-   * Every sentence lives here and only here, so no host can invent its own
-   * copy or hide the notice while the mismatch lasts. A host that can remedy
-   * the mismatch (restarting a shell into the open scope) passes an `action`
-   * snippet; a host that cannot shows the sentence alone.
+   * Every sentence lives here and only here, so no host can invent its own copy.
+   * A host that can remedy the mismatch (restarting a shell into the open scope)
+   * passes an `action` snippet; a host that cannot shows the sentence alone.
+   *
+   * The bar is dismissible, and dismissing it is purely a display decision: the
+   * host's `stale` prop is untouched, so a panel the user closed this toolbar on
+   * is still stale and its content still belongs to the other scope. The
+   * dismissal is keyed to the sentence, so the same panel going stale for a
+   * different reason says so again instead of hiding under the old dismissal.
    */
   type StaleReason = 'mount' | 'run' | 'canvas'
 
@@ -50,9 +57,13 @@
 
   let { stale, reason = 'mount', message, wrap = false, action }: Props = $props()
   let sentence = $derived(message ?? STALE_MESSAGES[reason])
+
+  /** Keyed to the sentence, which is also what identifies the reason to the user. */
+  const noticeId = $derived(`stalePanel:${reason}`)
+  const noticeCondition = $derived(sentence)
 </script>
 
-{#if stale}
+{#if stale && !noticeDismissals.isDismissed(noticeId, noticeCondition)}
   <div
     class="flex w-full shrink-0 items-center gap-1.5 border-b border-warning/40 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning"
     role="status"
@@ -63,5 +74,11 @@
     {#if action}
       {@render action()}
     {/if}
+    <NoticeDismissButton
+      id={noticeId}
+      condition={noticeCondition}
+      title="Dismiss the stale panel notice"
+      size="sm"
+    />
   </div>
 {/if}
