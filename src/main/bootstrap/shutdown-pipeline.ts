@@ -10,6 +10,7 @@
  *    and Electron proceeds to close windows → will-quit → exit.
  */
 
+import { flushBrowserSessionCookies } from '../browser/browser-service/browser-session-cookies'
 import { app } from 'electron'
 import type { Database } from '../database/database'
 import { flushDraftWrites } from '../chat/draft-commit-gate'
@@ -143,6 +144,12 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
     await state.browserService?.flushTabHistory()
   } catch (error) {
     Logger.error('Browser tab history could not be committed during shutdown:', error)
+  }
+
+  try {
+    await flushBrowserSessionCookies()
+  } catch (error: unknown) {
+    Logger.error('Browser cookie flush failed during shutdown:', error)
   }
 
   try {

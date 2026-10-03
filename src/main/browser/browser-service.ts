@@ -1,4 +1,9 @@
 import {
+  restoreBrowserSessionCookies,
+  waitBrowserSessionCookies,
+  flushBrowserSessionCookiesFor
+} from './browser-service/browser-session-cookies'
+import {
   validateNativeDockAck,
   validateNativeDockId,
   validateNativeDockInteraction,
@@ -3830,6 +3835,7 @@ export class BrowserService {
   private async settleJar(partition: string): Promise<void> {
     try {
       const browserSession = session.fromPartition(partition)
+      await waitBrowserSessionCookies(browserSession)
       await browserSession.closeAllConnections()
       await browserSession.clearStorageData()
       await browserSession.clearCache()
@@ -3841,7 +3847,9 @@ export class BrowserService {
   /** Erase one jar's storage, cache and remembered permission decisions. */
   private async clearJarStorage(partition: string): Promise<void> {
     const browserSession = session.fromPartition(partition)
+    await waitBrowserSessionCookies(browserSession)
     await browserSession.clearStorageData()
+    await flushBrowserSessionCookiesFor(browserSession)
     await browserSession.clearCache()
     await browserSession.closeAllConnections()
     await this.permissionMemory.forget(partition, this.permissionLedgers())
@@ -4335,6 +4343,9 @@ export class BrowserService {
   private sessionForProject(projectId: string, boxId: string | null = null): Session {
     const partition = browserPartitionFor(projectId, boxId)
     const browserSession = session.fromPartition(partition)
+    // Every browser context keeps its own login state across app restarts,
+    // including thread browsers that use their project's private cookie jar.
+    void restoreBrowserSessionCookies(browserSession)
     // Downloads are tracked for the session, not for the window: the window can be
     // parked and rebuilt while a download keeps running, so the manager that owns
     // them registers here once and keeps them across that rebuild. The partition
@@ -4760,6 +4771,7 @@ export class BrowserService {
           error
         })
       })
+      .then(() => waitBrowserSessionCookies(contents.session))
       .then(() => {
         if (this.tabs.get(tabId) !== tab || contents.isDestroyed()) return
         return contents.loadURL(url).catch((error: unknown) => {

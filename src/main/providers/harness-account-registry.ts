@@ -6,6 +6,7 @@ import type {
   ProviderAccountAuthEntry
 } from '../../lib/types'
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
+import { escapeRegExp, isGeneratedAccountLabelFor } from '../../lib/account-label'
 import { harnessSupportsMultipleAccounts } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 
@@ -115,9 +116,11 @@ export class HarnessAccountRegistry {
         const providerName = discovered.label || discovered.providerId
         const existingLabelWasGenerated =
           existing !== undefined &&
-          [existing.providerName, existing.providerId, harnessId].some((base) =>
-            generatedLabelFor(existing.label, base)
-          )
+          isGeneratedAccountLabelFor(existing.label, [
+            existing.providerName,
+            existing.providerId,
+            harnessId
+          ])
         let label =
           existing?.label && existing.label !== 'Default' && !existingLabelWasGenerated
             ? existing.label
@@ -469,17 +472,8 @@ export class HarnessAccountRegistry {
   }
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-}
-
 /** Preferred default for a set of same-provider accounts: an explicitly marked
  *  account, else the earliest created (accounts arrive createdAt-sorted). */
 function defaultAccountFor(accounts: HarnessAccount[]): HarnessAccount {
   return accounts.find((account) => account.isDefault) ?? accounts[0]
-}
-
-function generatedLabelFor(label: string, base: string): boolean {
-  if (!base.trim()) return false
-  return new RegExp(`^${escapeRegExp(base)}-\\d+$`, 'iu').test(label)
 }
