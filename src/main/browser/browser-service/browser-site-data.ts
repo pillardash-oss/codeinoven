@@ -4,6 +4,7 @@
  * The service supplies sessions, tabs and the permission/download ledgers.
  */
 
+import { waitBrowserSessionCookies, flushBrowserSessionCookiesFor } from './browser-session-cookies'
 import { Menu, MenuItem, dialog, type BrowserWindow, type Session } from 'electron'
 import type { BrowserSiteDataScope } from '../../../lib/ipc-contract'
 import { Logger } from '../../system/logger'
@@ -160,6 +161,7 @@ export class BrowserSiteDataService {
     scopes: readonly BrowserSiteDataScope[]
   ): Promise<void> {
     const browserSession = this.deps.sessionForJar(projectId, boxId)
+    await waitBrowserSessionCookies(browserSession)
     const work: Promise<unknown>[] = []
     if (scopes.length === 0) {
       work.push(browserSession.clearStorageData(), browserSession.clearCache())
@@ -173,6 +175,7 @@ export class BrowserSiteDataService {
     }
     if (work.length === 0) return
     await Promise.all(work)
+    await flushBrowserSessionCookiesFor(browserSession)
     await browserSession.closeAllConnections()
   }
 
