@@ -138,7 +138,7 @@ ipcMain.handle('app:parkWindow', async () => {
   await state.backgroundLifecycle?.park()
 })
 
-// Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+Q) is the menu bar's
+// Quit, not park: the direct-quit shortcut (Cmd/Ctrl+Shift+D) is the menu bar's
 // Quit item without reaching for the menu bar, so it bypasses background mode
 // entirely.
 ipcMain.handle('app:quitDirect', () => quitAppDirectly())
