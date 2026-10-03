@@ -4343,12 +4343,9 @@ export class BrowserService {
   private sessionForProject(projectId: string, boxId: string | null = null): Session {
     const partition = browserPartitionFor(projectId, boxId)
     const browserSession = session.fromPartition(partition)
-    if (
-      partition === browserPartitionFor(GLOBAL_BROWSER_PROJECT_ID) ||
-      partition.startsWith(`${browserPartitionFor(GLOBAL_BROWSER_PROJECT_ID)}:box:`)
-    ) {
-      void restoreBrowserSessionCookies(browserSession)
-    }
+    // Every browser context keeps its own login state across app restarts,
+    // including thread browsers that use their project's private cookie jar.
+    void restoreBrowserSessionCookies(browserSession)
     // Downloads are tracked for the session, not for the window: the window can be
     // parked and rebuilt while a download keeps running, so the manager that owns
     // them registers here once and keeps them across that rebuild. The partition
