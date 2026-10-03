@@ -85,5 +85,22 @@ jobs:
       # `bun audit` audits every dependency, not only the production tree, so
       # this job is named for what it does. The old "Audit production
       # dependencies" name implied a --production flag it never passed.
+      #
+      # The command is the `audit` script, not a bare `bun audit`, so the accepted
+      # advisory list has exactly one home (package.json) instead of one copy per
+      # caller. It currently accepts one:
+      #
+      #   GHSA-ch52-4w7c-c8xp (high, CVE-2026-93748), http-cache-semantics <=4.2.0
+      #   reachable only through electron-builder > dmg-builder >
+      #   app-builder-lib > @electron/get@3 > got > cacheable-request. Upstream has
+      #   published no fix (`first_patched_version: null`; 4.2.0 is `latest`), so
+      #   `bun audit fix` reports "no published version fixes" and suggests this
+      #   same flag. Every package on that path is already at its newest published
+      #   version, and the only way to drop it is an @electron/get ^5 override,
+      #   which is ESM-only and cannot be require()d by app-builder-lib's CJS.
+      #   The advisory needs a shared cache serving one user's zeroed response to
+      #   another; here it is reached only by the build-time Electron download.
+      #
+      # Remove the flag from the `audit` script as soon as upstream ships a fix.
       - name: Audit dependencies
-        run: bun audit
+        run: bun run audit

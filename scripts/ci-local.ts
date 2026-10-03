@@ -263,7 +263,10 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
     await stage('check', 'Type check', ['bun', 'run', 'check']),
     await stage('lint', 'Lint', ['bun', 'run', 'lint', '.']),
     await stage('test', 'Tests', ['bun', 'run', 'test'], undefined, { CI: 'true' }),
-    await stage('audit', 'Dependency audit', ['bun', 'audit'])
+    // The `audit` script, not a bare `bun audit`, so this stage and the
+    // security.yml job share one accepted-advisory list. See that workflow for
+    // why GHSA-ch52-4w7c-c8xp is accepted.
+    await stage('audit', 'Dependency audit', ['bun', 'run', 'audit'])
   )
 
   if (target === 'mac') {

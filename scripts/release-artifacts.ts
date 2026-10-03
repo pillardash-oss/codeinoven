@@ -138,12 +138,15 @@ async function checksums(directory: string): Promise<void> {
 /** Every asset to attach to the GitHub release: installers, update feeds, manifest. */
 function publishPaths(directory: string): Artifact[] {
   const files = listFiles(directory)
+  // The manifest is a release asset like any other: the mirror job verifies every
+  // byte it uploads against it and refuses to publish unverified ones, so leaving
+  // it off the release makes the mirror fail. Matched by name, never by
+  // extension, because `SHA256SUMS.txt` is covered by neither list.
   const assets = files.filter(
     (file) =>
-      file.name !== MANIFEST_NAME &&
-      (hasExtension(file.name, INSTALLER_EXTENSIONS) ||
-        hasExtension(file.name, UPDATE_FEED_EXTENSIONS) ||
-        file.name === MANIFEST_NAME)
+      file.name === MANIFEST_NAME ||
+      hasExtension(file.name, INSTALLER_EXTENSIONS) ||
+      hasExtension(file.name, UPDATE_FEED_EXTENSIONS)
   )
 
   if (assets.length === 0) {

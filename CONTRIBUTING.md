@@ -154,6 +154,12 @@ some changes get extra review scrutiny:
   any addition in the PR.
 - **Secrets scanning** runs on every push (Gitleaks) and `bun audit` runs in
   CI. Do not commit `.env` files or tokens.
+- **`bun audit` is never invoked directly.** Run the `audit` script
+  (`bun run audit`), which carries the accepted-advisory list. Add to that
+  script only when no patched release exists anywhere on the path, and say so
+  in the comment it requires. `GHSA-ch52-4w7c-c8xp` is the current entry: it has
+  no upstream fix and its only path is the build-time Electron download. See
+  the `audit` job in `.github/workflows/security.yml`.
 
 ---
 
