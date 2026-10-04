@@ -1,7 +1,20 @@
 <script lang="ts">
-  import type { Snippet } from 'svelte'
-  import { ContextMenu, DropdownMenu } from 'bits-ui'
+  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
+    browserTabIndicators,
+    browserTabIndicatorSlotClass
+  } from '$lib/stores/browser-tab-status'
+  import {
+    contextSidebarState,
+    type ContextSidebarTab,
+    type TerminalPlacement
+  } from '$lib/stores/context-sidebar.svelte'
+  import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
+  import { faviconState } from '$lib/stores/favicons.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import {
+    AppWindow,
     Bell,
     Bot,
     Boxes,
@@ -10,8 +23,6 @@
     ChevronDown,
     Cloud,
     FileDiff,
-    MonitorCog,
-    AppWindow,
     Files,
     GitBranch,
     GlobeCode,
@@ -20,6 +31,7 @@
     Maximize2,
     MessageCircleDashed,
     MessagesCircle,
+    MonitorCog,
     Network,
     NotebookPen,
     PanelBottom,
@@ -27,25 +39,13 @@
     Plus,
     Puzzle,
     SquareTerminal,
-    StickyNote,
+    StickyNotes,
     TriangleAlert,
     X
   } from '@lucide/svelte'
-  import {
-    contextSidebarState,
-    type ContextSidebarTab,
-    type TerminalPlacement
-  } from '$lib/stores/context-sidebar.svelte'
-  import {
-    browserTabIndicators,
-    browserTabIndicatorSlotClass
-  } from '$lib/stores/browser-tab-status'
-  import { faviconState } from '$lib/stores/favicons.svelte'
-  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
-  import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
+  import { ContextMenu, DropdownMenu } from 'bits-ui'
+  import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
-  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
 
   interface Props {
     tabs: ContextSidebarTab[]
@@ -399,7 +399,7 @@
     {:else if tab.kind === 'cloud-deployment'}
       <Cloud size={12} class="shrink-0" />
     {:else if tab.kind === 'thread-note'}
-      <StickyNote size={12} class="shrink-0" />
+      <StickyNotes size={12} class="shrink-0" />
     {:else if tab.kind === 'popup-window'}
       {#if tab.favicon}
         <img src={tab.favicon} alt="" class="h-3 w-3 shrink-0" aria-hidden="true" />

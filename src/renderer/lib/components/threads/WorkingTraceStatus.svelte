@@ -131,14 +131,14 @@
           {thinkingLevel}
         </span>
       {/if}
-      {#if accountId || accountLabel}
+      {#if accountLabel && accountLabel !== 'Default'}
         <span
           class={CONVERSATION_METADATA_BADGE_CLASS}
           title={`Account: ${accountLabel ?? 'Default'}`}
           aria-label={`Account: ${accountLabel ?? 'Default'}`}
         >
           <AccountMetadataIcon size={10} />
-          {#if accountLabel && accountLabel !== 'Default'}{accountLabel}{/if}
+          {accountLabel}
         </span>
       {/if}
       {#if ovenLabel}

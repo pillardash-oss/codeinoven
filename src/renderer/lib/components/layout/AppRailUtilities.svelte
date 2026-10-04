@@ -1,8 +1,18 @@
 <script lang="ts">
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import {
+    preloadSettingsChunk,
+    preloadTaskManagerChunk,
+    preloadUpdateBlockersChunk
+  } from '$lib/page-preload'
+  import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { updateBlockers } from '$lib/stores/update-blockers.svelte'
+  import { updaterState } from '$lib/stores/updater.svelte'
   import {
     AlertCircle,
     CheckCircle2,
     Clock,
+    CpuIcon,
     Download,
     Info,
     Loader2,
@@ -11,15 +21,6 @@
     Settings
   } from '@lucide/svelte'
   import type { Component } from 'svelte'
-  import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import {
-    preloadSettingsChunk,
-    preloadTaskManagerChunk,
-    preloadUpdateBlockersChunk
-  } from '$lib/page-preload'
-  import { updaterState } from '$lib/stores/updater.svelte'
-  import { updateBlockers } from '$lib/stores/update-blockers.svelte'
-  import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import AppRailButton from './AppRailButton.svelte'
 
   interface Props {
@@ -204,8 +205,16 @@
   />
 
   <AppRailButton
-    label="Task manager: running processes"
+    label="Utilities: Skills, MCP, Plugins"
     icon={Plug}
+    shortcut={settingsShortcut}
+    onHover={preloadSettingsChunk}
+    onSelect={() => navigate('settings-utilities')}
+  />
+
+  <AppRailButton
+    label="Task manager: running processes"
+    icon={CpuIcon}
     shortcut={taskManagerShortcut}
     onHover={preloadTaskManagerChunk}
     onSelect={() => (taskManagerOpen = true)}
