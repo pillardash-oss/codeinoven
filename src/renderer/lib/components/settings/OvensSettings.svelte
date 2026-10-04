@@ -65,6 +65,8 @@
   let showPassphrase = $state(false)
   let publicKey = $state('')
   let pendingRemoval = $state<Oven | null>(null)
+  let pendingHarnessRemoval = $state<{ ovenId: string; harnessId: string; command: string } | null>(null)
+  let harnessBusy = $state('')
   let setupOpen = $state(false)
   const hasAppearance = $derived(
     Boolean(
@@ -110,7 +112,23 @@
         if (generation !== refreshGeneration) return
         checking = oven.id
         try {
-          const result = await invoke('oven:connectionHealth', oven.id)
+          let result: OvenConnectionStatus
+          if (oven.kind === 'ssh') {
+            try {
+              const probe = await invoke('oven:probe', oven.id)
+              if (generation !== refreshGeneration) return
+              probes = { ...probes, [oven.id]: probe }
+              result = {
+                state: 'connected',
+                checkedAt: Date.now(),
+                specs: probe.specs ?? health[oven.id]?.specs
+              }
+            } catch {
+              result = await invoke('oven:connectionHealth', oven.id)
+            }
+          } else {
+            result = await invoke('oven:connectionHealth', oven.id)
+          }
           if (generation !== refreshGeneration) return
           health = {
             ...health,
@@ -318,6 +336,40 @@
       error = message(failure)
     } finally {
       busy = ''
+    }
+  }
+
+  async function updateHarness(ovenId: string, harnessId: string): Promise<void> {
+    if (harnessBusy) return
+    harnessBusy = `${ovenId}:${harnessId}`
+    error = ''
+    try {
+      const item = await invoke('oven:harness:update', ovenId, harnessId)
+      const probe = probes[ovenId]
+      if (probe?.inventory)
+        probes = { ...probes, [ovenId]: { ...probe, inventory: probe.inventory.map((row) => row.harnessId === harnessId ? item : row) } }
+    } catch (failure) {
+      error = message(failure)
+    } finally {
+      harnessBusy = ''
+    }
+  }
+
+  async function uninstallHarness(): Promise<void> {
+    if (!pendingHarnessRemoval || harnessBusy) return
+    const pending = pendingHarnessRemoval
+    harnessBusy = `${pending.ovenId}:${pending.harnessId}`
+    error = ''
+    try {
+      const item = await invoke('oven:harness:uninstall', pending.ovenId, pending.harnessId)
+      const probe = probes[pending.ovenId]
+      if (probe?.inventory)
+        probes = { ...probes, [pending.ovenId]: { ...probe, inventory: probe.inventory.map((row) => row.harnessId === pending.harnessId ? item : row) } }
+      pendingHarnessRemoval = null
+    } catch (failure) {
+      error = message(failure)
+    } finally {
+      harnessBusy = ''
     }
   }
 </script>
@@ -532,12 +584,21 @@
                     {probe.platform} · {probe.architecture} · Node {probe.nodeVersion} · {probe.activeRuns}
                     active runs
                   </p>
-                  <p>
-                    Installed harnesses: {probe.harnesses
-                      .filter((harness) => harness.path)
-                      .map((harness) => harness.command)
-                      .join(', ') || 'None found'}
-                  </p>
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <span>Installed harnesses:</span>
+                    {#if probe.inventory?.length}
+                      {#each probe.inventory.filter((item) => item.health !== 'missing') as item (item.harnessId)}
+                        <span class="flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[0.625rem]" title={item.health === 'healthy' ? `${item.command} ${item.installedVersion ?? ''}` : `${item.command}: ${item.health}`}>
+                          <span>{item.command}{item.installedVersion ? ` ${item.installedVersion}` : ` · ${item.health}`}</span>
+                          <button type="button" class="rounded px-1 py-0.5 text-primary hover:bg-surface disabled:opacity-50" title={`Update ${item.command}`} aria-label={`Update ${item.command}`} disabled={Boolean(harnessBusy) || item.health !== 'healthy'} onclick={() => void updateHarness(oven.id, item.harnessId)}>{harnessBusy === `${oven.id}:${item.harnessId}` ? 'Working' : 'Update'}</button>
+                          <button type="button" class="rounded px-1 py-0.5 text-danger hover:bg-surface disabled:opacity-50" title={`Uninstall ${item.command}`} aria-label={`Uninstall ${item.command}`} disabled={Boolean(harnessBusy)} onclick={() => (pendingHarnessRemoval = { ovenId: oven.id, harnessId: item.harnessId, command: item.command })}>Remove</button>
+                        </span>
+                      {/each}
+                      {#if !probe.inventory.some((item) => item.health !== 'missing')}<span>None found</span>{/if}
+                    {:else}
+                      <span>{probe.harnesses.filter((harness) => harness.path).map((harness) => harness.command).join(', ') || 'None found'}</span>
+                    {/if}
+                  </div>
                 </div>
               {/if}
             </div>
@@ -791,6 +852,18 @@
 >
   <p>Remove {pendingRemoval?.name} and its saved credentials from this computer?</p>
   <p>Its remote files and service remain on the host. Remote runs will continue there.</p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={Boolean(pendingHarnessRemoval)}
+  title="Uninstall harness?"
+  confirmLabel="Uninstall"
+  busy={Boolean(harnessBusy)}
+  onCancel={() => (pendingHarnessRemoval = null)}
+  onConfirm={uninstallHarness}
+>
+  <p>Uninstall {pendingHarnessRemoval?.command} from this Oven?</p>
+  <p>The harness may remove its own configuration or credentials. CodeInOven checks that it is not running before uninstalling it.</p>
 </ConfirmDialog>
 
 <OvenSetupModal open={setupOpen} onClose={() => (setupOpen = false)} />

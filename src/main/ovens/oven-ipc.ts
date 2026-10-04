@@ -14,6 +14,9 @@ import { LOCAL_OVEN_ID } from '../../lib/ovens'
 import { isThreadBusyStatus } from '../../lib/thread-status-policy'
 import { OvenSetupService } from './oven-setup-service'
 import { OvenHarnessService } from './oven-harness-service'
+import { createOvenSetupPorts } from './oven-setup-ports'
+import { HarnessAccountRegistry } from '../providers/harness-account-registry'
+import { validateOvenHarnessId, validateStartOvenSetup } from './oven-validation'
 
 export function registerOvenIpc(
   storage: StorageEngine,
@@ -25,8 +28,22 @@ export function registerOvenIpc(
   const service = new OvenService(registry)
   const transfers = new OvenTransfers(service)
   const previews = new OvenPreview(service)
-  const setupService = new OvenSetupService()
-  const harnessService = new OvenHarnessService()
+  const setupRuntime = createOvenSetupPorts({
+    service,
+    accounts: new HarnessAccountRegistry(storage),
+    vault
+  })
+  const setupService = new OvenSetupService(storage, setupRuntime)
+  const harnessService = new OvenHarnessService(service)
+  /**
+   * Local is a healthy harness host but has no oven service to configure, so a
+   * full setup request for it is a caller mistake rather than a user error.
+   */
+  const requireRemoteOven = (value: unknown): string => {
+    const id = ovenId(value)
+    if (id === LOCAL_OVEN_ID) throw new Error('The Local oven does not run oven setup.')
+    return id
+  }
   ipcMain.handle('oven:testConnection', (_event, raw: unknown) =>
     testDraftConnection(registry, validateSaveOven(raw))
   )
@@ -123,82 +140,42 @@ export function registerOvenIpc(
       })
     }
   )
-  ipcMain.handle('oven:setup:start', (_event, rawId: unknown, rawConfig: unknown) => {
-    const id = ovenId(rawId)
-    if (!rawConfig || typeof rawConfig !== 'object') {
-      throw new Error('Invalid setup configuration')
-    }
-    return setupService.startSetup(id, rawConfig as any)
+  ipcMain.handle('oven:setup:preflight', (_event, rawId: unknown) =>
+    setupService.preflight(requireRemoteOven(rawId))
+  )
+  ipcMain.handle('oven:setup:start', async (_event, rawId: unknown, rawInput: unknown) => {
+    const id = requireRemoteOven(rawId)
+    const configuration = await validateStartOvenSetup(rawInput, vault)
+    return setupService.startSetup(id, configuration)
   })
-  ipcMain.handle('oven:setup:status', (_event, rawId: unknown) => {
-    return setupService.getOperationForOven(ovenId(rawId))
+  ipcMain.handle('oven:setup:status', (_event, rawId: unknown) =>
+    setupService.getOperationForOven(requireRemoteOven(rawId))
+  )
+  ipcMain.handle('oven:setup:progress', (_event, rawId: unknown, after: unknown) =>
+    setupService.progress(
+      requireRemoteOven(rawId),
+      typeof after === 'number' && Number.isSafeInteger(after) && after >= 0 ? after : 0
+    )
+  )
+  ipcMain.handle('oven:setup:cancel', (_event, rawId: unknown) =>
+    setupService.cancelSetup(requireRemoteOven(rawId))
+  )
+  ipcMain.handle('oven:setup:retry', (_event, rawId: unknown) =>
+    setupService.retrySetup(requireRemoteOven(rawId))
+  )
+  ipcMain.handle('oven:setup:gitVerify', async (_event, rawId: unknown) => {
+    const id = requireRemoteOven(rawId)
+    const report = await setupRuntime.preflight(id)
+    return setupRuntime.gitIdentity.verify(id, report)
   })
-  ipcMain.handle('oven:setup:cancel', (_event, rawId: unknown) => {
-    const op = setupService.getOperationForOven(ovenId(rawId))
-    if (!op) throw new Error('No active operation')
-    return setupService.cancelSetup(op.id)
-  })
-  ipcMain.handle('oven:setup:retry', (_event, rawId: unknown) => {
-    const op = setupService.getOperationForOven(ovenId(rawId))
-    if (!op) throw new Error('No active operation')
-    return setupService.retrySetup(op.id)
-  })
-  ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown) => {
-    return harnessService.getInventory(ovenId(rawId))
-  })
-  ipcMain.handle('oven:harness:update', (_event, rawId: unknown, rawHarnessId: unknown) => {
-    if (typeof rawHarnessId !== 'string') throw new Error('Invalid harness')
-    return harnessService.updateHarness(ovenId(rawId), rawHarnessId)
-  })
-  ipcMain.handle('oven:harness:uninstall', (_event, rawId: unknown, rawHarnessId: unknown) => {
-    if (typeof rawHarnessId !== 'string') throw new Error('Invalid harness')
-    return harnessService.uninstallHarness(ovenId(rawId), rawHarnessId)
-  })
+  ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown) =>
+    harnessService.getInventory(ovenId(rawId))
+  )
+  ipcMain.handle('oven:harness:update', (_event, rawId: unknown, rawHarnessId: unknown) =>
+    harnessService.updateHarness(ovenId(rawId), validateOvenHarnessId(rawHarnessId))
+  )
+  ipcMain.handle('oven:harness:uninstall', (_event, rawId: unknown, rawHarnessId: unknown) =>
+    harnessService.uninstallHarness(ovenId(rawId), validateOvenHarnessId(rawHarnessId))
+  )
   return service
 }
-
-ipcMain.handle('oven:setup:start', async (_event, rawId: unknown, rawConfig: unknown) => {
-  const id = ovenId(rawId)
-  // Basic validation
-  if (!rawConfig || typeof rawConfig !== 'object') {
-    throw new Error('Invalid setup configuration')
-  }
-  const service = new (await import('./oven-setup-service')).OvenSetupService()
-  return service.startSetup(id, rawConfig as any)
-})
-
-ipcMain.handle('oven:setup:status', async (_event, rawId: unknown) => {
-  const service = new (await import('./oven-setup-service')).OvenSetupService()
-  return service.getOperationForOven(ovenId(rawId))
-})
-
-ipcMain.handle('oven:setup:cancel', async (_event, rawId: unknown) => {
-  const service = new (await import('./oven-setup-service')).OvenSetupService()
-  const op = service.getOperationForOven(ovenId(rawId))
-  if (!op) throw new Error('No active operation')
-  return service.cancelSetup(op.id)
-})
-
-ipcMain.handle('oven:setup:retry', async (_event, rawId: unknown) => {
-  const service = new (await import('./oven-setup-service')).OvenSetupService()
-  const op = service.getOperationForOven(ovenId(rawId))
-  if (!op) throw new Error('No active operation')
-  return service.retrySetup(op.id)
-})
-
-ipcMain.handle('oven:harness:inventory', async (_event, rawId: unknown) => {
-  const service = new (await import('./oven-harness-service')).OvenHarnessService()
-  return service.getInventory(ovenId(rawId))
-})
-
-ipcMain.handle('oven:harness:update', async (_event, rawId: unknown, rawHarnessId: unknown) => {
-  const service = new (await import('./oven-harness-service')).OvenHarnessService()
-  if (typeof rawHarnessId !== 'string') throw new Error('Invalid harness')
-  return service.updateHarness(ovenId(rawId), rawHarnessId)
-})
-
-ipcMain.handle('oven:harness:uninstall', async (_event, rawId: unknown, rawHarnessId: unknown) => {
-  const service = new (await import('./oven-harness-service')).OvenHarnessService()
-  if (typeof rawHarnessId !== 'string') throw new Error('Invalid harness')
-  return service.uninstallHarness(ovenId(rawId), rawHarnessId)
-})

@@ -43,6 +43,118 @@ export class OvenSsh {
     return result
   }
 
+  /**
+   * Write one secret file on the Oven through the channel's stdin.
+   *
+   * The value never appears in a command argument, in the remote process list,
+   * or in a log line, and the file is created with owner-only permissions in a
+   * single atomic move so a partially written key is never readable.
+   */
+  async putSecretFile(
+    id: string,
+    path: string,
+    contents: string,
+    options: { windows?: boolean; timeoutMs?: number } = {}
+  ): Promise<void> {
+    if (contents.includes('\0')) throw new TypeError('Secret values cannot contain null bytes.')
+    if (!/^[A-Za-z0-9._-]{1,120}$/u.test(path)) throw new TypeError('Invalid remote secret path.')
+    const command = options.windows
+      ? // Create the file with an owner-only ACL, then write through the handle
+        // so the plaintext is never visible in a window where it is world-readable.
+        [
+          `$ErrorActionPreference = 'Stop'`,
+          `$dir = Split-Path -Parent ${sshQuote(path)}`,
+          `if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }`,
+          `$acl = Get-Acl -LiteralPath $dir`,
+          `$acl.SetAccessRuleProtection($true, $false)`,
+          `$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name`,
+          `$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')`,
+          `$acl.SetAccessRule($rule)`,
+          `Set-Acl -LiteralPath $dir -AclObject $acl`,
+          `$content = [Console]::In.ReadToEnd()`,
+          `$staged = ${sshQuote(path)} + '.next'`,
+          `[System.IO.File]::WriteAllText($staged, $content, (New-Object System.Text.UTF8Encoding($false)))`,
+          `Move-Item -LiteralPath $staged -Destination ${sshQuote(path)} -Force`
+        ].join('; ')
+      : [
+          `set -eu`,
+          `umask 077`,
+          `dir=$(dirname ${sshQuote(path)})`,
+          `mkdir -p "$dir"`,
+          `chmod 700 "$dir"`,
+          `staged=${sshQuote(`${path}.next`)}`,
+          `cat > "$staged"`,
+          `chmod 600 "$staged"`,
+          `mv -f "$staged" ${sshQuote(path)}`
+        ].join('; ')
+    await this.execute(id, command, contents, options.timeoutMs ?? 30_000)
+  }
+
+  /**
+   * Write one secret file inside the Oven user's home directory.
+   *
+   * Used for the dedicated Git identity, which must live at a fixed, well-known
+   * location (`~/.ssh/<name>`) that OpenSSH itself resolves. Callers pass a
+   * home-relative path and a file name only: no absolute path, no traversal, and
+   * no user-controlled directory ever reaches the remote shell. As with
+   * `putSecretFile`, the value travels on stdin, never in an argument.
+   */
+  async putHomeSecretFile(
+    id: string,
+    relativePath: string,
+    contents: string,
+    options: { windows?: boolean; timeoutMs?: number } = {}
+  ): Promise<void> {
+    if (contents.includes('\0')) throw new TypeError('Secret values cannot contain null bytes.')
+    if (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u.test(relativePath))
+      throw new TypeError('Invalid remote home-relative path.')
+    const segments = relativePath.split('/')
+    if (segments.some((segment) => segment === '.' || segment === '..'))
+      throw new TypeError('Invalid remote home-relative path.')
+    const leaf = segments.pop()
+    if (!leaf) throw new TypeError('A remote secret path needs a file name.')
+    const directory = segments.join('/')
+    const command = options.windows
+      ? [
+          `$ErrorActionPreference = 'Stop'`,
+          `$root = Join-Path $env:USERPROFILE ${sshQuote(directory)}`,
+          `if (-not (Test-Path -LiteralPath $root)) { New-Item -ItemType Directory -Force -Path $root | Out-Null }`,
+          `$acl = Get-Acl -LiteralPath $root`,
+          `$acl.SetAccessRuleProtection($true, $false)`,
+          `$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name`,
+          `$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')`,
+          `$acl.SetAccessRule($rule)`,
+          `Set-Acl -LiteralPath $root -AclObject $acl`,
+          `$content = [Console]::In.ReadToEnd()`,
+          `$target = Join-Path $root ${sshQuote(leaf)}`,
+          `$staged = $target + '.next'`,
+          `[System.IO.File]::WriteAllText($staged, $content, (New-Object System.Text.UTF8Encoding($false)))`,
+          `Move-Item -LiteralPath $staged -Destination $target -Force`
+        ].join('; ')
+      : [
+          `set -eu`,
+          `umask 077`,
+          `target="$HOME"/${sshQuote(relativePath)}`,
+          `dir=$(dirname "$target")`,
+          `mkdir -p "$dir"`,
+          `chmod 700 "$dir"`,
+          `staged="$target".next`,
+          `cat > "$staged"`,
+          `chmod 600 "$staged"`,
+          `mv -f "$staged" "$target"`
+        ].join('; ')
+    await this.execute(id, command, contents, options.timeoutMs ?? 30_000)
+  }
+
+  /**
+   * Read one remote file as text. Used only for the Oven's own known_hosts and
+   * public keys, never for arbitrary paths supplied by the renderer.
+   */
+  async readFile(id: string, path: string, timeoutMs = 20_000): Promise<string> {
+    if (!/^[A-Za-z0-9._/-]{1,256}$/u.test(path)) throw new TypeError('Invalid remote path.')
+    return this.execute(id, `cat ${sshQuote(path)}`, '', timeoutMs)
+  }
+
   /** Bound SSH direct TCP channels. Each channel streams with backpressure. */
   async tunnel(id: string, remotePort: number): Promise<{ port: number; close: () => void }> {
     if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535)

@@ -36,8 +36,15 @@ export class OvenService {
     return this.parseProbe(output)
   }
 
-  async probe(id: string): Promise<OvenProbe> {
-    return this.parseProbe(await this.request(id, { method: 'probe' }))
+  /**
+   * Read an oven's live state.
+   *
+   * `refresh` asks the oven-side service to re-scan harness versions instead of
+   * answering from its own short-lived cache. Only harness management wants
+   * that, so ordinary connection probes stay cheap.
+   */
+  async probe(id: string, refresh = false): Promise<OvenProbe> {
+    return this.parseProbe(await this.request(id, refresh ? { method: 'probe', refresh: true } : { method: 'probe' }))
   }
 
   async runs(id: string): Promise<OvenRun[]> {

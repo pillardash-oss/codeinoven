@@ -3,7 +3,18 @@ import { open } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { sanitizeCustomSvg } from '../../lib/custom-svg'
-import { type SaveOvenInput, type OvenIcon, type OvenConnection } from '../../lib/ovens'
+import {
+  ovenHarnessIdForCommand,
+  OVEN_HARNESS_COMMANDS,
+  type SaveOvenInput,
+  type OvenIcon,
+  type OvenConnection,
+  type OvenSetupConfiguration,
+  type OvenSetupSelectedHarness,
+  type OvenSetupGitConfiguration
+} from '../../lib/ovens'
+import { findHarness } from '../agents/harness-registry'
+import type { SecretVault } from '../storage/secret-vault'
 
 export async function validateIdentityPath(value: unknown): Promise<string> {
   const supplied = text(value, 'Identity file', 4096)
@@ -140,4 +151,178 @@ export function validateSaveOven(value: unknown): SaveOvenInput {
     result.publicKey = key
   }
   return result
+}
+
+function boolean(value: unknown, label: string, fallback: boolean): boolean {
+  if (value === undefined) return fallback
+  if (typeof value !== 'boolean') throw new TypeError(`${label} must be true or false.`)
+  return value
+}
+
+const MAX_SELECTED_HARNESSES = OVEN_HARNESS_COMMANDS.length
+
+function validateSelectedHarness(value: unknown): OvenSetupSelectedHarness {
+  if (typeof value !== 'object' || !value) throw new TypeError('Each harness selection must be an object.')
+  const raw = value as Record<string, unknown>
+  const harnessId = text(raw.harnessId, 'Harness', 64)
+  // The renderer sends the canonical harness id; accept only registered ones so
+  // a typo cannot become an install of something unknown.
+  if (!findHarness(harnessId)) throw new TypeError(`Unknown harness: ${harnessId}`)
+  if (!OVEN_HARNESS_COMMANDS.some((command) => ovenHarnessIdForCommand(command) === harnessId))
+    throw new TypeError(`${findHarness(harnessId)?.name ?? harnessId} is not available on remote Ovens.`)
+  const selection: OvenSetupSelectedHarness = { harnessId }
+  if (raw.accountId !== undefined) selection.accountId = text(raw.accountId, 'Account', 128)
+  if (raw.install !== undefined) selection.install = boolean(raw.install, 'Install selection', true)
+  if (raw.update !== undefined) selection.update = boolean(raw.update, 'Update selection', true)
+  return selection
+}
+
+/**
+ * Validate a submitted Git identity without ever storing or echoing it.
+ *
+ * Raw key material is converted into vault references by the caller. Any
+ * configuration that still carries a `privateKey` or `passphrase` field is
+ * rejected outright, because that value would otherwise reach a persisted
+ * operation record and a progress event.
+ */
+function validateGitConfiguration(value: unknown): OvenSetupGitConfiguration {
+  if (value === undefined) return { enabled: false, host: 'github' }
+  if (typeof value !== 'object' || !value) throw new TypeError('Git settings are required.')
+  const raw = value as Record<string, unknown>
+  for (const forbidden of ['privateKey', 'passphrase', 'password', 'secret'] as const) {
+    if (raw[forbidden] !== undefined)
+      throw new TypeError(
+        'Secret values cannot be part of a persisted setup operation. Submit them once so they can be stored in the encrypted vault.'
+      )
+  }
+  const host = raw.host === undefined ? 'github' : text(raw.host, 'Git host', 16)
+  if (host !== 'github' && host !== 'any')
+    throw new TypeError('Only GitHub SSH identities are supported in this release.')
+  const git: OvenSetupGitConfiguration = {
+    enabled: boolean(raw.enabled, 'Git setup', false),
+    host
+  }
+  if (raw.privateKeyRef !== undefined) git.privateKeyRef = text(raw.privateKeyRef, 'Key reference', 256)
+  if (raw.passphraseRef !== undefined) git.passphraseRef = text(raw.passphraseRef, 'Passphrase reference', 256)
+  if (raw.publicKeyFingerprint !== undefined)
+    git.publicKeyFingerprint = text(raw.publicKeyFingerprint, 'Key fingerprint', 128)
+  if (raw.publicKey !== undefined) {
+    const publicKey = text(raw.publicKey, 'Public key', 16_384)
+    if (!/^(?:ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/]+=*(?: [^\r\n]*)?$/u.test(publicKey))
+      throw new TypeError('Paste an OpenSSH public key.')
+    git.publicKey = publicKey
+  }
+  if (git.enabled && !git.privateKeyRef)
+    throw new TypeError('Paste a dedicated SSH private key to configure Git on this Oven.')
+  return git
+}
+
+/**
+ * Validate a complete setup request. Local ovens never receive full setup, and
+ * the whole configuration is size-bounded so it can be journaled and resumed.
+ */
+export function validateOvenSetupConfiguration(value: unknown): OvenSetupConfiguration {
+  if (typeof value !== 'object' || !value || Array.isArray(value))
+    throw new TypeError('Invalid setup configuration.')
+  if (JSON.stringify(value).length > 64 * 1024)
+    throw new TypeError('The setup configuration is too large.')
+  const raw = value as Record<string, unknown>
+  if (!Array.isArray(raw.selectedHarnesses) || raw.selectedHarnesses.length > MAX_SELECTED_HARNESSES)
+    throw new TypeError('Choose at most one entry per available harness.')
+  const selectedHarnesses = raw.selectedHarnesses.map(validateSelectedHarness)
+  const seen = new Set<string>()
+  for (const selection of selectedHarnesses) {
+    if (seen.has(selection.harnessId)) throw new TypeError('Each harness can only be selected once.')
+    seen.add(selection.harnessId)
+  }
+  return {
+    selectedHarnesses,
+    synchronizeAccounts: boolean(raw.synchronizeAccounts, 'Account synchronization', true),
+    synchronizeConfiguration: boolean(raw.synchronizeConfiguration, 'Configuration synchronization', true),
+    git: validateGitConfiguration(raw.git),
+    packageUpgrades: boolean(raw.packageUpgrades, 'Package upgrades', false)
+  }
+}
+
+/** Guard for read-only setup requests, which must not carry a configuration at all. */
+export function assertNoSecretFields(value: unknown, label: string): void {
+  if (typeof value !== 'object' || !value) return
+  const serialized = JSON.stringify(value) ?? ''
+  if (/"(?:privateKey|passphrase|password|token|secret)"\s*:/u.test(serialized))
+    throw new TypeError(`${label} must not contain secret values.`)
+}
+
+/** Reject harness ids the remote service cannot run, and return the canonical id. */
+export function validateOvenHarnessId(value: unknown): string {
+  const id = text(value, 'Harness', 64)
+  if (!findHarness(id)) throw new TypeError(`Unknown harness: ${id}`)
+  if (!OVEN_HARNESS_COMMANDS.some((command) => ovenHarnessIdForCommand(command) === id))
+    throw new TypeError('That harness is not available on remote Ovens.')
+  return id
+}
+
+const PRIVATE_KEY_PATTERN = /^-----BEGIN (?:OPENSSH|RSA|EC|DSA|ENCRYPTED)? ?PRIVATE KEY-----/u
+
+/**
+ * Convert a submitted setup request into a persisted configuration.
+ *
+ * This is the one place raw key material is allowed to arrive. The private key
+ * and its passphrase are moved into the encrypted vault and replaced by
+ * references before validation, so what reaches the operation record, the
+ * journal, and every progress event contains no secret at all. Submitting the
+ * same key again reuses the existing reference instead of growing the vault.
+ */
+export async function validateStartOvenSetup(
+  value: unknown,
+  vault: SecretVault
+): Promise<OvenSetupConfiguration> {
+  if (typeof value !== 'object' || !value || Array.isArray(value))
+    throw new TypeError('Invalid setup configuration.')
+  const submitted = value as Record<string, unknown>
+  const wrapped = Object.hasOwn(submitted, 'configuration')
+  if (wrapped && Object.keys(submitted).some((key) => !['configuration', 'gitIdentity'].includes(key)))
+    throw new TypeError('The setup request contains unsupported fields.')
+  const raw = submitted.configuration && typeof submitted.configuration === 'object' && !Array.isArray(submitted.configuration)
+    ? { ...(submitted.configuration as Record<string, unknown>) }
+    : { ...submitted }
+  const identity = submitted.gitIdentity
+  if (identity !== undefined) {
+    if (!identity || typeof identity !== 'object' || Array.isArray(identity))
+      throw new TypeError('Invalid Git identity configuration.')
+    if (Object.keys(identity).some((key) => !['privateKey', 'passphrase'].includes(key)))
+      throw new TypeError('The Git identity contains unsupported fields.')
+    const git = raw.git && typeof raw.git === 'object' && !Array.isArray(raw.git)
+      ? { ...(raw.git as Record<string, unknown>) }
+      : {}
+    const identityFields = identity as Record<string, unknown>
+    if (identityFields.privateKey !== undefined) git.privateKey = identityFields.privateKey
+    if (identityFields.passphrase !== undefined) git.passphrase = identityFields.passphrase
+    raw.git = git
+  }
+  const gitInput = raw.git
+  if (gitInput && typeof gitInput === 'object' && !Array.isArray(gitInput)) {
+    const git = { ...(gitInput as Record<string, unknown>) }
+    if (git.privateKey !== undefined) {
+      const privateKey = text(git.privateKey, 'Private key', 64 * 1024)
+      if (!PRIVATE_KEY_PATTERN.test(privateKey)) throw new TypeError('Paste an OpenSSH private key.')
+      git.privateKeyRef = await vault.save(
+        privateKey,
+        typeof git.privateKeyRef === 'string' && git.privateKeyRef ? git.privateKeyRef : undefined
+      )
+      delete git.privateKey
+    }
+    if (git.passphrase !== undefined) {
+      const passphrase = text(git.passphrase, 'Key passphrase', 4096)
+      git.passphraseRef = await vault.save(
+        passphrase,
+        typeof git.passphraseRef === 'string' && git.passphraseRef ? git.passphraseRef : undefined
+      )
+      delete git.passphrase
+    }
+    raw.git = git
+  }
+  const configuration = validateOvenSetupConfiguration(raw)
+  // Nothing secret may survive into a persisted operation. Fail closed if it did.
+  assertNoSecretFields(configuration, 'The setup configuration')
+  return configuration
 }

@@ -1568,6 +1568,7 @@ export class ChatEngine {
       this.secretVault,
       this.threadManager,
       this.accountRegistry,
+      this.projectManager,
       (event) => {
         if (event.type === 'session.status') this.sessionStatuses.set(event.sessionId, event.status)
         if (event.type === 'session.idle')

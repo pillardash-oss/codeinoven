@@ -95,6 +95,7 @@ export interface OvenProbe {
   architecture: string
   home: string
   nodeVersion: string
+  specs?: NonNullable<OvenConnectionStatus['specs']>
   harnesses: { command: string; path: string | null }[]
   activeRuns: number
   inventory?: OvenHarnessInventoryItem[]
@@ -127,7 +128,47 @@ export interface StartOvenRunInput {
   closeInput?: boolean
 }
 
-export const OVEN_HARNESS_COMMANDS = ['codex', 'claude', 'opencode', 'muse', 'pi', 'cline'] as const
+/**
+ * Remote commands CodeInOven probes, installation registry, and runs on an oven,
+ * mapped to their canonical harness id in the harness registry.
+ *
+ * The oven side can only resolve a bare executable name, so this table is the
+ * one place the two registries meet: `claude` on disk is the `claude-code`
+ * harness, and Antigravity's `agy` command is included so oven inventory matches
+ * the harnesses the app can actually drive. Adding a harness to the registry
+ * without adding its remote command here makes it Local-only.
+ */
+export const OVEN_HARNESS_COMMANDS = [
+  'codex',
+  'claude',
+  'opencode',
+  'muse',
+  'pi',
+  'cline',
+  'agy'
+] as const
+
+export type OvenHarnessCommand = (typeof OVEN_HARNESS_COMMANDS)[number]
+
+const OVEN_HARNESS_ID_BY_COMMAND: Record<string, string> = {
+  codex: 'codex',
+  claude: 'claude-code',
+  opencode: 'opencode',
+  muse: 'muse',
+  pi: 'pi',
+  cline: 'cline',
+  agy: 'antigravity'
+}
+
+/** Resolve the canonical harness id for a remote command, or undefined when unknown. */
+export function ovenHarnessIdForCommand(command: string): string | undefined {
+  return OVEN_HARNESS_ID_BY_COMMAND[command]
+}
+
+/** True when the command is one CodeInOven is allowed to run on an oven. */
+export function isOvenHarnessCommand(value: unknown): value is OvenHarnessCommand {
+  return typeof value === 'string' && OVEN_HARNESS_ID_BY_COMMAND[value] !== undefined
+}
 
 export interface OvenFile {
   path: string
@@ -190,6 +231,110 @@ export interface OvenTransferReview extends OvenTransferInput {
   expiresAt: number
 }
 
+export type OvenPackageManager =
+  | 'apt'
+  | 'dnf'
+  | 'yum'
+  | 'pacman'
+  | 'zypper'
+  | 'brew'
+  | 'winget'
+  | 'choco'
+  | 'scoop'
+  | 'unknown'
+
+/** The minimum Node.js the oven service runtime requires. */
+export const OVEN_MINIMUM_NODE_VERSION = 22
+
+/** How much authority the authenticated oven user has for system mutation. */
+export type OvenPrivilege = 'root' | 'passwordless-sudo' | 'sudo' | 'none'
+
+export interface OvenToolStatus {
+  installed: boolean
+  version: string | null
+  path?: string | null
+}
+
+export interface OvenHarnessPreflight {
+  harnessId: string
+  command: string
+  name: string
+  supported: boolean
+  unsupportedReason?: string
+  /** Documented install channels for this platform, in preference order. */
+  channels: string[]
+  executablePath: string | null
+  installedVersion: string | null
+  health: 'healthy' | 'missing' | 'broken' | 'unsupported' | 'unknown'
+  issueCategory?: 'not-installed' | 'broken-executable' | 'unsupported-platform' | 'timeout'
+}
+
+/**
+ * One read-only observation of a remote oven. Everything here comes from
+ * non-mutating commands, so collecting a report is always safe.
+ */
+export interface OvenPreflightReport {
+  ovenId: string
+  checkedAt: number
+  /** `process.platform` reported by the oven, normalized to a known value. */
+  platform: NodeJS.Platform
+  architecture: string
+  osName: string
+  osVersion: string | null
+  packageManager: OvenPackageManager
+  privilege: OvenPrivilege
+  git: OvenToolStatus
+  curl: OvenToolStatus
+  node: OvenToolStatus
+  npm: OvenToolStatus
+  harnesses: OvenHarnessPreflight[]
+  /** Set when the oven reports pending OS updates or a required reboot. Never acted on. */
+  osUpdateRequired: boolean
+  osUpdateDetail?: string
+  rebootRequired: boolean
+  durationMs: number
+}
+
+export interface OvenPreflightIssue {
+  code:
+    | 'unsupported-platform'
+    | 'unsupported-architecture'
+    | 'unknown-package-manager'
+    | 'missing-git'
+    | 'missing-curl'
+    | 'node-missing'
+    | 'node-too-old'
+    | 'npm-missing'
+    | 'harness-unsupported'
+    | 'harness-broken'
+    | 'os-update-pending'
+    | 'reboot-required'
+  message: string
+  /** Blocks setup outright rather than merely warning. */
+  blocking: boolean
+}
+
+/** The pure verdict computed from a preflight report. Never performs I/O. */
+export interface OvenPreflightAssessment {
+  ovenId: string
+  checkedAt: number
+  platform: NodeJS.Platform
+  architecture: string
+  osName: string
+  supported: boolean
+  /** Setup can mutate this oven once the user starts it. */
+  setupCapable: boolean
+  prerequisitesSatisfied: boolean
+  issues: OvenPreflightIssue[]
+  harnesses: OvenHarnessPreflight[]
+  packageManager: OvenPackageManager
+  privilege: OvenPrivilege
+  nodeVersion: string | null
+  osUpdateRequired: boolean
+  osUpdateDetail?: string
+  rebootRequired: boolean
+}
+
 export type OvenSetupStepStatus =
   | 'pending'
   | 'running'
@@ -197,6 +342,7 @@ export type OvenSetupStepStatus =
   | 'failed'
   | 'blocked'
   | 'interrupted'
+  | 'cancelled'
   | 'skipped'
 
 export interface OvenSetupStep {
@@ -230,31 +376,70 @@ export interface OvenSetupSelectedHarness {
   update?: boolean
 }
 
+/**
+ * Git identity as it is persisted. Raw key material never reaches an operation
+ * record: the IPC layer converts a submitted key and passphrase into vault
+ * references and only these references are stored, journaled, or sent back to
+ * the renderer.
+ */
+export interface OvenSetupGitConfiguration {
+  enabled: boolean
+  host: 'github' | 'any'
+  privateKeyRef?: string
+  passphraseRef?: string
+  /** Fingerprint of the installed public key, used to detect a changed identity. */
+  publicKeyFingerprint?: string
+  publicKey?: string
+}
+
+/** Everything an operation needs to resume, with no secret values. */
 export interface OvenSetupConfiguration {
   selectedHarnesses: OvenSetupSelectedHarness[]
   synchronizeAccounts: boolean
   synchronizeConfiguration: boolean
-  git: {
-    enabled: boolean
-    host: 'github' | 'any'
-    privateKey?: string
-    passphrase?: string
-  }
+  git: OvenSetupGitConfiguration
   packageUpgrades: boolean
 }
 
+/**
+ * Start request. The Git identity is accepted exactly once, in the submission,
+ * and the IPC layer converts it into vault references before the operation is
+ * created. Nothing downstream ever sees the raw value.
+ */
+export interface StartOvenSetupInput {
+  configuration: OvenSetupConfiguration
+  gitIdentity?: { privateKey: string; passphrase?: string }
+}
+
+export interface OvenSetupPreflightResult {
+  report: OvenPreflightReport
+  assessment: OvenPreflightAssessment
+}
+
 export interface OvenSetupProgressEvent {
+  /** Monotonic per operation so the renderer can resume from a cursor after a reload. */
+  sequence: number
   operationId: string
   ovenId: string
   status: OvenSetupOperationStatus
-  phase: 'preflight' | 'bootstrap' | 'prerequisites' | 'harnesses' | 'accounts' | 'git' | 'finalize'
+  phase: OvenSetupPhase
   steps: OvenSetupStep[]
   currentStepId?: string
   startedAt: number
   finishedAt?: number
   error?: string
+  /** Operator-facing status. Never contains prompts, spec text, or secrets. */
   message?: string
 }
+
+export type OvenSetupPhase =
+  | 'preflight'
+  | 'bootstrap'
+  | 'prerequisites'
+  | 'harnesses'
+  | 'accounts'
+  | 'git'
+  | 'finalize'
 
 export interface OvenSetupOperation {
   id: string

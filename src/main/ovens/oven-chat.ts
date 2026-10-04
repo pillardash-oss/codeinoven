@@ -1,4 +1,6 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import type {
   AgentEvent,
   AgentMessage,
@@ -13,6 +15,7 @@ import type {
 import { LOCAL_OVEN_ID } from '../../lib/ovens'
 import type { OvenAppearance } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
+import type { ProjectManager } from '../../lib/engines/project-manager'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { HarnessAccountRegistry } from '../providers/harness-account-registry'
 import { OvenRegistry } from './oven-registry'
@@ -35,6 +38,8 @@ import {
   mergeSessionMessages
 } from '../drivers/persistent-cli/persistent-cli-transcript'
 import { Logger } from '../system/logger'
+
+const execFileAsync = promisify(execFile)
 
 interface Binding {
   projectId: string
@@ -79,6 +84,7 @@ export class OvenChat {
     vault: SecretVault,
     private readonly threads: ThreadManager,
     private readonly accounts: HarnessAccountRegistry,
+    private readonly projects: ProjectManager,
     private readonly publish: (event: AgentEvent) => void
   ) {
     this.registry = new OvenRegistry(storage, vault)
@@ -106,6 +112,31 @@ export class OvenChat {
 
   private path(thread: Pick<Thread, 'projectId' | 'id'>): string {
     return `ovens/threads/${thread.projectId}/${thread.id}.json`
+  }
+
+  private scopeCheckoutRoot(thread: Thread, home: string): string {
+    const project = createHash('sha256').update(thread.projectId).digest('hex').slice(0, 20)
+    const scope = createHash('sha256')
+      .update(thread.scopeBucketId || 'default')
+      .digest('hex')
+      .slice(0, 20)
+    return `${home}/.config/pillardash/codeinoven-oven/scopes/${project}/${scope}`
+  }
+
+  private async githubOrigin(thread: Thread): Promise<string | null> {
+    const project = await this.projects.getProject(thread.projectId)
+    if (!project?.path) return null
+    try {
+      const { stdout } = await execFileAsync('git', ['-C', project.path, 'remote', 'get-url', 'origin'], {
+        timeout: 5_000,
+        maxBuffer: 16 * 1024
+      })
+      const value = stdout.trim()
+      const match = value.match(/^(?:git@github\.com:|https?:\/\/github\.com\/)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/iu)
+      return match ? `git@github.com:${match[1]}/${match[2]}.git` : null
+    } catch {
+      return null
+    }
   }
 
   private makeLive(binding: Binding): Live {
@@ -162,13 +193,14 @@ export class OvenChat {
       const ovenLabel = await this.nameFor(ovenId)
       const ovenAppearance = await this.appearanceFor(ovenId)
       const probe = await this.service.probe(ovenId)
-      const requestedRoot =
-        settings.ovenPath ||
-        `${probe.home}/.config/pillardash/codeinoven-oven/workspaces/${thread.id}`
-      const { root } = await this.service.workspace(ovenId, {
-        operation: 'ensure',
-        root: requestedRoot
-      })
+      const requestedRoot = settings.ovenPath || this.scopeCheckoutRoot(thread, probe.home)
+      const origin = settings.ovenPath ? null : await this.githubOrigin(thread)
+      const { root } = await this.service.workspace(
+        ovenId,
+        origin
+          ? { operation: 'clone', root: requestedRoot, url: origin }
+          : { operation: 'ensure', root: requestedRoot }
+      )
       await this.threads.updateSettings(thread.projectId, thread.id, {
         ...settings,
         ovenPath: root

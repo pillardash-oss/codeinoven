@@ -3,7 +3,7 @@
   import { Server, FolderOpen, Monitor } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { Thread, ThreadSettings } from '$shared/types'
-  import type { OvenState } from '$shared/ovens'
+import type { OvenProbe, OvenState } from '$shared/ovens'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
   import PickerMenuShell from '../shared/PickerMenuShell.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -20,6 +20,7 @@
   }
   let { thread, settings, busy, onSettingsChange }: Props = $props()
   let ovens = $state.raw<OvenState | null>(null)
+  let probes = $state<Record<string, OvenProbe>>({})
   let editor = $state(false)
   let workspace = $state(false)
   let selected = $state(LOCAL_OVEN_ID)
@@ -79,8 +80,21 @@
     try {
       ovens = await invoke('oven:state')
       editor = true
+      void loadHarnessBadges(ovens.ovens)
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'Could not load Ovens.'
+    }
+  }
+
+  async function loadHarnessBadges(entries: OvenState['ovens']): Promise<void> {
+    for (const oven of entries) {
+      if (oven.kind !== 'ssh' || probes[oven.id]) continue
+      try {
+        probes = { ...probes, [oven.id]: await invoke('oven:probe', oven.id) }
+      } catch {
+        // A disconnected oven simply has no current inventory badge.
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 80))
     }
   }
 
@@ -200,7 +214,14 @@
             <span class="shrink-0 text-[0.625rem] text-dimmed"
               >{oven.id === LOCAL_OVEN_ID ? 'Local' : 'SSH'}</span
             >
-            <span class="shrink-0 rounded bg-elevated px-1 py-0.5 text-[0.5rem] text-muted">harness</span>
+            {#if oven.kind === 'ssh' && probes[oven.id]}
+              <span class="flex shrink-0 items-center gap-1" aria-label="Installed harnesses">
+                {#each probes[oven.id].harnesses.filter((item) => item.path).slice(0, 3) as harness (harness.command)}
+                  <span class="rounded bg-elevated px-1 py-0.5 text-[0.625rem] text-muted">{harness.command}</span>
+                {/each}
+                {#if !probes[oven.id].harnesses.some((item) => item.path)}<span class="text-[0.625rem] text-dimmed">No harnesses</span>{/if}
+              </span>
+            {/if}
           </button>
         {/each}
         {#if !visibleOvens.length}<p class="px-2.5 py-2 text-xs text-dimmed">

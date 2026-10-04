@@ -9,9 +9,11 @@ import type {
   OvenTransferInput,
   OvenTransferReview,
   OvenSetupConfiguration,
+  OvenSetupPreflightResult,
   OvenSetupProgressEvent,
   OvenSetupOperation,
-  OvenHarnessInventoryItem
+  OvenHarnessInventoryItem,
+  StartOvenSetupInput
 } from '../ovens'
 import type { OvenConnectionStatus } from '../ovens'
 import type { Contract } from './contract-helpers'
@@ -37,10 +39,8 @@ export const invokeOvenContract = {
     [projectId: string, threadId: string, id: string, root?: string],
     Thread
   >,
-  'oven:setup:start': {} as Contract<
-    [id: string, configuration: OvenSetupConfiguration],
-    OvenSetupOperation
-  >,
+  'oven:setup:preflight': {} as Contract<[id: string], OvenSetupPreflightResult>,
+  'oven:setup:start': {} as Contract<[id: string, input: StartOvenSetupInput], OvenSetupOperation>,
   'oven:setup:status': {} as Contract<[id: string], OvenSetupOperation | null>,
   'oven:setup:progress': {} as Contract<
     [id: string, after?: number],
