@@ -69,7 +69,17 @@ export function registerOvenIpc(
   ipcMain.handle('oven:remove', (_event, raw: unknown) => registry.remove(ovenId(raw)))
   ipcMain.handle('oven:setDefault', (_event, raw: unknown) => registry.setDefault(ovenId(raw)))
   ipcMain.handle('oven:install', (_event, raw: unknown) => service.install(ovenId(raw)))
-  ipcMain.handle('oven:probe', (_event, raw: unknown) => service.probe(ovenId(raw)))
+  ipcMain.handle('oven:probe', async (_event, raw: unknown) => {
+    const id = ovenId(raw)
+    try {
+      return await service.probe(id)
+    } catch (error) {
+      // Deliver probe failures to the UI without Electron logging a rejected handler.
+      return {
+        ovenProbeError: error instanceof Error ? error.message : 'Could not probe this Oven.'
+      }
+    }
+  })
   ipcMain.handle('oven:runs', (_event, raw: unknown) => service.runs(ovenId(raw)))
   ipcMain.handle('oven:workspace', (_event, raw: unknown, input: unknown) => {
     if (!input || typeof input !== 'object' || JSON.stringify(input).length > 512 * 1024)
