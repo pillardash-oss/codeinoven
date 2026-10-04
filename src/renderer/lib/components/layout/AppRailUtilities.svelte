@@ -205,19 +205,19 @@
   />
 
   <AppRailButton
-    label="Utilities: Skills, MCP, Plugins"
-    icon={Plug}
-    shortcut={settingsShortcut}
-    onHover={preloadSettingsChunk}
-    onSelect={() => navigate('settings-utilities')}
-  />
-
-  <AppRailButton
     label="Task manager: running processes"
     icon={CpuIcon}
     shortcut={taskManagerShortcut}
     onHover={preloadTaskManagerChunk}
     onSelect={() => (taskManagerOpen = true)}
+  />
+
+  <AppRailButton
+    label="Utilities: Skills, MCP, Plugins"
+    icon={Plug}
+    shortcut={settingsShortcut}
+    onHover={preloadSettingsChunk}
+    onSelect={() => navigate('settings-utilities')}
   />
 
   <AppRailButton
