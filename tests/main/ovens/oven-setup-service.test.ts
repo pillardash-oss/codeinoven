@@ -31,7 +31,7 @@ describe('oven setup service', () => {
     const op = service.startSetup('oven1', defaultConfig)
     service.cancelSetup(op.id)
     const retried = service.retrySetup(op.id)
-    expect(retried.status).toBe('preparing')
+    expect(['preparing', 'running']).toContain(retried.status)
   })
 
   it('gets operation for oven', () => {

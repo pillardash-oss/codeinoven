@@ -12,6 +12,10 @@ export class OvenSetupService {
   private operations = new Map<string, OvenSetupOperation>()
 
   startSetup(ovenId: string, configuration: OvenSetupConfiguration): OvenSetupOperation {
+    const existing = this.getOperationForOven(ovenId)
+    if (existing && existing.status !== 'succeeded' && existing.status !== 'cancelled') {
+      return existing
+    }
     const id = randomUUID()
     const operation: OvenSetupOperation = {
       id,
@@ -24,6 +28,9 @@ export class OvenSetupService {
     }
     this.operations.set(id, operation)
     Logger.info('Starting oven setup', { ovenId, operationId: id })
+    // Mark as running after preparation
+    operation.status = 'running'
+    operation.updatedAt = Date.now()
     return operation
   }
 
@@ -33,7 +40,7 @@ export class OvenSetupService {
 
   getOperationForOven(ovenId: string): OvenSetupOperation | null {
     for (const op of this.operations.values()) {
-      if (op.ovenId === ovenId && op.status !== 'succeeded' && op.status !== 'cancelled') {
+      if (op.ovenId === ovenId && op.status !== 'succeeded' && op.status !== 'cancelled' && op.status !== 'failed') {
         return op
       }
     }
@@ -56,6 +63,31 @@ export class OvenSetupService {
     op.error = undefined
     op.finishedAt = undefined
     op.updatedAt = Date.now()
+    op.status = 'running'
+    op.updatedAt = Date.now()
+    return op
+  }
+
+  completeSetup(operationId: string): OvenSetupOperation {
+    const op = this.operations.get(operationId)
+    if (!op) throw new Error('Operation not found')
+    op.status = 'succeeded'
+    op.finishedAt = Date.now()
+    op.updatedAt = Date.now()
+    for (const step of op.steps) {
+      step.status = 'succeeded'
+      if (!step.finishedAt) step.finishedAt = Date.now()
+    }
+    return op
+  }
+
+  failSetup(operationId: string, error: string): OvenSetupOperation {
+    const op = this.operations.get(operationId)
+    if (!op) throw new Error('Operation not found')
+    op.status = 'failed'
+    op.error = error
+    op.finishedAt = Date.now()
+    op.updatedAt = Date.now()
     return op
   }
 
@@ -71,7 +103,9 @@ export class OvenSetupService {
     return steps.map(s => ({
       id: s.id,
       name: s.name,
-      status: 'pending' as OvenSetupStepStatus
+      status: 'pending' as OvenSetupStepStatus,
+      startedAt: undefined,
+      finishedAt: undefined
     }))
   }
 }
