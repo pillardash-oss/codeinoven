@@ -1,71 +1,56 @@
 <script lang="ts">
-  import { tick } from 'svelte'
-  import { fly } from 'svelte/transition'
-  import { cubicOut } from 'svelte/easing'
-  import { motionDuration } from '$lib/motion'
-  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import {
-    Plus,
-    SquarePen,
-    Bot,
-    BrainCircuit,
-    Bug,
-    Clock1,
-    Cloud,
-    FileDiff,
-    MonitorCog,
-    FolderTree,
-    GlobeCode,
-    Hammer,
-    History,
-    Info,
-    MessageCircleDashed,
-    SquareTerminal,
-    StickyNote,
-    TriangleAlert
-  } from '@lucide/svelte'
+  import { contentThreadFamily } from '$lib/content-view-threads'
+  import { scheduleDeferredWork } from '$lib/deferred-work'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
-  import SidebarSearchControl from './SidebarSearchControl.svelte'
-  import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
-  import ContextSidebar from '../layout/ContextSidebar.svelte'
-  import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
-  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
-  import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
-  import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
-  import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
-  import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
-  import { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
-  import { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
-  import { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
-  import WorkspaceSidebar from './WorkspaceSidebar.svelte'
-  import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
-  import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
-  import WorkspaceEditProjectModal from './WorkspaceEditProjectModal.svelte'
-  import WorkspaceFullscreenTerminal from './WorkspaceFullscreenTerminal.svelte'
-  import WorkspaceUnsavedChangesDialog from './WorkspaceUnsavedChangesDialog.svelte'
-  import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
-  import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
-  import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
-  import { groupRunsByRoutine, groupRunsByTask } from '../assistant/assistant-view'
-  import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
-  import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
+  import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
+  import { motionDuration } from '$lib/motion'
+  import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'
-  import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
-  import { scheduleDeferredWork } from '$lib/deferred-work'
-  import { projectActionsState } from '$lib/stores/project-actions.svelte'
-  import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
-  import { contentThreadFamily } from '$lib/content-view-threads'
-  import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
+  import { browserStore, loadBrowser, switcherBrowserTabs } from '$lib/stores/browser-access.svelte'
+  import { browserAddressFocus } from '$lib/stores/browser-address-focus'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { chatDraft } from '$lib/stores/chat-draft'
   import {
+    contextSidebarState,
+    type ContextSidebarTab,
+    type TemporaryChatContextTab
+  } from '$lib/stores/context-sidebar.svelte'
+  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
+  import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
+  import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { projectActionsState } from '$lib/stores/project-actions.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { providerStore } from '$lib/stores/providers.svelte'
+  import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
+  import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { scopeState, STAGE_ORDER } from '$lib/stores/scope.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
+  import {
     assistantEffectiveSettings,
-    threadSettings,
-    chatEffectiveSettings
+    chatEffectiveSettings,
+    threadSettings
   } from '$lib/stores/thread-settings.svelte'
+  import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
+  import {
+    findEmptyNewThread,
+    pinnedThreadSort,
+    threadSort,
+    threadStatusSort,
+    threadStatusSortKey,
+    threadVisitKey,
+    workspaceState
+  } from '$lib/stores/workspace.svelte'
+  import { logRendererError } from '$lib/system/renderer-logger'
   import {
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
@@ -73,68 +58,13 @@
     settingsForNewThread,
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
-  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
+  import { toPosixPath } from '$shared/paths'
   import {
     routinePrimaryModel,
     settingsWithRoutineModel,
     withDefaultRoutinePrimary
   } from '$shared/routine-agents'
-  import { providerStore } from '$lib/stores/providers.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { gitState } from '$lib/stores/git.svelte'
-  import {
-    contextSidebarState,
-    type ContextSidebarTab,
-    type TemporaryChatContextTab
-  } from '$lib/stores/context-sidebar.svelte'
-  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
-  import { browserAddressFocus } from '$lib/stores/browser-address-focus'
-  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
-  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
-  import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
-  import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
-  import { speechController } from '$lib/speech/speech-controller.svelte'
-  import { reportError } from '$lib/stores/app-errors.svelte'
-  import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
-  import { toPosixPath } from '$shared/paths'
-  import { toast } from 'svelte-sonner'
-  import { logRendererError } from '$lib/system/renderer-logger'
-  import {
-    threadSort,
-    pinnedThreadSort,
-    threadStatusSort,
-    threadStatusSortKey,
-    findEmptyNewThread,
-    threadVisitKey
-  } from '$lib/stores/workspace.svelte'
-  import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
-  import { browserStore, loadBrowser, switcherBrowserTabs } from '$lib/stores/browser-access.svelte'
-  import {
-    buildThreadSwitcherEntries,
-    type ThreadSwitcherEntry
-  } from '../threads/thread-switcher-entries'
-  import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
-  import { threadHasVisibleWork } from './workspace-thread-helpers'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
-  import { threadMessages } from '$lib/stores/thread-messages.svelte'
-  import { scopeState, STAGE_ORDER } from '$lib/stores/scope.svelte'
-  import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
-  import {
-    coordinatorHasActiveDelegates,
-    activeThreadRowId,
-    INBOX_PROJECT_ID,
-    DRAFT_CHAT_THREAD_ID,
-    ASSISTANT_SPACE_ID,
-    ASSISTANT_SETUP_TITLE,
-    DEFAULT_THREAD_TITLE,
-    DEFAULT_SCOPE_BUCKET_ID,
-    isThreadBusy,
-    isOrchestrationChildThread,
-    conversationScopeId,
-    threadTracksReadStatus,
-    usesThreadWorkspaceMount
-  } from '$shared/types'
   import type {
     AgentModelSelection,
     AgentPart,
@@ -146,6 +76,76 @@
     Thread,
     ThreadSettings
   } from '$shared/types'
+  import {
+    activeThreadRowId,
+    ASSISTANT_SETUP_TITLE,
+    ASSISTANT_SPACE_ID,
+    conversationScopeId,
+    coordinatorHasActiveDelegates,
+    DEFAULT_SCOPE_BUCKET_ID,
+    DEFAULT_THREAD_TITLE,
+    DRAFT_CHAT_THREAD_ID,
+    INBOX_PROJECT_ID,
+    isOrchestrationChildThread,
+    isThreadBusy,
+    threadTracksReadStatus,
+    usesThreadWorkspaceMount
+  } from '$shared/types'
+  import {
+    Bot,
+    BrainCircuit,
+    Bug,
+    Clock1,
+    Cloud,
+    Feather,
+    FileDiff,
+    FolderTree,
+    GlobeCode,
+    Hammer,
+    History,
+    Info,
+    MessageCircleDashed,
+    MonitorCog,
+    Plus,
+    SquarePen,
+    SquareTerminal,
+    TriangleAlert
+  } from '@lucide/svelte'
+  import { tick } from 'svelte'
+  import { toast } from 'svelte-sonner'
+  import { cubicOut } from 'svelte/easing'
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+  import { fly } from 'svelte/transition'
+  import { groupRunsByRoutine, groupRunsByTask } from '../assistant/assistant-view'
+  import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
+  import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
+  import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
+  import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
+  import ContextSidebar from '../layout/ContextSidebar.svelte'
+  import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
+  import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
+  import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
+  import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
+  import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
+  import {
+    buildThreadSwitcherEntries,
+    type ThreadSwitcherEntry
+  } from '../threads/thread-switcher-entries'
+  import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
+  import SidebarSearchControl from './SidebarSearchControl.svelte'
+  import { threadHasVisibleWork } from './workspace-thread-helpers'
+  import { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
+  import WorkspaceContextPanelContent from './WorkspaceContextPanelContent.svelte'
+  import WorkspaceConversationPane from './WorkspaceConversationPane.svelte'
+  import WorkspaceEditProjectModal from './WorkspaceEditProjectModal.svelte'
+  import WorkspaceFullscreenTerminal from './WorkspaceFullscreenTerminal.svelte'
+  import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
+  import { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
+  import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
+  import WorkspaceSidebar from './WorkspaceSidebar.svelte'
+  import { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
+  import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
+  import WorkspaceUnsavedChangesDialog from './WorkspaceUnsavedChangesDialog.svelte'
 
   interface Props {
     /** Which sidebar the shell shows   the main content stays mounted across modes. */
@@ -1165,8 +1165,8 @@
     const threadNote: ContextDockItem[] = [
       {
         id: 'note',
-        label: hasThreadNote ? 'Note available' : 'Add note',
-        icon: StickyNote,
+        label: hasThreadNote ? 'Thread Note available' : 'Add a thread note',
+        icon: Feather,
         active: dockKindActive('thread-note'),
         tone: hasThreadNote ? 'warning' : undefined,
         onSelect: () =>

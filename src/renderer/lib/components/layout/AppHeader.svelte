@@ -1,20 +1,23 @@
 <script lang="ts">
-  import { invoke } from '$lib/ipc.svelte'
-  import { toast } from 'svelte-sonner'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { gitState } from '$lib/stores/git.svelte'
-  import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
-  import { browserStore } from '$lib/stores/browser-access.svelte'
-  import { reportError } from '$lib/stores/app-errors.svelte'
-  import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
-  import { scopeState } from '$lib/stores/scope.svelte'
-  import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
-  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
+  import { invoke } from '$lib/ipc.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
+  import { browserStore } from '$lib/stores/browser-access.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { gatewayState } from '$lib/stores/gateway.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
+  import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
+  import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
+  import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
   import {
     Bell,
     ChevronLeft,
@@ -22,20 +25,17 @@
     FileText,
     Globe,
     Loader2,
-    NotebookPen,
-    Search
+    Search,
+    StickyNotes
   } from '@lucide/svelte'
-  import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
-  import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
-  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
-  import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
-  import type { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
-  import AppHeaderViewActions from './AppHeaderViewActions.svelte'
-  import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
+  import { toast } from 'svelte-sonner'
   import AppHeaderCenter from './AppHeaderCenter.svelte'
-  import AppHeaderThreadModals from './AppHeaderThreadModals.svelte'
   import AppHeaderEditorMenu from './AppHeaderEditorMenu.svelte'
   import AppHeaderGitChip from './AppHeaderGitChip.svelte'
+  import type { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
+  import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
+  import AppHeaderThreadModals from './AppHeaderThreadModals.svelte'
+  import AppHeaderViewActions from './AppHeaderViewActions.svelte'
 
   type View = MainView
 
@@ -397,7 +397,7 @@
       title={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
       onclick={() => void toggleStickyNotes()}
     >
-      <NotebookPen size={16} />
+      <StickyNotes size={16} />
     </button>
 
     <button
