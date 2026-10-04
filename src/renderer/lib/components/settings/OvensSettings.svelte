@@ -29,6 +29,7 @@
   import SettingsEntry from '../shared/SettingsEntry.svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import OvenSetupModal from './OvenSetupModal.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import type { CustomIcon } from '$shared/types'
@@ -64,6 +65,7 @@
   let showPassphrase = $state(false)
   let publicKey = $state('')
   let pendingRemoval = $state<Oven | null>(null)
+  let setupOpen = $state(false)
   const hasAppearance = $derived(
     Boolean(
       color !== (editing?.color ?? '#22c55e') ||
@@ -332,6 +334,13 @@
       onclick={() => openEditor()}
     >
       <Plus size={14} /> New Oven
+    </button>
+    <button
+      type="button"
+      class="flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs hover:bg-elevated"
+      onclick={() => (setupOpen = true)}
+    >
+      Setup
     </button>
   </div>
   {#if error}<p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
@@ -783,3 +792,5 @@
   <p>Remove {pendingRemoval?.name} and its saved credentials from this computer?</p>
   <p>Its remote files and service remain on the host. Remote runs will continue there.</p>
 </ConfirmDialog>
+
+<OvenSetupModal open={setupOpen} onClose={() => (setupOpen = false)} />

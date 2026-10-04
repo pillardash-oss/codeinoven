@@ -7,7 +7,11 @@ import type {
   OvenWorkspaceRequest,
   OvenWorkspaceResult,
   OvenTransferInput,
-  OvenTransferReview
+  OvenTransferReview,
+  OvenSetupConfiguration,
+  OvenSetupProgressEvent,
+  OvenSetupOperation,
+  OvenHarnessInventoryItem
 } from '../ovens'
 import type { OvenConnectionStatus } from '../ovens'
 import type { Contract } from './contract-helpers'
@@ -32,5 +36,19 @@ export const invokeOvenContract = {
   'oven:selectThread': {} as Contract<
     [projectId: string, threadId: string, id: string, root?: string],
     Thread
-  >
+  >,
+  'oven:setup:start': {} as Contract<
+    [id: string, configuration: OvenSetupConfiguration],
+    OvenSetupOperation
+  >,
+  'oven:setup:status': {} as Contract<[id: string], OvenSetupOperation | null>,
+  'oven:setup:progress': {} as Contract<
+    [id: string, after?: number],
+    { events: OvenSetupProgressEvent[]; hasMore: boolean }
+  >,
+  'oven:setup:cancel': {} as Contract<[id: string], OvenSetupOperation>,
+  'oven:setup:retry': {} as Contract<[id: string], OvenSetupOperation>,
+  'oven:harness:inventory': {} as Contract<[id: string], OvenHarnessInventoryItem[]>,
+  'oven:harness:update': {} as Contract<[id: string, harnessId: string], OvenHarnessInventoryItem>,
+  'oven:harness:uninstall': {} as Contract<[id: string, harnessId: string], OvenHarnessInventoryItem>
 }

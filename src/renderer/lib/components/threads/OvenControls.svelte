@@ -200,6 +200,7 @@
             <span class="shrink-0 text-[0.625rem] text-dimmed"
               >{oven.id === LOCAL_OVEN_ID ? 'Local' : 'SSH'}</span
             >
+            <span class="shrink-0 rounded bg-elevated px-1 py-0.5 text-[0.5rem] text-muted">harness</span>
           </button>
         {/each}
         {#if !visibleOvens.length}<p class="px-2.5 py-2 text-xs text-dimmed">

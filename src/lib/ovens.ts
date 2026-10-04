@@ -75,6 +75,19 @@ export interface OvenConnectionStatus {
   }
 }
 
+export interface OvenHarnessInventoryItem {
+  harnessId: string
+  command: string
+  executablePath: string | null
+  installedVersion: string | null
+  health: 'healthy' | 'missing' | 'broken' | 'unsupported' | 'unknown'
+  issueCategory?: 'not-installed' | 'broken-executable' | 'unsupported-platform' | 'timeout' | 'unknown'
+  updateAvailable: boolean
+  latestVersion?: string
+  checkedAt: number
+  cached?: boolean
+}
+
 export interface OvenProbe {
   protocolVersion: number
   serviceRevision: string
@@ -84,6 +97,7 @@ export interface OvenProbe {
   nodeVersion: string
   harnesses: { command: string; path: string | null }[]
   activeRuns: number
+  inventory?: OvenHarnessInventoryItem[]
 }
 
 export interface OvenRun {
@@ -174,6 +188,84 @@ export interface OvenTransferReview extends OvenTransferInput {
   files: number
   bytes: number
   expiresAt: number
+}
+
+export type OvenSetupStepStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'blocked'
+  | 'interrupted'
+  | 'skipped'
+
+export interface OvenSetupStep {
+  id: string
+  name: string
+  status: OvenSetupStepStatus
+  startedAt?: number
+  finishedAt?: number
+  durationMs?: number
+  error?: string
+  detail?: string
+  retryCount?: number
+  skippedReason?: string
+  requiresElevation?: boolean
+}
+
+export type OvenSetupOperationStatus =
+  | 'idle'
+  | 'preparing'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted'
+  | 'blocked'
+
+export interface OvenSetupSelectedHarness {
+  harnessId: string
+  accountId?: string
+  install?: boolean
+  update?: boolean
+}
+
+export interface OvenSetupConfiguration {
+  selectedHarnesses: OvenSetupSelectedHarness[]
+  synchronizeAccounts: boolean
+  synchronizeConfiguration: boolean
+  git: {
+    enabled: boolean
+    host: 'github' | 'any'
+    privateKey?: string
+    passphrase?: string
+  }
+  packageUpgrades: boolean
+}
+
+export interface OvenSetupProgressEvent {
+  operationId: string
+  ovenId: string
+  status: OvenSetupOperationStatus
+  phase: 'preflight' | 'bootstrap' | 'prerequisites' | 'harnesses' | 'accounts' | 'git' | 'finalize'
+  steps: OvenSetupStep[]
+  currentStepId?: string
+  startedAt: number
+  finishedAt?: number
+  error?: string
+  message?: string
+}
+
+export interface OvenSetupOperation {
+  id: string
+  ovenId: string
+  status: OvenSetupOperationStatus
+  configuration: OvenSetupConfiguration
+  steps: OvenSetupStep[]
+  startedAt: number
+  finishedAt?: number
+  error?: string
+  updatedAt: number
 }
 
 /** Accept the familiar SSH form without ever accepting arbitrary CLI options. */
