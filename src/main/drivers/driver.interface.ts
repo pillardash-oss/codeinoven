@@ -735,6 +735,7 @@ export interface HarnessDriver {
     bankedResets?: AgentBankedResets
     contextWindow?: number
     contextUsed?: number
+    reauthenticationRequired?: boolean
   } | null>
 
   /**

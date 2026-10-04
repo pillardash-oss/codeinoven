@@ -2105,6 +2105,7 @@ export class CodexDriver extends PersistentCliDriver {
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
     bankedResets?: AgentBankedResets
+    reauthenticationRequired?: boolean
   } | null> {
     let temporaryHost: CodexAppServerHost | null = null
     try {
@@ -2121,6 +2122,14 @@ export class CodexDriver extends PersistentCliDriver {
       return telemetry
     } catch (error) {
       Logger.dev('Codex on-demand account usage refresh unavailable:', error)
+      if (
+        error instanceof Error &&
+        /401 Unauthorized[\s\S]*token_expired|token_expired[\s\S]*401 Unauthorized/iu.test(
+          error.message
+        )
+      ) {
+        return { rateLimits: [], reauthenticationRequired: true }
+      }
       return null
     } finally {
       if (temporaryHost) {

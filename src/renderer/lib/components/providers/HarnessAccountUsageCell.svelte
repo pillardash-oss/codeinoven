@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { BatteryCharging, Loader2, RefreshCw } from '@lucide/svelte'
+  import { BatteryCharging, Loader2, LogIn, RefreshCw } from '@lucide/svelte'
+  import { invoke } from '$lib/ipc.svelte'
+  import type { ProviderAccountLoginHandoff } from '$shared/types'
+  import Modal from '../ui/Modal.svelte'
+  import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
   import { bankedResetSummary, creditsLabel, formatExpiry } from '$lib/format/usage'
   import { relativeTime } from '$lib/format/relative-time'
@@ -16,6 +20,9 @@
   const snapshot = $derived(harnessAccountUsageCache.snapshotFor(account.id))
   const probing = $derived(harnessAccountUsageCache.isProbing(account.id))
   const usage = $derived(snapshot?.usage ?? null)
+  const reauthenticationRequired = $derived(
+    snapshot?.reauthenticationRequired === true || usage?.reauthenticationRequired === true
+  )
   const bankedResets = $derived(bankedResetSummary(usage?.bankedResets))
   const credits = $derived(usage ? creditsLabel(usage) : undefined)
   /** Any provider-reported quota at all: rolling windows, credits, or resets. */
@@ -38,6 +45,50 @@
   const checkedAtTitle = $derived(
     `Last checked ${checkedAt}${snapshot?.error ? ` · ${snapshot.error}` : ''}`
   )
+  let loginOpen = $state(false)
+  let loginHandoff = $state<ProviderAccountLoginHandoff | null>(null)
+  let loginError = $state('')
+  let loginTerminalId = $state('')
+
+  async function beginSignIn(): Promise<void> {
+    loginError = ''
+    loginHandoff = null
+    loginTerminalId = `provider-login-${crypto.randomUUID()}`
+    loginOpen = true
+    try {
+      loginHandoff = await invoke('providerAccounts:beginLogin', account.harnessId, {
+        mode: 'default',
+        ...(account.providerId ? { providerId: account.providerId } : {}),
+        accountId: account.id
+      })
+    } catch (error) {
+      loginError = error instanceof Error ? error.message : 'Sign-in could not be started.'
+    }
+  }
+
+  async function finishSignIn(exitCode: number): Promise<void> {
+    loginHandoff = null
+    if (exitCode !== 0) {
+      loginError = `Sign-in exited with code ${exitCode}.`
+      return
+    }
+    try {
+      const status = await invoke(
+        'providerAccounts:getAuthStatus',
+        account.harnessId,
+        undefined,
+        account.id
+      )
+      if (status.state === 'unauthenticated') {
+        loginError = 'Sign-in was not completed for this account.'
+        return
+      }
+      loginOpen = false
+      harnessAccountUsageCache.schedule([account], { force: true })
+    } catch (error) {
+      loginError = error instanceof Error ? error.message : 'The sign-in could not be verified.'
+    }
+  }
 </script>
 
 <div class="space-y-1.5">
@@ -52,25 +103,40 @@
         <span class="truncate">{bankedResets}</span>
       </p>
     {/if}
-  {:else if failed}
+  {:else if failed || reauthenticationRequired}
     <div class="space-y-1">
-      <p class="text-[0.625rem] text-dimmed">Usage unavailable</p>
-      <button
-        type="button"
-        class="flex items-center gap-1 text-[0.625rem] font-medium text-primary hover:underline disabled:text-dimmed disabled:no-underline"
-        disabled={probing}
-        title={`Retry reading usage for ${account.label}`}
-        aria-label={`Retry reading usage for ${account.label}`}
-        onclick={() => harnessAccountUsageCache.schedule([account], { force: true })}
-      >
-        {#if probing}
-          <Loader2 size={10} class="animate-spin" aria-hidden="true" />
-          Retrying…
-        {:else}
-          <RefreshCw size={10} aria-hidden="true" />
-          Retry
-        {/if}
-      </button>
+      <p class="text-[0.625rem] text-dimmed">
+        {reauthenticationRequired ? 'Codex sign-in expired' : 'Usage unavailable'}
+      </p>
+      {#if reauthenticationRequired}
+        <button
+          type="button"
+          class="flex items-center gap-1 text-[0.625rem] font-medium text-primary hover:underline"
+          title={`Sign in again to ${account.label}`}
+          aria-label={`Sign in again to ${account.label}`}
+          onclick={() => void beginSignIn()}
+        >
+          <LogIn size={10} aria-hidden="true" />
+          Sign in again
+        </button>
+      {:else}
+        <button
+          type="button"
+          class="flex items-center gap-1 text-[0.625rem] font-medium text-primary hover:underline disabled:text-dimmed disabled:no-underline"
+          disabled={probing}
+          title={`Retry reading usage for ${account.label}`}
+          aria-label={`Retry reading usage for ${account.label}`}
+          onclick={() => harnessAccountUsageCache.schedule([account], { force: true })}
+        >
+          {#if probing}
+            <Loader2 size={10} class="animate-spin" aria-hidden="true" />
+            Retrying…
+          {:else}
+            <RefreshCw size={10} aria-hidden="true" />
+            Retry
+          {/if}
+        </button>
+      {/if}
     </div>
   {:else if usage}
     <p class="text-[0.625rem] text-dimmed">No quota reported</p>
@@ -94,3 +160,25 @@
     </p>
   {/if}
 </div>
+
+<Modal open={loginOpen} title={`Sign in to ${account.label}`} onClose={() => (loginOpen = false)}>
+  <div class="h-[28rem] overflow-hidden rounded-lg border border-border bg-app">
+    {#if loginHandoff}
+      <ProviderLoginTerminal
+        terminalId={loginTerminalId}
+        command={loginHandoff.command}
+        args={loginHandoff.args}
+        environment={loginHandoff.environment}
+        onExit={(exitCode) => void finishSignIn(exitCode)}
+      />
+    {:else if loginError}
+      <div class="flex h-full items-center justify-center p-6">
+        <p class="max-w-md text-center text-sm text-danger">{loginError}</p>
+      </div>
+    {:else}
+      <div class="flex h-full items-center justify-center text-sm text-muted">
+        Preparing sign-in…
+      </div>
+    {/if}
+  </div>
+</Modal>

@@ -4432,7 +4432,10 @@ export class ChatEngine {
                 : { contextWindow: nativeTelemetry.contextWindow }),
               ...(nativeTelemetry?.contextUsed === undefined
                 ? {}
-                : { contextUsed: nativeTelemetry.contextUsed })
+                : { contextUsed: nativeTelemetry.contextUsed }),
+              ...(nativeTelemetry?.reauthenticationRequired
+                ? { reauthenticationRequired: true }
+                : {})
             }
           : null
       if (
