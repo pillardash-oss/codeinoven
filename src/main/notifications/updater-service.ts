@@ -2,7 +2,13 @@ import electronUpdater from 'electron-updater'
 import { BrowserWindow, app } from 'electron'
 import os from 'node:os'
 import { Logger } from '../system/logger'
-import type { UpdaterStatus, UpdaterChangelog } from '../../lib/ipc-contract'
+import type {
+  CloseConfirmationProject,
+  UpdateBlockerTerminal,
+  UpdateBlockers,
+  UpdaterChangelog,
+  UpdaterStatus
+} from '../../lib/ipc-contract'
 import type { ReleaseChannel } from '../../lib/download-mirror'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -63,6 +69,20 @@ export interface SessionActivitySource {
    * (a terminal session) has nothing to reconcile and omits this.
    */
   reconcileUnverifiedWork?(): Promise<number>
+  /**
+   * Everything behind this source's count that is not a working thread, such as a
+   * live terminal session. Listed in the same force-install modal as the threads,
+   * because a restart takes both down and the user is being asked to approve
+   * exactly that.
+   */
+  describeOtherSessions?(): UpdateBlockerTerminal[]
+  /**
+   * Stop everything this source counts. Reached only from the force-install
+   * override the user explicitly confirms, so it may interrupt live work. Must be
+   * best-effort and never throw: one source failing to stop must not keep the
+   * others running.
+   */
+  terminateActiveWork?(): Promise<void>
 }
 
 interface PendingInstallState {
@@ -73,6 +93,8 @@ interface PendingInstallState {
 export class UpdaterService {
   private storage: StorageEngine
   private chatEngine: SessionActivitySource | null = null
+  /** How to name the working threads behind the engine's count, for the modal. */
+  private workingThreadReport: (() => CloseConfirmationProject[]) | undefined
   private activitySources: SessionActivitySource[] = []
   private timer: ReturnType<typeof setInterval> | null = null
   private _status: UpdaterStatus
@@ -224,8 +246,21 @@ export class UpdaterService {
     })
   }
 
-  setChatEngine(engine: SessionActivitySource | null): void {
+  /**
+   * Register the chat engine as the primary activity source, and with it how the
+   * working threads behind its count are named for the force-install modal.
+   *
+   * The engine knows how many sessions are working but not their titles or
+   * projects: those live in the database, which the engine has no business
+   * querying for an install prompt. `workingThreads` is therefore supplied by the
+   * bootstrap, sharing the one report the close gate already asks for.
+   */
+  setChatEngine(
+    engine: SessionActivitySource | null,
+    workingThreads?: () => CloseConfirmationProject[]
+  ): void {
     this.chatEngine = engine
+    this.workingThreadReport = engine ? workingThreads : undefined
   }
 
   /**
@@ -238,9 +273,82 @@ export class UpdaterService {
     this.updateQuitHooks = hooks
   }
 
-  /** Register an extra activity source (for example live terminal sessions). */
+  /**
+   * Register an extra activity source (for example live terminal sessions). */
   addActivitySource(source: SessionActivitySource): void {
     this.activitySources.push(source)
+  }
+
+  /**
+   * Describe everything standing between the app and the update it is waiting to
+   * install, for the force-install modal.
+   *
+   * `activeCount` comes from the gate itself, so the modal's wording is derived
+   * from the same number the rail is already showing. The lists come from each
+   * source's own detail and can trail it by a poll, which is why the count is
+   * sent separately rather than recomputed from the lists.
+   */
+  blockers(): UpdateBlockers {
+    const terminals: UpdateBlockerTerminal[] = []
+    for (const source of this.activitySources) {
+      try {
+        terminals.push(...(source.describeOtherSessions?.() ?? []))
+      } catch (error: unknown) {
+        Logger.error('Updater: failed to describe blocking activity', error)
+      }
+    }
+    let projects: CloseConfirmationProject[] = []
+    try {
+      projects = this.workingThreadReport?.() ?? []
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to describe working threads', error)
+    }
+    return {
+      version: this._status.availableVersion ?? '',
+      activeCount: this.activeSessionCount(),
+      projects,
+      terminals
+    }
+  }
+
+  /**
+   * Stop every activity source, then install without waiting for anything.
+   *
+   * The user's explicit override, reached only from the force-install modal and
+   * only while an install is actually being held back. Two things happen in this
+   * order on purpose. The work is stopped first, so the harness connections a
+   * turn holds open are terminated by the same path a forced close uses instead
+   * of being torn down mid-dispatch by the installer's exit; and the install then
+   * reuses {@link quitAndInstallNow}, so a forced install records its dispatch,
+   * clears the pending file and clears background mode's park gate exactly as an
+   * ungated one does.
+   *
+   * The guard is `installPending` rather than the reported state, because the
+   * state the modal is reached in is `waiting`   there is nothing to override
+   * once a pending install is gone, and the case that matters is a click that
+   * lands after the gate opened on its own, which is exactly what a cleared
+   * `installPending` catches.
+   *
+   * Nothing here is recoverable once the user has asked, so a source that fails
+   * to stop is reported and the install still proceeds: leaving the app open
+   * behind an update they already approved would be the worse outcome.
+   */
+  async forceInstall(): Promise<void> {
+    if (!this.installPending) return
+    // The override wins outright. Clearing the gate first means a poll already
+    // reconciling reads a cleared `installPending` when it resumes and never
+    // dispatches a second install behind this one.
+    this.installPending = false
+    this.clearDeferredInstall()
+    for (const source of [this.chatEngine, ...this.activitySources]) {
+      if (!source?.terminateActiveWork) continue
+      try {
+        await source.terminateActiveWork()
+      } catch (error: unknown) {
+        Logger.error('Updater: could not stop active work before installing', error)
+      }
+    }
+    this.quitAndInstallNow()
   }
 
   /**
@@ -757,6 +865,11 @@ export class UpdaterService {
     this.deferredInstallDeciding = true
     try {
       await this.reconcileUnverifiedWork()
+      // Reconciling awaits, and `installPending` can flip across that await: a
+      // stop, or the user's own force-install override clearing the gate. The
+      // decision below acts on it, so it is re-read here instead of trusted from
+      // before the await.
+      if (!this.installPending) return
 
       const activeCount = this.activeSessionCount()
       if (activeCount === 0) {

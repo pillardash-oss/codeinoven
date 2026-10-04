@@ -12,8 +12,13 @@
   } from '@lucide/svelte'
   import type { Component } from 'svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { preloadSettingsChunk, preloadTaskManagerChunk } from '$lib/page-preload'
+  import {
+    preloadSettingsChunk,
+    preloadTaskManagerChunk,
+    preloadUpdateBlockersChunk
+  } from '$lib/page-preload'
   import { updaterState } from '$lib/stores/updater.svelte'
+  import { updateBlockers } from '$lib/stores/update-blockers.svelte'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import AppRailButton from './AppRailButton.svelte'
 
@@ -26,6 +31,7 @@
   let { navigate, activeView }: Props = $props()
 
   let taskManagerOpen = $state(false)
+  let blockersModalOpen = $state(false)
 
   /** One shape for the update control's icon, label, tone and enabled state. */
   interface UpdateControl {
@@ -86,11 +92,14 @@
       case 'waiting':
         return {
           icon: Clock,
+          // Enabled, not disabled: waiting is not a dead end. The click opens
+          // the modal that names the work and offers the force install, which is
+          // the only escape when a session is stuck reporting itself as working.
           label: `Update waiting for ${updaterState.waitingForThreads} active thread${
             updaterState.waitingForThreads === 1 ? '' : 's'
-          } to finish`,
+          } to finish. Review and force install`,
           tone: 'accent',
-          disabled: true,
+          disabled: false,
           spin: false
         }
       case 'error':
@@ -123,7 +132,40 @@
       void updaterState.installUpdate()
       return
     }
+    if (status.canAutoUpdate && status.state === 'waiting') {
+      // Read the blockers first so the modal opens with the list already in it.
+      // Nothing is mounted until this resolves, so there is no empty frame.
+      void openBlockersModal()
+      return
+    }
     navigate('settings-about')
+  }
+
+  /**
+   * Warm whichever chunk this button's click will open.
+   *
+   * The button is one control with two destinations, so a fixed hover warmer
+   * would fetch Settings for a click that opens the modal instead. The state
+   * decides, read at hover time rather than captured, so the button warms the
+   * right chunk even when the gate opens while the mouse is already on it.
+   */
+  function onUpdateHover(): void {
+    if (updaterState.status.canAutoUpdate && updaterState.status.state === 'waiting') {
+      preloadUpdateBlockersChunk()
+      return
+    }
+    preloadSettingsChunk()
+  }
+
+  /**
+   * Load the blockers, then show the modal over whatever the user was doing.
+   *
+   * `prepare` decides whether there is anything to show, so a click that raced the
+   * gate opening on its own leaves the window alone instead of putting a
+   * destructive action on screen for work that has already finished.
+   */
+  async function openBlockersModal(): Promise<void> {
+    if (await updateBlockers.prepare()) blockersModalOpen = true
   }
 
   /**
@@ -157,7 +199,7 @@
     tone={updateControl.tone}
     disabled={updateControl.disabled}
     spin={updateControl.spin}
-    onHover={preloadSettingsChunk}
+    onHover={onUpdateHover}
     onSelect={onUpdateSelect}
   />
 
@@ -187,5 +229,20 @@
 {#if taskManagerOpen}
   {#await import('$lib/components/workspace/TaskManagerModal.svelte') then { default: TaskManagerModal }}
     <TaskManagerModal open={taskManagerOpen} onClose={() => (taskManagerOpen = false)} />
+  {/await}
+{/if}
+
+<!-- Same treatment as the task manager above: the force-install modal is reached
+     from one rail button, so it stays out of the first-paint chunk and mounts
+     only once the click has also loaded the list it renders. -->
+{#if blockersModalOpen}
+  {#await import('$lib/components/layout/UpdateBlockersModal.svelte') then { default: UpdateBlockersModal }}
+    <UpdateBlockersModal
+      payload={updateBlockers.payload}
+      onDismiss={() => {
+        blockersModalOpen = false
+        updateBlockers.close()
+      }}
+    />
   {/await}
 {/if}

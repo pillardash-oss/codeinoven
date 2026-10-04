@@ -21,6 +21,7 @@ import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { threadNotesState } from '$lib/stores/thread-notes.svelte'
 import { updaterState } from '$lib/stores/updater.svelte'
+import { updateBlockers } from '$lib/stores/update-blockers.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import {
   DEFAULT_THREAD_TITLE,
@@ -272,7 +273,10 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // the main process. Deferring `init` also defers its two push subscriptions;
   // both stores read the current status, so a push that lands in the gap is
   // recovered by that read rather than lost.
-  scheduleDeferredWork('updater:init', () => updaterState.init())
+  scheduleDeferredWork('updater:init', () => {
+    updaterState.init()
+    updateBlockers.init()
+  })
   scheduleDeferredWork('skillUpdates:init', () => skillUpdateState.init())
   // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
   // initialise the store here so the overlay's dynamic import can be gated on
@@ -297,6 +301,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeHistoryForward()
     unsubscribeOpenedPaths()
     updaterState.destroy()
+    updateBlockers.destroy()
     skillUpdateState.destroy()
   }
 }
