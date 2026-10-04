@@ -890,7 +890,8 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
     command: 'codex',
     statusArgs: ['login', 'status'],
     parseStatus: parseCodexStatus,
-    loginArgs: (options) => ['login', ...(options.mode === 'device' ? ['--device-auth'] : [])]
+    loginArgs: (options) => ['login', ...(options.mode === 'device' ? ['--device-auth'] : [])],
+    logoutArgs: () => ['logout']
   },
   {
     id: 'pi',
