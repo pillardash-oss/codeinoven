@@ -3260,6 +3260,29 @@ export class ChatEngine {
   }
 
   /**
+   * Stop the work behind this engine's session counts, for the force-install
+   * override the user explicitly confirms.
+   *
+   * Named apart from {@link terminateActiveConnections} because the two are
+   * reached from different promises: a forced close terminates the connections
+   * and then lets the shutdown pipeline finish disposing everything, whereas a
+   * forced install has no pipeline left to run, so anything holding a session
+   * open has to be let go here too. Without it, a harness turn the user just
+   * agreed to abandon would be torn down mid-dispatch by the installer's exit
+   * instead of by the same deliberate path a close uses.
+   *
+   * Best-effort and never throws: the caller installs regardless, and one
+   * uncooperative session must not keep the others alive.
+   */
+  async terminateActiveWork(): Promise<void> {
+    try {
+      await this.terminateActiveConnections()
+    } catch (error) {
+      Logger.error('Could not stop active sessions before a forced install', error)
+    }
+  }
+
+  /**
    * Reap harness processes orphaned by an unclean previous run (crash, force
    * quit, or the shutdown failsafe) before this session spawns any new servers.
    * Only kills processes the app owns   never a user's external harness.

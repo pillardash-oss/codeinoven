@@ -13,6 +13,7 @@ let settingsChunkPromise: Promise<unknown> | null = null
 let scopeChunkPromise: Promise<unknown> | null = null
 let browserChunkPromise: Promise<unknown> | null = null
 let taskManagerChunkPromise: Promise<unknown> | null = null
+let updateBlockersChunkPromise: Promise<unknown> | null = null
 
 /** Warm the SettingsView module chunk so opening Settings is instant. */
 export function preloadSettingsChunk(): void {
@@ -36,6 +37,22 @@ export function preloadTaskManagerChunk(): void {
   taskManagerChunkPromise ??= import('$lib/components/workspace/TaskManagerModal.svelte').catch(
     (error) => {
       taskManagerChunkPromise = null
+      throw error
+    }
+  )
+}
+
+/**
+ * Warm the force-install modal's module chunk so opening it is instant.
+ *
+ * Warmed instead of the Settings chunk while the install gate is holding an
+ * update: hovering the rail's update button in that state promises the modal,
+ * and Settings is the only thing the same click opens in every other state.
+ */
+export function preloadUpdateBlockersChunk(): void {
+  updateBlockersChunkPromise ??= import('$lib/components/layout/UpdateBlockersModal.svelte').catch(
+    (error) => {
+      updateBlockersChunkPromise = null
       throw error
     }
   )

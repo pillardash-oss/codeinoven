@@ -1,8 +1,8 @@
 <script lang="ts">
   import Modal from '$lib/components/ui/Modal.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
-  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
+  import WorkingThreadList from '$lib/components/shared/WorkingThreadList.svelte'
   import BrowserDownloadProgress from '$lib/components/browser/BrowserDownloadProgress.svelte'
   import {
     browserDownloadBytes,
@@ -10,12 +10,7 @@
     browserDownloadStateLabel,
     browserDownloadTone
   } from '$lib/components/browser/browser-download-format'
-  import type {
-    BrowserDownload,
-    CloseConfirmationPayload,
-    CloseConfirmationProject,
-    CloseConfirmationThread
-  } from '$shared/ipc-contract'
+  import type { BrowserDownload, CloseConfirmationPayload } from '$shared/ipc-contract'
   import type { Project } from '$shared/types'
 
   type CloseConfirmationFileProject = Pick<Project, 'id' | 'name' | 'path' | 'source' | 'host'>
@@ -36,15 +31,9 @@
 
   let { payload, projects, onDismiss, onConfirm, onConfirmSave = undefined }: Props = $props()
 
-  const VISIBLE_PROJECTS = 2
-  const VISIBLE_THREADS_PER_PROJECT = 3
   const VISIBLE_FILES = 6
   const VISIBLE_DOWNLOADS = 4
 
-  let visibleProjects = $derived((payload?.projects ?? []).slice(0, VISIBLE_PROJECTS))
-  let remainingProjectCount = $derived(
-    Math.max(0, (payload?.projects.length ?? 0) - VISIBLE_PROJECTS)
-  )
   let visibleFiles = $derived((payload?.files ?? []).slice(0, VISIBLE_FILES))
   let visibleFileGroups = $derived.by(() => {
     const groups: VisibleFileGroup[] = []
@@ -132,53 +121,13 @@
     const many = downloads.length > 1
     return `Closing ${many ? 'pauses them' : 'pauses it'} and keeps the bytes already downloaded. On a server that supports resuming, ${many ? 'they continue' : 'it continues'} where ${many ? 'they left' : 'it left'} off the next time you open the app.`
   })
-
-  function visibleThreads(project: CloseConfirmationProject): CloseConfirmationThread[] {
-    return project.threads.slice(0, VISIBLE_THREADS_PER_PROJECT)
-  }
 </script>
 
 <Modal open={payload !== null} title="Close application?" onClose={onDismiss}>
   {#if payload}
     <div class="space-y-4">
       {#if hasThreads}
-        <div class="space-y-2">
-          <p class="text-sm text-muted">These threads are still working:</p>
-          <ul class="space-y-2.5">
-            {#each visibleProjects as project (project.projectId)}
-              <li class="space-y-1">
-                <div class="flex items-center gap-2 text-sm text-foreground">
-                  <StatusBadge stage="working" animated size="sm" title="Working" />
-                  <span class="min-w-0 truncate font-medium">{project.projectName}</span>
-                  <span class="shrink-0 text-xs text-dimmed tabular-nums">
-                    {project.threadCount}
-                    {project.threadCount === 1 ? 'thread' : 'threads'}
-                  </span>
-                </div>
-                <ul class="space-y-0.5 border-l border-border pl-3">
-                  {#each visibleThreads(project) as thread (thread.threadId)}
-                    <li class="flex items-center gap-1.5 text-xs text-muted">
-                      <span class="shrink-0 uppercase tracking-wide text-dimmed">
-                        {thread.status === 'executing' ? 'Executing' : 'Planning'}
-                      </span>
-                      <span class="min-w-0 truncate" title={thread.title}>{thread.title}</span>
-                    </li>
-                  {/each}
-                  {#if project.threads.length > VISIBLE_THREADS_PER_PROJECT}
-                    <li class="pl-0 text-xs text-dimmed">
-                      +{project.threads.length - VISIBLE_THREADS_PER_PROJECT} more
-                    </li>
-                  {/if}
-                </ul>
-              </li>
-            {/each}
-            {#if remainingProjectCount > 0}
-              <li class="pl-4 text-sm text-muted">
-                +{remainingProjectCount} more {remainingProjectCount === 1 ? 'project' : 'projects'}
-              </li>
-            {/if}
-          </ul>
-        </div>
+        <WorkingThreadList projects={payload.projects} />
       {/if}
 
       {#if hasFiles}

@@ -624,8 +624,17 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     const isolatedHandle = this.resolveIsolatedSession(isolated)
     const turnHandle = isolatedHandle ? undefined : this.turnServers.get(sessionId)
     const handle = isolatedHandle ?? turnHandle ?? (await this.ensureServer(projectPath))
+    const readHistory = async (transport: ServerHandle): Promise<AgentMessage[]> => {
+      // A message collection can be empty even when its session no longer
+      // exists. Check the session itself so ChatEngine.ensureSession can
+      // replace a stale binding and replay the durable mirror before sending.
+      await transport.client.json(`/api/session/${encodeURIComponent(sessionId)}`, {
+        timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS
+      })
+      return this.fetchMessages(transport, sessionId)
+    }
     try {
-      return await this.fetchMessages(handle, sessionId)
+      return await readHistory(handle)
     } catch (error) {
       // Utility cleanup deliberately kills the per-turn server after the
       // canonical mirror finishes, which terminates any other read already in
@@ -635,7 +644,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
         throw error
       }
       const replacement = this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
-      return this.fetchMessages(replacement, sessionId)
+      return readHistory(replacement)
     }
   }
 

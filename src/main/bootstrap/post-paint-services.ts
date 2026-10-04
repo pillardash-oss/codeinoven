@@ -36,6 +36,7 @@ import {
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
+import { getActiveThreadProjects } from '../database/active-thread-report'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -666,7 +667,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // half of the thread's error card, which the icon mirrors.
     state.backgroundLifecycle?.requestAttentionRefresh()
   })
-  state.updaterService.setChatEngine(state.chatEngine)
+  // The engine counts the working sessions but cannot name them; the shared
+  // report is what the close gate lists too, so an install prompt and a quit
+  // prompt describe the same work the same way.
+  state.updaterService.setChatEngine(state.chatEngine, () => getActiveThreadProjects(database))
   // Reap any harness processes orphaned by an unclean previous run before the
   // first session can spawn fresh servers, so leftover dev servers/ports are
   // reclaimed without ever touching a harness the user runs outside the app.
@@ -788,7 +792,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // Optional IPC   registered only after the services exist.
     if (state.updaterService) {
       state.updaterService.addActivitySource({
-        activeSessionCount: () => state.ptyService?.activeSessionCount() ?? 0
+        activeSessionCount: () => state.ptyService?.activeSessionCount() ?? 0,
+        describeOtherSessions: () => state.ptyService?.describeSessions() ?? [],
+        terminateActiveWork: async () => {
+          state.ptyService?.closeAllSessions()
+        }
       })
     }
     state.ptyService.register()

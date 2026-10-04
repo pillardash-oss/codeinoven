@@ -5,6 +5,7 @@ import { homedir } from 'os'
 import { basename, isAbsolute, relative, resolve } from 'path'
 import * as pty from 'node-pty'
 import { APP_NAME } from '../../lib/brand'
+import type { UpdateBlockerTerminal } from '../../lib/ipc-contract'
 import { Logger } from './logger'
 import { dailyLogRelativePath, PTY_EVENTS_LOG_FILE } from './log-paths'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -737,5 +738,39 @@ export class PtyService {
   /** Number of live terminal sessions   any of which a forced restart would kill. */
   activeSessionCount(): number {
     return this.sessions.size
+  }
+
+  /**
+   * The live sessions, as the force-install modal lists them. Oldest first, so
+   * the row a user recognises as "the one I left running" is at the top.
+   *
+   * The shell is reduced to its own name because the stored value is an absolute
+   * path, and a row reading `/opt/homebrew/bin/fish` says less than `fish` does
+   * next to the directory it was opened in.
+   */
+  describeSessions(): UpdateBlockerTerminal[] {
+    return [...this.sessions.values()]
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((session) => ({
+        sessionId: session.id,
+        shell: basename(session.shell),
+        cwd: session.cwd
+      }))
+  }
+
+  /**
+   * Kill every live shell and forget the sessions, leaving the renderer binding
+   * and the idle watchdog alone.
+   *
+   * Deliberately distinct from {@link destroyAll}, which is the shutdown path and
+   * also drops the transport: this one is a UI action that stops work, so it must
+   * not have side effects beyond the shells the user was shown. Each shell is
+   * killed exactly as a normal close kills it, so it still gets the chance to
+   * exit cleanly on the hangup instead of being orphaned.
+   */
+  closeAllSessions(): void {
+    for (const id of [...this.sessions.keys()]) {
+      this.destroy(id)
+    }
   }
 }

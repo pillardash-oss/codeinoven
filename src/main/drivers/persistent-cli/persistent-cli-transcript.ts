@@ -1,5 +1,5 @@
 import type { AgentEvent, AgentMessage, SessionAgentEvent, ThinkingLevel } from '../../../lib/types'
-import { appendPartDelta } from '../../../lib/agent-part-merge'
+import { appendPartDelta, mergeStreamedPart } from '../../../lib/agent-part-merge'
 import { estimateTokenCostUsd } from '../../providers/pricing'
 import {
   isPermissionToolName,
@@ -56,7 +56,16 @@ export function mergeSessionMessages(
     // Replacing a message moves it only when its timestamp changed; a snapshot
     // that keeps its `createdAt` cannot leave the transcript unordered.
     if (session.messages[index]?.createdAt !== message.createdAt) orderDisturbed = true
-    session.messages[index] = message
+    // Completion snapshots can omit or truncate streamed reasoning channels.
+    // Keep the same protection used by the renderer and durable turn stream.
+    const existingParts = new Map(session.messages[index].parts.map((part) => [part.id, part]))
+    session.messages[index] = {
+      ...message,
+      parts: message.parts.map((part) => {
+        const existing = existingParts.get(part.id)
+        return existing ? mergeStreamedPart(existing, part) : part
+      })
+    }
   }
   if (orderDisturbed) {
     session.messages.sort((left, right) => left.createdAt - right.createdAt)
@@ -94,7 +103,7 @@ export function foldEventIntoMessages(messages: AgentMessage[], event: AgentEven
     if (!message) return
     const index = message.parts.findLastIndex((part) => part.id === event.part.id)
     if (index === -1) message.parts.push(event.part)
-    else message.parts[index] = event.part
+    else message.parts[index] = mergeStreamedPart(message.parts[index], event.part)
     return
   }
   if (event.type === 'message.part.delta') {

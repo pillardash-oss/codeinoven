@@ -149,6 +149,17 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **A waiting update is now something you can act on.** The rail's update control used to
+  go dead the moment a downloaded update hit the install gate, showing "Update waiting for
+  N active threads to finish" with no way to respond, so a thread the app still believed
+  was working could hold an update off indefinitely. Clicking it now opens a confirmation
+  that names what is actually in the way — the working threads grouped by project, and any
+  live terminals — in the same shape the close-while-working prompt uses, with a
+  **Stop work & install** action that stops all of it and installs. The Settings update
+  panel offers the same **Review…** entry point. The gate's patience is unchanged: nothing
+  is stopped and no timeout applies unless the user asks, and the status behind it is only
+  ever settled by the thread's own harness reporting itself idle, never by a timer.
+
 - A capability installed without explicit harness targeting now applies to every harness,
   present and future. A missing `harnessBindings` used to normalize to an empty list, which
   `resolve` reads as "no harness", so the setup contract had to make the agent enumerate

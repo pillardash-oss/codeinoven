@@ -16,5 +16,9 @@ export function registerUpdaterHandlers(ctx: IpcHandlerContext): void {
     ipcMain.handle('updater:download', () => updaterService.downloadUpdate())
 
     ipcMain.handle('updater:install', () => updaterService.quitAndInstall())
+
+    ipcMain.handle('updater:blockers', () => updaterService.blockers())
+
+    ipcMain.handle('updater:forceInstall', () => updaterService.forceInstall())
   }
 }

@@ -14,6 +14,7 @@
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
+  import { updateBlockers } from '$lib/stores/update-blockers.svelte'
   import { APP_NAME, APP_SLUG, GITHUB_URL, ORG_SLUG, WEBSITE_URL, X_URL } from '$shared/brand'
   import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import {
@@ -55,6 +56,7 @@
   import ProvidersView from '../providers/ProvidersView.svelte'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
   import Modal from '../ui/Modal.svelte'
+  import UpdateBlockersModal from '../layout/UpdateBlockersModal.svelte'
   import Switch from '../ui/Switch.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
@@ -108,6 +110,7 @@
   let notificationTestFailed = $state(false)
   let notificationPermission = $state<SystemNotificationPermissionStatus | null>(null)
   let nightlyModalOpen = $state(false)
+  let blockersModalOpen = $state(false)
   let channelBusy = $state(false)
 
   type UtilitiesRoute =
@@ -506,6 +509,17 @@
     const base = updaterState.status.currentVersion ?? '0.1.0'
     return base.includes('nightly') ? base : isNightlyChannel ? `${base}-nightly` : base
   })
+
+  /**
+   * Load the blockers, then show the modal over the settings page.
+   *
+   * Same contract as the rail's entry point: the read decides whether there is
+   * anything to show, so a click that raced the gate opening on its own does not
+   * put a destructive action on screen for work that has already finished.
+   */
+  async function openUpdateBlockersModal(): Promise<void> {
+    if (await updateBlockers.prepare()) blockersModalOpen = true
+  }
 
   /** Toggle ON opens the confirmation modal; only a confirmed choice persists. */
   function onNightlyToggleRequested(enabled: boolean): void {
@@ -1358,13 +1372,21 @@
             {/if}
           {:else if updaterState.status.state === 'waiting'}
             <div class="mb-3 flex items-center gap-2 text-xs text-accent">
-              <Clock size={13} />
+              <Clock size={13} class="shrink-0" />
               <span>
                 Waiting for {updaterState.waitingForThreads} active thread{updaterState.waitingForThreads !==
                 1
                   ? 's'
                   : ''} to finish before installing…
               </span>
+              <button
+                type="button"
+                class="shrink-0 whitespace-nowrap rounded border border-accent/40 px-2 py-1 font-medium text-accent transition-colors hover:bg-accent/10"
+                title="Show what the update is waiting on, and offer to stop it and install now"
+                onclick={openUpdateBlockersModal}
+              >
+                Review…
+              </button>
             </div>
           {:else if updaterState.status.state === 'error'}
             <div class="mb-3 flex items-center gap-2 text-xs text-danger">
@@ -1561,6 +1583,16 @@
     headerIcon={Search}
     onSelect={handleSettingsSearch}
     onClose={() => (settingsUiState.searchOpen = false)}
+  />
+{/if}
+
+{#if blockersModalOpen}
+  <UpdateBlockersModal
+    payload={updateBlockers.payload}
+    onDismiss={() => {
+      blockersModalOpen = false
+      updateBlockers.close()
+    }}
   />
 {/if}
 
