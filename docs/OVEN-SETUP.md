@@ -6,7 +6,7 @@ Oven setup prepares an SSH Oven for CodeInOven runs. It does not perform full se
 
 1. Add and test the SSH Oven in Settings → Ovens.
 2. Open **Setup**. The app reads the OS, architecture, package manager, privilege, Git, curl, Node.js, npm, reboot state, and installed harness inventory without changing the host.
-3. Choose harnesses and optional account, configuration, and GitHub identity settings.
+3. Choose harnesses and optional GitHub identity settings. Saved accounts and portable configuration for selected harnesses synchronize automatically. Choose the account to use when sending a message.
 4. Select **Start setup** to authorize package upgrades and the selected installs. Package registry refresh and package upgrades run before Node bootstrap. OS release upgrades and reboots are never automatic.
 5. Follow progress in the docked setup panel. Failed steps include their error. Retry rechecks completed steps and resumes work that still needs attention.
 
@@ -14,7 +14,7 @@ Package updates use the detected package manager: apt, dnf, yum, pacman, Homebre
 
 ## Accounts and GitHub
 
-Account credentials are stored in the local encrypted vault. Setup sends selected credentials over the authenticated SSH connection and writes them into the Oven account directory with owner-only permissions. Optional portable settings are copied separately from credentials. Transcripts, caches, and local account homes are not copied.
+Account credentials are stored in the local encrypted vault. Setup sends selected credentials over the authenticated SSH connection and writes them into the Oven account directory with owner-only permissions. Portable settings are copied automatically alongside saved accounts for the selected harnesses. Transcripts, caches, and local account homes are not copied.
 
 Git setup uses a dedicated key for the Oven, separate from the SSH key used to log in. The private key travels from the encrypted vault through SSH input, never through command arguments or progress records. Use an unencrypted dedicated key, or load an encrypted key into the Oven's own `ssh-agent` before setup. CodeInOven does not send key passphrases to the Oven. The Oven writes the key under its own `.ssh` directory with restrictive permissions. GitHub verification requires strict host-key checking. If `github.com` is not in the Oven's `known_hosts`, compare its fingerprint with the published values shown by CodeInOven and add it on the Oven before retrying. CodeInOven does not accept a host key automatically.
 

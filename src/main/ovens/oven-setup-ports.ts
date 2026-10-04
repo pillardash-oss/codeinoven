@@ -1,4 +1,4 @@
-import type { OvenPreflightReport, OvenSetupGitConfiguration, OvenSetupSelectedHarness } from '../../lib/ovens'
+import type { OvenPreflightReport, OvenSetupGitConfiguration } from '../../lib/ovens'
 import { collectPreflight } from './oven-setup-bootstrap'
 import { OvenGitIdentityService } from './oven-git-identity'
 import { syncOvenAccount } from './oven-accounts'
@@ -35,7 +35,11 @@ export function createOvenSetupPorts(dependencies: OvenSetupPortDependencies): O
     gitIdentity,
     ssh: dependencies.service.ssh,
     waitForHarnessIdle: async (ovenId, command) => {
-      while ((await dependencies.service.runs(ovenId)).some((run) => run.command === command && run.status === 'running'))
+      while (
+        (await dependencies.service.runs(ovenId)).some(
+          (run) => run.command === command && run.status === 'running'
+        )
+      )
         await new Promise((resolve) => setTimeout(resolve, 1_000))
     },
     preflight: async (ovenId) => {
@@ -48,21 +52,12 @@ export function createOvenSetupPorts(dependencies: OvenSetupPortDependencies): O
     },
     syncAccounts: async (ovenId, selections, synchronizeConfiguration) => {
       const issues: string[] = []
-      const unique = new Map<string, OvenSetupSelectedHarness>()
-      for (const selection of selections) {
-        if (!selection.accountId) continue
-        unique.set(selection.accountId, selection)
-      }
-      if (unique.size === 0) return issues
-      // Accounts are copied one at a time. The account registry read is cheap,
-      // but the upload is not, and the transport already serializes per oven.
+      const harnessIds = new Set(selections.map((selection) => selection.harnessId))
+      if (harnessIds.size === 0) return issues
+      // Copy accounts sequentially into their isolated remote account directories.
       const accounts = await dependencies.accounts.list()
-      for (const [accountId, selection] of unique) {
-        const account = accounts.find((entry) => entry.id === accountId)
-        if (!account) {
-          issues.push(`The selected account for ${selection.harnessId} no longer exists on this computer.`)
-          continue
-        }
+      for (const account of accounts) {
+        if (!harnessIds.has(account.harnessId)) continue
         try {
           await syncOvenAccount(
             dependencies.service,
@@ -75,10 +70,10 @@ export function createOvenSetupPorts(dependencies: OvenSetupPortDependencies): O
           const message = error instanceof Error ? error.message : String(error)
           Logger.error('Could not synchronize an account into the oven', {
             ovenId,
-            harnessId: selection.harnessId,
+            harnessId: account.harnessId,
             error: message
           })
-          issues.push(`Could not copy the ${selection.harnessId} account into the Oven: ${message}`)
+          issues.push(`Could not copy the ${account.harnessId} account into the Oven: ${message}`)
         }
       }
       return issues
@@ -87,7 +82,8 @@ export function createOvenSetupPorts(dependencies: OvenSetupPortDependencies): O
       if (!configuration.enabled) return []
       if (!configuration.privateKeyRef && !configuration.publicKey)
         return ['Paste a dedicated SSH private key before Git setup can run.']
-      const report = reports.get(ovenId) ?? (await collectPreflight(dependencies.service.ssh, ovenId))
+      const report =
+        reports.get(ovenId) ?? (await collectPreflight(dependencies.service.ssh, ovenId))
       reports.set(ovenId, report)
       return gitIdentity.configure(ovenId, configuration, report)
     }

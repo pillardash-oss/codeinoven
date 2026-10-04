@@ -376,7 +376,7 @@ export class OvenSetupService {
         if (step) step.detail = 'Copying selected accounts and portable configuration into the oven.'
         const issues = await this.ports.syncAccounts(
           ovenId,
-          operation.configuration.selectedHarnesses.filter((entry) => entry.accountId),
+          operation.configuration.selectedHarnesses,
           operation.configuration.synchronizeConfiguration
         )
         if (issues.length > 0) throw new Error(issues[0])

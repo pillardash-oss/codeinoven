@@ -15,7 +15,6 @@
     type OvenSetupProgressEvent,
     type OvenSetupPreflightResult
   } from '$shared/ovens'
-  import type { HarnessAccount } from '$shared/types'
   import { remoteOvensForSetup } from '$shared/oven-setup-policy'
 
   interface Props {
@@ -33,11 +32,7 @@
   let startBusy = $state(false)
   let error = $state('')
   let selectedHarnesses = $state<string[]>([])
-  let accountOptions = $state<Record<string, HarnessAccount[]>>({})
-  let selectedAccounts = $state<Record<string, string>>({})
   let packageUpgrades = $state(true)
-  let synchronizeAccounts = $state(false)
-  let synchronizeConfiguration = $state(false)
   let gitEnabled = $state(false)
   let privateKey = $state('')
   let showPrivateKey = $state(false)
@@ -49,11 +44,6 @@
   const selectedOven = $derived(ovens.find((oven) => oven.id === ovenId))
   const blockers = $derived(preflight?.assessment.issues.filter((issue) => issue.blocking) ?? [])
   const active = $derived(Boolean(operation && ['running', 'preparing'].includes(operation.status)))
-  const accountsReady = $derived(
-    !(synchronizeAccounts || synchronizeConfiguration) ||
-      selectedHarnesses.every((harnessId) => Boolean(selectedAccounts[harnessId]))
-  )
-
   const harnessOptions = $derived(
     OVEN_HARNESS_COMMANDS.flatMap((command) => {
       const id = ovenHarnessIdForCommand(command)
@@ -66,8 +56,6 @@
   function toggleAllHarnesses(): void {
     const enabled = !harnessOptions.every((option) => selectedHarnesses.includes(option.id))
     selectedHarnesses = enabled ? harnessOptions.map((option) => option.id) : []
-    if (enabled && (synchronizeAccounts || synchronizeConfiguration))
-      void loadSelectedAccountOptions()
   }
 
   async function readPreflight(id: string): Promise<void> {
@@ -108,11 +96,10 @@
     const configuration: OvenSetupConfiguration = {
       selectedHarnesses: selectedHarnesses.map((harnessId) => ({
         harnessId,
-        install: true,
-        ...(selectedAccounts[harnessId] ? { accountId: selectedAccounts[harnessId] } : {})
+        install: true
       })),
-      synchronizeAccounts,
-      synchronizeConfiguration,
+      synchronizeAccounts: true,
+      synchronizeConfiguration: true,
       git: { enabled: gitEnabled, host: 'github' },
       packageUpgrades
     }
@@ -182,24 +169,6 @@
     selectedHarnesses = enabled
       ? [...new Set([...selectedHarnesses, harnessId])]
       : selectedHarnesses.filter((value) => value !== harnessId)
-    if (enabled && (synchronizeAccounts || synchronizeConfiguration))
-      void loadAccountOptions(harnessId)
-  }
-
-  async function loadAccountOptions(harnessId: string): Promise<void> {
-    try {
-      const accounts = await invoke('providerAccounts:list', harnessId)
-      accountOptions = { ...accountOptions, [harnessId]: accounts }
-      const preferred = accounts.find((account) => account.isDefault) ?? accounts[0]
-      if (preferred && !selectedAccounts[harnessId])
-        selectedAccounts = { ...selectedAccounts, [harnessId]: preferred.id }
-    } catch (cause) {
-      error = message(cause)
-    }
-  }
-
-  async function loadSelectedAccountOptions(): Promise<void> {
-    for (const harnessId of selectedHarnesses) await loadAccountOptions(harnessId)
   }
 
   function closeProgress(): void {
@@ -290,43 +259,6 @@
           title="Upgrade package registry and packages"
           label="Upgrade package registry and packages"
         />
-        <Switch
-          checked={synchronizeAccounts}
-          onchange={(checked) => {
-            synchronizeAccounts = checked
-            if (checked) void loadSelectedAccountOptions()
-          }}
-          aria-label="Synchronize selected harness accounts"
-          title="Synchronize selected harness accounts"
-          label="Synchronize selected harness accounts"
-        />
-        <Switch
-          checked={synchronizeConfiguration}
-          onchange={(checked) => {
-            synchronizeConfiguration = checked
-            if (checked) void loadSelectedAccountOptions()
-          }}
-          aria-label="Synchronize portable app configuration"
-          title="Synchronize portable app configuration"
-          label="Synchronize portable app configuration"
-        />
-        {#if synchronizeAccounts || synchronizeConfiguration}
-          {#each selectedHarnesses as harnessId (harnessId)}
-            <label class="block space-y-1 text-xs text-muted">
-              <span>{harnessId} account</span>
-              <select
-                class="w-full rounded-lg border bg-elevated px-3 py-2 text-foreground"
-                bind:value={selectedAccounts[harnessId]}
-              >
-                {#each accountOptions[harnessId] ?? [] as account (account.id)}<option
-                    value={account.id}>{account.label} · {account.providerName}</option
-                  >{/each}
-                {#if !accountOptions[harnessId]?.length}<option value="">No saved account</option
-                  >{/if}
-              </select>
-            </label>
-          {/each}
-        {/if}
       </section>
 
       <section class="space-y-3 rounded-lg border p-3">
@@ -381,7 +313,6 @@
           preflightBusy ||
           blockers.length > 0 ||
           (packageUpgrades && !preflight.assessment.setupCapable) ||
-          !accountsReady ||
           startBusy ||
           (gitEnabled && !privateKey.trim())}
         onclick={() => void start()}
