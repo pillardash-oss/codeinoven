@@ -79,23 +79,48 @@ export class OvenHarnessService {
     if (this.autoUpdateRunning) return
     this.autoUpdateRunning = true
     try {
-      const preferences = await this.storage.read<Record<string, boolean>>('harness-auto-update.json')
+      const preferences = await this.storage.read<Record<string, boolean>>(
+        'harness-auto-update.json'
+      )
       if (!preferences || !Object.values(preferences).some(Boolean)) return
       const state = await this.service.registry.state()
       for (const oven of state.ovens) {
         if (oven.kind !== 'ssh') continue
+        let inventory: OvenHarnessInventoryItem[]
+        try {
+          inventory = await this.getInventory(oven.id)
+        } catch (error) {
+          Logger.info('Remote oven auto-updates were skipped', {
+            ovenId: oven.id,
+            reason: error instanceof Error ? error.message : String(error)
+          })
+          continue
+        }
         for (const [harnessId, enabled] of Object.entries(preferences)) {
           if (!enabled) continue
           try {
-            const item = this.requireRow(await this.getInventory(oven.id), harnessId)
+            const item = this.requireRow(inventory, harnessId)
             if (item.health === 'healthy' && item.updateAvailable)
               await this.updateHarness(oven.id, harnessId)
           } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error)
             Logger.info('Remote harness auto-update was skipped', {
               ovenId: oven.id,
               harnessId,
-              reason: error instanceof Error ? error.message : String(error)
+              reason
             })
+            // SSH uses exit 255 for connection failures; ordinary remote command
+            // failures retain their own exit code and do not stop other harnesses.
+            if (
+              /^SSH connection failed \((?:255|disconnected)\)/u.test(reason) ||
+              reason === 'The Oven did not respond before the connection timeout.'
+            ) {
+              this.inventories.delete(oven.id)
+              Logger.info('Remaining auto-updates were skipped because the Oven is unavailable', {
+                ovenId: oven.id
+              })
+              break
+            }
           }
         }
       }
