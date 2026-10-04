@@ -77,6 +77,25 @@ export interface CloudDeploymentContainer {
 }
 
 /**
+ * One container another CodeInOven project already monitors through a provider
+ * kind.
+ *
+ * A provider account sees every container it hosts, across all of the
+ * provider's own projects, so the add-container picker has no inherent way to
+ * tell which CodeInOven project a container belongs to. Ownership is resolved
+ * from the per-project container mappings instead, so a project claims a
+ * container knowingly rather than by picking it out of a shared list.
+ */
+export interface CloudDeploymentContainerOwner {
+  /** Provider-side container id, as the mappings store it. */
+  containerId: string
+  /** The CodeInOven project that already monitors this container. */
+  projectId: string
+  /** That project's display name, resolved so the picker can name it. */
+  projectName: string
+}
+
+/**
  * A cloud deployment provider account in the global registry. Accounts are
  * created once, labelled by the user, and can be attached to any project.
  * They are NOT scoped to a project: the same account (e.g. one Coolify

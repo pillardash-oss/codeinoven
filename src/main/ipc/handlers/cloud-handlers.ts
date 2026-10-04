@@ -47,6 +47,7 @@ import type {
   AgentMessage,
   CloudDeploymentConfig,
   CloudDeploymentContainer,
+  CloudDeploymentContainerOwner,
   CloudDeploymentProjectProviderAccounts,
   CloudDeploymentProviderAccount,
   CloudDeploymentProviderKind,
@@ -70,6 +71,13 @@ import type { DeploymentProviderContext } from '../../providers/deployment-provi
 import type { IpcHandlerContext } from './context'
 
 const CLOUD_DEPLOYMENT_PROVIDER_KINDS = new Set<string>(CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES)
+
+/**
+ * How many project configs the container-ownership scan reads at once. Bounded
+ * so a workspace with many projects does not open one file handle per project
+ * in a single tick on the main thread.
+ */
+const OWNERSHIP_SCAN_BATCH = 8
 const CLOUD_DEPLOYMENT_STATUSES = new Set<string>(['building', 'success', 'failed', 'unknown'])
 const CLOUD_DEPLOYMENT_MAX_TOKEN_LENGTH = 16_384
 
@@ -574,15 +582,74 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     storage.getCloudDeploymentConfig(validateEntityId(projectId, 'Project ID'))
   )
 
+  /**
+   * Drop account references that no longer exist in the global registry.
+   *
+   * A config written before the pruning existed (or edited outside the app) can
+   * still point at a deleted account, which leaves the project resolving
+   * through a credential that is gone. Removing the dangling id, and falling
+   * back to a surviving attached account (or none), makes the project resolve
+   * again; the container mappings are deliberately kept so a reconnect brings
+   * the project's containers straight back instead of losing them.
+   */
+  const pruneDeadAccountReferences = async (
+    projectId: string,
+    config: CloudDeploymentConfig
+  ): Promise<CloudDeploymentConfig> => {
+    const associations = config.project.providerAccounts
+    if (!associations) return config
+    const registry = await storage.getCloudDeploymentAccounts()
+    const knownAccountIds = new Set(registry.accounts.map((account) => account.id))
+    let changed = false
+    const next: CloudDeploymentConfig['project']['providerAccounts'] = {}
+    for (const [kind, association] of Object.entries(associations)) {
+      if (!association) continue
+      const attachedAccountIds = association.attachedAccountIds.filter((id) =>
+        knownAccountIds.has(id)
+      )
+      if (attachedAccountIds.length === association.attachedAccountIds.length) {
+        next[kind as CloudDeploymentProviderKind] = association
+        continue
+      }
+      changed = true
+      next[kind as CloudDeploymentProviderKind] = {
+        attachedAccountIds,
+        activeAccountId:
+          association.activeAccountId !== null &&
+          attachedAccountIds.includes(association.activeAccountId)
+            ? association.activeAccountId
+            : (attachedAccountIds[0] ?? null)
+      }
+    }
+    if (!changed) return config
+    Logger.dev('Pruned deleted cloud deployment account references', {
+      projectId,
+      updatedAt: config.updatedAt
+    })
+    return {
+      ...config,
+      project: { ...config.project, providerAccounts: next }
+    }
+  }
+
+  /** Persist a project's config after pruning dead account references. */
+  const persistCloudDeploymentConfig = async (
+    projectId: string,
+    config: CloudDeploymentConfig
+  ): Promise<CloudDeploymentConfig> => {
+    const pruned = await pruneDeadAccountReferences(projectId, config)
+    await storage.saveCloudDeploymentConfig(projectId, pruned)
+    await syncCloudDeploymentsFlag(projectId)
+    return pruned
+  }
+
   ipcMain.handle('cloudDeploy:saveConfig', async (_, projectId: unknown, rawConfig: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const safeConfig = validateCloudDeploymentConfig(rawConfig, safeProjectId)
     // Accounts live in the global registry; saveConfig only persists the
     // project's provider/container selection and account association. It can
     // never create or mutate account/credential state.
-    await storage.saveCloudDeploymentConfig(safeProjectId, safeConfig)
-    await syncCloudDeploymentsFlag(safeProjectId)
-    return safeConfig
+    return persistCloudDeploymentConfig(safeProjectId, safeConfig)
   })
 
   ipcMain.handle('cloudDeploy:clearConfig', async (_, projectId: unknown) => {
@@ -624,9 +691,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       config.project.containers = [...config.project.containers]
       config.project.containers[index] = next
       config.updatedAt = Date.now()
-      await storage.saveCloudDeploymentConfig(safeProjectId, config)
-      await syncCloudDeploymentsFlag(safeProjectId)
-      return config
+      return persistCloudDeploymentConfig(safeProjectId, config)
     }
   )
 
@@ -646,9 +711,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       }
       config.project.containers = remaining
       config.updatedAt = Date.now()
-      await storage.saveCloudDeploymentConfig(safeProjectId, config)
-      await syncCloudDeploymentsFlag(safeProjectId)
-      return config
+      return persistCloudDeploymentConfig(safeProjectId, config)
     }
   )
 
@@ -844,9 +907,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
         config.project.providers = [...config.project.providers, kind]
       }
       config.updatedAt = Date.now()
-      await storage.saveCloudDeploymentConfig(safeProjectId, config)
-      await syncCloudDeploymentsFlag(safeProjectId)
-      return config
+      return persistCloudDeploymentConfig(safeProjectId, config)
     }
   )
 
@@ -886,9 +947,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
         config.project.providerAccounts = providerAccounts
       }
       config.updatedAt = Date.now()
-      await storage.saveCloudDeploymentConfig(safeProjectId, config)
-      await syncCloudDeploymentsFlag(safeProjectId)
-      return config
+      return persistCloudDeploymentConfig(safeProjectId, config)
     }
   )
 
@@ -908,9 +967,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       providerAccounts[kind] = { ...association, activeAccountId: safeAccountId }
       config.project.providerAccounts = providerAccounts
       config.updatedAt = Date.now()
-      await storage.saveCloudDeploymentConfig(safeProjectId, config)
-      await syncCloudDeploymentsFlag(safeProjectId)
-      return config
+      return persistCloudDeploymentConfig(safeProjectId, config)
     }
   )
 
@@ -1009,9 +1066,18 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       knownAccountIds.has(accountId)
     )
     if (fetchableAccountIds.length === 0) {
-      // Every attached account was deleted from the registry; report an empty
-      // overview instead of erroring on accounts the user already removed.
-      return { containers: [], fetchedAt: Date.now(), hasDeployments }
+      // Every attached account is gone from the registry (removed before the
+      // prune existed, or edited outside the app). Saying so is the difference
+      // between "nothing to monitor" and "your credentials went away": an
+      // empty list alone renders as an empty panel and looks like the project's
+      // containers were never configured.
+      const missingLabels = orderedAccountIds.map(accountLabel)
+      return {
+        containers: [],
+        fetchedAt: Date.now(),
+        hasDeployments,
+        accessError: `No attached ${kind} account could be found (${missingLabels.join(', ')}). Reconnect a ${kind} account to monitor this project's containers again.`
+      }
     }
 
     const liveContainers: CloudDeploymentContainer[] = []
@@ -1060,6 +1126,71 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
           accessError: error instanceof Error ? error.message : 'Provider request failed'
         }
       }
+    }
+  )
+
+  /**
+   * Resolve which OTHER projects already monitor a provider kind's containers.
+   *
+   * A provider account reports every container it hosts, across all of the
+   * provider's own projects, so the picker cannot tell them apart on its own.
+   * Ownership comes from the per-project mappings instead: a container id
+   * already mapped by another project is that project's, and the picker marks
+   * it as claimed so the same container is never pulled into this project
+   * unnoticed by a batch add.
+   *
+   * Every project config is read, so the walk is batched rather than one await
+   * per project: main must not sit on a chain of sequential file reads while
+   * the renderer waits.
+   */
+  ipcMain.handle(
+    'cloudDeploy:containerOwners',
+    async (
+      _,
+      projectId: unknown,
+      providerKind: unknown
+    ): Promise<CloudDeploymentContainerOwner[]> => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+
+      const projectIds = (await storage.listDirectories('projects')).filter(
+        (candidate) => candidate !== safeProjectId
+      )
+      const ownerProjectIds = new Set<string>()
+      const containerIdOwners = new Map<string, string>()
+      for (let index = 0; index < projectIds.length; index += OWNERSHIP_SCAN_BATCH) {
+        const batch = projectIds.slice(index, index + OWNERSHIP_SCAN_BATCH)
+        const scanned = await Promise.all(
+          batch.map(async (candidate) => ({
+            projectId: candidate,
+            config: await storage.getCloudDeploymentConfig(candidate)
+          }))
+        )
+        for (const { projectId, config } of scanned) {
+          if (!config) continue
+          for (const mapping of config.project.containers) {
+            if (mapping.providerKind !== kind) continue
+            // The first project to claim an id wins, so the list stays one entry
+            // per container even when two projects monitor it.
+            if (containerIdOwners.has(mapping.id)) continue
+            containerIdOwners.set(mapping.id, projectId)
+            ownerProjectIds.add(projectId)
+          }
+        }
+      }
+
+      // Names are resolved once per owning project, not once per container.
+      const names = new Map<string, string>()
+      for (const ownerProjectId of ownerProjectIds) {
+        const project = await projectManager.getProject(ownerProjectId)
+        names.set(ownerProjectId, project?.name ?? ownerProjectId)
+      }
+
+      return [...containerIdOwners].map(([containerId, ownerProjectId]) => ({
+        containerId,
+        projectId: ownerProjectId,
+        projectName: names.get(ownerProjectId) ?? ownerProjectId
+      }))
     }
   )
 
