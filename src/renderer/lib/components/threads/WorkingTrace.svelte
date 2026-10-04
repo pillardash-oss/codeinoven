@@ -303,6 +303,24 @@
     maybePageOlderEntries(element)
   }
 
+  /** A short trace can have older entries available without overflowing its
+   *  inner scroller. In that case there is no scroll offset to reach the top,
+   *  so a wheel-up gesture on the trace itself is the paging signal. */
+  function onTraceWheel(event: WheelEvent): void {
+    const element = traceScrollEl
+    if (
+      !element ||
+      event.deltaY >= 0 ||
+      element.scrollHeight - element.clientHeight > TRACE_SCROLL_THRESHOLD ||
+      (windowStartIndex === 0 && !olderPartsAvailable) ||
+      loadingOlderParts
+    ) {
+      return
+    }
+    event.stopPropagation()
+    expandTracePage()
+  }
+
   // New live parts follow the trace only while the user remains at its bottom.
   // A user scroll-up is preserved. Scroll chaining is left enabled: reaching the
   // top of a finished trace's inner scroller hands the gesture to the outer
@@ -430,6 +448,7 @@
       bind:this={traceScrollEl}
       class="max-h-[min(55vh,36rem)] overflow-y-auto overscroll-contain px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
       onscroll={onTraceScroll}
+      onwheel={onTraceWheel}
     >
       {#each pagedParts as part (part.id)}
         <WorkingTraceRow
