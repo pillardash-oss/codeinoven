@@ -16,13 +16,13 @@ Package updates use the detected package manager: apt, dnf, yum, pacman, Homebre
 
 Account credentials are stored in the local encrypted vault. Setup sends selected credentials over the authenticated SSH connection and writes them into the Oven account directory with owner-only permissions. Optional portable settings are copied separately from credentials. Transcripts, caches, and local account homes are not copied.
 
-Git setup uses a dedicated key for the Oven, separate from the SSH key used to log in. The private key travels from the encrypted vault through SSH input, never through command arguments or progress records. The passphrase stays in the local vault. The Oven writes the key under its own `.ssh` directory with restrictive permissions. GitHub verification requires strict host-key checking. If `github.com` is not in the Oven's `known_hosts`, compare its fingerprint with the published values shown by CodeInOven and add it on the Oven before retrying. CodeInOven does not accept a host key automatically.
+Git setup uses a dedicated key for the Oven, separate from the SSH key used to log in. The private key travels from the encrypted vault through SSH input, never through command arguments or progress records. Use an unencrypted dedicated key, or load an encrypted key into the Oven's own `ssh-agent` before setup. CodeInOven does not send key passphrases to the Oven. The Oven writes the key under its own `.ssh` directory with restrictive permissions. GitHub verification requires strict host-key checking. If `github.com` is not in the Oven's `known_hosts`, compare its fingerprint with the published values shown by CodeInOven and add it on the Oven before retrying. CodeInOven does not accept a host key automatically.
 
 ## Recovery and inventory
 
 Setup operations and progress are persisted without secret values. A setup interrupted by an app restart is marked interrupted; the next run observes remote state before repeating steps. Cancel stops scheduling later commands. A command already running remotely can finish, so its result is checked on retry.
 
-The managed remote probe returns device details and installed harness versions together. Its version scan uses a small worker pool and caches results briefly. The main process caches update metadata for five minutes. Update and uninstall requests for the same harness are serialized and check for a matching active run before changing the install. Uninstall is a destructive action and must ask for confirmation in the UI.
+The managed remote probe returns device details and installed harness versions together. Its version scan uses a small worker pool and caches results briefly. The main process caches update metadata for five minutes. When a harness's global auto-update preference is enabled, CodeInOven checks remote ovens shortly after startup and every fifteen minutes. Updates wait for active runs to finish. Setup installs, manual updates, and uninstalls share a per-oven harness gate that blocks new runs while a change is in progress. Uninstall is a destructive action and must ask for confirmation in the UI.
 
 ## Limits
 

@@ -378,15 +378,13 @@ export interface OvenSetupSelectedHarness {
 
 /**
  * Git identity as it is persisted. Raw key material never reaches an operation
- * record: the IPC layer converts a submitted key and passphrase into vault
- * references and only these references are stored, journaled, or sent back to
- * the renderer.
+ * record: the IPC layer converts a submitted private key into a vault reference.
+ * Only that reference is stored, journaled, or sent back to the renderer.
  */
 export interface OvenSetupGitConfiguration {
   enabled: boolean
   host: 'github' | 'any'
   privateKeyRef?: string
-  passphraseRef?: string
   /** Fingerprint of the installed public key, used to detect a changed identity. */
   publicKeyFingerprint?: string
   publicKey?: string
@@ -403,12 +401,12 @@ export interface OvenSetupConfiguration {
 
 /**
  * Start request. The Git identity is accepted exactly once, in the submission,
- * and the IPC layer converts it into vault references before the operation is
- * created. Nothing downstream ever sees the raw value.
+ * and the IPC layer converts it into a vault reference before the operation is
+ * created. Nothing downstream ever sees the raw key value.
  */
 export interface StartOvenSetupInput {
   configuration: OvenSetupConfiguration
-  gitIdentity?: { privateKey: string; passphrase?: string }
+  gitIdentity?: { privateKey: string }
 }
 
 export interface OvenSetupPreflightResult {
@@ -445,6 +443,8 @@ export interface OvenSetupOperation {
   id: string
   ovenId: string
   status: OvenSetupOperationStatus
+  /** Sticky flag set once the first complete setup succeeds. */
+  setupComplete?: boolean
   configuration: OvenSetupConfiguration
   steps: OvenSetupStep[]
   startedAt: number

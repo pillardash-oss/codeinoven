@@ -18,6 +18,7 @@ import { OVEN_SETUP_SCRIPT_VERSION } from './oven-setup-bootstrap'
 import { sshQuote, type OvenSsh } from './oven-ssh'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
+import { withOvenHarnessMutation } from './oven-operation-lock'
 
 const OPERATION_PATH = 'ovens/setup'
 /** Bounded so a long setup cannot grow the journal without limit. */
@@ -41,6 +42,8 @@ export interface OvenSetupPorts {
   ) => Promise<string[]>
   /** Install and verify the dedicated Git identity. Returns readiness issues. */
   configureGit: (ovenId: string, configuration: OvenSetupGitConfiguration) => Promise<string[]>
+  /** Wait until a selected harness has no active Oven run before changing it. */
+  waitForHarnessIdle?: (ovenId: string, command: string) => Promise<void>
 }
 
 interface Journal {
@@ -151,7 +154,7 @@ export class OvenSetupService {
       Logger.dev('Oven setup already active', { ovenId, operationId: existing.id })
       return existing
     }
-    const { report, assessment } = await this.preflight(ovenId)
+    const { assessment } = await this.preflight(ovenId)
     const blockers = assessment.issues.filter((issue) => issue.blocking)
     if (blockers.length > 0)
       throw new Error(`${blockers[0]?.message} Fix this on the Oven, then run setup again.`)
@@ -163,6 +166,7 @@ export class OvenSetupService {
       id: randomUUID(),
       ovenId,
       status: 'running',
+      setupComplete: existing?.setupComplete === true || existing?.status === 'succeeded',
       configuration,
       steps: plannedStepsToSetupSteps(plan),
       startedAt: Date.now(),
@@ -292,6 +296,7 @@ export class OvenSetupService {
     }
 
     operation.status = 'succeeded'
+    operation.setupComplete = true
     operation.finishedAt = Date.now()
     operation.updatedAt = Date.now()
     await this.persist(operation)
@@ -408,21 +413,30 @@ export class OvenSetupService {
    * user cannot see or answer.
    */
   private async runShellStep(ovenId: string, planned: SetupPlan['steps'][number]): Promise<void> {
-    for (const entry of planned.commands) {
-      if (this.cancellations.has(ovenId))
-        throw new Error('Setup was cancelled before this command started.')
-      const argv = entry.elevated ? ['-n', entry.command, ...entry.args] : [entry.command, ...entry.args]
-      const line = (entry.elevated ? ['sudo', ...argv] : argv).map(sshQuote).join(' ')
-      const timeout =
-        planned.id === 'packages' ? PACKAGE_TIMEOUT_MS : planned.phase === 'harnesses' ? INSTALL_TIMEOUT_MS : STEP_TIMEOUT_MS
-      await this.ports.ssh.execute(ovenId, line, '', timeout)
+    const execute = async (): Promise<void> => {
+      if (planned.phase === 'harnesses' && planned.verify?.command)
+        await this.ports.waitForHarnessIdle?.(ovenId, planned.verify.command)
+      for (const entry of planned.commands) {
+        if (this.cancellations.has(ovenId))
+          throw new Error('Setup was cancelled before this command started.')
+        const argv = entry.elevated ? ['-n', entry.command, ...entry.args] : [entry.command, ...entry.args]
+        const line = (entry.elevated ? ['sudo', ...argv] : argv).map(sshQuote).join(' ')
+        const timeout =
+          planned.id === 'packages' ? PACKAGE_TIMEOUT_MS : planned.phase === 'harnesses' ? INSTALL_TIMEOUT_MS : STEP_TIMEOUT_MS
+        await this.ports.ssh.execute(ovenId, line, '', timeout)
+      }
     }
+    if (planned.phase === 'harnesses' && planned.verify?.command)
+      await withOvenHarnessMutation(ovenId, planned.verify.command, execute)
+    else await execute()
   }
 
   /** Decide success by reading the oven back, never by trusting an exit code. */
   private async verify(ovenId: string, planned: SetupPlan['steps'][number]): Promise<void> {
     if (!planned.verify) return
-    const line = [planned.verify.command, ...planned.verify.args].map(sshQuote).join(' ')
+    const line = planned.id === 'node'
+      ? `${sshQuote('node')} ${sshQuote('-e')} ${sshQuote('if(Number(process.versions.node.split(String.fromCharCode(46))[0])<22)process.exit(1)')}`
+      : [planned.verify.command, ...planned.verify.args].map(sshQuote).join(' ')
     await this.ports.ssh.execute(ovenId, line, '', VERIFY_TIMEOUT_MS)
   }
 

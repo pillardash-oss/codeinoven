@@ -12,6 +12,7 @@ import {
 import type { OvenWorkspaceRequest, OvenWorkspaceResult } from '../../lib/ovens'
 import { OvenSsh, sshQuote } from './oven-ssh'
 import type { OvenRegistry } from './oven-registry'
+import { beginOvenHarnessRun } from './oven-operation-lock'
 
 const REMOTE_ROOT = '"$HOME/.config/pillardash/codeinoven-oven"'
 const SERVICE = `${REMOTE_ROOT}/service.mjs`
@@ -52,7 +53,12 @@ export class OvenService {
   }
 
   async start(id: string, input: StartOvenRunInput): Promise<OvenRun> {
-    return this.decode<OvenRun>(await this.request(id, { method: 'start', input }))
+    const release = beginOvenHarnessRun(id, input.command)
+    try {
+      return this.decode<OvenRun>(await this.request(id, { method: 'start', input }))
+    } finally {
+      release()
+    }
   }
 
   async events(

@@ -307,7 +307,7 @@ export async function preflightOven(
 export interface NodeInstallPlan {
   /** Commands that install Node.js 22+ when the Oven does not already run it. */
   commands: { command: string; args: string[]; elevated: boolean }[]
-  method: 'apt' | 'dnf' | 'yum' | 'pacman' | 'brew' | 'winget' | 'nvm' | 'manual'
+  method: 'apt' | 'dnf' | 'yum' | 'pacman' | 'brew' | 'winget' | 'choco' | 'scoop' | 'nvm' | 'manual'
   elevated?: boolean
   detail: string
 }
@@ -356,10 +356,17 @@ export function planNodeInstall(
       }
     if (packageManager === 'choco')
       return {
-        method: 'winget',
+        method: 'choco',
         elevated: false,
         detail: 'Installs Node.js LTS through Chocolatey.',
         commands: [{ command: 'choco', args: ['install', 'nodejs-lts', '-y'], elevated: false }]
+      }
+    if (packageManager === 'scoop')
+      return {
+        method: 'scoop',
+        elevated: false,
+        detail: 'Installs Node.js LTS through Scoop.',
+        commands: [{ command: 'scoop', args: ['install', 'nodejs-lts'], elevated: false }]
       }
     return {
       method: 'manual',
@@ -390,9 +397,16 @@ export function planNodeInstall(
       return {
         method: packageManager,
         elevated,
-        detail: `Installs Node.js 22 through ${packageManager}.${elevationSuffix}`,
+        detail: `Adds the NodeSource 22.x repository and installs Node.js 22 through ${packageManager}.${elevationSuffix}`,
         commands: [
-          { command: packageManager, args: ['install', '-y', 'nodejs'], elevated }
+          {
+            command: 'sh',
+            args: [
+              '-c',
+              `set -eu; curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -; ${packageManager} install -y nodejs; node --version`
+            ],
+            elevated
+          }
         ]
       }
     if (packageManager === 'pacman')

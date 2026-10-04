@@ -19,10 +19,12 @@
 
   interface Props {
     open: boolean
+    initialOvenId: string
+    onComplete: (ovenId: string) => void
     onClose: () => void
   }
 
-  let { open, onClose }: Props = $props()
+  let { open, initialOvenId, onComplete, onClose }: Props = $props()
   let ovens = $state<Oven[]>([])
   let ovenId = $state('')
   let preflight = $state<OvenSetupPreflightResult | null>(null)
@@ -38,7 +40,6 @@
   let gitEnabled = $state(false)
   let privateKey = $state('')
   let showPrivateKey = $state(false)
-  let passphrase = $state('')
   let operation = $state<OvenSetupOperation | null>(null)
   let progressEvents = $state<OvenSetupProgressEvent[]>([])
   let afterSequence = 0
@@ -74,7 +75,9 @@
     try {
       const state = await invoke('oven:state')
       ovens = remoteOvensForSetup(state.ovens)
-      if (!ovens.some((oven) => oven.id === ovenId)) ovenId = ovens[0]?.id ?? ''
+      ovenId = ovens.some((oven) => oven.id === initialOvenId)
+        ? initialOvenId
+        : ovens[0]?.id ?? ''
       if (ovenId) await readPreflight(ovenId)
     } catch (cause) {
       error = message(cause)
@@ -103,11 +106,10 @@
     try {
       const result = await invoke('oven:setup:start', ovenId, {
         configuration,
-        ...(gitEnabled ? { gitIdentity: { privateKey, ...(passphrase ? { passphrase } : {}) } } : {})
+        ...(gitEnabled ? { gitIdentity: { privateKey } } : {})
       })
       operation = result
       privateKey = ''
-      passphrase = ''
       progressEvents = []
       afterSequence = 0
       minimized = false
@@ -135,6 +137,7 @@
         await new Promise((resolve) => setTimeout(resolve, 1200))
       }
     }
+    if (operation?.status === 'succeeded') onComplete(id)
   }
 
   async function cancel(): Promise<void> {
@@ -266,10 +269,7 @@
               <SecretVisibilityButton revealed={showPrivateKey} title={showPrivateKey ? 'Hide private key' : 'Show private key'} onclick={() => (showPrivateKey = !showPrivateKey)} />
             </div>
           </label>
-          <label class="block space-y-1.5 text-sm">
-            <span class="text-muted">Key passphrase, if set</span>
-            <input class="w-full rounded-lg border bg-elevated px-3 py-2 text-foreground" type="password" bind:value={passphrase} autocomplete="new-password" />
-          </label>
+          <p class="text-xs text-muted">Use an unencrypted dedicated key, or load an encrypted key into the Oven's ssh-agent before setup. The key passphrase is not sent to the Oven.</p>
         {/if}
       </section>
     {/if}
@@ -299,7 +299,7 @@
         {#each operation.steps as step (step.id)}
           <li class="flex items-start gap-2 rounded-lg border px-3 py-2">
             {#if step.status === 'succeeded'}<CheckCircle2 size={15} class="mt-0.5 text-success" />{:else if step.status === 'failed' || step.status === 'blocked'}<AlertCircle size={15} class="mt-0.5 text-danger" />{:else if step.status === 'running'}<Loader2 size={15} class="mt-0.5 animate-spin text-primary" />{:else}<Circle size={15} class="mt-0.5 text-muted" />{/if}
-            <div class="min-w-0"><p class="text-sm">{step.name}</p>{#if step.detail || step.error}<p class="mt-0.5 break-words text-xs text-muted">{step.error ?? step.detail}</p>{/if}</div>
+            <div class="min-w-0"><p class="text-sm">{step.name}</p>{#if step.detail || step.error}<p class="mt-0.5 break-words whitespace-pre-wrap text-xs text-muted">{step.error ?? step.detail}</p>{/if}</div>
           </li>
         {/each}
       </ol>

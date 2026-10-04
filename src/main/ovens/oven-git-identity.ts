@@ -68,7 +68,7 @@ export class OvenGitIdentityService {
    */
   async configure(
     ovenId: string,
-    configuration: { privateKeyRef?: string; passphraseRef?: string; publicKey?: string },
+    configuration: { privateKeyRef?: string; publicKey?: string },
     report: OvenPreflightReport
   ): Promise<string[]> {
     const issues: string[] = []
@@ -141,7 +141,7 @@ export class OvenGitIdentityService {
         ].join('; ')
       : `GIT_SSH_COMMAND="ssh -i ~/.ssh/${IDENTITY_FILE} ${sshOptions}" ssh -T ${sshQuote(GITHUB_SSH)} 2>&1; printf '\\nexit=%s\\n' "$?"`
 
-    let output = ''
+    let output: string
     try {
       output = await this.ports.ssh.execute(ovenId, probe, '', 45_000)
     } catch (error) {
@@ -150,7 +150,7 @@ export class OvenGitIdentityService {
         return {
           status: 'host-key-changed',
           message:
-            'The host key for github.com changed on this Oven. Verify the new key against GitHub’s published fingerprints before trusting it.',
+          `The host key for github.com changed on this Oven. Verify the new key against GitHub’s published fingerprints before trusting it:\n${GITHUB_HOST_KEY_FINGERPRINTS.join('\n')}`,
           expectedHostKeyFingerprints: GITHUB_HOST_KEY_FINGERPRINTS
         }
       return {
@@ -163,14 +163,14 @@ export class OvenGitIdentityService {
     if (/Host key verification failed/u.test(output) || /not known to hosts/u.test(output))
       return {
         status: 'host-key-untrusted',
-        message: `This Oven does not trust github.com yet. Compare its key with GitHub’s published fingerprints, then add github.com to its known_hosts.`,
+        message: `This Oven does not trust github.com yet. Compare its key with GitHub’s published fingerprints, then add github.com to its known_hosts. Expected fingerprints:\n${GITHUB_HOST_KEY_FINGERPRINTS.join('\n')}`,
         expectedHostKeyFingerprints: GITHUB_HOST_KEY_FINGERPRINTS
       }
     if (/REMOTE HOST IDENTIFICATION HAS CHANGED/u.test(output))
       return {
         status: 'host-key-changed',
         message:
-          'The host key for github.com changed on this Oven. Verify the new key against GitHub’s published fingerprints before trusting it.',
+          `The host key for github.com changed on this Oven. Verify the new key against GitHub’s published fingerprints before trusting it:\n${GITHUB_HOST_KEY_FINGERPRINTS.join('\n')}`,
         expectedHostKeyFingerprints: GITHUB_HOST_KEY_FINGERPRINTS
       }
     if (/Could not resolve hostname|Connection refused|timed out|No route to host/u.test(output))

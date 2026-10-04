@@ -34,6 +34,10 @@ export function createOvenSetupPorts(dependencies: OvenSetupPortDependencies): O
   return {
     gitIdentity,
     ssh: dependencies.service.ssh,
+    waitForHarnessIdle: async (ovenId, command) => {
+      while ((await dependencies.service.runs(ovenId)).some((run) => run.command === command && run.status === 'running'))
+        await new Promise((resolve) => setTimeout(resolve, 1_000))
+    },
     preflight: async (ovenId) => {
       const report = await collectPreflight(dependencies.service.ssh, ovenId)
       reports.set(ovenId, report)

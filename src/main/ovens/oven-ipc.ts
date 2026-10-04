@@ -34,7 +34,9 @@ export function registerOvenIpc(
     vault
   })
   const setupService = new OvenSetupService(storage, setupRuntime)
-  const harnessService = new OvenHarnessService(service)
+  const harnessService = new OvenHarnessService(service, storage)
+  harnessService.startAutoUpdates()
+  app.once('before-quit', () => harnessService.stopAutoUpdates())
   /**
    * Local is a healthy harness host but has no oven service to configure, so a
    * full setup request for it is a caller mistake rather than a user error.

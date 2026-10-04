@@ -54,4 +54,36 @@ describe('oven setup service', () => {
     const { service } = createService()
     await expect(service.getOperationForOven('oven-test')).resolves.toBeNull()
   })
+
+  it('keeps setup completion sticky when a later setup update fails', async () => {
+    const { service, ports } = createService()
+    vi.mocked(ports.installService)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('service refresh failed'))
+    const configuration = {
+      selectedHarnesses: [],
+      synchronizeAccounts: false,
+      synchronizeConfiguration: false,
+      git: { enabled: false as const, host: 'github' as const },
+      packageUpgrades: false
+    }
+
+    const first = await service.startSetup('oven-test', configuration)
+    expect(first.setupComplete).toBe(false)
+    await waitForStatus(service, 'succeeded')
+
+    const second = await service.startSetup('oven-test', configuration)
+    expect(second.setupComplete).toBe(true)
+    const failed = await waitForStatus(service, 'failed')
+    expect(failed.setupComplete).toBe(true)
+  })
 })
+
+async function waitForStatus(service: OvenSetupService, status: 'succeeded' | 'failed') {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const operation = await service.getOperationForOven('oven-test')
+    if (operation?.status === status) return operation
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error(`Setup did not reach ${status}.`)
+}

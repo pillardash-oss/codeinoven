@@ -12,6 +12,8 @@ import { harnessUninstallCommand } from '../agents/harness-install-service'
 import { sshQuote } from './oven-ssh'
 import type { OvenService } from './oven-service'
 import { Logger } from '../system/logger'
+import { withOvenHarnessMutation } from './oven-operation-lock'
+import type { StorageEngine } from '../storage/storage-engine'
 
 /** A harness update is a real install mutation; give it room but never hang forever. */
 const UPDATE_TIMEOUT_MS = 5 * 60_000
@@ -45,8 +47,66 @@ export class OvenHarnessService {
     string,
     { checkedAt: number; result: Awaited<ReturnType<typeof latestHarnessVersion>> }
   >()
+  private autoUpdateTimer: ReturnType<typeof setInterval> | undefined
+  private autoUpdateInitial: ReturnType<typeof setTimeout> | undefined
+  private autoUpdateRunning = false
 
-  constructor(private readonly service: OvenService) {}
+  constructor(
+    private readonly service: OvenService,
+    private readonly storage: StorageEngine
+  ) {}
+
+  /** Apply the shared per-harness auto-update preferences to every remote oven. */
+  startAutoUpdates(): void {
+    if (this.autoUpdateTimer) return
+    this.autoUpdateInitial = setTimeout(() => {
+      this.autoUpdateInitial = undefined
+      void this.runAutoUpdates()
+    }, 10_000)
+    this.autoUpdateInitial.unref?.()
+    this.autoUpdateTimer = setInterval(() => void this.runAutoUpdates(), 15 * 60_000)
+    this.autoUpdateTimer.unref?.()
+  }
+
+  stopAutoUpdates(): void {
+    if (this.autoUpdateInitial) clearTimeout(this.autoUpdateInitial)
+    this.autoUpdateInitial = undefined
+    if (this.autoUpdateTimer) clearInterval(this.autoUpdateTimer)
+    this.autoUpdateTimer = undefined
+  }
+
+  private async runAutoUpdates(): Promise<void> {
+    if (this.autoUpdateRunning) return
+    this.autoUpdateRunning = true
+    try {
+      const preferences = await this.storage.read<Record<string, boolean>>('harness-auto-update.json')
+      if (!preferences || !Object.values(preferences).some(Boolean)) return
+      const state = await this.service.registry.state()
+      for (const oven of state.ovens) {
+        if (oven.kind !== 'ssh') continue
+        for (const [harnessId, enabled] of Object.entries(preferences)) {
+          if (!enabled) continue
+          try {
+            const item = this.requireRow(await this.getInventory(oven.id), harnessId)
+            if (item.health === 'healthy' && item.updateAvailable)
+              await this.updateHarness(oven.id, harnessId)
+          } catch (error) {
+            Logger.info('Remote harness auto-update was skipped', {
+              ovenId: oven.id,
+              harnessId,
+              reason: error instanceof Error ? error.message : String(error)
+            })
+          }
+        }
+      }
+    } catch (error) {
+      Logger.info('Remote harness auto-update check failed', {
+        reason: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      this.autoUpdateRunning = false
+    }
+  }
 
   /** Serialize work per oven and harness, so updates never overlap each other. */
   private withLock<T>(key: string, task: () => Promise<T>): Promise<T> {
@@ -65,8 +125,14 @@ export class OvenHarnessService {
 
   /** True while any run of this harness is live on the oven. */
   private async hasActiveRun(ovenId: string, command: string): Promise<boolean> {
-    const runs = await this.service.runs(ovenId).catch(() => [])
+    const runs = await this.service.runs(ovenId)
     return runs.some((run) => run.status === 'running' && run.command === command)
+  }
+
+  /** Updates and removals wait for active turns, while the shared gate blocks new ones. */
+  private async waitForHarnessIdle(ovenId: string, command: string): Promise<void> {
+    while (await this.hasActiveRun(ovenId, command))
+      await new Promise((resolve) => setTimeout(resolve, 1_000))
   }
 
   /**
@@ -145,19 +211,18 @@ export class OvenHarnessService {
         throw new Error(
           `${descriptor.name} does not document an unattended update command. Update it on the Oven itself.`
         )
-      if (await this.hasActiveRun(ovenId, descriptor.command))
-        throw new Error(
-          `${descriptor.name} is running on this Oven. Wait for the run to finish before updating it.`
+      return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
+        await this.waitForHarnessIdle(ovenId, descriptor.command)
+        Logger.info('Updating a harness on an oven', { ovenId, harnessId })
+        await this.service.ssh.execute(
+          ovenId,
+          [descriptor.command, ...args].map(sshQuote).join(' '),
+          '',
+          UPDATE_TIMEOUT_MS
         )
-      Logger.info('Updating a harness on an oven', { ovenId, harnessId })
-      await this.service.ssh.execute(
-        ovenId,
-        [descriptor.command, ...args].map(sshQuote).join(' '),
-        '',
-        UPDATE_TIMEOUT_MS
-      )
-      this.inventories.delete(ovenId)
-      return this.requireRow(await this.getInventory(ovenId, true), harnessId)
+        this.inventories.delete(ovenId)
+        return this.requireRow(await this.getInventory(ovenId, true), harnessId)
+      })
     })
   }
 
@@ -174,25 +239,24 @@ export class OvenHarnessService {
       if (!descriptor) throw new Error('That harness is not in the app registry.')
       const current = this.requireRow(await this.getInventory(ovenId), harnessId)
       if (current.health === 'missing') return current
-      if (await this.hasActiveRun(ovenId, descriptor.command))
-        throw new Error(
-          `${descriptor.name} is running on this Oven. Stop the run before uninstalling it.`
-        )
       const method = methodForPath(current.executablePath)
       const removal = harnessUninstallCommand(harnessId, method)
       if (!removal)
         throw new Error(
           `${descriptor.name} documents no unattended uninstall for ${method} installs. Remove it on the Oven itself.`
         )
-      Logger.info('Uninstalling a harness on an oven', { ovenId, harnessId, method })
-      await this.service.ssh.execute(
-        ovenId,
-        [removal.command, ...removal.args].map(sshQuote).join(' '),
-        '',
-        UPDATE_TIMEOUT_MS
-      )
-      this.inventories.delete(ovenId)
-      return this.requireRow(await this.getInventory(ovenId, true), harnessId)
+      return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
+        await this.waitForHarnessIdle(ovenId, descriptor.command)
+        Logger.info('Uninstalling a harness on an oven', { ovenId, harnessId, method })
+        await this.service.ssh.execute(
+          ovenId,
+          [removal.command, ...removal.args].map(sshQuote).join(' '),
+          '',
+          UPDATE_TIMEOUT_MS
+        )
+        this.inventories.delete(ovenId)
+        return this.requireRow(await this.getInventory(ovenId, true), harnessId)
+      })
     })
   }
 

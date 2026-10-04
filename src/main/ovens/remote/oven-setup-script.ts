@@ -116,6 +116,14 @@ function packageCommands(
         commands: [command('pacman', ['-Syu', '--noconfirm'], { elevated })],
         notice: releaseNotice
       }
+    case 'zypper':
+      return {
+        commands: [
+          command('zypper', ['--non-interactive', 'refresh'], { elevated }),
+          command('zypper', ['--non-interactive', 'update', '-y'], { elevated })
+        ],
+        notice: `zypper updates installed packages only. ${releaseNotice}`
+      }
     case 'brew':
       return {
         commands: [
@@ -127,7 +135,7 @@ function packageCommands(
     case 'winget':
       return {
         commands: [
-          command('winget', ['upgrade', '--accept-source-agreements', '--disable-interactivity'], {
+          command('winget', ['upgrade', '--all', '--accept-source-agreements', '--disable-interactivity'], {
             elevated: false
           })
         ],
@@ -165,6 +173,8 @@ function toolInstallCommands(
     case 'dnf':
     case 'yum':
       return [command(manager, ['install', '-y', tool], { elevated })]
+    case 'zypper':
+      return [command('zypper', ['--non-interactive', 'install', '-y', tool], { elevated })]
     case 'pacman':
       return [command('pacman', ['-S', '--noconfirm', tool], { elevated })]
     case 'brew':
@@ -172,7 +182,7 @@ function toolInstallCommands(
     case 'winget':
       return tool === 'git'
         ? [command('winget', ['install', '--id', 'Git.Git', '-e', '--accept-source-agreements'])]
-        : [command('winget', ['install', '--id', 'Git.GitHub.PsWin32', '-e', '--accept-source-agreements'])]
+        : [command('winget', ['install', '--id', 'cURL.cURL', '-e', '--accept-source-agreements'])]
     case 'choco':
       return [command('choco', ['install', tool === 'git' ? 'git.install' : 'curl', '-y'])]
     case 'scoop':
@@ -197,6 +207,8 @@ function npmInstallCommands(manager: OvenPackageManager, privilege: OvenPrivileg
       return [command(manager, ['install', '-y', 'npm'], { elevated })]
     case 'pacman':
       return [command('pacman', ['-S', '--noconfirm', 'npm'], { elevated })]
+    case 'zypper':
+      return [command('zypper', ['--non-interactive', 'install', '-y', 'npm'], { elevated })]
     case 'brew':
       return [command('brew', ['install', 'node@22'])]
     case 'winget':
@@ -417,8 +429,6 @@ export function buildSetupPlan(
 
   // Package registry refresh and package upgrades are the first mutations after
   // preflight. Bootstrap Node only after that authorized package pass.
-  steps.push(...bootstrapSteps)
-
   for (const tool of ['git', 'curl'] as const) {
     const missing = assessment.issues.some((issue) => issue.code === `missing-${tool}`)
     const commands = missing ? toolInstallCommands(tool, platform, assessment.packageManager, privilege) : []
@@ -435,6 +445,8 @@ export function buildSetupPlan(
     if (missing && commands.length === 0)
       blockers.push(`Cannot install ${tool} automatically with the detected package manager.`)
   }
+
+  steps.push(...bootstrapSteps)
 
   const npmMissing = assessment.issues.some((issue) => issue.code === 'npm-missing')
   if (npmMissing) {

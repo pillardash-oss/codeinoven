@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { OvenHarnessService } from '../../../src/main/ovens/oven-harness-service'
 import type { OvenService } from '../../../src/main/ovens/oven-service'
 import type { OvenProbe } from '../../../src/lib/ovens'
+import type { StorageEngine } from '../../../src/main/storage/storage-engine'
 
 const probe: OvenProbe = {
   protocolVersion: 1,
@@ -34,7 +35,8 @@ function harnessService() {
     runs: vi.fn(async () => []),
     ssh: { execute }
   } as unknown as OvenService
-  return { service: new OvenHarnessService(oven), oven, execute }
+  const storage = { read: vi.fn(async () => null) } as unknown as StorageEngine
+  return { service: new OvenHarnessService(oven, storage), oven, execute }
 }
 
 describe('oven harness service', () => {
@@ -45,13 +47,17 @@ describe('oven harness service', () => {
     expect(inventory.find((item) => item.command === 'claude')?.health).toBe('missing')
   })
 
-  it('refuses to update a harness while its run is active', async () => {
+  it('waits for an active harness run before updating it', async () => {
     const { service, oven, execute } = harnessService()
     vi.mocked(oven.runs).mockResolvedValue([
       { id: 'run-1', command: 'codex', status: 'running' } as Awaited<ReturnType<OvenService['runs']>>[number]
     ])
-    await expect(service.updateHarness('oven-test', 'codex')).rejects.toThrow('running')
+    const update = service.updateHarness('oven-test', 'codex')
+    await new Promise((resolve) => setTimeout(resolve, 30))
     expect(execute).not.toHaveBeenCalled()
+    vi.mocked(oven.runs).mockResolvedValue([])
+    await update
+    expect(execute).toHaveBeenCalledOnce()
   })
 
   it('runs only the selected harness update command', async () => {

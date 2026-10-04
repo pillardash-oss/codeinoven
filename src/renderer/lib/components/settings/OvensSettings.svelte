@@ -33,6 +33,7 @@
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import type { CustomIcon } from '$shared/types'
+  import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
 
   const fieldClass = 'w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground'
   let ovenState = $state.raw<OvenState | null>(null)
@@ -42,6 +43,7 @@
   let refreshGeneration = 0
   let connectionResult = $state<OvenConnectionStatus | null>(null)
   let probes = $state<Record<string, OvenProbe>>({})
+  let setupComplete = $state<Record<string, boolean>>({})
   let busy = $state('')
   let error = $state('')
   let modalError = $state('')
@@ -68,6 +70,7 @@
   let pendingHarnessRemoval = $state<{ ovenId: string; harnessId: string; command: string } | null>(null)
   let harnessBusy = $state('')
   let setupOpen = $state(false)
+  let setupOvenId = $state('')
   const hasAppearance = $derived(
     Boolean(
       color !== (editing?.color ?? '#22c55e') ||
@@ -92,6 +95,7 @@
         )
           health = { ...health, [oven.id]: oven.connectionStatus }
       }
+      void refreshSetupStatuses(ovenState)
       void refreshHealth(ovenState)
     } catch (failure) {
       error = message(failure)
@@ -100,6 +104,19 @@
   onMount(() => {
     void load()
   })
+
+  async function refreshSetupStatuses(state: OvenState): Promise<void> {
+    const remote = state.ovens.filter((oven) => oven.kind === 'ssh')
+    for (let offset = 0; offset < remote.length; offset += 3) {
+      const batch = await Promise.all(
+        remote.slice(offset, offset + 3).map(async (oven) => {
+          const operation = await invoke('oven:setup:status', oven.id).catch(() => null)
+          return [oven.id, operation?.setupComplete === true || operation?.status === 'succeeded'] as const
+        })
+      )
+      setupComplete = { ...setupComplete, ...Object.fromEntries(batch) }
+    }
+  }
 
   onDestroy(() => {
     refreshGeneration++
@@ -311,18 +328,18 @@
     }
   }
 
-  async function connect(oven: Oven): Promise<void> {
-    if (busy) return
-    busy = oven.id
-    error = ''
-    try {
-      const probe = await invoke('oven:install', oven.id)
-      probes = { ...probes, [oven.id]: probe }
-    } catch (failure) {
-      error = `${oven.name}: ${message(failure)}`
-    } finally {
-      busy = ''
+  async function openOvenSetup(oven: Oven): Promise<void> {
+    setupOvenId = oven.id
+    setupOpen = true
+    const operation = await invoke('oven:setup:status', oven.id).catch(() => null)
+    setupComplete = {
+      ...setupComplete,
+      [oven.id]: operation?.setupComplete === true || operation?.status === 'succeeded'
     }
+  }
+
+  function markSetupComplete(ovenId: string): void {
+    setupComplete = { ...setupComplete, [ovenId]: true }
   }
 
   async function remove(): Promise<void> {
@@ -386,13 +403,6 @@
       onclick={() => openEditor()}
     >
       <Plus size={14} /> New Oven
-    </button>
-    <button
-      type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs hover:bg-elevated"
-      onclick={() => (setupOpen = true)}
-    >
-      Setup
     </button>
   </div>
   {#if error}<p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
@@ -477,8 +487,8 @@
                   type="button"
                   class="rounded-lg border px-2.5 py-1.5 text-xs hover:bg-elevated disabled:opacity-50"
                   disabled={Boolean(busy)}
-                  onclick={() => void connect(oven)}>Set up service</button
-                >
+                  onclick={() => void openOvenSetup(oven)}
+                >{ovenSetupActionLabel(setupComplete[oven.id] ?? false)}</button>
                 <button
                   type="button"
                   class="rounded-lg px-2 py-1.5 text-xs text-muted hover:bg-elevated"
@@ -866,4 +876,9 @@
   <p>The harness may remove its own configuration or credentials. CodeInOven checks that it is not running before uninstalling it.</p>
 </ConfirmDialog>
 
-<OvenSetupModal open={setupOpen} onClose={() => (setupOpen = false)} />
+<OvenSetupModal
+  open={setupOpen}
+  initialOvenId={setupOvenId}
+  onComplete={markSetupComplete}
+  onClose={() => (setupOpen = false)}
+/>

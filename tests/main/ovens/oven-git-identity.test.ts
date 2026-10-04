@@ -24,6 +24,7 @@ describe('oven Git identity', () => {
     const result = await service.verify('oven-test', report)
     expect(result.status).toBe('host-key-untrusted')
     expect(result.expectedHostKeyFingerprints.length).toBeGreaterThan(0)
+    expect(result.message).toContain(result.expectedHostKeyFingerprints[0] ?? 'unreachable')
     expect(execute.mock.calls[1]?.[1]).toContain('StrictHostKeyChecking=yes')
   })
 

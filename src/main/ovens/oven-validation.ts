@@ -203,7 +203,6 @@ function validateGitConfiguration(value: unknown): OvenSetupGitConfiguration {
     host
   }
   if (raw.privateKeyRef !== undefined) git.privateKeyRef = text(raw.privateKeyRef, 'Key reference', 256)
-  if (raw.passphraseRef !== undefined) git.passphraseRef = text(raw.passphraseRef, 'Passphrase reference', 256)
   if (raw.publicKeyFingerprint !== undefined)
     git.publicKeyFingerprint = text(raw.publicKeyFingerprint, 'Key fingerprint', 128)
   if (raw.publicKey !== undefined) {
@@ -267,8 +266,8 @@ const PRIVATE_KEY_PATTERN = /^-----BEGIN (?:OPENSSH|RSA|EC|DSA|ENCRYPTED)? ?PRIV
  * Convert a submitted setup request into a persisted configuration.
  *
  * This is the one place raw key material is allowed to arrive. The private key
- * and its passphrase are moved into the encrypted vault and replaced by
- * references before validation, so what reaches the operation record, the
+ * is moved into the encrypted vault and replaced by a reference before
+ * validation, so what reaches the operation record, the
  * journal, and every progress event contains no secret at all. Submitting the
  * same key again reuses the existing reference instead of growing the vault.
  */
@@ -296,7 +295,8 @@ export async function validateStartOvenSetup(
       : {}
     const identityFields = identity as Record<string, unknown>
     if (identityFields.privateKey !== undefined) git.privateKey = identityFields.privateKey
-    if (identityFields.passphrase !== undefined) git.passphrase = identityFields.passphrase
+    if (identityFields.passphrase !== undefined)
+      throw new TypeError('Oven Git setup does not accept key passphrases. Load the encrypted key into the Oven ssh-agent first.')
     raw.git = git
   }
   const gitInput = raw.git
@@ -310,14 +310,6 @@ export async function validateStartOvenSetup(
         typeof git.privateKeyRef === 'string' && git.privateKeyRef ? git.privateKeyRef : undefined
       )
       delete git.privateKey
-    }
-    if (git.passphrase !== undefined) {
-      const passphrase = text(git.passphrase, 'Key passphrase', 4096)
-      git.passphraseRef = await vault.save(
-        passphrase,
-        typeof git.passphraseRef === 'string' && git.passphraseRef ? git.passphraseRef : undefined
-      )
-      delete git.passphrase
     }
     raw.git = git
   }
