@@ -1879,8 +1879,8 @@ export class BrowserService {
 
   /**
    * Fill a page's file input through a narrow main-process action. Auto Review
-   * requires a native chooser or confirmation for exact paths; Full Access can
-   * use paths directly. The site never receives a file until this operation is
+   * always asks the user to choose files in a native dialog; Full Access can use
+   * paths directly. The site never receives a file until this operation is
    * called, and this operation never submits the surrounding form.
    */
   private async uploadFiles(
@@ -1923,26 +1923,13 @@ export class BrowserService {
     }
     const multiple = inputRecord['multiple'] === true
     const accept = typeof inputRecord['accept'] === 'string' ? inputRecord['accept'] : ''
-    const suppliedPaths = this.uploadPathInputs(input)
+    const requestedPaths = this.uploadPathInputs(input)
+    const suppliedPaths = permissionLevel === 'full_access' ? requestedPaths : []
     let paths: string[]
     if (suppliedPaths.length > 0) {
       paths = await Promise.all(suppliedPaths.map((path) => this.resolveUploadPath(path)))
       if (!multiple && paths.length > 1) {
         throw new Error('This file input accepts one file at a time')
-      }
-      if (permissionLevel === 'auto_review') {
-        const pageOrigin = safeOrigin(beforeUrl)
-        const approval = await dialog.showMessageBox(this.window, {
-          type: 'warning',
-          title: 'Approve browser file upload',
-          message: `Allow the agent to upload ${paths.length === 1 ? 'this file' : `${paths.length} files`}?`,
-          detail: `${paths.join('\n')}\n\nDestination: ${pageOrigin}`,
-          buttons: ['Cancel', 'Upload'],
-          defaultId: 0,
-          cancelId: 0,
-          noLink: true
-        })
-        if (approval.response !== 1) return { uploaded: false, cancelled: true }
       }
     } else {
       const filters = fileChooserFilters(accept)

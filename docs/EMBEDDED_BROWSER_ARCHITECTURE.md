@@ -80,9 +80,9 @@ material way, and the difference is deliberate.
   `page: "user"`. Navigation, clicks, typing, reload, and viewport changes still need a
   page the agent opened itself. Uploading a file is the one narrow exception: the main
   process brokers a file-input action without exposing CDP to the harness. Auto Review
-  requires a native file chooser or an exact-file confirmation for that operation;
-  Full Access accepts explicit absolute paths. Upload only fills the file input and
-  never submits the page's form.
+  always asks the user to choose the files in a native file chooser; Full Access accepts
+  explicit absolute paths. Upload only fills the file input and never submits the page's
+  form.
 - **Extensions are installed from the global browser, but a box's set follows the
   box.** An extension record names the global browser's own jar (the empty jar id)
   and its boxes, and a box's set is loaded while any context uses that box
