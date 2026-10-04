@@ -243,7 +243,11 @@ export interface UtilityTurnGateway {
 export type BrowserUtilityExecutor = (
   operation: string,
   input: Record<string, unknown>,
-  context: { projectId: string; threadId: string }
+  context: {
+    projectId: string
+    threadId: string
+    permissionLevel: PermissionLevel
+  }
 ) => Promise<unknown>
 
 /**
@@ -1664,7 +1668,8 @@ export class UtilityOrchestrationService {
       if (!executor) throw new Error('The in-app browser is unavailable')
       result = await executor(operation, operationInput, {
         projectId: state.request.projectId,
-        threadId: state.request.threadId
+        threadId: state.request.threadId,
+        permissionLevel: state.request.permissionLevel
       })
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
       // One capability, four operation groups with different owners: `preview`

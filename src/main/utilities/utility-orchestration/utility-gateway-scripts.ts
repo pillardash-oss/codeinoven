@@ -150,6 +150,30 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
     }
   },
   {
+    name: 'upload',
+    description:
+      'Choose files for a file input on the current browser page. This fills the input only; it does not submit the form. In Auto Review, explicit file paths require your approval and an omitted path opens the native file chooser. In Full Access, absolute paths can be supplied directly.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        selector: {
+          type: 'string',
+          description:
+            'CSS selector for an input[type="file"]. Defaults to the first file input on the page.'
+        },
+        paths: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 10,
+          description:
+            'Absolute local file paths. Auto Review asks the user to approve the exact files before upload.'
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
     name: 'navigate',
     description: 'Navigate the current in-app browser tab to an http(s) URL.',
     inputSchema: {

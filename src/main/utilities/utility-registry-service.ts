@@ -169,7 +169,7 @@ export class UtilityRegistryService {
         kind: 'computer_use',
         name: 'cio:browser',
         description:
-          'Runs project- and thread-scoped browsers for localhost and web application testing, including navigation, DOM snapshots, clicks, typing, screenshots, and browser console diagnostics.',
+          'Runs project- and thread-scoped browsers for localhost and web application testing, including navigation, DOM snapshots, clicks, typing, reviewed file uploads, screenshots, and browser console diagnostics.',
         enabled: true,
         activation: 'on_demand',
         scope: { level: 'global' },

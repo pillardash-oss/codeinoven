@@ -28,11 +28,11 @@ import {
 } from 'electron'
 import type { Database } from '../database/database'
 import { createHash } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { mkdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
-import type { Project, Thread } from '../../lib/types'
+import type { PermissionLevel, Project, Thread } from '../../lib/types'
 import { isPreviewOriginUrl, originOf } from '../../lib/local-development-url'
 import {
   BUILT_IN_BROWSER_SEARCH_ENGINES,
@@ -415,10 +415,19 @@ function replaceHandler(channel: string, listener: Parameters<typeof ipcMain.han
  * A browser tab's assistant conversation answers about the page on screen, so its
  * browser capability is attached to that tab. Only the reading operations are
  * allowed there: they observe the page, while everything else in the capability
- * changes it, and a page the user is reading must never be moved, clicked
- * through or resized by an answer to their question.
+ * changes it. File upload is the one reviewed exception: Auto Review uses a
+ * native file chooser or an exact-file confirmation, while Full Access may name
+ * the files directly. Navigation, clicks and resizing remain agent-page only.
  */
-const ATTACHED_PAGE_OPERATIONS = new Set(['snapshot', 'screenshot', 'console'])
+const ATTACHED_PAGE_READ_OPERATIONS = new Set(['snapshot', 'screenshot', 'console'])
+const ATTACHED_PAGE_MUTATION_OPERATIONS = new Set([
+  'click',
+  'type',
+  'navigate',
+  'reload',
+  'viewport',
+  'upload'
+])
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -1630,7 +1639,11 @@ export class BrowserService {
   async executeUtility(
     operation: string,
     input: Record<string, unknown>,
-    context: { projectId: string; threadId: string }
+    context: {
+      projectId: string
+      threadId: string
+      permissionLevel: PermissionLevel
+    }
   ): Promise<unknown> {
     const projectId = validateProjectId(context.projectId)
     const threadId = validateThreadId(context.threadId)
@@ -1682,13 +1695,30 @@ export class BrowserService {
     if (!attached && (tab.projectId !== projectId || tab.threadId !== threadId)) {
       throw new Error('The current browser tab belongs to a different project or thread')
     }
-    // The page the user is on is attached for reading only. Driving it (clicking,
-    // typing, navigating, reloading, resizing) would move the page the user is
-    // looking at out from under them, so those operations keep requiring a page
-    // the agent opened itself.
-    if (attached && !ATTACHED_PAGE_OPERATIONS.has(operation)) {
+    // The user's tab is read-only by default. Full Access follows the thread's
+    // permission tier; Auto Review asks the user to approve each page mutation.
+    // File upload has its own exact-file review and never submits a form.
+    if (attached && !ATTACHED_PAGE_READ_OPERATIONS.has(operation)) {
+      if (!ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation)) {
+        throw new Error(
+          `The page the user is on is attached for reading (${[...ATTACHED_PAGE_READ_OPERATIONS].join(', ')}), so "${operation}" is unavailable.`
+        )
+      }
+      if (
+        context.permissionLevel === 'auto_review' &&
+        operation !== 'upload' &&
+        !(await this.approveAttachedPageOperation(operation, input, tab))
+      ) {
+        return { ...this.utilityTabContext(tabId, tab), page: 'user', cancelled: true }
+      }
+    }
+    if (
+      attached &&
+      !ATTACHED_PAGE_READ_OPERATIONS.has(operation) &&
+      !ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation)
+    ) {
       throw new Error(
-        `The page the user is on is attached for reading (${[...ATTACHED_PAGE_OPERATIONS].join(', ')}), so "${operation}" needs a page of your own: call "open" first.`
+        `The page the user is on cannot run "${operation}". Open a page of your own first.`
       )
     }
     // An operation is a use: it revives a tab the agent owns that was evicted
@@ -1786,6 +1816,10 @@ export class BrowserService {
       })()`)
       return { ...utilityContext, result }
     }
+    if (operation === 'upload') {
+      const result = await this.uploadFiles(tabId, tab, input, context.permissionLevel)
+      return { ...utilityContext, result }
+    }
     if (operation === 'screenshot') {
       return { ...utilityContext, ...(await this.captureScreenshot(tabId, tab, input)) }
     }
@@ -1793,6 +1827,195 @@ export class BrowserService {
       return { ...utilityContext, entries: [...tab.consoleEntries] }
     }
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
+  }
+
+  /** Ask before an Auto Review turn mutates the page the user is viewing. */
+  private async approveAttachedPageOperation(
+    operation: string,
+    input: Record<string, unknown>,
+    tab: BrowserTab
+  ): Promise<boolean> {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
+    const pageUrl = contents.getURL()
+    const pageGeneration = tab.navigationGeneration
+    let action: string
+    if (operation === 'click') {
+      action = `Click the first element matching this selector:\n${this.requiredInputString(input, 'selector')}`
+    } else if (operation === 'type') {
+      action = `Replace the value of this element:\n${this.requiredInputString(input, 'selector')}\n\nWith this text:\n${this.requiredInputString(input, 'text', true)}`
+    } else if (operation === 'navigate') {
+      action = `Navigate the current tab to:\n${validateBrowserUrl(this.requiredInputString(input, 'url'))}`
+    } else if (operation === 'reload') {
+      action = 'Reload the current page.'
+    } else if (operation === 'viewport') {
+      action = `Change the page viewport to:\n${JSON.stringify(input)}`
+    } else {
+      throw new Error(`Auto Review does not support the browser action "${operation}"`)
+    }
+
+    const approval = await dialog.showMessageBox(this.window, {
+      type: 'warning',
+      title: 'Approve browser action',
+      message: `Allow the agent to act on ${safeOrigin(pageUrl)}?`,
+      detail: action,
+      buttons: ['Cancel', 'Allow'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    })
+    if (approval.response !== 1) return false
+    if (
+      contents.isDestroyed() ||
+      tab.navigationGeneration !== pageGeneration ||
+      contents.getURL() !== pageUrl
+    ) {
+      throw new Error(
+        'The page changed while the browser action was being approved; retry on the current page'
+      )
+    }
+    return true
+  }
+
+  /**
+   * Fill a page's file input through a narrow main-process action. Auto Review
+   * requires a native chooser or confirmation for exact paths; Full Access can
+   * use paths directly. The site never receives a file until this operation is
+   * called, and this operation never submits the surrounding form.
+   */
+  private async uploadFiles(
+    tabId: string,
+    tab: BrowserTab,
+    input: Record<string, unknown>,
+    permissionLevel: PermissionLevel
+  ): Promise<Record<string, unknown>> {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
+
+    const rawSelector = input['selector']
+    if (
+      rawSelector !== undefined &&
+      (typeof rawSelector !== 'string' || rawSelector.length === 0 || rawSelector.length > 1024)
+    ) {
+      throw new TypeError('selector must be a non-empty CSS selector under 1024 characters')
+    }
+    const selector = typeof rawSelector === 'string' ? rawSelector : 'input[type="file"]'
+    const beforeUrl = contents.getURL()
+    const beforeGeneration = tab.navigationGeneration
+    const inputState: unknown = await contents.executeJavaScript(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      if (!(element instanceof HTMLInputElement) || element.type !== 'file') {
+        return { available: false };
+      }
+      return {
+        available: true,
+        multiple: element.multiple,
+        accept: element.accept,
+        disabled: element.disabled
+      };
+    })()`)
+    if (typeof inputState !== 'object' || inputState === null) {
+      throw new Error('The selected browser element is not a file input')
+    }
+    const inputRecord = inputState as Record<string, unknown>
+    if (inputRecord['available'] !== true || inputRecord['disabled'] === true) {
+      throw new Error('The selected browser element is not an enabled file input')
+    }
+    const multiple = inputRecord['multiple'] === true
+    const accept = typeof inputRecord['accept'] === 'string' ? inputRecord['accept'] : ''
+    const suppliedPaths = this.uploadPathInputs(input)
+    let paths: string[]
+    if (suppliedPaths.length > 0) {
+      paths = await Promise.all(suppliedPaths.map((path) => this.resolveUploadPath(path)))
+      if (!multiple && paths.length > 1) {
+        throw new Error('This file input accepts one file at a time')
+      }
+      if (permissionLevel === 'auto_review') {
+        const pageOrigin = safeOrigin(beforeUrl)
+        const approval = await dialog.showMessageBox(this.window, {
+          type: 'warning',
+          title: 'Approve browser file upload',
+          message: `Allow the agent to upload ${paths.length === 1 ? 'this file' : `${paths.length} files`}?`,
+          detail: `${paths.join('\n')}\n\nDestination: ${pageOrigin}`,
+          buttons: ['Cancel', 'Upload'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true
+        })
+        if (approval.response !== 1) return { uploaded: false, cancelled: true }
+      }
+    } else {
+      const filters = fileChooserFilters(accept)
+      const choice = await dialog.showOpenDialog(this.window, {
+        title: `Choose files for upload to ${safeOrigin(beforeUrl)}`,
+        buttonLabel: 'Upload',
+        properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+        ...(filters.length > 0 ? { filters } : {})
+      })
+      if (choice.canceled || choice.filePaths.length === 0) {
+        return { uploaded: false, cancelled: true }
+      }
+      paths = await Promise.all(choice.filePaths.map((path) => this.resolveUploadPath(path)))
+    }
+    if (paths.length > 10) throw new Error('A browser upload can include at most 10 files')
+
+    if (
+      contents.isDestroyed() ||
+      tab.navigationGeneration !== beforeGeneration ||
+      contents.getURL() !== beforeUrl
+    ) {
+      throw new Error(
+        'The page changed while the file upload was being approved; retry on the current page'
+      )
+    }
+
+    const debuggerSession = contents.debugger
+    const attachedHere = !debuggerSession.isAttached()
+    try {
+      if (attachedHere) debuggerSession.attach('1.3')
+      const documentResult: unknown = await debuggerSession.sendCommand('DOM.getDocument', {
+        depth: 1,
+        pierce: true
+      })
+      const documentRecord = asObject(documentResult)
+      const root = asObject(documentRecord?.['root'])
+      const rootNodeId = root?.['nodeId']
+      if (typeof rootNodeId !== 'number') throw new Error('The page document is unavailable')
+      const queryResult: unknown = await debuggerSession.sendCommand('DOM.querySelector', {
+        nodeId: rootNodeId,
+        selector
+      })
+      const nodeId = asObject(queryResult)?.['nodeId']
+      if (typeof nodeId !== 'number' || nodeId === 0) {
+        throw new Error('The file input is no longer present on the page')
+      }
+      await debuggerSession.sendCommand('DOM.setFileInputFiles', { nodeId, files: paths })
+      return { uploaded: true, files: paths.map((path) => basename(path)), submitted: false }
+    } finally {
+      if (attachedHere && debuggerSession.isAttached()) debuggerSession.detach()
+    }
+  }
+
+  private uploadPathInputs(input: Record<string, unknown>): string[] {
+    const value = input['paths']
+    if (value === undefined) return []
+    if (
+      !Array.isArray(value) ||
+      value.length < 1 ||
+      value.length > 10 ||
+      value.some((path) => typeof path !== 'string' || path.length === 0 || path.length > 8192)
+    ) {
+      throw new TypeError('paths must contain between 1 and 10 absolute file paths')
+    }
+    return value as string[]
+  }
+
+  private async resolveUploadPath(path: string): Promise<string> {
+    if (!isAbsolute(path)) throw new TypeError('Every upload path must be absolute')
+    const resolved = await realpath(path)
+    const details = await stat(resolved)
+    if (!details.isFile()) throw new TypeError(`Upload path is not a file: ${basename(path)}`)
+    return resolved
   }
 
   /**
@@ -5671,6 +5894,32 @@ export class BrowserService {
     }
     return value
   }
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
+}
+
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return 'the current page'
+  }
+}
+
+function fileChooserFilters(accept: string): Array<{ name: string; extensions: string[] }> {
+  const extensions = [
+    ...new Set(
+      accept
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.startsWith('.') && !item.includes('*'))
+        .map((item) => item.slice(1).toLowerCase())
+        .filter((item) => /^[a-z0-9.+_-]+$/u.test(item))
+    )
+  ]
+  return extensions.length > 0 ? [{ name: 'Accepted file types', extensions }] : []
 }
 
 /**
