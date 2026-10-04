@@ -420,6 +420,9 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
         stages: [],
         autopilot: false
       })
+      await threadManager.updateThread(safeProjectId, safeThreadId, {
+        implementationBrainstorm: { id: finalized.id, version: finalized.version }
+      })
       return finalized
     }
   )

@@ -10540,14 +10540,31 @@ export class ChatEngine {
     }
   }
 
-  private implementationAuditEligible(
-    thread: Thread | null
-  ): thread is Thread & { settings: ThreadSettings } {
+  private async implementationBrainstormContract(
+    projectId: string,
+    threadId: string
+  ): Promise<BrainstormDocument | null> {
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    const reference = thread?.implementationBrainstorm
+    const document = reference
+      ? await this.brainstormEngine.getVersionViaWorker(
+          projectId,
+          threadId,
+          reference.id,
+          reference.version
+        )
+      : await this.brainstormEngine.getFinalizedViaWorker(projectId, threadId)
+    return document?.status === 'finalized' ? document : null
+  }
+
+  private async implementationAuditEligible(thread: Thread | null): Promise<boolean> {
     if (!thread?.settings) return false
     if (this.engineeringLifecycleActive(thread.projectId, thread.id) || thread.settings.loopMode) {
       return true
     }
-    return this.assignmentEngine.getActive(thread.projectId, thread.id)?.status === 'completed'
+    if (this.assignmentEngine.getActive(thread.projectId, thread.id)?.status === 'completed')
+      return true
+    return (await this.implementationBrainstormContract(thread.projectId, thread.id)) !== null
   }
 
   async closeTemporaryChat(temporaryChatId: string): Promise<void> {
@@ -16927,7 +16944,7 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const settings = validateThreadSettings(request.settings)
     const thread = await this.threadManager.getThread(projectId, threadId)
-    if (!this.implementationAuditEligible(thread)) {
+    if (!thread?.settings || !(await this.implementationAuditEligible(thread))) {
       throw new Error(
         'Implementation audits require Engineering, Achievement, or a completed Assignment'
       )
@@ -16982,7 +16999,7 @@ export class ChatEngine {
   ): Promise<Thread> {
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
     if (!coordinator) throw new Error('Engineering audit coordinator not found.')
-    if (!this.implementationAuditEligible(coordinator)) {
+    if (!(await this.implementationAuditEligible(coordinator))) {
       throw new Error('An approved Engineering implementation is required before audit.')
     }
     if (this.assignmentEngine.getActive(projectId, coordinatorThreadId)) {
@@ -18009,6 +18026,11 @@ export class ChatEngine {
             ? 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then allow Achievement to audit again.'
             : 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then request a fresh audit when ready.',
           ...(achievement ? [await this.cioPrompt('achievement-implementation')] : []),
+          ...(report.brainstormId && report.brainstormVersion
+            ? [
+                `Implementation contract: ${await this.artifactRef(projectId, coordinatorThreadId, join('versions', `${report.brainstormId}-v${report.brainstormVersion}-brainstorm.md`))}. Use this finalized Brainstorm for the corrections.`
+              ]
+            : []),
           `Audit report: ${auditPath}`,
           `User feedback:\n${feedback.trim()}`,
           `Open audit annotations:\n${formatOpenAnnotations(report.annotations)}`
@@ -18965,9 +18987,13 @@ export class ChatEngine {
     settings: ThreadSettings
   ): Promise<{ report: AuditReport; auditorThread: Thread }> {
     const spec = await this.getActiveSpec(projectId, coordinatorThreadId)
-    if (!spec || spec.status !== 'approved') {
-      throw new Error('An approved specification is required before audit.')
+    const brainstorm = !spec
+      ? await this.implementationBrainstormContract(projectId, coordinatorThreadId)
+      : null
+    if ((spec && spec.status !== 'approved') || (!spec && !brainstorm)) {
+      throw new Error('An approved specification or finalized Brainstorm is required before audit.')
     }
+    const contractSummary = spec?.content.resolutionSummary ?? brainstorm?.content.summary ?? ''
     const auditorThread = await this.ensureImplementationAuditorThread(
       projectId,
       coordinatorThreadId,
@@ -18977,14 +19003,18 @@ export class ChatEngine {
     const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, auditorThread.id)
     const sessionId = await this.ensureSession(projectId, auditorThread.id, driverId)
-    const specPath = await this.artifactRef(
+    const contractPath = await this.artifactRef(
       projectId,
       coordinatorThreadId,
-      join('versions', `${spec.id}-v${spec.version}.md`)
+      spec
+        ? join('versions', `${spec.id}-v${spec.version}.md`)
+        : join('versions', `${brainstorm?.id}-v${brainstorm?.version}-brainstorm.md`)
     )
     const basePrompt = [
-      `Independently audit the current project implementation against the approved specification at this project-relative path: ${specPath}`,
-      `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
+      spec
+        ? `Independently audit the current project implementation against the approved specification at this project-relative path: ${contractPath}`
+        : `Audit the current project implementation against the finalized Brainstorm at this project-relative path: ${contractPath}. No specification exists. This Brainstorm is the authoritative implementation contract. Verify its agreed direction, requirements, constraints, and prototypes against the repository. Do not require a specification or invent additional requirements.`,
+      `Open annotations on the implementation contract:\n${formatOpenAnnotations(spec?.annotations ?? brainstorm?.annotations ?? [])}`
     ].join('\n\n')
     let lastError: Error | null = null
 
@@ -19002,14 +19032,12 @@ export class ChatEngine {
         projectId,
         auditorThread.id,
         messageId,
-        `Audit implementation: ${spec.content.resolutionSummary}`,
+        `Audit implementation: ${contractSummary}`,
         prompt,
         [],
         [],
         [],
-        attemptIndex === 0
-          ? { action: 'Audit implementation', body: spec.content.resolutionSummary }
-          : undefined,
+        attemptIndex === 0 ? { action: 'Audit implementation', body: contractSummary } : undefined,
         'internal'
       )
       const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
@@ -19044,7 +19072,15 @@ export class ChatEngine {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [await this.cioPrompt('audit-report'), utilityTurn.instructions]
+          systemPrompt: [
+            await this.cioPrompt('audit-report'),
+            ...(!spec
+              ? [
+                  'For this audit, the supplied finalized Brainstorm replaces the approved specification as the implementation contract. Apply all audit checks to that document.'
+                ]
+              : []),
+            utilityTurn.instructions
+          ]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
@@ -19072,8 +19108,10 @@ export class ChatEngine {
         const report = await this.auditEngine.create({
           projectId,
           threadId: coordinatorThreadId,
-          specId: spec.id,
-          specVersion: spec.version,
+          specId: spec?.id,
+          specVersion: spec?.version,
+          brainstormId: brainstorm?.id,
+          brainstormVersion: brainstorm?.version,
           content,
           outcome: auditRequiresRework(content) ? 'rework_required' : 'passed',
           provenance: {
@@ -25373,9 +25411,14 @@ export class ChatEngine {
           this.getActiveSpec(info.projectId, info.threadId)
         ])
         const loopAssignment = this.assignmentEngine.getActive(info.projectId, info.threadId)
+        const finalizedBrainstorm =
+          !activeSpec && thread?.settings?.loopMode !== true
+            ? await this.implementationBrainstormContract(info.projectId, info.threadId)
+            : null
         if (
-          this.implementationAuditEligible(thread) &&
-          activeSpec?.status === 'approved' &&
+          thread?.settings &&
+          (await this.implementationAuditEligible(thread)) &&
+          (activeSpec?.status === 'approved' || finalizedBrainstorm !== null) &&
           (!thread.settings.loopMode || !loopAssignment || loopAssignment.status === 'completed') &&
           thread.auditState !== 'running' &&
           thread.auditState !== 'report_ready'

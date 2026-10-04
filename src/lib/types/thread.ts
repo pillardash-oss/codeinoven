@@ -118,6 +118,8 @@ export interface Thread {
   /** Latest persisted audit report surfaced by the thread. */
   activeAuditId?: string
   activeAuditVersion?: number
+  /** Exact finalized document selected for direct Brainstorm implementation. */
+  implementationBrainstorm?: { id: string; version: number }
   /** Assignment workflow that owns this thread, when it is a coordinator or worker. */
   assignmentId?: string
   /** Role used to scope Assignment orchestration capabilities. */

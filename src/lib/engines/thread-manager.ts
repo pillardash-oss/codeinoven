@@ -613,6 +613,7 @@ export class ThreadManager {
         | 'providerId'
         | 'workingDirectory'
         | 'authoredWorkKind'
+        | 'implementationBrainstorm'
         | 'scopeBucketId'
         | 'lastActivity'
         | 'read'

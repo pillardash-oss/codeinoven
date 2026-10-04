@@ -19,6 +19,8 @@ export interface CreateAuditReportInput {
   /** Audited specification; omit for independent (spec-less) audits. */
   specId?: string
   specVersion?: number
+  brainstormId?: string
+  brainstormVersion?: number
   /** True when the report comes from an independent spec-less audit. */
   independent?: boolean
   assignmentId?: string
@@ -62,6 +64,8 @@ export class AuditEngine {
       threadId: input.threadId,
       specId: input.specId,
       specVersion: input.specVersion,
+      brainstormId: input.brainstormId,
+      brainstormVersion: input.brainstormVersion,
       independent: input.independent === true ? true : undefined,
       assignmentId: input.assignmentId,
       assignmentVersion: input.assignmentVersion,

@@ -2990,7 +2990,8 @@
   let plainEngineeringAuditAvailable = $derived(
     studioOnlyAuditWorkflow &&
       (engineeringOn || plainAuditTriggered) &&
-      spec?.status === 'approved' &&
+      (spec?.status === 'approved' ||
+        (!spec && brainstormWorkflow?.finalizedBrainstormVersion !== undefined)) &&
       (auditState === 'offered' ||
         auditState === 'running' ||
         auditState === 'reworking' ||
@@ -3065,7 +3066,7 @@
     // "Run audit" there is what commits the choice durably.
     if (independentAuditDisplayEnabled) return 'audit'
     if (achievementTriggered && spec) return 'achievement'
-    if (plainEngineeringAuditAvailable && spec) return 'audit'
+    if (plainEngineeringAuditAvailable) return 'audit'
     return null
   })
 
@@ -3179,13 +3180,13 @@
       }
     }
     const auditSpec = spec
-    if (!auditSpec) return null
+    if (!auditSpec && !brainstormWorkflow?.finalizedBrainstormVersion) return null
     return {
       component: 'achievement',
       props: {
         mode: 'audit',
         specTitle: thread.title,
-        specSummary: auditSpec.content.resolutionSummary,
+        specSummary: auditSpec?.content.resolutionSummary ?? brainstorm?.content.summary ?? '',
         auditThread: durableAuditThread,
         auditState,
         reportAvailable: auditReport !== null,
