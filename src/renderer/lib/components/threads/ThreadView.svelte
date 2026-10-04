@@ -8555,9 +8555,43 @@
 
   /** Next-step choices from the Brainstorm studio after a session. */
   async function brainstormNextStep(
-    step: 'lofi' | 'hifi' | 'prd' | 'spec',
+    step: 'lofi' | 'hifi' | 'prd' | 'spec' | 'implement',
     draft: BrainstormDocument
   ): Promise<void> {
+    if (brainstormBusy || busy) return
+    if (step === 'implement') {
+      brainstormBusy = true
+      brainstormError = ''
+      try {
+        const finalized = await invoke(
+          'brainstorm:implement',
+          draft.projectId,
+          draft.threadId,
+          draft.id,
+          draft.version
+        )
+        applyBrainstormDocument(finalized)
+        engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+        showSpecStudio = false
+        await sendMessage(
+          'Implement the agreed direction from this Brainstorm.',
+          [],
+          undefined,
+          true,
+          `The user selected Implement directly from Brainstorm version ${finalized.version}. Use this document as the implementation brief. Complete the implementation and relevant validation.\n\n${JSON.stringify(finalized.content)}`,
+          [],
+          [],
+          workflowActionPresentation('Implement Brainstorm', '')
+        )
+      } catch (error) {
+        brainstormError =
+          error instanceof Error ? error.message : 'Brainstorm implementation failed.'
+        errorMessage = brainstormError
+      } finally {
+        brainstormBusy = false
+      }
+      return
+    }
     if (step === 'lofi' || step === 'hifi') {
       const note =
         step === 'lofi'
@@ -13135,10 +13169,7 @@
                 busy={brainstormBusy}
                 onReview={openBrainstormStudio}
                 onOpenPrototype={openPrototypePreview}
-                finalizeLabel={engineeringLifecycle?.activeStage === 'brainstorm'
-                  ? 'Finalize Brainstorm'
-                  : 'Prepare spec'}
-                onFinalize={() => submitBrainstormDecision('finalize', readyBrainstorm, '')}
+                onNextStep={(step) => brainstormNextStep(step, readyBrainstorm)}
                 {settings}
                 {providers}
                 projectId={thread.projectId}

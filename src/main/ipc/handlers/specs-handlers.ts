@@ -391,6 +391,38 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
       )
     }
   )
+  privileged(
+    'brainstorm:implement',
+    async (_, projectId: unknown, threadId: unknown, brainstormId: unknown, version: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      const lifecycle = ctx.engineeringLifecycleEngine.ensure(safeProjectId, safeThreadId)
+      if (
+        (lifecycle.activeStage && lifecycle.activeStage !== 'brainstorm') ||
+        (lifecycle.humanGate &&
+          lifecycle.humanGate !== 'brainstorm_finalization' &&
+          lifecycle.humanGate !== 'prototype_selection')
+      ) {
+        throw new Error('Finish the active Engineering stage before implementing the Brainstorm')
+      }
+      const finalized = await brainstormEngine.finalize(
+        safeProjectId,
+        safeThreadId,
+        validateEntityId(brainstormId, 'Brainstorm ID'),
+        requireVersion(version),
+        ''
+      )
+      ctx.engineeringLifecycleEngine.advance(safeProjectId, safeThreadId, {
+        ...(lifecycle.activeStage === 'brainstorm' ? { completedStage: 'brainstorm' } : {}),
+        terminal: true
+      })
+      ctx.engineeringLifecycleEngine.select(safeProjectId, safeThreadId, {
+        stages: [],
+        autopilot: false
+      })
+      return finalized
+    }
+  )
   ipcMain.handle(
     'brainstorm:finalize',
     (

@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { ArrowRight, Lightbulb } from '@lucide/svelte'
+  import { Lightbulb } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import type { BrainstormPrototype, ProviderCatalog, ThreadSettings } from '$shared/types'
+  import BrainstormNextStepMenu from '../shared/BrainstormNextStepMenu.svelte'
+  import type { BrainstormNextStep } from '../shared/BrainstormNextStepMenu.svelte'
   import CardFoldToggle from '../shared/CardFoldToggle.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
@@ -10,10 +12,9 @@
     version: number
     busy?: boolean
     onReview: () => void
-    onFinalize: () => void
+    onNextStep: (step: BrainstormNextStep) => CallbackResult
     prototypes?: BrainstormPrototype[]
     onOpenPrototype?: (previewPath: string) => CallbackResult
-    finalizeLabel?: string
     settings?: ThreadSettings
     providers?: ProviderCatalog[]
     projectId?: string | null
@@ -34,10 +35,9 @@
     version,
     busy = false,
     onReview,
-    onFinalize,
+    onNextStep,
     prototypes = [],
     onOpenPrototype,
-    finalizeLabel = 'Prepare spec',
     settings,
     providers = [],
     projectId = null,
@@ -75,8 +75,8 @@
       <div class="space-y-1.5 p-4">
         <p class="text-sm font-semibold text-foreground">Your current alignment is captured.</p>
         <p class="text-xs leading-relaxed text-muted">
-          Keep talking to refine the direction, review the concise report, or use it to prepare the
-          specification.
+          Keep talking to refine the direction, review the concise report, or choose what to build
+          next.
         </p>
         {#if prototypes.length > 0}
           <div class="max-h-60 space-y-1 overflow-y-auto pt-1">
@@ -124,14 +124,7 @@
         >
           Review report
         </button>
-        <button
-          class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
-          disabled={busy}
-          onclick={onFinalize}
-        >
-          {finalizeLabel}
-          <ArrowRight size={13} />
-        </button>
+        <BrainstormNextStepMenu {busy} onNextStep={(step) => void onNextStep(step)} />
       </div>
     </div>
   {/if}
