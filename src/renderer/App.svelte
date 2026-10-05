@@ -335,13 +335,6 @@
     viewTourStep = 0
   })
 
-  /** The setup tour explains the left sidebar, so the workspace keeps that
-   *  sidebar on screen for as long as the tour runs, even on a first run where
-   *  it is still empty. */
-  $effect(() => {
-    workspaceState.setSetupTourOpen(onboardingOpen)
-  })
-
   async function loadConfig(): Promise<void> {
     try {
       config = await invoke('config:get')
@@ -1621,6 +1614,7 @@
           mode={lastContentView}
           active={showsContentView}
           scopeViewActive={activeView === 'scope'}
+          setupTourOpen={onboardingOpen}
           {navigate}
           lastProjectViewLanding={() => navigation.projectFamilyLanding()}
           {config}

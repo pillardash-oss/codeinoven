@@ -155,6 +155,10 @@
     /** True while the Scope page is on screen   thread switches must keep the
      *  scope store's active project in sync with the selected thread. */
     scopeViewActive?: boolean
+    /** True while the getting-started tour is on screen. That tour explains the
+     *  left sidebar, so the shell paints it even when the view's sidebar has
+     *  nothing in it yet, which is exactly the state a first run is in. */
+    setupTourOpen?: boolean
     navigate: (view: MainView) => void
     /** The project view a Ctrl+Tab return to the project family lands on: the
      *  view the user last used for the family, which is also the one the rail's
@@ -170,6 +174,7 @@
     mode,
     active = true,
     scopeViewActive = false,
+    setupTourOpen = false,
     navigate,
     lastProjectViewLanding = () => 'projects',
     config,
@@ -1821,7 +1826,7 @@
    * itself is what one of its steps explains, and a first run is exactly the
    * moment the sidebar is empty.
    */
-  let workspaceSidebarVisible = $derived(workspaceSidebarHasContent || workspaceState.setupTourOpen)
+  let workspaceSidebarVisible = $derived(workspaceSidebarHasContent || setupTourOpen)
 
   // ─── Data loading ────────────────────────────────────────────────────────
 

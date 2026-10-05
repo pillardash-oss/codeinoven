@@ -507,15 +507,6 @@ class WorkspaceState {
     return this.pendingViewTour
   }
 
-  /** True while the getting-started tour is on screen. That tour explains the
-   *  left sidebar, so the shell paints it even when the active view has nothing
-   *  in it yet, which is exactly the state a first run is in. */
-  setupTourOpen = $state(false)
-
-  setSetupTourOpen(open: boolean): void {
-    this.setupTourOpen = open
-  }
-
   /** Thread ids that had a user message this session. The centered composer
    *  head start never returns for these — even if the messages are deleted —
    *  so it never interrupts a user mid-thought. Session-scoped by design:

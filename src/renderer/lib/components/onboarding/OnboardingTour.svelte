@@ -328,9 +328,9 @@
             class="flex gap-1"
             aria-label={`${tourLabel} step ${spotlightIndex + 1} of ${spotlightCount}`}
           >
-            {#each steps as _step, index (index)}
+            {#each steps as tourStep (tourStep.selector)}
               <span
-                class={`h-1.5 rounded-full ${index === spotlightIndex ? 'w-5 bg-primary' : 'w-1.5 bg-raised'}`}
+                class={`h-1.5 rounded-full ${tourStep.selector === activeSpotlight.selector ? 'w-5 bg-primary' : 'w-1.5 bg-raised'}`}
               ></span>
             {/each}
           </div>
