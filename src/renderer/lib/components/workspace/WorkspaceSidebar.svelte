@@ -212,6 +212,7 @@
     }
     const entries: ThreadListEntry[] = []
     for (const group of threadGroups) {
+      if (!threadGroupingState.isVisible(group.label)) continue
       entries.push({ key: `group:${group.label}`, kind: 'header', group })
       if (!threadGroupingState.isFolded(group.label)) {
         for (const thread of group.threads) {
@@ -781,9 +782,11 @@
                   ? sidebar.threadsSearching
                     ? 'Searching…'
                     : 'No matching threads'
-                  : threadProjectFilterState.isAll
-                    ? 'No threads yet'
-                    : 'No threads in the selected projects'}
+                  : threadGroupingState.enabled && !threadGroupingState.isAll
+                    ? 'No threads in the selected inboxes'
+                    : threadProjectFilterState.isAll
+                      ? 'No threads yet'
+                      : 'No threads in the selected projects'}
               </p>
             {/if}
           {/each}
