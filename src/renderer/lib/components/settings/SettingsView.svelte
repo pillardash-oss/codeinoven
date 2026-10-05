@@ -1216,8 +1216,8 @@
               CIO Cleanup
             </h3>
             <p class="mb-3 text-xs leading-relaxed text-dimmed">
-              Stale content of every workspace's <code>.cio</code> scratch folder — projects, scopes,
-              chats, assistant routines, and browser tabs — is removed once a day.
+              Stale content of every workspace's <code>.cio</code> scratch folder (projects, scopes, chats,
+              assistant routines, and browser tabs) is removed once a day.
             </p>
             <div class="space-y-3">
               <div class="flex items-center justify-between gap-4">
