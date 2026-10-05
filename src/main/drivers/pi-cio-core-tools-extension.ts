@@ -31,6 +31,7 @@
 
 import { piCoreToolsExtension } from './pi-core-tools-extension'
 import { piCompactionExtension } from './pi-compaction-extension'
+import { piMcpServersExtension } from './pi-mcp-servers-extension'
 import { piStatusExtension } from './pi-status-extension'
 import { piUsageExtension } from './pi-usage-extension'
 import { piUtilityGatewayExtension } from './pi-utility-gateway-extension'
@@ -65,6 +66,10 @@ export interface CioCoreToolsExtensionOptions {
   /** Absolute path of the per-session allowed-tools handoff file. Empty array
    *  (the seed) means every pi built-in tool is available. */
   allowedToolsPath: string
+  /** Absolute path of the per-session MCP server document. The extension
+   *  registers the servers it names with pi's MCP host; a missing file registers
+   *  nothing and never tears down a registration an earlier turn made. */
+  mcpServersPath: string
   /** Absolute path of the per-session oversized-request recovery arm/disarm
    *  flag file the driver rewrites during oversized-body error recovery. */
   oversizedFlagPath: string
@@ -176,6 +181,7 @@ export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): 
     { factory: '__cioStatusExtension', source: piStatusExtension() },
     { factory: '__cioUsageExtension', source: piUsageExtension() },
     { factory: '__cioGatewayExtension', source: piUtilityGatewayExtension() },
+    { factory: '__cioMcpServersExtension', source: piMcpServersExtension() },
     {
       factory: '__cioCoreToolsExtension',
       source: piCoreToolsExtension({ questionCap: options.questionCap })
@@ -203,6 +209,7 @@ export default function codeInOvenCioCoreToolsExtension(pi: ExtensionAPI): void 
   __cioStatusExtension()(pi)
   __cioUsageExtension()(pi)
 __CIO_INTERACTIVE_TOOLS__  __cioGatewayExtension()(pi)
+__CIO_INTERACTIVE_TOOLS__  __cioMcpServersExtension()(pi)
 __CIO_INTERACTIVE_TOOLS__  __cioCoreToolsExtension()(pi)
 __CIO_STRIP_BUILTINS__  // Strip built-in tools after load: setActiveTools is an action
 __CIO_STRIP_BUILTINS__  // method and throws during extension loading, so it is deferred
@@ -217,6 +224,13 @@ __CIO_STRIP_BUILTINS__  })
       .replace('__CIO_SYSTEM_PROMPT_PATH__', JSON.stringify(options.systemPromptPath).slice(1, -1))
       .replace('__CIO_HISTORY_RECAP_PATH__', JSON.stringify(options.historyRecapPath).slice(1, -1))
       .replace('__CIO_ALLOWED_TOOLS_PATH__', JSON.stringify(options.allowedToolsPath).slice(1, -1))
+      // Two generated fragments read this document (the registration extension
+      // and the core-tools gate), so EVERY occurrence is replaced. The
+      // replacement is a function because a path may contain `$`, which a
+      // string replacement would read as a capture reference.
+      .replaceAll('__CIO_MCP_SERVERS_PATH__', () =>
+        JSON.stringify(options.mcpServersPath).slice(1, -1)
+      )
       .replace(
         '__CIO_OVERSIZED_FLAG_PATH__',
         JSON.stringify(options.oversizedFlagPath).slice(1, -1)

@@ -508,3 +508,28 @@ export interface ResolvedUtility {
   utility: UtilityDefinition
   binding: HarnessUtilityBinding
 }
+
+/**
+ * One MCP utility handed to a harness that runs MCP servers itself.
+ *
+ * Pi owns an MCP host, so a utility it can run is described to pi instead of
+ * being proxied by the app gateway. The credential values travel with the
+ * utility because they are read by a process that was spawned before the
+ * utility was activated and therefore cannot inherit them from the app's own
+ * launch environment.
+ */
+export interface NativeMcpUtilityBinding {
+  utility: UtilityDefinitionFor<'mcp'>
+  /** Credential values resolved for this turn, keyed by the variable the server reads. */
+  environment: Record<string, string>
+}
+
+/** What a harness that runs MCP servers itself published for one utility. */
+export interface NativeMcpServerPublication {
+  utilityId: string
+  /**
+   * Server name the harness registered. Pi exposes its tools as
+   * `mcp__<name>__<tool>` and announces the server as `mcp__<name>`.
+   */
+  server: string
+}

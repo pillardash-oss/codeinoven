@@ -11,6 +11,8 @@ import type {
   HarnessCommand,
   PermissionReply,
   ResolvedUtility,
+  NativeMcpServerPublication,
+  NativeMcpUtilityBinding,
   UtilityKind
 } from '../../lib/types'
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
@@ -694,6 +696,19 @@ export interface HarnessDriver {
     sessionId: string,
     endpoint: UtilityGatewayEndpoint | null
   ): Promise<void>
+
+  /**
+   * Publish the MCP utilities this thread has activated to a harness that runs
+   * MCP servers itself (pi's own MCP host). Absent for every harness that only
+   * reaches MCP servers through the app gateway, which is what keeps the gateway
+   * the one transport there. Answers with the server name each utility took, so
+   * the gateway can tell the model which namespace to call from a script.
+   */
+  publishUtilityMcpServers?(
+    projectPath: string,
+    sessionId: string,
+    utilities: readonly NativeMcpUtilityBinding[]
+  ): Promise<NativeMcpServerPublication[]>
 
   /**
    * Publish the owning thread's plan and progress for checkpoint rebuilds.

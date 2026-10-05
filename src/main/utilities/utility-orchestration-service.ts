@@ -6,7 +6,9 @@ import type {
   UtilityDefinitionFor,
   McpUtilityConfig,
   UtilityKind,
-  PermissionLevel
+  PermissionLevel,
+  NativeMcpServerPublication,
+  NativeMcpUtilityBinding
 } from '../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
@@ -157,6 +159,17 @@ export interface UtilityTurnRequest {
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
   /**
+   * Hand the harness's own MCP host the utilities this thread has activated, so
+   * it runs them instead of the app gateway (which is what lets a codemode
+   * script receive a tool's whole `CallToolResult`, structured payload
+   * included). Absent for every harness without an MCP host of its own, which
+   * keeps the gateway as the one transport there. Returns the server name each
+   * utility took, so activation can tell the model which namespace to reach for.
+   */
+  publishNativeMcpServers?: (
+    utilities: readonly NativeMcpUtilityBinding[]
+  ) => Promise<readonly NativeMcpServerPublication[]>
+  /**
    * Whether this turn belongs to a design session the user opened with
    * `@cio-design`. A session promotes the app-owned design capability to an
    * active capability for the turn, so the playbook is already in context and
@@ -256,6 +269,26 @@ export interface UtilityTurnGateway {
   cleanup(): Promise<void>
 }
 
+/**
+ * What the model is told when a harness's own MCP host runs the server.
+ *
+ * The gateway can still reach the same server, which is why this says so
+ * plainly, but a script is the path that receives a tool's whole
+ * `CallToolResult`: an image or a structured payload that the gateway's JSON
+ * hop flattens (a computer-use snapshot, for one) arrives intact.
+ */
+function nativeMcpHostHint(server: string): { namespace: string; note: string } {
+  return {
+    namespace: `mcp__${server}`,
+    note:
+      `This server also runs on your own MCP host as \`mcp__${server}\`: its tools are named ` +
+      `\`mcp__${server}__<tool>\`, they are not declared to you, and you call them from the body of a codemode script, ` +
+      'finding them by name or by intent with `searchTools`. Prefer that path whenever a tool returns an ' +
+      'image or a structured payload, because a script receives the complete result: a large result can also be ' +
+      'filtered there before it reaches you. The gateway operations in this payload remain a fallback for the same server.'
+  }
+}
+
 export type BrowserUtilityExecutor = (
   operation: string,
   input: Record<string, unknown>,
@@ -331,6 +364,8 @@ interface TurnState {
   eligible: Map<string, ResolvedUtility>
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
+  /** Server name each utility took on the harness's own MCP host this turn. */
+  nativeMcpServers: Map<string, string>
   /**
    * Connections being established right now, keyed like `clients`.
    *
@@ -789,6 +824,7 @@ export class UtilityOrchestrationService {
       eligible: new Map(eligible.map((entry) => [entry.utility.id, entry])),
       activated: new Map(always.map((entry) => [entry.utility.id, entry])),
       clients: new Map(),
+      nativeMcpServers: new Map(),
       connecting: new Map(),
       attributionSequence: 0,
       searched: false,
@@ -807,6 +843,10 @@ export class UtilityOrchestrationService {
     for (const entry of bankEntries) {
       if (state.eligible.has(entry.id)) state.bank.set(entry.id, entry)
     }
+    // Register the thread's activated MCP servers with the harness's own MCP
+    // host before the model runs: a script call then reaches them without a
+    // gateway round trip, while a utility nobody activated costs nothing.
+    await this.publishNativeMcpServers(state)
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
@@ -1506,6 +1546,10 @@ export class UtilityOrchestrationService {
       }
     }
     state.activated.set(utilityId, resolved)
+    // A harness-owned MCP host must learn about the server before the model's
+    // next script, or an activation in this turn would only take effect in the
+    // next one.
+    if (resolved.utility.kind === 'mcp') await this.publishNativeMcpServers(state)
     // First activation in this thread registers the utility in the durable
     // thread utilities bank so every later turn can invoke it by id directly.
     await this.registerThreadBankEntry(state, resolved.utility)
@@ -1598,6 +1642,14 @@ export class UtilityOrchestrationService {
       }
     }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
+      const nativeServer = state.nativeMcpServers.get(resolved.utility.id)
+      if (nativeServer) {
+        // The harness's own MCP host runs this server, so connecting the app's
+        // client too would spawn a second copy of the same process for nothing.
+        // The model reaches the tools from a script, where they are discoverable
+        // by name and by intent.
+        return { nativeHost: nativeMcpHostHint(nativeServer) }
+      }
       const client = await this.ensureMcpClient(state, resolved)
       return { tools: await client.listTools() }
     }
@@ -2391,6 +2443,60 @@ export class UtilityOrchestrationService {
     return resolveCredentialEnvironment(utility.credentials, (secretRef) =>
       this.vault.resolve(secretRef)
     )
+  }
+
+  /**
+   * The MCP utilities a harness-owned MCP host should run for this thread: the
+   * ones this thread already activated (its durable bank), plus the one
+   * activated earlier in this turn. Everything else waits for the app gateway
+   * and its activation step, so a session that never reaches an MCP server never
+   * pays for one.
+   *
+   * Computer use is deliberately absent. Its snapshot pairing, grounding and
+   * per-window lease live on the gateway path, and moving the server without
+   * moving that logic would undo the fix that made it work.
+   */
+  private nativeMcpUtilities(state: TurnState): ResolvedUtility[] {
+    const native: ResolvedUtility[] = []
+    for (const resolved of state.eligible.values()) {
+      if (resolved.utility.kind !== 'mcp') continue
+      if (this.isComputerUseUtility(resolved)) continue
+      if (!state.bank.has(resolved.utility.id) && !state.activated.has(resolved.utility.id)) {
+        continue
+      }
+      native.push(resolved)
+    }
+    return native
+  }
+
+  /**
+   * Publish that set to the harness's own MCP host, with every credential
+   * resolved here, where the vault lives.
+   *
+   * Publication is an optimization over the gateway and never a reason to fail a
+   * turn: a harness that refuses the document, or a server whose config the
+   * harness rejects, leaves the gateway as the path to that utility.
+   */
+  private async publishNativeMcpServers(state: TurnState): Promise<void> {
+    const publish = state.request.publishNativeMcpServers
+    if (!publish) return
+    const bindings: NativeMcpUtilityBinding[] = []
+    for (const resolved of this.nativeMcpUtilities(state)) {
+      if (resolved.utility.kind !== 'mcp') continue
+      bindings.push({
+        utility: resolved.utility,
+        environment: await this.credentialEnvironment(resolved.utility)
+      })
+    }
+    try {
+      const publications = await publish(bindings)
+      state.nativeMcpServers.clear()
+      for (const publication of publications) {
+        state.nativeMcpServers.set(publication.utilityId, publication.server)
+      }
+    } catch (error) {
+      Logger.dev('Native MCP server publication failed:', error)
+    }
   }
 
   private async audit(

@@ -14,7 +14,7 @@ import type {
   CliLineParseContext,
   PersistentCliSession
 } from '../../../src/main/drivers/persistent-cli-driver'
-import type { SessionAgentEvent } from '../../../src/lib/types'
+import type { SessionAgentEvent, UtilityDefinitionFor } from '../../../src/lib/types'
 
 const rpcMock = vi.hoisted(() => {
   const clients: Array<{
@@ -288,7 +288,7 @@ describe('PiDriver', () => {
     const client = rpcMock.clients[0]
     expect(client).toBeDefined()
     const [promptText] = client.prompt.mock.calls[0] as [string, undefined]
-    // The system prompt must not be duplicated into the user turn's text  
+    // The system prompt must not be duplicated into the user turn's text
     // it is delivered as a real system-role field via the core-tools
     // extension's before_agent_start hook, which reads the handoff file
     // below. Re-sending it in every turn's text made models mistake the
@@ -850,5 +850,90 @@ describe('PiDriver', () => {
     expect(result?.events ?? []).toEqual([])
     // And it must not be mistaken for a user message.
     expect(context.session.messages).toHaveLength(0)
+  })
+})
+
+describe('PiDriver MCP server document', () => {
+  const slackUtility: UtilityDefinitionFor<'mcp'> = {
+    id: 'slack-mcp',
+    kind: 'mcp',
+    name: 'Slack MCP',
+    description: 'Post to Slack.',
+    enabled: true,
+    activation: 'on_demand',
+    scope: { level: 'global' },
+    config: { transport: 'stdio', command: 'npx', args: ['-y', 'slack-mcp'] },
+    credentials: [
+      {
+        id: 'token',
+        label: 'Slack token',
+        secretRef: 'secret_1',
+        required: false,
+        environmentVariable: 'SLACK_MCP_XOXP_TOKEN'
+      }
+    ],
+    harnessBindings: [],
+    appOwned: false,
+    createdAt: 0,
+    updatedAt: 0
+  }
+
+  it('publishes the activated utilities, their config and their credentials', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+
+    const publications = await driver.publishUtilityMcpServers('/project', 'session-1', [
+      { utility: slackUtility, environment: { SLACK_MCP_XOXP_TOKEN: 'xoxp-value' } }
+    ])
+
+    expect(publications).toEqual([{ utilityId: 'slack-mcp', server: 'slack_mcp' }])
+    const document = JSON.parse(
+      (await engine.readRaw('runtime/cio-core-tools/session-1/mcp-servers.json')) ?? '{}'
+    ) as { version: number; servers: Array<{ name: string; config: unknown }> }
+    expect(document.version).toBe(1)
+    expect(document.servers).toEqual([
+      {
+        name: 'slack_mcp',
+        utilityId: 'slack-mcp',
+        utilityName: 'Slack MCP',
+        config: {
+          description: 'Post to Slack.',
+          exposure: 'codemode',
+          type: 'stdio',
+          command: 'npx',
+          args: ['-y', 'slack-mcp'],
+          env: { SLACK_MCP_XOXP_TOKEN: 'xoxp-value' }
+        }
+      }
+    ])
+  })
+
+  it('publishes an empty set when the thread activated nothing', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+
+    await driver.publishUtilityMcpServers('/project', 'session-1', [])
+
+    // Empty is a real instruction: pi drops the servers the app no longer
+    // publishes, which is how a disabled utility stops running.
+    expect(
+      JSON.parse(
+        (await engine.readRaw('runtime/cio-core-tools/session-1/mcp-servers.json')) ?? '{}'
+      )
+    ).toEqual({ version: 1, servers: [] })
+  })
+
+  it('removes the credential-bearing document when the session goes away', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const sessionId = await driver.createSession('/project', 'Pi')
+    await driver.publishUtilityMcpServers('/project', sessionId, [
+      { utility: slackUtility, environment: { SLACK_MCP_XOXP_TOKEN: 'xoxp-value' } }
+    ])
+    const relative = `runtime/cio-core-tools/${sessionId}/mcp-servers.json`
+
+    await driver.deleteSession('/project', sessionId)
+
+    expect(await engine.readRaw(relative)).toBeNull()
   })
 })

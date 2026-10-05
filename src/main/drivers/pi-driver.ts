@@ -10,6 +10,8 @@ import type {
   AgentRateLimitWindow,
   AgentUsageCredits,
   AgentToolStatus,
+  NativeMcpServerPublication,
+  NativeMcpUtilityBinding,
   ProviderCatalog,
   ProviderModel,
   SessionAgentEvent
@@ -48,6 +50,11 @@ import {
   type TitleModelCandidate
 } from './persistent-cli-driver'
 import { piMcpExtension } from './pi-mcp-extension'
+import {
+  PI_MCP_SERVERS_FILE_NAME,
+  buildPiMcpRegistrations,
+  piMcpServersDocument
+} from './pi/pi-mcp-registration'
 import { piCustomProvidersExtension } from './pi-providers-extension'
 import { apiKeyEnvVarFor } from '../providers/base-url-provider-service'
 import { piCioCoreToolsExtension } from './pi-cio-core-tools-extension'
@@ -418,6 +425,11 @@ export class PiDriver extends PersistentCliDriver {
   /** Storage-relative allowed-tools handoff file per session, rewritten per turn
    *  so the extension's tool gate reflects the current File-System setting. */
   private cioAllowedToolsPaths = new Map<string, string>()
+  /** Storage-relative MCP server documents per session. Each one names the MCP
+   *  utilities this thread has activated, so the extension can register them
+   *  with pi's own MCP host; the document is rewritten whenever that set or a
+   *  credential changes. */
+  private cioMcpServersPaths = new Map<string, string>()
   /** Storage-relative arm/disarm flag files for oversized-request recovery. */
   private cioOversizedFlagPaths = new Map<string, string>()
   /** Storage-relative stop-flag files the user's Stop writes for the core-tools
@@ -1218,6 +1230,7 @@ export class PiDriver extends PersistentCliDriver {
     this.turnStates.delete(sessionId)
     this.silentContinues.delete(sessionId)
     await this.removeGatewayHandoff(sessionId)
+    await this.removeMcpServersDocument(sessionId)
     await super.deleteSession(projectPath, sessionId)
   }
 
@@ -1352,6 +1365,45 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
+   * Publish the MCP servers this thread has activated, so the app-owned
+   * extension can register them with pi's own MCP host.
+   *
+   * A pi session process outlives the turn that spawned it, so this document  
+   * not the launch arguments   is how a utility activated in a later turn
+   * reaches the running process, and how a rotated credential is re-read
+   * without a restart. An empty list is a real instruction, because pi then
+   * drops the servers the app no longer publishes; a failed write is not, and
+   * leaves the previous document in force until the next publication.
+   *
+   * Answers with the server name each utility took, which the gateway hands the
+   * model on activation so it knows which namespace to reach for.
+   */
+  async publishUtilityMcpServers(
+    _projectPath: string,
+    sessionId: string,
+    utilities: readonly NativeMcpUtilityBinding[]
+  ): Promise<NativeMcpServerPublication[]> {
+    void _projectPath
+    const relative =
+      this.cioMcpServersPaths.get(sessionId) ??
+      join(cioCoreToolsDirectory(sessionId), PI_MCP_SERVERS_FILE_NAME)
+    this.cioMcpServersPaths.set(sessionId, relative)
+    // One broken utility never costs the thread the others: the adapter reports
+    // it, and the app gateway is still a path to that one.
+    const { registrations, failures } = buildPiMcpRegistrations(utilities)
+    for (const failure of failures) {
+      Logger.dev('Pi MCP server skipped:', failure.utilityName, failure.reason)
+    }
+    try {
+      await this.storage.writeRaw(relative, JSON.stringify(piMcpServersDocument(registrations)))
+    } catch (error) {
+      Logger.dev('Pi MCP server document update failed:', error)
+      return []
+    }
+    return registrations.map(({ utilityId, name }) => ({ utilityId, server: name }))
+  }
+
+  /**
    * Publish the plan and progress the owning thread is executing, so the
    * compaction extension can rebuild a checkpoint from them when a transcript
    * cannot be summarized. Session-keyed and best-effort: a thread with no plan
@@ -1481,6 +1533,9 @@ export class PiDriver extends PersistentCliDriver {
     }
     this.gatewayHandoffPaths.clear()
     this.pendingGatewayEndpoints.clear()
+    for (const sessionId of this.cioMcpServersPaths.keys()) {
+      void this.removeMcpServersDocument(sessionId)
+    }
     this.cioCoreToolsExtensionPaths.clear()
     this.cioSystemPromptPaths.clear()
     this.cioHistoryRecapPaths.clear()
@@ -2312,6 +2367,19 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
+  /** Remove a session's MCP server document, which names the utilities and
+   *  carries the credential values a deleted session must not leave behind. */
+  private async removeMcpServersDocument(sessionId: string): Promise<void> {
+    const relative = this.cioMcpServersPaths.get(sessionId)
+    if (!relative) return
+    this.cioMcpServersPaths.delete(sessionId)
+    try {
+      await this.storage.removeRaw(relative)
+    } catch (error) {
+      Logger.dev('Pi MCP server document removal failed:', error)
+    }
+  }
+
   /** Remove a session's gateway handoff file and forget its path. */
   private async removeGatewayHandoff(sessionId: string): Promise<void> {
     const handoffPath = this.gatewayHandoffPaths.get(sessionId)
@@ -3064,6 +3132,7 @@ export class PiDriver extends PersistentCliDriver {
       const systemPromptRelative = join(directory, 'system-prompt.txt')
       const historyRecapRelative = join(directory, 'history-recap.txt')
       const allowedToolsRelative = join(directory, 'allowed-tools.json')
+      const mcpServersRelative = join(directory, PI_MCP_SERVERS_FILE_NAME)
       const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
       const stopFlagRelative = join(directory, 'stop-request.json')
       const watchFlagRelative = join(directory, 'watched-subagents.json')
@@ -3091,6 +3160,7 @@ export class PiDriver extends PersistentCliDriver {
           systemPromptPath: this.storage.resolve(systemPromptRelative),
           historyRecapPath: this.storage.resolve(historyRecapRelative),
           allowedToolsPath: this.storage.resolve(allowedToolsRelative),
+          mcpServersPath: this.storage.resolve(mcpServersRelative),
           oversizedFlagPath: this.storage.resolve(oversizedFlagRelative),
           stopFlagPath: this.storage.resolve(stopFlagRelative),
           subagentWatchPath: this.storage.resolve(watchFlagRelative),
@@ -3109,6 +3179,7 @@ export class PiDriver extends PersistentCliDriver {
       this.cioSystemPromptPaths.set(sessionId, systemPromptRelative)
       this.cioHistoryRecapPaths.set(sessionId, historyRecapRelative)
       this.cioAllowedToolsPaths.set(sessionId, allowedToolsRelative)
+      this.cioMcpServersPaths.set(sessionId, mcpServersRelative)
       this.cioOversizedFlagPaths.set(sessionId, oversizedFlagRelative)
       this.cioStopFlagPaths.set(sessionId, stopFlagRelative)
       this.cioWatchFlagPaths.set(sessionId, watchFlagRelative)

@@ -3726,6 +3726,17 @@ export class ChatEngine {
         ...(scopeBucketId === undefined ? {} : { scopeBucketId }),
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
+        // A harness with an MCP host of its own runs this thread's activated MCP
+        // servers itself, so a script receives a tool's whole result instead of
+        // what survives the gateway's JSON hop. Every other harness keeps the
+        // gateway as its only transport.
+        ...(driver.publishUtilityMcpServers
+          ? {
+              publishNativeMcpServers: (utilities) =>
+                driver.publishUtilityMcpServers?.(projectPath, sessionId, utilities) ??
+                Promise.resolve([])
+            }
+          : {}),
         resolveExecutingModelVisionCapable: () =>
           this.executingModelVisionCapable(projectId, settings),
         allowManagement,
@@ -4035,6 +4046,15 @@ export class ChatEngine {
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
+        // A rebuilt turn must re-publish the harness's own MCP servers too, or a
+        // steer would leave them registered against the previous turn's set.
+        ...(driver.publishUtilityMcpServers
+          ? {
+              publishNativeMcpServers: (utilities) =>
+                driver.publishUtilityMcpServers?.(projectPath, sessionId, utilities) ??
+                Promise.resolve([])
+            }
+          : {}),
         resolveExecutingModelVisionCapable: () =>
           this.executingModelVisionCapable(projectId, settings),
         // A steered turn keeps the setup + diagnostics contract alive when the
