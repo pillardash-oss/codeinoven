@@ -1,5 +1,6 @@
 import type {
   AgentModelSelection,
+  ModelRuntimeSettings,
   InferenceMode,
   ModelIdentity,
   PermissionLevel,
@@ -41,7 +42,7 @@ export type AuxiliaryAgentConfig = Record<string, AgentModelSelection>
 export type RankingJudgeKind = 'automatic' | 'typesafe' | 'model'
 
 /** Persisted ranking-judge preference. The model fields apply to `model` only. */
-export interface RankingJudgeConfig {
+export interface RankingJudgeConfig extends ModelRuntimeSettings {
   kind: RankingJudgeKind
   harnessId?: string
   providerId?: string

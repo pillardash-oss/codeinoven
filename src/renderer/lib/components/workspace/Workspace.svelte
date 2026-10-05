@@ -3713,6 +3713,8 @@
       providerId: settings.providerId,
       modelId: settings.modelId,
       ...(settings.accountId ? { accountId: settings.accountId } : {}),
+      inferenceMode: settings.inferenceMode,
+      contextWindow: settings.contextWindow,
       ...(settings.thinkingLevel ? { thinkingLevel: settings.thinkingLevel } : {})
     }
   }

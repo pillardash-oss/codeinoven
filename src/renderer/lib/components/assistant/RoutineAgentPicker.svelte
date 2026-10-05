@@ -171,18 +171,14 @@
               selectionOf(providerId, modelId, harnessId, accountId, draft.primary?.thinkingLevel)
             )}
           thinkingLevel={draft.primary?.thinkingLevel}
+          runtimeSettings={draft.primary ?? undefined}
+          onSelectRuntime={(runtime) => {
+            if (draft.primary) setPrimary({ ...draft.primary, ...runtime })
+          }}
           onSelectThinking={(level) => {
             const current = draft.primary
             if (!current) return
-            setPrimary(
-              selectionOf(
-                current.providerId,
-                current.modelId,
-                current.harnessId,
-                current.accountId,
-                level
-              )
-            )
+            setPrimary({ ...current, thinkingLevel: level })
           }}
           onToggleFavorite={(providerId, modelId, harnessId) =>
             rendererRecovery.toggleModelFavoriteFor(
@@ -242,19 +238,14 @@
                 selectionOf(providerId, modelId, harnessId, accountId, row?.thinkingLevel)
               )}
             thinkingLevel={row?.thinkingLevel}
+            runtimeSettings={row ?? undefined}
+            onSelectRuntime={(runtime) => {
+              if (row) setFallback(index, { ...row, ...runtime })
+            }}
             onSelectThinking={(level) => {
               const current = draft.rows[index]
               if (!current) return
-              setFallback(
-                index,
-                selectionOf(
-                  current.providerId,
-                  current.modelId,
-                  current.harnessId,
-                  current.accountId,
-                  level
-                )
-              )
+              setFallback(index, { ...current, thinkingLevel: level })
             }}
             onToggleFavorite={(providerId, modelId, harnessId) =>
               rendererRecovery.toggleModelFavoriteFor(

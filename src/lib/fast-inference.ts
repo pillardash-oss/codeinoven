@@ -93,11 +93,14 @@ export function normalizeFastInference(
   harnessId: string,
   providerId: string,
   modelId: string,
-  modelFastSupported?: boolean
+  modelFastSupported?: boolean,
+  modelUltrafastSupported = false
 ): ThreadSettings {
-  // Model-switch callers pass their new selection here. Re-select ultrafast
-  // explicitly on the new model instead of carrying an unsupported tier.
-  if (settings.inferenceMode === 'ultrafast') return { ...settings, inferenceMode: 'normal' }
+  if (settings.inferenceMode === 'ultrafast') {
+    return harnessId === 'codex' && providerId === 'openai' && modelUltrafastSupported
+      ? settings
+      : { ...settings, inferenceMode: 'normal' }
+  }
   if (settings.inferenceMode !== 'fast') return settings
   if (supportsFastInference(harnessId, providerId, modelFastSupported)) return settings
   return { ...settings, inferenceMode: 'normal' }

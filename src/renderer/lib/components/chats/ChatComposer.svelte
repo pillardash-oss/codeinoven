@@ -6,7 +6,6 @@
   import { motionDuration } from '$lib/motion'
   import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
-  import { fastMultiplierFor, supportsFastInference } from '$shared/fast-inference'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
   import { posixBasename } from '$shared/paths'
@@ -27,7 +26,6 @@
   import ChatComposerDropZone from './ChatComposerDropZone.svelte'
   import ChatComposerImageGate from './ChatComposerImageGate.svelte'
   import ExpertCard from './ExpertCard.svelte'
-  import ChatComposerInferencePicker from './ChatComposerInferencePicker.svelte'
   import ChatComposerPermissionPicker from './ChatComposerPermissionPicker.svelte'
   import ChatComposerPlusMenu from './ChatComposerPlusMenu.svelte'
   import { installComposerDropListeners, type ComposerDropRegion } from './chat-composer-drop'
@@ -40,7 +38,6 @@
   import { trackMenuCloseFocus } from './chat-composer-menu-focus.svelte'
   import {
     withFileSystemMode,
-    withInferenceMode,
     withModelSelection,
     withPermissionLevel,
     withThinkingLevel
@@ -88,7 +85,6 @@
     ThreadSettings,
     ThinkingLevel,
     ThinkingPreset,
-    InferenceMode,
     PermissionLevel,
     ProviderCatalog,
     PromptAttachment,
@@ -963,28 +959,6 @@
   /** Thinking controls only appear when the model explicitly declares presets. */
   let supportsThinking = $derived(thinkingPresets.length > 0)
 
-  /** Native fast harnesses stay visible even while their model catalog is cold or incomplete. */
-  let fastVariant = $derived(
-    supportsFastInference(resolved.harnessId, resolved.providerId, selectedModel?.fastSupported)
-      ? { multiplier: fastMultiplierFor(resolved.modelId) }
-      : null
-  )
-
-  let supportsFast = $derived(fastVariant !== null)
-  let supportsUltrafast = $derived(
-    resolved.harnessId === 'codex' &&
-      resolved.providerId === 'openai' &&
-      selectedModel?.ultrafastSupported === true
-  )
-  let contextWindows = $derived(selectedModel?.contextWindows ?? [])
-  let contextWindow = $derived(
-    resolved.contextWindow ??
-      (resolved.harnessId === 'codex' ? contextWindows[0] : selectedModel?.contextWindow) ??
-      contextWindows[0]
-  )
-  let showModelSettings = $derived(supportsFast || supportsUltrafast || contextWindows.length > 1)
-
-  let inferenceMode = $derived(resolved.inferenceMode ?? 'normal')
   const slash = createComposerSlashActions({
     getShowChatModes: () => showChatModes,
     getFileSystemMode: () => resolved.fileSystemMode,
@@ -1402,11 +1376,6 @@
     // change   skip the redundant commit.
     if (resolved.thinkingLevel === level) return
     applySettings(withThinkingLevel(resolved, level))
-  }
-
-  function selectInference(mode: InferenceMode): void {
-    inferenceMenuOpen = false
-    applySettings(withInferenceMode(resolved, mode))
   }
 
   function runUsageCredits(): void {
@@ -1904,27 +1873,13 @@
         onSelectAccount={onAccountSelected}
         {onToggleFavorite}
         {onReorderFavorite}
-        fast={inferenceMode !== 'normal'}
+        runtimeSettings={resolved}
+        bind:runtimeMenuOpen={inferenceMenuOpen}
+        onSelectRuntime={(runtime) => applySettings({ ...resolved, ...runtime })}
         thinkingLevel={resolved.thinkingLevel}
         {thinkingPresets}
         onSelectThinking={(level) => selectThinking({ id: level, label: level })}
-      >
-        {#snippet settingsPicker()}
-          {#if showModelSettings}
-            <ChatComposerInferencePicker
-              {inferenceMode}
-              fastSupported={supportsFast}
-              ultrafastSupported={supportsUltrafast}
-              fastMultiplier={fastVariant?.multiplier ?? 1}
-              {contextWindows}
-              {contextWindow}
-              bind:menuOpen={inferenceMenuOpen}
-              onSelect={selectInference}
-              onSelectContext={(tokens) => applySettings({ ...resolved, contextWindow: tokens })}
-            />
-          {/if}
-        {/snippet}
-      </ModelPicker>
+      />
     </div>
 
     <!-- API usage credits   native harness command to bill this session's

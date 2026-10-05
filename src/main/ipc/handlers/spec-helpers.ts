@@ -1,3 +1,4 @@
+import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
 import { validateMemoryConfig } from '../../chat/memory-service'
 import { validateEntityId } from '../ipc-validation'
 import { isRecord, requireString, requireVersion, validateStringArray } from './shared'
@@ -87,6 +88,7 @@ function validateAssignmentModel(
     throw new TypeError(`${label} thinking level is invalid`)
   }
   return {
+    ...validateModelRuntimeSettings(value, label),
     harnessId: requireString(value.harnessId, `${label} harness ID`),
     providerId: requireString(value.providerId, `${label} provider ID`),
     modelId: requireString(value.modelId, `${label} model ID`),

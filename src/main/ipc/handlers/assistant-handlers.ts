@@ -1,3 +1,4 @@
+import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { validateEntityId } from '../ipc-validation'
 import { requireString } from './shared'
@@ -118,6 +119,7 @@ function sanitizeModelSelection(value: unknown): RoutineAgents['fallbacks'][numb
     return null
   }
   return {
+    ...validateModelRuntimeSettings(record),
     harnessId: record.harnessId.slice(0, 64),
     providerId: record.providerId.slice(0, 128),
     modelId: record.modelId.slice(0, 200),

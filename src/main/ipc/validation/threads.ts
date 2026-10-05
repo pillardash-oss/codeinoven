@@ -1,3 +1,4 @@
+import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
 import type {
   ChecklistItemStatus,
   CreateProjectInput,
@@ -82,7 +83,9 @@ const AGENT_MODEL_SELECTION_FIELDS = new Set([
   'providerId',
   'modelId',
   'accountId',
-  'thinkingLevel'
+  'thinkingLevel',
+  'inferenceMode',
+  'contextWindow'
 ])
 const CREATE_PROJECT_FIELDS = new Set([
   'name',
@@ -188,6 +191,7 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
     const auditor = assertRecord(input.loopAuditor, 'Achievement auditor')
     rejectUnknownFields(auditor, AGENT_MODEL_SELECTION_FIELDS, 'Achievement auditor')
     settings.loopAuditor = {
+      ...validateModelRuntimeSettings(auditor),
       harnessId: validateEntityId(auditor.harnessId, 'Achievement auditor harness ID'),
       providerId: validateBoundedString(
         auditor.providerId,
@@ -216,6 +220,7 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
     const descriptor = assertRecord(input.imageDescriptor, 'Image descriptor')
     rejectUnknownFields(descriptor, AGENT_MODEL_SELECTION_FIELDS, 'image descriptor')
     settings.imageDescriptor = {
+      ...validateModelRuntimeSettings(descriptor),
       harnessId: validateEntityId(descriptor.harnessId, 'Image descriptor harness ID'),
       providerId: validateBoundedString(
         descriptor.providerId,
@@ -244,6 +249,7 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
     const descriptor = assertRecord(input.imageDescriptorFallback, 'Image descriptor fallback')
     rejectUnknownFields(descriptor, AGENT_MODEL_SELECTION_FIELDS, 'image descriptor fallback')
     settings.imageDescriptorFallback = {
+      ...validateModelRuntimeSettings(descriptor),
       harnessId: validateEntityId(descriptor.harnessId, 'Image descriptor fallback harness ID'),
       providerId: validateBoundedString(
         descriptor.providerId,

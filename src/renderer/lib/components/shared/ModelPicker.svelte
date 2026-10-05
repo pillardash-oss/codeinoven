@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { onMount, tick, type Snippet } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { DropdownMenu, Popover } from 'bits-ui'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { Brain, Check, Cpu, Star, UserRound, Zap } from '@lucide/svelte'
+  import { Brain, Check, Cpu, Star, UserRound } from '@lucide/svelte'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { isGeneratedAccountLabelFor } from '$shared/account-label'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
@@ -19,10 +19,17 @@
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import type {
     HarnessAccount,
+    ModelRuntimeSettings,
     ProviderCatalog,
     ThinkingLevel,
     ThinkingPreset
   } from '$shared/types'
+  import ModelSettingsPicker from './ModelSettingsPicker.svelte'
+  import {
+    fastMultiplierFor,
+    fastSelectionModelId,
+    supportsFastInference
+  } from '$shared/fast-inference'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
   import ModelPickerList from './ModelPickerList.svelte'
   import ModelPickerVendorIcons from './ModelPickerVendorIcons.svelte'
@@ -67,7 +74,9 @@
     /** Shows that the selected model is using its fast inference tier. */
     fast?: boolean
     /** Settings segment between thinking and account controls. */
-    settingsPicker?: Snippet
+    runtimeSettings?: ModelRuntimeSettings
+    runtimeMenuOpen?: boolean
+    onSelectRuntime?: (settings: ModelRuntimeSettings) => void
     /** When true, only models that report vision capability are shown. */
     visionOnly?: boolean
     /** Current thinking level. Whenever the selected model declares thinking
@@ -119,7 +128,9 @@
     multiSelect = false,
     selectedModelKeys = [],
     fast = false,
-    settingsPicker,
+    runtimeSettings,
+    runtimeMenuOpen = $bindable(false),
+    onSelectRuntime,
     visionOnly = false,
     thinkingLevel = null,
     thinkingPresets,
@@ -162,6 +173,26 @@
     selectedProvider?.models.find((model) => model.id === modelId) ??
       displayProviders.flatMap((provider) => provider.models).find((model) => model.id === modelId)
   )
+  let fastSupported = $derived(
+    supportsFastInference(harnessId, providerId, selectedModel?.fastSupported)
+  )
+  let ultrafastSupported = $derived(
+    harnessId === 'codex' && providerId === 'openai' && selectedModel?.ultrafastSupported === true
+  )
+  let contextWindows = $derived(selectedModel?.contextWindows ?? [])
+  let showRuntimeSettings = $derived(
+    !multiSelect &&
+      Boolean(modelId) &&
+      (fastSupported || ultrafastSupported || contextWindows.length > 0)
+  )
+  let currentInferenceMode = $derived(runtimeSettings?.inferenceMode ?? (fast ? 'fast' : 'normal'))
+
+  function chooseSpeed(mode: NonNullable<ModelRuntimeSettings['inferenceMode']>): void {
+    const nextModel = mode === 'fast' ? fastSelectionModelId(harnessId, modelId) : modelId
+    if (nextModel !== modelId) onSelect(providerId, nextModel, harnessId, accountId)
+    onSelectRuntime?.({ ...runtimeSettings, inferenceMode: mode })
+  }
+
   /**
    * Thinking presets offered by the selected model. Callers may override them
    * (e.g. the composer falls back to the standard presets while the catalog is
@@ -472,14 +503,6 @@
             {selectedPeak.triggerLabel}
           </span>
         {/if}
-        {#if fast && !settingsPicker}
-          <Zap
-            size={11}
-            class="shrink-0 text-accent"
-            fill="currentColor"
-            aria-label="Fast inference"
-          />
-        {/if}
       </Popover.Trigger>
       {#if supportsThinking}
         <DropdownMenu.Root bind:open={thinkingMenuOpen}>
@@ -531,7 +554,24 @@
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
       {/if}
-      {@render settingsPicker?.()}
+      {#if showRuntimeSettings}
+        <ModelSettingsPicker
+          inferenceMode={currentInferenceMode}
+          {fastSupported}
+          {ultrafastSupported}
+          fastMultiplier={fastMultiplierFor(modelId)}
+          {contextWindows}
+          contextWindow={runtimeSettings?.contextWindow}
+          defaultContextWindow={harnessId === 'codex' && providerId === 'openai'
+            ? contextWindows[0]
+            : (selectedModel?.contextWindow ?? contextWindows[0])}
+          bind:menuOpen={runtimeMenuOpen}
+          disabled={disabled || !onSelectRuntime}
+          onSelect={chooseSpeed}
+          onSelectContext={(tokens) =>
+            onSelectRuntime?.({ ...runtimeSettings, contextWindow: tokens })}
+        />
+      {/if}
       {#if showAccountPicker}
         <DropdownMenu.Root bind:open={accountMenuOpen}>
           <DropdownMenu.Trigger

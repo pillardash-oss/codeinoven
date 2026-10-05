@@ -873,6 +873,9 @@
         onRequestDelete={requestDelete}
         onSelectAgentModel={selectAgentModel}
         onSelectAgentThinking={selectAgentThinking}
+        onSelectAgentRuntime={(runtime) => {
+          if (agentSettings) agentSettings = { ...agentSettings, ...runtime }
+        }}
       />
     {/snippet}
   </Modal>

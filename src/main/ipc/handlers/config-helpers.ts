@@ -1,3 +1,4 @@
+import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
 import { AGENT_BEHAVIOR_PROMPT_MAX_LENGTH } from '../../../lib/agent-behavior'
 import {
   DEFAULT_VOICE_RECORDING_SHORTCUT,
@@ -223,7 +224,15 @@ function isUnloadOption(value: unknown): value is '5m' | '10m' | '20m' | '30m' |
 
 function validateAgentModelSelection(value: unknown, label: string): AgentModelSelection {
   if (!isRecord(value)) throw new TypeError(`${label} must be an object`)
-  const fields = new Set(['harnessId', 'providerId', 'modelId', 'accountId', 'thinkingLevel'])
+  const fields = new Set([
+    'harnessId',
+    'providerId',
+    'modelId',
+    'accountId',
+    'thinkingLevel',
+    'inferenceMode',
+    'contextWindow'
+  ])
   for (const field of Object.keys(value)) {
     if (!fields.has(field)) throw new TypeError(`Unsupported ${label} field: ${field}`)
   }
@@ -236,6 +245,7 @@ function validateAgentModelSelection(value: unknown, label: string): AgentModelS
     throw new TypeError(`${label} thinking level is invalid`)
   }
   return {
+    ...validateModelRuntimeSettings(value, label),
     harnessId: requireString(value.harnessId, `${label} harness ID`),
     providerId: requireString(value.providerId, `${label} provider ID`),
     modelId: requireString(value.modelId, `${label} model ID`),
@@ -469,7 +479,9 @@ const RANKING_JUDGE_MODEL_FIELDS = [
   'providerId',
   'modelId',
   'accountId',
-  'thinkingLevel'
+  'thinkingLevel',
+  'inferenceMode',
+  'contextWindow'
 ] as const
 
 /**
@@ -1080,6 +1092,7 @@ function validateHeartbeatCreateInput(value: unknown): Omit<HeartbeatConfig, 'id
     ...(input.accountId === undefined
       ? {}
       : { accountId: validateEntityId(input.accountId, 'Heartbeat account ID', 256) }),
+    ...validateModelRuntimeSettings(input),
     thinkingLevel: validateHeartbeatThinkingLevel(input.thinkingLevel),
     times: validateHeartbeatTimes(input.times),
     enabled: typeof input.enabled === 'boolean' ? input.enabled : true
@@ -1107,6 +1120,12 @@ function validateHeartbeatPatchInput(value: unknown): Partial<Omit<HeartbeatConf
   if (input.thinkingLevel !== undefined) {
     patch.thinkingLevel = validateHeartbeatThinkingLevel(input.thinkingLevel)
   }
+  Object.assign(patch, validateModelRuntimeSettings(input))
+  if ('contextWindow' in input)
+    patch.contextWindow =
+      input.contextWindow === undefined
+        ? undefined
+        : validateModelRuntimeSettings(input).contextWindow
   if (input.times !== undefined) patch.times = validateHeartbeatTimes(input.times)
   if (input.enabled !== undefined) {
     if (typeof input.enabled !== 'boolean')

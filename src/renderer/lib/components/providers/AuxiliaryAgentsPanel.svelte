@@ -127,6 +127,15 @@
     await commit({ ...auxiliaryAgents, [rowId]: { ...current, thinkingLevel: level } })
   }
 
+  async function selectRuntime(
+    rowId: string,
+    runtime: import('$shared/types').ModelRuntimeSettings
+  ): Promise<void> {
+    const current = auxiliaryAgents[rowId]
+    if (!current) return
+    await commit({ ...auxiliaryAgents, [rowId]: { ...current, ...runtime } })
+  }
+
   async function clearAssignment(rowId: string): Promise<void> {
     const next = { ...auxiliaryAgents }
     delete next[rowId]
@@ -246,7 +255,9 @@
                     onSelect={(providerId, modelId, harnessId, accountId) =>
                       void selectModel(row.id, providerId, modelId, harnessId, accountId)}
                     thinkingLevel={target?.thinkingLevel}
+                    runtimeSettings={target}
                     onSelectThinking={(level) => void selectThinking(row.id, level)}
+                    onSelectRuntime={(runtime) => void selectRuntime(row.id, runtime)}
                     onToggleFavorite={(providerId, modelId, harnessId) =>
                       rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                     onReorderFavorite={(draggedKey, targetKey, position) =>

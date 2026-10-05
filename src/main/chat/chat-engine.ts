@@ -1,3 +1,4 @@
+import { validateModelRuntimeSettings } from '../../lib/model-runtime-settings'
 import { BrowserWindow, powerMonitor } from 'electron'
 import { readdir, readFile, rm, stat } from 'fs/promises'
 import type { Dirent } from 'node:fs'
@@ -11081,7 +11082,9 @@ export class ChatEngine {
       accountId: account.id,
       providerId: selection.providerId,
       modelId: selection.modelId,
-      thinkingLevel: 'low',
+      inferenceMode: selection.inferenceMode,
+      contextWindow: selection.contextWindow,
+      thinkingLevel: selection.thinkingLevel ?? 'low',
       permissionLevel: 'auto_review',
       assignmentMode: false,
       loopMode: false
@@ -11498,7 +11501,9 @@ export class ChatEngine {
       accountId: account.id,
       providerId: selection.providerId,
       modelId: selection.modelId,
-      thinkingLevel: 'low',
+      inferenceMode: selection.inferenceMode,
+      contextWindow: selection.contextWindow,
+      thinkingLevel: selection.thinkingLevel ?? 'low',
       permissionLevel: 'auto_review',
       assignmentMode: false,
       loopMode: false
@@ -11886,6 +11891,8 @@ export class ChatEngine {
         accountId,
         providerId: selection.providerId,
         modelId: selection.modelId,
+        inferenceMode: selection.inferenceMode,
+        contextWindow: selection.contextWindow,
         thinkingLevel: selection.thinkingLevel ?? 'minimal',
         permissionLevel: 'auto_review',
         assignmentMode: false,
@@ -11927,6 +11934,8 @@ export class ChatEngine {
         accountId: account.id,
         providerId: selection.providerId,
         modelId: selection.modelId,
+        inferenceMode: selection.inferenceMode,
+        contextWindow: selection.contextWindow,
         thinkingLevel: selection.thinkingLevel ?? 'minimal',
         permissionLevel: 'auto_review',
         assignmentMode: false,
@@ -13419,6 +13428,7 @@ export class ChatEngine {
           1,
           256
         ),
+        ...validateModelRuntimeSettings(selection),
         modelId: validateBoundedString(selection.modelId, 'Image descriptor model ID', 1, 256),
         ...(selection.accountId === undefined
           ? {}
@@ -23709,6 +23719,8 @@ export class ChatEngine {
         accountId: config.accountId ?? legacyHarnessAccountId(config.harnessId),
         providerId: config.providerId,
         modelId: config.modelId,
+        inferenceMode: config.inferenceMode,
+        contextWindow: config.contextWindow,
         thinkingLevel: config.thinkingLevel ?? 'minimal',
         permissionLevel: 'auto_review'
       }
@@ -25965,6 +25977,8 @@ export class ChatEngine {
       providerId,
       modelId,
       ...(preference.accountId === undefined ? {} : { accountId: preference.accountId }),
+      inferenceMode: preference.inferenceMode,
+      contextWindow: preference.contextWindow,
       ...(preference.thinkingLevel === undefined ? {} : { thinkingLevel: preference.thinkingLevel })
     }
     try {

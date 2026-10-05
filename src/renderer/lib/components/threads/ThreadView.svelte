@@ -3490,7 +3490,13 @@
       harnessId: agentDefaults.worker?.harnessId ?? settings.harnessId,
       providerId: agentDefaults.worker?.providerId ?? settings.providerId,
       modelId: agentDefaults.worker?.modelId ?? settings.modelId,
-      thinkingLevel: settings.thinkingLevel
+      thinkingLevel: settings.thinkingLevel,
+      inferenceMode: agentDefaults.worker
+        ? agentDefaults.worker.inferenceMode
+        : settings.inferenceMode,
+      contextWindow: agentDefaults.worker
+        ? agentDefaults.worker.contextWindow
+        : settings.contextWindow
     }
   }
 
@@ -3499,7 +3505,9 @@
       harnessId: settings.harnessId,
       providerId: settings.providerId,
       modelId: settings.modelId,
-      thinkingLevel: settings.thinkingLevel
+      thinkingLevel: settings.thinkingLevel,
+      inferenceMode: settings.inferenceMode,
+      contextWindow: settings.contextWindow
     }
   }
 
@@ -7668,7 +7676,9 @@
       harnessId: selection.harnessId,
       providerId: selection.providerId,
       modelId: selection.modelId,
-      thinkingLevel: selection.thinkingLevel
+      thinkingLevel: selection.thinkingLevel,
+      inferenceMode: selection.inferenceMode,
+      contextWindow: selection.contextWindow
     }
 
     settings = updated
@@ -8889,6 +8899,20 @@
     }, DEPENDENCY_PRELOAD_DEBOUNCE_MS)
   }
 
+  /** Ultrafast requires an advertised native Codex tier. */
+  function ultrafastSupportedFor(harnessId: string, providerId: string, modelId: string): boolean {
+    return (
+      harnessId === 'codex' &&
+      providerId === 'openai' &&
+      providers.some(
+        (provider) =>
+          provider.harnessId === harnessId &&
+          provider.id === providerId &&
+          provider.models.some((model) => model.id === modelId && model.ultrafastSupported)
+      )
+    )
+  }
+
   /** True when the selected model exposes a fast tier, per the live catalog. */
   function fastSupportedFor(harnessId: string, providerId: string, modelId: string): boolean {
     const provider = providers.find(
@@ -8935,7 +8959,8 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     try {
       const updatedWorker = await invoke(
@@ -9477,14 +9502,17 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     auditSettings = normalized
     const auditor = {
       harnessId: normalized.harnessId,
       providerId: normalized.providerId,
       modelId: normalized.modelId,
-      thinkingLevel: normalized.thinkingLevel
+      thinkingLevel: normalized.thinkingLevel,
+      inferenceMode: normalized.inferenceMode,
+      contextWindow: normalized.contextWindow
     }
     rendererRecovery.setAuditModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
@@ -9511,7 +9539,8 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     rendererRecovery.addRecentModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
@@ -9528,7 +9557,8 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     rendererRecovery.addRecentModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
@@ -10337,7 +10367,9 @@
             harnessId: auditSettings.harnessId,
             providerId: auditSettings.providerId,
             modelId: auditSettings.modelId,
-            thinkingLevel: auditSettings.thinkingLevel
+            thinkingLevel: auditSettings.thinkingLevel,
+            inferenceMode: auditSettings.inferenceMode,
+            contextWindow: auditSettings.contextWindow
           }
         : undefined
     // Fast inference only exists for models that actually support it. A model
@@ -10402,7 +10434,9 @@
         harnessId: normalized.harnessId,
         providerId: normalized.providerId,
         modelId: normalized.modelId,
-        thinkingLevel: normalized.thinkingLevel
+        thinkingLevel: normalized.thinkingLevel,
+        inferenceMode: normalized.inferenceMode,
+        contextWindow: normalized.contextWindow
       })
     }
     // Persist immediately so the choice survives navigation away from this view.

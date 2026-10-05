@@ -35,6 +35,7 @@
   let draftModelId = $state('')
   let draftAccountId = $state<string | undefined>(undefined)
   let draftThinkingLevel = $state<ThinkingLevel | undefined>(undefined)
+  let draftRuntime = $state<import('$shared/types').ModelRuntimeSettings>({})
   let draftTimes = $state<string[]>([])
   let draftTimeInput = $state('')
   let draftError = $state('')
@@ -85,6 +86,7 @@
     draftModelId = ''
     draftAccountId = undefined
     draftThinkingLevel = undefined
+    draftRuntime = {}
     draftTimes = []
     draftTimeInput = ''
     draftError = ''
@@ -99,6 +101,7 @@
     draftModelId = config.modelId
     draftAccountId = config.accountId
     draftThinkingLevel = config.thinkingLevel
+    draftRuntime = { inferenceMode: config.inferenceMode, contextWindow: config.contextWindow }
     draftTimes = [...config.times]
     draftTimeInput = ''
     draftError = ''
@@ -144,6 +147,7 @@
           modelId: draftModelId,
           accountId: draftAccountId,
           thinkingLevel: draftThinkingLevel,
+          ...draftRuntime,
           times: draftTimes
         })
       } else {
@@ -154,6 +158,7 @@
           modelId: draftModelId,
           accountId: draftAccountId,
           thinkingLevel: draftThinkingLevel,
+          ...draftRuntime,
           times: draftTimes,
           enabled: true
         })
@@ -199,7 +204,7 @@
     <div>
       <h1 class="text-xl font-bold tracking-tight">Heartbeat</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Send a lightweight "ping" to a model at set times to start its usage window early   so the
+        Send a lightweight "ping" to a model at set times to start its usage window early so the
         next 5-hour reset lands before you need it.
       </p>
     </div>
@@ -399,6 +404,8 @@
           }
           rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
         }}
+        runtimeSettings={draftRuntime}
+        onSelectRuntime={(runtime) => (draftRuntime = runtime)}
         thinkingLevel={draftThinkingLevel}
         onSelectThinking={(level) => (draftThinkingLevel = level)}
       />

@@ -36,7 +36,12 @@ export type InferenceMode = 'normal' | 'fast' | 'ultrafast'
 export type PermissionLevel = 'auto_review' | 'full_access'
 
 /** Harness/provider/model identity used for a secondary agent role. */
-export interface AgentModelSelection {
+export interface ModelRuntimeSettings {
+  inferenceMode?: InferenceMode
+  contextWindow?: number
+}
+
+export interface AgentModelSelection extends ModelRuntimeSettings {
   harnessId: string
   providerId: string
   modelId: string
