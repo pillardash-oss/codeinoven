@@ -141,6 +141,24 @@ function refuseEmptyChunks(environment: 'main' | 'preload'): Plugin {
   }
 }
 
+/** Electron Vite's regex shim injector mistakes imports inside generated Pi
+ * extension template strings for bundle imports. Supply the shim through the
+ * output banner instead, where it always remains at module scope. */
+function useModuleScopeCommonJsShim(): Plugin {
+  return {
+    name: 'codeinoven:module-scope-commonjs-shim',
+    configResolved(config) {
+      const shim = config.plugins.find((plugin) => plugin.name === 'vite:esm-shim')
+      if (shim) shim.renderChunk = undefined
+    }
+  }
+}
+
+const mainCommonJsBanner = `import { createRequire as __cioCreateRequire } from 'node:module';
+const __filename = import.meta.filename;
+const __dirname = import.meta.dirname;
+const require = __cioCreateRequire(import.meta.url);`
+
 export function rendererPlugins(): PluginOption[] {
   return [svelte({ configFile: resolve(__dirname, 'svelte.config.js') }), tailwindcss()]
 }
@@ -155,7 +173,7 @@ export default defineConfig(({ mode }) => {
   ])
   return {
     main: {
-      plugins: [refuseEmptyChunks('main')],
+      plugins: [refuseEmptyChunks('main'), useModuleScopeCommonJsShim()],
       define: {
         // Keep the splash copy tied to the package version used to build the
         // Electron bundle (or the CI-resolved nightly prerelease version).
@@ -189,6 +207,7 @@ export default defineConfig(({ mode }) => {
           },
           output: {
             format: 'es',
+            banner: mainCommonJsBanner,
             entryFileNames: (chunk) => (chunk.name === 'oven-service' ? '[name].mjs' : '[name].js')
           }
         }
