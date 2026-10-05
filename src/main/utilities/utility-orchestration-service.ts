@@ -43,6 +43,18 @@ import { NO_EXPERTS, type EffectiveExperts } from '../../lib/experts'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { currentWorkRoots } from '../design/work-roots-state'
 import { resultWithImageParts } from '../../lib/image-payload'
+import { acquireCuaSnapshotLease } from './cua-snapshot-lease'
+import {
+  cuaActionReference,
+  cuaRefusal,
+  cuaSnapshotView,
+  foreignSnapshotAdvice,
+  groundCuaAction,
+  isSupersededSnapshotRefusal,
+  reanchorCuaAction,
+  shapeCuaResult,
+  type CuaSnapshotView
+} from '../../lib/cua-driver'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
@@ -335,6 +347,17 @@ interface TurnState {
   searched: boolean
   /** Session ids created for Cua utilities so cursor state is turn-scoped. */
   cuaSessionIds: Map<string, string>
+  /**
+   * The window snapshot the gateway handed the model, keyed `pid:window_id`.
+   *
+   * A Cua action addresses elements and pixels inside one snapshot, and the
+   * driver's registry keeps a single slot per window that the app's own
+   * computer-use preview refills at up to 15 frames a second. Keeping the view
+   * here is what lets an action name the snapshot its index truly belongs to,
+   * and re-anchor that reference onto a fresh one when the registry has moved
+   * on. See `src/lib/cua-driver.ts`.
+   */
+  cuaViews: Map<string, CuaSnapshotView>
   /** Utilities created through the explicit setup-only management capability. */
   managedUtilities: UtilityDefinition[]
   /** Lazily created read-only diagnostics provider for explicit @cio-utility turns. */
@@ -770,6 +793,7 @@ export class UtilityOrchestrationService {
       attributionSequence: 0,
       searched: false,
       cuaSessionIds: new Map(),
+      cuaViews: new Map(),
       managedUtilities: [],
       diagnostics: null,
       projectSearchTerms: null,
@@ -1807,11 +1831,22 @@ export class UtilityOrchestrationService {
     } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
-      try {
-        result = await client.callTool(operation, routedInput)
-      } catch (error) {
-        await this.dropUnusableTransport(state, resolved, client, error)
-        throw error
+      if (this.isComputerUseUtility(resolved)) {
+        result = await this.invokeComputerUse(
+          state,
+          resolved,
+          client,
+          utilityId,
+          operation,
+          routedInput
+        )
+      } else {
+        try {
+          result = await client.callTool(operation, routedInput)
+        } catch (error) {
+          await this.dropUnusableTransport(state, resolved, client, error)
+          throw error
+        }
       }
       if (this.isComputerUseUtility(resolved)) {
         this.cuaActivityListener?.({
@@ -1853,6 +1888,15 @@ export class UtilityOrchestrationService {
       throw new Error(`Utility kind "${resolved.utility.kind}" does not expose runtime operations`)
     }
     await this.audit(state, 'utility.invoked', { utilityId, operation })
+    // A computer-use snapshot reaches the model as its structured payload plus
+    // the screenshot as an image part. The payload is where the element handles
+    // and the geometry live that the driver asks a later action to name, and the
+    // tree in it is the same tree the driver's markdown repeats, so the markdown
+    // is what would be paid for twice.
+    if (this.isComputerUseUtility(resolved)) {
+      const snapshot = shapeCuaResult(result)
+      if (snapshot) return snapshot
+    }
     // A picture that travels inline as base64 is billed as text, at roughly one
     // token per character; the same bytes delivered as an image content part are
     // billed on the pixels they cover, which measured about 22x cheaper on a real
@@ -1992,6 +2036,259 @@ export class UtilityOrchestrationService {
     return sessionId ? { ...input, session: sessionId } : input
   }
 
+  /** The remembered snapshot of the window one call names. */
+  private cuaViewFor(state: TurnState, input: Record<string, unknown>): CuaSnapshotView | null {
+    const pid = typeof input['pid'] === 'number' ? input['pid'] : null
+    const windowId = typeof input['window_id'] === 'number' ? input['window_id'] : null
+    if (pid === null) return null
+    if (windowId !== null) return state.cuaViews.get(cuaViewKey(pid, windowId)) ?? null
+    // A pid with exactly one remembered window answers for it; a pid with
+    // several would be a guess about which window the address meant.
+    const views = [...state.cuaViews.values()].filter((view) => view.pid === pid)
+    return views.length === 1 ? views[0] : null
+  }
+
+  /** The window one call addresses, from the call itself or, when it names only
+   *  a pid, from the single window remembered for that pid. */
+  private cuaActionWindow(
+    state: TurnState,
+    input: Record<string, unknown>
+  ): { pid: number; windowId: number } | null {
+    const pid = typeof input['pid'] === 'number' ? input['pid'] : null
+    const windowId = typeof input['window_id'] === 'number' ? input['window_id'] : null
+    if (pid !== null && windowId !== null) return { pid, windowId }
+    if (pid === null) return null
+    const views = [...state.cuaViews.values()].filter((view) => view.pid === pid)
+    return views.length === 1 ? { pid, windowId: views[0].windowId } : null
+  }
+
+  /**
+   * One computer-use operation, with the snapshot it addresses owned here.
+   *
+   * The driver refuses every element and pixel action whose snapshot has been
+   * replaced, and a window's snapshot is replaced by the next snapshot of that
+   * window from any client. The app is itself such a client: the computer-use
+   * preview photographs the window being driven at up to 15 frames a second, so
+   * a reference the model read on one call is normally superseded by the time it
+   * acts on the next one.
+   *
+   * The gateway therefore names the snapshot the model's address truly belongs
+   * to, and when the driver answers that the reference is stale it takes one
+   * fresh snapshot, re-anchors the same address onto it and tries once more.
+   * Nothing is guessed: an element is re-anchored only when its identity is
+   * provable, a pixel address only when both images state their size, and a
+   * reference into a snapshot the app never handed out is answered with what to
+   * do instead of with an action.
+   */
+  private async invokeComputerUse(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    client: McpClient,
+    utilityId: string,
+    operation: string,
+    input: Record<string, unknown>
+  ): Promise<unknown> {
+    const view = this.cuaViewFor(state, input)
+    const grounding = groundCuaAction(operation, input, view)
+    const grounded = grounding.kind === 'grounded' ? grounding.input : input
+    const reference = cuaActionReference(operation, input)
+    const window = this.cuaActionWindow(state, input)
+    if (reference?.session === 'implicit') {
+      // This tool cannot read a snapshot taken under the turn's session label,
+      // so its pixels are re-read from a snapshot of the same window taken on
+      // the connection's own session, and the model's coordinates are moved
+      // into that image before the call. One attempt, then whatever the driver
+      // answers is the answer.
+      const release = window ? await acquireCuaSnapshotLease(window.pid, window.windowId) : null
+      try {
+        const fresh = await this.refreshComputerUseView(
+          state,
+          client,
+          utilityId,
+          input,
+          'pixels',
+          'implicit'
+        )
+        const mapped = fresh ? reanchorCuaAction(operation, grounded, view, fresh) : null
+        const anchor = mapped && 'input' in mapped ? mapped.input : grounded
+        return await this.callComputerUse(state, resolved, client, operation, anchor)
+      } finally {
+        release?.()
+      }
+    }
+    const snapshotting = operation === 'get_window_state'
+    const result = snapshotting
+      ? await this.snapshotUnderLease(state, resolved, client, operation, grounded, window)
+      : await this.callComputerUse(state, resolved, client, operation, grounded)
+    const snapshot = cuaSnapshotView(result)
+    if (snapshot) {
+      // The snapshot the model asked for is the mapping its next element or
+      // pixel address refers to. A snapshot the gateway takes on its own behalf
+      // deliberately never lands here: the model's indices were read from a tree
+      // this one may not match row for row.
+      state.cuaViews.set(cuaViewKey(snapshot.pid, snapshot.windowId), snapshot)
+      return result
+    }
+    if (!isSupersededSnapshotRefusal(result)) return result
+    const refusal = cuaRefusal(result)
+    if (grounding.kind === 'ungrounded' && grounding.reason === 'foreign-snapshot') {
+      if (!reference) return result
+      return refusalResult(foreignSnapshotAdvice(reference, view))
+    }
+    const refreshed = await this.reanchorComputerUse(
+      state,
+      resolved,
+      client,
+      utilityId,
+      operation,
+      grounded,
+      view,
+      window,
+      reference?.pixels ? 'pixels' : 'elements',
+      reference?.session ?? 'labelled'
+    )
+    if (!refreshed) return result
+    if ('refusal' in refreshed) {
+      Logger.dev('Cua action could not be re-anchored', {
+        utilityId,
+        operation,
+        code: refusal?.code,
+        reason: refreshed.refusal
+      })
+      return refusalResult(refreshed.refusal)
+    }
+    Logger.dev('Cua action re-anchored on a fresh snapshot', {
+      utilityId,
+      operation,
+      code: refusal?.code,
+      snapshotId: refreshed.snapshotId
+    })
+    return refreshed.result
+  }
+
+  /**
+   * One fresh snapshot, the address moved onto it, and the action tried once
+   * more, all under a lease on the window's snapshot slot.
+   *
+   * Without that lease the retry would race the rest of this app: a preview
+   * frame, or another thread's gateway snapshot, arriving between the snapshot
+   * and the action would take the slot with it, which is the very failure the
+   * retry exists to repair.
+   */
+  private async reanchorComputerUse(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    client: McpClient,
+    utilityId: string,
+    operation: string,
+    input: Record<string, unknown>,
+    view: CuaSnapshotView | null,
+    window: { pid: number; windowId: number } | null,
+    want: 'elements' | 'pixels',
+    session: 'labelled' | 'implicit'
+  ): Promise<{ result: unknown; snapshotId: string } | { refusal: string } | null> {
+    const release = window ? await acquireCuaSnapshotLease(window.pid, window.windowId) : null
+    try {
+      const refreshed = await this.refreshComputerUseView(
+        state,
+        client,
+        utilityId,
+        input,
+        want,
+        session
+      )
+      if (!refreshed) return null
+      const reanchored = reanchorCuaAction(operation, input, view, refreshed)
+      if ('refusal' in reanchored) return { refusal: reanchored.refusal }
+      const result = await this.callComputerUse(
+        state,
+        resolved,
+        client,
+        operation,
+        reanchored.input
+      )
+      return { result, snapshotId: refreshed.snapshotId }
+    } finally {
+      release?.()
+    }
+  }
+
+  /** One driver call, retiring a connection that cannot answer any more. */
+  private async callComputerUse(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    client: McpClient,
+    operation: string,
+    input: Record<string, unknown>
+  ): Promise<unknown> {
+    try {
+      return await client.callTool(operation, input)
+    } catch (error) {
+      await this.dropUnusableTransport(state, resolved, client, error)
+      throw error
+    }
+  }
+
+  /**
+   * A snapshot the model asked for, taken under the window's lease.
+   *
+   * Another turn's gateway holds the same window while it re-anchors an action
+   * it is about to perform, and this call would take that snapshot's place. The
+   * lease is milliseconds long in practice, so waiting for it costs a snapshot
+   * nothing and is the difference between the other turn's action landing and it
+   * being refused.
+   */
+  private async snapshotUnderLease(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    client: McpClient,
+    operation: string,
+    input: Record<string, unknown>,
+    window: { pid: number; windowId: number } | null
+  ): Promise<unknown> {
+    const release = window ? await acquireCuaSnapshotLease(window.pid, window.windowId) : null
+    try {
+      return await this.callComputerUse(state, resolved, client, operation, input)
+    } finally {
+      release?.()
+    }
+  }
+
+  /**
+   * One snapshot of the window an action addresses, taken for the gateway's own
+   * re-anchoring. An element address needs the tree and nothing else, and the
+   * driver returns the handles with it; a pixel address needs the screenshot and
+   * no accessibility walk at all. The walk gets a 5 second budget because
+   * re-anchoring a large app's element against a tree that was truncated on
+   * arrival would refuse an action the driver could otherwise have performed.
+   */
+  private async refreshComputerUseView(
+    state: TurnState,
+    client: McpClient,
+    utilityId: string,
+    input: Record<string, unknown>,
+    want: 'elements' | 'pixels',
+    session: 'labelled' | 'implicit'
+  ): Promise<CuaSnapshotView | null> {
+    const pid = typeof input['pid'] === 'number' ? input['pid'] : null
+    const windowId = typeof input['window_id'] === 'number' ? input['window_id'] : null
+    if (pid === null || windowId === null) return null
+    const request = {
+      pid,
+      window_id: windowId,
+      include_screenshot: want === 'pixels',
+      include_accessibility_tree: want === 'elements',
+      ...(want === 'elements' ? { timeout_ms: 5000 } : {})
+    }
+    const routed =
+      session === 'labelled' ? this.routeComputerUseInput(state, utilityId, request) : request
+    const result = await client.callTool('get_window_state', routed).catch((error: unknown) => {
+      Logger.dev('Cua snapshot refresh failed:', error)
+      return null
+    })
+    return cuaSnapshotView(result)
+  }
+
   private async endComputerUseSessions(state: TurnState): Promise<void> {
     await Promise.allSettled(
       [...state.cuaSessionIds.entries()].map(async ([utilityId, sessionId]) => {
@@ -2119,6 +2416,22 @@ export class UtilityOrchestrationService {
     response.writeHead(status, { 'Content-Type': 'application/json' })
     response.end(JSON.stringify(body))
   }
+}
+
+/**
+ * The key one window's remembered snapshot is filed under.
+ *
+ * A window is the driver's own scope for a snapshot: it refuses a `window_id`
+ * that no longer exists, and a snapshot of one window never answers for
+ * another, so the pid completes the key rather than defining it.
+ */
+function cuaViewKey(pid: number, windowId: number): string {
+  return `${pid}:${windowId}`
+}
+
+/** A gateway-authored refusal, in the same shape the driver refuses in. */
+function refusalResult(message: string): Record<string, unknown> {
+  return { content: [{ type: 'text', text: message }], isError: true }
 }
 
 /**
