@@ -2,23 +2,30 @@
   import { invoke } from '$lib/ipc.svelte'
   import {
     ChevronDown,
+    CircleCheck,
+    CircleX,
     Copy,
     Ellipsis,
     ExternalLink,
+    FileText,
     Folder,
     FolderKanban,
     FolderOpen,
     FolderTree,
+    Inbox,
     MessageSquare,
     Pencil,
+    Pickaxe,
     Pin,
     PinOff,
     Plus,
     Trash2
   } from '@lucide/svelte'
+  import type { Component } from 'svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { SvelteMap } from 'svelte/reactivity'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
+  import TriangleQuestionMark from '$lib/components/icons/TriangleQuestionMark.svelte'
   import type { ScopeActionsController } from '$lib/components/scope/ScopeActionsController.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
@@ -41,7 +48,7 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { STAGE_COLORS, STAGE_LABELS, STAGE_ORDER, scopeState } from '$lib/stores/scope.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
-  import { threadGroupingState } from '$lib/stores/thread-grouping.svelte'
+  import { threadGroupingState, type ThreadGroup } from '$lib/stores/thread-grouping.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { type Project, type Thread } from '$shared/types'
   import FolderRow from './FolderRow.svelte'
@@ -161,6 +168,9 @@
   const searchResultsById = $derived(
     new Map(sidebar.threadsSearchResults.map((result) => [result.thread.id, result]))
   )
+  // Grouping runs over unpinned threads only: pinned threads keep their own
+  // section above every status group, exactly like the flat list. Search
+  // results keep pinned entries, since search mode has no pinned section.
   const threadGroups = $derived(
     mode === 'threads' && threadGroupingState.enabled
       ? groupThreadsByStatus(
@@ -168,10 +178,31 @@
             ? sidebar.threadsSearchResults
                 .filter((result) => threadProjectFilterState.matches(result.thread.projectId))
                 .map((result) => result.thread)
-            : [...pinnedTimelineThreads, ...unpinnedTimelineThreads]
+            : unpinnedTimelineThreads
         )
       : []
   )
+
+  /** Header icon per status group, threads view only. Lucide has no
+   *  triangle-question-mark, so Attention uses the in-house equivalent. */
+  const THREAD_GROUP_ICONS: Record<ThreadGroup, Component> = {
+    Attention: TriangleQuestionMark,
+    Unread: Inbox,
+    Errors: CircleX,
+    Spec: FileText,
+    Working: Pickaxe,
+    Done: CircleCheck
+  }
+
+  /** Header colour per status group: the same variables the row statuses use. */
+  const THREAD_GROUP_COLORS: Record<ThreadGroup, string> = {
+    Attention: 'var(--color-warning)',
+    Unread: 'var(--color-thread-unread)',
+    Errors: 'var(--color-thread-error)',
+    Spec: 'var(--color-thread-spec)',
+    Working: 'var(--color-thread-working)',
+    Done: 'var(--color-thread-done)'
+  }
 
   function getThreadIcon(thread: Thread): string | null {
     const project = projects.find((p) => p.id === thread.projectId)
@@ -628,11 +659,31 @@
       {/if}
       {#if mode === 'threads'}
         {#if threadGroupingState.enabled}
+          {#if !searchingThreads}
+            <!-- Pinned threads stay their own section above every status
+                 group, unchanged from the flat list. -->
+            <PinnedSection
+              sectionKey="threads"
+              label="Pinned Threads"
+              threads={pinnedTimelineThreads}
+              activeThreadId={activeThreadId ?? null}
+              getRowIcon={(t) => getThreadIcon(t)}
+              onOpen={onOpenThread}
+              {onRename}
+              {onTogglePin}
+              {onDelete}
+              {onFork}
+              onMovePinnedThread={(draggedId, targetId, pos) =>
+                onTimelinePinnedMove(draggedId, targetId, pos)}
+            />
+          {/if}
           {#each threadGroups as group (group.label)}
             <PinnedSection
               sectionKey="threads"
               label={group.label}
               threads={group.threads}
+              icon={THREAD_GROUP_ICONS[group.label]}
+              accent={THREAD_GROUP_COLORS[group.label]}
               folded={threadGroupingState.folded[group.label]}
               onToggleFold={() =>
                 (threadGroupingState.folded[group.label] =
@@ -662,21 +713,22 @@
                     {onTogglePin}
                     {onDelete}
                     {onFork}
-                    onMoveThread={thread.pinned ? onTimelinePinnedMove : undefined}
                   />
                 {/if}
               {/snippet}
             </PinnedSection>
           {:else}
-            <p class="px-2 py-6 text-center text-xs text-dimmed">
-              {searchingThreads
-                ? sidebar.threadsSearching
-                  ? 'Searching…'
-                  : 'No matching threads'
-                : threadProjectFilterState.isAll
-                  ? 'No threads yet'
-                  : 'No threads in the selected projects'}
-            </p>
+            {#if searchingThreads || pinnedTimelineThreads.length === 0}
+              <p class="px-2 py-6 text-center text-xs text-dimmed">
+                {searchingThreads
+                  ? sidebar.threadsSearching
+                    ? 'Searching…'
+                    : 'No matching threads'
+                  : threadProjectFilterState.isAll
+                    ? 'No threads yet'
+                    : 'No threads in the selected projects'}
+              </p>
+            {/if}
           {/each}
           {#if !searchingThreads && hasMoreHistory}
             <button

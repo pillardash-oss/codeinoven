@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ChevronDown } from '@lucide/svelte'
-  import type { Snippet } from 'svelte'
+  import type { Component, Snippet } from 'svelte'
   import ThreadRow from './ThreadRow.svelte'
   import type { Thread } from '$shared/types'
   import { pinnedFold, type PinnedSectionKey } from '$lib/stores/pinned-fold.svelte'
@@ -32,6 +32,12 @@
     /** Controlled folding for other thread groups that reuse this section. */
     folded?: boolean
     onToggleFold?: () => void
+    /** Optional icon before the label. Only the threads-view status groups
+     *  pass one; every other view keeps the plain label. */
+    icon?: Component
+    /** Optional status colour applied to the icon and the label text. Without
+     *  it the header keeps the dimmed look shared by all views. */
+    accent?: string
   }
 
   let {
@@ -48,7 +54,9 @@
     onMovePinnedThread,
     row,
     folded: controlledFolded,
-    onToggleFold
+    onToggleFold,
+    icon,
+    accent
   }: Props = $props()
 
   const folded = $derived(controlledFolded ?? pinnedFold.isFolded(sectionKey))
@@ -68,7 +76,21 @@
         size={12}
         class="shrink-0 text-dimmed transition-transform {folded ? '-rotate-90' : ''}"
       />
-      <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">{label}</span>
+      {#if icon}
+        {@const Icon = icon}
+        <Icon
+          size={12}
+          class="shrink-0"
+          style={accent ? `color:${accent}` : undefined}
+          aria-hidden="true"
+        />
+      {/if}
+      <span
+        class="text-[0.625rem] font-semibold uppercase tracking-wide {accent ? '' : 'text-dimmed'}"
+        style={accent ? `color:${accent}` : undefined}
+      >
+        {label}
+      </span>
       <span class="text-[0.625rem] text-dimmed/70">{threads.length}</span>
     </button>
 
