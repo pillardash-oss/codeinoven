@@ -9,7 +9,13 @@ import {
   type OvenRunEvent,
   type StartOvenRunInput
 } from '../../lib/ovens'
-import type { OvenWorkspaceRequest, OvenWorkspaceResult } from '../../lib/ovens'
+import {
+  type OvenRootPeers,
+  type OvenWorkspaceRequest,
+  type OvenWorkspaceResult
+} from '../../lib/ovens'
+import { mirrorLocalGitIdentity, OVEN_GIT_NETWORK_CHANNELS } from './oven-local-git-identity'
+import { syncLocalGitHostTrust } from './oven-local-git-trust'
 import { OVEN_HARNESS_PATH } from './oven-harness-paths'
 import { OvenSsh, sshQuote } from './oven-ssh'
 import type { OvenRegistry } from './oven-registry'
@@ -81,8 +87,79 @@ export class OvenService {
     this.decode(await this.request(id, { method: 'stop', runId }))
   }
 
-  async workspace(id: string, input: OvenWorkspaceRequest): Promise<OvenWorkspaceResult> {
+  /**
+   * Filesystem and Git work inside one checkout on the Oven.
+   *
+   * A clone first mirrors the identity this machine already authenticates with
+   * and shares the host keys this machine already trusts, so the Oven clones as
+   * the user without a manual key setup.
+   */
+  async workspace(
+    id: string,
+    input: OvenWorkspaceRequest,
+    localRepository?: string
+  ): Promise<OvenWorkspaceResult> {
+    if (input.operation === 'clone') {
+      await syncLocalGitHostTrust(this.ssh, id)
+      const mirror = await mirrorLocalGitIdentity(this.ssh, id, localRepository)
+      const output = await this.ssh.execute(
+        id,
+        `${NODE_CHECK}; node ${SERVICE} workspace`,
+        `${JSON.stringify({ ...input, ...(mirror ? { localIdentityFile: mirror.file } : {}) })}\n`,
+        150_000,
+        undefined,
+        true
+      )
+      return this.decode<OvenWorkspaceResult>(output)
+    }
     return this.decode(await this.request(id, { method: 'workspace', input }))
+  }
+
+  /**
+   * One desktop handler executing against an Oven checkout.
+   *
+   * Network Git channels mirror the local identity and its host trust first;
+   * every other channel runs with the checkout as it stands.
+   */
+  async rootOperation(
+    id: string,
+    root: string,
+    projectId: string,
+    channel: string,
+    args: unknown[],
+    localRepository?: string,
+    peers?: OvenRootPeers
+  ): Promise<unknown> {
+    const network = OVEN_GIT_NETWORK_CHANNELS.has(channel)
+    let localIdentityFile: string | undefined
+    if (network) {
+      await syncLocalGitHostTrust(this.ssh, id)
+      localIdentityFile = (await mirrorLocalGitIdentity(this.ssh, id, localRepository))?.file
+    }
+    const input = {
+      root,
+      projectId,
+      channel,
+      ...(localIdentityFile ? { localIdentityFile } : {}),
+      ...(peers ? { peers } : {}),
+      arguments: args.map((value) => ({
+        present: value !== undefined,
+        ...(value !== undefined ? { value } : {})
+      }))
+    }
+    const data = JSON.stringify(input)
+    if (Buffer.byteLength(data) > 8 * 1024 * 1024)
+      throw new Error('The Oven operation exceeds 8 MiB.')
+    const output = await this.ssh.execute(
+      id,
+      `${NODE_CHECK}; node ${SERVICE} root-operation`,
+      `${data}\n`,
+      150_000,
+      undefined,
+      network,
+      8 * 1024 * 1024
+    )
+    return this.decode<unknown>(output)
   }
 
   async putFile(id: string, root: string, path: string, data: Buffer, mode = 0o600): Promise<void> {

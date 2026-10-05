@@ -36,6 +36,13 @@ interface LogDaySinks {
  * without a restart.
  */
 export class Logger {
+  private static remoteOutput = false
+
+  /** Remote RPC stdout contains protocol messages only. */
+  static useStandardError(): void {
+    Logger.remoteOutput = true
+  }
+
   private static logsDirectory: string | null = null
   private static activeDay: string | null = null
   private static daySinks: LogDaySinks | null = null
@@ -115,7 +122,7 @@ export class Logger {
 
   private static write(level: LogLevel, args: unknown[]): void {
     const formatted = Logger.format(level, args)
-    const stream = level === 'error' ? process.stderr : process.stdout
+    const stream = level === 'error' || Logger.remoteOutput ? process.stderr : process.stdout
     stream.write(`${formatted}\n`)
 
     const sinks = Logger.resolveDaySinks()

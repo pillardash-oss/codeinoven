@@ -1,3 +1,4 @@
+import { ovenRootArguments, ovenRootTarget, type OvenRootBinding } from '$lib/oven-root-target'
 /// <reference types="vite/client" />
 
 import type {
@@ -8,6 +9,7 @@ import type {
   InvokeChannel,
   InvokeResult
 } from '../../preload/index'
+import { isOvenRootChannel } from '$shared/oven-root-routing'
 import {
   isGitInvocationSuccess,
   isGitRefusedOperation,
@@ -85,12 +87,53 @@ export async function invoke<Channel extends InvokeChannel>(
 ): Promise<InvokeResult<Channel>> {
   await waitForFeatureHandlers(channel)
   const plainArgs = args.map((arg) => $state.snapshot(arg)) as InvokeArgs<Channel>
-  const result = await window.api.invoke(channel, ...plainArgs)
+  const target = isOvenRootChannel(channel) ? ovenRootTarget(channel, plainArgs) : null
+  const result = target
+    ? await invokeAtOvenRootBinding(channel, target, ovenRootArguments(channel, plainArgs))
+    : await window.api.invoke(channel, ...plainArgs)
   if (import.meta.env.DEV) {
     agentDebug.trackInvoke(channel, plainArgs)
     agentDebug.trackResult(channel, result)
   }
   return result
+}
+
+/**
+ * A captured root operation keeps background work bound to its own checkout.
+ *
+ * Saving a draft after the user selected another Oven must reach the Oven the
+ * editor was opened on, not whichever thread happens to be selected now.
+ */
+export async function invokeAtOvenRoot<Channel extends InvokeChannel>(
+  channel: Channel,
+  target: { threadId: string; ovenId: string },
+  ...args: InvokeArgs<Channel>
+): Promise<InvokeResult<Channel>> {
+  await waitForFeatureHandlers(channel)
+  const projectId = args[0]
+  if (typeof projectId !== 'string' || !isOvenRootChannel(channel))
+    throw new Error('Invalid root operation.')
+  return await invokeAtOvenRootBinding(
+    channel,
+    { projectId, threadId: target.threadId, ovenId: target.ovenId },
+    args.slice(1).map((arg) => $state.snapshot(arg))
+  )
+}
+
+/** One routed call: the whole renderer reaches an Oven checkout through here. */
+async function invokeAtOvenRootBinding<Channel extends InvokeChannel>(
+  channel: Channel,
+  target: OvenRootBinding,
+  args: readonly unknown[]
+): Promise<InvokeResult<Channel>> {
+  return (await window.api.invoke(
+    'oven:rootOperation',
+    target.projectId,
+    target.threadId,
+    channel,
+    [...args],
+    target.ovenId
+  )) as InvokeResult<Channel>
 }
 
 /**

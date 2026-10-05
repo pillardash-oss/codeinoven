@@ -167,6 +167,7 @@ function standaloneOvenService(): Plugin {
         configFile: false,
         mode,
         logLevel: 'warn',
+        ssr: { noExternal: true },
         build: {
           ssr: resolve(__dirname, 'src/main/ovens/remote/oven-service-entry.ts'),
           write: false,

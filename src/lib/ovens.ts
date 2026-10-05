@@ -81,7 +81,8 @@ export interface OvenHarnessInventoryItem {
   executablePath: string | null
   installedVersion: string | null
   health: 'healthy' | 'missing' | 'broken' | 'unsupported' | 'unknown'
-  issueCategory?: 'not-installed' | 'broken-executable' | 'unsupported-platform' | 'timeout' | 'unknown'
+  issueCategory?:
+    'not-installed' | 'broken-executable' | 'unsupported-platform' | 'timeout' | 'unknown'
   updateAvailable: boolean
   latestVersion?: string
   checkedAt: number
@@ -193,7 +194,8 @@ export type OvenWorkspaceRequest =
       exclusive?: boolean
       mode?: number
     }
-  | { operation: 'mkdir'; root: string; path: string }
+  | { operation: 'mkdir'; root: string; path: string; exclusive?: boolean }
+  | { operation: 'publishFile'; root: string; path: string; staged: string }
   | { operation: 'symlink'; root: string; path: string; target: string }
   | { operation: 'stat'; root: string; path: string }
   | {
@@ -205,7 +207,34 @@ export type OvenWorkspaceRequest =
       expectedData?: string
     }
   | { operation: 'git'; root: string; action: 'status' | 'diff' | 'log' }
-  | { operation: 'clone'; root: string; url: string }
+  | {
+      operation: 'clone'
+      root: string
+      url: string
+      /**
+       * Home-relative identity the Oven's Git environment must use.
+       *
+       * The app mirrors the GitHub identity this machine already authenticates
+       * with: a file-backed key travels whole with owner-only permissions, an
+       * agent-held key travels as its public half and the forwarded agent
+       * supplies the secret half. A dedicated Oven identity, when configured,
+       * takes precedence over this path.
+       */
+      localIdentityFile?: string
+    }
+
+/** Scope checkouts that exist on one Oven, offered as the other end of a Git sync. */
+export interface OvenRootPeers {
+  /** Scope bucket id the running checkout belongs to. */
+  currentScope: string
+  checkouts: Array<{ id: string; name: string; root: string }>
+}
+
+/** One end of a file or Git operation: a checkout on an Oven, or a local root. */
+export interface OvenRootTarget {
+  ovenId: string
+  root: string
+}
 
 export interface OvenWorkspaceResult {
   root: string
@@ -232,16 +261,7 @@ export interface OvenTransferReview extends OvenTransferInput {
 }
 
 export type OvenPackageManager =
-  | 'apt'
-  | 'dnf'
-  | 'yum'
-  | 'pacman'
-  | 'zypper'
-  | 'brew'
-  | 'winget'
-  | 'choco'
-  | 'scoop'
-  | 'unknown'
+  'apt' | 'dnf' | 'yum' | 'pacman' | 'zypper' | 'brew' | 'winget' | 'choco' | 'scoop' | 'unknown'
 
 /** The minimum Node.js the oven service runtime requires. */
 export const OVEN_MINIMUM_NODE_VERSION = 22
@@ -355,7 +375,10 @@ export interface OvenSetupStep {
   error?: string
   detail?: string
   retryCount?: number
-  installProgress?: { stage: 'starting' | 'downloading' | 'installing' | 'verifying'; percent?: number }
+  installProgress?: {
+    stage: 'starting' | 'downloading' | 'installing' | 'verifying'
+    percent?: number
+  }
   skippedReason?: string
   requiresElevation?: boolean
 }
@@ -432,13 +455,7 @@ export interface OvenSetupProgressEvent {
 }
 
 export type OvenSetupPhase =
-  | 'preflight'
-  | 'bootstrap'
-  | 'prerequisites'
-  | 'harnesses'
-  | 'accounts'
-  | 'git'
-  | 'finalize'
+  'preflight' | 'bootstrap' | 'prerequisites' | 'harnesses' | 'accounts' | 'git' | 'finalize'
 
 export interface OvenSetupOperation {
   id: string

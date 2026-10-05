@@ -1,3 +1,4 @@
+import { registerOvenRootIpc } from './oven-root-ipc'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { OvenRegistry } from './oven-registry'
 import { OvenService } from './oven-service'
@@ -5,6 +6,8 @@ import { inspectOvenConnection, testDraftConnection, localOvenConnection } from 
 import { ovenId, validateSaveOven, validateIdentityPath } from './oven-validation'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { SecretVault } from '../storage/secret-vault'
+import type { ProjectManager } from '../../lib/engines/project-manager'
+import type { ProjectFilesService } from '../editor/project-files-service'
 import { app } from 'electron'
 import { OvenTransfers } from './oven-transfers'
 import { OvenPreview } from './oven-preview'
@@ -22,12 +25,26 @@ export function registerOvenIpc(
   storage: StorageEngine,
   vault: SecretVault,
   threads: ThreadManager,
-  resolveImagePath: (value: unknown) => Promise<string>
+  resolveImagePath: (value: unknown) => Promise<string>,
+  projects: ProjectManager,
+  projectFiles: ProjectFilesService,
+  scopeNames: (projectId: string) => Record<string, string>
 ): OvenService {
   const registry = new OvenRegistry(storage, vault)
   const service = new OvenService(registry)
   const transfers = new OvenTransfers(service)
   const previews = new OvenPreview(service)
+  registerOvenRootIpc({
+    service,
+    threads,
+    projects,
+    projectFiles,
+    transfers,
+    previews,
+    scopeNames,
+    authorizePath: resolveImagePath
+  })
+
   const setupRuntime = createOvenSetupPorts({
     service,
     accounts: new HarnessAccountRegistry(storage),

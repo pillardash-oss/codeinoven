@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import {
+  link,
+  unlink,
   chmod,
   lstat,
   mkdir,
@@ -22,14 +24,23 @@ const cloneLocks = new Map<string, Promise<void>>()
 
 /** Permit only repository URLs that can be mapped to the dedicated GitHub key. */
 export function normalizeGitHubSshUrl(value: string): string | null {
-  const scp = value.trim().match(/^git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/u)
+  const scp = value
+    .trim()
+    .match(/^git@github\.com:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/u)
   if (scp) return `git@github.com:${scp[1]}/${scp[2]}.git`
   try {
     const parsed = new URL(value.trim())
-    if (parsed.hostname.toLowerCase() !== 'github.com' || parsed.username || parsed.password || parsed.search || parsed.hash)
+    if (
+      parsed.hostname.toLowerCase() !== 'github.com' ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    )
       return null
     const parts = parsed.pathname.split('/').filter(Boolean)
-    if (parts.length !== 2 || !parts.every((part) => /^[A-Za-z0-9_.-]+(?:\.git)?$/u.test(part))) return null
+    if (parts.length !== 2 || !parts.every((part) => /^[A-Za-z0-9_.-]+(?:\.git)?$/u.test(part)))
+      return null
     const repo = parts[1].replace(/\.git$/u, '')
     return `git@github.com:${parts[0]}/${repo}.git`
   } catch {
@@ -108,7 +119,10 @@ async function command(
         reject(new Error('Git output is too large. Narrow the request.'))
       }
     })
-    child.stderr.resume()
+    let stderr = ''
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString()).slice(-8192)
+    })
     child.once('error', (error) => {
       clearTimeout(timer)
       reject(error)
@@ -116,22 +130,111 @@ async function command(
     child.once('exit', (code) => {
       clearTimeout(timer)
       if (code === 0) resolveResult(text)
-      else reject(new Error(`Remote Git operation failed (${code}).`))
+      else reject(new Error(gitFailure(stderr, code)))
     })
   })
 }
 
-function ovenGitEnvironment(): Record<string, string> {
-  const identity = join(homedir(), '.ssh', 'codeinoven-github')
-  const escaped = identity.replace(/"/gu, '\\"')
+/**
+ * Plain-language explanation for a Git failure, or null when the text names
+ * none of the states this app can describe precisely.
+ *
+ * Every remote Git path   clone, workspace commands, and routed desktop Git
+ * channels   classifies through here, so a user never sees a bare exit code.
+ */
+export function describeGitFailure(text: string): string | null {
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED/u.test(text))
+    return 'GitHub’s host key changed on the Oven. Verify the new key fingerprint before trusting it.'
+  if (/Host key verification failed/u.test(text))
+    return 'GitHub is not trusted by OpenSSH on the Oven. Verify GitHub’s host fingerprint, then update the Oven’s known hosts.'
+  if (/Repository not found|does not appear to be a git repository/iu.test(text))
+    return 'The repository was not found, or this GitHub account has no access to it. Check the repository URL and account permissions.'
+  if (/Permission denied.*publickey/iu.test(text))
+    return 'GitHub rejected the SSH identity. The app mirrors the identity this computer uses; if it still fails, configure a dedicated Git key for this Oven.'
+  if (/could not read from remote repository/iu.test(text))
+    return 'GitHub refused the request over SSH. Check that this account can reach the repository and that the Oven’s Git identity is still valid.'
+  if (/not a git repository/iu.test(text) || /no git repository/iu.test(text))
+    return 'This Oven checkout is not a Git repository yet. Initialize it, or clone the project’s GitHub repository into it.'
+  if (/Could not resolve hostname|Name or service not known/iu.test(text))
+    return 'The Oven cannot resolve the Git host. Check its DNS and network connection.'
+  if (/Connection timed out|Network is unreachable|Connection refused/iu.test(text))
+    return 'The Oven cannot reach the Git host over SSH. Check its network and firewall.'
+  if (/No space left on device/iu.test(text))
+    return 'The Oven has no disk space available for this checkout.'
+  if (/uncommitted changes|would be overwritten/iu.test(text))
+    return 'The Oven checkout has uncommitted changes that this operation would overwrite. Commit or discard them first.'
+  return null
+}
+
+function gitFailure(stderr: string, code: number | null): string {
+  return (
+    describeGitFailure(stderr) ??
+    `Remote Git operation failed (${code ?? 'disconnected'}). Git could not complete the requested operation on the Oven.`
+  )
+}
+
+/** The app-managed identities an Oven may hold, most specific first. */
+const DEDICATED_IDENTITY = '.ssh/codeinoven-github'
+const MIRRORED_IDENTITY = /^\.ssh\/codeinoven-local-github(?:\.pub)?$/u
+const MIRRORED_TRUST = '.ssh/codeinoven-local-github-known-hosts'
+
+/** One home-relative path inside a shell command Git will parse again. */
+function optionPath(path: string): string {
+  return `"${path.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"')}"`
+}
+
+async function isFile(path: string): Promise<boolean> {
+  return lstat(path)
+    .then((info) => info.isFile())
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return false
+      throw error
+    })
+}
+
+/**
+ * The Git-over-SSH environment every Oven-side Git command runs with.
+ *
+ * A dedicated CodeInOven identity for this Oven wins; otherwise the app mirror
+ * of the user's own GitHub identity is used, paired with the host keys this
+ * machine already trusts so the Oven inherits the user's trust decisions. Host
+ * key checking stays strict and forwarding stays off in both cases.
+ */
+export async function ovenGitEnvironment(
+  localIdentityFile?: unknown
+): Promise<Record<string, string>> {
+  const dedicated = join(homedir(), DEDICATED_IDENTITY)
+  const hasDedicated = await isFile(dedicated)
+  const mirror =
+    !hasDedicated &&
+    typeof localIdentityFile === 'string' &&
+    MIRRORED_IDENTITY.test(localIdentityFile)
+      ? join(homedir(), localIdentityFile)
+      : null
+  const identity = hasDedicated ? dedicated : mirror
+  const trust =
+    mirror && (await isFile(join(homedir(), MIRRORED_TRUST)))
+      ? join(homedir(), MIRRORED_TRUST)
+      : null
+  const options = [
+    ...(identity ? [`-i ${optionPath(identity)}`, '-o IdentitiesOnly=yes'] : []),
+    ...(trust ? [`-o UserKnownHostsFile=${optionPath(trust)}`] : []),
+    '-o StrictHostKeyChecking=yes',
+    '-o BatchMode=yes',
+    '-o ForwardAgent=no'
+  ]
   return {
     GIT_SSH_VARIANT: 'ssh',
-    GIT_SSH_COMMAND: `ssh -i "${escaped}" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes -o ForwardAgent=no`
+    GIT_SSH_COMMAND: `ssh ${options.join(' ')}`
   }
 }
 
 /** Clone once into a sibling staging directory and publish only a verified repo. */
-async function cloneIntoScope(root: string, url: string): Promise<string> {
+async function cloneIntoScope(
+  root: string,
+  url: string,
+  localIdentityFile?: unknown
+): Promise<string> {
   const previous = cloneLocks.get(root) ?? Promise.resolve()
   let release = (): void => undefined
   const current = new Promise<void>((resolveLock) => {
@@ -149,7 +252,9 @@ async function cloneIntoScope(root: string, url: string): Promise<string> {
       const origin = (await command('git', ['remote', 'get-url', 'origin'], root)).trim()
       const top = (await command('git', ['rev-parse', '--show-toplevel'], root)).trim()
       if (origin !== url || resolve(top) !== resolve(root))
-        throw new Error('The existing scope checkout belongs to a different repository. It was left untouched.')
+        throw new Error(
+          'The existing scope checkout belongs to a different repository. It was left untouched.'
+        )
       return root
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -157,7 +262,12 @@ async function cloneIntoScope(root: string, url: string): Promise<string> {
 
     const staged = `${root}.codeinoven-${randomUUID()}.tmp`
     try {
-      await command('git', ['clone', '--', url, staged], undefined, ovenGitEnvironment())
+      await command(
+        'git',
+        ['clone', '--', url, staged],
+        undefined,
+        await ovenGitEnvironment(localIdentityFile)
+      )
       const origin = (await command('git', ['remote', 'get-url', 'origin'], staged)).trim()
       const top = (await command('git', ['rev-parse', '--show-toplevel'], staged)).trim()
       if (origin !== url || resolve(top) !== resolve(staged))
@@ -190,11 +300,12 @@ export async function ovenWorkspace(raw: unknown): Promise<OvenWorkspaceResult> 
     return { root: await realpath(root) }
   }
   if (input.operation === 'clone') {
-    const url = typeof input.url === 'string' && input.url.length <= 4096
-      ? normalizeGitHubSshUrl(input.url)
-      : null
+    const url =
+      typeof input.url === 'string' && input.url.length <= 4096
+        ? normalizeGitHubSshUrl(input.url)
+        : null
     if (!url) throw new Error('Use a GitHub SSH repository URL.')
-    return { root: await cloneIntoScope(root, url) }
+    return { root: await cloneIntoScope(root, url, input.localIdentityFile) }
   }
   if (input.operation === 'git') {
     const args =
@@ -211,8 +322,16 @@ export async function ovenWorkspace(raw: unknown): Promise<OvenWorkspaceResult> 
   const path = await workspacePath(
     root,
     input.path,
-    ['write', 'mkdir', 'symlink', 'replace'].includes(input.operation)
+    ['write', 'mkdir', 'symlink', 'replace', 'publishFile'].includes(input.operation)
   )
+  if (input.operation === 'publishFile') {
+    const staged = await workspacePath(root, input.staged)
+    if (!(await lstat(staged)).isFile())
+      throw new Error('Only a staged regular file can be published.')
+    await link(staged, path)
+    await unlink(staged)
+    return { root, file: await fileInfo(root, path) }
+  }
   if (input.operation === 'replace') {
     if (!Number.isInteger(input.mode) || input.mode < 0 || input.mode > 0o777)
       throw new Error('Invalid file mode.')
@@ -253,7 +372,7 @@ export async function ovenWorkspace(raw: unknown): Promise<OvenWorkspaceResult> 
     return { root, files, ...(entries.length === 128 ? { after: entries.at(-1) } : {}) }
   }
   if (input.operation === 'mkdir') {
-    await mkdir(path, { recursive: true, mode: 0o700 })
+    await mkdir(path, { recursive: input.exclusive !== true, mode: 0o700 })
     return { root }
   }
   if (input.operation === 'symlink') {

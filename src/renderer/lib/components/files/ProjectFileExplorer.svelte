@@ -11,6 +11,7 @@
   } from '$shared/types'
   import { cioScratchRelativePath } from '$shared/cio-cleanup'
   import { invoke } from '$lib/ipc.svelte'
+  import { ovenRootThread } from '$lib/oven-root-target'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { copyText } from '$lib/copy-text'
@@ -103,6 +104,8 @@
   let filterQuery = $state('')
   let filterOpen = $state(false)
   let revealedSearchPath = $state<string | null>(null)
+  /** True while this tree reads a checkout that lives on an Oven. */
+  let ovenTree = $derived(Boolean(ovenRootThread(projectId)))
   /** Backed by the per-project files store so sidebar tab remounts keep it. */
   let lastTurnOnly = $derived(projectState.lastTurnOnly)
   let autoFiltered = $state(false)
@@ -1262,6 +1265,7 @@
                 }}
                 onInfo={(entry) => void showInfo(entry)}
                 onReveal={(entry) => void revealInFileManager(entry)}
+                canReveal={!ovenTree}
                 onOpenInBrowser={(entry) => void openEntryInBrowser(entry)}
                 onOpenInTerminal={openEntryInTerminal}
                 cioCleanupExcluded={isRowCioCleanupExcluded(virtualRow.row)}

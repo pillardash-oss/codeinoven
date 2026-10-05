@@ -468,6 +468,13 @@ export class SidebarTabContexts {
     })
   }
 
+  openOven(projectId: string, threadId: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `oven:${projectId}:${threadId}`
+    if (context.tabs.some((tab) => tab.id === id)) this.focusInContext(context, id)
+    else this.open(context, { id, kind: 'oven', title: 'Oven', projectId, threadId })
+  }
+
   openSources(projectId: string, threadId: string): void {
     const context = this.ensureContext(projectId, threadId)
     const id = `sources:${projectId}:${threadId}`

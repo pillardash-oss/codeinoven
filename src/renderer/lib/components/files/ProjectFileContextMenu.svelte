@@ -17,6 +17,7 @@
     Trash2
   } from '@lucide/svelte'
   import type { ProjectFileEntry } from '$shared/types'
+  import type { CioCleanupCategoryId } from '$shared/types/cio-cleanup'
   import type { WorkRoots } from '$shared/design/work-roots'
   import {
     cioCleanupProtectedPaths,
@@ -41,6 +42,13 @@
     onDelete: () => void
     onInfo: () => void
     onReveal: () => void
+    /**
+     * Whether the local file manager can show this entry.
+     *
+     * False for a checkout that lives on an Oven: the absolute path belongs to
+     * the remote machine, so a local reveal could only fail.
+     */
+    canReveal?: boolean
     onOpenInBrowser: () => void
     onOpenInTerminal: () => void
     cioCleanupExcluded: boolean
@@ -62,6 +70,7 @@
     onDelete,
     onInfo,
     onReveal,
+    canReveal = true,
     onOpenInBrowser,
     onOpenInTerminal,
     cioCleanupExcluded,
@@ -79,18 +88,26 @@
     entry === null || entry.kind === 'directory' || /\.(?:html?|xhtml)$/iu.test(entry.name)
   )
   /**
-   * Whether CIO Cleanup never removes this entry, because it is installed
-   * content (a project's scoped utilities) or the user's own authored work.
+   * Whether CIO Cleanup never enters this entry, because its folder is one the
+   * user excluded from the sweep. A fresh install excludes designs, videos, and
+   * installed utilities, and the settings page can change that list.
    *
    * Such an entry has nothing to exclude, so the menu states that instead of
    * offering an exclusion a sweep would not act on. The stored exclusion is still
-   * read, so one set before the entry became protected can be undone here.
+   * read, so one set before the folder was excluded can be undone here.
    */
-  function isProtectedFromCioCleanup(entry: ProjectFileEntry | null, workRoots: WorkRoots) {
+  function isProtectedFromCioCleanup(
+    entry: ProjectFileEntry | null,
+    workRoots: WorkRoots,
+    excludedCategories: readonly CioCleanupCategoryId[]
+  ) {
     if (entry === null) return false
     const relativePath = cioScratchRelativePath(entry.path)
     if (relativePath === null || relativePath === '') return false
-    return isCioCleanupProtectedPath(relativePath, cioCleanupProtectedPaths(workRoots))
+    return isCioCleanupProtectedPath(
+      relativePath,
+      cioCleanupProtectedPaths(workRoots, excludedCategories)
+    )
   }
 
   /** Any row inside a workspace's `.cio` scratch folder, the folder itself
@@ -98,7 +115,13 @@
   let cioCleanupRow = $derived(
     entry !== null && entry.path !== '.cio' && isCioScratchPath(entry.path)
   )
-  let cioCleanupProtected = $derived(isProtectedFromCioCleanup(entry, appConfigState.workRoots))
+  let cioCleanupProtected = $derived(
+    isProtectedFromCioCleanup(
+      entry,
+      appConfigState.workRoots,
+      appConfigState.cioCleanupExcludedCategories
+    )
+  )
 
   const itemClass =
     'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
@@ -156,17 +179,20 @@
           <Copy size={13} class="text-muted" />
           {selectedCount > 1 ? `Copy ${selectedCount} paths` : 'Copy path'}
         </ContextMenu.Item>
-        <ContextMenu.Item class={itemClass} onSelect={onReveal}>
-          <FolderOpen size={13} class="text-muted" />
-          Show in File Manager
-        </ContextMenu.Item>
+        {#if canReveal}
+          <ContextMenu.Item class={itemClass} onSelect={onReveal}>
+            <FolderOpen size={13} class="text-muted" />
+            Show in File Manager
+          </ContextMenu.Item>
+        {/if}
         {#if cioCleanupRow}
           <ContextMenu.Separator class="my-1 h-px bg-border" />
           {#if cioCleanupProtected && !cioCleanupExcluded}
             <ContextMenu.Item
               class={itemClass}
               disabled
-              title="Installed utilities and authored work are never removed by CIO Cleanup"
+              title="This folder is excluded from CIO Cleanup in Settings"
+
             >
               <ShieldCheck size={13} class="text-muted" />
               Protected from CIO Cleanup

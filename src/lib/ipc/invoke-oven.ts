@@ -8,7 +8,6 @@ import type {
   OvenWorkspaceResult,
   OvenTransferInput,
   OvenTransferReview,
-  OvenSetupConfiguration,
   OvenSetupPreflightResult,
   OvenSetupProgressEvent,
   OvenSetupOperation,
@@ -23,6 +22,16 @@ export const invokeOvenContract = {
   'oven:testConnection': {} as Contract<[input: SaveOvenInput], OvenConnectionStatus>,
   'oven:connectionHealth': {} as Contract<[id: string], OvenConnectionStatus>,
   'oven:validateIdentity': {} as Contract<[path: string], string>,
+  'oven:rootOperation': {} as Contract<
+    [
+      projectId: string,
+      threadId: string,
+      channel: string,
+      args: unknown[],
+      expectedOvenId?: string
+    ],
+    unknown
+  >,
   'oven:state': {} as Contract<[], OvenState>,
   'oven:save': {} as Contract<[input: SaveOvenInput], Oven>,
   'oven:remove': {} as Contract<[id: string], OvenState>,
@@ -50,5 +59,8 @@ export const invokeOvenContract = {
   'oven:setup:retry': {} as Contract<[id: string], OvenSetupOperation>,
   'oven:harness:inventory': {} as Contract<[id: string], OvenHarnessInventoryItem[]>,
   'oven:harness:update': {} as Contract<[id: string, harnessId: string], OvenHarnessInventoryItem>,
-  'oven:harness:uninstall': {} as Contract<[id: string, harnessId: string], OvenHarnessInventoryItem>
+  'oven:harness:uninstall': {} as Contract<
+    [id: string, harnessId: string],
+    OvenHarnessInventoryItem
+  >
 }

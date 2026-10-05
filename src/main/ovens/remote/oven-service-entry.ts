@@ -12,6 +12,7 @@ import { ovenHarnessIdForCommand } from '../../../lib/ovens'
 import { listHarnesses } from '../../agents/harness-registry'
 import { OPENCODE_COMMAND_ALIASES } from '../../../lib/opencode-version'
 import { OVEN_NPM_PREFIX } from '../oven-harness-paths'
+import { ovenRootOperation } from './oven-root-operations'
 import { ovenWorkspace } from './oven-workspace'
 
 const PROTOCOL = 1
@@ -620,13 +621,35 @@ async function main(): Promise<void> {
     }
     throw new Error('The Oven service could not start.')
   }
-  if (process.argv[2] !== 'request') throw new Error('Use ensure, request, or daemon.')
+  if (!['request', 'workspace', 'root-operation'].includes(process.argv[2]))
+    throw new Error('Use ensure, request, workspace, or daemon.')
   let data = ''
   let bytes = 0
   for await (const chunk of process.stdin) {
     bytes += Buffer.byteLength(chunk)
-    if (bytes > MAX_REQUEST) throw new Error('Oven request exceeds 1 MiB.')
+    if (bytes > (process.argv[2] === 'root-operation' ? 8 * MAX_REQUEST : MAX_REQUEST))
+      throw new Error('The Oven request exceeds its size limit.')
     data += String(chunk)
+  }
+  if (process.argv[2] === 'workspace' || process.argv[2] === 'root-operation') {
+    try {
+      process.stdout.write(
+        JSON.stringify({
+          ok: true,
+          value: await (process.argv[2] === 'workspace'
+            ? ovenWorkspace(JSON.parse(data))
+            : ovenRootOperation(JSON.parse(data)))
+        }) + '\n'
+      )
+    } catch (error) {
+      process.stdout.write(
+        JSON.stringify({
+          ok: false,
+          error: error instanceof Error ? error.message : 'The remote workspace operation failed.'
+        }) + '\n'
+      )
+    }
+    return
   }
   process.stdout.write(await request(data))
 }

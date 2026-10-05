@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ovenRootThread } from '$lib/oven-root-target'
   import type { Attachment } from 'svelte/attachments'
   import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
   import {
@@ -31,7 +32,16 @@
    * a user started in one scope keeps running while they work in another.
    */
   let scopeKey = $derived(scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
-  let scopedTerminalId = $derived(`${terminalId}::${scopeKey}`)
+  /**
+   * A remote thread's shell belongs to its Oven as well as its scope, so the
+   * session id names both. Switching threads or Ovens mounts that end's own
+   * shell instead of leaving one session shared across unrelated hardware.
+   */
+  let scopedTerminalId = $derived.by(() => {
+    const ovenThread = ovenRootThread(projectId)
+    const ovenKey = ovenThread ? `${ovenThread.id}:${ovenThread.settings?.ovenId ?? ''}` : 'local'
+    return `${terminalId}::${scopeKey}::${ovenKey}`
+  })
 
   /**
    * One spawn binding per scoped session. A thread switch retargets only the
@@ -135,7 +145,14 @@
   <div tabindex="-1" class="terminal-wrap relative min-h-0 flex-1 overflow-hidden">
     <div
       class="h-full w-full overflow-hidden py-1 pl-2"
-      {@attach attachTerminal(scopedTerminalId, projectId, scopeKey, threadId, directory, retrySequence)}
+      {@attach attachTerminal(
+        scopedTerminalId,
+        projectId,
+        scopeKey,
+        threadId,
+        directory,
+        retrySequence
+      )}
     ></div>
     {#if loading}
       <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">

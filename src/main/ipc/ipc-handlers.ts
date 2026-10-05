@@ -1,3 +1,4 @@
+import { resolveOvenThreadRoot } from '../ovens/oven-thread-root'
 import { app } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
@@ -211,7 +212,48 @@ export function registerIpcHandlers(
     onSettled: broadcastThreadBranchUpdated
   }
   const vault = options.vault ?? new SecretVault(storage)
-  registerOvenIpc(storage, vault, threadManager, (value) => privilegedIpc.resolveScopedPath(value))
+  const ovenService = registerOvenIpc(
+    storage,
+    vault,
+    threadManager,
+    (value) => privilegedIpc.resolveScopedPath(value),
+    projectManager,
+    projectFilesService,
+    (id) =>
+      Object.fromEntries(
+        scopeManager.getBoard(id).buckets.map((bucket) => [bucket.id, bucket.name])
+      )
+  )
+  /**
+   * Preview reads for a remote thread.
+   *
+   * The `appfile://` protocol serves remote previews through the same file
+   * service as local ones; this hook is what turns a remote path into bytes,
+   * bound to the thread whose checkout the URL names.
+   */
+  projectFilesService.remoteFileReader = async (projectId, threadId, path) => {
+    const thread = await threadManager.getThread(projectId, threadId)
+    if (!thread?.settings?.ovenId || thread.settings.ovenId === 'local') return null
+    const target = await resolveOvenThreadRoot(ovenService, thread, projectManager)
+    const metadata = await ovenService.workspace(target.ovenId, {
+      operation: 'stat',
+      root: target.root,
+      path
+    })
+    if (metadata.file?.kind !== 'file') throw new Error('The remote preview is not a file.')
+    return {
+      size: metadata.file.size,
+      read: async (offset) => {
+        const chunk = await ovenService.workspace(target.ovenId, {
+          operation: 'read',
+          root: target.root,
+          path,
+          offset
+        })
+        return new Uint8Array(Buffer.from(chunk.data ?? '', 'base64'))
+      }
+    }
+  }
   const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
 
   const githubAuthService = options.githubAuthService ?? new GitHubAuthService(vault)

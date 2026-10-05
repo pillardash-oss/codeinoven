@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { createServer, type Socket } from 'node:net'
 import { mkdir, mkdtemp, writeFile, rm, readdir, readFile, stat } from 'node:fs/promises'
@@ -73,14 +74,31 @@ export class OvenSsh {
     command: string,
     input = '',
     timeoutMs = 30_000,
-    onOutput?: (chunk: string) => void
+    onOutput?: (chunk: string) => void,
+    forwardAgent = false,
+    maxOutputBytes = 2 * 1024 * 1024
   ): Promise<string> {
+    if (
+      !Number.isSafeInteger(maxOutputBytes) ||
+      maxOutputBytes < 1 ||
+      maxOutputBytes > 8 * 1024 * 1024
+    )
+      throw new TypeError('Invalid Oven response limit.')
     const result = this.tail
       .catch(() => undefined)
       .then(async () => {
         this.initialized ??= this.cleanStaleCredentials()
         await this.initialized
-        return this.run(id, command, input, timeoutMs, undefined, onOutput)
+        return this.run(
+          id,
+          command,
+          input,
+          timeoutMs,
+          undefined,
+          onOutput,
+          forwardAgent,
+          maxOutputBytes
+        )
       })
     this.tail = result
     return result
@@ -194,6 +212,7 @@ export class OvenSsh {
     const leaf = segments.pop()
     if (!leaf) throw new TypeError('A remote secret path needs a file name.')
     const directory = segments.join('/')
+    const stagedSuffix = `.${randomUUID()}.next`
     const command = options.windows
       ? [
           `$ErrorActionPreference = 'Stop'`,
@@ -207,7 +226,7 @@ export class OvenSsh {
           `Set-Acl -LiteralPath $root -AclObject $acl`,
           `$content = [Console]::In.ReadToEnd()`,
           `$target = Join-Path $root ${sshQuote(leaf)}`,
-          `$staged = $target + '.next'`,
+          `$staged = $target + ${sshQuote(stagedSuffix)}`,
           `[System.IO.File]::WriteAllText($staged, $content, (New-Object System.Text.UTF8Encoding($false)))`,
           `Move-Item -LiteralPath $staged -Destination $target -Force`
         ].join('; ')
@@ -218,7 +237,7 @@ export class OvenSsh {
           `dir=$(dirname "$target")`,
           `mkdir -p "$dir"`,
           `chmod 700 "$dir"`,
-          `staged="$target".next`,
+          `staged="$target"${sshQuote(stagedSuffix)}`,
           `cat > "$staged"`,
           `chmod 600 "$staged"`,
           `mv -f "$staged" "$target"`
@@ -301,7 +320,8 @@ export class OvenSsh {
     id: string,
     command: string | undefined,
     tty = false,
-    directPort?: number
+    directPort?: number,
+    forwardAgent = false
   ): Promise<OvenSshInvocation> {
     this.initialized ??= this.cleanStaleCredentials()
     await this.initialized
@@ -324,7 +344,7 @@ export class OvenSsh {
       '-o',
       'StrictHostKeyChecking=yes',
       '-o',
-      'ForwardAgent=no',
+      `ForwardAgent=${forwardAgent ? 'yes' : 'no'}`,
       '-o',
       `PasswordAuthentication=${connection.authentication === 'password' ? 'yes' : 'no'}`,
       '-o',
@@ -421,14 +441,17 @@ export class OvenSsh {
     input: string,
     timeoutMs: number,
     channel?: { socket: Socket; remotePort: number },
-    onOutput?: (chunk: string) => void
+    onOutput?: (chunk: string) => void,
+    forwardAgent = false,
+    maxOutputBytes = 2 * 1024 * 1024
   ): Promise<string> {
     if (channel?.socket.destroyed) throw new Error('The preview connection closed.')
     const prepared = await this.prepare(
       id,
       channel ? undefined : command,
       false,
-      channel?.remotePort
+      channel?.remotePort,
+      forwardAgent
     )
     const { executable, args, env } = prepared
     try {
@@ -454,8 +477,10 @@ export class OvenSsh {
             : undefined
         const capture = (chunk: Buffer): void => {
           bytes += chunk.length
-          if (bytes > 2 * 1024 * 1024) {
-            failure = new Error('The Oven response exceeded the 2 MiB limit.')
+          if (bytes > maxOutputBytes) {
+            failure = new Error(
+              `The Oven response exceeded the ${maxOutputBytes / 1024 / 1024} MiB limit.`
+            )
             child.kill('SIGKILL')
             return
           }

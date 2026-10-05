@@ -1,3 +1,4 @@
+import { bindOvenRootThread } from '$lib/oven-root-target'
 /**
  * Shared workspace state — lets the app header reflect the active thread
  * (title, connection source, status, history, sources, terminal) without prop-drilling
@@ -352,7 +353,11 @@ class WorkspaceState {
 
   /** Update the selected thread object in place (e.g. after a status change). */
   updateThread(thread: Thread): void {
-    if (this.selectedThread?.id === thread.id) this.selectedThread = thread
+    if (this.selectedThread?.id === thread.id) {
+      this.selectedThread = thread
+      if (!thread.settings?.ovenId || thread.settings.ovenId === 'local')
+        contextSidebarState.close(`oven:${thread.projectId}:${thread.id}`)
+    }
   }
 
   // ─── Keyboard shortcut signals ──────────────────────────────────────────
@@ -675,3 +680,5 @@ export function findEmptyNewThread(
 }
 
 export const workspaceState = new WorkspaceState()
+
+bindOvenRootThread(() => workspaceState.selectedThread)

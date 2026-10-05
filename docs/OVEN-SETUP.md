@@ -22,6 +22,30 @@ Account credentials are stored in the local encrypted vault. Setup sends selecte
 
 Git setup uses a dedicated key for the Oven, separate from the SSH key used to log in. The private key travels from the encrypted vault through SSH input, never through command arguments or progress records. Use an unencrypted dedicated key, or load an encrypted key into the Oven's own `ssh-agent` before setup. CodeInOven does not send key passphrases to the Oven. The Oven writes the key under its own `.ssh` directory with restrictive permissions. GitHub verification requires strict host-key checking. If `github.com` is not in the Oven's `known_hosts`, compare its fingerprint with the published values shown by CodeInOven and add it on the Oven before retrying. CodeInOven does not accept a host key automatically.
 
+### When no dedicated key is configured
+
+An Oven with no dedicated key still works as the signed-in user. Before a clone or a network Git command, CodeInOven asks OpenSSH which GitHub identity this computer actually authenticates with and mirrors that identity onto the Oven:
+
+- A **file-backed** key is copied whole into `~/.ssh/codeinoven-local-github` with owner-only permissions (0600 on POSIX, an owner-only ACL on Windows). The private key travels over the authenticated SSH connection and is never written to a log, a command argument, or a progress record.
+- An **agent-held** key is mirrored as its public half only, and the Oven authenticates through the SSH agent forwarded for that connection.
+- GitHub host keys this computer already trusts are copied to `~/.ssh/codeinoven-local-github-known-hosts`, so the Oven inherits trust decisions the user already made for GitHub. CodeInOven never adds a host key on its own.
+
+A dedicated key for that Oven always takes precedence over the mirror. Removing the mirrored files from the Oven is safe: the next operation re-uploads them.
+
+Git failures are reported as the situation that caused them, and never as a bare exit code such as `128`: missing repository access, a rejected identity, GitHub host trust, DNS or network reachability, disk space, or uncommitted local changes.
+
+## Oven checkouts
+
+A remote thread reads and writes one directory on its Oven. Files, Git, the file tree, previews, directory previews, transfers, and the Oven shell all resolve to that same checkout, so no panel can disagree about where the work lives.
+
+- The checkout lives under `~/.config/pillardash/codeinoven-oven/scopes/<project>/<scope>` on the Oven, keyed by hashes of the project id and the scope id rather than by their text.
+- The project identifies the repository: the checkout is cloned from the project's GitHub remote in SSH form. Other Git hosts are not cloned automatically yet.
+- The scope identifies the checkout: a scope that owns its own worktree gets its own directory on the Oven. A thread that sets an explicit Oven path keeps it.
+- An existing checkout is verified and left untouched. A directory that already holds a different repository is reported, never overwritten.
+- Cloning runs on the Oven into a staging directory and is published only after the origin and worktree verify. A failed clone leaves the destination alone.
+
+Each remote thread has an **Oven** panel in the workspace rail. It opens the app's embedded terminal as an interactive SSH session on the Oven, so the Oven can be inspected and driven directly. The shell starts in that thread's checkout once the checkout exists, and in the Oven user's home directory before that. Terminal sessions are separate per Oven and per scope.
+
 ## Recovery and inventory
 
 Setup operations and progress are persisted without secret values. A setup interrupted by an app restart is marked interrupted; the next run observes remote state before repeating steps. Cancel stops scheduling later commands. A command already running remotely can finish, so its result is checked on retry.
@@ -33,5 +57,7 @@ The managed remote probe returns device details and installed harness versions t
 - Setup requires an SSH Oven. Local remains available for harness inventory and normal local use.
 - Package operations need root, passwordless `sudo`, or a password-authenticated Oven connection whose login password also authenticates sudo. Setup does not open an interactive password prompt; a privilege refusal is reported as a blocked step.
 - The app never performs OS release upgrades or reboots the Oven.
-- GitHub SSH is the only managed Git identity provider in this release. Other Git hosts are not configured by this flow.
+- GitHub SSH is the only managed Git identity provider in this release. Other Git hosts are configured by their own credentials inside the harness, not by this flow.
+- Checkouts are prepared from a GitHub remote. A project without one gets an empty prepared directory and is reported as not a Git repository until it is initialized or cloned on the Oven.
+- Turn checkpoints (the per-conversation file diffs) track writes this app makes on this computer. An Oven thread's **Changes** tab shows the Oven checkout's own Git state instead.
 - Harness commands and versions are discovered from the Oven's executable path. A missing or broken executable is reported separately from an unreachable Oven.

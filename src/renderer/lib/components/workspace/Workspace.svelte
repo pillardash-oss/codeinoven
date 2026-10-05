@@ -584,6 +584,8 @@
   async function openFiles(): Promise<void> {
     if (!selectedThread) return
     if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') {
+      projectFilesWorkspace.setThreadMount(selectedThread.projectId, selectedThread.id)
+      await projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
       contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
       return
     }
@@ -917,6 +919,12 @@
    *  otherwise the right sidebar like every other tool. */
   function toggleTerminal(): void {
     if (!selectedThread) return
+    if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') {
+      toggleDockPanel('oven', () =>
+        contextSidebarState.openOven(selectedThread.projectId, selectedThread.id)
+      )
+      return
+    }
 
     if (contextSidebarState.terminalPlacement === 'bottom') {
       // The bottom dock is an independent region, so the rail toggles the dock
@@ -1035,6 +1043,18 @@
       : []
 
     const workspaceTools: ContextDockItem[] = []
+    if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local')
+      workspaceTools.push({
+        id: 'oven',
+        label: 'Oven',
+        icon: SquareTerminal,
+        active: dockKindActive('oven'),
+        onSelect: () =>
+          toggleDockPanel('oven', () =>
+            contextSidebarState.openOven(selectedThread.projectId, selectedThread.id)
+          )
+      })
+
     // Conversations surface their own app-owned workspace directory as the file
     // tree: a chat's artifact directory, or an assistant task's working
     // directory (the routine's root).
@@ -1066,13 +1086,14 @@
       )
     }
     if (!isConversation && workspaceState.terminalAvailable) {
-      workspaceTools.push({
-        id: 'terminal',
-        label: terminalOpen ? 'Hide terminal' : 'Show terminal',
-        icon: SquareTerminal,
-        active: terminalOpen,
-        onSelect: toggleTerminal
-      })
+      if (!selectedThread.settings?.ovenId || selectedThread.settings.ovenId === 'local')
+        workspaceTools.push({
+          id: 'terminal',
+          label: terminalOpen ? 'Hide terminal' : 'Show terminal',
+          icon: SquareTerminal,
+          active: terminalOpen,
+          onSelect: toggleTerminal
+        })
       const runningActions = projectActionsState.runningCount(selectedThread.projectId)
       workspaceTools.push({
         id: 'actions',
@@ -1326,6 +1347,21 @@
    *  panel down. Only changing projects remounts it. */
   let gitPanelProjectId = $state<string | null>(null)
   let gitPanelScopeBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
+  /**
+   * Whether the keep-mounted Git panel is the surface the user is looking at.
+   *
+   * A remote thread has no turn checkpoints, because those track writes this app
+   * made locally, so its Changes tab shows the Oven’s own Git state through this
+   * same panel instead of mounting a second one.
+   */
+  let gitPanelVisible = $derived.by(() => {
+    const tab = contextSidebarState.sidebarActiveTab
+    if (!tab) return false
+    if (tab.kind === 'git') return true
+    if (tab.kind !== 'diff' || !('projectId' in tab)) return false
+    const ovenId = selectedThread?.settings?.ovenId
+    return !!ovenId && ovenId !== 'local' && tab.projectId === selectedThread?.projectId
+  })
   $effect(() => {
     const tab = contextSidebarState.sidebarActiveTab
     const openProjectId = activeProject?.id ?? null
@@ -1340,7 +1376,7 @@
       }
       return
     }
-    if (tab.kind !== 'git') {
+    if (tab.kind !== 'git' && !gitPanelVisible) {
       if (tab.projectId !== gitPanelProjectId) gitPanelProjectId = null
       return
     }
@@ -4566,6 +4602,7 @@
             {active}
             {gitPanelProjectId}
             {gitPanelScopeBucketId}
+            {gitPanelVisible}
             {terminalFullscreenTabId}
             {browserFullscreenTabId}
             {activeProject}

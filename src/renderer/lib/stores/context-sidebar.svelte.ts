@@ -218,7 +218,10 @@ class ContextSidebarState {
       ? [...withNotifications, STICKY_NOTES_TAB]
       : withNotifications
     return this.attentionScope
-      ? [...withStickyNotes, attentionTab(this.attentionScope.projectId, this.attentionScope.threadId)]
+      ? [
+          ...withStickyNotes,
+          attentionTab(this.attentionScope.projectId, this.attentionScope.threadId)
+        ]
       : withStickyNotes
   }
 
@@ -575,6 +578,10 @@ class ContextSidebarState {
 
   openSources(projectId: string, threadId: string): void {
     this.tabContexts.openSources(projectId, threadId)
+  }
+
+  openOven(projectId: string, threadId: string): void {
+    this.tabContexts.openOven(projectId, threadId)
   }
 
   openGit(projectId: string, threadId: string): void {
