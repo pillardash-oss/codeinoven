@@ -3781,6 +3781,7 @@ export class BrowserService {
     contents.setWindowOpenHandler((details) =>
       this.windowOpenResponse(popupPageOwner(record), details)
     )
+    this.installDevToolsOpenPolicy(contents, () => popupPageOwner(record))
   }
 
   /**
@@ -3806,6 +3807,21 @@ export class BrowserService {
   /** Install the landing policy for the windows a page opens. */
   private installWindowOpenPolicy(view: WebContentsView, owner: BrowserPageOwner): void {
     view.webContents.setWindowOpenHandler((details) => this.windowOpenResponse(owner, details))
+    this.installDevToolsOpenPolicy(view.webContents, () => owner)
+  }
+
+  /** DevTools link commands use their own event, independent of window.open. */
+  private installDevToolsOpenPolicy(contents: WebContents, owner: () => BrowserPageOwner): void {
+    contents.on('devtools-open-url', (_event, url) => {
+      if (contents.isDestroyed() || this.window.isDestroyed()) return
+      const source = owner()
+      if (!this.tabs.has(source.tabId)) return
+      try {
+        this.openNewTabFor(source, validateBrowserUrl(url))
+      } catch (error: unknown) {
+        Logger.error('Browser DevTools rejected a link:', error)
+      }
+    })
   }
 
   /**
