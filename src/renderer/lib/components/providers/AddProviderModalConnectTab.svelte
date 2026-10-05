@@ -137,7 +137,11 @@
             <CheckCircle2 size={14} class="shrink-0 text-success" />
             <div class="min-w-0 flex-1">
               <p class="flex items-center gap-1.5 truncate text-xs font-medium text-foreground">
-                <span class="truncate">{connected.label}</span>
+                <span
+                  class="truncate"
+                  title={accountForConnected(connected)?.label || connected.label}
+                  >{accountForConnected(connected)?.label || connected.label}</span
+                >
                 {#if hiddenIds.includes(connected.providerId)}
                   <span
                     class="shrink-0 rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] font-medium text-dimmed"
@@ -167,7 +171,7 @@
               <button
                 type="button"
                 class="flex h-7 items-center gap-1 rounded-lg px-2 text-[0.6875rem] font-medium text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-                title={`Disconnect ${connected.label}`}
+                title={`Disconnect ${accountForConnected(connected)?.label || connected.label}`}
                 onclick={() => onRequestDisconnect(accountForConnected(connected) ?? null)}
               >
                 <Unplug size={11} /> Disconnect
