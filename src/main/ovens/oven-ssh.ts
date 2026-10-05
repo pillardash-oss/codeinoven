@@ -26,13 +26,25 @@ export function sshQuote(value: string): string {
 
 /** Translate bounded stderr into actionable diagnostics without exposing remote secrets. */
 function remoteCommandIssue(stderr: string): string {
-  if (/sudo:.*(?:password is required|a terminal is required)/iu.test(stderr))
-    return 'sudo: a password is required. Setup needs passwordless sudo for system package changes.'
+  if (
+    /sudo:.*(?:password is required|a terminal is required|interactive authentication is required)/iu.test(
+      stderr
+    )
+  )
+    return 'sudo: a password is required. Setup needs a password-authenticated Oven connection or passwordless sudo for system package changes.'
   if (/not in the sudoers|not allowed to execute|may not run sudo/iu.test(stderr))
     return 'Permission denied: the Oven user is not allowed to run this command with sudo.'
-  if (/are you root|must be (?:run as )?root|requires root|superuser privilege|permission denied/iu.test(stderr))
+  if (
+    /are you root|must be (?:run as )?root|requires root|superuser privilege|permission denied/iu.test(
+      stderr
+    )
+  )
     return 'Permission denied: system package changes require root or sudo.'
-  if (/could not get lock|unable to acquire.*lock|another (?:process|instance).*running/iu.test(stderr))
+  if (
+    /could not get lock|unable to acquire.*lock|another (?:process|instance).*running/iu.test(
+      stderr
+    )
+  )
     return 'Another package operation holds the package-manager lock. Wait for it to finish, then retry.'
   if (/dpkg was interrupted/iu.test(stderr))
     return 'The Oven has an interrupted package configuration. Repair it on the Oven before retrying setup.'
@@ -40,7 +52,9 @@ function remoteCommandIssue(stderr: string): string {
     return 'A command or file required by this step is missing on the Oven.'
   if (/no space left on device/iu.test(stderr))
     return 'The Oven has insufficient free disk space for this command.'
-  if (/could not resolve|temporary failure resolving|failed to fetch|could not connect/iu.test(stderr))
+  if (
+    /could not resolve|temporary failure resolving|failed to fetch|could not connect/iu.test(stderr)
+  )
     return 'The remote command could not reach its package source. Check the Oven network and repositories.'
   return 'The remote command failed after connecting. Check the package manager or command on the Oven, then retry this step.'
 }
@@ -62,6 +76,36 @@ export class OvenSsh {
       })
     this.tail = result
     return result
+  }
+
+  /** Authenticate sudo through stdin; the elevated command receives no credential input. */
+  async executeElevated(
+    id: string,
+    argv: string[],
+    timeoutMs: number,
+    authenticate: boolean
+  ): Promise<string> {
+    const oven = await this.registry.require(id)
+    if (!authenticate || oven.connection?.authentication !== 'password' || !oven.passwordRef)
+      return this.execute(id, ['sudo', '-n', ...argv].map(sshQuote).join(' '), '', timeoutMs)
+    const password = await this.registry.vault.resolve(oven.passwordRef)
+    if (!password || /[\r\n\0]/u.test(password))
+      throw new Error('The Oven login credential cannot authenticate sudo.')
+    const command = [
+      'sudo',
+      '-S',
+      '-p',
+      '',
+      '--',
+      'sh',
+      '-c',
+      'exec "$@" </dev/null',
+      'sh',
+      ...argv
+    ]
+      .map(sshQuote)
+      .join(' ')
+    return this.execute(id, command, `${password}\n`, timeoutMs)
   }
 
   /**
@@ -447,7 +491,9 @@ export class OvenSsh {
           else if (code === 255 || code === null)
             reject(new Error(`SSH connection failed (${code ?? 'disconnected'}). ${sshIssue}`))
           else if (code !== 0)
-            reject(new Error(`Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`))
+            reject(
+              new Error(`Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`)
+            )
           else resolve(output)
         })
         if (!channel) child.stdin.end(input)

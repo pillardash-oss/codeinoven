@@ -79,12 +79,13 @@ tool npm npm --version
 if [ -e /var/run/reboot-required ] || [ -e /run/reboot-required ]; then field reboot.required true; else field reboot.required false; fi
 case "$(command -v apt-get 2>/dev/null || true)" in
   /usr/bin/apt-get|/usr/local/bin/apt-get)
-    field os.updates "$(limit 25 apt-get -s -qq upgrade 2>/dev/null | grep -c '^Inst' || echo 0)"
+    field os.updates "$(limit apt-get -s -qq upgrade 2>/dev/null | grep -c '^Inst' || echo 0)"
     ;;
   *) field os.updates 0 ;;
 esac
 ${OVEN_HARNESS_COMMANDS.map(
-  (command) => `harness ${command} "$(command -v ${command} 2>/dev/null || true)" "$(limit ${command} --version 2>/dev/null | head -n 1 || true)"`
+  (command) =>
+    `harness ${command} "$(command -v ${command} 2>/dev/null || true)" "$(limit ${command} --version 2>/dev/null | head -n 1 || true)"`
 ).join('\n')}`
 
 /** Read-only native Windows preflight through PowerShell. Same output format. */
@@ -124,7 +125,9 @@ $pending = $pending -or ((Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\Curren
 Field 'reboot.required' $(if ($pending) { 'true' } else { 'false' })
 Field 'os.updates' '0'
 ${OVEN_HARNESS_COMMANDS.map(
-  (command) => `$resolved${command} = Get-Command '${command}' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  (
+    command
+  ) => `$resolved${command} = Get-Command '${command}' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($resolved${command}) {
   $version${command} = & '${command}' --version 2>$null | Select-Object -First 1
   Field 'harness' "${command}|$($resolved${command}.Source)|$version${command}"
@@ -214,12 +217,18 @@ function harnessChannels(
   command: string,
   platform: string
 ): { channels: string[]; supported: boolean; reason?: string } {
-  if (!isSetupPlatform(platform)) return { channels: [], supported: false, reason: `unsupported platform ${platform}` }
+  if (!isSetupPlatform(platform))
+    return { channels: [], supported: false, reason: `unsupported platform ${platform}` }
   const harnessId = ovenHarnessIdForCommand(command)
-  if (!harnessId) return { channels: [], supported: false, reason: 'no canonical harness registration' }
+  if (!harnessId)
+    return { channels: [], supported: false, reason: 'no canonical harness registration' }
   const channels = harnessInstallChannels(harnessId, platform)
   if (!channels || channels.length === 0)
-    return { channels: [], supported: false, reason: 'no documented install channel for this platform' }
+    return {
+      channels: [],
+      supported: false,
+      reason: 'no documented install channel for this platform'
+    }
   return { channels: channels.map((channel) => channel.method), supported: true }
 }
 
@@ -267,7 +276,9 @@ export function buildPreflightReport(
     harnesses: observations,
     osUpdateRequired: Number.isFinite(updates) && updates > 0,
     ...(Number.isFinite(updates) && updates > 0
-      ? { osUpdateDetail: `The Oven reports ${updates} pending package upgrade${updates === 1 ? '' : 's'}. CodeInOven upgrades packages only after you start setup, and never the operating-system release.` }
+      ? {
+          osUpdateDetail: `The Oven reports ${updates} pending package upgrade${updates === 1 ? '' : 's'}. CodeInOven upgrades packages only after you start setup, and never the operating-system release.`
+        }
       : {}),
     rebootRequired: fields.get('reboot.required') === 'true',
     durationMs
@@ -284,7 +295,11 @@ export async function collectPreflight(ssh: OvenSsh, id: string): Promise<OvenPr
   const start = Date.now()
   const shell = await detectRemoteShell(ssh, id)
   const command =
-    shell === 'posix' ? POSIX_PREFLIGHT : shell === 'powershell' ? `powershell -NoProfile -NonInteractive -Command @'\n${POWERSHELL_PREFLIGHT}\n'@` : null
+    shell === 'posix'
+      ? POSIX_PREFLIGHT
+      : shell === 'powershell'
+        ? `powershell -NoProfile -NonInteractive -Command @'\n${POWERSHELL_PREFLIGHT}\n'@`
+        : null
   if (!command)
     throw new Error(
       'This Oven presents a Windows command shell CodeInOven cannot read. Configure OpenSSH on the Oven to use PowerShell, then try again.'
@@ -307,7 +322,8 @@ export async function preflightOven(
 export interface NodeInstallPlan {
   /** Commands that install Node.js 22+ when the Oven does not already run it. */
   commands: { command: string; args: string[]; elevated: boolean }[]
-  method: 'apt' | 'dnf' | 'yum' | 'pacman' | 'brew' | 'winget' | 'choco' | 'scoop' | 'nvm' | 'manual'
+  method:
+    'apt' | 'dnf' | 'yum' | 'pacman' | 'brew' | 'winget' | 'choco' | 'scoop' | 'nvm' | 'manual'
   elevated?: boolean
   detail: string
 }
@@ -326,7 +342,9 @@ export function planNodeInstall(
   privilege: OvenPrivilege
 ): NodeInstallPlan {
   const elevationSuffix =
-    privilege === 'root' || privilege === 'passwordless-sudo' ? '' : ' requires elevation on this Oven.'
+    privilege === 'root' || privilege === 'passwordless-sudo'
+      ? ''
+      : ' requires elevation on this Oven.'
   const elevated = privilege !== 'root'
   const architectureSuffix = architecture === 'arm64' ? 'arm64' : 'x64'
 
@@ -352,7 +370,13 @@ export function planNodeInstall(
         method: 'winget',
         elevated: false,
         detail: 'Installs the Node.js LTS package through winget.',
-        commands: [{ command: 'winget', args: ['install', '--id', 'OpenJS.NodeJS.LTS', '-e'], elevated: false }]
+        commands: [
+          {
+            command: 'winget',
+            args: ['install', '--id', 'OpenJS.NodeJS.LTS', '-e'],
+            elevated: false
+          }
+        ]
       }
     if (packageManager === 'choco')
       return {

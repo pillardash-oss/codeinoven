@@ -12,7 +12,11 @@ import {
   type OvenPreflightAssessment,
   type OvenPreflightReport
 } from '../../lib/ovens'
-import { buildSetupPlan, plannedStepsToSetupSteps, type SetupPlan } from './remote/oven-setup-script'
+import {
+  buildSetupPlan,
+  plannedStepsToSetupSteps,
+  type SetupPlan
+} from './remote/oven-setup-script'
 import { assessPreflight } from './oven-setup-capabilities'
 import { OVEN_SETUP_SCRIPT_VERSION } from './oven-setup-bootstrap'
 import { sshQuote, type OvenSsh } from './oven-ssh'
@@ -110,7 +114,9 @@ export class OvenSetupService {
    * the next run before the oven is touched again.
    */
   async recover(): Promise<number> {
-    const directories = await this.storage.listDirectories(OPERATION_PATH).catch(() => [] as string[])
+    const directories = await this.storage
+      .listDirectories(OPERATION_PATH)
+      .catch(() => [] as string[])
     let recoveredCount = 0
     for (const entry of directories.slice(0, 64)) {
       const ovenId = entry.split('/').filter(Boolean).pop()
@@ -121,7 +127,8 @@ export class OvenSetupService {
         for (const step of stored.steps)
           if (step.status === 'running') {
             step.status = 'interrupted'
-            step.error = 'CodeInOven closed while this step was running. Its result is re-checked before setup continues.'
+            step.error =
+              'CodeInOven closed while this step was running. Its result is re-checked before setup continues.'
           }
         stored.status = 'interrupted'
         stored.updatedAt = Date.now()
@@ -147,7 +154,10 @@ export class OvenSetupService {
    * Start setup. Re-running while a mutating operation is already active
    * returns that operation rather than starting a second one.
    */
-  async startSetup(ovenId: string, configuration: OvenSetupConfiguration): Promise<OvenSetupOperation> {
+  async startSetup(
+    ovenId: string,
+    configuration: OvenSetupConfiguration
+  ): Promise<OvenSetupOperation> {
     await this.ensureRecovered()
     const existing = this.operations.get(ovenId)
     if (existing && isActive(existing.status)) {
@@ -190,8 +200,7 @@ export class OvenSetupService {
     await this.ensureRecovered()
     const operation = this.operations.get(ovenId)
     if (!operation) throw new Error('There is no oven setup operation to retry.')
-    if (isActive(operation.status))
-      throw new Error('This oven setup is still running.')
+    if (isActive(operation.status)) throw new Error('This oven setup is still running.')
     const plan = this.plans.get(ovenId)
     if (!plan)
       throw new Error('The setup plan for this oven is no longer available. Start setup again.')
@@ -206,7 +215,9 @@ export class OvenSetupService {
     // A plan whose shape changed means the oven moved under a paused operation.
     // Rather than resuming into an unknown state, restart the plan from the top:
     // every step is idempotent and re-verifies itself before it succeeds.
-    const planChanged = refreshed.steps.some((planned, index) => planned.id !== plan.steps[index]?.id)
+    const planChanged = refreshed.steps.some(
+      (planned, index) => planned.id !== plan.steps[index]?.id
+    )
 
     operation.status = 'running'
     operation.error = undefined
@@ -373,7 +384,8 @@ export class OvenSetupService {
         return
       }
       case 'accounts': {
-        if (step) step.detail = 'Copying selected accounts and portable configuration into the oven.'
+        if (step)
+          step.detail = 'Copying selected accounts and portable configuration into the oven.'
         const issues = await this.ports.syncAccounts(
           ovenId,
           operation.configuration.selectedHarnesses,
@@ -395,8 +407,7 @@ export class OvenSetupService {
         this.reports.set(ovenId, report)
         const stillMissing = report.harnesses.filter(
           (harness) =>
-            harness.supported &&
-            (harness.health === 'missing' || harness.health === 'broken')
+            harness.supported && (harness.health === 'missing' || harness.health === 'broken')
         )
         if (step && stillMissing.length > 0)
           step.detail = `${stillMissing.length} harness${stillMissing.length === 1 ? '' : 'es'} still need attention.`
@@ -409,8 +420,8 @@ export class OvenSetupService {
 
   /**
    * Steps the oven runs. Every command is structured argv quoted once here, and
-   * elevation uses `sudo -n` so a refused password never blocks on a prompt the
-   * user cannot see or answer.
+   * elevation uses the vaulted login credential when sudo requires authentication,
+   * otherwise sudo stays noninteractive.
    */
   private async runShellStep(ovenId: string, planned: SetupPlan['steps'][number]): Promise<void> {
     const execute = async (): Promise<void> => {
@@ -419,11 +430,24 @@ export class OvenSetupService {
       for (const entry of planned.commands) {
         if (this.cancellations.has(ovenId))
           throw new Error('Setup was cancelled before this command started.')
-        const argv = entry.elevated ? ['-n', entry.command, ...entry.args] : [entry.command, ...entry.args]
+        const argv = entry.elevated
+          ? ['-n', entry.command, ...entry.args]
+          : [entry.command, ...entry.args]
         const line = (entry.elevated ? ['sudo', ...argv] : argv).map(sshQuote).join(' ')
         const timeout =
-          planned.id === 'packages' ? PACKAGE_TIMEOUT_MS : planned.phase === 'harnesses' ? INSTALL_TIMEOUT_MS : STEP_TIMEOUT_MS
-        await this.ports.ssh.execute(ovenId, line, '', timeout)
+          planned.id === 'packages'
+            ? PACKAGE_TIMEOUT_MS
+            : planned.phase === 'harnesses'
+              ? INSTALL_TIMEOUT_MS
+              : STEP_TIMEOUT_MS
+        if (entry.elevated)
+          await this.ports.ssh.executeElevated(
+            ovenId,
+            [entry.command, ...entry.args],
+            timeout,
+            this.reports.get(ovenId)?.privilege === 'sudo'
+          )
+        else await this.ports.ssh.execute(ovenId, line, '', timeout)
       }
     }
     if (planned.phase === 'harnesses' && planned.verify?.command)
@@ -434,9 +458,10 @@ export class OvenSetupService {
   /** Decide success by reading the oven back, never by trusting an exit code. */
   private async verify(ovenId: string, planned: SetupPlan['steps'][number]): Promise<void> {
     if (!planned.verify) return
-    const line = planned.id === 'node'
-      ? `${sshQuote('node')} ${sshQuote('-e')} ${sshQuote('if(Number(process.versions.node.split(String.fromCharCode(46))[0])<22)process.exit(1)')}`
-      : [planned.verify.command, ...planned.verify.args].map(sshQuote).join(' ')
+    const line =
+      planned.id === 'node'
+        ? `${sshQuote('node')} ${sshQuote('-e')} ${sshQuote('if(Number(process.versions.node.split(String.fromCharCode(46))[0])<22)process.exit(1)')}`
+        : [planned.verify.command, ...planned.verify.args].map(sshQuote).join(' ')
     await this.ports.ssh.execute(ovenId, line, '', VERIFY_TIMEOUT_MS)
   }
 

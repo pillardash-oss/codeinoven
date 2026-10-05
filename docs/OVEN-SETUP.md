@@ -10,7 +10,7 @@ Oven setup prepares an SSH Oven for CodeInOven runs. It does not perform full se
 4. Select **Start setup** to authorize package upgrades and the selected installs. Package registry refresh and package upgrades run before Node bootstrap. OS release upgrades and reboots are never automatic.
 5. Follow progress in the global docked setup panel. Leaving Settings or switching views keeps the panel and progress tracking alive. Failed steps include their error. Retry rechecks completed steps and resumes work that still needs attention.
 
-Linux system package commands run directly as root or through noninteractive sudo for other users, including passwordless-sudo users. Remote command failures are reported separately from SSH connection and trust errors.
+Linux system package commands run directly as root or through sudo for other users. Password-authenticated Oven connections use the vaulted login password through SSH stdin when sudo requires authentication. The elevated command receives no password input. Other connections require passwordless sudo. Remote command failures are reported separately from SSH connection and trust errors.
 
 Package updates use the detected package manager: apt, dnf, yum, pacman, Homebrew, winget, Chocolatey, or Scoop. Harness installs use the same documented channel metadata as the Local installer. A selected harness without a supported one-command install path blocks setup rather than running a guessed command.
 
@@ -29,7 +29,7 @@ The managed remote probe returns device details and installed harness versions t
 ## Limits
 
 - Setup requires an SSH Oven. Local remains available for harness inventory and normal local use.
-- Package operations may need root or passwordless `sudo`. Setup does not prompt for a remote password; a privilege refusal is reported as a blocked step.
+- Package operations need root, passwordless `sudo`, or a password-authenticated Oven connection whose login password also authenticates sudo. Setup does not open an interactive password prompt; a privilege refusal is reported as a blocked step.
 - The app never performs OS release upgrades or reboots the Oven.
 - GitHub SSH is the only managed Git identity provider in this release. Other Git hosts are not configured by this flow.
 - Harness commands and versions are discovered from the Oven's executable path. A missing or broken executable is reported separately from an unreachable Oven.

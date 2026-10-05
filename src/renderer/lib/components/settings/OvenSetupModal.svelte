@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2, Circle, CheckCircle2, AlertCircle } from '@lucide/svelte'
+  import { Loader2, Circle, CheckCircle2, AlertCircle, X } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
@@ -45,6 +45,12 @@
   const selectedOven = $derived(ovens.find((oven) => oven.id === ovenId))
   const blockers = $derived(preflight?.assessment.issues.filter((issue) => issue.blocking) ?? [])
   const active = $derived(Boolean(operation && ['running', 'preparing'].includes(operation.status)))
+  const completedSteps = $derived(
+    operation?.steps.filter((step) => ['succeeded', 'skipped'].includes(step.status)).length ?? 0
+  )
+  const currentStep = $derived(
+    operation?.steps.find((step) => ['running', 'failed', 'blocked'].includes(step.status))
+  )
   const harnessOptions = $derived(
     OVEN_HARNESS_COMMANDS.flatMap((command) => {
       const id = ovenHarnessIdForCommand(command)
@@ -173,7 +179,11 @@
   }
 
   function closeProgress(): void {
-    minimized = true
+    if (active) return
+    operation = null
+    progressEvents = []
+    afterSequence = 0
+    minimized = false
   }
 </script>
 
@@ -330,7 +340,7 @@
     open
     title="Oven setup progress"
     {minimized}
-    closable
+    closable={!active}
     onMinimize={() => (minimized = true)}
     onClose={closeProgress}
     storageKey="codeinoven.ovenSetup.progress.v1"
@@ -339,13 +349,38 @@
   >
     {#snippet dock()}
       <DockRow storageKey="codeinoven.ovenSetup.progress.v1" label="Move docked oven setup">
-        <button
-          type="button"
-          class="rounded-full border bg-surface px-3 py-1 text-xs hover:bg-elevated"
-          title="Show oven setup progress"
-          aria-label="Show oven setup progress"
-          onclick={() => (minimized = false)}>Oven setup · {operation?.status ?? 'running'}</button
-        >
+        <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
+          <button
+            type="button"
+            class="flex items-center gap-2 rounded-lg px-2 py-1 text-xs hover:bg-elevated"
+            title="Show oven setup progress"
+            aria-label="Show oven setup progress"
+            onclick={() => (minimized = false)}
+          >
+            {#if active}<Loader2
+                size={14}
+                class="animate-spin"
+              />{:else if operation?.status === 'succeeded'}<CheckCircle2
+                size={14}
+                class="text-success"
+              />{:else}<AlertCircle size={14} class="text-danger" />{/if}
+            <span
+              >Oven setup · {completedSteps}/{operation?.steps.length ?? 0} · {currentStep?.name ??
+                operation?.status}{#if currentStep && !active}
+                · {operation?.status}{/if}</span
+            >
+          </button>
+          {#if !active}
+            <span class="h-4 w-px bg-border"></span>
+            <button
+              type="button"
+              class="rounded-lg p-1.5 text-muted hover:bg-elevated"
+              title="Close oven setup progress"
+              aria-label="Close oven setup progress"
+              onclick={closeProgress}><X size={14} /></button
+            >
+          {/if}
+        </div>
       </DockRow>
     {/snippet}
     <div class="space-y-4 p-4">
