@@ -21505,9 +21505,8 @@ export class ChatEngine {
    * leaves a conversation the user cannot remove and an eviction candidate that
    * is re-picked on every create without ever making room. The persisted
    * compatibility directory is exactly the path this thread's harness session
-   * was opened with, and the two
-   * teardown calls that use it, abort and session removal, are already
-   * best-effort.
+   * was opened with, and the two teardown calls that use it, abort and session
+   * removal, are already best-effort.
    */
   private async resolveTeardownPath(thread: Thread): Promise<string> {
     try {
