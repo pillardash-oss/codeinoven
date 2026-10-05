@@ -7,7 +7,6 @@
     Boxes,
     Globe2,
     KeyRound,
-    LayoutGrid,
     Loader2,
     Monitor,
     Package,
@@ -19,7 +18,8 @@
     Server,
     Trash2,
     Upload,
-    Wrench
+    Wrench,
+    X
   } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -136,6 +136,7 @@
   let loading = $state(true)
   let error = $state('')
   let query = $state('')
+  let searchInputEl = $state<HTMLInputElement | null>(null)
   let scopeFilter = $state('all')
   let editorOpen = $state(false)
   let editorTarget = $state<UtilityEditorTarget | null>(null)
@@ -178,6 +179,17 @@
     plugins: 'Search plugins',
     web: 'Search web & browser utilities',
     tools: 'Search names, sources, and descriptions'
+  }
+
+  /** One-line tooltip per tab, so a hover names the section without acronym noise. */
+  const TAB_TITLE: Record<UtilitiesTab, string> = {
+    all: 'Every installed utility',
+    skills: 'Installed skills',
+    bookmarks: 'Bookmarked marketplace skills',
+    mcp: 'MCP servers',
+    plugins: 'Install a plugin bundle',
+    web: 'Web and browser utilities',
+    tools: 'Agent tool schemas'
   }
 
   function harnessName(harnessId: string): string {
@@ -482,15 +494,19 @@
     activeTab === 'all' || activeTab === 'skills' || activeTab === 'bookmarks'
   )
 
+  /** What the installed-skill upkeep is, for the hover tooltip. */
+  const SKILL_UPDATE_TOOLTIP = `${APP_NAME} re-checks the skills it installed every time the app checks for updates.`
+
   /** One short line of what the background pass last did, in plain words. */
   let skillUpdateSummary = $derived.by(() => {
     const status = skillUpdateState.status
-    if (status.running) return 'Checking installed skills for updates…'
+    if (status.running) return 'Checking for skill updates…'
     if (status.error) return status.error
     if (status.lastCheckedAt === null) {
-      return status.tracked === 0
-        ? `Skills installed from ${APP_NAME} are kept up to date with the app update check.`
-        : `${status.tracked} installed ${status.tracked === 1 ? 'skill' : 'skills'} kept up to date with the app update check.`
+      if (status.tracked === 0) return 'No installed skills to keep fresh'
+      return status.tracked === 1
+        ? '1 installed skill stays up to date'
+        : `${status.tracked} installed skills stay up to date`
     }
     const failed = status.results.filter((result) => result.outcome === 'failed').length
     const updated =
@@ -505,6 +521,11 @@
       .filter(Boolean)
       .join(' · ')
   })
+
+  function clearSearch(): void {
+    query = ''
+    searchInputEl?.focus()
+  }
 
   function replaceUtility(updated: UtilityDefinition): void {
     utilities = utilities.some((utility) => utility.id === updated.id)
@@ -797,41 +818,23 @@
 {/snippet}
 
 <div class="p-6 pb-24">
-  <!-- Header: title and description, matching the flow of every other page. -->
-  <div class="min-w-0">
-    <h1 class="text-xl font-bold tracking-tight">Utilities</h1>
-    <p class="mt-1 text-sm text-muted">{TAB_BLURB[activeTab]}</p>
-    {#if showsSkillUpdates}
-      <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
-        <span class={skillUpdateState.status.error ? 'text-danger' : 'text-dimmed'}>
-          {skillUpdateSummary}
-        </span>
-        <button
-          type="button"
-          class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-          disabled={skillUpdateState.status.running}
-          title="Check the skills installed by CodeInOven for updates now"
-          onclick={() => void skillUpdateState.checkNow()}
-        >
-          <RefreshCw size={11} class={skillUpdateState.status.running ? 'animate-spin' : ''} /> Check
-          now
-        </button>
-      </div>
-    {/if}
-  </div>
-
-  <!-- Actions and tabs share one row: buttons first, then the section tabs. -->
-  <div class="mt-4 flex flex-wrap items-center justify-between gap-4">
-    <div class="flex flex-wrap items-center gap-3">
+  <!-- Header: what this page holds on the left, the page's own actions on the
+       right, so the title never competes with navigation for one row. -->
+  <div class="flex flex-wrap items-start justify-between gap-4">
+    <div class="min-w-0">
+      <h1 class="text-xl font-bold tracking-tight">Utilities</h1>
+      <p class="mt-1 text-sm text-muted">{TAB_BLURB[activeTab]}</p>
+    </div>
+    <div class="flex shrink-0 flex-wrap items-center gap-2">
       <button
-        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
+        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
         title="Add a skill, MCP server, or other utility"
         onclick={openCreate}
       >
         <Plus size={13} /> Add utility
       </button>
       <button
-        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
         disabled={activeTab === 'tools'
           ? agentToolsStore.loading || agentToolsStore.refreshing
           : loading}
@@ -849,7 +852,7 @@
       </button>
       {#if activeTab === 'all' || activeTab === 'skills' || activeTab === 'bookmarks'}
         <button
-          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           title="Open the skills marketplace"
           onclick={onOpenMarketplace}
         >
@@ -857,48 +860,60 @@
         </button>
       {/if}
     </div>
+  </div>
 
+  <!-- Section tabs on the left, installed-skill upkeep on the right. The two
+       clusters share one row without competing: navigation stays in one piece,
+       and the background check reads as page housekeeping, not page action. -->
+  <div class="mt-5 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
     <div
-      class="flex flex-wrap items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+      class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
       role="tablist"
       aria-label="Utilities sections"
     >
       {#each tabs as tab (tab.id)}
         <button
-          class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors {activeTab ===
-          tab.id
+          class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab === tab.id
             ? 'bg-surface text-foreground shadow-sm'
             : 'text-muted hover:text-foreground'}"
           role="tab"
           aria-selected={activeTab === tab.id}
-          title="{tab.label} utilities"
+          title={TAB_TITLE[tab.id]}
           onclick={() => onSelectTab(tab.id)}
         >
-          {#if tab.id === 'all'}
-            <LayoutGrid size={13} />
-          {:else if tab.id === 'skills'}
-            <BookOpen size={13} />
-          {:else if tab.id === 'bookmarks'}
-            <Bookmark size={13} />
-          {:else if tab.id === 'mcp'}
-            <Server size={13} />
-          {:else if tab.id === 'plugins'}
-            <Boxes size={13} />
-          {:else if tab.id === 'web'}
-            <Globe2 size={13} />
-          {:else}
-            <Wrench size={13} />
-          {/if}
           {tab.label}
         </button>
       {/each}
     </div>
+
+    {#if showsSkillUpdates}
+      <div class="flex min-w-0 items-center gap-2">
+        <span
+          class="truncate text-[0.6875rem] {skillUpdateState.status.error
+            ? 'text-danger'
+            : 'text-dimmed'}"
+          title={SKILL_UPDATE_TOOLTIP}
+        >
+          {skillUpdateSummary}
+        </span>
+        <button
+          type="button"
+          class="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
+          disabled={skillUpdateState.status.running}
+          title="Check the skills installed by CodeInOven for updates now"
+          onclick={() => void skillUpdateState.checkNow()}
+        >
+          <RefreshCw size={11} class={skillUpdateState.status.running ? 'animate-spin' : ''} /> Check
+          now
+        </button>
+      </div>
+    {/if}
   </div>
 
   {#if isListTab(activeTab)}
-    <!-- Row 4 — search and entry count: one row, same position for every list tab. -->
-    <div class="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-      <label class="relative block">
+    <!-- Search and the entry count: one row, same place for every list tab. -->
+    <div class="mt-4 flex items-center gap-3">
+      <label class="relative block min-w-0 flex-1">
         <Search
           size={14}
           class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
@@ -907,26 +922,38 @@
           Search {activeTab === 'bookmarks' ? 'bookmarked skills' : 'utilities'}
         </span>
         <input
-          class="h-9 w-full rounded-lg border bg-surface pl-9 pr-3 text-sm outline-none focus:border-primary"
-          type="search"
+          bind:this={searchInputEl}
+          class="h-9 w-full rounded-lg border bg-elevated pl-9 pr-9 text-sm outline-none transition-colors placeholder:text-dimmed focus:border-primary"
+          type="text"
           placeholder={SEARCH_PLACEHOLDER[activeTab]}
           bind:value={query}
         />
+        {#if query}
+          <button
+            type="button"
+            class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+            aria-label="Clear search"
+            title="Clear search"
+            onclick={clearSearch}
+          >
+            <X size={12} />
+          </button>
+        {/if}
       </label>
-      <span class="flex items-center justify-end whitespace-nowrap text-xs text-muted">
-        {resultCount}
-        {resultCount === 1
-          ? activeTab === 'tools'
+      <span class="flex shrink-0 items-baseline gap-1 whitespace-nowrap text-xs text-muted">
+        <span class="font-medium tabular-nums text-foreground">{resultCount}</span>
+        {activeTab === 'tools'
+          ? resultCount === 1
             ? 'tool'
-            : 'entry'
-          : activeTab === 'tools'
-            ? 'tools'
+            : 'tools'
+          : resultCount === 1
+            ? 'entry'
             : 'entries'}
       </span>
     </div>
 
-    <!-- Row 5 — filter chips: scope/harness tags for utility tabs, source + harness for Tools. Same row for every list tab. -->
-    <div class="mt-4 flex flex-wrap items-center gap-1.5" role="group" aria-label="Filters">
+    <!-- Filters: what is shown (built-ins) first, then the scope and harness tags. -->
+    <div class="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label="Filters">
       {#if activeTab === 'tools'}
         <select
           class="h-7 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium outline-none focus:border-primary"
@@ -985,6 +1012,9 @@
             Hide built-in
             <span class="tabular-nums opacity-70">{builtInRowCount}</span>
           </button>
+        {/if}
+        {#if activeTab !== 'bookmarks' && builtInRowCount > 0 && availableTags.length > 0}
+          <span class="mx-0.5 h-4 w-px shrink-0 bg-border/60" aria-hidden="true"></span>
         {/if}
         {#if availableTags.length > 0 && activeTab !== 'bookmarks'}
           <button
