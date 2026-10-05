@@ -82,7 +82,13 @@
     {@const isForeignRun = foreignRuns.isForeign(thread.projectId, thread.id)}
     {@const activeRunActivity = agentRuns.activity(thread.projectId, thread.id)}
     {@const activeRunActivityDetail = agentRuns.activityDetail(thread.projectId, thread.id)}
-    <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
+    <!-- `max-w-[var(--app-header-center-max-width)]` (set on the header shell)
+         holds the whole centred block to the middle band of the bar: the title
+         truncates there, and the project icon, thread menu, and status badge
+         stay pinned inside the same band. -->
+    <div
+      class="titlebar-no-drag relative flex min-w-0 max-w-[var(--app-header-center-max-width)] items-center gap-2"
+    >
       {#if !chatMode && thread.projectId !== INBOX_PROJECT_ID}
         {@const headerProject =
           workspaceState.activeProject ??

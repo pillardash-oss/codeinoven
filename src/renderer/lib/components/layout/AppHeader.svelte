@@ -443,6 +443,12 @@
 <style>
   .app-header {
     container-type: inline-size;
+    /* The centre of the header (the open thread's title, or the browser page's
+       title) is capped to this width: a long title truncates inside the middle
+       band of the bar instead of stretching towards the view switcher and the
+       right-hand actions, so it never reaches over the panels below it. `rem`
+       keeps the cap in step with the Appearance font size. */
+    --app-header-center-max-width: min(100%, 32rem);
   }
 
   @container (max-width: 1100px) {
