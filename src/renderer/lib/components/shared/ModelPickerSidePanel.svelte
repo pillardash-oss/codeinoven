@@ -5,9 +5,11 @@
   import { activeModelProfile } from '$shared/model-profiles'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
   import ModelPickerProfiles from './ModelPickerProfiles.svelte'
-  import type {
-    ModelPickerProfilesGroup,
-    PickerHarnessFilterControls
+  import {
+    PICKER_ENTRY_SELECTOR,
+    pickerEntryTarget,
+    type ModelPickerProfilesGroup,
+    type PickerHarnessFilterControls
   } from './model-picker-helpers'
 
   /**
@@ -117,6 +119,117 @@
     measure()
     return () => observer.disconnect()
   }
+
+  /** The rendered panel, which is portaled out of the row that opens it. */
+  let cardElement: HTMLElement | null = null
+  /** True while a caller that asked for the panel directly still needs its focus. */
+  let focusOnOpen = false
+
+  /**
+   * Open the panel from outside, for a caller that asked for profiles directly.
+   *
+   * The panel is only mounted while the picker's own popover is open, and its
+   * content mounts a flush after `open` turns true, so the focus it owes the caller
+   * is taken when the card attaches rather than here. That caller's keyboard is
+   * still on the composer, so without this the arrows would walk the draft instead
+   * of the panel. Escape and the rows themselves own the state after that.
+   */
+  export function openPanel(): void {
+    if (open) {
+      focusFirstEntry()
+      return
+    }
+    focusOnOpen = true
+    open = true
+  }
+
+  /** True while focus sits in a field that wants the arrow keys for its caret. */
+  function isTextEntry(target: EventTarget | null): boolean {
+    return (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      (target instanceof HTMLElement && target.isContentEditable)
+    )
+  }
+
+  /** Move focus onto the panel's first entry, if it has one. */
+  function focusFirstEntry(): void {
+    entryElements()[0]?.focus()
+  }
+
+  /**
+   * Take the panel's card, and the focus a direct caller is owed with it.
+   *
+   * The attachment is where the card first exists, which is what makes it the one
+   * moment the entries can be focused. The handoff then waits a frame, because the
+   * picker focuses its own search field as it opens, after this card has mounted,
+   * and taking focus any earlier would hand it straight back to the search box.
+   */
+  function attachCard(node: HTMLElement): () => void {
+    cardElement = node
+    if (focusOnOpen) {
+      focusOnOpen = false
+      requestAnimationFrame(() => focusFirstEntry())
+    }
+    return () => {
+      cardElement = null
+    }
+  }
+
+  /** The controls the arrows walk, in the order they are read. */
+  function entryElements(): HTMLElement[] {
+    if (!cardElement) return []
+    return [...cardElement.querySelectorAll<HTMLElement>(PICKER_ENTRY_SELECTOR)]
+  }
+
+  /**
+   * Move focus one entry, reporting whether the key was used.
+   *
+   * The panel is portaled out of the row that opens it, so focus is often still on
+   * that row when the first arrow arrives: a step forward from outside the panel
+   * lands on its first entry, which is where Tab would have started. Stepping back
+   * from outside has nothing above it to reach, so the key is left alone.
+   */
+  function stepEntryFocus(step: 1 | -1): boolean {
+    const entries = entryElements()
+    const focused = document.activeElement
+    const target =
+      cardElement && focused && cardElement.contains(focused)
+        ? pickerEntryTarget(entries, focused, step)
+        : step === 1
+          ? (entries[0] ?? null)
+          : null
+    if (!target) return false
+    target.focus()
+    return true
+  }
+
+  /**
+   * The panel's key map: Escape closes it, and the arrows walk it.
+   *
+   * Bound both on the panel and on the row that opens it, because the two live in
+   * different trees once the panel is portaled. Both bindings come from
+   * `keymapState`, so a rebind in Keymap settings moves the panel's navigation with
+   * it. The walk covers the profiles and the harness filter as one run of rows,
+   * because the panel is the only surface that holds both: it starts on the
+   * header's save row, and stepping past the last profile row reaches the chips. A
+   * name field is left alone, because its arrow keys belong to the caret.
+   */
+  function onPanelKeydown(event: KeyboardEvent): void {
+    if (isTextEntry(event.target)) return
+    if (keymapState.matches('palette-close', event)) {
+      if (!open) return
+      // Closes the panel, never the picker it belongs to. From inside the panel the
+      // picker's own content is never an ancestor of this portal, so it cannot see
+      // the key; from the row that opens the panel it can, so it is stopped here.
+      event.stopPropagation()
+      open = false
+      return
+    }
+    if (!open || !keymapState.matches('palette-model-nav', event)) return
+    const step: 1 | -1 = event.key === 'ArrowUp' ? -1 : 1
+    if (stepEntryFocus(step)) event.preventDefault()
+  }
 </script>
 
 {#if profiles || filter}
@@ -126,6 +239,7 @@
         class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title={rowTitle}
         aria-label={rowTitle}
+        onkeydown={onPanelKeydown}
       >
         {#if profiles}
           <Layers size={11} class="shrink-0" />
@@ -180,15 +294,11 @@
             role="dialog"
             aria-label={panelLabel}
             tabindex={-1}
+            {@attach attachCard}
             style:top={panelTop === null ? '0' : `${panelTop}px`}
             style:translate={panelTop === null ? '0' : '0 -50%'}
             style:max-height={hostBox ? `${hostBox.height}px` : undefined}
-            onkeydown={(event: KeyboardEvent) => {
-              // Closes the panel, never the picker it belongs to: the picker's own
-              // content is never an ancestor of this portal, so nothing else in the
-              // composer sees the key.
-              if (keymapState.matches('palette-close', event)) open = false
-            }}
+            onkeydown={onPanelKeydown}
           >
             {#if profiles}
               <ModelPickerProfiles {...profiles} />
@@ -224,6 +334,7 @@
       >
         <button
           type="button"
+          data-picker-entry
           class="flex h-6 items-center gap-1 rounded-md border px-2 text-[0.625rem] font-medium transition-colors {!filter.active
             ? 'border-primary bg-primary text-on-primary'
             : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -237,6 +348,7 @@
         {#each filter.options as option (option.id)}
           <button
             type="button"
+            data-picker-entry
             class="flex h-6 items-center gap-1 rounded-md border px-2 text-[0.625rem] font-medium transition-colors {filter.selected.has(
               option.id
             )

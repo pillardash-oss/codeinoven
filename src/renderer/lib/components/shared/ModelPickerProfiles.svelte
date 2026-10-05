@@ -34,6 +34,11 @@
    * Everything here is presentational. Persistence, the applied-settings maths,
    * and the delete confirmation belong to the composer, which owns the settings it
    * commits; this component only reports intent.
+   *
+   * The side panel's arrow keys walk this section through the `data-picker-entry`
+   * marker, which is on the save control and on each row's apply button. A row's
+   * rename and delete buttons stay out of that walk and are reached with Tab, so
+   * the arrows step rows rather than controls.
    */
   interface Props {
     /** Saved profiles, in the order the user listed them. */
@@ -254,6 +259,7 @@
       </span>
       <button
         type="button"
+        data-picker-entry
         class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium text-primary transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
         title={atCapacity
           ? `You can save up to ${MAX_MODEL_PROFILES} profiles`
@@ -292,6 +298,7 @@
           {:else}
             <button
               type="button"
+              data-picker-entry
               class={`flex min-w-0 flex-auto items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isActive ? 'bg-elevated' : ''}`}
               title={titleFor(profile, display)}
               aria-pressed={isActive}

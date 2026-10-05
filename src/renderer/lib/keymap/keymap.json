@@ -770,9 +770,9 @@
         {
           "id": "palette-model-nav",
           "keys": ["arrowup", "arrowdown"],
-          "label": "Navigate model list",
-          "description": "Moves between model rows.",
-          "scenario": "Model picker open."
+          "label": "Navigate picker rows",
+          "description": "Moves between the rows of a picker: its model list, saved profiles, and harness filter chips.",
+          "scenario": "Model picker or one of its panels open."
         },
         {
           "id": "palette-model-select",

@@ -596,6 +596,8 @@
   let accountPickerVisible = $state(false)
   /** The scope shoe instance, so the `/scope` slash action can open its picker. */
   let scopeShoeComponent: ComposerShoe | undefined = $state(undefined)
+  /** The profiles panel instance, so the `/profile` slash action can open it. */
+  let profilesPanel: ModelPickerSidePanel | undefined = $state(undefined)
   /** The scope picker is live on the shoe (project mode, new thread)   gates
    *  the `/scope` slash action the same way the shoe's badge chevron does. */
   let scopePickerAvailable = $derived(scopeShoe !== undefined && scopeShoe.isNewThread === true)
@@ -737,6 +739,20 @@
     if (!modelSettingsVisible) return
     closeAllMenus()
     inferenceMenuOpen = true
+  }
+
+  /**
+   * Open the model picker on its profiles panel, for the `/profile` action.
+   *
+   * The panel is mounted with the picker's popover rather than beside it, so it
+   * only exists once that popover has opened: the ask waits for the open to land
+   * before handing the panel to the arrow keys.
+   */
+  function showProfilesMenu(): void {
+    if (readOnlyMode) return
+    closeAllMenus()
+    modelMenuOpen = true
+    void tick().then(() => profilesPanel?.openPanel())
   }
 
   function showThinkingMenu(): void {
@@ -1032,6 +1048,7 @@
 
   const slash = createComposerSlashActions({
     getModelSettingsVisible: () => modelSettingsVisible,
+    getProfilesPickerVisible: () => !readOnlyMode,
     getShowChatModes: () => showChatModes,
     getFileSystemMode: () => resolved.fileSystemMode,
     getSupportsThinking: () => supportsThinking,
@@ -1163,6 +1180,11 @@
 
     if (action.id === 'selector:model-setting') {
       showModelSettingsMenu()
+      return
+    }
+
+    if (action.id === 'selector:profiles') {
+      showProfilesMenu()
       return
     }
 
@@ -2034,6 +2056,7 @@
             it lists are supplied only by composers that can apply them.
           -->
           <ModelPickerSidePanel
+            bind:this={profilesPanel}
             {filter}
             profiles={readOnlyMode
               ? null

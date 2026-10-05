@@ -728,7 +728,7 @@
     data-model-key={rowKey}
     onclick={() => onChoose(entry)}
     onkeydown={(event: KeyboardEvent) => {
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (keymapState.matches('palette-model-nav', event)) {
         event.preventDefault()
         const currentIndex = pickerModelKeys.indexOf(rowKey)
         if (currentIndex === -1) return

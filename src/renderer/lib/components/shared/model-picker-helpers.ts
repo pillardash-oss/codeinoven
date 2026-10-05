@@ -83,6 +83,54 @@ export interface ModelPickerProfilesGroup {
 /** Cap the trigger label at this length, suffixing an ellipsis when exceeded. */
 export const MODEL_LABEL_MAX_LENGTH = 40
 
+/**
+ * Marks a control a picker's side panel walks between with the arrow keys.
+ *
+ * One marker per row, on the control that takes focus when the row is stepped
+ * to, rather than one per focusable control: a profile row owns its rename and
+ * delete buttons as well, and marking those too would stop the arrows three
+ * times on the same row. They are reached with Tab instead.
+ */
+export const PICKER_ENTRY_SELECTOR = '[data-picker-entry]'
+
+/**
+ * `Node.DOCUMENT_POSITION_FOLLOWING`.
+ *
+ * Spelled out rather than read off `Node` so this module stays importable where
+ * the DOM globals are not defined.
+ */
+const DOCUMENT_POSITION_FOLLOWING = 4
+
+/**
+ * The entry the arrows should move to from wherever focus currently is.
+ *
+ * `focused` is rarely an entry itself: a row hands focus to its rename and delete
+ * buttons too, and those sit beside the row's entry in the document rather than
+ * inside it. So the walk is measured in document order: the entry focus stands on
+ * is the one it is, or the last one that precedes it, which is the row that owns
+ * whatever control was reached with Tab. From there the step lands on the
+ * neighbour, and `null` at either end of the panel means the key is left to the
+ * browser and focus stays where it is.
+ */
+export function pickerEntryTarget(
+  entries: readonly HTMLElement[],
+  focused: Element | null,
+  step: 1 | -1
+): HTMLElement | null {
+  if (!focused || entries.length === 0) return null
+  let owner = -1
+  for (const [index, entry] of entries.entries()) {
+    if (
+      entry === focused ||
+      (entry.compareDocumentPosition(focused) & DOCUMENT_POSITION_FOLLOWING) !== 0
+    ) {
+      owner = index
+    }
+  }
+  if (owner === -1) return null
+  return entries[owner + step] ?? null
+}
+
 export const PICKER_OVERSCAN = 8
 
 export const PICKER_ROW_HEIGHT = {

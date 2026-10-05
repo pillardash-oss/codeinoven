@@ -9,6 +9,8 @@ export interface ComposerSlashActionsOptions {
   getModelSettingsVisible: () => boolean
   getSupportsThinking: () => boolean
   getAccountPickerVisible: () => boolean
+  /** The profiles panel is live (a composer whose settings a profile can commit). */
+  getProfilesPickerVisible: () => boolean
   /** The scope shoe's picker is live (project mode, new thread). */
   getScopePickerVisible: () => boolean
   getOvenPickerVisible: () => boolean
@@ -55,6 +57,18 @@ export function createComposerSlashActions(options: ComposerSlashActionsOptions)
               category: 'model',
               source: composerActionSource,
               keywords: ['settings', 'speed', 'context', 'window', 'fast']
+            } satisfies ActionDefinition
+          ]
+        : []),
+      ...(options.getProfilesPickerVisible()
+        ? [
+            {
+              id: 'selector:profiles',
+              title: '/profile',
+              description: 'Open the model picker on your saved profiles and harnesses',
+              category: 'model',
+              source: composerActionSource,
+              keywords: ['profile', 'profiles', 'preset', 'setup', 'harness', 'filter']
             } satisfies ActionDefinition
           ]
         : []),
