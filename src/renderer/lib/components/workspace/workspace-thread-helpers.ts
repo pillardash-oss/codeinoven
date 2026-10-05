@@ -9,10 +9,24 @@ import {
 import type { ThreadGroup } from '$lib/stores/thread-grouping.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+import { threadVisitKey } from '$lib/stores/recent-visits.svelte'
 
-/** Partition the already-filtered rows once, preserving their order within each group. */
+/**
+ * Partition the already-filtered rows once, preserving their order within each group.
+ *
+ * A thread holding an unsent composer draft belongs to Work: the user is mid
+ * composition on it, so it leaves Unread and Done and sits under Working until
+ * the draft is sent or cleared. Errors, Attention, and Spec keep their
+ * precedence above it, matching the row badge, which shows a parked or failed
+ * state over the draft dot.
+ *
+ * `draftThreadKeys` is the workspace's draft set   the same one that pins drafts
+ * to the top of the list. Asking the recovery store about every thread instead
+ * would materialize an empty draft entry per row on each keystroke.
+ */
 export function groupThreadsByStatus(
-  threads: Thread[]
+  threads: Thread[],
+  draftThreadKeys?: ReadonlySet<string> | null
 ): { label: ThreadGroup; threads: Thread[] }[] {
   const groups: Record<ThreadGroup, Thread[]> = {
     Attention: [],
@@ -31,6 +45,7 @@ export function groupThreadsByStatus(
       threadHasVisibleWork(thread) ||
       thread.status === 'working-paused' ||
       thread.status === 'created' ||
+      (draftThreadKeys?.has(threadVisitKey(thread)) ?? false) ||
       rendererRecovery.queuedMessageCount(thread.projectId, thread.id) > 0 ||
       rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
     )

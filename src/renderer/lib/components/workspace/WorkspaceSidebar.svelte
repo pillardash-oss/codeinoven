@@ -79,6 +79,10 @@
     standaloneThreads: Thread[]
     pinnedTimelineThreads: Thread[]
     unpinnedTimelineThreads: Thread[]
+    /** Threads whose composer holds an unsent draft (typed or dictated), keyed by
+     *  visit key. The workspace owns the set; grouping reads it so drafting shows
+     *  up as work in progress. */
+    draftThreadKeys: ReadonlySet<string>
     hasMoreHistory: boolean
     historyLoading: boolean
     projectPageLoading: string | null
@@ -138,6 +142,7 @@
     standaloneThreads,
     pinnedTimelineThreads,
     unpinnedTimelineThreads,
+    draftThreadKeys,
     hasMoreHistory,
     historyLoading,
     projectPageLoading,
@@ -178,7 +183,8 @@
             ? sidebar.threadsSearchResults
                 .filter((result) => threadProjectFilterState.matches(result.thread.projectId))
                 .map((result) => result.thread)
-            : unpinnedTimelineThreads
+            : unpinnedTimelineThreads,
+          draftThreadKeys
         )
       : []
   )

@@ -4283,6 +4283,7 @@
       {standaloneThreads}
       {pinnedTimelineThreads}
       {unpinnedTimelineThreads}
+      {draftThreadKeys}
       {hasMoreHistory}
       {historyLoading}
       {projectPageLoading}
