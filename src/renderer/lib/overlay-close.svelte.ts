@@ -18,6 +18,32 @@
 
 type CloseHandler = () => void
 
+/** Register a menu for the lifetime of its open state and dismiss it before
+ * window-level composer handlers run. Capture-phase recording handlers see
+ * the registration before this listener consumes Escape. */
+export function trackEscapeMenu(isOpen: () => boolean, close: CloseHandler): void {
+  $effect(() => {
+    if (!isOpen()) return
+    const unregister = registerOverlayClose(close)
+    const onKeydown = (event: KeyboardEvent): void => {
+      if (
+        event.key !== 'Escape' ||
+        event.defaultPrevented ||
+        closeHandlers[closeHandlers.length - 1] !== close
+      )
+        return
+      event.preventDefault()
+      event.stopPropagation()
+      close()
+    }
+    document.addEventListener('keydown', onKeydown)
+    return () => {
+      document.removeEventListener('keydown', onKeydown)
+      unregister()
+    }
+  })
+}
+
 const closeHandlers: CloseHandler[] = []
 
 /** Register an overlay's close behavior. Returns an unsubscribe function. */

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { tick, onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { fade } from 'svelte/transition'
@@ -753,6 +754,51 @@
     closeAllMenus()
     scopeShoeComponent?.openScopeMenu()
   }
+
+  trackEscapeMenu(
+    () => plusMenuOpen,
+    () => {
+      plusMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => modelMenuOpen,
+    () => {
+      modelMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => inferenceMenuOpen,
+    () => {
+      inferenceMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => permissionMenuOpen,
+    () => {
+      permissionMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => thinkingMenuOpen,
+    () => {
+      thinkingMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => accountMenuOpen,
+    () => {
+      accountMenuOpen = false
+    }
+  )
+  trackEscapeMenu(
+    () => startAfterPickerOpen,
+    () => {
+      startAfterPickerOpen = false
+    }
+  )
+  trackEscapeMenu(() => selectionPopoverOpen, closeSelectionPopover)
+  trackEscapeMenu(() => startAfterPopoverOpen, closeStartAfterPopover)
 
   // Focus restoration on close for every menu/overlay that steals focus from
   // the editor: each returns the caret to its last published position rather
