@@ -42,11 +42,23 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
     // harness   thread creation never waits on the database, and neither does
     // typing, reading, or switching threads.
     const { thread, finalize } = threadManager.prepareCreateThread(validated, {
-      onEvictionError: (error) =>
-        Logger.error('Thread capacity eviction failed', {
-          threadId: thread.id,
-          error: String(error)
-        })
+      onEviction: (outcome) => {
+        // Room was made, but a thread that could not be deleted is always worth
+        // auditing: it is the difference between the bucket sitting at its bound
+        // and the project quietly growing past it.
+        if (outcome.failedIds.length === 0) return
+        Logger.error(
+          outcome.evictedId === undefined
+            ? 'Thread capacity eviction failed'
+            : 'Thread capacity eviction skipped a thread it could not delete',
+          {
+            threadId: thread.id,
+            evictedId: outcome.evictedId,
+            failedIds: outcome.failedIds.join(','),
+            error: String(outcome.error)
+          }
+        )
+      }
     })
     threadCreation.begin(
       thread.id,

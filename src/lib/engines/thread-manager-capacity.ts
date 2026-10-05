@@ -71,13 +71,17 @@ export function countThreadsInBucket(
     .length
 }
 
-/** First unprotected candidate in a bucket, in the order the repo returned it. */
-export function firstEvictableInBucket(
+/**
+ * Every unprotected candidate in a bucket, in the order the repo returned it
+ * (oldest activity first). Eviction walks this list so a thread that cannot be
+ * deleted costs one attempt instead of disabling the project's capacity bound.
+ */
+export function evictableInBucket(
   candidates: ThreadCapacityCandidate[],
   scopedBuckets: Set<string>,
   bucket: string
-): ThreadCapacityCandidate | undefined {
-  return candidates.find(
+): ThreadCapacityCandidate[] {
+  return candidates.filter(
     (candidate) =>
       bucketForThread(candidate, scopedBuckets) === bucket &&
       !isProtectedFromAutomaticCleanup(candidate)

@@ -13116,7 +13116,7 @@ export class ChatEngine {
       sessionIds.add(thread.sessionId)
       childSessionInfo.set(thread.sessionId, {
         driverId: thread.sessionHarnessId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS,
-        projectPath: await this.resolveThreadPath(projectId, threadId),
+        projectPath: await this.resolveTeardownPath(thread),
         accountId: thread.sessionAccountId
       })
     }
@@ -21417,6 +21417,31 @@ export class ChatEngine {
       : resolve(projectPath, workingDirectory)
   }
 
+  /**
+   * The directory a thread's teardown runs against.
+   *
+   * Deleting a thread is cleanup, not execution, so it never fails closed. The
+   * scope resolver stays the authority for every turn, file surface, and Git
+   * operation, but a thread whose scope was removed (or whose managed checkout
+   * is unhealthy) must still be deletable. Refusing here leaves a conversation
+   * the user cannot remove and an eviction candidate that is re-picked on every
+   * create without ever making room. The persisted compatibility directory is
+   * exactly the path this thread's harness session was opened with, and the two
+   * teardown calls that use it, abort and session removal, are already
+   * best-effort.
+   */
+  private async resolveTeardownPath(thread: Thread): Promise<string> {
+    try {
+      return await this.resolveThreadPath(thread.projectId, thread.id)
+    } catch (error) {
+      Logger.dev('Thread teardown resolved its scope root from the compatibility directory:', error)
+    }
+    const persisted = thread.workingDirectory.trim()
+    const projectPath = await this.resolveProjectPath(thread.projectId)
+    if (!persisted) return projectPath
+    return isAbsolute(persisted) ? resolve(persisted) : resolve(projectPath, persisted)
+  }
+
   private async resolveProjectPath(projectId: string): Promise<string> {
     const project = await this.projectManager.getProject(projectId)
     if (!project) throw new Error(`Project not found: ${projectId}`)
@@ -23672,11 +23697,15 @@ export class ChatEngine {
         assistantTaskId: input.task.id
       },
       {
-        onEvictionError: (error) =>
+        onEviction: (outcome) => {
+          if (outcome.failedIds.length === 0) return
           Logger.error('Assistant run thread eviction failed', {
             taskId: input.task.id,
-            error: String(error)
+            evictedId: outcome.evictedId,
+            failedIds: outcome.failedIds.join(','),
+            error: String(outcome.error)
           })
+        }
       }
     )
     await finalize()
