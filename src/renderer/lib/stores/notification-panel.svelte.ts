@@ -67,8 +67,9 @@ const SUB_FILTER_KINDS: Record<Exclude<NotificationSubFilter, 'all'>, InAppNotif
  * from here, so the colour on the notification badge is always the status
  * colour the rest of the app uses for the same thing   never a one-off hue.
  *
- * An assistant notice wears the assistant space's own colour instead (see
- * `accentColor`), which is how the assistant is identified across the app.
+ * An assistant notice raised by the assistant space's own activity wears the
+ * assistant colour instead (see `accentColor`), which is how the assistant is
+ * identified across the app. A status kind never does: see `STATUS_KINDS`.
  */
 export const NOTIFICATION_KIND_COLORS: Record<InAppNotification['kind'], string> = {
   completed: 'var(--color-success)',
@@ -77,6 +78,18 @@ export const NOTIFICATION_KIND_COLORS: Record<InAppNotification['kind'], string>
   spec: 'var(--color-thread-spec)',
   error: 'var(--color-danger)'
 }
+
+/**
+ * Kinds that report a status rather than a source's own activity.
+ *
+ * Their colour is the app's canonical colour for that status whoever raised
+ * them, because a status has to read before its words do: an assistant run that
+ * failed is an error first and an assistant run second, so it must never hide
+ * behind the assistant space colour   that was exactly the failure the eye
+ * could not see. Only activity a source owns (a completion) is branded by the
+ * space it came from.
+ */
+const STATUS_KINDS: ReadonlySet<InAppNotification['kind']> = new Set(['attention', 'spec', 'error'])
 
 class NotificationPanelState {
   private _notifications: InAppNotification[] = $state([])
@@ -107,14 +120,16 @@ class NotificationPanelState {
   }
 
   /**
-   * The colour a notification wears on its leading dot and its card border:
-   * an assistant notice takes the assistant space colour, everything else the
-   * canonical kind colour. One rule shared by the bell and the panel, so the
-   * two surfaces can never disagree about what colour a notification is.
+   * The colour a notification wears on its leading dot and its card border: a
+   * status kind always takes its canonical status colour, and every other
+   * assistant notice takes the assistant space colour. One rule shared by the
+   * bell and the panel, so the two surfaces can never disagree about what
+   * colour a notification is   and a failed run reads as an error on all of
+   * them, never as brand colour.
    */
   accentColor(n: InAppNotification): string {
-    if (this.isAssistant(n)) return this.assistantColor ?? 'var(--color-dimmed)'
-    return NOTIFICATION_KIND_COLORS[n.kind]
+    if (!this.isAssistant(n) || STATUS_KINDS.has(n.kind)) return NOTIFICATION_KIND_COLORS[n.kind]
+    return this.assistantColor ?? 'var(--color-dimmed)'
   }
 
   private byKind(items: InAppNotification[], sub: NotificationSubFilter): InAppNotification[] {
