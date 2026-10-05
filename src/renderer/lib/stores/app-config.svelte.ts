@@ -7,7 +7,8 @@ import type {
   AppConfig,
   GitPullPreference,
   InAppNotificationSoundSettings,
-  MediaGenerationConfig
+  MediaGenerationConfig,
+  ModelProfile
 } from '$shared/types'
 import { findBrowserSearchEngine, type BrowserSearchEngine } from '$shared/browser-search-engines'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -41,6 +42,13 @@ let fontWeight = $state(DEFAULT_APP_FONT_WEIGHT)
 let zoomLevel = $state(DEFAULT_ZOOM_LEVEL)
 /** The generation backend choice, mirrored so deep components can read it. */
 let mediaGeneration = $state<MediaGenerationConfig>({ providerId: null })
+/**
+ * Saved model profiles, mirrored so the composer can read them without the config
+ * being threaded down to it. Held as a plain array of plain records: the config is
+ * synced on every `config:changed`, so this is a fresh array each time rather than
+ * a mutation of the previous one, which is what lets the picker rows re-key.
+ */
+let modelProfiles = $state<ModelProfile[]>([])
 
 /** Push the persisted appearance preferences onto the document. The CSS itself
  *  is applied by `lib/app-typography.ts`, which the app's child documents use as
@@ -101,6 +109,10 @@ export const appConfigState = {
   get mediaGeneration(): MediaGenerationConfig {
     return mediaGeneration
   },
+  /** Named presets the user applies from the model picker. */
+  get modelProfiles(): ModelProfile[] {
+    return modelProfiles
+  },
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
     browserHibernationMinutes = config.browserHibernationMinutes
@@ -130,6 +142,7 @@ export const appConfigState = {
     fontWeight = config.fontWeight
     zoomLevel = config.zoomLevel
     mediaGeneration = { providerId: config.mediaGeneration.providerId }
+    modelProfiles = config.modelProfiles ?? []
     // The persisted keybindings overwrite the registry defaults, so every
     // handler that asks keymapState for an id picks up the user's binding.
     keymapState.setOverrides(config.keybindings)

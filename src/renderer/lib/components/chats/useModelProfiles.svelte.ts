@@ -1,0 +1,159 @@
+import { invoke } from '$lib/ipc.svelte'
+import { reportError } from '$lib/stores/app-errors.svelte'
+import { appConfigState } from '$lib/stores/app-config.svelte'
+import {
+  MAX_MODEL_PROFILES,
+  applyModelProfile,
+  uniqueModelProfileId,
+  usableModelProfiles
+} from '$shared/model-profiles'
+import type {
+  AppConfigPatch,
+  ModelProfile,
+  PermissionLevel,
+  ProviderCatalog,
+  ThreadSettings
+} from '$shared/types'
+
+/**
+ * Saved model profiles, as a composer-scoped controller.
+ *
+ * The profiles themselves live in `AppConfig.modelProfiles` and are mirrored into
+ * `appConfigState`, so this controller never keeps its own copy: it reads the
+ * mirrored list and persists through `config:update`, which broadcasts
+ * `config:changed` and re-syncs the mirror. That is why there is no local array
+ * and no separate save path here.
+ *
+ * A controller rather than plain functions because the picker needs reactive state
+ * for the pending-delete confirmation.
+ */
+export interface ModelProfilesController {
+  /** Profiles that can be applied, in the order the user listed them. */
+  readonly profiles: ModelProfile[]
+  /** True when no more profiles can be saved. */
+  readonly atCapacity: boolean
+  /** The profile waiting on delete confirmation, if any. */
+  readonly pendingDelete: ModelProfile | null
+  /** A starting name for a profile saved from the current settings. */
+  draftName(settings: ThreadSettings, catalogs: readonly ProviderCatalog[]): string
+  /** Ask to delete a profile. Nothing is removed until `confirmDelete` runs. */
+  requestDelete(profile: ModelProfile): void
+  /** Abandon the pending delete. */
+  cancelDelete(): void
+  /** Remove the pending profile for good. */
+  confirmDelete(): Promise<void>
+  /** Save the current settings as a new profile under `name`. */
+  save(settings: ThreadSettings, name: string): Promise<boolean>
+  /** The settings produced by applying a profile, clamped for this surface. */
+  apply(
+    profile: ModelProfile,
+    settings: ThreadSettings,
+    catalogs: readonly ProviderCatalog[]
+  ): ThreadSettings
+}
+
+/**
+ * What the caller must resolve before the controller can clamp permissions.
+ *
+ * A predicate rather than a value because the answer changes while the composer is
+ * mounted: a chat unlocks Full Access the moment File System is switched on, so a
+ * value read once at setup would keep clamping a profile that is now allowed.
+ */
+export interface ModelProfileClampOptions {
+  /**
+   * True when the surface must not grant Full Access. A chat only unlocks it once
+   * the user turns on File System for that chat, matching `effectiveSettings` in
+   * the thread settings store, so a profile carrying `full_access` cannot hand a
+   * web-only chat file access nobody granted it.
+   */
+  readonly lockedToAutoReview: () => boolean
+}
+
+export function createModelProfilesController(
+  options: ModelProfileClampOptions
+): ModelProfilesController {
+  let pendingDelete = $state<ModelProfile | null>(null)
+
+  async function persist(next: ModelProfile[], failureMessage: string): Promise<boolean> {
+    try {
+      await invoke('config:update', { modelProfiles: next } satisfies AppConfigPatch)
+      return true
+    } catch (error) {
+      reportError(error, failureMessage)
+      return false
+    }
+  }
+
+  return {
+    get profiles(): ModelProfile[] {
+      return usableModelProfiles(appConfigState.modelProfiles)
+    },
+    get atCapacity(): boolean {
+      return this.profiles.length >= MAX_MODEL_PROFILES
+    },
+    get pendingDelete(): ModelProfile | null {
+      return pendingDelete
+    },
+    draftName: draftProfileName,
+    requestDelete(profile: ModelProfile): void {
+      pendingDelete = profile
+    },
+    cancelDelete(): void {
+      pendingDelete = null
+    },
+    async confirmDelete(): Promise<void> {
+      const target = pendingDelete
+      if (!target) return
+      // Cleared before the write: once it resolves the row is already gone, and
+      // leaving it set would let a second confirm target a row that no longer
+      // exists.
+      pendingDelete = null
+      await persist(
+        appConfigState.modelProfiles.filter((profile) => profile.id !== target.id),
+        'The model profile was not deleted.'
+      )
+    },
+    async save(settings: ThreadSettings, name: string): Promise<boolean> {
+      const trimmed = name.trim()
+      // A profile with no model names nothing the app could run, so it is refused
+      // here rather than stored as a row that applies to a plausible default.
+      if (!trimmed || !settings.modelId || this.atCapacity) return false
+      const existing = appConfigState.modelProfiles
+      const profile: ModelProfile = {
+        id: uniqueModelProfileId(existing, trimmed),
+        name: trimmed,
+        harnessId: settings.harnessId,
+        providerId: settings.providerId,
+        modelId: settings.modelId,
+        thinkingLevel: settings.thinkingLevel,
+        inferenceMode: settings.inferenceMode ?? 'normal',
+        permissionLevel: settings.permissionLevel
+      }
+      return persist([...existing, profile], 'The model profile was not saved.')
+    },
+    apply(profile, settings, catalogs): ThreadSettings {
+      const applied = applyModelProfile(settings, profile, catalogs)
+      return options.lockedToAutoReview()
+        ? { ...applied, permissionLevel: 'auto_review' as PermissionLevel }
+        : applied
+    }
+  }
+}
+
+/**
+ * A starting name for a profile saved from the current settings.
+ *
+ * The model name is what the user recognises this setup by, so it seeds the field
+ * instead of a generic "New profile" they would have to overwrite. A model the
+ * catalog has not resolved yet falls back to the harness, which still says more
+ * than nothing.
+ */
+function draftProfileName(settings: ThreadSettings, catalogs: readonly ProviderCatalog[]): string {
+  const provider = catalogs.find(
+    (candidate) =>
+      candidate.harnessId === settings.harnessId && candidate.id === settings.providerId
+  )
+  const model = provider?.models.find((candidate) => candidate.id === settings.modelId)
+  const base = (model?.name ?? settings.modelId ?? settings.harnessId).trim()
+  return base.replace(/[^A-Za-z0-9 -]/gu, '').trim() || 'Profile'
+}

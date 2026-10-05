@@ -65,6 +65,9 @@
   import EngineeringToolbox from './EngineeringToolbox.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import ModelPickerProfiles from '../shared/ModelPickerProfiles.svelte'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import { createModelProfilesController } from './useModelProfiles.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { filterActions, permissionLevelForAction } from '$lib/actions'
@@ -96,6 +99,7 @@
     AssignmentTask,
     AgentModelSelection,
     AttachmentStorageScope,
+    ModelProfile,
     UsageEfficiencyKpis,
     Thread,
     EngineeringLifecycleSelectionInput,
@@ -1370,6 +1374,36 @@
     )
   }
 
+  /**
+   * Saved profiles, applied through the picker's profile rows.
+   *
+   * The controller holds no copy of the profiles: they live in the app config and
+   * come back through the mirrored store, so creating one from any composer is
+   * immediately available in every other one.
+   *
+   * Permission clamping is handed to the controller rather than re-derived per
+   * apply, because a chat only unlocks Full Access once File System is on and the
+   * picker must not be able to grant it any other way.
+   */
+  const modelProfiles = createModelProfilesController({
+    lockedToAutoReview: () => hidePermissionSelector && resolved.fileSystemMode !== true
+  })
+
+  /** Run a saved profile, closing the picker it was picked from. */
+  function applyProfile(profile: ModelProfile): void {
+    closeAllMenus()
+    onModelUsed?.(modelKey(profile.harnessId, profile.providerId, profile.modelId))
+    applySettings(modelProfiles.apply(profile, resolved, resolvedProviders))
+  }
+
+  function saveProfile(name: string): void {
+    void modelProfiles.save(resolved, name)
+  }
+
+  function requestDeleteProfile(profile: ModelProfile): void {
+    modelProfiles.requestDelete(profile)
+  }
+
   function selectThinking(preset: ThinkingPreset): void {
     const level = preset.id as ThinkingLevel
     // The picker may re-emit the level it already applied during a model
@@ -1664,6 +1698,27 @@
     />
   {/if}
 
+  <!--
+    Deleting a profile is destructive, so the picker's trash icon only arms this and
+    nothing is removed until it is confirmed here. `pendingDelete` is cleared by
+    the controller before the write, so a double confirm cannot remove a second row.
+  -->
+  <ConfirmDialog
+    open={modelProfiles.pendingDelete !== null}
+    title={`Delete the ${modelProfiles.pendingDelete?.name ?? ''} profile?`}
+    confirmLabel="Delete profile"
+    variant="danger"
+    note="This cannot be undone. The model setup it captured is not changed."
+    onCancel={() => modelProfiles.cancelDelete()}
+    onConfirm={() => modelProfiles.confirmDelete()}
+  >
+    <p>
+      Every composer will stop offering <strong>{modelProfiles.pendingDelete?.name}</strong>. The
+      harness, model, thinking level, speed, and permissions already in force stay exactly as they
+      are.
+    </p>
+  </ConfirmDialog>
+
   {#if expertGateOpen && expertGateState}
     <ExpertCard
       expertState={expertGateState}
@@ -1879,7 +1934,26 @@
         thinkingLevel={resolved.thinkingLevel}
         {thinkingPresets}
         onSelectThinking={(level) => selectThinking({ id: level, label: level })}
-      />
+      >
+        {#snippet aboveList()}
+          <!--
+            Suppressed on a read-only composer: a profile commits settings, and a
+            viewer has no settings to commit them to.
+          -->
+          {#if !readOnlyMode}
+            <ModelPickerProfiles
+              profiles={modelProfiles.profiles}
+              settings={resolved}
+              catalogs={resolvedProviders}
+              atCapacity={modelProfiles.atCapacity}
+              draftName={modelProfiles.draftName(resolved, resolvedProviders)}
+              onApply={applyProfile}
+              onSave={saveProfile}
+              onRequestDelete={requestDeleteProfile}
+            />
+          {/if}
+        {/snippet}
+      </ModelPicker>
     </div>
 
     <!-- API usage credits   native harness command to bill this session's

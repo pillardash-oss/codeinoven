@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, type Snippet } from 'svelte'
   import { DropdownMenu, Popover } from 'bits-ui'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -59,6 +59,13 @@
     /** Project whose harness catalog this picker displays. When provided, opening
      *  the picker lazily fetches that project's catalog (network only when stale). */
     projectId?: string | null
+    /**
+     * Band rendered at the top of the popover, above the harness filter and the
+     * model list. A snippet rather than profile props so only the callers that
+     * actually have profiles opt in, and the ones that do keep ownership of the
+     * profile state instead of passing it through this component.
+     */
+    aboveList?: Snippet
     /** Restricts the picker to one harness. Unset shows every harness as today. */
     harnessFilter?: string | null
     side?: 'top' | 'bottom'
@@ -119,6 +126,7 @@
     thinkingMenuOpen = $bindable(false),
     accountMenuOpen = $bindable(false),
     projectId = null,
+    aboveList,
     harnessFilter = null,
     side = 'top',
     disabled = false,
@@ -684,6 +692,7 @@
         <ModelPickerList
           {displayProviders}
           {cachedProviders}
+          {aboveList}
           {harnessFilter}
           {favoriteModels}
           {recentModels}

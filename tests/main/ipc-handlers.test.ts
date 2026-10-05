@@ -110,6 +110,7 @@ const defaultConfig: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
   design: { assignments: [] },
+  modelProfiles: [],
   workRoots: { design: '.cio/designs', video: '.cio/videos' },
   mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
@@ -196,7 +197,19 @@ describe('validateAppConfigPatch', () => {
         defaultMergeMethod: 'rebase',
         maxDiffLines: 250,
         agentBehaviorPrompt: 'Custom agent behavior.',
-        memory
+        memory,
+        modelProfiles: [
+          {
+            id: 'deep-review',
+            name: 'Deep review',
+            harnessId: 'opencode',
+            providerId: 'anthropic',
+            modelId: 'claude-opus-4-8',
+            thinkingLevel: 'high',
+            inferenceMode: 'fast',
+            permissionLevel: 'full_access'
+          }
+        ]
       })
     ).toMatchObject({
       theme: 'dark',
@@ -239,7 +252,19 @@ describe('validateAppConfigPatch', () => {
             source: 'manual'
           })
         ]
-      }
+      },
+      modelProfiles: [
+        {
+          id: 'deep-review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'fast',
+          permissionLevel: 'full_access'
+        }
+      ]
     })
   })
 
@@ -278,6 +303,92 @@ describe('validateAppConfigPatch', () => {
       ]
     },
     { resumeWorkOnRestart: 1 },
+    { modelProfiles: 'deep-review' },
+    { modelProfiles: [{}] },
+    {
+      modelProfiles: [
+        {
+          id: 'Deep Review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'fast',
+          permissionLevel: 'full_access'
+        }
+      ]
+    },
+    {
+      modelProfiles: [
+        {
+          id: 'deep-review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'turbo',
+          permissionLevel: 'full_access'
+        }
+      ]
+    },
+    {
+      modelProfiles: [
+        {
+          id: 'deep-review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'fast',
+          permissionLevel: 'ask_every_time'
+        }
+      ]
+    },
+    {
+      // A profile never stores an account, so accepting one here would persist a
+      // credential the profile has no say in.
+      modelProfiles: [
+        {
+          id: 'deep-review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'fast',
+          permissionLevel: 'full_access',
+          accountId: 'opencode.work'
+        }
+      ]
+    },
+    {
+      // Two rows keyed by the same id would make the picker ambiguous.
+      modelProfiles: [
+        {
+          id: 'deep-review',
+          name: 'Deep review',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-opus-4-8',
+          thinkingLevel: 'high',
+          inferenceMode: 'fast',
+          permissionLevel: 'full_access'
+        },
+        {
+          id: 'deep-review',
+          name: 'Review again',
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-sonnet-4-5',
+          thinkingLevel: 'low',
+          inferenceMode: 'normal',
+          permissionLevel: 'auto_review'
+        }
+      ]
+    },
     {
       memory: {
         enabled: true,

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { tick, type Snippet } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import {
     Check,
@@ -42,6 +42,15 @@
   interface Props {
     displayProviders: ProviderCatalog[]
     cachedProviders: ProviderCatalog[]
+    /**
+     * Optional band rendered between the search field and the harness filter.
+     *
+     * The model picker takes this as a snippet rather than as profile props so the
+     * ~25 call sites that mount this list without profiles are untouched, and so
+     * profile state stays owned by the composer rather than threaded down through
+     * two layers.
+     */
+    aboveList?: Snippet
     /** Restricts the list to one harness. Unset shows every harness as today. */
     harnessFilter?: string | null
     favoriteModels: string[]
@@ -70,6 +79,7 @@
   let {
     displayProviders,
     cachedProviders,
+    aboveList,
     harnessFilter = null,
     favoriteModels,
     recentModels,
@@ -488,6 +498,8 @@
     </button>
   {/if}
 </div>
+
+{@render aboveList?.()}
 
 {#if harnessOptions.length > 1}
   <div class="border-b px-2.5 py-1.5">

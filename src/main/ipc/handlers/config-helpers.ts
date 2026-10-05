@@ -38,6 +38,15 @@ import {
   type BrowserSearchEngine
 } from '../../../lib/browser-search-engines'
 import { AUXILIARY_AGENT_ID_MAX_LENGTH, MAX_AUXILIARY_AGENTS } from '../../../lib/auxiliary-agents'
+import {
+  MAX_MODEL_PROFILES,
+  MODEL_PROFILE_ID_MAX_LENGTH,
+  MODEL_PROFILE_INFERENCE_MODES,
+  MODEL_PROFILE_NAME_MAX_LENGTH,
+  MODEL_PROFILE_PERMISSION_LEVELS,
+  isModelProfileId,
+  isUsableModelProfile
+} from '../../../lib/model-profiles'
 import { validateMemoryConfig } from '../../chat/memory-service'
 import {
   MAX_BROWSER_HIBERNATION_MINUTES,
@@ -62,11 +71,14 @@ import type {
   DesignConfig,
   EditorId,
   HeartbeatConfig,
+  InferenceMode,
   LocalProfileAnalyticsRange,
   LocalRankingGradeScope,
   LocalUsageClearInput,
   LocalUsageRecordStore,
   MediaGenerationConfig,
+  ModelProfile,
+  PermissionLevel,
   RankingJudgeConfig,
   RankingJudgeKind,
   ThinkingLevel
@@ -177,6 +189,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'agentDefaults',
   'auxiliaryAgents',
   'design',
+  'modelProfiles',
   'workRoots',
   'mediaGeneration',
   'rankingJudge',
@@ -380,6 +393,102 @@ function validateWorkRoots(value: unknown): WorkRoots {
     )
   }
   return roots
+}
+
+/** Fields one model profile may carry, and no others. */
+const MODEL_PROFILE_FIELDS = new Set([
+  'id',
+  'name',
+  'harnessId',
+  'providerId',
+  'modelId',
+  'thinkingLevel',
+  'inferenceMode',
+  'permissionLevel'
+])
+
+/**
+ * Validate the user's model profiles.
+ *
+ * A profile has to name a complete model plus a thinking level, a speed tier, and
+ * a permission level, because applying one replaces all five at once. A profile
+ * missing any of them would apply a partial preset the user never described, so it
+ * is refused here rather than stored inert. Ids are unique because a picker row is
+ * keyed by id. No account field exists: the account is resolved when a profile is
+ * applied, so accepting one here would be storing a credential the profile never
+ * had a say in.
+ */
+function validateModelProfiles(value: unknown): ModelProfile[] {
+  if (!Array.isArray(value)) throw new TypeError('Model profiles must be an array')
+  if (value.length > MAX_MODEL_PROFILES) {
+    throw new TypeError(`Model profiles accept at most ${MAX_MODEL_PROFILES} rows`)
+  }
+  const seen = new Set<string>()
+  return value.map((entry: unknown, index: number) => {
+    const label = `Model profile ${index + 1}`
+    if (!isRecord(entry)) throw new TypeError(`${label} must be an object`)
+    for (const field of Object.keys(entry)) {
+      if (!MODEL_PROFILE_FIELDS.has(field)) {
+        throw new TypeError(`Unsupported ${label} field: ${field}`)
+      }
+    }
+    const id = requireString(entry.id, `${label} ID`)
+    if (id.length > MODEL_PROFILE_ID_MAX_LENGTH || !isModelProfileId(id)) {
+      throw new TypeError(`${label} ID must be a short lowercase handle like "deep-review"`)
+    }
+    if (seen.has(id)) throw new TypeError(`Model profiles repeat the ID "${id}"`)
+    seen.add(id)
+    const name = requireString(entry.name, `${label} name`)
+    if (name.length > MODEL_PROFILE_NAME_MAX_LENGTH) {
+      throw new TypeError(`${label} name is too long`)
+    }
+    const inferenceMode = entry.inferenceMode
+    if (
+      typeof inferenceMode !== 'string' ||
+      !MODEL_PROFILE_INFERENCE_MODES.includes(inferenceMode as InferenceMode)
+    ) {
+      throw new TypeError(
+        `${label} speed must be one of ${MODEL_PROFILE_INFERENCE_MODES.join(', ')}`
+      )
+    }
+    const permissionLevel = entry.permissionLevel
+    if (
+      typeof permissionLevel !== 'string' ||
+      !MODEL_PROFILE_PERMISSION_LEVELS.includes(permissionLevel as PermissionLevel)
+    ) {
+      throw new TypeError(
+        `${label} permission level must be one of ${MODEL_PROFILE_PERMISSION_LEVELS.join(', ')}`
+      )
+    }
+    const profile: ModelProfile = {
+      id,
+      name,
+      harnessId: requireString(entry.harnessId, `${label} harness ID`),
+      providerId: requireString(entry.providerId, `${label} provider ID`),
+      modelId: requireString(entry.modelId, `${label} model ID`),
+      thinkingLevel: validateThinkingLevel(entry.thinkingLevel, `${label} thinking level`),
+      inferenceMode: inferenceMode as InferenceMode,
+      permissionLevel: permissionLevel as PermissionLevel
+    }
+    if (!isUsableModelProfile(profile)) {
+      throw new TypeError(`${label} must name a harness, a provider, and a model`)
+    }
+    return profile
+  })
+}
+
+/**
+ * Validate one stored thinking level.
+ *
+ * A profile written against a model that has since dropped a level must not
+ * restore a level the model cannot run, so the value is checked here rather than
+ * trusted. Mirrors the level set `validateAgentModelSelection` accepts.
+ */
+function validateThinkingLevel(value: unknown, label: string): ThinkingLevel {
+  if (typeof value !== 'string' || !THINKING_LEVEL_ORDER.includes(value as ThinkingLevel)) {
+    throw new TypeError(`${label} must be one of ${THINKING_LEVEL_ORDER.join(', ')}`)
+  }
+  return value as ThinkingLevel
 }
 
 function validateDesignConfig(value: unknown): DesignConfig {
@@ -923,6 +1032,10 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   if ('design' in value) {
     patch.design = validateDesignConfig(value.design)
+  }
+
+  if ('modelProfiles' in value) {
+    patch.modelProfiles = validateModelProfiles(value.modelProfiles)
   }
 
   if ('workRoots' in value) {
