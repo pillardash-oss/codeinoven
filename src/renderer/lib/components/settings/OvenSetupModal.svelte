@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2, Circle, CheckCircle2, AlertCircle, X } from '@lucide/svelte'
+  import { Loader2, Circle, CheckCircle2, AlertCircle, X, Minus } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
@@ -408,16 +408,19 @@
       <ol class="space-y-2">
         {#each operation.steps as step (step.id)}
           <li class="flex items-start gap-2 rounded-lg border px-3 py-2">
-            {#if step.status === 'succeeded'}<CheckCircle2
+            {#if step.status === 'succeeded' || (step.status === 'skipped' && /already installed|meets the service requirement|is installed/u.test(step.skippedReason ?? ''))}<CheckCircle2
                 size={15}
-                class="mt-0.5 text-success"
+                class="mt-0.5 shrink-0 text-success"
+              />{:else if step.status === 'skipped'}<Minus
+                size={15}
+                class="mt-0.5 shrink-0 text-muted"
               />{:else if step.status === 'failed' || step.status === 'blocked'}<AlertCircle
                 size={15}
-                class="mt-0.5 text-danger"
+                class="mt-0.5 shrink-0 text-danger"
               />{:else if step.status === 'running'}<Loader2
                 size={15}
-                class="mt-0.5 animate-spin text-primary"
-              />{:else}<Circle size={15} class="mt-0.5 text-muted" />{/if}
+                class="mt-0.5 shrink-0 animate-spin text-primary"
+              />{:else}<Circle size={15} class="mt-0.5 shrink-0 text-muted" />{/if}
             <div class="min-w-0">
               <p class="text-sm">{step.name}</p>
               {#if step.detail || step.error}<p
