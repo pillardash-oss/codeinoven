@@ -65,6 +65,7 @@ import {
   CODEX_QUESTION_TOOL_NAME,
   codexApprovalPolicy,
   codexEffort,
+  codexQuestionDecisionText,
   codexQuestionIds,
   codexQuestionTool,
   codexSandboxPolicy,
@@ -524,7 +525,7 @@ export class CodexDriver extends PersistentCliDriver {
       throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
     }
     if (isCodexDynamicQuestion(request)) {
-      this.completeDynamicQuestion(request, answers)
+      await this.completeDynamicQuestion(request, answers)
       return
     }
     if (isCodexAsyncQuestion(request)) {
@@ -536,6 +537,16 @@ export class CodexDriver extends PersistentCliDriver {
     questionIds.forEach((id, index) => {
       mappedAnswers[id] = { answers: answers[index] ?? [] }
     })
+    // A native question request can also be auto-resolved by Codex while the
+    // turn keeps running, which drops the result we write here. The turn input
+    // carries the same decision, so the answer survives either way.
+    await this.relayQuestionDecision(
+      request,
+      codexQuestionDecisionText(
+        request.questions ?? normalizeAgentQuestions(request.params),
+        answers
+      )
+    )
     this.writeServerResponse(request, { answers: mappedAnswers })
     this.serverRequests.delete(requestId)
   }
@@ -559,7 +570,7 @@ export class CodexDriver extends PersistentCliDriver {
       throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
     }
     if (isCodexDynamicQuestion(request)) {
-      this.completeDynamicQuestion(request)
+      await this.completeDynamicQuestion(request)
       return
     }
     if (isCodexAsyncQuestion(request)) {
@@ -568,6 +579,13 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const answers: Record<string, { answers: string[] }> = {}
     for (const id of codexQuestionIds(request.params)) answers[id] = { answers: [] }
+    await this.relayQuestionDecision(
+      request,
+      codexQuestionDecisionText(
+        request.questions ?? normalizeAgentQuestions(request.params),
+        undefined
+      )
+    )
     this.writeServerResponse(request, { answers })
     this.serverRequests.delete(requestId)
   }
@@ -582,7 +600,10 @@ export class CodexDriver extends PersistentCliDriver {
     )
   }
 
-  private completeDynamicQuestion(request: CodexServerRequest, answers?: string[][]): void {
+  private async completeDynamicQuestion(
+    request: CodexServerRequest,
+    answers?: string[][]
+  ): Promise<void> {
     // A reply written after the owning turn ended reaches nothing: Codex has
     // already finished, so the answer would be silently dropped and the thread
     // would sit idle with an answered card. Report the turn as inactive so the
@@ -592,22 +613,49 @@ export class CodexDriver extends PersistentCliDriver {
       throw new InactiveQuestionTurnError(request.sessionId, String(request.id), this.name)
     }
     const questions = request.questions ?? normalizeAgentQuestions(request.params)
-    const decisions = questions.map((question, index) => ({
-      question: question.prompt,
-      answers: answers?.[index] ?? []
-    }))
-    const text = answers
-      ? [
-          '[Authoritative agent question answer]',
-          'The user submitted these answers. Continue the original task using them.',
-          JSON.stringify(decisions)
-        ].join('\n')
-      : 'The user dismissed the structured question. Continue the original task without an answer.'
+    const text = codexQuestionDecisionText(questions, answers)
+    await this.relayQuestionDecision(request, text)
     this.writeServerResponse(request, {
       success: true,
       contentItems: [{ type: 'inputText', text }]
     })
     this.serverRequests.delete(String(request.id))
+  }
+
+  /**
+   * Write the user's decision onto the turn's own input channel.
+   *
+   * Codex parks a long-running `exec` script after about half a minute and
+   * hands the model a "Script running with cell ID ..." placeholder. When the
+   * user answers while that cell is parked, the app-server accepts the tool
+   * result, but the model can end its turn before the parked cell is collected,
+   * so the value never reaches the conversation: the card looks answered, the
+   * thread goes idle, and the next turn repeats the same question. Steering the
+   * live turn writes the decision as ordinary user input, which the model
+   * consumes on its next step. A turn that refuses input falls back to the
+   * result it is still blocked on, and a turn that already ended is reported as
+   * inactive by the caller so the chat engine resumes with the decision.
+   */
+  private async relayQuestionDecision(request: CodexServerRequest, text: string): Promise<void> {
+    const active = this.activeTurns.get(request.sessionId)
+    if (
+      !active?.nativeThreadId ||
+      !active.turnId ||
+      active.finished ||
+      active.host !== request.host
+    ) {
+      return
+    }
+    try {
+      await this.appServerRequest(active.host, 'turn/steer', {
+        threadId: active.nativeThreadId,
+        input: [{ type: 'text', text, text_elements: [] }],
+        expectedTurnId: active.turnId
+      })
+    } catch (error) {
+      if (active.finished || this.activeTurns.get(request.sessionId) !== active) return
+      Logger.dev('Codex question decision could not be steered into the live turn:', error)
+    }
   }
 
   private async continueAsyncQuestion(
@@ -626,17 +674,7 @@ export class CodexDriver extends PersistentCliDriver {
       throw new InactiveQuestionTurnError(request.sessionId, requestId, this.name)
     }
     const questions = request.questions ?? normalizeAgentQuestions(request.params)
-    const decisions = questions.map((question, index) => ({
-      question: question.prompt,
-      answers: answers?.[index] ?? []
-    }))
-    const text = answers
-      ? [
-          '[Authoritative agent question answer]',
-          'The user submitted these answers. Continue the original task using them.',
-          JSON.stringify(decisions)
-        ].join('\n')
-      : 'The user dismissed the structured question. Continue the original task without an answer.'
+    const text = codexQuestionDecisionText(questions, answers)
     try {
       await this.appServerRequest(active.host, 'turn/steer', {
         threadId: active.nativeThreadId,
