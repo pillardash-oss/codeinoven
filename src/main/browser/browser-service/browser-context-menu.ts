@@ -43,6 +43,9 @@ export interface BrowserContextMenuActions {
 
   /** Open a link in a new tab. Only called for a navigable http(s) address. */
   openLinkInNewTab(url: string): void
+  /** Open an ephemeral peek at a link, or at the page itself when no address is
+   *  given. The service already knows the point that was clicked, so the flight
+   *  it starts can grow out of the link there. */
   openPeekWindow?(url?: string): void
   /** Save a link's target through the download manager. */
   saveLinkAs(url: string): void
@@ -114,7 +117,7 @@ export function buildBrowserPageMenuItems(
     { label: 'Forward', enabled: context.canGoForward, click: () => actions.goForward() },
     { type: 'separator' },
     ...(actions.openPeekWindow
-      ? [{ label: 'Peek Window', click: () => actions.openPeekWindow?.() }]
+      ? [{ label: 'Take a Peek', click: () => actions.openPeekWindow?.() }]
       : []),
     { label: 'Reload', click: () => actions.reload() },
     { label: 'Hard Reload', click: () => actions.hardReload() },
@@ -180,7 +183,7 @@ function buildLinkItems(
   if (navigable) {
     items.push({ label: 'Open Link in New Tab', click: () => actions.openLinkInNewTab(url) })
     if (actions.openPeekWindow)
-      items.push({ label: 'Peek Window', click: () => actions.openPeekWindow?.(url) })
+      items.push({ label: 'Take a Peek', click: () => actions.openPeekWindow?.(url) })
   }
   if (params.linkText.trim()) {
     items.push({ label: 'Copy Link Text', click: () => actions.copyText(params.linkText) })

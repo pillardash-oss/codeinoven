@@ -311,6 +311,7 @@
       : 'hover:bg-elevated'}"
   role="group"
   aria-label={`${label} tab row`}
+  data-browser-tab-id={tab.id}
   oncontextmenu={onContextMenu}
 >
   <button

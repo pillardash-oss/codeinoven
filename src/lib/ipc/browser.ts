@@ -492,6 +492,12 @@ export interface BrowserOpenRequestContext {
   requestedTabId?: string
   reveal: boolean
   /**
+   * The rectangle on screen a peek's opening flight starts from, in the window's
+   * own pixels: the link the user clicked, or a box around the click when the
+   * page named no link. Absent for a tab, which has no source to grow out of.
+   */
+  origin?: BrowserViewBounds | null
+  /**
    * The box the created or revealed tab runs in, or null/absent for the
    * context's own jar. Main resolves it from the owning tab, so the renderer's
    * row and the session agree about which jar the page lives in.

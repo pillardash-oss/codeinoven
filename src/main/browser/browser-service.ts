@@ -152,6 +152,17 @@ import {
   RESTORE_SETTLE_TIMEOUT_MS,
   restoreNeedsFallbackLoad
 } from './browser-service/browser-navigation-outcome'
+import {
+  parsePeekProbeAnswer,
+  peekPointInFrame,
+  peekProbePoint,
+  peekProbeScript,
+  PEEK_ORIGIN_PROBE_TIMEOUT_MS,
+  PEEK_SNAPSHOT_MAX_WIDTH,
+  resolvePeekOrigin,
+  type BrowserPeekPoint,
+  type BrowserPeekRect
+} from './browser-service/browser-peek'
 import { BrowserTabStage } from './browser-service/browser-stage'
 import {
   listBrowserProfilesForPartition,
@@ -1009,10 +1020,17 @@ export class BrowserService {
       // Leaving a tab right after an agent revealed it is the signal that the
       // agent's reveal was not welcome; it stops being counted after a while.
       this.noteDepartedReveal(tabId)
+      // A peek is the one tab whose hide is never a hand-off between two surfaces:
+      // it is being destroyed or promoted into a tab of its own, and either way its
+      // page has to be off screen before the flight that carries it away starts,
+      // because a native view is painted over the DOM that flight happens in. The
+      // grace period below would leave the page sitting over that flight for its
+      // length.
+      if (tabId === this.peekTabId) this.parkTab(tabId)
       // Deferred by one tick, so a panel that unmounts because the same tab is
       // moving to another surface (the sidebar handing the tab to the full screen
       // browser) does not park a view that is about to be shown again.
-      this.schedulePark(tabId)
+      else this.schedulePark(tabId)
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
     })
@@ -1389,6 +1407,13 @@ export class BrowserService {
       if (tabId !== this.peekTabId || !this.tabs.has(tabId))
         throw new Error('Peek Window is no longer available')
       this.peekTabId = null
+    })
+    replaceHandler('browser:peekSnapshot', async (_event, rawTabId) => {
+      // Taken while the peek is still on screen, because the surface animates the
+      // page away with it: without a picture the last thing the user sees of the
+      // page is the frame it was replaced by.
+      const captured = await this.captureThumbnail(validateTabId(rawTabId), PEEK_SNAPSHOT_MAX_WIDTH)
+      return captured?.dataUrl ?? null
     })
     replaceHandler('browser:destroy', (_event, rawTabId, rawReason) => {
       this.destroy(validateTabId(rawTabId), validateTabDestroyReason(rawReason))
@@ -3246,7 +3271,7 @@ export class BrowserService {
       owner.projectId === GLOBAL_BROWSER_PROJECT_ID
     ) {
       try {
-        this.openNewTabFor(owner, validateBrowserUrl(details.url), true)
+        this.openPeekFromWindowRequest(owner, validateBrowserUrl(details.url))
       } catch (error: unknown) {
         Logger.error('Browser Peek rejected unsafe URL:', error)
       }
@@ -5047,13 +5072,38 @@ export class BrowserService {
     if (this.window.isDestroyed()) return
     const tab = this.requireTab(tabId)
     const page = menuPageFor(tabId, tab)
+    const frame = this.frameForTab(tabId)
     const menu = Menu.buildFromTemplate(
       buildBrowserPageMenuItems(
         this.contextMenuContext(page.contents),
-        this.contextMenuActions(page)
+        this.contextMenuActions(page, frame, this.pagePointOf(x, y, frame))
       )
     )
     menu.popup({ window: this.window, x, y })
+  }
+
+  /**
+   * A page-menu point, translated from the window's space into the page's own.
+   *
+   * The channel behind the page menu is shared: the host's fallback for a click
+   * the native view did not take passes the click itself, and the reload button
+   * passes its own position under it. Only a point that lands inside the page
+   * says anything about where on the page the user is, so one that does not is
+   * reported as no point at all.
+   */
+  private pagePointOf(
+    x: number,
+    y: number,
+    frame: BrowserViewBounds | null
+  ): BrowserPeekPoint | null {
+    if (frame === null) return null
+    return peekPointInFrame({ x: Math.round(x - frame.x), y: Math.round(y - frame.y) }, frame)
+  }
+
+  /** The rectangle a tab's page is on screen at, or null while it is parked or
+   *  displayed off the app window. */
+  private frameForTab(tabId: string): BrowserViewBounds | null {
+    return this.activeTabId === tabId ? this.activeTabBounds : null
   }
 
   /**
@@ -5067,7 +5117,7 @@ export class BrowserService {
   private showTabContextMenu(tabId: string, params: Electron.ContextMenuParams): void {
     const tab = this.tabs.get(tabId)
     if (!tab || this.window.isDestroyed() || tab.view.webContents.isDestroyed()) return
-    const frame = this.activeTabId === tabId ? this.activeTabBounds : null
+    const frame = this.frameForTab(tabId)
     this.showPageContextMenu(menuPageFor(tabId, tab), params, frame)
   }
 
@@ -5100,7 +5150,7 @@ export class BrowserService {
       buildBrowserContextMenuItems(
         params,
         this.contextMenuContext(page.contents),
-        this.contextMenuActions(page),
+        this.contextMenuActions(page, frame, { x: params.x, y: params.y }),
         this.extensionMenuItems(page, params)
       )
     )
@@ -5130,7 +5180,18 @@ export class BrowserService {
    * same actions over both: what differs is only which page they act on and which
    * tab a page they open belongs to.
    */
-  private contextMenuActions(page: BrowserMenuPage): BrowserContextMenuActions {
+  /**
+   * The menu's actions for one page.
+   *
+   * `frame` and `point` are where the click that opened the menu landed, which
+   * only the page's own right-click and the host's fallback can supply: they are
+   * what a Peek opened from this menu grows out of.
+   */
+  private contextMenuActions(
+    page: BrowserMenuPage,
+    frame: BrowserViewBounds | null,
+    point: BrowserPeekPoint | null
+  ): BrowserContextMenuActions {
     const contents = page.contents
     const owner = page.owner
     const live = (): WebContents | null =>
@@ -5175,11 +5236,14 @@ export class BrowserService {
             openPeekWindow: (url?: string): void => {
               const current = live()
               if (!current) return
+              let target: string
               try {
-                this.openNewTabFor(owner, validateBrowserUrl(url ?? current.getURL()), true)
+                target = validateBrowserUrl(url ?? current.getURL())
               } catch (error: unknown) {
                 Logger.error('Browser Peek refused a link:', error)
+                return
               }
+              this.openPeekFrom(owner, current, target, frame, point)
             }
           }
         : {}),
@@ -5209,7 +5273,12 @@ export class BrowserService {
    * that open an address in a new tab, so every new tab is parked, loaded and
    * announced the same way.
    */
-  private openNewTabFor(owner: BrowserPageOwner, url: string, peek = false): void {
+  private openNewTabFor(
+    owner: BrowserPageOwner,
+    url: string,
+    peek = false,
+    origin: BrowserViewBounds | null = null
+  ): void {
     if (peek && this.peekTabId) this.destroy(this.peekTabId, 'closed')
     const tabId = `browser:${crypto.randomUUID()}`
     if (peek) this.peekTabId = tabId
@@ -5225,8 +5294,113 @@ export class BrowserService {
       requestedTabId: tabId,
       peek,
       reveal: true,
-      boxId: owner.boxId
+      boxId: owner.boxId,
+      origin
     })
+  }
+
+  /**
+   * Open an ephemeral peek page, growing out of the link it was asked for.
+   *
+   * The probe is what makes the opening flight start on the link rather than at a
+   * corner of the window, and it is bounded: the page is asked once, within
+   * `PEEK_ORIGIN_PROBE_TIMEOUT_MS`, and the tab is created afterwards with whatever
+   * answer came back. In practice that is a few milliseconds, because the question
+   * is a containment test in a frame that is already running; the budget is what a
+   * page that is busy, mid-navigation or without a document can cost, and it is
+   * spent before the surface exists rather than while it is on screen.
+   */
+  private openPeekFrom(
+    owner: BrowserPageOwner,
+    contents: WebContents,
+    url: string,
+    frame: BrowserViewBounds | null,
+    point: BrowserPeekPoint | null
+  ): void {
+    void this.peekOriginFor(contents, frame, point).then((origin) => {
+      try {
+        this.openNewTabFor(owner, url, true, origin)
+      } catch (error: unknown) {
+        Logger.error('Browser Peek refused a link:', error)
+      }
+    })
+  }
+
+  /**
+   * Open a peek for a page that asked for a window of its own.
+   *
+   * Chromium reports no point for this gesture, but the pointer is the click: a
+   * shift-click on a link is exactly this request, and the pointer is still on
+   * the link when it arrives.
+   */
+  private openPeekFromWindowRequest(owner: BrowserPageOwner, url: string): void {
+    const frame = this.frameForTab(owner.tabId)
+    const source = this.tabs.get(owner.tabId)
+    if (!frame || !source || source.view.webContents.isDestroyed()) {
+      this.openNewTabFor(owner, url, true)
+      return
+    }
+    const point = peekPointInFrame(this.pointerViewPoint(frame), frame)
+    this.openPeekFrom(owner, source.view.webContents, url, frame, point)
+  }
+
+  /** Where the pointer is, in a page view's own pixels. */
+  private pointerViewPoint(frame: BrowserViewBounds): BrowserPeekPoint {
+    const cursor = screen.getCursorScreenPoint()
+    const content = this.window.getContentBounds()
+    return {
+      x: Math.round(cursor.x - content.x - frame.x),
+      y: Math.round(cursor.y - content.y - frame.y)
+    }
+  }
+
+  /**
+   * The rectangle a peek's flight starts from: the link under `point`, or null
+   * when there is no point to speak of, because the page is not on screen, the
+   * click never landed on it, or the page answered nothing in time.
+   *
+   * `point` arrives in the page view's own pixels, which is what Electron reports
+   * for a right-click and what the pointer is read as, and the answer has to be in
+   * the window's, because that is where the renderer's panel and ghost are laid
+   * out. The frame is what converts one into the other.
+   */
+  private async peekOriginFor(
+    contents: WebContents,
+    frame: BrowserViewBounds | null,
+    point: BrowserPeekPoint | null
+  ): Promise<BrowserViewBounds | null> {
+    if (frame === null || point === null) return null
+    const link = await this.probeLinkRect(contents, point)
+    return resolvePeekOrigin({
+      link,
+      point: { x: frame.x + point.x, y: frame.y + point.y },
+      frame,
+      zoomFactor: contents.isDestroyed() ? 1 : contents.getZoomFactor()
+    })
+  }
+
+  /** Ask the page which link is under a point, bounded. */
+  private async probeLinkRect(
+    contents: WebContents,
+    point: BrowserPeekPoint
+  ): Promise<BrowserPeekRect | null> {
+    if (contents.isDestroyed()) return null
+    const script = peekProbeScript(peekProbePoint(point, contents.getZoomFactor()))
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const answer = await Promise.race([
+        contents.executeJavaScript(script) as Promise<unknown>,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), PEEK_ORIGIN_PROBE_TIMEOUT_MS)
+        })
+      ])
+      return parsePeekProbeAnswer(answer)
+    } catch {
+      // A page mid-navigation answers with an error rather than a rectangle.
+      return null
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
   }
 
   /**
