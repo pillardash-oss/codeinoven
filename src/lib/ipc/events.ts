@@ -117,11 +117,14 @@ export const IPC_EVENT_CONTRACT = {
    *  it shows that toast (see src/renderer/lib/notification-sound.ts). */
   'notification:playSound': [] as unknown as [kind: NotificationSoundKind],
   'notification:show': [] as unknown as [payload: AgentNotificationPayload],
-  /** Transient in-app toast (error/info, optional navigation action). */
+  /** Transient in-app toast (error/info, optional navigation action). An error
+   *  toast keeps `details` behind its Copy action and is also filed in the App
+   *  Errors panel. */
   'app:toast': [] as unknown as [
     payload: {
       message: string
       type: 'error' | 'info'
+      details?: string
       projectId?: string
       threadId?: string
       action?: { label: string; projectId: string; threadId: string }

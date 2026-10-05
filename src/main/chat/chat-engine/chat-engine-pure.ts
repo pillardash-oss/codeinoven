@@ -5,6 +5,7 @@ import { createHash } from 'crypto'
 import { homedir } from 'node:os'
 import type { IncomingMessage, Server, ServerResponse } from 'http'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
+import { broadcastAppToast } from '../../ipc/app-toast'
 import { AssignmentEngineError } from '../../../lib/engines/assignment-engine'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { listHarnesses } from '../../agents/harness-registry'
@@ -1041,9 +1042,7 @@ export function deliverBroadcast(event: AgentEvent): void {
 }
 
 export function broadcastToast(message: string, type: 'error' | 'info' = 'error'): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    sendToRenderer(win.webContents, 'app:toast', { message, type })
-  }
+  broadcastAppToast({ message, type })
 }
 
 export function chatSkillPaths(driverId: string): string[] {
