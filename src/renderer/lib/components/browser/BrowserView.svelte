@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BrowserPeekWindow from './BrowserPeekWindow.svelte'
   import GitHubSignInBrowserDock from '$lib/components/git/GitHubSignInBrowserDock.svelte'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
   import { feature } from '$lib/feature-registry'
@@ -433,6 +434,8 @@
     onClose={() => globalBrowser.closeAddressSpotlight()}
   />
 {/if}
+
+<BrowserPeekWindow />
 
 <style>
   .context-rail {

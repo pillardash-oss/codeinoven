@@ -619,6 +619,7 @@ export class BrowserService {
   private readonly tabHistory = new BrowserTabHistoryStore()
   /** Stacks of tabs closed this session, held only until the tab is reopened. */
   private readonly closedTabHistory = new BrowserClosedTabHistory()
+  private peekTabId: string | null = null
   private consoleSequence = 0
   /**
    * The popup windows pages have opened, hosted by the app rather than by the
@@ -810,6 +811,7 @@ export class BrowserService {
    * to be restored twice.
    */
   private captureTabHistory(tabId: string, tab: BrowserTab): void {
+    if (tabId === this.peekTabId) return
     const record = this.readTabHistory(tabId, tab)
     if (!record) return
     this.closedTabHistory.forget(tabId)
@@ -1381,6 +1383,12 @@ export class BrowserService {
       // listener is bound. Invoke replies bypass the push-side load-state
       // guards that repeatedly dropped the first prompt (blank first popup).
       return this.promptWindow.currentContext()
+    })
+    replaceHandler('browser:expandPeek', (_event, rawTabId) => {
+      const tabId = validateTabId(rawTabId)
+      if (tabId !== this.peekTabId || !this.tabs.has(tabId))
+        throw new Error('Peek Window is no longer available')
+      this.peekTabId = null
     })
     replaceHandler('browser:destroy', (_event, rawTabId, rawReason) => {
       this.destroy(validateTabId(rawTabId), validateTabDestroyReason(rawReason))
@@ -2875,6 +2883,11 @@ export class BrowserService {
     // a development build the menu is Electron's default one) and Cmd/Ctrl+W
     // from closing its window.
     view.webContents.on('before-input-event', (event, input) => {
+      if (this.peekTabId === tabId && input.type === 'keyDown' && input.key === 'Escape') {
+        event.preventDefault()
+        this.requestPanelShortcut(tabId, 'close-tab')
+        return
+      }
       // The switcher is claimed first: it is an app-level gesture that must work
       // from inside a page, and it must never be shadowed by a browser binding.
       if (this.consumeSwitcherKey(input)) {
@@ -3226,6 +3239,19 @@ export class BrowserService {
     owner: BrowserPageOwner,
     details: Electron.HandlerDetails
   ): Electron.WindowOpenHandlerResponse {
+    if (
+      details.disposition === 'new-window' &&
+      !details.features &&
+      !details.postBody &&
+      owner.projectId === GLOBAL_BROWSER_PROJECT_ID
+    ) {
+      try {
+        this.openNewTabFor(owner, validateBrowserUrl(details.url), true)
+      } catch (error: unknown) {
+        Logger.error('Browser Peek rejected unsafe URL:', error)
+      }
+      return { action: 'deny' }
+    }
     if (details.disposition === 'new-window' && owner.projectId === GLOBAL_BROWSER_PROJECT_ID) {
       const popup = this.openPopupWindowFor(owner, details)
       if (popup) return popup
@@ -5128,6 +5154,19 @@ export class BrowserService {
       inspectElement: (x, y) => live()?.inspectElement(x, y),
       selectAll: () => live()?.selectAll(),
       openLinkInNewTab: openInNewTab,
+      ...(owner.projectId === GLOBAL_BROWSER_PROJECT_ID
+        ? {
+            openPeekWindow: (url?: string): void => {
+              const current = live()
+              if (!current) return
+              try {
+                this.openNewTabFor(owner, validateBrowserUrl(url ?? current.getURL()), true)
+              } catch (error: unknown) {
+                Logger.error('Browser Peek refused a link:', error)
+              }
+            }
+          }
+        : {}),
       saveLinkAs: saveAs,
       openMediaInNewTab: openInNewTab,
       saveMediaAs: saveAs,
@@ -5154,8 +5193,10 @@ export class BrowserService {
    * that open an address in a new tab, so every new tab is parked, loaded and
    * announced the same way.
    */
-  private openNewTabFor(owner: BrowserPageOwner, url: string): void {
+  private openNewTabFor(owner: BrowserPageOwner, url: string, peek = false): void {
+    if (peek && this.peekTabId) this.destroy(this.peekTabId, 'closed')
     const tabId = `browser:${crypto.randomUUID()}`
+    if (peek) this.peekTabId = tabId
     // A new sibling inherits the box it was opened from: a popup or a link
     // belongs beside the page that produced it, in the same jar.
     const tab = this.ensureTab(tabId, owner.projectId, owner.threadId, owner.boxId)
@@ -5166,6 +5207,7 @@ export class BrowserService {
       projectId: owner.projectId,
       threadId: owner.threadId,
       requestedTabId: tabId,
+      peek,
       reveal: true,
       boxId: owner.boxId
     })
@@ -5776,7 +5818,8 @@ export class BrowserService {
     if (reason === 'hibernated') {
       if (tab) this.captureTabHistory(tabId, tab)
     } else {
-      this.stashClosedTabHistory(tabId, tab)
+      if (tabId !== this.peekTabId) this.stashClosedTabHistory(tabId, tab)
+      else this.peekTabId = null
       this.tabHistory.forget(tabId)
     }
     if (!tab) return

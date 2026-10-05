@@ -473,6 +473,7 @@ export const invokeBrowserContract = {
    *  This pull model cannot race document load state, which the previous
    *  push-based first-delivery repeatedly did (blank first prompt). */
   'browser:popupReady': {} as Contract<[], BrowserPermissionPromptContext | null>,
+  'browser:expandPeek': {} as Contract<[tabId: string], void>,
   'browser:destroy': {} as Contract<[tabId: string, reason: BrowserTabDestroyReason], void>,
   'browser:destroyThread': {} as Contract<[projectId: string, threadId: string], void>,
   'browser:destroyProject': {} as Contract<[projectId: string], void>,

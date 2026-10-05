@@ -6,7 +6,7 @@
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
   import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
-  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { type BrowserSurface, browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import BrowserFindBar from './BrowserFindBar.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
@@ -14,9 +14,10 @@
 
   interface Props {
     tab: GlobalBrowserTab
+    surface?: BrowserSurface
   }
 
-  let { tab }: Props = $props()
+  let { tab, surface = 'workspace' }: Props = $props()
 
   /**
    * The page frame.
@@ -207,8 +208,8 @@
    */
   $effect(() => {
     if (!pageVisible) return
-    browserKeyboardFocus.setClaim('workspace', tabId)
-    return () => browserKeyboardFocus.setClaim('workspace', null)
+    browserKeyboardFocus.setClaim(surface, tabId)
+    return () => browserKeyboardFocus.setClaim(surface, null)
   })
 
   onMount(() => {
@@ -216,7 +217,7 @@
     // The claim is released with the component, so a destroyed surface can never
     // keep the view. Publishing it also flips `pageVisible`, which is what
     // attaches the page on the first paint.
-    const releaseClaim = browserVisibility.claimTab(tabId, 'workspace')
+    const releaseClaim = browserVisibility.claimTab(tabId, surface)
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', onPanelShortcut)
     let destroyed = false
     const observer = new ResizeObserver(() => {

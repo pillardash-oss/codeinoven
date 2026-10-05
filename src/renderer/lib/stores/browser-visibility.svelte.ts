@@ -41,7 +41,7 @@ import type { BrowserViewBounds } from '$shared/ipc-contract'
 import { contextSidebarState } from './context-sidebar.svelte'
 
 /** The places the browser can display native content. */
-export type BrowserSurface = 'sidebar' | 'fullscreen' | 'workspace'
+export type BrowserSurface = 'sidebar' | 'fullscreen' | 'workspace' | 'peek'
 
 /**
  * A reason a DOM surface publishes while it is on screen and the native view
@@ -161,7 +161,8 @@ class BrowserVisibilityState {
     const surface = this.owningSurface
     if (surface === null) return false
     for (const reason of this.blocks.values()) {
-      if (reason === 'workspace-inactive' && surface === 'workspace') continue
+      if (reason === 'workspace-inactive' && (surface === 'workspace' || surface === 'peek'))
+        continue
       return false
     }
     return true
@@ -222,7 +223,8 @@ class BrowserVisibilityState {
       // own top-level workspace surface, which is not inside the shell at all.
       // Without this, opening the browser view published the block and the page
       // was attached in main but never shown.
-      if (reason === 'workspace-inactive' && surface === 'workspace') continue
+      if (reason === 'workspace-inactive' && (surface === 'workspace' || surface === 'peek'))
+        continue
       return reason
     }
     if (surface === null) return 'not-placed'
@@ -246,6 +248,7 @@ class BrowserVisibilityState {
    * the published blocks plus occlusion, and nothing else.
    */
   popupHideReasonFor(bounds: BrowserViewBounds | null): BrowserHideReason | null {
+    if (this.claims.has('peek')) return 'owned-elsewhere'
     for (const reason of this.blocks.values()) {
       // The popup panel lives in the browser's own top-level view, which is not
       // inside the workspace shell, so the shell's own hidden state says nothing
@@ -269,6 +272,7 @@ class BrowserVisibilityState {
    * Other tabs are not detached any more, they run parked offscreen.
    */
   private get owningSurface(): BrowserSurface | null {
+    if (this.claims.has('peek')) return 'peek'
     if (this.claims.has('workspace')) return 'workspace'
     if (this.claims.has('fullscreen')) return 'fullscreen'
     const tabId = this.claims.get('sidebar')

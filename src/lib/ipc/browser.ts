@@ -485,6 +485,8 @@ export type BrowserFindStopAction = 'clearSelection' | 'keepSelection' | 'activa
 
 /** Ownership metadata for a browser tab requested by the main process. */
 export interface BrowserOpenRequestContext {
+  /** Ephemeral native page, adopted into the saved tab list only on expansion. */
+  peek?: boolean
   projectId: string
   threadId: string
   requestedTabId?: string

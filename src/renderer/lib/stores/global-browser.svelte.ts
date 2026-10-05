@@ -102,6 +102,34 @@ function withDefaultBox(boxes: GlobalBrowserBox[]): GlobalBrowserBox[] {
 
 export class GlobalBrowserState {
   tabs: GlobalBrowserTab[] = $state([])
+  peekTab: GlobalBrowserTab | null = $state(null)
+
+  closePeek(): void {
+    const tab = this.peekTab
+    if (!tab) return
+    this.peekTab = null
+    this.runtime.delete(tab.id)
+    void invoke('browser:destroy', tab.id, 'closed').catch((error: unknown) =>
+      reportError(error, 'Peek Window could not be closed.')
+    )
+  }
+
+  async expandPeek(): Promise<void> {
+    const tab = this.peekTab
+    if (!tab) return
+    try {
+      await invoke('browser:expandPeek', tab.id)
+    } catch (error: unknown) {
+      reportError(error, 'Peek Window could not be expanded.')
+      return
+    }
+    if (this.peekTab?.id !== tab.id) return
+    this.enforceTabCap()
+    this.tabs = [...this.tabs, tab]
+    this.peekTab = null
+    this.activate(tab.id)
+    this.persist()
+  }
   /**
    * Tabs closed this session, most recently closed last.
    *
@@ -641,7 +669,10 @@ export class GlobalBrowserState {
 
   /** One tab by id, or null once it has been closed. */
   tabById(tabId: string): GlobalBrowserTab | null {
-    return this.tabs.find((tab) => tab.id === tabId) ?? null
+    return (
+      this.tabs.find((tab) => tab.id === tabId) ??
+      (this.peekTab?.id === tabId ? this.peekTab : null)
+    )
   }
 
   // ─── The active tab ───────────────────────────────────────────────────────
@@ -1134,35 +1165,38 @@ export class GlobalBrowserState {
       this.persist()
       return
     }
-    this.enforceTabCap()
+    if (!context.peek) this.enforceTabCap()
     const now = Date.now()
-    this.tabs = [
-      ...this.tabs,
-      {
-        id: tabId,
-        title: browserTabTitleForUrl(url),
-        customTitle: null,
-        url,
-        favicon: null,
-        // A popup belongs beside the page that opened it.
-        groupId: this.activeTab?.groupId ?? null,
-        // Main creates the tab in the opener's jar and hands back the box it
-        // used, so the row and the session agree from the first show. Main is the
-        // only side that knows the true owner when a background tab opens the
-        // popup, so its answer is trusted over the active tab's box.
-        boxId: context.boxId ?? null,
-        createdAt: now,
-        lastUsedAt: now,
-        hibernated: false,
-        pinned: false,
-        pinnedAt: null,
-        assistantThreadId: null,
-        color: null,
-        iconType: null,
-        customSvg: null,
-        imagePath: null
-      }
-    ]
+    const newTab: GlobalBrowserTab = {
+      id: tabId,
+      title: browserTabTitleForUrl(url),
+      customTitle: null,
+      url,
+      favicon: null,
+      // A popup belongs beside the page that opened it.
+      groupId: this.activeTab?.groupId ?? null,
+      // Main creates the tab in the opener's jar and hands back the box it
+      // used, so the row and the session agree from the first show. Main is the
+      // only side that knows the true owner when a background tab opens the
+      // popup, so its answer is trusted over the active tab's box.
+      boxId: context.boxId ?? null,
+      createdAt: now,
+      lastUsedAt: now,
+      hibernated: false,
+      pinned: false,
+      pinnedAt: null,
+      assistantThreadId: null,
+      color: null,
+      iconType: null,
+      customSvg: null,
+      imagePath: null
+    }
+    if (context.peek) {
+      this.closePeek()
+      this.peekTab = newTab
+      return
+    }
+    this.tabs = [...this.tabs, newTab]
     if (context.reveal) this.activate(tabId)
     this.persist()
   }
@@ -1762,7 +1796,7 @@ export class GlobalBrowserState {
   /** Apply a live page snapshot: the navigation identity onto the tab, and the
    *  loading/audio/capture state onto the map the strip and header read. */
   applyPageState(state: BrowserPageState): void {
-    const tab = this.tabs.find((candidate) => candidate.id === state.tabId)
+    const tab = this.tabById(state.tabId)
     if (!tab) return
     let changed = false
     // A document with no committed address yet (a fresh tab, an about:blank
@@ -1797,7 +1831,7 @@ export class GlobalBrowserState {
     // Loading a page is a use of the tab, which is what keeps a tab the user is
     // actively navigating from being hibernated mid-load.
     if (state.loading) tab.lastUsedAt = Date.now()
-    if (changed) this.persist()
+    if (changed && tab !== this.peekTab) this.persist()
     const current = this.runtime.get(state.tabId)
     if (
       current &&
