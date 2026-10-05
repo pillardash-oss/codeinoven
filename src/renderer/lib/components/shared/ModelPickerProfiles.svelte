@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { type Snippet } from 'svelte'
   import { Check, Pencil, Plus, Trash2, X } from '@lucide/svelte'
   import { permissionLevelLabel } from '$lib/actions'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
@@ -27,6 +28,11 @@
    * harness and provider marks, with the text naming what actually runs. Two
    * profiles saved against different harnesses therefore never read alike.
    *
+   * The header carries the save action and the count, because saving is the rare
+   * gesture: as a row of its own at the bottom it took a row's height from the
+   * list on every open. `aboveList` lets the panel draw the harness filter
+   * between the header and the list, so the controls sit together.
+   *
    * Everything here is presentational. Persistence, the applied-settings maths,
    * and the delete confirmation belong to the composer, which owns the settings it
    * commits; this component only reports intent.
@@ -50,6 +56,11 @@
     onRename: (profile: ModelProfile, name: string) => void
     /** Ask to delete; the composer confirms before anything is removed. */
     onRequestDelete: (profile: ModelProfile) => void
+    /**
+     * Drawn between the header and the list, where the panel puts the harness
+     * filter: the controls belong together, and the list keeps what is left.
+     */
+    aboveList?: Snippet
   }
 
   let {
@@ -61,7 +72,8 @@
     onApply,
     onSave,
     onRename,
-    onRequestDelete
+    onRequestDelete,
+    aboveList
   }: Props = $props()
 
   /**
@@ -233,15 +245,40 @@
   </button>
 {/snippet}
 
-<!-- Only the list scrolls: the header stays put and the save row stays reachable
-     however many profiles are saved. -->
+<!-- Only the list scrolls: the header, the filter above it, and the save field in
+     it stay put however many profiles are saved. -->
 <div class="flex min-h-0 flex-1 flex-col">
   <div class="flex shrink-0 items-center gap-1.5 px-3 pb-1 pt-2">
-    <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">Profiles</span>
-    <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">
-      {usable.length}/{MAX_MODEL_PROFILES}
-    </span>
+    {#if editor?.kind === 'new'}
+      <!-- Naming takes the whole header, so the field is never crowded by the
+           surface's own label and count. -->
+      {@render nameEditor('new')}
+    {:else}
+      <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
+        Profiles
+      </span>
+      <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">
+        {usable.length}/{MAX_MODEL_PROFILES}
+      </span>
+      <button
+        type="button"
+        class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.625rem] font-medium text-primary transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+        title={atCapacity
+          ? `You can save up to ${MAX_MODEL_PROFILES} profiles`
+          : 'Save the current harness, model, thinking level, speed, and permissions as a profile'}
+        aria-label={atCapacity
+          ? `You can save up to ${MAX_MODEL_PROFILES} profiles`
+          : 'Save the current model setup as a profile'}
+        disabled={atCapacity}
+        onclick={beginNaming}
+      >
+        <Plus size={11} class="shrink-0" />
+        <span>Save</span>
+      </button>
+    {/if}
   </div>
+
+  {@render aboveList?.()}
 
   {#if usable.length > 0}
     <ul class="min-h-0 flex-1 overflow-y-auto p-1">
@@ -339,28 +376,4 @@
       {/each}
     </ul>
   {/if}
-
-  <div class="shrink-0 p-1">
-    {#if editor?.kind === 'new'}
-      <div class="flex items-center gap-1">
-        {@render nameEditor('new')}
-      </div>
-    {:else}
-      <button
-        type="button"
-        class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
-        title={atCapacity
-          ? `You can save up to ${MAX_MODEL_PROFILES} profiles`
-          : 'Save the current harness, model, thinking level, speed, and permissions as a profile'}
-        aria-label={atCapacity
-          ? `You can save up to ${MAX_MODEL_PROFILES} profiles`
-          : 'Save the current model setup as a profile'}
-        disabled={atCapacity}
-        onclick={beginNaming}
-      >
-        <Plus size={11} class="shrink-0" />
-        <span class="truncate">Save current as a profile</span>
-      </button>
-    {/if}
-  </div>
 </div>

@@ -191,54 +191,9 @@
             }}
           >
             {#if profiles}
-              <ModelPickerProfiles {...profiles} />
-            {/if}
-
-            {#if filter}
-              <!-- Only divided from the profiles when there are profiles above it:
-                 a lone harness section would otherwise draw a second line right
-                 under the panel's own border. -->
-              <div class="shrink-0 px-2.5 py-2 {profiles ? 'border-t' : ''}">
-                <div
-                  class="px-1 pb-1.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
-                >
-                  Filter models by harness
-                </div>
-                <div
-                  class="flex max-h-24 flex-wrap gap-1 overflow-y-auto"
-                  role="group"
-                  aria-label="Filter models by harness"
-                >
-                  <button
-                    type="button"
-                    class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!filter.active
-                      ? 'border-primary bg-primary text-on-primary'
-                      : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-                    aria-pressed={!filter.active}
-                    title="Show every harness"
-                    onclick={filter.onClear}
-                  >
-                    <ListFilter size={11} class="shrink-0" />
-                    All
-                  </button>
-                  {#each filter.options as option (option.id)}
-                    <button
-                      type="button"
-                      class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {filter.selected.has(
-                        option.id
-                      )
-                        ? 'border-primary bg-primary text-on-primary'
-                        : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-                      aria-pressed={filter.selected.has(option.id)}
-                      title={`Show only ${option.name} models`}
-                      onclick={() => filter.onToggle(option.id)}
-                    >
-                      <ModelPickerHarnessIcon harnessId={option.id} />
-                      <span class="truncate">{option.name}</span>
-                    </button>
-                  {/each}
-                </div>
-              </div>
+              <ModelPickerProfiles {...profiles} aboveList={harnessFilterSection} />
+            {:else if filter}
+              {@render harnessFilterSection()}
             {/if}
           </div>
         </Popover.Content>
@@ -246,3 +201,52 @@
     </Popover.Root>
   </div>
 {/if}
+
+<!--
+  The harness filter, drawn above the profiles list, or as the whole panel when a
+  picker has no profiles surface.
+
+  No heading: the row that opens the panel already names what the chips filter,
+  and the chips themselves are sized to fit several per row, because choosing a
+  harness is worth one line rather than three.
+-->
+{#snippet harnessFilterSection()}
+  {#if filter}
+    <div class="shrink-0 px-2 py-1.5 {profiles ? 'border-b' : ''}">
+      <div
+        class="flex max-h-24 flex-wrap gap-1 overflow-y-auto"
+        role="group"
+        aria-label="Filter models by harness"
+      >
+        <button
+          type="button"
+          class="flex h-6 items-center gap-1 rounded-md border px-2 text-[0.625rem] font-medium transition-colors {!filter.active
+            ? 'border-primary bg-primary text-on-primary'
+            : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+          aria-pressed={!filter.active}
+          title="Show every harness"
+          onclick={filter.onClear}
+        >
+          <ListFilter size={10} class="shrink-0" />
+          All
+        </button>
+        {#each filter.options as option (option.id)}
+          <button
+            type="button"
+            class="flex h-6 items-center gap-1 rounded-md border px-2 text-[0.625rem] font-medium transition-colors {filter.selected.has(
+              option.id
+            )
+              ? 'border-primary bg-primary text-on-primary'
+              : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+            aria-pressed={filter.selected.has(option.id)}
+            title={`Show only ${option.name} models`}
+            onclick={() => filter.onToggle(option.id)}
+          >
+            <ModelPickerHarnessIcon harnessId={option.id} />
+            <span class="truncate">{option.name}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
+{/snippet}
