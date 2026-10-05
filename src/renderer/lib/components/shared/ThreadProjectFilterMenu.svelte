@@ -1,6 +1,10 @@
 <script lang="ts">
   import { Funnel, Inbox } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
+  import {
+    THREAD_GROUP_ICONS,
+    THREAD_GROUP_COLORS
+  } from '$lib/components/threads/thread-group-presentation'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { THREAD_GROUPS, threadGroupingState } from '$lib/stores/thread-grouping.svelte'
   import ProjectSwitch from './ProjectSwitch.svelte'
@@ -80,6 +84,7 @@
           threadGroupingState.setAllVisible(!threadGroupingState.isAll)
         }}
       >
+        <Inbox size={12} class="shrink-0 text-muted" aria-hidden="true" />
         <span class="min-w-0 flex-1 truncate text-xs font-medium">All</span>
         <span
           role="presentation"
@@ -104,7 +109,17 @@
             threadGroupingState.setVisible(group, !threadGroupingState.isVisible(group))
           }}
         >
-          <span class="min-w-0 flex-1 truncate text-xs font-medium">{group}</span>
+          {@const Icon = THREAD_GROUP_ICONS[group]}
+          <Icon
+            size={12}
+            class="shrink-0"
+            style={`color:${THREAD_GROUP_COLORS[group]}`}
+            aria-hidden="true"
+          />
+          <span
+            class="min-w-0 flex-1 truncate text-xs font-medium"
+            style:color={THREAD_GROUP_COLORS[group]}>{group}</span
+          >
           <span
             role="presentation"
             onclick={(event) => event.stopPropagation()}
