@@ -13217,6 +13217,26 @@ export class ChatEngine {
     await this.agentSecrets
       .deleteThreadSecrets(threadId)
       .catch((error: unknown) => Logger.error('Thread secret cleanup failed:', error))
+
+    // A capability the user scoped to this thread is thread state as well: its
+    // entry can never resolve for another conversation, and its install folder
+    // goes with the thread's own directories, so the entry goes here. Credentials
+    // it collected go with it rather than lingering in the vault unreferenced.
+    await this.removeThreadScopedUtilities(threadId)
+  }
+
+  /** Drop every capability scoped to one deleted thread, credentials included. */
+  private async removeThreadScopedUtilities(threadId: string): Promise<void> {
+    try {
+      const removed = await this.utilityRegistry.deleteThreadScoped(threadId)
+      for (const utility of removed) {
+        for (const credential of utility.credentials) {
+          await this.secretVault.remove(credential.secretRef).catch(() => undefined)
+        }
+      }
+    } catch (error) {
+      Logger.dev('Thread-scoped utility cleanup failed:', error)
+    }
   }
 
   /** Reply to a pending permission request (from the UI permission card). */

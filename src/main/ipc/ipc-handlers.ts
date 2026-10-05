@@ -408,6 +408,7 @@ export function registerIpcHandlers(
     updaterService,
     chatEngine,
     options,
+    utilityFootprint: options.utilityFootprint,
     projectManager,
     threadCreation,
     threadDeletion,

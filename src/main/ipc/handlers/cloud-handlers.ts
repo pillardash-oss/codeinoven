@@ -545,6 +545,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     githubAuthService,
     privileged,
     skillUpdates,
+    utilityFootprint,
     resolveProjectPath,
     providerForProject,
     pullRequestTarget
@@ -1763,7 +1764,11 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     storage,
     home: app.getPath('home'),
     resolveProjectPath,
-    githubToken: () => githubAuthService.resolveToken()
+    githubToken: () => githubAuthService.resolveToken(),
+    // A CodeInOven-managed copy is a registry entry, so a project-scoped one is
+    // installed into that project's own `.cio` folder by the same service the
+    // Utilities page uses.
+    ...(utilityFootprint ? { footprint: utilityFootprint } : {})
   })
 
   /** Projects a native skill scan can look into: local ones with a real path. */
@@ -1778,7 +1783,13 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
 
   ipcMain.handle('utilities:uninstallMarketSkill', async (_, rawSkillId: unknown) => {
     const skillId = validateEntityId(rawSkillId, 'Skill ID', 200)
-    return uninstallMarketSkill(storage, skillId, await skillScanProjects(), app.getPath('home'))
+    return uninstallMarketSkill(
+      storage,
+      skillId,
+      await skillScanProjects(),
+      app.getPath('home'),
+      utilityFootprint
+    )
   })
 
   // Background skill updates ride the app-update check cycle, so this layer only

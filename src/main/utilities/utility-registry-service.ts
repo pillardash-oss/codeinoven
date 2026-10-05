@@ -591,6 +591,32 @@ export class UtilityRegistryService {
     })
   }
 
+  /**
+   * Remove every capability scoped to one thread, returning what was removed so
+   * the caller can reap its credentials.
+   *
+   * A thread-scoped capability resolves for that conversation and no other, so
+   * once the thread is gone the entry can never be reached again. Deleting the
+   * thread therefore deletes it here too, instead of leaving an entry in the
+   * Utilities list that names a thread nobody can open.
+   */
+  async deleteThreadScoped(threadId: string): Promise<UtilityDefinition[]> {
+    assertId(threadId, 'Thread ID')
+    await this.ensureAppDefaultsSeeded()
+    return this.mutate(async (registry) => {
+      const removed = registry.utilities.filter(
+        (utility) =>
+          !utility.appOwned &&
+          utility.scope.level === 'thread' &&
+          utility.scope.threadId === threadId
+      )
+      if (removed.length === 0) return []
+      const removedIds = new Set(removed.map((utility) => utility.id))
+      registry.utilities = registry.utilities.filter((utility) => !removedIds.has(utility.id))
+      return structuredClone(removed)
+    })
+  }
+
   async search(options: UtilitySearchOptions = {}): Promise<UtilityDefinition[]> {
     assertSearchOptions(options)
     await this.ensureAppDefaultsSeeded()

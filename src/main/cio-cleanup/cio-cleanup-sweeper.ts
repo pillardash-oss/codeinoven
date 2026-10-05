@@ -6,7 +6,7 @@ import type {
   CioCleanupRemovalRecord,
   CioCleanupTarget
 } from '../../lib/types/cio-cleanup'
-import { isCioCleanupExcluded } from '../../lib/cio-cleanup'
+import { isCioCleanupExcluded, isCioCleanupInstalledPath } from '../../lib/cio-cleanup'
 
 /**
  * How many entries one pass examines before it hands the event loop back. Every
@@ -171,6 +171,13 @@ async function pruneDirectory(
     // A nested repository is neither scratch this app wrote nor something a
     // stale-content rule should ever take apart.
     if (child.name === '.git' && child.isDirectory()) {
+      outcome.survivors += 1
+      continue
+    }
+    // Installed content, not scratch: a project's scoped utilities live here, and
+    // a sweep that took the folder would delete an install the registry still
+    // resolves. Kept without walking, so nothing inside is judged either.
+    if (child.isDirectory() && isCioCleanupInstalledPath(childRel)) {
       outcome.survivors += 1
       continue
     }

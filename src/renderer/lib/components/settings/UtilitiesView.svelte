@@ -223,6 +223,7 @@
       'App',
       ...(utility.scope.level === 'global' ? ['Global'] : []),
       ...(utility.scope.level === 'project' ? ['Project'] : []),
+      ...(utility.scope.level === 'thread' ? ['Thread'] : []),
       ...utility.harnessBindings.map((binding) =>
         binding.harnessId === ALL_HARNESSES_BINDING_ID ? 'All harnesses' : binding.harnessId
       )
@@ -403,6 +404,7 @@
     if (tag === 'App') return 'CIO'
     if (tag === 'Global') return 'Global'
     if (tag === 'Project') return 'Project'
+    if (tag === 'Thread') return 'Thread'
     if (tag === 'All harnesses') return 'All harnesses'
     return harnessName(tag)
   }
@@ -502,21 +504,15 @@
     const status = skillUpdateState.status
     if (status.running) return 'Checking for skill updates…'
     if (status.error) return status.error
-    if (status.lastCheckedAt === null) {
-      if (status.tracked === 0) return 'No installed skills to keep fresh'
-      return status.tracked === 1
-        ? '1 installed skill stays up to date'
-        : `${status.tracked} installed skills stay up to date`
-    }
     const failed = status.results.filter((result) => result.outcome === 'failed').length
     const updated =
       status.updated > 0
         ? `Updated ${status.updated} ${status.updated === 1 ? 'skill' : 'skills'}`
-        : 'Skills up to date'
+        : ''
     return [
       updated,
       failed > 0 ? `${failed} source${failed === 1 ? '' : 's'} unreachable` : '',
-      `checked ${relativeTime(status.lastCheckedAt)}`
+      status.lastCheckedAt ? `checked ${relativeTime(status.lastCheckedAt)}` : ''
     ]
       .filter(Boolean)
       .join(' · ')
@@ -670,7 +666,7 @@
       <img class="h-full w-full object-contain" src={cioIconUrl} alt="" />
     </span>
     <span>{scopeTagLabel(tag)}</span>
-  {:else if tag === 'Global' || tag === 'Project' || tag === 'All harnesses'}
+  {:else if tag === 'Global' || tag === 'Project' || tag === 'Thread' || tag === 'All harnesses'}
     <span>{scopeTagLabel(tag)}</span>
   {:else}
     <AgentIcon agentId={tag} label={scopeTagLabel(tag)} size={14} />
@@ -903,8 +899,8 @@
           title="Check the skills installed by CodeInOven for updates now"
           onclick={() => void skillUpdateState.checkNow()}
         >
-          <RefreshCw size={11} class={skillUpdateState.status.running ? 'animate-spin' : ''} /> Check
-          now
+          <RefreshCw size={11} class={skillUpdateState.status.running ? 'animate-spin' : ''} /> Update
+          utilities
         </button>
       </div>
     {/if}

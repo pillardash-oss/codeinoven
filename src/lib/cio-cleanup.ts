@@ -1,4 +1,5 @@
 import type { CioCleanupExclusion, CioCleanupMount } from './types/cio-cleanup'
+import { PROJECT_UTILITIES_DIRECTORY } from './utility-scope-paths'
 
 /**
  * The scratch folder every workspace CodeInOven stages agent work in. It is the
@@ -12,12 +13,31 @@ import type { CioCleanupExclusion, CioCleanupMount } from './types/cio-cleanup'
  */
 export const CIO_SCRATCH_DIRECTORY = '.cio'
 
+/**
+ * `.cio` folders that hold installed content rather than scratch, so no sweep
+ * may touch them.
+ *
+ * `.cio/utilities` is where a project's own scoped skills and MCP servers are
+ * installed. A sweep that deleted it would leave the utility registry pointing
+ * at an install that only comes back the next time that utility is written, so
+ * the sweeper keeps the folder whole.
+ */
+export const CIO_CLEANUP_INSTALLED_PATHS: readonly string[] = [PROJECT_UTILITIES_DIRECTORY]
+
 /** Normalize a workspace-relative path to forward slashes without a leading `./`. */
 export function normalizeCioCleanupPath(path: string): string {
   return path
     .replaceAll('\\', '/')
     .replace(/^\.\/+/u, '')
     .replace(/\/+$/u, '')
+}
+
+/** Whether a `.cio`-relative path is installed content a sweep must keep. */
+export function isCioCleanupInstalledPath(relativePath: string): boolean {
+  const normalized = normalizeCioCleanupPath(relativePath)
+  return CIO_CLEANUP_INSTALLED_PATHS.some(
+    (installedPath) => normalized === installedPath || normalized.startsWith(`${installedPath}/`)
+  )
 }
 
 /**

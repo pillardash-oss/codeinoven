@@ -79,6 +79,10 @@ import {
 } from '../../lib/routine-authoring'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import {
+  UtilityScopeFootprintService,
+  type UtilityScopeFootprintDeps
+} from './utility-scope-footprint'
+import {
   matchesUtilityKinds,
   normalizeCapability,
   operationPid,
@@ -369,6 +373,9 @@ type GatewayBridgeHandler = (state: TurnState, input: Record<string, unknown>) =
 export class UtilityOrchestrationService {
   private readonly registry: UtilityRegistryService
   private readonly vault: SecretVault
+  /** Install folders for scoped utilities; resolved on first use. */
+  private scopeFootprint: UtilityScopeFootprintService | null = null
+  private scopeFootprintResolved = false
   private readonly turns = new Map<
     string,
     { state: TurnState; scriptPath: string; token: string }
@@ -401,6 +408,32 @@ export class UtilityOrchestrationService {
     this.registry = new UtilityRegistryService(storage)
     this.vault = new SecretVault(storage)
     this.bridgeHandlers = this.buildBridgeHandlers()
+  }
+
+  /**
+   * Install folders for scoped utilities, built on first use.
+   *
+   * A bundle the agent installs can be scoped to a project or a thread, and a
+   * scoped capability is installed as a real folder in that scope. The app-wide
+   * installer is built here from the database so this service needs nothing
+   * handed to it, and a session with no database (a disposable one) simply skips
+   * the disk step rather than failing the install.
+   */
+  private footprint(): UtilityScopeFootprintService | null {
+    if (this.scopeFootprintResolved) return this.scopeFootprint
+    this.scopeFootprintResolved = true
+    const database = this.database
+    if (!database) return null
+    const deps: UtilityScopeFootprintDeps = {
+      resolveProjectPath: async (projectId) =>
+        (await new ProjectRepo(database).getViaWorker(projectId))?.path ?? null,
+      listProjectPaths: async () =>
+        (await new ProjectRepo(database).listViaWorker())
+          .filter((project) => project.source !== 'ssh' && project.path)
+          .map((project) => ({ id: project.id, path: project.path }))
+    }
+    this.scopeFootprint = new UtilityScopeFootprintService(this.storage, deps)
+    return this.scopeFootprint
   }
 
   /** Derive the route → handler map from `GATEWAY_TOOLS`, failing fast if a
@@ -975,6 +1008,14 @@ export class UtilityOrchestrationService {
     }
     const definitions = normalizeBundleDefinitions(input['bundle'])
     const outcomes = await this.registry.installMany(definitions, { consolidate: true })
+    // A capability scoped to a project or a thread is installed on disk as well
+    // as in the registry, so the install the user asked for exists outside app
+    // state. Best effort: the entry is already saved.
+    await this.footprint()
+      ?.reconcile(await this.registry.list())
+      .catch((error: unknown) =>
+        Logger.dev('Scoped utility install folder was not written:', error)
+      )
     state.managedUtilities.push(...outcomes.map((outcome) => outcome.utility))
     // Hot reload: make what this turn just installed reachable by the next search
     // or activation in the same turn, without waiting for a reload.

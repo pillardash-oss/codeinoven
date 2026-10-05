@@ -37,6 +37,7 @@
   import UtilityEditorModalHarnessSelector from './UtilityEditorModalHarnessSelector.svelte'
   import UtilityEditorModalPluginBundle from './UtilityEditorModalPluginBundle.svelte'
   import { canToggleUtilityEnabled, isComputerUseUtility } from '$shared/utility-ids'
+  import { utilityInstallFolderName } from '$shared/utility-scope-paths'
   import {
     allHarnessBinding,
     buildBindings,
@@ -295,6 +296,25 @@
       nativeEntry.origin === 'global' &&
       !nativeSkillHarnesses.includes(ALL_HARNESSES_BINDING_ID)
   )
+
+  /**
+   * Where a scoped capability is installed, said plainly, because a scope is a
+   * place on disk as well as a reach decision. A kind the app answers itself
+   * (a web tool, a provider) has no files to place, so it stays quiet.
+   */
+  let installHint = $derived.by(() => {
+    if (isNative || isAppOwned || draft.scopeLevel === 'global') return ''
+    if (draft.kind !== 'skill' && draft.kind !== 'mcp') return ''
+    const file = draft.kind === 'skill' ? 'SKILL.md' : 'mcp.json'
+    const folder = utilityInstallFolderName(
+      draft.name,
+      draft.bindings.map((binding) => binding.transportName).find((name) => name.trim() !== '')
+    )
+    if (draft.scopeLevel === 'project') {
+      return `Installed into .cio/utilities/${folder}/ in this project as ${file}, so only this project's threads reach it.`
+    }
+    return `Installed into this thread's own utilities/threads/<thread>/${folder}/ folder in the app data root as ${file}, and removed with the thread.`
+  })
 
   let title = $derived.by(() => {
     if (isNative) return `Edit ${nativeEntry?.name ?? 'capability'}`
@@ -899,11 +919,11 @@
           </div>
         {/if}
 
-        <!-- A skill's activation and scope belong to the harness that loads it,
-             so the app only manages where the skill comes from. MCP servers
-             always load on demand behind the gateway, so their activation is
+        <!-- Scope decides where a capability is installed and which turns can
+             reach it, so every credential-free kind chooses it. An MCP server
+             always loads on demand behind the gateway, so its activation is
              fixed rather than chosen. -->
-        {#if !isNative && !isAppOwned && draft.kind !== 'skill'}
+        {#if !isNative && !isAppOwned}
           <div class="grid gap-3 {draft.kind === 'mcp' ? '' : 'grid-cols-2'}">
             {#if draft.kind !== 'mcp'}
               <label class="space-y-1 text-xs font-medium">
@@ -970,6 +990,9 @@
                 </label>
               {/if}
             </div>
+          {/if}
+          {#if installHint}
+            <p class="text-xs text-muted">{installHint}</p>
           {/if}
         {/if}
 
