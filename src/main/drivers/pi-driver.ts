@@ -294,6 +294,22 @@ export class PiDriver extends PersistentCliDriver {
   private turnStates = new Map<string, PiTurnState>()
   private rpcClients = new Map<string, PiRpcClient>()
   /**
+   * In-flight session bootstraps, keyed by session id.
+   *
+   * A bootstrap spawns the process and then REPLACES its session (`new_session`,
+   * plus the native-transcript `switch_session` when one is resumed). Pi disposes
+   * the replaced session   invalidating the extension context bound to it   as
+   * soon as the replacement runs, so a command dispatched into that window lands
+   * on a session that is about to be torn down: its run then dies mid-flight
+   * with "This extension ctx is stale after session replacement or reload",
+   * which reaches the user as a failed turn. Publishing the client before its
+   * bootstrap finished made that reachable whenever two callers met a cold
+   * session at once (a second send, a steered message, a warm-up racing the
+   * turn), because the second caller found the client in `rpcClients` and
+   * dispatched immediately. Every caller now awaits the one bootstrap.
+   */
+  private readonly rpcClientBootstraps = new Map<string, Promise<PiRpcClient>>()
+  /**
    * Last activity per live RPC session (any RPC record, prompt, steer, or
    * abort). Feeds the idle sweep that disposes resident harness processes, so
    * a thread that finished its work stops holding a process and its heap.
@@ -980,7 +996,7 @@ export class PiDriver extends PersistentCliDriver {
 
   async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
-    const client = this.rpcClients.get(options.sessionId)
+    const client = await this.settledRpcClient(options.sessionId)
     // A registered live turn takes the steer channel. When it is not
     // registered, the session may still be busy inside pi's own lifecycle
     // (auto-compaction, retry windows) that CodeInOven reports as "working"
@@ -1044,7 +1060,7 @@ export class PiDriver extends PersistentCliDriver {
   ): Promise<void> {
     const checkpoint = this.pageCompactions.get(sessionId)
     if (checkpoint) checkpoint.resume = true
-    const client = this.rpcClients.get(sessionId)
+    const client = await this.settledRpcClient(sessionId)
     if (!client) {
       throw new Error(`No active Pi turn is available to steer for session ${sessionId}`)
     }
@@ -1497,8 +1513,47 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   private async ensureRpcClient(projectPath: string, sessionId: string): Promise<PiRpcClient> {
+    // The in-flight bootstrap wins over the published client: `rpcClients` holds
+    // the client from the moment it is spawned (Pi's events, UI requests, exit
+    // handling and the task manager all need that reference), but the client is
+    // only safe to dispatch into once its session replacement has completed.
+    const bootstrap = this.rpcClientBootstraps.get(sessionId)
+    if (bootstrap) return bootstrap
     const existing = this.rpcClients.get(sessionId)
     if (existing) return existing
+    const started = this.startRpcClient(projectPath, sessionId)
+    this.rpcClientBootstraps.set(sessionId, started)
+    try {
+      return await started
+    } finally {
+      if (this.rpcClientBootstraps.get(sessionId) === started) {
+        this.rpcClientBootstraps.delete(sessionId)
+      }
+    }
+  }
+
+  /**
+   * The session's live client, once any in-flight bootstrap has settled. A
+   * caller that must dispatch a session-bound command (a steered message, a
+   * re-prompt) sees the client only after its replacement finished; a bootstrap
+   * that failed leaves the caller with whatever the map holds, let it fail its
+   * own way rather than surfacing the bootstrap error twice.
+   */
+  private async settledRpcClient(sessionId: string): Promise<PiRpcClient | undefined> {
+    const bootstrap = this.rpcClientBootstraps.get(sessionId)
+    if (!bootstrap) return this.rpcClients.get(sessionId)
+    try {
+      return await bootstrap
+    } catch {
+      return this.rpcClients.get(sessionId)
+    }
+  }
+
+  /**
+   * Spawn this session's Pi process and bootstrap the session itself. Never call
+   * this directly   `ensureRpcClient` owns the one-bootstrap-per-session rule.
+   */
+  private async startRpcClient(projectPath: string, sessionId: string): Promise<PiRpcClient> {
     const session = await this.requireSession(projectPath, sessionId)
     const currentTurnState = this.turnStates.get(sessionId)
     this.turnStates.set(sessionId, {
@@ -1912,6 +1967,18 @@ export class PiDriver extends PersistentCliDriver {
     sessionId: string,
     projectPath: string
   ): Promise<void> {
+    // Pi names the extension and the hook that threw for every failed extension
+    // hook, and this is the only place both reach the app: the stream fold keeps
+    // just the message, which left a stale-extension failure attributable only
+    // by reproducing it. Logged at error level because it fails a real turn.
+    if (record['type'] === 'extension_error') {
+      Logger.error('Pi extension error', {
+        sessionId,
+        extensionPath: stringValue(record['extensionPath']) ?? '',
+        event: stringValue(record['event']) ?? '',
+        error: stringValue(record['error']) ?? ''
+      })
+    }
     this.touchSessionActivity(sessionId)
     return this.requireSession(projectPath, sessionId)
       .then(async (session) => {
@@ -2122,7 +2189,10 @@ export class PiDriver extends PersistentCliDriver {
     text: string,
     fallbackError: string
   ): Promise<void> {
-    const live = this.rpcClients.get(session.id)
+    // A continuation is a prompt like any other: dispatching it into a session
+    // whose replacement is still running kills it the moment pi disposes that
+    // session (see `ensureRpcClient`), so wait for any in-flight bootstrap.
+    const live = await this.settledRpcClient(session.id)
     if (live) {
       try {
         await live.prompt(text)
