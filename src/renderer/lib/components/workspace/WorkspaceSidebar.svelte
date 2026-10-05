@@ -31,7 +31,10 @@
   import ThreadSearchResultRow from '$lib/components/shared/ThreadSearchResultRow.svelte'
   import SpecConversationSidebar from '$lib/components/specs/SpecConversationSidebar.svelte'
   import PinnedSection from '$lib/components/threads/PinnedSection.svelte'
-  import { THREAD_GROUP_ICONS, THREAD_GROUP_COLORS } from '$lib/components/threads/thread-group-presentation'
+  import {
+    THREAD_GROUP_ICONS,
+    THREAD_GROUP_COLORS
+  } from '$lib/components/threads/thread-group-presentation'
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
   import { copyText } from '$lib/copy-text'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -49,6 +52,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { type Project, type Thread } from '$shared/types'
   import FolderRow from './FolderRow.svelte'
+  import SidebarListPane from './SidebarListPane.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import type { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
@@ -164,6 +168,15 @@
     projectHasMoreInDb
   }: Props = $props()
 
+  /**
+   * The scoped state and the projects tree are the same shell mode, so they are
+   * two panes of one sidebar and only one of them is ever the visible one. Both
+   * stay mounted, because that pair is exactly what the Project and Scoped
+   * views move between and neither list should be rebuilt on the way.
+   */
+  let scopedSidebarVisible = $derived(mode === 'projects' && scopeState.sidebarContext !== null)
+  let projectsTreeVisible = $derived(mode === 'projects' && scopeState.sidebarContext === null)
+
   const searchingThreads = $derived(
     sidebar.threadsSearchOpen && Boolean(sidebar.threadsSearchQuery.trim())
   )
@@ -174,7 +187,7 @@
   // section above every status group, exactly like the flat list. Search
   // results keep pinned entries, since search mode has no pinned section.
   const threadGroups = $derived(
-    mode === 'threads' && threadGroupingState.enabled
+    threadGroupingState.enabled
       ? groupThreadsByStatus(
           searchingThreads
             ? sidebar.threadsSearchResults
@@ -193,7 +206,6 @@
   // One keyed list owns the rows in both layouts. Switching inbox mode only
   // moves existing instances and inserts the small group headers.
   const threadListEntries = $derived.by((): ThreadListEntry[] => {
-    if (mode !== 'threads') return []
     if (!threadGroupingState.enabled) {
       const threads = searchingThreads
         ? sidebar.threadsSearchResults.map((result) => result.thread)
@@ -231,7 +243,6 @@
       duration: prefersReducedMotion.current || !visible ? 0 : 160
     })
   }
-
 
   function getThreadIcon(thread: Thread): string | null {
     const project = projects.find((p) => p.id === thread.projectId)
@@ -380,269 +391,280 @@
 
     {#if workspaceState.specStudioOpen}
       <SpecConversationSidebar />
-    {:else if mode === 'projects' && scopeState.sidebarContext}
-      {@const scopeContext = scopeState.sidebarContext}
-      {@const scopeProject = projects.find((project) => project.id === scopeContext.projectId)}
-      {@const scopeBucket = scopeState.buckets.find(
-        (bucket) => bucket.id === scopeContext.bucketId
-      )}
-      {@const otherBuckets = scopeState.buckets.filter(
-        (bucket) => bucket.id !== scopeContext.bucketId
-      )}
-      <div class="flex h-full flex-col">
-        <!-- Board context bar: project identity + scope switcher sit right
+    {:else}
+      <!-- Every list stays mounted and only the current view's pane is shown.
+             Switching views used to unmount one list and build the next one,
+             which costs a few hundred row components and was the whole reason
+             moving between Projects, Threads and Scoped took around a second
+             once the workspace held a few hundred threads. The content blocks
+             below must therefore never be gated on the mode again: the pane
+             owns visibility. -->
+      <SidebarListPane name="scoped" visible={scopedSidebarVisible}>
+        {#if scopeState.sidebarContext}
+          {@const scopeContext = scopeState.sidebarContext}
+          {@const scopeProject = projects.find((project) => project.id === scopeContext.projectId)}
+          {@const scopeBucket = scopeState.buckets.find(
+            (bucket) => bucket.id === scopeContext.bucketId
+          )}
+          {@const otherBuckets = scopeState.buckets.filter(
+            (bucket) => bucket.id !== scopeContext.bucketId
+          )}
+          <div class="flex h-full flex-col">
+            <!-- Board context bar: project identity + scope switcher sit right
                under the view/controls header -->
-        <div
-          class="flex shrink-0 items-center gap-2 border-b px-3 py-2"
-          style:background-color={scopeProject?.color
-            ? `color-mix(in srgb, ${scopeProject.color} 10%, var(--color-surface))`
-            : undefined}
-        >
-          {#if scopeProject && getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))}
-            <img
-              src={getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))!}
-              alt=""
-              class="h-4 w-4 shrink-0 object-contain"
-              onerror={projectIconOnError(scopeProject)}
-            />
-          {:else}
-            <Folder size={14} class="shrink-0 text-muted" />
-          {/if}
-          {#if scopeProject}
-            <ProjectIdentity
-              project={scopeProject}
-              class="min-w-0 flex-1"
-              nameClass="text-xs font-semibold text-foreground"
-              locationClass="text-[0.5625rem] text-dimmed"
-              showLocation={hasProjectNameCollision(scopeProject, visibleProjects)}
-            />
-          {:else}
-            <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
-              Project
-            </span>
-          {/if}
-          {#if scopeBucket}
-            {#if scopeBucket && scopeBucket.root.kind === 'worktree'}
-              <span
-                class="flex shrink-0 items-center"
-                role="img"
-                aria-label="Managed Git worktree scope on {scopeBucket.root.branch}"
-                title="Managed Git worktree scope on {scopeBucket.root.branch}"
-              >
-                <FolderTree size={12} class="text-warning" />
-              </span>
-            {/if}
-            <!-- The scope itself is the menu trigger: click or right-click it to
-                   reach every scope action the scope board offers. -->
-            <ScopeActionsMenu
-              bucket={scopeBucket}
-              actions={scopeActions}
-              triggerClass="flex shrink-0 cursor-pointer items-center rounded-md transition-opacity hover:opacity-85"
-              triggerTitle="Scope actions"
-            >
-              {#snippet trigger()}
-                <ScopeBadge bucket={scopeBucket} size="xs" />
-              {/snippet}
-            </ScopeActionsMenu>
-          {/if}
-          <ProjectSwitch
-            activeProjectId={scopeProject?.id ?? null}
-            class="h-5 w-5 shrink-0 text-dimmed hover:text-foreground"
-            onSwitch={onSwitchScopedProject}
-          >
-            <FolderKanban size={12} />
-          </ProjectSwitch>
-        </div>
-
-        {#if scopeActions.error}
-          <div
-            class="flex shrink-0 items-center gap-2 border-b bg-danger/10 px-3 py-1.5 text-xs text-danger"
-          >
-            <span class="min-w-0 flex-1">{scopeActions.error}</span>
-            <button
-              class="shrink-0 rounded-md px-1.5 py-0.5 transition-colors hover:bg-danger/10"
-              aria-label="Dismiss scope action error"
-              title="Dismiss"
-              onclick={() => scopeActions.dismissError()}
-            >
-              Dismiss
-            </button>
-          </div>
-        {/if}
-
-        {#if otherBuckets.length > 0}
-          <div class="shrink-0 border-b px-3 py-2">
             <div
-              class="grid gap-1.5"
-              class:grid-cols-1={otherBuckets.length === 1}
-              class:grid-cols-2={otherBuckets.length > 1}
+              class="flex shrink-0 items-center gap-2 border-b px-3 py-2"
+              style:background-color={scopeProject?.color
+                ? `color-mix(in srgb, ${scopeProject.color} 10%, var(--color-surface))`
+                : undefined}
             >
-              {#each otherBuckets as bucket (bucket.id)}
-                {@const pinnedCount = scopeState.threadsFor(bucket.id, 'pinned').length}
-                {@const todoCount = scopeState.threadsFor(bucket.id, 'todo').length}
-                {@const workingCount = scopeState.threadsFor(bucket.id, 'working').length}
-                {@const issueCount = scopeState.threadsFor(bucket.id, 'issue').length}
-                {@const unreadCount = scopeState.threadsFor(bucket.id, 'unread').length}
-                <div
-                  class="group flex items-center gap-1 border-l-2 pl-2 pr-2.5 py-1.5 transition-colors hover:bg-elevated"
-                  style:border-color={bucket.color ?? pickColorForSeed(bucket.id)}
-                >
-                  <button
-                    class="relative flex min-w-0 flex-1 items-center gap-2 text-left text-xs text-muted"
-                    title={bucket.name}
-                    onclick={() => scopeState.setSidebarBucket(bucket.id)}
+              {#if scopeProject && getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))}
+                <img
+                  src={getProjectIcon(scopeProject, projectIcons.get(scopeProject.id))!}
+                  alt=""
+                  class="h-4 w-4 shrink-0 object-contain"
+                  onerror={projectIconOnError(scopeProject)}
+                />
+              {:else}
+                <Folder size={14} class="shrink-0 text-muted" />
+              {/if}
+              {#if scopeProject}
+                <ProjectIdentity
+                  project={scopeProject}
+                  class="min-w-0 flex-1"
+                  nameClass="text-xs font-semibold text-foreground"
+                  locationClass="text-[0.5625rem] text-dimmed"
+                  showLocation={hasProjectNameCollision(scopeProject, visibleProjects)}
+                />
+              {:else}
+                <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+                  Project
+                </span>
+              {/if}
+              {#if scopeBucket}
+                {#if scopeBucket && scopeBucket.root.kind === 'worktree'}
+                  <span
+                    class="flex shrink-0 items-center"
+                    role="img"
+                    aria-label="Managed Git worktree scope on {scopeBucket.root.branch}"
+                    title="Managed Git worktree scope on {scopeBucket.root.branch}"
                   >
-                    <div class="absolute -top-1 left-0 flex gap-0.5">
-                      {#if pinnedCount > 0}
-                        <StatusBadge stage="pinned" title="Pinned threads" />
-                      {/if}
-                      {#if todoCount > 0}
-                        <StatusBadge stage="todo" title="Todo threads" />
-                      {/if}
-                      {#if workingCount > 0}
-                        <StatusBadge stage="working" title="Working threads" />
-                      {/if}
-                      {#if issueCount > 0}
-                        <StatusBadge stage="issue" title="Issue threads" />
-                      {/if}
-                      {#if unreadCount > 0}
-                        <StatusBadge stage="unread" title="Unread threads" />
-                      {/if}
-                    </div>
-                    {#if bucket.iconType}
-                      <img
-                        src={getIconSvgDataUrl(
-                          bucket.iconType,
-                          bucket.color ?? pickColorForSeed(bucket.id)
-                        )}
-                        alt=""
-                        class="h-3.5 w-3.5 shrink-0 object-contain"
-                        draggable="false"
-                      />
-                    {:else if bucket.color}
-                      <img
-                        src={generateInitialsIconSvg(bucket.name, bucket.color)}
-                        alt=""
-                        class="h-3.5 w-3.5 shrink-0 object-contain"
-                        draggable="false"
-                      />
-                    {/if}
-                    {#if bucket.pinned}
-                      <Pin size={10} class="shrink-0 text-accent" aria-hidden="true" />
-                    {/if}
-                    {#if bucket.root.kind === 'worktree'}
-                      <span
-                        class="flex shrink-0 items-center"
-                        role="img"
-                        aria-label="Managed Git worktree scope on {bucket.root.branch}"
-                        title="Managed Git worktree scope on {bucket.root.branch}"
+                    <FolderTree size={12} class="text-warning" />
+                  </span>
+                {/if}
+                <!-- The scope itself is the menu trigger: click or right-click it to
+                   reach every scope action the scope board offers. -->
+                <ScopeActionsMenu
+                  bucket={scopeBucket}
+                  actions={scopeActions}
+                  triggerClass="flex shrink-0 cursor-pointer items-center rounded-md transition-opacity hover:opacity-85"
+                  triggerTitle="Scope actions"
+                >
+                  {#snippet trigger()}
+                    <ScopeBadge bucket={scopeBucket} size="xs" />
+                  {/snippet}
+                </ScopeActionsMenu>
+              {/if}
+              <ProjectSwitch
+                activeProjectId={scopeProject?.id ?? null}
+                class="h-5 w-5 shrink-0 text-dimmed hover:text-foreground"
+                onSwitch={onSwitchScopedProject}
+              >
+                <FolderKanban size={12} />
+              </ProjectSwitch>
+            </div>
+
+            {#if scopeActions.error}
+              <div
+                class="flex shrink-0 items-center gap-2 border-b bg-danger/10 px-3 py-1.5 text-xs text-danger"
+              >
+                <span class="min-w-0 flex-1">{scopeActions.error}</span>
+                <button
+                  class="shrink-0 rounded-md px-1.5 py-0.5 transition-colors hover:bg-danger/10"
+                  aria-label="Dismiss scope action error"
+                  title="Dismiss"
+                  onclick={() => scopeActions.dismissError()}
+                >
+                  Dismiss
+                </button>
+              </div>
+            {/if}
+
+            {#if otherBuckets.length > 0}
+              <div class="shrink-0 border-b px-3 py-2">
+                <div
+                  class="grid gap-1.5"
+                  class:grid-cols-1={otherBuckets.length === 1}
+                  class:grid-cols-2={otherBuckets.length > 1}
+                >
+                  {#each otherBuckets as bucket (bucket.id)}
+                    {@const pinnedCount = scopeState.threadsFor(bucket.id, 'pinned').length}
+                    {@const todoCount = scopeState.threadsFor(bucket.id, 'todo').length}
+                    {@const workingCount = scopeState.threadsFor(bucket.id, 'working').length}
+                    {@const issueCount = scopeState.threadsFor(bucket.id, 'issue').length}
+                    {@const unreadCount = scopeState.threadsFor(bucket.id, 'unread').length}
+                    <div
+                      class="group flex items-center gap-1 border-l-2 pl-2 pr-2.5 py-1.5 transition-colors hover:bg-elevated"
+                      style:border-color={bucket.color ?? pickColorForSeed(bucket.id)}
+                    >
+                      <button
+                        class="relative flex min-w-0 flex-1 items-center gap-2 text-left text-xs text-muted"
+                        title={bucket.name}
+                        onclick={() => scopeState.setSidebarBucket(bucket.id)}
                       >
-                        <FolderTree size={10} class="text-warning" />
-                      </span>
-                    {/if}
-                    <span class="truncate">{bucket.name}</span>
-                  </button>
-                  <!--
+                        <div class="absolute -top-1 left-0 flex gap-0.5">
+                          {#if pinnedCount > 0}
+                            <StatusBadge stage="pinned" title="Pinned threads" />
+                          {/if}
+                          {#if todoCount > 0}
+                            <StatusBadge stage="todo" title="Todo threads" />
+                          {/if}
+                          {#if workingCount > 0}
+                            <StatusBadge stage="working" title="Working threads" />
+                          {/if}
+                          {#if issueCount > 0}
+                            <StatusBadge stage="issue" title="Issue threads" />
+                          {/if}
+                          {#if unreadCount > 0}
+                            <StatusBadge stage="unread" title="Unread threads" />
+                          {/if}
+                        </div>
+                        {#if bucket.iconType}
+                          <img
+                            src={getIconSvgDataUrl(
+                              bucket.iconType,
+                              bucket.color ?? pickColorForSeed(bucket.id)
+                            )}
+                            alt=""
+                            class="h-3.5 w-3.5 shrink-0 object-contain"
+                            draggable="false"
+                          />
+                        {:else if bucket.color}
+                          <img
+                            src={generateInitialsIconSvg(bucket.name, bucket.color)}
+                            alt=""
+                            class="h-3.5 w-3.5 shrink-0 object-contain"
+                            draggable="false"
+                          />
+                        {/if}
+                        {#if bucket.pinned}
+                          <Pin size={10} class="shrink-0 text-accent" aria-hidden="true" />
+                        {/if}
+                        {#if bucket.root.kind === 'worktree'}
+                          <span
+                            class="flex shrink-0 items-center"
+                            role="img"
+                            aria-label="Managed Git worktree scope on {bucket.root.branch}"
+                            title="Managed Git worktree scope on {bucket.root.branch}"
+                          >
+                            <FolderTree size={10} class="text-warning" />
+                          </span>
+                        {/if}
+                        <span class="truncate">{bucket.name}</span>
+                      </button>
+                      <!--
                     The ellipsis is a hover affordance, and its popup lives in a
                     portal now: while the menu is open the row is no longer hovered,
                     so `data-state` is what keeps the trigger visible under it.
                   -->
-                  <ScopeActionsMenu
-                    {bucket}
-                    actions={scopeActions}
-                    triggerClass="flex h-7 w-7 items-center justify-center rounded-md text-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-elevated hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
-                  />
+                      <ScopeActionsMenu
+                        {bucket}
+                        actions={scopeActions}
+                        triggerClass="flex h-7 w-7 items-center justify-center rounded-md text-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-elevated hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100"
+                      />
+                    </div>
+                  {/each}
                 </div>
-              {/each}
-            </div>
-          </div>
-        {/if}
+              </div>
+            {/if}
 
-        {#key scopeContext.bucketId}
-          <div class="flex flex-1 min-h-0">
-            <!-- Stage rail: slices share the full sidebar height, growing to
+            {#key scopeContext.bucketId}
+              <div class="flex flex-1 min-h-0">
+                <!-- Stage rail: slices share the full sidebar height, growing to
                    fill available space and shrinking to their floor when tight -->
-            <div class="flex min-h-0 shrink-0 flex-col items-stretch border-r py-2 gap-1.5 w-11">
-              {#each STAGE_ORDER as stage (stage)}
-                {@const stageCount = scopeState.threadsFor(scopeContext.bucketId, stage).length}
-                {@const isActive = scopeContext.stage === stage}
-                {@const bgOpacity = isActive ? '35%' : '8%'}
-                <button
-                  class="flex min-h-12 flex-1 items-center justify-center rounded-md transition-all text-xs font-medium"
-                  style="background-color: color-mix(in srgb, {STAGE_COLORS[
-                    stage
-                  ]} {bgOpacity}, transparent); color: {isActive
-                    ? 'var(--color-foreground)'
-                    : 'var(--color-muted)'}"
-                  onclick={() => scopeState.selectSidebarStage(stage)}
+                <div
+                  class="flex min-h-0 shrink-0 flex-col items-stretch border-r py-2 gap-1.5 w-11"
                 >
-                  <span class="-rotate-90 flex flex-row items-center gap-3">
-                    {#if stageCount > 0}
-                      <span class="font-bold">{stageCount}</span>
-                    {/if}
-                    <span>{STAGE_LABELS[stage]}</span>
-                  </span>
-                </button>
-              {/each}
-            </div>
-
-            <div class="flex flex-1 flex-col min-w-0">
-              <div class="flex shrink-0 items-center gap-1.5 border-b px-3 py-2">
-                <StatusBadge stage={scopeContext.stage} size="md" />
-                <span class="text-xs font-semibold">{STAGE_LABELS[scopeContext.stage]}</span>
-                {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0}
-                  <span class="tabular-nums text-[0.625rem] text-dimmed"
-                    >{scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length}</span
-                  >
-                {/if}
-              </div>
-              <div class="flex-1 overflow-y-auto">
-                {#each scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage) as thread (thread.id)}
-                  <ThreadRow
-                    {thread}
-                    selected={activeThreadId === thread.id}
-                    compact
-                    hideScope
-                    onOpen={onOpenScopedThread}
-                    {onRename}
-                    {onTogglePin}
-                    {onDelete}
-                    {onFork}
-                  />
-                {:else}
-                  <p class="px-4 py-8 text-center text-xs text-dimmed">No threads in this slice</p>
-                {/each}
-                {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0 && projectHasMoreInDb(scopeContext.projectId) && !scopeState.isProjectFullyHydrated(scopeContext.projectId)}
-                  <div class="flex justify-center border-t py-1.5">
+                  {#each STAGE_ORDER as stage (stage)}
+                    {@const stageCount = scopeState.threadsFor(scopeContext.bucketId, stage).length}
+                    {@const isActive = scopeContext.stage === stage}
+                    {@const bgOpacity = isActive ? '35%' : '8%'}
                     <button
-                      class="flex items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-                      disabled={projectPageLoading === scopeContext.projectId}
-                      onclick={() => void onLoadProjectThreadsPage(scopeContext.projectId)}
+                      class="flex min-h-12 flex-1 items-center justify-center rounded-md transition-all text-xs font-medium"
+                      style="background-color: color-mix(in srgb, {STAGE_COLORS[
+                        stage
+                      ]} {bgOpacity}, transparent); color: {isActive
+                        ? 'var(--color-foreground)'
+                        : 'var(--color-muted)'}"
+                      onclick={() => scopeState.selectSidebarStage(stage)}
                     >
-                      {projectPageLoading === scopeContext.projectId
-                        ? 'Loading…'
-                        : 'Load older threads'}
+                      <span class="-rotate-90 flex flex-row items-center gap-3">
+                        {#if stageCount > 0}
+                          <span class="font-bold">{stageCount}</span>
+                        {/if}
+                        <span>{STAGE_LABELS[stage]}</span>
+                      </span>
                     </button>
-                  </div>
-                {/if}
-              </div>
-            </div>
-          </div>
-        {/key}
+                  {/each}
+                </div>
 
-        <!-- Scope action dialogs (edit, delete, worktree lifecycle, merge).
+                <div class="flex flex-1 flex-col min-w-0">
+                  <div class="flex shrink-0 items-center gap-1.5 border-b px-3 py-2">
+                    <StatusBadge stage={scopeContext.stage} size="md" />
+                    <span class="text-xs font-semibold">{STAGE_LABELS[scopeContext.stage]}</span>
+                    {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0}
+                      <span class="tabular-nums text-[0.625rem] text-dimmed"
+                        >{scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage)
+                          .length}</span
+                      >
+                    {/if}
+                  </div>
+                  <div class="flex-1 overflow-y-auto">
+                    {#each scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage) as thread (thread.id)}
+                      <ThreadRow
+                        {thread}
+                        selected={activeThreadId === thread.id}
+                        compact
+                        hideScope
+                        onOpen={onOpenScopedThread}
+                        {onRename}
+                        {onTogglePin}
+                        {onDelete}
+                        {onFork}
+                      />
+                    {:else}
+                      <p class="px-4 py-8 text-center text-xs text-dimmed">
+                        No threads in this slice
+                      </p>
+                    {/each}
+                    {#if scopeState.threadsFor(scopeContext.bucketId, scopeContext.stage).length > 0 && projectHasMoreInDb(scopeContext.projectId) && !scopeState.isProjectFullyHydrated(scopeContext.projectId)}
+                      <div class="flex justify-center border-t py-1.5">
+                        <button
+                          class="flex items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+                          disabled={projectPageLoading === scopeContext.projectId}
+                          onclick={() => void onLoadProjectThreadsPage(scopeContext.projectId)}
+                        >
+                          {projectPageLoading === scopeContext.projectId
+                            ? 'Loading…'
+                            : 'Load older threads'}
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            {/key}
+
+            <!-- Scope action dialogs (edit, delete, worktree lifecycle, merge).
                Loaded on demand so their heavy worktree forms stay out of the
                main shell chunk. -->
-        {#await import('../scope/ScopeActionsModals.svelte') then { default: ScopeActionsModals }}
-          <ScopeActionsModals actions={scopeActions} />
-        {/await}
-      </div>
-    {:else if loading}
-      <p class="px-2 py-4 text-sm text-dimmed">Loading...</p>
-    {:else}
-      <!-- Only the active list stays mounted. Keeping inactive lists in the DOM
-             duplicated every row component, observer, and derived calculation. -->
-      {#if mode === 'chats'}
+            {#await import('../scope/ScopeActionsModals.svelte') then { default: ScopeActionsModals }}
+              <ScopeActionsModals actions={scopeActions} />
+            {/await}
+          </div>
+        {/if}
+      </SidebarListPane>
+      <SidebarListPane name="chats" visible={!loading && mode === 'chats'}>
         {#if pinnedInboxThreads.length > 0}
           <PinnedSection
             sectionKey="chats"
@@ -685,8 +707,8 @@
             <p class="text-xs text-dimmed">Start a new chat to get going</p>
           </div>
         {/if}
-      {/if}
-      {#if mode === 'threads'}
+      </SidebarListPane>
+      <SidebarListPane name="threads" visible={!loading && mode === 'threads'}>
         {#if !searchingThreads}
           <PinnedSection
             sectionKey="threads"
@@ -774,8 +796,8 @@
             {historyLoading ? 'Loading history…' : 'Load older threads'}
           </button>
         {/if}
-      {/if}
-      {#if mode === 'projects'}
+      </SidebarListPane>
+      <SidebarListPane name="projects" visible={!loading && projectsTreeVisible}>
         <!-- Pinned threads above everything -->
         <PinnedSection
           sectionKey="projects-threads"
@@ -1238,6 +1260,9 @@
             {/each}
           </div>
         {/if}
+      </SidebarListPane>
+      {#if loading && !scopedSidebarVisible}
+        <p class="px-2 py-4 text-sm text-dimmed">Loading...</p>
       {/if}
     {/if}
   </CollapsibleSidebar>
