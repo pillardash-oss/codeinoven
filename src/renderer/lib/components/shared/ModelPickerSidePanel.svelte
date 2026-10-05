@@ -191,8 +191,10 @@
             }}
           >
             {#if profiles}
-              <ModelPickerProfiles {...profiles} aboveList={harnessFilterSection} />
-            {:else if filter}
+              <ModelPickerProfiles {...profiles} />
+            {/if}
+
+            {#if filter}
               {@render harnessFilterSection()}
             {/if}
           </div>
@@ -203,16 +205,18 @@
 {/if}
 
 <!--
-  The harness filter, drawn above the profiles list, or as the whole panel when a
+  The harness filter, drawn below the profiles list, or as the whole panel when a
   picker has no profiles surface.
 
   No heading: the row that opens the panel already names what the chips filter,
   and the chips themselves are sized to fit several per row, because choosing a
-  harness is worth one line rather than three.
+  harness is worth one line rather than three. The divider is drawn only when
+  there are profile rows above, so a picker without profiles does not end up with
+  a second line at the panel's own border.
 -->
 {#snippet harnessFilterSection()}
   {#if filter}
-    <div class="shrink-0 px-2 py-1.5 {profiles ? 'border-b' : ''}">
+    <div class="shrink-0 px-2 py-1.5 {profiles ? 'border-t' : ''}">
       <div
         class="flex max-h-24 flex-wrap gap-1 overflow-y-auto"
         role="group"

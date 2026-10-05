@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { type Snippet } from 'svelte'
   import { Check, Pencil, Plus, Trash2, X } from '@lucide/svelte'
   import { permissionLevelLabel } from '$lib/actions'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
@@ -30,8 +29,7 @@
    *
    * The header carries the save action and the count, because saving is the rare
    * gesture: as a row of its own at the bottom it took a row's height from the
-   * list on every open. `aboveList` lets the panel draw the harness filter
-   * between the header and the list, so the controls sit together.
+   * list on every open.
    *
    * Everything here is presentational. Persistence, the applied-settings maths,
    * and the delete confirmation belong to the composer, which owns the settings it
@@ -56,11 +54,6 @@
     onRename: (profile: ModelProfile, name: string) => void
     /** Ask to delete; the composer confirms before anything is removed. */
     onRequestDelete: (profile: ModelProfile) => void
-    /**
-     * Drawn between the header and the list, where the panel puts the harness
-     * filter: the controls belong together, and the list keeps what is left.
-     */
-    aboveList?: Snippet
   }
 
   let {
@@ -72,8 +65,7 @@
     onApply,
     onSave,
     onRename,
-    onRequestDelete,
-    aboveList
+    onRequestDelete
   }: Props = $props()
 
   /**
@@ -245,8 +237,8 @@
   </button>
 {/snippet}
 
-<!-- Only the list scrolls: the header, the filter above it, and the save field in
-     it stay put however many profiles are saved. -->
+<!-- Only the list scrolls: the header and the save field in it stay put however
+     many profiles are saved. -->
 <div class="flex min-h-0 flex-1 flex-col">
   <div class="flex shrink-0 items-center gap-1.5 px-3 pb-1 pt-2">
     {#if editor?.kind === 'new'}
@@ -277,8 +269,6 @@
       </button>
     {/if}
   </div>
-
-  {@render aboveList?.()}
 
   {#if usable.length > 0}
     <ul class="min-h-0 flex-1 overflow-y-auto p-1">
