@@ -115,6 +115,10 @@
   import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
   import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
   import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
+  import {
+    workspaceTourViewFor,
+    type WorkspaceTourView
+  } from '$lib/components/onboarding/onboarding-tour-steps'
 
   type View = MainView
 
@@ -144,6 +148,9 @@
   let newProjectSpotlightOpen = $state(false)
   let onboardingOpen = $state(false)
   let onboardingStep = $state(0)
+  /** A content view's own tour, running on its own step counter. */
+  let viewTourView = $state<WorkspaceTourView | null>(null)
+  let viewTourStep = $state(0)
   let onboardingInitialized = false
   let onboardingProjectPickerActive = false
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
@@ -318,6 +325,21 @@
       onboardingStep = 0
       onboardingOpen = true
     }
+  })
+
+  /** A view's empty state, or the palette, can request that view's own tour. */
+  $effect(() => {
+    const view = workspaceState.consumeViewTourRequest()
+    if (!view) return
+    viewTourView = view
+    viewTourStep = 0
+  })
+
+  /** The setup tour explains the left sidebar, so the workspace keeps that
+   *  sidebar on screen for as long as the tour runs, even on a first run where
+   *  it is still empty. */
+  $effect(() => {
+    workspaceState.setSetupTourOpen(onboardingOpen)
   })
 
   async function loadConfig(): Promise<void> {
@@ -649,6 +671,11 @@
         onboardingStep = 0
         onboardingOpen = true
         return
+      case 'app:tour-view': {
+        const view = workspaceTourViewFor(activeView)
+        if (view) workspaceState.requestViewTour(view)
+        return
+      }
       case 'app:terminal': {
         const thread = workspaceState.selectedThread
         if (!thread) return
@@ -1676,6 +1703,21 @@
         onExisting={handleSpotlightExistingProject}
       />
     {/await}
+  {/if}
+  {#if viewTourView}
+    <!-- A view's own tour: the same spotlight presentation as the setup tour,
+         over that view's steps. Remounted per step so each target is measured
+         once it is on screen. -->
+    {#key viewTourStep}
+      {#await import('$lib/components/onboarding/OnboardingTour.svelte') then { default: OnboardingTour }}
+        <OnboardingTour
+          tour={viewTourView}
+          step={viewTourStep}
+          onStepChange={(step) => (viewTourStep = step)}
+          onFinish={() => (viewTourView = null)}
+        />
+      {/await}
+    {/key}
   {/if}
   {#if onboardingOpen}
     {#key onboardingStep}

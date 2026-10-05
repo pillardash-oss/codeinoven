@@ -1777,6 +1777,52 @@
   let pinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => thread.pinned))
   let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => !thread.pinned))
 
+  /** Every thread the Threads timeline lists, before its project filter. */
+  let timelineThreads = $derived(
+    allThreads.filter(
+      (thread) =>
+        !thread.archived &&
+        thread.projectId !== INBOX_PROJECT_ID &&
+        thread.projectId !== ASSISTANT_SPACE_ID
+    )
+  )
+
+  /**
+   * Whether the active view's left sidebar has anything to show.
+   *
+   * Emptiness is judged on the view's own lists before any search or project
+   * filter, because collapsing the sidebar over a filter the user applied would
+   * take away the very control they filtered with. Loading counts as content, so
+   * the sidebar never blinks away while the first page is still arriving.
+   */
+  let workspaceSidebarHasContent = $derived.by(() => {
+    if (loading || workspaceState.specStudioOpen) return true
+    if (mode === 'assistant') {
+      return assistantRoutineList.length > 0 || assistantTasks.length > 0
+    }
+    if (mode === 'chats') {
+      return pinnedInboxThreads.length > 0 || standaloneThreads.length > 0
+    }
+    if (mode === 'threads') return timelineThreads.length > 0
+    // Projects: the tree needs a project or a thread, and the scoped stage board
+    // docks its own rail over it.
+    return (
+      Boolean(scopeState.sidebarContext) ||
+      pinnedProjects.length > 0 ||
+      regularProjects.length > 0 ||
+      pinnedThreads.length > 0
+    )
+  })
+
+  /**
+   * Whether the left sidebar is painted at all. A sidebar with nothing in it is
+   * not rendered, so no dock and no edge-hover overlay offer a panel with no
+   * content; the getting-started tour keeps it on screen because the sidebar
+   * itself is what one of its steps explains, and a first run is exactly the
+   * moment the sidebar is empty.
+   */
+  let workspaceSidebarVisible = $derived(workspaceSidebarHasContent || workspaceState.setupTourOpen)
+
   // ─── Data loading ────────────────────────────────────────────────────────
 
   /** Keep keyed sidebar rows safe even when hydration and live updates overlap. */
@@ -4254,8 +4300,10 @@
 <svelte:document onpointerdowncapture={handleComposerPointerDown} />
 
 <div class="flex h-full">
-  <!-- Shared sidebar   Projects/Chats/Threads use WorkspaceSidebar; Assistant has its own. -->
-  {#if mode === 'assistant'}
+  <!-- Shared sidebar   Projects/Chats/Threads use WorkspaceSidebar; Assistant has its own.
+       A view with nothing in its sidebar paints no sidebar at all, so an empty
+       panel is never put in front of the user. -->
+  {#if workspaceSidebarVisible && mode === 'assistant'}
     {#await import('../assistant/AssistantSidebar.svelte') then { default: AssistantSidebar }}
       <AssistantSidebar
         bind:scroller={sidebarScroller}
@@ -4285,7 +4333,7 @@
         onAssignTask={(taskId, routineId) => void assignAssistantTask(taskId, routineId)}
       />
     {/await}
-  {:else}
+  {:else if workspaceSidebarVisible}
     <WorkspaceSidebar
       bind:scroller={sidebarScroller}
       {mode}
@@ -4356,6 +4404,7 @@
         {config}
         {updateConfig}
         restoreKey={chatsComposerRestoreKey}
+        sidebarHasContent={workspaceSidebarHasContent}
         onNavigate={navigate}
         onForked={handleForkedThread}
         onContinueInProject={handleContinuedInProject}

@@ -19,6 +19,7 @@ import { threadMessages } from './thread-messages.svelte'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { recentVisits, threadVisitKey } from './recent-visits.svelte'
+import type { WorkspaceTourView } from '$lib/components/onboarding/onboarding-tour-steps'
 
 // Thread navigation history is shared with the browser tab visits so the Ctrl+Tab
 // switcher can interleave both kinds of surface in one recency order. The keys
@@ -486,6 +487,33 @@ class WorkspaceState {
     if (this.consumedOnboardingRequestCount === this.requestOnboardingCount) return false
     this.consumedOnboardingRequestCount = this.requestOnboardingCount
     return true
+  }
+
+  /** A view asked for its own tour, from that view's empty state or the command
+   *  palette. Value-carrying like `requestProjectFileOpen`: the requested view
+   *  *is* the request, so one slot plus a count is the whole handshake. */
+  pendingViewTour: WorkspaceTourView | null = $state(null)
+  requestViewTourCount = $state(0)
+  private consumedViewTourRequestCount = 0
+
+  requestViewTour(view: WorkspaceTourView): void {
+    this.pendingViewTour = view
+    this.requestViewTourCount++
+  }
+
+  consumeViewTourRequest(): WorkspaceTourView | null {
+    if (this.consumedViewTourRequestCount === this.requestViewTourCount) return null
+    this.consumedViewTourRequestCount = this.requestViewTourCount
+    return this.pendingViewTour
+  }
+
+  /** True while the getting-started tour is on screen. That tour explains the
+   *  left sidebar, so the shell paints it even when the active view has nothing
+   *  in it yet, which is exactly the state a first run is in. */
+  setupTourOpen = $state(false)
+
+  setSetupTourOpen(open: boolean): void {
+    this.setupTourOpen = open
   }
 
   /** Thread ids that had a user message this session. The centered composer
