@@ -24,7 +24,11 @@
     ThinkingLevel,
     ThinkingPreset
   } from '$shared/types'
-  import { hasModelRuntimeSettings } from '$shared/model-runtime-settings'
+  import {
+    hasModelRuntimeSettings,
+    resolveModelRuntimeDefaults
+  } from '$shared/model-runtime-settings'
+  import { modelRuntimeDefaults } from '$lib/stores/model-runtime-defaults.svelte'
   import ModelSettingsPicker from './ModelSettingsPicker.svelte'
   import { fastMultiplierFor, fastSelectionModelId } from '$shared/fast-inference'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
@@ -443,6 +447,17 @@
         thinkingLevel
       )
       if (resolved && resolved !== thinkingLevel) onSelectThinking?.(resolved)
+    }
+    await tick()
+    if (providerId === nextProviderId && modelId === nextModelId && harnessId === nextHarnessId) {
+      onSelectRuntime?.(
+        resolveModelRuntimeDefaults(
+          modelRuntimeDefaults.settings,
+          entry?.model,
+          nextHarnessId,
+          nextProviderId
+        )
+      )
     }
   }
 

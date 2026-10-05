@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Check, Gauge, Settings2, Snail, Zap } from '@lucide/svelte'
+  import { Check, Gauge, Settings2, Snail, Star, Zap } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
+  import { modelRuntimeDefaults } from '$lib/stores/model-runtime-defaults.svelte'
   import type { InferenceMode } from '$shared/types'
 
   interface Props {
@@ -92,6 +93,31 @@
               >~{fastMultiplier}× usage</span
             >{/if}
           {#if currentSpeed.id === speed.id}<Check size={11} class="shrink-0 text-primary" />{/if}
+          <button
+            type="button"
+            class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed hover:bg-overlay hover:text-primary"
+            title={modelRuntimeDefaults.settings.inferenceMode === speed.id
+              ? `Clear ${speed.label} as default speed`
+              : `Set ${speed.label} as default speed`}
+            aria-label={modelRuntimeDefaults.settings.inferenceMode === speed.id
+              ? `Clear ${speed.label} as default speed`
+              : `Set ${speed.label} as default speed`}
+            aria-pressed={modelRuntimeDefaults.settings.inferenceMode === speed.id}
+            onkeydown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') event.stopPropagation()
+            }}
+            onclick={(event) => {
+              event.stopPropagation()
+              modelRuntimeDefaults.toggleSpeed(speed.id)
+            }}
+          >
+            <Star
+              size={11}
+              class={modelRuntimeDefaults.settings.inferenceMode === speed.id
+                ? 'fill-primary text-primary'
+                : ''}
+            />
+          </button>
         </DropdownMenu.Item>
       {/each}
       {#if contextWindows.length > 0}
@@ -108,6 +134,31 @@
                 size={11}
                 class="shrink-0 text-primary"
               />{/if}
+            <button
+              type="button"
+              class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed hover:bg-overlay hover:text-primary"
+              title={modelRuntimeDefaults.settings.contextWindow === tokens
+                ? `Clear ${contextLabel(tokens)} as default context window`
+                : `Set ${contextLabel(tokens)} as default context window`}
+              aria-label={modelRuntimeDefaults.settings.contextWindow === tokens
+                ? `Clear ${contextLabel(tokens)} as default context window`
+                : `Set ${contextLabel(tokens)} as default context window`}
+              aria-pressed={modelRuntimeDefaults.settings.contextWindow === tokens}
+              onkeydown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') event.stopPropagation()
+              }}
+              onclick={(event) => {
+                event.stopPropagation()
+                modelRuntimeDefaults.toggleContext(tokens)
+              }}
+            >
+              <Star
+                size={11}
+                class={modelRuntimeDefaults.settings.contextWindow === tokens
+                  ? 'fill-primary text-primary'
+                  : ''}
+              />
+            </button>
           </DropdownMenu.Item>
         {/each}
       {/if}

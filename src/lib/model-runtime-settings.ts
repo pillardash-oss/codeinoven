@@ -41,3 +41,33 @@ export function hasModelRuntimeSettings(
     (model?.contextWindows?.length ?? 0) > 0
   )
 }
+
+/** Apply saved defaults only where the chosen model advertises support. */
+export function resolveModelRuntimeDefaults(
+  defaults: ModelRuntimeSettings,
+  model: ProviderModel | undefined,
+  harnessId: string,
+  providerId: string
+): ModelRuntimeSettings {
+  const speed = defaults.inferenceMode
+  const inferenceMode =
+    speed === 'normal' ||
+    (speed === 'fast' && model?.fastSupported === true) ||
+    (speed === 'ultrafast' &&
+      harnessId === 'codex' &&
+      providerId === 'openai' &&
+      model?.ultrafastSupported === true)
+      ? speed
+      : 'normal'
+  const harnessDefaultWindow =
+    harnessId === 'codex' && providerId === 'openai'
+      ? model?.contextWindows?.[0]
+      : (model?.contextWindow ?? model?.contextWindows?.[0])
+  const contextWindow =
+    defaults.contextWindow !== undefined &&
+    model?.contextWindows?.includes(defaults.contextWindow) &&
+    defaults.contextWindow !== harnessDefaultWindow
+      ? defaults.contextWindow
+      : undefined
+  return { inferenceMode, contextWindow }
+}
