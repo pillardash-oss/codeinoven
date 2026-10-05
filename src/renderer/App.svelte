@@ -38,6 +38,7 @@
     viewShowsThread,
     type ContentThreadFamily
   } from '$lib/content-view-threads'
+  import { viewShowsProject } from '$lib/content-view-projects'
   import {
     navigationHistoryState,
     type NavigationLocation
@@ -51,6 +52,7 @@
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
@@ -868,38 +870,38 @@
   /**
    * Focus a project picked from the Switch project spotlight.
    *
-   * The scoped threads view keeps its docked sidebar: the picked project becomes
-   * the docked scope and the conversation is cleared, so the sidebar shows the
-   * new project's scoped threads. Every other view lands on the Projects view
-   * with the project's most recent thread open, matching how focusing a project
-   * already works elsewhere (OS hand-off, existing-project spotlight, header tabs).
+   * A view that already shows the picked project keeps it: the scoped state
+   * stays docked on the project (it is that project's own thread list), the
+   * Threads timeline keeps the pick while its project filter lets the project
+   * through, and the Scope board follows the project it is already showing. The
+   * picked project becomes the view's project and its most recent thread opens
+   * in place, so nothing the current view can already show is taken away from
+   * it.
+   *
+   * Every other case lands on the Projects view with the project's most recent
+   * thread open, matching how focusing a project already works elsewhere (OS
+   * hand-off, existing-project spotlight, header tabs): that is what a project
+   * the current view cannot show gets, one filtered out of the Threads timeline
+   * or one picked from a view with no project threads of its own (Chats, the
+   * Assistant, the browser, the takeover pages).
    */
   function focusProjectFromSpotlight(project: Project): void {
-    const scopedThreadsActive =
-      (activeView === 'projects' || activeView === 'projects-scope') &&
-      scopeState.sidebarContext !== null
     const iconUrl =
       scopeState.projects.find((candidate) => candidate.id === project.id)?.iconUrl ?? null
-
-    if (scopedThreadsActive) {
-      void scopeState.activateProject(project.id)
-      workspaceState.clearThread()
-      workspaceState.activeProject = project
-      workspaceState.activeProjectIconUrl = iconUrl
-      rendererRecovery.setSelectedProject(project.id)
-      scopeState.showSidebarForProject(project.id)
-      return
-    }
+    const keepsProject = viewShowsProject(activeView, project.id, {
+      scopedProjectId: scopeState.sidebarContext?.projectId ?? null,
+      threadsViewShowsProject: threadProjectFilterState.matches(project.id),
+      boardProjectId: scopeState.activeProjectId
+    })
 
     // Navigate before selecting the thread so the shell's content-view reconcile
     // never paints the Projects family's remembered thread for a frame.
-    const wasOnProjectsView = activeView === 'projects' || activeView === 'projects-scope'
-    if (!wasOnProjectsView) navigate('projects')
+    if (!keepsProject) navigate('projects')
     void scopeState.activateProject(project.id)
 
     // Picking the project that is already focused keeps the conversation the user
     // is reading instead of jumping to its latest thread.
-    if (wasOnProjectsView && workspaceState.selectedThread?.projectId === project.id) return
+    if (keepsProject && workspaceState.selectedThread?.projectId === project.id) return
 
     const thread =
       scopeState.allScopeThreads
@@ -910,13 +912,20 @@
             !isOrchestrationChildThread(candidate)
         )
         .sort((left, right) => right.lastActivity - left.lastActivity)[0] ?? null
+    // Only a kept view can still be docked in the scoped state   leaving for the
+    // Projects view above closes the sidebar with the scope state itself. There
+    // the scope sidebar is the picked project's own thread list, so it follows
+    // the thread the pick opened (its bucket and stage), exactly as the scope
+    // sidebar's own project switcher does.
     if (thread) {
       workspaceState.openThread(thread, project, iconUrl)
+      if (scopeState.sidebarContext) scopeState.showSidebarForThread(thread)
     } else {
       workspaceState.clearThread()
       workspaceState.activeProject = project
       workspaceState.activeProjectIconUrl = iconUrl
       rendererRecovery.setSelectedProject(project.id)
+      if (scopeState.sidebarContext) scopeState.showSidebarForProject(project.id)
     }
   }
 
