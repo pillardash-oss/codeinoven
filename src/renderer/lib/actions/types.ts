@@ -79,7 +79,8 @@ export interface ActionStatusBadge {
   stage?: 'pinned' | 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done'
   tone?: import('$shared/thread-status-policy').ThreadStatusTone
   kind?: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
-  variant?: 'dot' | 'spinner'
+  variant?: 'dot' | 'spinner' | 'icon'
+  icon?: Component
   animated?: boolean
 }
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { tick } from 'svelte'
   import { Portal } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'
@@ -33,7 +34,13 @@
   let isWorking = $derived(isThreadLiveWorking(thread))
   let isRetryPaused = $derived(thread.status === 'working-paused')
 
+  let hasQueuedMessage = $derived(
+    rendererRecovery.queuedMessageCount(thread.projectId, thread.id) > 0
+  )
+  let queuedBadge = $derived(statusBadgeForThread(thread, isWorking, hasQueuedMessage))
+
   let badgeProps = $derived.by(() => {
+    if (queuedBadge.variant === 'icon') return queuedBadge
     if (isRetryPaused) {
       return { tone: 'working-paused' as const, variant: 'spinner' as const }
     }
@@ -181,9 +188,10 @@
           tone={badgeProps.tone}
           kind={badgeProps.kind}
           variant={badgeProps.variant ?? 'dot'}
+          icon={queuedBadge.icon}
           animated={badgeProps.animated}
           size="sm"
-          title={statusBadgeForThread(thread, isWorking)?.label}
+          title={queuedBadge.label}
         />
       {:else}
         <span class="h-2 w-2 rounded-full border border-border-strong bg-transparent"></span>

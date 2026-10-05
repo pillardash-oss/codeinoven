@@ -316,6 +316,7 @@
     | 'approval'
     | 'error'
     | 'scheduled'
+    | 'queued'
 
   /** Threads with any unsent composer content read as "todo" (filled gray dot).
    *  Live dictation counts too: from the first mic press through transcription
@@ -326,9 +327,12 @@
       speechController.isCapturingThread(thread.id)
   )
 
-  /** A thread with an unsent message scheduled behind other thread(s)   its
-   *  agent has not started yet. Reads as pending/draft state, but gets a timer
-   *  badge in the working colour instead of the plain draft dot. */
+  /** Queued messages get a clock instead of the draft dot, including during live work. */
+  let hasQueuedMessage = $derived(
+    rendererRecovery.queuedMessageCount(thread.projectId, thread.id) > 0
+  )
+
+  /** A message scheduled behind other threads also gets the working-colour clock. */
   let hasStartAfterPending = $derived(
     rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
   )
@@ -447,6 +451,8 @@
 
   let threadState = $derived.by((): ThreadState => {
     if (thread.status === 'failed') return 'error'
+    if (hasQueuedMessage && thread.status !== 'awaiting_approval' && thread.status !== 'spec')
+      return 'queued'
     if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
@@ -529,6 +535,8 @@
   /** Tooltip for the state badge: the only place a collapsed row can explain
    *  itself, since the badge is a bare dot or spinner. */
   let badgeTitle = $derived.by((): string => {
+    if (threadState === 'queued')
+      return isWorking ? 'Working · Queued' : isRetryPaused ? 'Waiting to retry · Queued' : 'Queued'
     if (isForeignRun) return 'Running in another instance'
     if (isRetryPaused || isWorking) return stageLabel
     if (thread.status === 'spec') return 'Spec ready'
@@ -565,6 +573,7 @@
           return isForeignRun
             ? { variant: 'icon', icon: AppWindow, tone: 'working' }
             : { variant: 'spinner', stage: 'working' }
+        case 'queued':
         case 'scheduled':
           return { variant: 'icon', stage: 'working', icon: Clock }
         case 'working-paused':
@@ -1103,7 +1112,11 @@
           {isWorking}
           {isRetryPaused}
           {stageLabel}
-          {threadState}
+          threadState={threadState === 'queued'
+            ? hasStartAfterPending
+              ? 'scheduled'
+              : 'working'
+            : threadState}
           {isForeignRun}
         />
       </div>

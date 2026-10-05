@@ -1,3 +1,4 @@
+import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { MessagesSquare } from '@lucide/svelte'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
@@ -208,7 +209,11 @@ export class ThreadSearchPaletteController {
         (candidate) => candidate.id === thread.projectId
       )?.iconUrl
       const isLiveWorking = isThreadLiveWorking(thread)
-      const status = statusBadgeForThread(thread, isLiveWorking)
+      const status = statusBadgeForThread(
+        thread,
+        isLiveWorking,
+        rendererRecovery.queuedMessageCount(thread.projectId, thread.id) > 0
+      )
       // Model/harness metadata for the result row: while the thread is working
       // the current provider + model is shown, otherwise the thread's harnesses
       // and provider appear as icons - mirroring the sidebar thread row.
