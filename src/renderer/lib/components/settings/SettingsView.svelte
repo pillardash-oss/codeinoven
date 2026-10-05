@@ -13,6 +13,7 @@
     ZOOM_LEVEL_OPTIONS
   } from '$lib/stores/app-config.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
+  import { CIO_CLEANUP_CATEGORIES } from '$shared/cio-cleanup'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
@@ -21,6 +22,8 @@
   import { formatDateTime } from '$shared/date-time-format'
   import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import {
+    CIO_CLEANUP_CATEGORY_IDS,
+    DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
     DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
     MAX_BACKGROUND_WAKE_LEAD_MS,
     MAX_CIO_CLEANUP_RETENTION_DAYS,
@@ -30,6 +33,7 @@
     MIN_MAX_CONFLICT_FILE_BYTES,
     type AppConfig,
     type AppConfigPatch,
+    type CioCleanupCategoryId,
     type GitPullPreference,
     type PrMergeMethod,
     type SkillMarketEntry,
@@ -361,6 +365,29 @@
     }
 
     void updateConfig({ cioCleanupRetentionDays: value })
+  }
+
+  /**
+   * Exclude one `.cio` folder from the sweep, or let it be swept again.
+   *
+   * Excluding never deletes anything by itself: it tells every future run to
+   * keep that folder whole, which is how a design folder nobody opened for
+   * months survives the daily pass.
+   */
+  function saveCioCleanupCategory(id: CioCleanupCategoryId, excluded: boolean): void {
+    const current = config.cioCleanupExcludedCategories ?? DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES
+    void updateConfig({
+      cioCleanupExcludedCategories: CIO_CLEANUP_CATEGORY_IDS.filter((category) =>
+        category === id ? excluded : current.includes(category)
+      )
+    })
+  }
+
+  /** Whether one `.cio` folder is currently excluded from the sweep. */
+  function isCioCleanupCategoryExcluded(id: CioCleanupCategoryId): boolean {
+    return (
+      config.cioCleanupExcludedCategories ?? DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES
+    ).includes(id)
   }
 
   /** The last finished cleanup run, phrased for the settings report line. */
@@ -1217,8 +1244,8 @@
             </h3>
             <p class="mb-3 text-xs leading-relaxed text-dimmed">
               Stale content of every workspace's <code>.cio</code> scratch folder (projects, scopes, chats,
-              assistant routines, and browser tabs) is removed once a day. Installed utilities and the
-              designs and videos written there are never removed.
+              assistant routines, and browser tabs) is removed once a day. Folders you exclude below are
+              never touched.
             </p>
             <div class="space-y-3">
               <div class="flex items-center justify-between gap-4">
@@ -1263,6 +1290,29 @@
                   />
                   Run cleanup now
                 </button>
+              </div>
+              <div class="border-t pt-3">
+                <p class="text-sm font-medium">Folders</p>
+                <p class="text-xs leading-relaxed text-dimmed">
+                  A folder switched on is kept whole, whatever its age. The rest are swept once
+                  their content has been idle for the retention window.
+                </p>
+                <div class="mt-3 space-y-3">
+                  {#each CIO_CLEANUP_CATEGORIES as category (category.id)}
+                    <div class="flex items-center justify-between gap-4">
+                      <div>
+                        <p class="text-sm font-medium">{category.label}</p>
+                        <p class="text-xs leading-relaxed text-dimmed">{category.description}</p>
+                      </div>
+                      <Switch
+                        checked={isCioCleanupCategoryExcluded(category.id)}
+                        onchange={(excluded) => saveCioCleanupCategory(category.id, excluded)}
+                        aria-label={`Exclude ${category.label} from CIO Cleanup`}
+                        disabled={!settingsReady}
+                      />
+                    </div>
+                  {/each}
+                </div>
               </div>
               <div class="border-t pt-3">
                 {#if cioCleanupLastRunText}

@@ -60,7 +60,9 @@ import {
   MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
   MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
   MIN_CIO_CLEANUP_RETENTION_DAYS,
-  MAX_CIO_CLEANUP_RETENTION_DAYS
+  MAX_CIO_CLEANUP_RETENTION_DAYS,
+  isCioCleanupCategoryId,
+  normalizeCioCleanupExcludedCategories
 } from '../../../lib/types'
 import { validateBoundedString, validateEntityId, validateMergeMethod } from '../ipc-validation'
 import { isRecord, requireString } from './shared'
@@ -223,7 +225,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'prototypeCdnAllowlist',
   'inAppNotificationSound',
   'sound',
-  'cioCleanupRetentionDays'
+  'cioCleanupRetentionDays',
+  'cioCleanupExcludedCategories'
 ])
 
 const AGENT_DEFAULT_FIELDS = new Set([
@@ -928,6 +931,22 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       MIN_CIO_CLEANUP_RETENTION_DAYS,
       MAX_CIO_CLEANUP_RETENTION_DAYS
     )
+  }
+
+  if ('cioCleanupExcludedCategories' in value) {
+    const categories = value.cioCleanupExcludedCategories
+    if (!Array.isArray(categories)) {
+      throw new TypeError('CIO Cleanup excluded categories must be an array')
+    }
+    // An id this build does not know is refused rather than dropped: the
+    // renderer sent a list it believes in, and silently keeping less would turn
+    // a version mismatch into a folder that starts being swept.
+    for (const id of categories) {
+      if (!isCioCleanupCategoryId(id)) {
+        throw new TypeError(`Unknown CIO Cleanup folder: ${String(id)}`)
+      }
+    }
+    patch.cioCleanupExcludedCategories = normalizeCioCleanupExcludedCategories(categories)
   }
 
   if ('sound' in value) {

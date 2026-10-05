@@ -1,10 +1,12 @@
 import {
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_BROWSER_HISTORY_LIMIT,
+  DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
   DEFAULT_IN_APP_NOTIFICATION_SOUND
 } from '$shared/types'
 import type {
   AppConfig,
+  CioCleanupCategoryId,
   GitPullPreference,
   InAppNotificationSoundSettings,
   MediaGenerationConfig,
@@ -49,6 +51,14 @@ let mediaGeneration = $state<MediaGenerationConfig>({ providerId: null })
  * the former), and the tree is too deep to receive the config as a prop.
  */
 let workRoots = $state<WorkRoots>({ ...DEFAULT_WORK_ROOTS })
+/**
+ * The `.cio` folders CIO Cleanup must keep, mirrored because the file tree's
+ * context menu reads it to say whether a row is protected, and the tree is too
+ * deep to receive the config as a prop.
+ */
+let cioCleanupExcludedCategories = $state<CioCleanupCategoryId[]>([
+  ...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES
+])
 /**
  * Saved model profiles, mirrored so the composer can read them without the config
  * being threaded down to it. Held as a plain array of plain records: the config is
@@ -120,6 +130,10 @@ export const appConfigState = {
   get workRoots(): WorkRoots {
     return workRoots
   },
+  /** The `.cio` folders the sweep leaves alone, by category. */
+  get cioCleanupExcludedCategories(): CioCleanupCategoryId[] {
+    return cioCleanupExcludedCategories
+  },
   /** Named presets the user applies from the model picker. */
   get modelProfiles(): ModelProfile[] {
     return modelProfiles
@@ -154,6 +168,9 @@ export const appConfigState = {
     zoomLevel = config.zoomLevel
     mediaGeneration = { providerId: config.mediaGeneration.providerId }
     workRoots = config.workRoots ?? { ...DEFAULT_WORK_ROOTS }
+    cioCleanupExcludedCategories = [
+      ...(config.cioCleanupExcludedCategories ?? DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES)
+    ]
     modelProfiles = config.modelProfiles ?? []
     // The persisted keybindings overwrite the registry defaults, so every
     // handler that asks keymapState for an id picks up the user's binding.

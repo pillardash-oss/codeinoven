@@ -1,7 +1,12 @@
-import type { CioCleanupExclusion, CioCleanupMount } from './types/cio-cleanup'
-import { PROJECT_UTILITIES_DIRECTORY } from './utility-scope-paths'
 import {
-  AUTHORED_WORK_KINDS,
+  DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
+  type CioCleanupCategoryId,
+  type CioCleanupExclusion,
+  type CioCleanupMount
+} from './types/cio-cleanup'
+import { PROJECT_UTILITIES_DIRECTORY } from './utility-scope-paths'
+import type { AuthoredWorkKind } from './ipc/design'
+import {
   DEFAULT_WORK_ROOTS,
   normalizeWorkRoot,
   workRootForKind,
@@ -20,17 +25,59 @@ import {
  */
 export const CIO_SCRATCH_DIRECTORY = '.cio'
 
+/** The `.cio` folder holding feature specs, plans, and assignment documents. */
+export const CIO_CLEANUP_SPECS_FOLDER = 'specs'
+
 /**
- * `.cio` folders that hold installed content rather than scratch, so no sweep
- * may touch them.
+ * One `.cio` folder the settings page lists, with the sentence that explains it.
  *
- * `.cio/utilities` is where a project's own scoped skills and MCP servers are
- * installed. A sweep that deleted it would leave the utility registry pointing
- * at an install that only comes back the next time that utility is written, so
- * the sweeper keeps the folder whole. A list rather than one name, because a
- * second install root must be able to appear without a sweeper change.
+ * The copy lives beside the ids so the sweep's vocabulary and the settings page
+ * cannot drift: a category added here reaches the page, the config validation,
+ * and the protection rule together.
  */
-export const CIO_CLEANUP_INSTALLED_PATHS: readonly string[] = [PROJECT_UTILITIES_DIRECTORY]
+export interface CioCleanupCategoryDefinition {
+  id: CioCleanupCategoryId
+  label: string
+  description: string
+}
+
+export const CIO_CLEANUP_CATEGORIES: readonly CioCleanupCategoryDefinition[] = [
+  {
+    id: 'scratch',
+    label: 'Scratch',
+    description: 'Temporary files, staged attachments, and probe output, in .cio/tmp.'
+  },
+  {
+    id: 'work',
+    label: 'Work artifacts',
+    description: 'Plans, walkthroughs, and reports written while a task runs, in .cio/work.'
+  },
+  {
+    id: 'specs',
+    label: 'Feature specs',
+    description: 'Spec, plan, and assignment documents for a feature, in .cio/specs.'
+  },
+  {
+    id: 'git',
+    label: 'Pull request reports',
+    description: 'Per pull request reports and audits, in .cio/git.'
+  },
+  {
+    id: 'designs',
+    label: 'Designs',
+    description: 'Authored design folders, wherever the design root points.'
+  },
+  {
+    id: 'videos',
+    label: 'Videos',
+    description: 'Authored video folders, wherever the video root points.'
+  },
+  {
+    id: 'utilities',
+    label: 'Installed utilities',
+    description: 'Skills and MCP servers installed for a project, in .cio/utilities.'
+  }
+]
 
 /** Normalize a workspace-relative path to forward slashes without a leading `./`. */
 export function normalizeCioCleanupPath(path: string): string {
@@ -41,28 +88,65 @@ export function normalizeCioCleanupPath(path: string): string {
 }
 
 /**
+ * The workspace-relative folders one category owns.
+ *
+ * Fixed names for the four scratch folders and the utilities install root; the
+ * two authored categories follow the work-roots setting, and answer with both
+ * the configured root and the shipped default, so work left behind by a root
+ * that moved is still named here. A caller turns these into `.cio`-relative
+ * paths with {@link cioScratchRelativePath}, which is also what drops a root the
+ * user pointed outside `.cio`.
+ */
+export function cioCleanupCategoryPaths(
+  category: CioCleanupCategoryId,
+  workRoots: WorkRoots = DEFAULT_WORK_ROOTS
+): string[] {
+  switch (category) {
+    case 'scratch':
+      return [`${CIO_SCRATCH_DIRECTORY}/tmp`]
+    case 'work':
+      return [`${CIO_SCRATCH_DIRECTORY}/work`]
+    case 'specs':
+      return [`${CIO_SCRATCH_DIRECTORY}/${CIO_CLEANUP_SPECS_FOLDER}`]
+    case 'git':
+      return [`${CIO_SCRATCH_DIRECTORY}/git`]
+    case 'utilities':
+      return [`${CIO_SCRATCH_DIRECTORY}/${PROJECT_UTILITIES_DIRECTORY}`]
+    case 'designs':
+      return authoredWorkRootPaths('design', workRoots)
+    case 'videos':
+      return authoredWorkRootPaths('video', workRoots)
+  }
+}
+
+/** One authored kind's configured root plus the shipped default, normalized and deduped. */
+function authoredWorkRootPaths(kind: AuthoredWorkKind, workRoots: WorkRoots): string[] {
+  const paths = new Set<string>()
+  for (const roots of [workRoots, DEFAULT_WORK_ROOTS]) {
+    const root = normalizeWorkRoot(workRootForKind(roots, kind))
+    if (root) paths.add(root)
+  }
+  return [...paths]
+}
+
+/**
  * Every `.cio`-relative folder a sweep must keep, whatever its age.
  *
- * Two kinds of content live in a workspace's `.cio` folder and only one of them
- * is scratch. Installed content (`utilities`) is a real install the registry still
- * resolves, and authored work (the configured design and video roots) is the
- * user's own deliverable, which the design board lists and nothing can rebuild.
- * A sweep that took either would delete work, not reclaim space, so both are named
- * here and the sweeper never enters them.
- *
- * The default roots are kept alongside the configured ones: a user who moves a
- * root leaves folders behind under `.cio`, and old work must not start dying
- * because the setting that named it moved.
+ * The categories the user excluded name them. A fresh install excludes designs,
+ * videos, and installed utilities while the four scratch folders stay
+ * sweepable, because deleting a design nobody opened for a month, or an
+ * installed skill the registry still resolves, reclaims nothing and loses work.
+ * Excluding a folder only keeps it: the sweeper never enters a protected folder,
+ * so nothing inside is judged by its age either.
  */
 export function cioCleanupProtectedPaths(
-  workRoots: WorkRoots = DEFAULT_WORK_ROOTS
+  workRoots: WorkRoots = DEFAULT_WORK_ROOTS,
+  excludedCategories: readonly CioCleanupCategoryId[] = DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES
 ): readonly string[] {
-  const paths = new Set<string>(CIO_CLEANUP_INSTALLED_PATHS)
-  for (const roots of [workRoots, DEFAULT_WORK_ROOTS]) {
-    for (const kind of AUTHORED_WORK_KINDS) {
-      const root = normalizeWorkRoot(workRootForKind(roots, kind))
-      if (!root) continue
-      const relative = cioScratchRelativePath(root)
+  const paths = new Set<string>()
+  for (const category of excludedCategories) {
+    for (const folder of cioCleanupCategoryPaths(category, workRoots)) {
+      const relative = cioScratchRelativePath(folder)
       // `''` is the `.cio` folder itself, and the sweep root is never a candidate.
       if (relative) paths.add(relative)
     }

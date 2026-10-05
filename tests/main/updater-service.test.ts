@@ -11,6 +11,7 @@ import {
   DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS
 } from '../../src/lib/types/settings'
+import { DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES } from '../../src/lib/types/cio-cleanup'
 import {
   UpdaterService,
   type SessionActivitySource
@@ -108,6 +109,7 @@ function defaultConfig(): AppConfig {
     browserSearchEngine: 'duckduckgo',
     browserCustomSearchEngines: [],
     cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
+    cioCleanupExcludedCategories: [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES],
     sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
   }
 }

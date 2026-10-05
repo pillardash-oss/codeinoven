@@ -12,6 +12,62 @@
 export type CioCleanupOwnerKind = 'project' | 'chat' | 'assistant' | 'browser' | 'legacy'
 
 /**
+ * One `.cio` folder the sweep knows by name.
+ *
+ * A workspace's scratch folder is not one thing: `tmp`, `work`, `specs`, and
+ * `git` hold transient material, while `designs`, `videos`, and `utilities` hold
+ * deliverables and installed content. The settings page lists these ids and the
+ * sweep reads them, so one vocabulary answers both what a row says and which
+ * folders a run must keep.
+ */
+export type CioCleanupCategoryId =
+  'scratch' | 'work' | 'specs' | 'git' | 'designs' | 'videos' | 'utilities'
+
+/** Every category, in the order the settings page lists them. */
+export const CIO_CLEANUP_CATEGORY_IDS: readonly CioCleanupCategoryId[] = [
+  'scratch',
+  'work',
+  'specs',
+  'git',
+  'designs',
+  'videos',
+  'utilities'
+]
+
+/**
+ * What a fresh install excludes: the folders holding authored work and installed
+ * content rather than scratch. The four scratch folders are swept, because that
+ * is the feature's whole point; these three are kept until the user says
+ * otherwise.
+ */
+export const DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES: readonly CioCleanupCategoryId[] = [
+  'designs',
+  'videos',
+  'utilities'
+]
+
+/** Whether a value is one of the categories the sweep knows. */
+export function isCioCleanupCategoryId(value: unknown): value is CioCleanupCategoryId {
+  return (
+    typeof value === 'string' && (CIO_CLEANUP_CATEGORY_IDS as readonly string[]).includes(value)
+  )
+}
+
+/**
+ * The stored exclusion list as the sweep reads it.
+ *
+ * A missing value is a config written before the list existed and means the
+ * shipped defaults; anything unusable is dropped rather than rejected, so a
+ * hand-edited file still starts. The result keeps the canonical order and has no
+ * duplicates, so two spellings of one choice cannot reach the settings page.
+ */
+export function normalizeCioCleanupExcludedCategories(value: unknown): CioCleanupCategoryId[] {
+  if (!Array.isArray(value)) return [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES]
+  const chosen = new Set(value.filter(isCioCleanupCategoryId))
+  return CIO_CLEANUP_CATEGORY_IDS.filter((id) => chosen.has(id))
+}
+
+/**
  * Identifies one workspace mount, using the same triple the file tree uses to
  * resolve a root: a project, its scope bucket, and (for a conversation's own
  * workspace) the conversation. Exclusions are keyed by it because a sweep

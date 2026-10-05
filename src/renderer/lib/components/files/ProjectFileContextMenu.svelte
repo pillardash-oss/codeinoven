@@ -192,7 +192,6 @@
               class={itemClass}
               disabled
               title="This folder is excluded from CIO Cleanup in Settings"
-
             >
               <ShieldCheck size={13} class="text-muted" />
               Protected from CIO Cleanup

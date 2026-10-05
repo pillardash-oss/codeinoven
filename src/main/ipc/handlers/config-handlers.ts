@@ -356,9 +356,13 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     }
     options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
     options.retryScheduler?.setEnabled(config.autoRetryAfterReset)
-    // The retention setting changes what the next sweep removes, so the settings
-    // page is told the state moved instead of showing the previous cutoff.
-    if (patch.cioCleanupRetentionDays !== undefined) {
+    // The retention and folder settings change what the next sweep removes, so
+    // the settings page is told the state moved instead of showing the previous
+    // cutoff.
+    if (
+      patch.cioCleanupRetentionDays !== undefined ||
+      patch.cioCleanupExcludedCategories !== undefined
+    ) {
       void options.cioCleanup?.refresh()
     }
     // Background mode is applied live: the login item, the menu bar icon, and the

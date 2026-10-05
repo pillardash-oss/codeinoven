@@ -1,4 +1,5 @@
 import type { AgentDefaultsConfig, AuxiliaryAgentConfig, RankingJudgeConfig } from './agent'
+import type { CioCleanupCategoryId } from './cio-cleanup'
 import type { AgentModelSelection, InferenceMode, PermissionLevel, ThinkingLevel } from './common'
 import type { GitPullPreference, PrMergeMethod } from './git'
 import type { MediaProviderId } from '../media-generation'
@@ -493,6 +494,12 @@ export interface AppConfig {
    * scratch folder. Bounded to `MIN/MAX_CIO_CLEANUP_RETENTION_DAYS`.
    */
   cioCleanupRetentionDays: number
+  /**
+   * `.cio` folders the sweep never enters, by category. A fresh install keeps
+   * designs, videos, and installed utilities, leaving the four scratch folders
+   * sweepable; the settings page toggles the list.
+   */
+  cioCleanupExcludedCategories: CioCleanupCategoryId[]
 }
 
 /** Bounds for `AppConfig.cioCleanupRetentionDays`. */
@@ -562,5 +569,6 @@ export type AppConfigPatch = Partial<
     | 'inAppNotificationSound'
     | 'sound'
     | 'cioCleanupRetentionDays'
+    | 'cioCleanupExcludedCategories'
   >
 >

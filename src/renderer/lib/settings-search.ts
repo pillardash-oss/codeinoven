@@ -319,8 +319,19 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     blockId: 'general-cio-cleanup',
     title: 'CIO Cleanup',
     description:
-      'Daily removal of stale scratch content from every workspace .cio folder, keeping installed utilities and authored work.',
-    keywords: ['cleanup', 'scratch', 'retention', 'exclusions', 'stale', 'cio'],
+      'Daily removal of stale scratch content from every workspace .cio folder, with the folders you exclude kept whole.',
+    keywords: [
+      'cleanup',
+      'scratch',
+      'retention',
+      'exclusions',
+      'stale',
+      'cio',
+      'folders',
+      'designs',
+      'videos',
+      'utilities'
+    ],
     icon: SlidersHorizontal
   },
   {

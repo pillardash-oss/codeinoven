@@ -26,7 +26,9 @@ import {
   MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
   DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   MIN_CIO_CLEANUP_RETENTION_DAYS,
-  MAX_CIO_CLEANUP_RETENTION_DAYS
+  MAX_CIO_CLEANUP_RETENTION_DAYS,
+  DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
+  normalizeCioCleanupExcludedCategories
 } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { DEFAULT_WORK_ROOTS, workRootsFromConfig } from '../../lib/design/work-roots'
@@ -122,6 +124,7 @@ const DEFAULT_CONFIG: AppConfig = {
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
   cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
+  cioCleanupExcludedCategories: [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES],
   sound: DEFAULT_SPEECH_SETTINGS
 }
 
@@ -303,6 +306,12 @@ export class StorageEngine {
         MIN_CIO_CLEANUP_RETENTION_DAYS,
         MAX_CIO_CLEANUP_RETENTION_DAYS,
         DEFAULT_CONFIG.cioCleanupRetentionDays
+      ),
+      // A config written before the folder list existed keeps the shipped
+      // exclusions; an id a future version wrote is dropped rather than
+      // rejecting the whole file.
+      cioCleanupExcludedCategories: normalizeCioCleanupExcludedCategories(
+        config?.cioCleanupExcludedCategories
       ),
       sound: {
         ...DEFAULT_CONFIG.sound,
