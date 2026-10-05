@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AppWindow, Clock, StickyNote } from '@lucide/svelte'
+  import { AppWindow, Clock, Feather, StickyNote } from '@lucide/svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -196,8 +196,8 @@
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Note</dt>
       <dd class="flex items-center gap-1 text-warning" title="This thread has a user note">
-        <StickyNote size={12} />
-        Note available
+        <Feather size={12} />
+        Thread note available
       </dd>
     </div>
   {/if}

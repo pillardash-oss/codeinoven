@@ -1165,7 +1165,7 @@
     const threadNote: ContextDockItem[] = [
       {
         id: 'note',
-        label: hasThreadNote ? 'Thread Note available' : 'Add a thread note',
+        label: hasThreadNote ? 'Thread note available' : 'Add a thread note',
         icon: Feather,
         active: dockKindActive('thread-note'),
         tone: hasThreadNote ? 'warning' : undefined,

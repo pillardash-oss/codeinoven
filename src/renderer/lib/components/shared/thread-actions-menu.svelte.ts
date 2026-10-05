@@ -1,20 +1,20 @@
+import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
+import { copyText } from '$lib/copy-text'
+import { scopeState } from '$lib/stores/scope.svelte'
+import type { Thread } from '$shared/types'
 import {
+  Copy,
+  EyeOff,
+  FeatherIcon,
+  GitFork,
+  Kanban,
   Pencil,
   Pin,
   PinOff,
-  GitFork,
-  Kanban,
   Send,
-  StickyNote,
-  Copy,
-  EyeOff,
   Trash2
 } from '@lucide/svelte'
 import { toast } from 'svelte-sonner'
-import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
-import { scopeState } from '$lib/stores/scope.svelte'
-import { copyText } from '$lib/copy-text'
-import type { Thread } from '$shared/types'
 
 export interface ThreadActionsMenuConfig {
   /** Resolved on every access   callers pass a getter so the menu tracks the current thread. */
@@ -129,40 +129,40 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
       { label: 'Rename', icon: Pencil, onClick: startRename },
       ...(howToThread
         ? [
-            {
-              label: 'Hide how-to thread',
-              icon: EyeOff,
-              onClick: () => config.onHideHowTo?.(thread)
-            }
-          ]
+          {
+            label: 'Hide how-to thread',
+            icon: EyeOff,
+            onClick: () => config.onHideHowTo?.(thread)
+          }
+        ]
         : [
-            {
-              label: thread.pinned ? 'Unpin' : 'Pin',
-              icon: thread.pinned ? PinOff : Pin,
-              onClick: () => void config.onTogglePin(thread)
-            }
-          ]),
+          {
+            label: thread.pinned ? 'Unpin' : 'Pin',
+            icon: thread.pinned ? PinOff : Pin,
+            onClick: () => void config.onTogglePin(thread)
+          }
+        ]),
       { label: 'Fork', icon: GitFork, onClick: () => void config.onFork(thread) },
       ...(showHandoffItem
         ? [
-            {
-              label: 'Hand off to project',
-              icon: Send,
-              onClick: () => config.onHandoff?.(thread)
-            }
-          ]
+          {
+            label: 'Hand off to project',
+            icon: Send,
+            onClick: () => config.onHandoff?.(thread)
+          }
+        ]
         : []),
       ...(showScope
         ? [{ label: 'Change Scope', icon: Kanban, onClick: startChangeScope }]
         : []),
       ...(showNotesItem
         ? [
-            {
-              label: 'Notes',
-              icon: StickyNote,
-              onClick: () => config.onOpenNotes?.(thread)
-            }
-          ]
+          {
+            label: 'Thread Note',
+            icon: FeatherIcon,
+            onClick: () => config.onOpenNotes?.(thread)
+          }
+        ]
         : []),
       ...(showCopyIdItem
         ? [{ label: 'Copy thread id', icon: Copy, onClick: () => void copyThreadId() }]

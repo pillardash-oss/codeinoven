@@ -1,61 +1,61 @@
 <script lang="ts">
-  import { tick } from 'svelte'
-  import type { Component } from 'svelte'
-  import type { Attachment } from 'svelte/attachments'
-  import { AppWindow, Check, Clock, Pin, StickyNote } from '@lucide/svelte'
-  import { Portal } from 'bits-ui'
-  import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
-  import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
-  import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
-  import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
-  import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
-  import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
-  import {
-    calculateThreadHoverPopoverPosition,
-    resolveThreadHoverPopoverSize,
-    threadHoverPopoverStyle,
-    THREAD_HOVER_POPOVER_SURFACE_CLASS
-  } from '$lib/components/shared/thread-hover-popover-layout'
-  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
-  import { scopeState } from '$lib/stores/scope.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
-  import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
-  import { threadMessages } from '$lib/stores/thread-messages.svelte'
-  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-  import { effectiveThreadTitle } from '$lib/stores/draft-label'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
-  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import { reportError } from '$lib/stores/app-errors.svelte'
-  import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
-  import { pickColorForSeed } from '$lib/project-colors'
-  import { longPress } from '$lib/long-press.svelte'
-  import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
-  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
-  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
-  import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
   import {
     AUTHORED_WORK_ICON_BY_KIND,
     AUTHORED_WORK_NAME_BY_KIND
   } from '$lib/authored-work-presentation'
-  import type { AuthoredWorkKind } from '$shared/ipc-contract'
-  import { threadScopeBucket } from '$lib/threads/thread-scope'
-  import { pipState } from '$lib/stores/pip.svelte'
+  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
+  import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
+  import {
+    calculateThreadHoverPopoverPosition,
+    resolveThreadHoverPopoverSize,
+    THREAD_HOVER_POPOVER_SURFACE_CLASS,
+    threadHoverPopoverStyle
+  } from '$lib/components/shared/thread-hover-popover-layout'
+  import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
+  import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
+  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import Modal from '$lib/components/ui/Modal.svelte'
+  import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { longPress } from '$lib/long-press.svelte'
+  import { pickColorForSeed } from '$lib/project-colors'
+  import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { speechController } from '$lib/speech/speech-controller.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { effectiveThreadTitle } from '$lib/stores/draft-label'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+  import { pipState } from '$lib/stores/pip.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
+  import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { isThreadLiveWorking } from '$lib/thread-status-badge'
+  import { threadScopeBucket } from '$lib/threads/thread-scope'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import type { AuthoredWorkKind } from '$shared/ipc-contract'
+  import { threadStatusPolicy } from '$shared/thread-status-policy'
+  import type { Thread } from '$shared/types'
   import {
     coordinatorHasActiveDelegates,
     coordinatorHasUnreadWorkers,
     DEFAULT_SCOPE_BUCKET_ID,
-    isThreadBusy,
-    isOrchestrationChildThread
+    isOrchestrationChildThread,
+    isThreadBusy
   } from '$shared/types'
-  import type { Thread } from '$shared/types'
-  import { threadStatusPolicy } from '$shared/thread-status-policy'
+  import { AppWindow, Check, Clock, Feather, Pin } from '@lucide/svelte'
+  import { Portal } from 'bits-ui'
+  import type { Component } from 'svelte'
+  import { tick } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
 
   interface Props {
     thread: Thread
@@ -802,7 +802,7 @@
         <span class="flex min-w-0 items-center justify-end gap-1">
           {#if hasNote}
             <span class="flex shrink-0 items-center text-warning" title="Note attached">
-              <StickyNote size={11} />
+              <Feather size={11} />
             </span>
           {/if}
           {@render authoredWorkMarker(authoredWorkKind)}
@@ -1046,7 +1046,7 @@
         <span class="col-start-3 flex min-w-0 items-center justify-end gap-1">
           {#if hasNote}
             <span class="flex shrink-0 items-center text-warning" title="Note attached">
-              <StickyNote size={11} />
+              <Feather size={11} />
             </span>
           {/if}
           {@render authoredWorkMarker(authoredWorkKind)}
