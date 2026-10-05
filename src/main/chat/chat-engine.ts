@@ -570,6 +570,7 @@ import {
   SPEC_GENERATION_MAX_ATTEMPTS,
   SPEC_GENERATION_TIMEOUT_MS,
   SPEC_MEMORY_MAX_LESSONS,
+  SUPERSEDED_TURN_MESSAGE,
   SYSTEM_LAYER_RESERVE_TOKENS,
   TOOL_CATALOG_TTL_MS,
   TRANSFER_SETTLE_POLL_MS,
@@ -942,6 +943,15 @@ export class ChatEngine {
 
   /** Number of hidden continuations issued after a turn ended without a final response. */
   private incompleteTurnRecoveryAttempts = new Map<string, number>()
+
+  /**
+   * Threads whose assistant model fallback resume is in flight, keyed
+   * `projectId:threadId`. The same provider failure is reported more than once
+   * (the session event, the idle finalization, the rejected send), and a second
+   * fallback armed while one is resuming would read the model the first one
+   * just wrote and skip a candidate.
+   */
+  private assistantFallbackResumes = new Set<string>()
 
   /** Per-project user-terminal activity: while the user is typing commands in
    *  an in-app terminal, an open fingerprint window (one per terminal worktree
@@ -5392,7 +5402,24 @@ export class ChatEngine {
     // The switch succeeded (a replacement session is bound). Best-effort release
     // the old harness's session so its native context, prompt cache, and storage
     // are reclaimed instead of orphaned on disk.
-    if (switchedRuntime && previousHarnessId && previousAccountId && previousSessionId) {
+    //
+    // The release is skipped while a model-fallback resume for this thread is
+    // still dispatching and the previous session's turn is still running: the
+    // release retires that state and deletes the native session its turn is
+    // streaming into, which is how a concurrently resumed turn ended with
+    // `Session not found`. A user's own harness switch still releases the old
+    // session, because no resume holds the thread then.
+    const previousOwnedByResume =
+      previousSessionId !== undefined &&
+      this.assistantFallbackResumes.has(`${projectId}:${threadId}`) &&
+      this.sessionStatuses.get(previousSessionId)?.state === 'working'
+    if (
+      switchedRuntime &&
+      previousHarnessId &&
+      previousAccountId &&
+      previousSessionId &&
+      !previousOwnedByResume
+    ) {
       await this.releaseOrphanedHarnessSession(
         projectId,
         threadId,
@@ -23998,6 +24025,11 @@ export class ChatEngine {
    * model that is not part of the routine's set is left untouched: that is the
    * user's own pick, and a routine's fallbacks never override it. Returns true
    * when a fallback was armed.
+   *
+   * One resume per thread is in flight at a time, and a resume that could not
+   * even be dispatched advances to the next candidate instead of only logging:
+   * a released session or a dead server must not strand the routine on the
+   * model that just failed.
    */
   private async tryAssistantModelFallback(
     info: SessionInfo,
@@ -24020,6 +24052,13 @@ export class ChatEngine {
     if (thread.sessionId !== sessionId) return false
     const settings = thread.settings
     if (!settings) return false
+    // One fallback at a time per thread. The same provider failure is reported
+    // more than once (the session event, the idle finalization, the rejected
+    // send), and a second call landing while the first resume is still in
+    // flight reads the model the first one just wrote and arms the candidate
+    // AFTER it, skipping a model and racing two sends onto one thread.
+    const fallbackKey = `${info.projectId}:${info.threadId}`
+    if (this.assistantFallbackResumes.has(fallbackKey)) return true
     const next = nextRoutineModel(settings, resolver(thread))
     if (!next) return false
     try {
@@ -24040,6 +24079,7 @@ export class ChatEngine {
       modelId: next.modelId,
       issueKind: issue.kind
     })
+    this.assistantFallbackResumes.add(fallbackKey)
     // Fire-and-forget: the resume re-enters this engine's own send pipeline,
     // and its first statement awaits, so the failing turn unwinds first.
     void this.continueScheduledThread({
@@ -24050,9 +24090,22 @@ export class ChatEngine {
       issueKind: issue.kind,
       issueMessage: issue.message,
       ...(issue.rawError === undefined ? {} : { rawError: issue.rawError })
-    }).catch((error) => {
-      Logger.error('Assistant model fallback resume failed:', error)
     })
+      .then(() => {
+        this.assistantFallbackResumes.delete(fallbackKey)
+      })
+      .catch(async (error) => {
+        Logger.error('Assistant model fallback resume failed:', error)
+        // Release the claim first, then advance: the next candidate is read
+        // from the model that just failed to dispatch. The chain ends when the
+        // routine has nothing left to try.
+        this.assistantFallbackResumes.delete(fallbackKey)
+        try {
+          await this.tryAssistantModelFallback(info, sessionId, issue)
+        } catch (recoveryError) {
+          Logger.error('Assistant model fallback recovery failed:', recoveryError)
+        }
+      })
     return true
   }
 
@@ -24730,6 +24783,52 @@ export class ChatEngine {
     )
   }
 
+  /**
+   * The thread an idle finalization still owns, or null once a newer turn has
+   * superseded it.
+   *
+   * `onSessionIdle` captures the thread when the idle arrives and then spends
+   * seconds loading the transcript, stamping parts, and validating output. A
+   * provider failure inside that window is handled immediately and, on an
+   * assistant task, moves the routine onto its next model on a replacement
+   * session. This finalization still holds the failed session and the settings
+   * that turn ran with, and issuing its own continuation from that snapshot is
+   * what made an assistant model fallback resume fail: the late continuation
+   * wrote the failed model back, the harness-switch path released the
+   * fallback's live session as orphaned, and the fallback's own send then ran
+   * against a session that no longer existed.
+   *
+   * Only the engine's own thread-bound turns reach the idle finalizer (every
+   * auxiliary session registers ephemeral and returns before it), so the
+   * thread's bound session is the honest test of ownership. Once it is some
+   * other session, a fallback resume, a harness switch, or a newer user turn
+   * owns the thread and this finalization must not act on it.
+   */
+  private async idleTurnThread(info: SessionInfo, sessionId: string): Promise<Thread | null> {
+    // Another turn already owns this session. A fallback resume that kept the
+    // same session marks it working, and one whose send is still dispatching
+    // holds the thread's resume claim.
+    if (this.sessionStatuses.get(sessionId)?.state === 'working') return null
+    if (this.assistantFallbackResumes.has(`${info.projectId}:${info.threadId}`)) return null
+    try {
+      const thread = await this.threadManager.getThread(info.projectId, info.threadId)
+      if (!thread || thread.archived) return null
+      // A thread bound to a different session has already moved on. A thread
+      // whose binding was cleared (an account removal, for example) has no
+      // live turn to protect and still needs this finalization to settle it.
+      if (thread.sessionId && thread.sessionId !== sessionId) return null
+      return thread
+    } catch (error) {
+      Logger.dev('Idle finalization ownership check failed:', {
+        projectId: info.projectId,
+        threadId: info.threadId,
+        sessionId,
+        error: rawErrorMessage(error)
+      })
+      return null
+    }
+  }
+
   /** When a turn finishes, persist the canonical transcript and update thread state. */
   private async onSessionIdle(sessionId: string): Promise<void> {
     const info = this.sessionRegistry.get(sessionId)
@@ -24852,6 +24951,13 @@ export class ChatEngine {
       // visibility or attach validation notices, but can never be the first
       // durable write of a completed response.
       await this.threadManager.upsertMessages(info.projectId, info.threadId, merged, sessionId)
+      // The thread this turn belongs to, read fresh. Everything the engine
+      // issues on its own initiative below must act on the thread's live turn:
+      // a provider failure handled while this transcript was being finalized
+      // can already have moved the thread to a fallback model and session,
+      // leaving this finalization holding the failed session and its settings.
+      const liveThread = await this.idleTurnThread(info, sessionId)
+      const superseded = liveThread === null
       let failure = lastAssistant?.error
       // A deliberate user stop is not a failure: keep the thread on
       // `interrupted` and never surface the abort error as a session failure.
@@ -24894,8 +25000,8 @@ export class ChatEngine {
       if (!missingFinalResponse) {
         this.incompleteTurnRecoveryAttempts.delete(sessionId)
       } else if (
-        (this.incompleteTurnRecoveryAttempts.get(sessionId) ?? 0) >= 1 ||
-        !thread?.settings
+        liveThread !== null &&
+        ((this.incompleteTurnRecoveryAttempts.get(sessionId) ?? 0) >= 1 || !liveThread.settings)
       ) {
         failure = INCOMPLETE_TURN_MESSAGE
       }
@@ -24915,7 +25021,7 @@ export class ChatEngine {
             restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
             mirror
           )
-          if ((this.mermaidRepairAttempts.get(sessionId) ?? 0) >= 1 || !thread?.settings) {
+          if ((this.mermaidRepairAttempts.get(sessionId) ?? 0) >= 1 || !liveThread?.settings) {
             failure = rejectionReason
             merged = mergeAgentMessages(merged, [
               mermaidValidationNotice(turnAssistant, rejectionReason)
@@ -24976,7 +25082,7 @@ export class ChatEngine {
           .recordInUse(info.driverId)
           .catch((error) => Logger.dev('Harness manifest in-use confirmation failed:', error))
       }
-      if (mermaidFailures.length > 0 && !failure && thread?.settings) {
+      if (mermaidFailures.length > 0 && !failure && liveThread?.settings) {
         this.mermaidRepairAttempts.set(sessionId, 1)
         await this.finishCheckpoint(
           sessionId,
@@ -24991,7 +25097,7 @@ export class ChatEngine {
           await this.sendPrompt(
             info.projectId,
             info.threadId,
-            thread.settings,
+            liveThread.settings,
             mermaidRepairPrompt(mermaidFailures),
             [],
             undefined,
@@ -25030,7 +25136,7 @@ export class ChatEngine {
         !awaitingUser &&
         !suppressTerminalAnswer &&
         turnAssistant &&
-        thread?.settings &&
+        liveThread?.settings &&
         (this.searchNudgeAttempts.get(sessionId) ?? 0) < 1
       ) {
         const utilityTurn = this.utilityTurns.get(sessionId)
@@ -25053,7 +25159,7 @@ export class ChatEngine {
             await this.sendPrompt(
               info.projectId,
               info.threadId,
-              thread.settings,
+              liveThread.settings,
               searchNudgePromptForProse(claimedUnavailable),
               [],
               undefined,
@@ -25086,7 +25192,7 @@ export class ChatEngine {
       // resume immediately, fall into the catch below and flip the thread
       // from the will-retry wait to a terminal error.
       const resetWaitActiveForRecovery = !userAborted && this.isUsageResetWaitActive(sessionId)
-      if (missingFinalResponse && !failure && !resetWaitActiveForRecovery && thread?.settings) {
+      if (missingFinalResponse && !failure && !resetWaitActiveForRecovery && liveThread?.settings) {
         this.incompleteTurnRecoveryAttempts.set(sessionId, 1)
         await this.finishCheckpoint(sessionId, info, 'failed', INCOMPLETE_TURN_MESSAGE)
         await this.cleanupTurnUtilities(sessionId, completedGatewayId ?? '')
@@ -25096,7 +25202,7 @@ export class ChatEngine {
           await this.sendPrompt(
             info.projectId,
             info.threadId,
-            thread.settings,
+            liveThread.settings,
             INCOMPLETE_TURN_CONTINUATION_PROMPT,
             [],
             engineeringContractActive ? 'implement' : undefined,
@@ -25121,7 +25227,7 @@ export class ChatEngine {
         }
         return
       }
-      if (contractContinuationRequired && thread?.settings) {
+      if (contractContinuationRequired && liveThread?.settings) {
         await this.finishCheckpoint(
           sessionId,
           info,
@@ -25135,7 +25241,7 @@ export class ChatEngine {
           await this.sendPrompt(
             info.projectId,
             info.threadId,
-            thread.settings,
+            liveThread.settings,
             SPEC_CONTRACT_CONTINUATION_PROMPT,
             [],
             'implement',
@@ -25312,6 +25418,33 @@ export class ChatEngine {
       // otherwise claim success, keep it failed so a terminal "done"
       // notification can never shadow the real error.
       const threadBeforeFinalize = await this.threadManager.getThread(info.projectId, info.threadId)
+      // A superseded finalization owns nothing on the thread any more: its
+      // session was replaced while the transcript was being finalized (a model
+      // fallback moved the routine onto its next model, the harness changed, or
+      // a newer turn started). The transcript and its usage are durable above;
+      // the live turn owns the status, the notifications, the run report, and
+      // the coordinator hand-off, so this must not settle any of them.
+      if (superseded) {
+        // A newer turn running on this same session re-registered the active
+        // turn id, and an idle finalization does not carry the turn id it
+        // belongs to: closing the checkpoint then would steal the live turn's
+        // checkpoint, so it is only closed when no newer turn owns the session.
+        if (!awaitingUser && this.sessionStatuses.get(sessionId)?.state !== 'working') {
+          await this.finishCheckpoint(
+            sessionId,
+            info,
+            failure ? 'failed' : 'interrupted',
+            failure ?? SUPERSEDED_TURN_MESSAGE
+          )
+        }
+        Logger.dev('Stopped a superseded idle finalization', {
+          projectId: info.projectId,
+          threadId: info.threadId,
+          sessionId,
+          liveSessionId: threadBeforeFinalize?.sessionId ?? null
+        })
+        return
+      }
       // A live usage-reset wait owns this turn's outcome: the harness reported
       // its limit as the waiting card and the engine already persisted
       // `working-paused` with a scheduled resume. The idle finalization's own
@@ -25489,7 +25622,11 @@ export class ChatEngine {
         [...this.pendingQuestions.values()].some(
           (pending) => pending.request.sessionId === sessionId
         )
-      if (!interviewWaiting) {
+      // A newer turn already running on this same session owns the registry
+      // entry now: clearing its turn markers or tearing its utility gateway
+      // down here would rip the credentials out from under a live turn.
+      const ownedByNewerTurn = this.sessionStatuses.get(sessionId)?.state === 'working'
+      if (!interviewWaiting && !ownedByNewerTurn) {
         info.activeTurnUserMessageId = undefined
         info.activeTurnOrigin = undefined
         info.estimatedContextUsed = undefined
