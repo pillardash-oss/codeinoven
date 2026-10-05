@@ -488,7 +488,17 @@ export interface AppConfig {
   inAppNotificationSound: InAppNotificationSoundSettings
   /** Local speech capture, cleanup, model, cue, history, and playback preferences. */
   sound: import('../speech/types').SpeechSettings
+  /**
+   * Age in days after which CIO Cleanup deletes content of a workspace's `.cio`
+   * scratch folder. Bounded to `MIN/MAX_CIO_CLEANUP_RETENTION_DAYS`.
+   */
+  cioCleanupRetentionDays: number
 }
+
+/** Bounds for `AppConfig.cioCleanupRetentionDays`. */
+export const MIN_CIO_CLEANUP_RETENTION_DAYS = 1
+export const MAX_CIO_CLEANUP_RETENTION_DAYS = 365
+export const DEFAULT_CIO_CLEANUP_RETENTION_DAYS = 30
 
 /** A single layer of the assembled prompt/behavior display. */
 export interface BehaviorLayer {
@@ -551,5 +561,6 @@ export type AppConfigPatch = Partial<
     | 'prototypeCdnAllowlist'
     | 'inAppNotificationSound'
     | 'sound'
+    | 'cioCleanupRetentionDays'
   >
 >

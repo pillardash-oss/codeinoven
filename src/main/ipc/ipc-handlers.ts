@@ -77,6 +77,7 @@ import { registerSearchHandlers } from './handlers/search-handlers'
 import { registerPlanHandlers } from './handlers/plan-handlers'
 import { registerUpdaterHandlers } from './handlers/updater-handlers'
 import { registerAssistantHandlers } from './handlers/assistant-handlers'
+import { registerCioCleanupHandlers } from './handlers/cio-cleanup-handlers'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { UpdaterService } from '../notifications/updater-service'
@@ -475,4 +476,5 @@ export function registerIpcHandlers(
   registerPlanHandlers(ctx)
   registerUpdaterHandlers(ctx)
   registerAssistantHandlers(ctx)
+  registerCioCleanupHandlers(ctx)
 }

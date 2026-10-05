@@ -364,5 +364,22 @@ export const IPC_EVENT_CONTRACT = {
         }
       | { loginId: string; kind: 'complete'; providerId: string }
       | { loginId: string; kind: 'failed'; error: string }
+  ],
+  /**
+   * One live stage of a manual CIO Cleanup run. Only a run the user started
+   * reports here: the daily sweep is silent, so a background pass can never
+   * open a dockable panel the user did not ask for.
+   */
+  'cioCleanup:progress': [] as unknown as [
+    progress: import('../types/cio-cleanup').CioCleanupProgress
+  ],
+  /**
+   * CIO Cleanup state moved (a run started or finished, the retention setting
+   * changed, or the user excluded or included a path). Surfaces re-read their
+   * own view of the state rather than inferring it from a progress event, so a
+   * scheduled run that shows no panel still updates the settings page.
+   */
+  'cioCleanup:stateChanged': [] as unknown as [
+    state: import('../types/cio-cleanup').CioCleanupState
   ]
 }

@@ -23,7 +23,10 @@ import {
   MAX_BACKGROUND_WAKE_LEAD_MS,
   MIN_BACKGROUND_WAKE_LEAD_MS,
   MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
-  MIN_MAX_BACKGROUND_WAKE_HOLD_MS
+  MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
+  DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
+  MIN_CIO_CLEANUP_RETENTION_DAYS,
+  MAX_CIO_CLEANUP_RETENTION_DAYS
 } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { DEFAULT_WORK_ROOTS, workRootsFromConfig } from '../../lib/design/work-roots'
@@ -118,6 +121,7 @@ const DEFAULT_CONFIG: AppConfig = {
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
+  cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   sound: DEFAULT_SPEECH_SETTINGS
 }
 
@@ -291,6 +295,14 @@ export class StorageEngine {
         MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
         MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
         DEFAULT_CONFIG.maxBackgroundWakeHoldMs
+      ),
+      // Read tolerantly: a hand-edited value outside the bounds falls back to the
+      // shipped retention instead of sweeping with a cutoff nobody chose.
+      cioCleanupRetentionDays: clampNumber(
+        config?.cioCleanupRetentionDays,
+        MIN_CIO_CLEANUP_RETENTION_DAYS,
+        MAX_CIO_CLEANUP_RETENTION_DAYS,
+        DEFAULT_CONFIG.cioCleanupRetentionDays
       ),
       sound: {
         ...DEFAULT_CONFIG.sound,

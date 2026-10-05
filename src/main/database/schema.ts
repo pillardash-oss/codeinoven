@@ -772,6 +772,20 @@ CREATE TABLE IF NOT EXISTS provider_sync_cursors (
 CREATE TABLE IF NOT EXISTS maintenance_meta (
   key   TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL
+);
+
+-- ─── CIO Cleanup exclusions ────────────────────────────────────────────────
+-- One row per path the user protected from the daily stale-scratch sweep,
+-- keyed by the workspace mount it belongs to. scope_bucket_id and thread_id
+-- mirror the triple the file tree uses to resolve a mount root, so a sweep can
+-- match an exclusion without storing any absolute path.
+CREATE TABLE IF NOT EXISTS cio_cleanup_exclusions (
+  project_id      TEXT NOT NULL,
+  scope_bucket_id TEXT NOT NULL,
+  thread_id       TEXT NOT NULL DEFAULT '',
+  path            TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (project_id, scope_bucket_id, thread_id, path)
 );`
 
 export const USAGE_EVENTS_COLUMNS_SQL = `

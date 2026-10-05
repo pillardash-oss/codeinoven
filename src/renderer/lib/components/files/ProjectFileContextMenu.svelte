@@ -11,10 +11,13 @@
     Info,
     Pencil,
     Scissors,
+    ShieldCheck,
+    ShieldOff,
     Terminal,
     Trash2
   } from '@lucide/svelte'
   import type { ProjectFileEntry } from '$shared/types'
+  import { isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
 
   interface Props {
     entry: ProjectFileEntry | null
@@ -33,6 +36,8 @@
     onReveal: () => void
     onOpenInBrowser: () => void
     onOpenInTerminal: () => void
+    cioCleanupExcluded: boolean
+    onToggleCioCleanupExclusion: () => void
   }
 
   let {
@@ -51,7 +56,9 @@
     onInfo,
     onReveal,
     onOpenInBrowser,
-    onOpenInTerminal
+    onOpenInTerminal,
+    cioCleanupExcluded,
+    onToggleCioCleanupExclusion
   }: Props = $props()
 
   let selectedCount = $derived(
@@ -63,6 +70,11 @@
    *  over a loopback origin and previewed with their scripts and assets live. */
   let canOpenInBrowser = $derived(
     entry === null || entry.kind === 'directory' || /\.(?:html?|xhtml)$/iu.test(entry.name)
+  )
+  /** Only a real entry inside a workspace's `.cio` scratch folder can be
+   *  excluded from CIO Cleanup; the scratch folder root itself never can. */
+  let canToggleCioCleanup = $derived(
+    entry !== null && entry.path !== '.cio' && isCioScratchPath(entry.path)
   )
 
   const itemClass =
@@ -125,6 +137,18 @@
           <FolderOpen size={13} class="text-muted" />
           Show in File Manager
         </ContextMenu.Item>
+        {#if canToggleCioCleanup}
+          <ContextMenu.Separator class="my-1 h-px bg-border" />
+          <ContextMenu.Item class={itemClass} onSelect={onToggleCioCleanupExclusion}>
+            {#if cioCleanupExcluded}
+              <ShieldCheck size={13} class="text-muted" />
+              Include in CIO Cleanup
+            {:else}
+              <ShieldOff size={13} class="text-muted" />
+              Exclude from CIO Cleanup
+            {/if}
+          </ContextMenu.Item>
+        {/if}
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         {#if isSingle}
           <ContextMenu.Item class={itemClass} onSelect={onRename}>

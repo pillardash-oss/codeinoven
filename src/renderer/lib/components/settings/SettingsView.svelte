@@ -4,6 +4,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { isOverlayOpen } from '$lib/overlay-close.svelte'
   import { flashElement } from '$lib/reveal-flash'
+  import { formatBytes } from '$lib/format/bytes'
   import type { SettingsSearchEntry } from '$lib/settings-search'
   import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
   import {
@@ -11,16 +12,21 @@
     FONT_WEIGHT_OPTIONS,
     ZOOM_LEVEL_OPTIONS
   } from '$lib/stores/app-config.svelte'
+  import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import { updateBlockers } from '$lib/stores/update-blockers.svelte'
   import { APP_NAME, APP_SLUG, GITHUB_URL, ORG_SLUG, WEBSITE_URL, X_URL } from '$shared/brand'
+  import { formatDateTime } from '$shared/date-time-format'
   import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import {
+    DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
     MAX_BACKGROUND_WAKE_LEAD_MS,
+    MAX_CIO_CLEANUP_RETENTION_DAYS,
     MAX_MAX_CONFLICT_FILE_BYTES,
     MIN_BACKGROUND_WAKE_LEAD_MS,
+    MIN_CIO_CLEANUP_RETENTION_DAYS,
     MIN_MAX_CONFLICT_FILE_BYTES,
     type AppConfig,
     type AppConfigPatch,
@@ -339,6 +345,40 @@
 
     void updateConfig({ threadLimit: value })
   }
+
+  function saveCioCleanupRetentionDays(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const value = Number(input.value)
+    if (
+      !Number.isInteger(value) ||
+      value < MIN_CIO_CLEANUP_RETENTION_DAYS ||
+      value > MAX_CIO_CLEANUP_RETENTION_DAYS
+    ) {
+      input.value = String(config.cioCleanupRetentionDays)
+      return
+    }
+
+    void updateConfig({ cioCleanupRetentionDays: value })
+  }
+
+  /** The last finished cleanup run, phrased for the settings report line. */
+  const cioCleanupLastRunText = $derived.by(() => {
+    const run = cioCleanupStore.state.lastRun
+    if (!run) return null
+
+    const parts = [
+      `Last run: ${formatDateTime(run.finishedAt)}`,
+      `${run.entriesRemoved} removed`,
+      formatBytes(run.bytesRemoved),
+      `${run.targetsSwept} folder${run.targetsSwept === 1 ? '' : 's'}`
+    ]
+    if (run.phase === 'cancelled') parts.push('Stopped')
+    if (run.phase === 'failed') parts.push('Failed')
+    if (run.error) parts.push(run.error)
+    return parts.join(' · ')
+  })
 
   function saveQuestionTimeout(event: Event): void {
     const input = event.currentTarget
@@ -1166,6 +1206,80 @@
                   />
                   seconds
                 </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- CIO Cleanup -->
+          <div id="settings-block-general-cio-cleanup" class="rounded-xl border bg-surface p-4">
+            <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
+              CIO Cleanup
+            </h3>
+            <p class="mb-3 text-xs leading-relaxed text-dimmed">
+              Stale content of every workspace's <code>.cio</code> scratch folder — projects, scopes,
+              chats, assistant routines, and browser tabs — is removed once a day.
+            </p>
+            <div class="space-y-3">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Keep scratch for</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Default is {DEFAULT_CIO_CLEANUP_RETENTION_DAYS} days; the next run uses the new value
+                  </p>
+                </div>
+                <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+                  <input
+                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    type="number"
+                    min={MIN_CIO_CLEANUP_RETENTION_DAYS}
+                    max={MAX_CIO_CLEANUP_RETENTION_DAYS}
+                    step="1"
+                    value={config.cioCleanupRetentionDays}
+                    disabled={!settingsReady}
+                    aria-label="CIO Cleanup retention days"
+                    onchange={saveCioCleanupRetentionDays}
+                  />
+                  days
+                </label>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Run cleanup now</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    A manual run shows progress in a dockable panel; the daily run stays silent
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="flex h-9 shrink-0 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                  title="Run CIO Cleanup now"
+                  disabled={!settingsReady || cioCleanupStore.state.running}
+                  onclick={() => void cioCleanupStore.runNow()}
+                >
+                  <RefreshCw
+                    size={13}
+                    class={cioCleanupStore.state.running ? 'animate-spin' : ''}
+                  />
+                  Run cleanup now
+                </button>
+              </div>
+              <div class="border-t pt-3">
+                {#if cioCleanupLastRunText}
+                  <p class="text-xs leading-relaxed text-muted tabular-nums">
+                    {cioCleanupLastRunText}
+                  </p>
+                {:else}
+                  <p class="text-xs leading-relaxed text-dimmed">CIO Cleanup has not run yet.</p>
+                {/if}
+                <p class="mt-1 text-xs leading-relaxed text-dimmed">
+                  Exclusions come from the file tree's right-click menu inside <code>.cio</code>
+                  ("Exclude from CIO Cleanup"){#if cioCleanupStore.state.exclusions.length > 0},
+                    with
+                    {cioCleanupStore.state.exclusions.length}
+                    {cioCleanupStore.state.exclusions.length === 1
+                      ? 'active exclusion'
+                      : 'active exclusions'}{/if}.
+                </p>
               </div>
             </div>
           </div>

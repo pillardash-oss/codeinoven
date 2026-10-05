@@ -6,8 +6,11 @@ import { ProjectRepo } from '../main/database/repositories/project-repo'
 import { CHATS_CWD_DIR, type Project } from './types'
 import { atomicWrite, ensureDir } from './utils'
 import { APP_NAME } from './brand'
+import { CIO_SCRATCH_DIRECTORY } from './cio-cleanup'
 
-export const PROJECT_DATA_DIRECTORY = '.cio'
+/** The scratch folder name, owned by the shared CIO Cleanup module so the
+ *  renderer's exclusion menu and the main-process sweeper cannot drift. */
+export const PROJECT_DATA_DIRECTORY = CIO_SCRATCH_DIRECTORY
 export const PROJECT_SPECS_DIRECTORY = 'specs'
 
 /** App-storage root directory used as the neutral working directory for

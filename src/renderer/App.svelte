@@ -64,6 +64,7 @@
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
+  import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
@@ -1802,6 +1803,13 @@
     <!-- Floats above every view so a sync between two checkouts reports itself, and its outcome is never a dialog. -->
     {#await import('$lib/components/git/GitSyncDockHost.svelte') then { default: GitSyncDockHost }}
       <GitSyncDockHost />
+    {/await}
+  {/if}
+
+  {#if cioCleanupStore.jobs.length}
+    <!-- Floats above every view so a manual cleanup keeps reporting while the user works. -->
+    {#await import('$lib/components/cio/CioCleanupDockHost.svelte') then { default: CioCleanupDockHost }}
+      <CioCleanupDockHost />
     {/await}
   {/if}
 

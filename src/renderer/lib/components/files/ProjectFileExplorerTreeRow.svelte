@@ -37,6 +37,8 @@
     onReveal: (entry: ProjectFileEntry) => void
     onOpenInBrowser: (entry: ProjectFileEntry) => void
     onOpenInTerminal: (entry: ProjectFileEntry) => void
+    cioCleanupExcluded: boolean
+    onToggleCioCleanupExclusion: (entry: ProjectFileEntry) => void
     onRowClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowDoubleClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowContextMenu: (entry: ProjectFileEntry) => void
@@ -68,6 +70,8 @@
     onReveal,
     onOpenInBrowser,
     onOpenInTerminal,
+    cioCleanupExcluded,
+    onToggleCioCleanupExclusion,
     onRowClick,
     onRowDoubleClick,
     onRowContextMenu,
@@ -148,6 +152,8 @@
     onReveal={() => onReveal(entry)}
     onOpenInBrowser={() => onOpenInBrowser(entry)}
     onOpenInTerminal={() => onOpenInTerminal(entry)}
+    {cioCleanupExcluded}
+    onToggleCioCleanupExclusion={() => onToggleCioCleanupExclusion(entry)}
   >
     {#if inlineEdit?.kind === 'rename' && inlineEdit.entry.path === entry.path}
       <div

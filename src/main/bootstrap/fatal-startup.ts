@@ -70,6 +70,10 @@ export async function handleFatalStartup(
         close: () => state.routineScheduler?.dispose()
       },
       {
+        name: 'cioCleanup',
+        close: () => state.cioCleanup?.stop()
+      },
+      {
         name: 'speechService',
         close: () => void state.speechService?.dispose()
       }

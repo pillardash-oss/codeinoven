@@ -58,7 +58,9 @@ import {
   MAX_BACKGROUND_WAKE_LEAD_MS,
   MIN_BACKGROUND_WAKE_LEAD_MS,
   MAX_MAX_BACKGROUND_WAKE_HOLD_MS,
-  MIN_MAX_BACKGROUND_WAKE_HOLD_MS
+  MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
+  MIN_CIO_CLEANUP_RETENTION_DAYS,
+  MAX_CIO_CLEANUP_RETENTION_DAYS
 } from '../../../lib/types'
 import { validateBoundedString, validateEntityId, validateMergeMethod } from '../ipc-validation'
 import { isRecord, requireString } from './shared'
@@ -220,7 +222,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'allowPrototypeExternalCdn',
   'prototypeCdnAllowlist',
   'inAppNotificationSound',
-  'sound'
+  'sound',
+  'cioCleanupRetentionDays'
 ])
 
 const AGENT_DEFAULT_FIELDS = new Set([
@@ -916,6 +919,15 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('In-app notification sound toggles must be booleans')
     }
     patch.inAppNotificationSound = { success: sound.success, issue: sound.issue }
+  }
+
+  if ('cioCleanupRetentionDays' in value) {
+    patch.cioCleanupRetentionDays = validateBoundedInteger(
+      value.cioCleanupRetentionDays,
+      'CIO Cleanup retention',
+      MIN_CIO_CLEANUP_RETENTION_DAYS,
+      MAX_CIO_CLEANUP_RETENTION_DAYS
+    )
   }
 
   if ('sound' in value) {

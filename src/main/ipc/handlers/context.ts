@@ -55,6 +55,7 @@ import type { AutoAnswerStore } from '../../system/auto-answer-store'
 import type { PrivilegedIpcValidator } from '../ipc-validation'
 import type { BrowserService } from '../../browser/browser-service'
 import type { AttachmentStorageScope } from '../../../lib/types'
+import type { CioCleanupService } from '../../cio-cleanup/cio-cleanup-service'
 
 export interface RegisterIpcHandlersOptions {
   projectManager?: ProjectManager
@@ -108,6 +109,11 @@ export interface RegisterIpcHandlersOptions {
    * the app-update check cycle rather than a scheduler of its own.
    */
   skillUpdates?: SkillUpdateService
+  /**
+   * CIO Cleanup: the daily sweep of stale scratch folders, and the manual run
+   * the dock tracks. Absent only in a bare handler set.
+   */
+  cioCleanup?: CioCleanupService
   /** Receives the privileged scoped-path resolver so other main-process
    *  boundaries (the `appfile://` preview protocol) authorize paths exactly
    *  like privileged IPC does. */

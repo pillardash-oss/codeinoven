@@ -125,13 +125,12 @@ export function bestForBadge(artifact: SpeechModelArtifact): { label: string; cl
   return null
 }
 
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1_048_576).toFixed(1)} MB`
-  return `${(bytes / 1_073_741_824).toFixed(2)} GB`
-}
-
+/**
+ * Byte counts moved to `$lib/format/bytes` so every surface that reports a size
+ * shares one implementation. Re-exported here because the sound settings tab
+ * imports it from this module.
+ */
+export { formatBytes } from '$lib/format/bytes'
 export function downloadPercent(download: { bytesReceived: number; totalBytes: number }): number {
   if (download.totalBytes <= 0) return 0
   return Math.min(

@@ -313,6 +313,24 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: SlidersHorizontal
   },
   {
+    id: 'general-cio-cleanup',
+    section: 'general',
+    blockId: 'general-cio-cleanup',
+    title: 'CIO Cleanup',
+    description: 'Daily removal of stale scratch content from every workspace .cio folder.',
+    keywords: ['cleanup', 'scratch', 'retention', 'exclusions', 'stale', 'cio'],
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'general-cio-cleanup-retention',
+    section: 'general',
+    blockId: 'general-cio-cleanup',
+    title: 'CIO Cleanup retention',
+    description: 'How many days scratch content is kept before CIO Cleanup removes it.',
+    keywords: ['cleanup', 'scratch', 'retention', 'days', 'stale'],
+    icon: SlidersHorizontal
+  },
+  {
     id: 'general-background',
     section: 'general',
     blockId: 'general-threads',

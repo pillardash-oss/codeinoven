@@ -188,7 +188,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     },
     { SkillUpdateService },
     { SecretVault },
-    { GitHubAuthService }
+    { GitHubAuthService },
+    { CioCleanupService },
+    { broadcastCioCleanupProgress, broadcastCioCleanupState }
   ] = await Promise.all([
     import('../ipc/ipc-handlers'),
     import('../../lib/engines/project-manager'),
@@ -214,7 +216,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../scheduler/assistant-events'),
     import('../utilities/skill-updates'),
     import('../storage/secret-vault'),
-    import('../git/github-auth-service')
+    import('../git/github-auth-service'),
+    import('../cio-cleanup/cio-cleanup-service'),
+    import('../cio-cleanup/cio-cleanup-events')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -235,6 +239,24 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     createThreadWorkspaceRoots(storage, database)
   )
   state.appfileProjectFiles = projectFilesService
+  // CIO Cleanup resolves the same roots the app boots a session in, and reports
+  // into the app-root dock exactly like the other background jobs do.
+  state.cioCleanup = new CioCleanupService({
+    database,
+    storage,
+    boards: scopeManager,
+    scopeRoots: {
+      resolve: async (target) => {
+        const resolution = await scopeRootResolver.resolve(target)
+        return resolution.ok ? { ok: true, root: resolution.root } : { ok: false }
+      }
+    },
+    hasActiveProcesses: (projectId, scopeBucketId) =>
+      state.chatEngine?.hasActiveProcessesInScope(projectId, scopeBucketId) ??
+      Promise.resolve(false),
+    onProgress: broadcastCioCleanupProgress,
+    onStateChanged: broadcastCioCleanupState
+  })
   state.computerUsePipService = new ComputerUsePipService(storage)
   state.harnessManifestService = new HarnessManifestService(storage)
   state.modelPricingService = new ModelPricingService(storage)
@@ -700,6 +722,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     heartbeatScheduler: state.heartbeatScheduler,
     routineManager: state.routineManager ?? undefined,
     routineScheduler: state.routineScheduler ?? undefined,
+    cioCleanup: state.cioCleanup ?? undefined,
     autoAnswerStore: state.autoAnswerStore ?? undefined,
     harnessManifestService: state.harnessManifestService,
     worktreeService: scopeWorktreeService,
@@ -915,6 +938,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       }
     } catch (error) {
       Logger.error('Routine scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      // Daily, silent, and bounded per pass: a stale scratch backlog is reclaimed
+      // in the background instead of hammering the disk in one go.
+      await state.cioCleanup?.start()
+    } catch (error) {
+      Logger.error('CIO Cleanup startup failed (non-fatal):', error)
     }
 
     // A machine that slept through a slot catches up when it wakes or unlocks.

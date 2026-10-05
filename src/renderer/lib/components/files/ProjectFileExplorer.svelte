@@ -3,7 +3,13 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import type { ProjectFileEntry, ProjectFileInfo, ProjectFileTransferMode } from '$shared/types'
+  import type {
+    CioCleanupMount,
+    ProjectFileEntry,
+    ProjectFileInfo,
+    ProjectFileTransferMode
+  } from '$shared/types'
+  import { cioScratchRelativePath } from '$shared/cio-cleanup'
   import { invoke } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -13,6 +19,7 @@
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
+  import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
   import ProjectFileExplorerDialogs from './ProjectFileExplorerDialogs.svelte'
@@ -37,7 +44,8 @@
     TREE_ROW_HEIGHT,
     TREE_VERTICAL_PADDING,
     visibleEntries,
-    type InlineEdit
+    type InlineEdit,
+    type TreeRow
   } from './project-file-explorer-tree'
 
   interface Props {
@@ -147,6 +155,30 @@
   let suppressRevealScroll = false
   const lastTurnPathSet = $derived(new Set(lastTurnPaths))
   const conflictPathSet = $derived(new Set(conflictPaths))
+
+  /** The scratch mount this tree browses: the project, its active scope bucket,
+   *  and the conversation whose own workspace is mounted (when set). CIO
+   *  Cleanup exclusions are keyed by exactly this triple. */
+  let cioCleanupMount = $derived<CioCleanupMount>({
+    projectId,
+    scopeBucketId: workspaceState.activeScopeBucketIdFor(projectId),
+    ...(projectState.mountThreadId ? { threadId: projectState.mountThreadId } : {})
+  })
+
+  /** Whether a row is protected from CIO Cleanup. An exclusion on any ancestor
+   *  inside `.cio` covers the row, so a child of an excluded folder reads as
+   *  excluded too. */
+  function isRowCioCleanupExcluded(row: TreeRow): boolean {
+    if (row.kind !== 'entry') return false
+    const relativePath = cioScratchRelativePath(row.entry.path)
+    if (!relativePath) return false
+    return cioCleanupStore.exclusionFor(cioCleanupMount, relativePath) !== null
+  }
+
+  /** Exclude a `.cio` entry from the cleanup sweep, or include it again. */
+  function toggleCioCleanupExclusion(entry: ProjectFileEntry): void {
+    void cioCleanupStore.toggleExclusion({ ...cioCleanupMount, path: entry.path })
+  }
 
   let searchResultDirectories = $derived(collectSearchResultDirectories(searchResultPaths))
 
@@ -1153,6 +1185,8 @@
     onReveal={() => undefined}
     onOpenInBrowser={() => void openEntryInBrowser(null)}
     onOpenInTerminal={() => openEntryInTerminal(null)}
+    cioCleanupExcluded={false}
+    onToggleCioCleanupExclusion={() => undefined}
   >
     <div
       {@attach attachTreeScroll}
@@ -1230,6 +1264,8 @@
                 onReveal={(entry) => void revealInFileManager(entry)}
                 onOpenInBrowser={(entry) => void openEntryInBrowser(entry)}
                 onOpenInTerminal={openEntryInTerminal}
+                cioCleanupExcluded={isRowCioCleanupExcluded(virtualRow.row)}
+                onToggleCioCleanupExclusion={toggleCioCleanupExclusion}
                 onRowClick={handleRowClick}
                 onRowDoubleClick={handleRowDoubleClick}
                 onRowContextMenu={handleRowContextMenu}
