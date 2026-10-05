@@ -452,7 +452,10 @@ export class ComputerUsePipService {
 
   private async ensureClient(): Promise<McpClient> {
     const level = this.targetPermissionLevel
-    if (this.client && this.clientPermissionLevel === level) return this.client
+    // A connection the driver retired (a frame that ran out of budget) can never
+    // answer again, so the preview reconnects instead of photographing a dead
+    // client for the rest of the run.
+    if (this.client?.usable && this.clientPermissionLevel === level) return this.client
     const generation = this.runGeneration
     if (this.client) {
       // A client's tier is fixed by the environment it was spawned with, so a

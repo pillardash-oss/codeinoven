@@ -315,6 +315,17 @@ interface TurnState {
   eligible: Map<string, ResolvedUtility>
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
+  /**
+   * Connections being established right now, keyed like `clients`.
+   *
+   * The gateway serves concurrent calls, so two of them can reach the same
+   * utility before either has a client: a parallel tool call inside one turn, or
+   * a turn whose agent fires several operations at once. Without this, both
+   * spawn a server process and the slower one is overwritten in `clients` and
+   * never closed, leaving an orphan holding the same shared resource (the Cua
+   * daemon, an npm cache lock) that the surviving one needs.
+   */
+  connecting: Map<string, Promise<McpClient>>
   attributionSequence: number
   /** True once the agent has called the app utility-search tool this turn. */
   searched: boolean
@@ -722,6 +733,7 @@ export class UtilityOrchestrationService {
       eligible: new Map(eligible.map((entry) => [entry.utility.id, entry])),
       activated: new Map(always.map((entry) => [entry.utility.id, entry])),
       clients: new Map(),
+      connecting: new Map(),
       attributionSequence: 0,
       searched: false,
       cuaSessionIds: new Map(),
@@ -1554,24 +1566,61 @@ export class UtilityOrchestrationService {
    *  activation and straight-to-usage banked invocation. */
   private async ensureMcpClient(state: TurnState, resolved: ResolvedUtility): Promise<McpClient> {
     const utilityId = resolved.utility.id
-    if (resolved.utility.kind !== 'mcp' && resolved.utility.kind !== 'computer_use') {
-      throw new Error(`Utility kind "${resolved.utility.kind}" does not expose an MCP client`)
-    }
-    let client = state.clients.get(utilityId)
-    if (!client) {
-      if (this.isComputerUseUtility(resolved)) {
-        // The Cua daemon's authorization mode is a start-time, daemon-wide
-        // property: whichever client starts the daemon fixes it for every later
-        // run until the daemon stops. Claiming the tier here, before the client
-        // connects, is what keeps a full_access run from leaving an
-        // approval-free daemon behind and an auto_review run from silently
-        // downgrading a full_access one.
-        await this.cuaBridge.claimDaemonMode(state.request.permissionLevel, state.id)
+    const utility = mcpCapableUtility(resolved.utility)
+    const cached = state.clients.get(utilityId)
+    if (cached?.usable) {
+      if (this.isComputerUseUtility(resolved) && !state.cuaSessionIds.has(utilityId)) {
+        await this.prepareComputerUseSession(state, utilityId, cached)
       }
-      client = await this.mcpClient(state, resolved.utility)
-      state.clients.set(utilityId, client)
+      return cached
     }
-    if (this.isComputerUseUtility(resolved) && !state.cuaSessionIds.has(utilityId)) {
+    if (cached) {
+      // The connection stopped answering (a request timed out, the child died,
+      // the remote session was lost), so it is replaced instead of reused. A
+      // computer-use session is forgotten with it: that session lives inside the
+      // daemon the old connection was talking to, so the new connection starts
+      // its own rather than naming one that no longer exists.
+      state.clients.delete(utilityId)
+      state.cuaSessionIds.delete(utilityId)
+      await cached.close().catch(() => undefined)
+    }
+    const connecting =
+      state.connecting.get(utilityId) ?? this.connectMcpClient(state, resolved, utility, utilityId)
+    state.connecting.set(utilityId, connecting)
+    try {
+      const client = await connecting
+      state.clients.set(utilityId, client)
+      return client
+    } finally {
+      if (state.connecting.get(utilityId) === connecting) state.connecting.delete(utilityId)
+    }
+  }
+
+  /**
+   * Establish one utility's connection and leave it ready to use: claim the
+   * shared Cua daemon for a computer-use run before connecting, and start the
+   * turn's cursor session once it is up.
+   *
+   * Separate from `ensureMcpClient` so both the caller that starts a connection
+   * and any caller that joins the one already in flight run the same setup.
+   */
+  private async connectMcpClient(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    utility: UtilityDefinitionFor<'mcp'> | UtilityDefinitionFor<'computer_use'>,
+    utilityId: string
+  ): Promise<McpClient> {
+    if (this.isComputerUseUtility(resolved)) {
+      // The Cua daemon's authorization mode is a start-time, daemon-wide
+      // property: whichever client starts the daemon fixes it for every later
+      // run until the daemon stops. Claiming the tier here, before the client
+      // connects, is what keeps a full_access run from leaving an
+      // approval-free daemon behind and an auto_review run from silently
+      // downgrading a full_access one.
+      await this.cuaBridge.claimDaemonMode(state.request.permissionLevel, state.id)
+    }
+    const client = await this.mcpClient(state, utility)
+    if (this.isComputerUseUtility(resolved)) {
       await this.prepareComputerUseSession(state, utilityId, client)
     }
     return client
@@ -1720,7 +1769,7 @@ export class UtilityOrchestrationService {
       try {
         result = await client.callTool(operation, routedInput)
       } catch (error) {
-        await this.dropDeadComputerUseTransport(state, resolved, client, error)
+        await this.dropUnusableTransport(state, resolved, client, error)
         throw error
       }
       if (this.isComputerUseUtility(resolved)) {
@@ -1798,15 +1847,15 @@ export class UtilityOrchestrationService {
   }
 
   /**
-   * Drop a Cua client whose daemon connection died mid-turn.
+   * Forget a connection that cannot answer any more, so the next call reconnects.
    *
-   * The `cua-driver mcp` server owns one connection to the shared Cua daemon and
-   * never re-establishes it, so a daemon that dies while a run is in flight (a
-   * crash, a driver update, a quit from the menu bar) leaves every remaining
-   * computer-use call of that turn failing against a connection that can never
-   * work again   measured against cua-driver 0.17.0: the connected server keeps
-   * answering `daemon transport error ... cua-driver.sock: No such file or
-   * directory` while a freshly spawned one starts a new daemon and works.
+   * Two failures land here. The Cua daemon can die under a live run (a crash, a
+   * driver update, another run restarting it in its own mode), and the `cua-driver
+   * mcp` server owns one connection to it and never re-establishes it: the
+   * connected server keeps answering `daemon transport error ... cua-driver.sock:
+   * No such file or directory` while a freshly spawned one starts a new daemon and
+   * works. Any other MCP server can simply stop answering, which the client reports
+   * as a request that ran out of budget and a connection it retired on the way out.
    *
    * Closing the client and forgetting its session is what lets the next call
    * reconnect: reconnecting re-claims the daemon, which starts a fresh one on
@@ -1820,22 +1869,22 @@ export class UtilityOrchestrationService {
    * still the cached one: the gateway serves concurrent requests, so another call
    * may already have replaced it with a fresh connection that must survive.
    */
-  private async dropDeadComputerUseTransport(
+  private async dropUnusableTransport(
     state: TurnState,
     resolved: ResolvedUtility,
     client: McpClient,
     error: unknown
   ): Promise<void> {
-    if (!this.isComputerUseUtility(resolved)) return
     const message = error instanceof Error ? error.message : String(error)
-    if (!isCuaDaemonTransportFailure(message)) return
+    const daemonLost = this.isComputerUseUtility(resolved) && isCuaDaemonTransportFailure(message)
+    if (client.usable && !daemonLost) return
     const utilityId = resolved.utility.id
     if (state.clients.get(utilityId) === client) {
       state.clients.delete(utilityId)
-      state.cuaSessionIds.delete(utilityId)
+      if (this.isComputerUseUtility(resolved)) state.cuaSessionIds.delete(utilityId)
     }
     await client.close().catch(() => undefined)
-    Logger.dev('Cua daemon connection was lost; the next computer-use call reconnects')
+    Logger.dev('MCP connection retired; the next call reconnects', { utilityId, daemonLost })
   }
 
   /** Establish a visible, never-idle-hidden cursor for one Cua turn. */
@@ -2029,6 +2078,22 @@ export class UtilityOrchestrationService {
     response.writeHead(status, { 'Content-Type': 'application/json' })
     response.end(JSON.stringify(body))
   }
+}
+
+/**
+ * The utility a connection can be opened for, or the reason it cannot be.
+ *
+ * The two callers of `ensureMcpClient` both need this narrowing before they can
+ * reach the connection path, so it lives here rather than being restated at each
+ * of them.
+ */
+function mcpCapableUtility(
+  utility: UtilityDefinition
+): UtilityDefinitionFor<'mcp'> | UtilityDefinitionFor<'computer_use'> {
+  if (utility.kind !== 'mcp' && utility.kind !== 'computer_use') {
+    throw new Error(`Utility kind "${utility.kind}" does not expose an MCP client`)
+  }
+  return utility
 }
 
 /**

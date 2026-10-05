@@ -14,6 +14,8 @@ export class RemoteMcpClient implements McpClient {
 
   private nextId = 1
   private sessionId: string | undefined
+  /** Cleared the moment this session can no longer be trusted. */
+  private retired = false
   /** Registry id of this client's task-manager row, once announced. */
   private serviceId: string | null = null
 
@@ -21,6 +23,10 @@ export class RemoteMcpClient implements McpClient {
     private readonly url: string,
     private readonly headers: Record<string, string>
   ) {}
+
+  get usable(): boolean {
+    return !this.retired
+  }
 
   static async connect(
     url: string,
@@ -81,20 +87,38 @@ export class RemoteMcpClient implements McpClient {
   }
 
   async close(): Promise<void> {
+    this.retired = true
     if (this.serviceId) {
       appServiceRegistry.unregister(this.serviceId)
       this.serviceId = null
     }
     if (this.sessionId) {
+      // Bounded like every other request this client makes: a server that never
+      // answers the DELETE must not hold turn cleanup open, and cleanup awaits
+      // this through `Promise.allSettled`, which settles only when it does.
       await fetch(this.url, {
         method: 'DELETE',
-        headers: { ...this.headers, 'Mcp-Session-Id': this.sessionId }
+        headers: { ...this.headers, 'Mcp-Session-Id': this.sessionId },
+        signal: AbortSignal.timeout(MCP_TIMEOUT_MS)
       }).catch(() => undefined)
     }
   }
 
-  private request(method: string, params: Record<string, unknown>): Promise<unknown> {
-    return this.send({ jsonrpc: '2.0', id: this.nextId++, method, params }, true)
+  /**
+   * A request this client abandons on a timeout retires it.
+   *
+   * The session id it carries belongs to a server that stopped answering inside
+   * the request budget, and a streamable-HTTP session cannot be resumed mid-call:
+   * the next call re-initializes instead of queueing behind work that is still
+   * running server-side. The holder closes this client, which ends the session.
+   */
+  private async request(method: string, params: Record<string, unknown>): Promise<unknown> {
+    try {
+      return await this.send({ jsonrpc: '2.0', id: this.nextId++, method, params }, true)
+    } catch (error) {
+      if (isTimeoutError(error)) this.retired = true
+      throw error
+    }
   }
 
   private notify(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -130,4 +154,15 @@ export class RemoteMcpClient implements McpClient {
     if (result.error) throw new Error(result.error.message)
     return result.result
   }
+}
+
+/**
+ * Whether a fetch failed because `AbortSignal.timeout` expired it.
+ *
+ * The signal is this client's own request budget, so it is the only way to tell
+ * "the server is gone or jammed" from "the server answered with a refusal":
+ * refusals are a working session and keep the client in service.
+ */
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TimeoutError'
 }

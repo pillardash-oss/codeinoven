@@ -9,6 +9,17 @@ import { getConfigRoot } from '../../lib/utils'
 
 export const MCP_TIMEOUT_MS = 30_000
 
+/**
+ * How long a retired connection's child gets to read what was sent to it and
+ * stop on its own before it is signalled.
+ *
+ * Teardown happens after a request already ran out of its budget, so a fraction
+ * of a second costs the turn nothing, and it is the difference between a
+ * cancellation that can be honoured and a process killed before it reads the
+ * line. Unref'd so a retiring client never holds the app open.
+ */
+const RETIRE_GRACE_MS = 300
+
 /** How much child stderr is kept so a startup failure can say why it failed. */
 const STDERR_TAIL_LIMIT = 2_000
 
@@ -38,6 +49,16 @@ export interface McpClient {
   listTools(): Promise<McpTool[]>
   callTool(name: string, input: Record<string, unknown>): Promise<unknown>
   close(): Promise<void>
+  /**
+   * Whether this connection can still answer a call.
+   *
+   * A stdio server that stopped answering cannot be resumed: its abandoned work
+   * is still running inside the child, and anything sent behind it waits only to
+   * time out again. A client that is no longer usable is therefore replaced by
+   * whoever holds it rather than reused, so one hung call costs a reconnect
+   * instead of every later call of the turn.
+   */
+  readonly usable: boolean
   /** Filled once the handshake completes; a connection test reports it back. */
   readonly serverInfo?: McpServerInfo
 }
@@ -99,6 +120,8 @@ export class StdioMcpClient implements McpClient {
   private nextId = 1
   private buffer = ''
   private stderrTail = ''
+  /** Cleared the moment this connection can no longer be trusted. */
+  private retired = false
   private pending = new Map<
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
@@ -116,13 +139,25 @@ export class StdioMcpClient implements McpClient {
     // Keeping a bounded tail is what turns "the process died" into the reason it died:
     // a stdio MCP that exits over a missing credential reports that on stderr alone.
     child.stderr.on('data', (chunk: Buffer) => this.recordStderr(chunk.toString()))
+    // A write to a server that has already exited surfaces as an asynchronous EPIPE on
+    // stdin. Without a listener that is an uncaught exception in the main process, and
+    // the writes that reach it are exactly the ones sent while a server is dying.
+    child.stdin.on('error', () => undefined)
     // `close` rather than `exit`: it fires once the stdio streams are drained, so the
     // tail above is complete by the time the failure is reported.
     child.on('close', (code, signal) => {
+      this.retired = true
       this.retireService()
       this.rejectPending(this.exitError(code, signal))
     })
-    child.on('error', (error) => this.rejectPending(error))
+    child.on('error', (error) => {
+      this.retired = true
+      this.rejectPending(error)
+    })
+  }
+
+  get usable(): boolean {
+    return !this.retired
   }
 
   static async connect(
@@ -199,16 +234,53 @@ export class StdioMcpClient implements McpClient {
   }
 
   async close(): Promise<void> {
+    this.retire('MCP client closed')
+  }
+
+  /**
+   * Take this connection out of service: fail everything still waiting on it, and
+   * stop the child that owns the abandoned work.
+   *
+   * Closing the child is the only cancellation a stdio server cannot ignore, and
+   * it is what releases whatever shared resource the hung call was holding (a
+   * Cua daemon, a remote session, a half-open install). The caller replaces this
+   * client on its next call, so the cost of retiring a slow-but-fine server is
+   * one reconnect, while the cost of keeping a jammed one is the rest of the
+   * turn failing against a connection that cannot answer.
+   */
+  private retire(reason: string): void {
+    if (this.retired) return
+    this.retired = true
     this.retireService()
-    this.rejectPending(new Error('MCP client closed'))
-    this.child.kill()
+    this.rejectPending(new Error(reason))
+    // Half-close stdin first: an EOF-aware server stops its work and exits by
+    // itself, which is what lets a cancellation sent just before this be read at
+    // all, and the signal is the guarantee for one that is not EOF-aware.
+    this.child.stdin.end()
+    const child = this.child
+    const killTimer = setTimeout(() => child.kill(), RETIRE_GRACE_MS)
+    if (typeof killTimer.unref === 'function') killTimer.unref()
+    child.once('close', () => clearTimeout(killTimer))
   }
 
   private request(method: string, params: Record<string, unknown>): Promise<unknown> {
+    if (this.retired) {
+      // A retired connection has no child left to answer, so this fails now
+      // instead of spending a request budget waiting for nothing.
+      return Promise.reject(new Error(`MCP request refused on a retired connection: ${method}`))
+    }
     const id = this.nextId++
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
+        // The server is still working on a call nobody is waiting for any more.
+        // Tell it so, then retire the connection: whatever is running inside it
+        // is already delaying every later call on this child.
+        this.notify('notifications/cancelled', {
+          requestId: id,
+          reason: `\`${method}\` exceeded the ${MCP_TIMEOUT_MS} ms request budget`
+        })
+        this.retire(`MCP request timed out: ${method}`)
         reject(new Error(`MCP request timed out: ${method}`))
       }, MCP_TIMEOUT_MS)
       this.pending.set(id, { resolve, reject, timer })
@@ -221,7 +293,12 @@ export class StdioMcpClient implements McpClient {
   }
 
   private write(value: Record<string, unknown>): void {
-    this.child.stdin.write(`${JSON.stringify(value)}\n`)
+    try {
+      this.child.stdin.write(`${JSON.stringify(value)}\n`)
+    } catch {
+      // A server that is gone cannot be written to. Its `close` handler reports
+      // that, so a failed write stays silent here.
+    }
   }
 
   private consume(chunk: string): void {
