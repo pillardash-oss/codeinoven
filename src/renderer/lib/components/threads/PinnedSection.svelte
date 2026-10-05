@@ -38,6 +38,8 @@
     /** Optional status colour applied to the icon and the label text. Without
      *  it the header keeps the dimmed look shared by all views. */
     accent?: string
+    /** Render only the reusable header when rows belong to a shared keyed list. */
+    headerOnly?: boolean
   }
 
   let {
@@ -56,14 +58,15 @@
     folded: controlledFolded,
     onToggleFold,
     icon,
-    accent
+    accent,
+    headerOnly = false
   }: Props = $props()
 
   const folded = $derived(controlledFolded ?? pinnedFold.isFolded(sectionKey))
 </script>
 
 {#if threads.length > 0}
-  <div class="mb-3 pb-3 border-b">
+  <div class={headerOnly ? 'mt-3 border-t pt-1' : 'mb-3 pb-3 border-b'}>
     <button
       type="button"
       class="flex w-full items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-overlay"
@@ -94,7 +97,7 @@
       <span class="text-[0.625rem] text-dimmed/70">{threads.length}</span>
     </button>
 
-    {#if !folded}
+    {#if !headerOnly && !folded}
       <div class="space-y-px" role="list">
         {#each threads as thread (thread.id)}
           {#if row}

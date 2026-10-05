@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { flip } from 'svelte/animate'
+  import { prefersReducedMotion } from 'svelte/motion'
+  import { fade } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
   import {
     ChevronDown,
@@ -188,6 +191,51 @@
         )
       : []
   )
+
+  type ThreadListEntry =
+    | { key: string; kind: 'header'; group: (typeof threadGroups)[number] }
+    | { key: string; kind: 'thread'; thread: Thread }
+
+  // One keyed list owns the rows in both layouts. Switching inbox mode only
+  // moves existing instances and inserts the small group headers.
+  const threadListEntries = $derived.by((): ThreadListEntry[] => {
+    if (mode !== 'threads') return []
+    if (!threadGroupingState.enabled) {
+      const threads = searchingThreads
+        ? sidebar.threadsSearchResults.map((result) => result.thread)
+        : unpinnedTimelineThreads
+      return threads.map((thread) => ({
+        key: `thread:${thread.projectId}:${thread.id}`,
+        kind: 'thread',
+        thread
+      }))
+    }
+    const entries: ThreadListEntry[] = []
+    for (const group of threadGroups) {
+      entries.push({ key: `group:${group.label}`, kind: 'header', group })
+      if (!threadGroupingState.isFolded(group.label)) {
+        for (const thread of group.threads) {
+          entries.push({
+            key: `thread:${thread.projectId}:${thread.id}`,
+            kind: 'thread',
+            thread
+          })
+        }
+      }
+    }
+    return entries
+  })
+
+  // Animate only rows that were or will be on screen. Offscreen rows move
+  // immediately instead of creating hundreds of invisible animations.
+  function moveThreadEntry(node: HTMLElement, positions: { from: DOMRect; to: DOMRect }) {
+    const visible = [positions.from, positions.to].some(
+      (rect) => rect.bottom > 0 && rect.top < window.innerHeight
+    )
+    return flip(node, positions, {
+      duration: prefersReducedMotion.current || !visible ? 0 : 160
+    })
+  }
 
   /** Header icon per status group, threads view only. Lucide has no
    *  triangle-question-mark, so Attention uses the in-house equivalent. */
@@ -664,105 +712,7 @@
         {/if}
       {/if}
       {#if mode === 'threads'}
-        {#if threadGroupingState.enabled}
-          {#if !searchingThreads}
-            <!-- Pinned threads stay their own section above every status
-                 group, unchanged from the flat list. -->
-            <PinnedSection
-              sectionKey="threads"
-              label="Pinned Threads"
-              threads={pinnedTimelineThreads}
-              activeThreadId={activeThreadId ?? null}
-              getRowIcon={(t) => getThreadIcon(t)}
-              onOpen={onOpenThread}
-              {onRename}
-              {onTogglePin}
-              {onDelete}
-              {onFork}
-              onMovePinnedThread={(draggedId, targetId, pos) =>
-                onTimelinePinnedMove(draggedId, targetId, pos)}
-            />
-          {/if}
-          {#each threadGroups as group (group.label)}
-            <PinnedSection
-              sectionKey="threads"
-              label={group.label}
-              threads={group.threads}
-              icon={THREAD_GROUP_ICONS[group.label]}
-              accent={THREAD_GROUP_COLORS[group.label]}
-              folded={threadGroupingState.isFolded(group.label)}
-              onToggleFold={() => threadGroupingState.toggleFold(group.label)}
-              activeThreadId={activeThreadId ?? null}
-              onOpen={onOpenThread}
-              {onRename}
-              {onTogglePin}
-              {onDelete}
-              {onFork}
-            >
-              {#snippet row(thread: Thread)}
-                {@const result = searchingThreads ? searchResultsById.get(thread.id) : undefined}
-                {#if result}
-                  <ThreadSearchResultRow
-                    {result}
-                    selected={activeThreadId === thread.id}
-                    onOpen={onOpenThread}
-                  />
-                {:else}
-                  <ThreadRow
-                    {thread}
-                    projectIconUrl={getThreadIcon(thread)}
-                    selected={activeThreadId === thread.id}
-                    onOpen={onOpenThread}
-                    {onRename}
-                    {onTogglePin}
-                    {onDelete}
-                    {onFork}
-                  />
-                {/if}
-              {/snippet}
-            </PinnedSection>
-          {:else}
-            {#if searchingThreads || pinnedTimelineThreads.length === 0}
-              <p class="px-2 py-6 text-center text-xs text-dimmed">
-                {searchingThreads
-                  ? sidebar.threadsSearching
-                    ? 'Searching…'
-                    : 'No matching threads'
-                  : threadProjectFilterState.isAll
-                    ? 'No threads yet'
-                    : 'No threads in the selected projects'}
-              </p>
-            {/if}
-          {/each}
-          {#if !searchingThreads && hasMoreHistory}
-            <button
-              class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-              disabled={historyLoading}
-              onclick={() => void onLoadHistoryPage()}
-            >
-              {historyLoading ? 'Loading history…' : 'Load older threads'}
-            </button>
-          {/if}
-        {:else if sidebar.threadsSearchOpen && sidebar.threadsSearchQuery.trim()}
-          <!-- Threads search: results render inline in the sidebar so the user
-                 can open several results without the search dismissing. -->
-          {#if sidebar.threadsSearching && sidebar.threadsSearchResults.length === 0}
-            <p class="px-2 py-6 text-center text-xs text-dimmed">Searching…</p>
-          {:else if sidebar.threadsSearchResults.length === 0}
-            <p class="px-2 py-6 text-center text-xs text-dimmed">No matching threads</p>
-          {:else}
-            <div class="space-y-px" role="list">
-              {#each sidebar.threadsSearchResults as result (result.thread.id)}
-                <ThreadSearchResultRow
-                  {result}
-                  selected={activeThreadId === result.thread.id}
-                  onOpen={onOpenThread}
-                />
-              {/each}
-            </div>
-          {/if}
-        {:else}
-          <!-- Threads mode: pinned section then flat list -->
+        {#if !searchingThreads}
           <PinnedSection
             sectionKey="threads"
             label="Pinned Threads"
@@ -777,37 +727,75 @@
             onMovePinnedThread={(draggedId, targetId, pos) =>
               onTimelinePinnedMove(draggedId, targetId, pos)}
           />
-          <div class="space-y-px" role="list">
-            {#each unpinnedTimelineThreads as thread (thread.id)}
-              <ThreadRow
-                {thread}
-                projectIconUrl={getThreadIcon(thread)}
-                selected={activeThreadId === thread.id}
-                onOpen={onOpenThread}
-                {onRename}
-                {onTogglePin}
-                {onDelete}
-                {onFork}
-              />
-            {:else}
-              <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-                <p class="text-xs text-muted">
-                  {threadProjectFilterState.isAll
+        {/if}
+        <div class="space-y-px" role="list">
+          {#each threadListEntries as entry (entry.key)}
+            <div animate:moveThreadEntry>
+              {#if entry.kind === 'header'}
+                <div in:fade={{ duration: prefersReducedMotion.current ? 0 : 120 }}>
+                  <PinnedSection
+                    sectionKey="threads"
+                    label={entry.group.label}
+                    threads={entry.group.threads}
+                    headerOnly
+                    icon={THREAD_GROUP_ICONS[entry.group.label]}
+                    accent={THREAD_GROUP_COLORS[entry.group.label]}
+                    folded={threadGroupingState.isFolded(entry.group.label)}
+                    onToggleFold={() => threadGroupingState.toggleFold(entry.group.label)}
+                    activeThreadId={activeThreadId ?? null}
+                    onOpen={onOpenThread}
+                    {onRename}
+                    {onTogglePin}
+                    {onDelete}
+                    {onFork}
+                  />
+                </div>
+              {:else}
+                {@const result = searchingThreads
+                  ? searchResultsById.get(entry.thread.id)
+                  : undefined}
+                {#if result}
+                  <ThreadSearchResultRow
+                    {result}
+                    selected={activeThreadId === entry.thread.id}
+                    onOpen={onOpenThread}
+                  />
+                {:else}
+                  <ThreadRow
+                    thread={entry.thread}
+                    projectIconUrl={getThreadIcon(entry.thread)}
+                    selected={activeThreadId === entry.thread.id}
+                    onOpen={onOpenThread}
+                    {onRename}
+                    {onTogglePin}
+                    {onDelete}
+                    {onFork}
+                  />
+                {/if}
+              {/if}
+            </div>
+          {:else}
+            {#if searchingThreads || pinnedTimelineThreads.length === 0}
+              <p class="px-2 py-6 text-center text-xs text-dimmed">
+                {searchingThreads
+                  ? sidebar.threadsSearching
+                    ? 'Searching…'
+                    : 'No matching threads'
+                  : threadProjectFilterState.isAll
                     ? 'No threads yet'
                     : 'No threads in the selected projects'}
-                </p>
-              </div>
-            {/each}
-          </div>
-          {#if hasMoreHistory}
-            <button
-              class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-              disabled={historyLoading}
-              onclick={() => void onLoadHistoryPage()}
-            >
-              {historyLoading ? 'Loading history…' : 'Load older threads'}
-            </button>
-          {/if}
+              </p>
+            {/if}
+          {/each}
+        </div>
+        {#if !searchingThreads && hasMoreHistory}
+          <button
+            class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+            disabled={historyLoading}
+            onclick={() => void onLoadHistoryPage()}
+          >
+            {historyLoading ? 'Loading history…' : 'Load older threads'}
+          </button>
         {/if}
       {/if}
       {#if mode === 'projects'}
