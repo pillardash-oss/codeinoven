@@ -29,7 +29,7 @@
   import SettingsEntry from '../shared/SettingsEntry.svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
-  import OvenSetupModal from './OvenSetupModal.svelte'
+  import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import type { CustomIcon } from '$shared/types'
@@ -69,8 +69,6 @@
   let pendingRemoval = $state<Oven | null>(null)
   let pendingHarnessRemoval = $state<{ ovenId: string; harnessId: string; command: string } | null>(null)
   let harnessBusy = $state('')
-  let setupOpen = $state(false)
-  let setupOvenId = $state('')
   const hasAppearance = $derived(
     Boolean(
       color !== (editing?.color ?? '#22c55e') ||
@@ -329,17 +327,12 @@
   }
 
   async function openOvenSetup(oven: Oven): Promise<void> {
-    setupOvenId = oven.id
-    setupOpen = true
+    ovenSetupStore.show(oven.id)
     const operation = await invoke('oven:setup:status', oven.id).catch(() => null)
     setupComplete = {
       ...setupComplete,
       [oven.id]: operation?.setupComplete === true || operation?.status === 'succeeded'
     }
-  }
-
-  function markSetupComplete(ovenId: string): void {
-    setupComplete = { ...setupComplete, [ovenId]: true }
   }
 
   async function remove(): Promise<void> {
@@ -488,7 +481,7 @@
                   class="rounded-lg border px-2.5 py-1.5 text-xs hover:bg-elevated disabled:opacity-50"
                   disabled={Boolean(busy)}
                   onclick={() => void openOvenSetup(oven)}
-                >{ovenSetupActionLabel(setupComplete[oven.id] ?? false)}</button>
+                >{ovenSetupActionLabel(ovenSetupStore.completed[oven.id] || setupComplete[oven.id] || false)}</button>
                 <button
                   type="button"
                   class="rounded-lg px-2 py-1.5 text-xs text-muted hover:bg-elevated"
@@ -875,10 +868,3 @@
   <p>Uninstall {pendingHarnessRemoval?.command} from this Oven?</p>
   <p>The harness may remove its own configuration or credentials. CodeInOven checks that it is not running before uninstalling it.</p>
 </ConfirmDialog>
-
-<OvenSetupModal
-  open={setupOpen}
-  initialOvenId={setupOvenId}
-  onComplete={markSetupComplete}
-  onClose={() => (setupOpen = false)}
-/>

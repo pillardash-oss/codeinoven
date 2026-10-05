@@ -2,6 +2,7 @@
   import { Loader2, Circle, CheckCircle2, AlertCircle } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
+  import DockRow from '../ui/DockRow.svelte'
   import Switch from '../ui/Switch.svelte'
   import HarnessToggleGroup from '../shared/HarnessToggleGroup.svelte'
   import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
@@ -90,7 +91,7 @@
   }
 
   async function start(): Promise<void> {
-    if (!ovenId || blockers.length > 0 || startBusy) return
+    if (!ovenId || blockers.length > 0 || startBusy || active) return
     startBusy = true
     error = ''
     const configuration: OvenSetupConfiguration = {
@@ -314,6 +315,7 @@
           blockers.length > 0 ||
           (packageUpgrades && !preflight.assessment.setupCapable) ||
           startBusy ||
+          active ||
           (gitEnabled && !privateKey.trim())}
         onclick={() => void start()}
       >
@@ -325,23 +327,33 @@
 
 {#if operation}
   <DockableModal
-    open={true}
+    open
     title="Oven setup progress"
     {minimized}
-    closable={true}
+    closable
     onMinimize={() => (minimized = true)}
     onClose={closeProgress}
     storageKey="codeinoven.ovenSetup.progress.v1"
     defaultHeight={460}
     dragLabel="Drag oven setup progress"
   >
-    {#snippet dock()}<span class="rounded-full border bg-surface px-3 py-1 text-xs"
-        >Oven setup · {operation?.status ?? 'running'}</span
-      >{/snippet}
+    {#snippet dock()}
+      <DockRow storageKey="codeinoven.ovenSetup.progress.v1" label="Move docked oven setup">
+        <button
+          type="button"
+          class="rounded-full border bg-surface px-3 py-1 text-xs hover:bg-elevated"
+          title="Show oven setup progress"
+          aria-label="Show oven setup progress"
+          onclick={() => (minimized = false)}>Oven setup · {operation?.status ?? 'running'}</button
+        >
+      </DockRow>
+    {/snippet}
     <div class="space-y-4 p-4">
       <div class="flex items-center justify-between gap-3">
         <div>
-          <p class="text-sm font-medium">{selectedOven?.name ?? 'Remote Oven'}</p>
+          <p class="text-sm font-medium">
+            {ovens.find((oven) => oven.id === operation?.ovenId)?.name ?? 'Remote Oven'}
+          </p>
           <p class="text-xs text-muted">{operation.status}</p>
         </div>
         {#if active}<button

@@ -68,6 +68,7 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
+  import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
@@ -1755,6 +1756,17 @@
          opened from: the Git sidebar is behind the browser view when it lands. -->
     {#await import('$lib/components/git/GitHubSignInDock.svelte') then { default: GitHubSignInDock }}
       <GitHubSignInDock />
+    {/await}
+  {/if}
+
+  {#if ovenSetupStore.initialized}
+    {#await import('$lib/components/settings/OvenSetupModal.svelte') then { default: OvenSetupModal }}
+      <OvenSetupModal
+        open={ovenSetupStore.open}
+        initialOvenId={ovenSetupStore.ovenId}
+        onComplete={(ovenId) => ovenSetupStore.markComplete(ovenId)}
+        onClose={() => ovenSetupStore.close()}
+      />
     {/await}
   {/if}
 

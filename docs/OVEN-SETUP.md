@@ -8,7 +8,7 @@ Oven setup prepares an SSH Oven for CodeInOven runs. It does not perform full se
 2. Open **Setup**. The app reads the OS, architecture, package manager, privilege, Git, curl, Node.js, npm, reboot state, and installed harness inventory without changing the host.
 3. Choose harnesses and optional GitHub identity settings. Saved accounts and portable configuration for selected harnesses synchronize automatically. Choose the account to use when sending a message.
 4. Select **Start setup** to authorize package upgrades and the selected installs. Package registry refresh and package upgrades run before Node bootstrap. OS release upgrades and reboots are never automatic.
-5. Follow progress in the docked setup panel. Failed steps include their error. Retry rechecks completed steps and resumes work that still needs attention.
+5. Follow progress in the global docked setup panel. Leaving Settings or switching views keeps the panel and progress tracking alive. Failed steps include their error. Retry rechecks completed steps and resumes work that still needs attention.
 
 Package updates use the detected package manager: apt, dnf, yum, pacman, Homebrew, winget, Chocolatey, or Scoop. Harness installs use the same documented channel metadata as the Local installer. A selected harness without a supported one-command install path blocks setup rather than running a guessed command.
 
