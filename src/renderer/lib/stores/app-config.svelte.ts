@@ -11,6 +11,7 @@ import type {
   ModelProfile
 } from '$shared/types'
 import { findBrowserSearchEngine, type BrowserSearchEngine } from '$shared/browser-search-engines'
+import { DEFAULT_WORK_ROOTS, type WorkRoots } from '$shared/design/work-roots'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { publishBrowserSearchEngine } from '$lib/browser-search-context'
 import {
@@ -42,6 +43,12 @@ let fontWeight = $state(DEFAULT_APP_FONT_WEIGHT)
 let zoomLevel = $state(DEFAULT_ZOOM_LEVEL)
 /** The generation backend choice, mirrored so deep components can read it. */
 let mediaGeneration = $state<MediaGenerationConfig>({ providerId: null })
+/**
+ * Where a design or video session writes, mirrored because the file tree reads it
+ * to tell the user's authored work apart from scratch (CIO Cleanup never removes
+ * the former), and the tree is too deep to receive the config as a prop.
+ */
+let workRoots = $state<WorkRoots>({ ...DEFAULT_WORK_ROOTS })
 /**
  * Saved model profiles, mirrored so the composer can read them without the config
  * being threaded down to it. Held as a plain array of plain records: the config is
@@ -109,6 +116,10 @@ export const appConfigState = {
   get mediaGeneration(): MediaGenerationConfig {
     return mediaGeneration
   },
+  /** The project-relative roots authored work is written into. */
+  get workRoots(): WorkRoots {
+    return workRoots
+  },
   /** Named presets the user applies from the model picker. */
   get modelProfiles(): ModelProfile[] {
     return modelProfiles
@@ -142,6 +153,7 @@ export const appConfigState = {
     fontWeight = config.fontWeight
     zoomLevel = config.zoomLevel
     mediaGeneration = { providerId: config.mediaGeneration.providerId }
+    workRoots = config.workRoots ?? { ...DEFAULT_WORK_ROOTS }
     modelProfiles = config.modelProfiles ?? []
     // The persisted keybindings overwrite the registry defaults, so every
     // handler that asks keymapState for an id picks up the user's binding.

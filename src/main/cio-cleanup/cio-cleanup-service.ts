@@ -18,7 +18,12 @@ import type {
   CioCleanupRunSummary,
   CioCleanupState
 } from '../../lib/types/cio-cleanup'
-import { cioScratchRelativePath, findCioCleanupExclusion } from '../../lib/cio-cleanup'
+import {
+  cioCleanupProtectedPaths,
+  cioScratchRelativePath,
+  findCioCleanupExclusion
+} from '../../lib/cio-cleanup'
+import { currentWorkRoots } from '../design/work-roots-state'
 import { instanceRegistry } from '../system/instance-registry'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { CioCleanupRepo } from '../database/repositories/cio-cleanup-repo'
@@ -282,6 +287,10 @@ export class CioCleanupService {
         (await this.deps.storage.getConfig()).cioCleanupRetentionDays
       )
       const cutoff = Date.now() - retentionDays * 24 * 60 * 60_000
+      // Read once per run: the work roots are a setting, and one pass has to
+      // judge every workspace by the same list rather than half of it by the
+      // value before a settings save and half by the value after.
+      const protectedPaths = cioCleanupProtectedPaths(currentWorkRoots())
       const exclusions = await this.pruneAndListExclusions()
       const targets = await listCioCleanupTargets({
         database: this.deps.database,
@@ -303,6 +312,7 @@ export class CioCleanupService {
           target,
           cutoff,
           exclusions,
+          protectedPaths,
           control: {
             isCancelled: () => live.cancelled,
             onScanned: () => this.publishProgress()

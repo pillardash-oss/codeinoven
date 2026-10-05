@@ -6,7 +6,7 @@ import type {
   CioCleanupRemovalRecord,
   CioCleanupTarget
 } from '../../lib/types/cio-cleanup'
-import { isCioCleanupExcluded, isCioCleanupInstalledPath } from '../../lib/cio-cleanup'
+import { isCioCleanupExcluded, isCioCleanupProtectedPath } from '../../lib/cio-cleanup'
 
 /**
  * How many entries one pass examines before it hands the event loop back. Every
@@ -49,6 +49,8 @@ interface SweepContext {
   target: CioCleanupTarget
   cutoff: number
   exclusions: readonly CioCleanupExclusion[]
+  /** `.cio`-relative folders holding content a sweep never touches. */
+  protectedPaths: readonly string[]
   control: CioCleanupSweepControl
   scanned: number
   cancelled: boolean
@@ -95,18 +97,25 @@ function defaultYield(): Promise<void> {
  * walked or removed, and a symbolic link is removed as a link because `lstat`
  * never follows one. Every removal is checked against the folder first, so a
  * symlinked entry can never point the sweep somewhere else.
+ *
+ * What is not scratch is not a candidate either. The caller names the folders
+ * that hold installed content and authored work (`protectedPaths`), and the
+ * walk keeps each of them whole without ever entering it, so no entry inside one
+ * is judged by its age at all.
  */
 export async function sweepCioScratchRoot(options: {
   scratchRoot: string
   target: CioCleanupTarget
   cutoff: number
   exclusions: readonly CioCleanupExclusion[]
+  protectedPaths: readonly string[]
   control: CioCleanupSweepControl
 }): Promise<CioCleanupSweepResult> {
   const context: SweepContext = {
     target: options.target,
     cutoff: options.cutoff,
     exclusions: options.exclusions,
+    protectedPaths: options.protectedPaths,
     control: options.control,
     scanned: 0,
     cancelled: false
@@ -174,10 +183,10 @@ async function pruneDirectory(
       outcome.survivors += 1
       continue
     }
-    // Installed content, not scratch: a project's scoped utilities live here, and
-    // a sweep that took the folder would delete an install the registry still
-    // resolves. Kept without walking, so nothing inside is judged either.
-    if (child.isDirectory() && isCioCleanupInstalledPath(childRel)) {
+    // Protected content is not scratch: a project's scoped utilities live here,
+    // and so does the user's authored work. Kept without walking, so nothing
+    // inside is judged by its age either.
+    if (child.isDirectory() && isCioCleanupProtectedPath(childRel, context.protectedPaths)) {
       outcome.survivors += 1
       continue
     }

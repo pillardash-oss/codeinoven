@@ -17,7 +17,14 @@
     Trash2
   } from '@lucide/svelte'
   import type { ProjectFileEntry } from '$shared/types'
+  import type { WorkRoots } from '$shared/design/work-roots'
+  import {
+    cioCleanupProtectedPaths,
+    cioScratchRelativePath,
+    isCioCleanupProtectedPath
+  } from '$shared/cio-cleanup'
   import { isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
 
   interface Props {
     entry: ProjectFileEntry | null
@@ -71,11 +78,27 @@
   let canOpenInBrowser = $derived(
     entry === null || entry.kind === 'directory' || /\.(?:html?|xhtml)$/iu.test(entry.name)
   )
-  /** Only a real entry inside a workspace's `.cio` scratch folder can be
-   *  excluded from CIO Cleanup; the scratch folder root itself never can. */
-  let canToggleCioCleanup = $derived(
+  /**
+   * Whether CIO Cleanup never removes this entry, because it is installed
+   * content (a project's scoped utilities) or the user's own authored work.
+   *
+   * Such an entry has nothing to exclude, so the menu states that instead of
+   * offering an exclusion a sweep would not act on. The stored exclusion is still
+   * read, so one set before the entry became protected can be undone here.
+   */
+  function isProtectedFromCioCleanup(entry: ProjectFileEntry | null, workRoots: WorkRoots) {
+    if (entry === null) return false
+    const relativePath = cioScratchRelativePath(entry.path)
+    if (relativePath === null || relativePath === '') return false
+    return isCioCleanupProtectedPath(relativePath, cioCleanupProtectedPaths(workRoots))
+  }
+
+  /** Any row inside a workspace's `.cio` scratch folder, the folder itself
+   *  excepted: it shows how CIO Cleanup treats that row. */
+  let cioCleanupRow = $derived(
     entry !== null && entry.path !== '.cio' && isCioScratchPath(entry.path)
   )
+  let cioCleanupProtected = $derived(isProtectedFromCioCleanup(entry, appConfigState.workRoots))
 
   const itemClass =
     'flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
@@ -137,17 +160,28 @@
           <FolderOpen size={13} class="text-muted" />
           Show in File Manager
         </ContextMenu.Item>
-        {#if canToggleCioCleanup}
+        {#if cioCleanupRow}
           <ContextMenu.Separator class="my-1 h-px bg-border" />
-          <ContextMenu.Item class={itemClass} onSelect={onToggleCioCleanupExclusion}>
-            {#if cioCleanupExcluded}
+          {#if cioCleanupProtected && !cioCleanupExcluded}
+            <ContextMenu.Item
+              class={itemClass}
+              disabled
+              title="Installed utilities and authored work are never removed by CIO Cleanup"
+            >
               <ShieldCheck size={13} class="text-muted" />
-              Include in CIO Cleanup
-            {:else}
-              <ShieldOff size={13} class="text-muted" />
-              Exclude from CIO Cleanup
-            {/if}
-          </ContextMenu.Item>
+              Protected from CIO Cleanup
+            </ContextMenu.Item>
+          {:else}
+            <ContextMenu.Item class={itemClass} onSelect={onToggleCioCleanupExclusion}>
+              {#if cioCleanupExcluded}
+                <ShieldCheck size={13} class="text-muted" />
+                Include in CIO Cleanup
+              {:else}
+                <ShieldOff size={13} class="text-muted" />
+                Exclude from CIO Cleanup
+              {/if}
+            </ContextMenu.Item>
+          {/if}
         {/if}
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         {#if isSingle}

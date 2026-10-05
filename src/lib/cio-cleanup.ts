@@ -1,5 +1,12 @@
 import type { CioCleanupExclusion, CioCleanupMount } from './types/cio-cleanup'
 import { PROJECT_UTILITIES_DIRECTORY } from './utility-scope-paths'
+import {
+  AUTHORED_WORK_KINDS,
+  DEFAULT_WORK_ROOTS,
+  normalizeWorkRoot,
+  workRootForKind,
+  type WorkRoots
+} from './design/work-roots'
 
 /**
  * The scratch folder every workspace CodeInOven stages agent work in. It is the
@@ -20,7 +27,8 @@ export const CIO_SCRATCH_DIRECTORY = '.cio'
  * `.cio/utilities` is where a project's own scoped skills and MCP servers are
  * installed. A sweep that deleted it would leave the utility registry pointing
  * at an install that only comes back the next time that utility is written, so
- * the sweeper keeps the folder whole.
+ * the sweeper keeps the folder whole. A list rather than one name, because a
+ * second install root must be able to appear without a sweeper change.
  */
 export const CIO_CLEANUP_INSTALLED_PATHS: readonly string[] = [PROJECT_UTILITIES_DIRECTORY]
 
@@ -32,12 +40,43 @@ export function normalizeCioCleanupPath(path: string): string {
     .replace(/\/+$/u, '')
 }
 
-/** Whether a `.cio`-relative path is installed content a sweep must keep. */
-export function isCioCleanupInstalledPath(relativePath: string): boolean {
+/**
+ * Every `.cio`-relative folder a sweep must keep, whatever its age.
+ *
+ * Two kinds of content live in a workspace's `.cio` folder and only one of them
+ * is scratch. Installed content (`utilities`) is a real install the registry still
+ * resolves, and authored work (the configured design and video roots) is the
+ * user's own deliverable, which the design board lists and nothing can rebuild.
+ * A sweep that took either would delete work, not reclaim space, so both are named
+ * here and the sweeper never enters them.
+ *
+ * The default roots are kept alongside the configured ones: a user who moves a
+ * root leaves folders behind under `.cio`, and old work must not start dying
+ * because the setting that named it moved.
+ */
+export function cioCleanupProtectedPaths(
+  workRoots: WorkRoots = DEFAULT_WORK_ROOTS
+): readonly string[] {
+  const paths = new Set<string>(CIO_CLEANUP_INSTALLED_PATHS)
+  for (const roots of [workRoots, DEFAULT_WORK_ROOTS]) {
+    for (const kind of AUTHORED_WORK_KINDS) {
+      const root = normalizeWorkRoot(workRootForKind(roots, kind))
+      if (!root) continue
+      const relative = cioScratchRelativePath(root)
+      // `''` is the `.cio` folder itself, and the sweep root is never a candidate.
+      if (relative) paths.add(relative)
+    }
+  }
+  return [...paths].sort()
+}
+
+/** Whether a `.cio`-relative path is content a sweep must keep. */
+export function isCioCleanupProtectedPath(
+  relativePath: string,
+  protectedPaths: readonly string[]
+): boolean {
   const normalized = normalizeCioCleanupPath(relativePath)
-  return CIO_CLEANUP_INSTALLED_PATHS.some(
-    (installedPath) => normalized === installedPath || normalized.startsWith(`${installedPath}/`)
-  )
+  return protectedPaths.some((protectedPath) => cioCleanupPathCovers(protectedPath, normalized))
 }
 
 /**
