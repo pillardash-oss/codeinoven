@@ -30,6 +30,8 @@ const DATE_TIME = new Intl.DateTimeFormat(APP_LOCALE, {
 
 const DATE_ONLY = new Intl.DateTimeFormat(APP_LOCALE, { dateStyle: 'medium' })
 
+const DATE_COMPACT = new Intl.DateTimeFormat(APP_LOCALE, { month: 'short', day: 'numeric' })
+
 const DATE_TIME_COMPACT = new Intl.DateTimeFormat(APP_LOCALE, {
   month: 'short',
   day: 'numeric',
@@ -83,6 +85,66 @@ export function formatDate(value: Date | number): string {
 /** `8:05 AM` - a time of day on its own. */
 export function formatTime(value: Date | number): string {
   return TIME_ONLY.format(value)
+}
+
+/** The local calendar day a moment falls on, as `year-month-day` in the
+ *  user's own zone. Comparing two of these answers "same day?" without any
+ *  elapsed-milliseconds arithmetic, which is what breaks across a
+ *  daylight-saving transition. */
+function localDayKey(value: number): string {
+  const date = new Date(value)
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+}
+
+/** `Sep 23` in the reference year, `Sep 23, 2025` in any other one, so a date
+ *  never leaves the reader guessing which year it belongs to. */
+function dayStamp(value: number, reference: number): string {
+  return new Date(value).getFullYear() === new Date(reference).getFullYear()
+    ? DATE_COMPACT.format(value)
+    : DATE_ONLY.format(value)
+}
+
+/**
+ * The stamp a conversation message carries.
+ *
+ * Today reads as a bare clock (`8:05 AM`), because the day is obvious in a
+ * thread the user is living in. Any other day leads with its real date
+ * (`Sep 22, 8:05 AM`, plus the year once it differs), so a thread that spans
+ * several days, or one reopened a week later, never shows a message without
+ * the day it was sent or received.
+ */
+export function formatMessageTimestamp(
+  value: Date | number,
+  now: Date | number = Date.now()
+): string {
+  const timestamp = typeof value === 'number' ? value : value.getTime()
+  if (!Number.isFinite(timestamp)) return ''
+  const reference = typeof now === 'number' ? now : now.getTime()
+  const clock = formatTime(timestamp)
+  return localDayKey(timestamp) === localDayKey(reference)
+    ? clock
+    : `${dayStamp(timestamp, reference)}, ${clock}`
+}
+
+/**
+ * The stamp a dense list row carries: `Now`, `5m`, `23h`, `6d`, and then the
+ * real day (`Sep 16`, `Sep 16, 2025`) once the age passes a week.
+ *
+ * An age past a week is where `2w` and `3mo` stop telling an operator anything,
+ * so the ladder hands over to the date the moment it stops being precise.
+ */
+export function formatCompactAge(value: Date | number, now: Date | number = Date.now()): string {
+  const timestamp = typeof value === 'number' ? value : value.getTime()
+  if (!Number.isFinite(timestamp)) return ''
+  const reference = typeof now === 'number' ? now : now.getTime()
+  const minutes = Math.floor((reference - timestamp) / 60_000)
+  if (minutes < 1) return 'Now'
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d`
+  return dayStamp(timestamp, reference)
 }
 
 /**

@@ -3,11 +3,11 @@
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
+  import MessageTimestamp from '../shared/MessageTimestamp.svelte'
   import type {
     SubagentProviderStatus,
     SubagentRecoveryNotice
   } from './subagent-session-view-helpers'
-  import { formatTime } from './subagent-session-view-helpers'
 
   interface Props {
     /** A paused or failed provider connection, when there is one. */
@@ -58,7 +58,7 @@
         {recoveryNotice.message}
       </p>
       <p class="mt-1 text-[0.625rem] text-dimmed">
-        {formatTime(recoveryNotice.recoveredAt)}
+        <MessageTimestamp at={recoveryNotice.recoveredAt} />
       </p>
     </div>
     <button

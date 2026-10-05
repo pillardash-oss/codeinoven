@@ -5,6 +5,7 @@
   import type { Attachment } from 'svelte/attachments'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import { formatCompactAge } from '$shared/date-time-format'
   import {
     calculateThreadHoverPopoverPosition,
     resolveThreadHoverPopoverSize,
@@ -95,20 +96,6 @@
     if (thread.status === 'created') return 'todo'
     return 'read'
   })
-
-  function relativeTime(ts: number): string {
-    const diff = Date.now() - ts
-    const minutes = Math.floor(diff / 60_000)
-    if (minutes < 1) return 'Now'
-    if (minutes < 60) return `${minutes}m`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h`
-    const days = Math.floor(hours / 24)
-    if (days < 7) return `${days}d`
-    const weeks = Math.floor(days / 7)
-    if (weeks < 5) return `${weeks}w`
-    return `${Math.floor(days / 30)}mo`
-  }
 
   // ─── Hover popover (parity with ThreadRow) ────────────────────────────────
 
@@ -204,7 +191,7 @@
       <SpeakingIndicator label="Playing audio" />
     {:else}
       <span class="shrink-0 whitespace-nowrap text-[0.625rem] text-dimmed">
-        {relativeTime(thread.lastActivity)}
+        {formatCompactAge(thread.lastActivity)}
       </span>
     {/if}
   </span>

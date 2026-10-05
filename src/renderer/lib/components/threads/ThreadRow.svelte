@@ -9,6 +9,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import { formatCompactAge } from '$shared/date-time-format'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import {
     calculateThreadHoverPopoverPosition,
@@ -597,25 +598,6 @@
     }
   )
 
-  // ─── Relative time ───────────────────────────────────────────────────────
-
-  function relativeTime(ts: number): string {
-    const diff = Date.now() - ts
-    const minutes = Math.floor(diff / 60_000)
-    if (minutes < 1) return 'Now'
-    if (minutes < 60) return `${minutes}m`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h`
-    const days = Math.floor(hours / 24)
-    if (days < 7) return `${days}d`
-    const weeks = Math.floor(days / 7)
-    if (weeks < 5) return `${weeks}w`
-    const months = Math.floor(days / 30)
-    if (months < 12) return `${months}mo`
-    const years = Math.floor(days / 365)
-    return `${years}y`
-  }
-
   // ─── Hover interactions ──────────────────────────────────────────────────
 
   async function revealPopover(): Promise<void> {
@@ -756,7 +738,7 @@
           </span>
         {:else}
           <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
-            {relativeTime(thread.lastActivity)}
+            {formatCompactAge(thread.lastActivity)}
           </span>
         {/if}
       {:else if currentModelProviderName}
@@ -824,7 +806,7 @@
             <ThreadIndicatorSlot {indicator} />
           {:else}
             <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
-              {relativeTime(thread.lastActivity)}
+              {formatCompactAge(thread.lastActivity)}
             </span>
           {/if}
         </span>
@@ -990,7 +972,7 @@
               : 'opacity-100'}"
             aria-hidden={hovered}
           >
-            {relativeTime(thread.lastActivity)}
+            {formatCompactAge(thread.lastActivity)}
           </span>
         {/if}
       {:else}
@@ -1077,7 +1059,7 @@
                 : 'opacity-100'}"
               aria-hidden={hovered}
             >
-              {relativeTime(thread.lastActivity)}
+              {formatCompactAge(thread.lastActivity)}
             </span>
           {/if}
         </span>

@@ -1,21 +1,24 @@
 <script lang="ts">
   import { MessageSquareText } from '@lucide/svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import MessageTimestamp from '../shared/MessageTimestamp.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { formatTime } from '$shared/date-time-format'
 </script>
 
 <div class="flex min-h-full flex-col gap-2" aria-label="Spec conversation">
   {#each workspaceState.specAgentResponses as response (response.id)}
     <article class="rounded-lg border bg-elevated px-3 py-2.5">
       <div class="mb-2 flex items-center justify-between gap-2">
-        <span class="flex min-w-0 items-center gap-1.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
+        <span
+          class="flex min-w-0 items-center gap-1.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
+        >
           <MessageSquareText size={12} class="shrink-0 text-accent" />
           Agent
         </span>
-        <time class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
-          {formatTime(response.createdAt)}
-        </time>
+        <MessageTimestamp
+          at={response.createdAt}
+          class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
+        />
       </div>
       <MarkdownView text={response.content} class="text-xs leading-relaxed" />
     </article>

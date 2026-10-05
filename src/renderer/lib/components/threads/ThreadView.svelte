@@ -3,7 +3,6 @@
   import { mergeWorkingParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
   import { formatDurationMs } from '$lib/format/duration'
   import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
-  import { formatTime } from '$shared/date-time-format'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -167,6 +166,7 @@
     type RoutinePlanDraft
   } from '$lib/components/assistant/assistant-view'
   import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
+  import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
@@ -11773,7 +11773,7 @@
                           >{formatDurationMs(previousTurnAudit.duration)}</span
                         >
                         <span>·</span>
-                        <span>{formatTime(previousTurnAudit.endTime)}</span>
+                        <MessageTimestamp at={previousTurnAudit.endTime} />
                       </div>
                     {/if}
                     {@const inlineTags = inlineFileTagsForMessage(msg)}
@@ -11988,7 +11988,7 @@
                         {/if}
                       </div>
                       <span class="text-[0.625rem] text-dimmed">·</span>
-                      <span class="text-[0.625rem] text-dimmed">{formatTime(msg.createdAt)}</span>
+                      <MessageTimestamp at={msg.createdAt} class="text-[0.625rem] text-dimmed" />
                     </div>
                   {/if}
                 </div>
@@ -12359,9 +12359,11 @@
                                 {/if}
                                 {msgOvenLabel}
                               </span>
-                              <span class="text-[0.625rem] text-dimmed"
-                                >· {formatTime(msg.completedAt ?? msg.createdAt)}</span
-                              >
+                              <MessageTimestamp
+                                at={msg.completedAt ?? msg.createdAt}
+                                prefix="· "
+                                class="text-[0.625rem] text-dimmed"
+                              />
                               {#if turnDuration !== null}
                                 <span class="text-[0.625rem] text-dimmed tabular-nums"
                                   >· {formatDurationMs(turnDuration)}</span
