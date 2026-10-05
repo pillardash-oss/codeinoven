@@ -13,7 +13,9 @@
   }
 
   let { diff, maxHeight = undefined }: Props = $props()
-  let details = $derived(diffDetails(diff.before, diff.after))
+  let details = $derived(
+    diffDetails(diff.before, diff.after, diff.beforeStartLine, diff.afterStartLine)
+  )
   /** Hunks with more changed lines than this render a notice instead of lines. */
   let maxDiffLines = $derived(appConfigState.maxDiffLines)
 
@@ -148,8 +150,11 @@
             {@render foldBar(hunk, hunkAdditions, hunkDeletions, w.aboveHidden, 'above')}
             {#if !isFolded}
               {#if limitExceeded}
-                <div class="px-3 py-3 text-center font-sans text-[0.6875rem] text-muted" role="note">
-                  Maximum diff exceeded   this hunk changes {hunkChanged} lines (limit {maxDiffLines}).
+                <div
+                  class="px-3 py-3 text-center font-sans text-[0.6875rem] text-muted"
+                  role="note"
+                >
+                  Maximum diff exceeded this hunk changes {hunkChanged} lines (limit {maxDiffLines}).
                   The lines are hidden to keep the diff responsive.
                 </div>
               {:else}
