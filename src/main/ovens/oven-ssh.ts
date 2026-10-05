@@ -24,6 +24,27 @@ export function sshQuote(value: string): string {
   return `'${value.replace(/'/gu, `'"'"'`)}'`
 }
 
+/** Translate bounded stderr into actionable diagnostics without exposing remote secrets. */
+function remoteCommandIssue(stderr: string): string {
+  if (/sudo:.*(?:password is required|a terminal is required)/iu.test(stderr))
+    return 'sudo: a password is required. Setup needs passwordless sudo for system package changes.'
+  if (/not in the sudoers|not allowed to execute|may not run sudo/iu.test(stderr))
+    return 'Permission denied: the Oven user is not allowed to run this command with sudo.'
+  if (/are you root|must be (?:run as )?root|requires root|superuser privilege|permission denied/iu.test(stderr))
+    return 'Permission denied: system package changes require root or sudo.'
+  if (/could not get lock|unable to acquire.*lock|another (?:process|instance).*running/iu.test(stderr))
+    return 'Another package operation holds the package-manager lock. Wait for it to finish, then retry.'
+  if (/dpkg was interrupted/iu.test(stderr))
+    return 'The Oven has an interrupted package configuration. Repair it on the Oven before retrying setup.'
+  if (/command not found|is not recognized|No such file or directory/iu.test(stderr))
+    return 'A command or file required by this step is missing on the Oven.'
+  if (/no space left on device/iu.test(stderr))
+    return 'The Oven has insufficient free disk space for this command.'
+  if (/could not resolve|temporary failure resolving|failed to fetch|could not connect/iu.test(stderr))
+    return 'The remote command could not reach its package source. Check the Oven network and repositories.'
+  return 'The remote command failed after connecting. Check the package manager or command on the Oven, then retry this step.'
+}
+
 export class OvenSsh {
   private tail: Promise<unknown> = Promise.resolve()
   private initialized: Promise<void> | undefined
@@ -359,6 +380,7 @@ export class OvenSsh {
           stdio: ['pipe', 'pipe', 'pipe']
         })
         let output = ''
+        let remoteStderr = ''
         let bytes = 0
         let failure: Error | undefined
         let timedOut = false
@@ -388,6 +410,7 @@ export class OvenSsh {
         // Recognize failures without echoing server/config stderr or credential paths.
         child.stderr.on('data', (chunk: Buffer) => {
           const text = chunk.toString('utf8')
+          remoteStderr = (remoteStderr + text).slice(-8192)
           if (/REMOTE HOST IDENTIFICATION HAS CHANGED/u.test(text)) {
             sshIssue =
               'The host key changed. Verify the host identity before updating OpenSSH trust.'
@@ -421,8 +444,10 @@ export class OvenSsh {
           if (failure) reject(failure)
           else if (timedOut)
             reject(new Error('The Oven did not respond before the connection timeout.'))
-          else if (code !== 0)
+          else if (code === 255 || code === null)
             reject(new Error(`SSH connection failed (${code ?? 'disconnected'}). ${sshIssue}`))
+          else if (code !== 0)
+            reject(new Error(`Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`))
           else resolve(output)
         })
         if (!channel) child.stdin.end(input)

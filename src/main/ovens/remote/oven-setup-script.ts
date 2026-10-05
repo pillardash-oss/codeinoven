@@ -89,7 +89,7 @@ function packageCommands(
   manager: OvenPackageManager,
   privilege: OvenPrivilege
 ): { commands: SetupCommand[]; notice?: string } {
-  const elevated = !ELEVATED_OK.includes(privilege)
+  const elevated = privilege !== 'root'
   const releaseNotice =
     'Only packages are upgraded. CodeInOven never upgrades the operating-system release and never reboots the Oven.'
   switch (manager) {
@@ -166,7 +166,7 @@ function toolInstallCommands(
   manager: OvenPackageManager,
   privilege: OvenPrivilege
 ): SetupCommand[] {
-  const elevated = !ELEVATED_OK.includes(privilege)
+  const elevated = privilege !== 'root'
   switch (manager) {
     case 'apt':
       return [command('apt-get', ['install', '-y', tool], { elevated })]
@@ -198,7 +198,7 @@ function toolInstallCommands(
 
 /** Install npm when Node exists but its package manager does not. */
 function npmInstallCommands(manager: OvenPackageManager, privilege: OvenPrivilege): SetupCommand[] {
-  const elevated = !ELEVATED_OK.includes(privilege)
+  const elevated = privilege !== 'root'
   switch (manager) {
     case 'apt':
       return [command('apt-get', ['install', '-y', 'npm'], { elevated })]

@@ -327,7 +327,7 @@ export function planNodeInstall(
 ): NodeInstallPlan {
   const elevationSuffix =
     privilege === 'root' || privilege === 'passwordless-sudo' ? '' : ' requires elevation on this Oven.'
-  const elevated = privilege !== 'root' && privilege !== 'passwordless-sudo'
+  const elevated = privilege !== 'root'
   const architectureSuffix = architecture === 'arm64' ? 'arm64' : 'x64'
 
   if (platform === 'darwin') {
@@ -389,7 +389,7 @@ export function planNodeInstall(
               '-c',
               `set -eu; apt-get install -y ca-certificates curl; curl -fsSL https://deb.nodesource.com/setup_22.x | bash -; apt-get install -y nodejs; node --version`
             ],
-            elevated: true
+            elevated
           }
         ]
       }

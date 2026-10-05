@@ -106,7 +106,7 @@ describe('oven setup assessment', () => {
     const plan = planNodeInstall('linux', 'x64', 'dnf', 'passwordless-sudo')
     expect(plan.commands[0]?.command).toBe('sh')
     expect(plan.commands[0]?.args[1]).toContain('https://rpm.nodesource.com/setup_22.x')
-    expect(plan.commands[0]?.elevated).toBe(false)
+    expect(plan.commands[0]?.elevated).toBe(true)
   })
 
   it('installs Node.js through Scoop on native Windows when it is the available manager', () => {
