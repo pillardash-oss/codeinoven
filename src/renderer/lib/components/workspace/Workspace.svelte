@@ -2658,6 +2658,18 @@
    * visible again after a trip to Settings or Scope. The full loadData() pass
    * is intentionally not re-run: it would reset folder expansion and re-restore
    * the thread, and the open thread never unmounts so it needs no re-fetch.
+   *
+   * The thread re-sync **merges** into the list rather than replacing it.
+   * `thread:listRecentPerProject` is the bounded first-paint slice   ten rows per
+   * project   while the Threads view hydrates up to two hundred rows from the
+   * global list. Replacing the list with the slice unmounted every hydrated row,
+   * and the Threads view's own hydration then rebuilt them right after the
+   * switch: the list visibly shrank to the slice and grew back over about a
+   * second, in two blocking passes. Merging refreshes the rows the slice knows
+   * about (a rename, a status change, a thread created while the workspace was
+   * hidden) and leaves the hydrated ones in place, so the re-sync never has to
+   * undo itself. The pager bookkeeping is deliberately left alone for the same
+   * reason: the rows it accounts for are still in the list.
    */
   async function refreshListData(): Promise<void> {
     try {
@@ -2667,16 +2679,24 @@
       ])
       projects = projectList
       const uniqueThreads = uniqueThreadList(threadList)
-      allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
-      historyOffset = uniqueThreadList(threadList).length
-      hasMoreHistory = false
+      for (const thread of uniqueThreads) upsertThreadInList(thread)
       notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
         projectIcons.set(projectId, iconUrl)
       }
       scopeState.setScopesFromProjects(projectList, projectIcons)
-      scopeState.setThreads(uniqueThreads)
+      // Hand the scope store the list this workspace holds now, not the bounded
+      // slice: its own merge protects board-hydrated projects, but the Threads
+      // view's hydrated rows live here, and seeding the scope store with the
+      // slice alone would drop them from the docked sidebar and the board.
+      // Archived rows and the reserved browser container stay out, exactly as
+      // `scopeState.updateThread` filters them on every other ingestion path.
+      scopeState.setThreads(
+        uniqueThreadList(allThreads).filter(
+          (thread) => !thread.archived && thread.projectId !== GLOBAL_BROWSER_PROJECT_ID
+        )
+      )
       void rescueDraftThreads()
     } catch {
       // Non-fatal   keep the current lists on failure.
