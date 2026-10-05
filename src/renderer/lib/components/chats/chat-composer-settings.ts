@@ -96,7 +96,13 @@ export function withModelSelection(
     selection.providerId !== resolved.providerId ||
     selection.modelId !== resolved.modelId
       ? {
-          contextWindow: selection.modelId.endsWith('[1m]') ? 1_000_000 : model?.contextWindows?.[0]
+          // An unset window belongs to the harness. Only carry an explicit
+          // user choice forward when the selected model supports it.
+          contextWindow:
+            resolved.contextWindow !== undefined &&
+            model?.contextWindows?.includes(resolved.contextWindow)
+              ? resolved.contextWindow
+              : undefined
         }
       : {})
   }
