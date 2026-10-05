@@ -1,3 +1,4 @@
+import { feature } from '$lib/feature-registry'
 import { invoke } from '$lib/ipc.svelte'
 import { messageId } from '$shared/id'
 import { agentRuns } from './agent-runs.svelte'
@@ -545,7 +546,7 @@ export class SidebarTabContexts {
     this.open(context, {
       id,
       kind: 'thread-note',
-      title: 'Notes',
+      title: feature('thread-note').name,
       projectId,
       threadId,
       threadTitle,
@@ -601,7 +602,7 @@ export class SidebarTabContexts {
       {
         id,
         kind: 'thread-note',
-        title: 'Notes',
+        title: feature('thread-note').name,
         projectId,
         threadId,
         threadTitle,

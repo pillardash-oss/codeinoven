@@ -1,6 +1,7 @@
 <script lang="ts">
   import GitHubSignInBrowserDock from '$lib/components/git/GitHubSignInBrowserDock.svelte'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
+  import { feature } from '$lib/feature-registry'
   import { subscribe } from '$lib/ipc.svelte'
   import { motionDuration } from '$lib/motion'
   import { publicAssetUrl } from '$lib/static-assets'
@@ -21,7 +22,6 @@
     Boxes,
     Clock,
     Download,
-    Feather,
     MessagesCircle,
     Puzzle
   } from '@lucide/svelte'
@@ -211,8 +211,10 @@
       ? [
           {
             id: 'note',
-            label: hasNote ? 'Tab note available' : 'Add tab note',
-            icon: Feather,
+            label: hasNote
+              ? `${feature('tab-note').name} available`
+              : `Add a ${feature('tab-note').name.toLowerCase()}`,
+            icon: feature('tab-note').icon,
             active: globalBrowser.noteSidebarShown,
             tone: hasNote ? 'warning' : undefined,
             onSelect: () => globalBrowser.toggleContextSidebar()

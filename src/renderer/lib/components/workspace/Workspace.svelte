@@ -1,6 +1,7 @@
 <script lang="ts">
   import { contentThreadFamily } from '$lib/content-view-threads'
   import { scheduleDeferredWork } from '$lib/deferred-work'
+  import { feature } from '$lib/feature-registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
@@ -97,7 +98,6 @@
     Bug,
     Clock1,
     Cloud,
-    Feather,
     FileDiff,
     FolderTree,
     GlobeCode,
@@ -1165,8 +1165,10 @@
     const threadNote: ContextDockItem[] = [
       {
         id: 'note',
-        label: hasThreadNote ? 'Thread note available' : 'Add a thread note',
-        icon: Feather,
+        label: hasThreadNote
+          ? `${feature('thread-note').name} available`
+          : `Add a ${feature('thread-note').name.toLowerCase()}`,
+        icon: feature('thread-note').icon,
         active: dockKindActive('thread-note'),
         tone: hasThreadNote ? 'warning' : undefined,
         onSelect: () =>

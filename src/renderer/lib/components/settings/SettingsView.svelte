@@ -49,8 +49,8 @@
     Moon,
     RefreshCw,
     Search,
-    SlidersHorizontal,
-    Sun
+    Sun,
+    type LucideIcon
   } from '@lucide/svelte'
   import { onMount, tick } from 'svelte'
   import { toast } from 'svelte-sonner'
@@ -260,7 +260,7 @@
   const tabs: Array<{
     id: SettingsSection
     label: string
-    icon: typeof SlidersHorizontal
+    icon: LucideIcon
   }> = SETTINGS_SEARCH_ENTRIES.filter((entry) => !entry.blockId).map((entry) => ({
     id: entry.section,
     label: entry.title,

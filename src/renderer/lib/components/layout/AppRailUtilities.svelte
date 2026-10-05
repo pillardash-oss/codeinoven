@@ -5,6 +5,7 @@
     preloadTaskManagerChunk,
     preloadUpdateBlockersChunk
   } from '$lib/page-preload'
+  import { feature } from '$lib/feature-registry'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { updateBlockers } from '$lib/stores/update-blockers.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
@@ -12,13 +13,10 @@
     AlertCircle,
     CheckCircle2,
     Clock,
-    CpuIcon,
     Download,
     Info,
     Loader2,
-    Plug,
-    RefreshCw,
-    Settings
+    RefreshCw
   } from '@lucide/svelte'
   import type { Component } from 'svelte'
   import AppRailButton from './AppRailButton.svelte'
@@ -205,24 +203,24 @@
   />
 
   <AppRailButton
-    label="Task manager: running processes"
-    icon={CpuIcon}
+    label={`${feature('task-manager').name}: running processes`}
+    icon={feature('task-manager').icon}
     shortcut={taskManagerShortcut}
     onHover={preloadTaskManagerChunk}
     onSelect={() => (taskManagerOpen = true)}
   />
 
   <AppRailButton
-    label="Utilities: Skills, MCP, Plugins"
-    icon={Plug}
+    label={`${feature('utilities').name}: Skills, MCP, Plugins`}
+    icon={feature('utilities').icon}
     shortcut={settingsShortcut}
     onHover={preloadSettingsChunk}
     onSelect={() => navigate('settings-utilities')}
   />
 
   <AppRailButton
-    label="Settings"
-    icon={Settings}
+    label={feature('settings').name}
+    icon={feature('settings').icon}
     active={isSettingsView(activeView)}
     shortcut={settingsShortcut}
     onHover={preloadSettingsChunk}

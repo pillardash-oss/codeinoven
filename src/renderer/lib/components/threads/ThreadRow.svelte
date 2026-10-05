@@ -5,6 +5,7 @@
     AUTHORED_WORK_ICON_BY_KIND,
     AUTHORED_WORK_NAME_BY_KIND
   } from '$lib/authored-work-presentation'
+  import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
@@ -51,7 +52,7 @@
     isOrchestrationChildThread,
     isThreadBusy
   } from '$shared/types'
-  import { AppWindow, Check, Clock, Feather, Pin } from '@lucide/svelte'
+  import { AppWindow, Check, Clock, Pin } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
   import { tick } from 'svelte'
@@ -810,8 +811,12 @@
 
         <span class="flex min-w-0 items-center justify-end gap-1">
           {#if hasNote}
-            <span class="flex shrink-0 items-center text-warning" title="Note attached">
-              <Feather size={11} />
+            {@const ThreadNoteIcon = feature('thread-note').icon}
+            <span
+              class="flex shrink-0 items-center text-warning"
+              title={`${feature('thread-note').name} attached`}
+            >
+              <ThreadNoteIcon size={11} />
             </span>
           {/if}
           {@render authoredWorkMarker(authoredWorkKind)}
@@ -1054,8 +1059,12 @@
 
         <span class="col-start-3 flex min-w-0 items-center justify-end gap-1">
           {#if hasNote}
-            <span class="flex shrink-0 items-center text-warning" title="Note attached">
-              <Feather size={11} />
+            {@const ThreadNoteIcon = feature('thread-note').icon}
+            <span
+              class="flex shrink-0 items-center text-warning"
+              title={`${feature('thread-note').name} attached`}
+            >
+              <ThreadNoteIcon size={11} />
             </span>
           {/if}
           {@render authoredWorkMarker(authoredWorkKind)}

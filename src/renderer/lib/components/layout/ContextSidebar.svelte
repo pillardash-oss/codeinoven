@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
@@ -33,13 +34,11 @@
     MessagesCircle,
     MonitorCog,
     Network,
-    NotebookPen,
     PanelBottom,
     PanelRight,
     Plus,
     Puzzle,
     SquareTerminal,
-    StickyNotes,
     TriangleAlert,
     X
   } from '@lucide/svelte'
@@ -389,7 +388,8 @@
     {:else if tab.kind === 'notifications'}
       <Bell size={12} class="shrink-0" />
     {:else if tab.kind === 'sticky-notes'}
-      <NotebookPen size={12} class="shrink-0" />
+      {@const StickyNotesIcon = feature('sticky-notes').icon}
+      <StickyNotesIcon size={12} class="shrink-0" />
     {:else if tab.kind === 'attention'}
       <TriangleAlert size={12} class="shrink-0 text-warning" />
     {:else if tab.kind === 'memory'}
@@ -399,7 +399,8 @@
     {:else if tab.kind === 'cloud-deployment'}
       <Cloud size={12} class="shrink-0" />
     {:else if tab.kind === 'thread-note'}
-      <StickyNotes size={12} class="shrink-0" />
+      {@const ThreadNoteIcon = feature('thread-note').icon}
+      <ThreadNoteIcon size={12} class="shrink-0" />
     {:else if tab.kind === 'popup-window'}
       {#if tab.favicon}
         <img src={tab.favicon} alt="" class="h-3 w-3 shrink-0" aria-hidden="true" />
