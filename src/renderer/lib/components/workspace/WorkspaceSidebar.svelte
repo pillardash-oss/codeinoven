@@ -822,7 +822,7 @@
 
         <!-- Pinned projects -->
         {#if pinnedProjects.length > 0}
-          <div class="mb-1 pb-2 border-b">
+          <div class="mb-1 pb-2">
             <button
               type="button"
               class="flex w-full items-center gap-1.5 px-2 pt-1 pb-0.5 text-left transition-colors hover:bg-overlay"

@@ -66,7 +66,7 @@
 </script>
 
 {#if threads.length > 0}
-  <div class={headerOnly ? 'mt-3 border-t pt-1' : 'mb-3 pb-3 border-b'}>
+  <div class={headerOnly ? 'mt-3 pt-1' : 'mb-3 pb-3'}>
     <button
       type="button"
       class="flex w-full items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-overlay"
