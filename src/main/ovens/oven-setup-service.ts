@@ -164,7 +164,19 @@ export class OvenSetupService {
       Logger.dev('Oven setup already active', { ovenId, operationId: existing.id })
       return existing
     }
-    const { assessment } = await this.preflight(ovenId)
+    Logger.info('Oven setup preflight started', { ovenId })
+    let assessment: OvenPreflightAssessment
+    try {
+      assessment = (await this.preflight(ovenId)).assessment
+      Logger.info('Oven setup preflight finished', {
+        ovenId,
+        platform: assessment.platform,
+        packageManager: assessment.packageManager
+      })
+    } catch (error) {
+      Logger.error('Oven setup preflight failed', { ovenId, error: messageOf(error) })
+      throw error
+    }
     const blockers = assessment.issues.filter((issue) => issue.blocking)
     if (blockers.length > 0)
       throw new Error(`${blockers[0]?.message} Fix this on the Oven, then run setup again.`)
@@ -293,12 +305,25 @@ export class OvenSetupService {
       if (!step) continue
       if (this.cancellations.has(ovenId)) return
       /* Verified work is not repeated; interrupted and failed work always is. */
-      if (step.status === 'succeeded') continue
+      if (step.status === 'succeeded') {
+        Logger.info('Oven setup step retained', {
+          ovenId,
+          operationId: operation.id,
+          stepId: step.id
+        })
+        continue
+      }
       if (planned.skippedReason) {
         step.status = 'skipped'
         step.skippedReason = planned.skippedReason
         step.finishedAt = Date.now()
         step.durationMs = 0
+        Logger.info('Oven setup step skipped', {
+          ovenId,
+          operationId: operation.id,
+          stepId: step.id,
+          reason: planned.skippedReason
+        })
         continue
       }
       await this.runStep(ovenId, operation, step, planned)
@@ -427,7 +452,7 @@ export class OvenSetupService {
     const execute = async (): Promise<void> => {
       if (planned.phase === 'harnesses' && planned.verify?.command)
         await this.ports.waitForHarnessIdle?.(ovenId, planned.verify.command)
-      for (const entry of planned.commands) {
+      for (const [commandIndex, entry] of planned.commands.entries()) {
         if (this.cancellations.has(ovenId))
           throw new Error('Setup was cancelled before this command started.')
         const argv = entry.elevated
@@ -440,6 +465,16 @@ export class OvenSetupService {
             : planned.phase === 'harnesses'
               ? INSTALL_TIMEOUT_MS
               : STEP_TIMEOUT_MS
+        const context = {
+          ovenId,
+          operationId: this.operations.get(ovenId)?.id,
+          stepId: planned.id,
+          commandIndex,
+          executable: entry.command,
+          elevated: entry.elevated
+        }
+        Logger.info('Oven setup command started', context)
+        const started = Date.now()
         if (entry.elevated)
           await this.ports.ssh.executeElevated(
             ovenId,
@@ -448,6 +483,7 @@ export class OvenSetupService {
             this.reports.get(ovenId)?.privilege === 'sudo'
           )
         else await this.ports.ssh.execute(ovenId, line, '', timeout)
+        Logger.info('Oven setup command finished', { ...context, durationMs: Date.now() - started })
       }
     }
     if (planned.phase === 'harnesses' && planned.verify?.command)
@@ -501,6 +537,21 @@ export class OvenSetupService {
   ): Promise<void> {
     const operation = this.operations.get(ovenId)
     if (!operation) return
+    const step = operation.steps.find((entry) => entry.id === currentStepId)
+    const context = {
+      ovenId,
+      operationId: operation.id,
+      phase,
+      stepId: currentStepId,
+      status: operation.status,
+      stepStatus: step?.status,
+      durationMs: step?.durationMs,
+      ...(message ? { message } : {}),
+      ...(operation.error ? { error: operation.error } : {})
+    }
+    if (['failed', 'blocked'].includes(operation.status))
+      Logger.error('Oven setup progress', context)
+    else Logger.info('Oven setup progress', context)
     const journal = this.journals.get(ovenId) ?? { sequence: 0, events: [] }
     const event: OvenSetupProgressEvent = {
       sequence: ++journal.sequence,

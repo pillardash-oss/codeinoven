@@ -228,27 +228,29 @@ export class OvenHarnessService {
    * command. Returns the refreshed row so the caller never has to re-probe.
    */
   async updateHarness(ovenId: string, harnessId: string): Promise<OvenHarnessInventoryItem> {
-    return this.withLock(`${ovenId}:${harnessId}`, async () => {
-      const descriptor = findHarness(harnessId)
-      if (!descriptor) throw new Error('That harness is not in the app registry.')
-      const args = harnessSelfUpdateArgs(harnessId)
-      if (!args)
-        throw new Error(
-          `${descriptor.name} does not document an unattended update command. Update it on the Oven itself.`
-        )
-      return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
-        await this.waitForHarnessIdle(ovenId, descriptor.command)
-        Logger.info('Updating a harness on an oven', { ovenId, harnessId })
-        await this.service.ssh.execute(
-          ovenId,
-          [descriptor.command, ...args].map(sshQuote).join(' '),
-          '',
-          UPDATE_TIMEOUT_MS
-        )
-        this.inventories.delete(ovenId)
-        return this.requireRow(await this.getInventory(ovenId, true), harnessId)
+    return this.logMutation('update', ovenId, harnessId, () =>
+      this.withLock(`${ovenId}:${harnessId}`, async () => {
+        const descriptor = findHarness(harnessId)
+        if (!descriptor) throw new Error('That harness is not in the app registry.')
+        const args = harnessSelfUpdateArgs(harnessId)
+        if (!args)
+          throw new Error(
+            `${descriptor.name} does not document an unattended update command. Update it on the Oven itself.`
+          )
+        return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
+          await this.waitForHarnessIdle(ovenId, descriptor.command)
+          Logger.info('Updating a harness on an oven', { ovenId, harnessId })
+          await this.service.ssh.execute(
+            ovenId,
+            [descriptor.command, ...args].map(sshQuote).join(' '),
+            '',
+            UPDATE_TIMEOUT_MS
+          )
+          this.inventories.delete(ovenId)
+          return this.requireRow(await this.getInventory(ovenId, true), harnessId)
+        })
       })
-    })
+    )
   }
 
   /**
@@ -259,30 +261,60 @@ export class OvenHarnessService {
    * user first. CodeInOven never decides on its own to remove a harness.
    */
   async uninstallHarness(ovenId: string, harnessId: string): Promise<OvenHarnessInventoryItem> {
-    return this.withLock(`${ovenId}:${harnessId}`, async () => {
-      const descriptor = findHarness(harnessId)
-      if (!descriptor) throw new Error('That harness is not in the app registry.')
-      const current = this.requireRow(await this.getInventory(ovenId), harnessId)
-      if (current.health === 'missing') return current
-      const method = methodForPath(current.executablePath)
-      const removal = harnessUninstallCommand(harnessId, method)
-      if (!removal)
-        throw new Error(
-          `${descriptor.name} documents no unattended uninstall for ${method} installs. Remove it on the Oven itself.`
-        )
-      return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
-        await this.waitForHarnessIdle(ovenId, descriptor.command)
-        Logger.info('Uninstalling a harness on an oven', { ovenId, harnessId, method })
-        await this.service.ssh.execute(
-          ovenId,
-          [removal.command, ...removal.args].map(sshQuote).join(' '),
-          '',
-          UPDATE_TIMEOUT_MS
-        )
-        this.inventories.delete(ovenId)
-        return this.requireRow(await this.getInventory(ovenId, true), harnessId)
+    return this.logMutation('uninstall', ovenId, harnessId, () =>
+      this.withLock(`${ovenId}:${harnessId}`, async () => {
+        const descriptor = findHarness(harnessId)
+        if (!descriptor) throw new Error('That harness is not in the app registry.')
+        const current = this.requireRow(await this.getInventory(ovenId), harnessId)
+        if (current.health === 'missing') return current
+        const method = methodForPath(current.executablePath)
+        const removal = harnessUninstallCommand(harnessId, method)
+        if (!removal)
+          throw new Error(
+            `${descriptor.name} documents no unattended uninstall for ${method} installs. Remove it on the Oven itself.`
+          )
+        return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
+          await this.waitForHarnessIdle(ovenId, descriptor.command)
+          Logger.info('Uninstalling a harness on an oven', { ovenId, harnessId, method })
+          await this.service.ssh.execute(
+            ovenId,
+            [removal.command, ...removal.args].map(sshQuote).join(' '),
+            '',
+            UPDATE_TIMEOUT_MS
+          )
+          this.inventories.delete(ovenId)
+          return this.requireRow(await this.getInventory(ovenId, true), harnessId)
+        })
       })
-    })
+    )
+  }
+
+  private async logMutation(
+    action: 'update' | 'uninstall',
+    ovenId: string,
+    harnessId: string,
+    task: () => Promise<OvenHarnessInventoryItem>
+  ): Promise<OvenHarnessInventoryItem> {
+    const started = Date.now()
+    const context = { action, ovenId, harnessId }
+    Logger.info('Oven harness operation queued', context)
+    try {
+      const result = await task()
+      Logger.info('Oven harness operation finished', {
+        ...context,
+        durationMs: Date.now() - started,
+        version: result.installedVersion,
+        health: result.health
+      })
+      return result
+    } catch (error) {
+      Logger.error('Oven harness operation failed', {
+        ...context,
+        durationMs: Date.now() - started,
+        error: error instanceof Error ? error.message : 'Unknown operation failure'
+      })
+      throw error
+    }
   }
 
   private requireRow(
