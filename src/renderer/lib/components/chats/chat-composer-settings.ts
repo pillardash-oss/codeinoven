@@ -84,6 +84,20 @@ export function withModelSelection(
           ? `${nextHarness}.default`
           : (resolved.accountId ?? `${nextHarness}.default`))),
     ...(thinkingLevel ? { thinkingLevel } : {}),
-    ...(fastSupported ? {} : { inferenceMode: 'normal' })
+    ...(resolved.inferenceMode === 'ultrafast'
+      ? {
+          inferenceMode:
+            nextHarness === 'codex' && model?.ultrafastSupported ? 'ultrafast' : 'normal'
+        }
+      : fastSupported
+        ? {}
+        : { inferenceMode: 'normal' }),
+    ...(nextHarness !== resolved.harnessId ||
+    selection.providerId !== resolved.providerId ||
+    selection.modelId !== resolved.modelId
+      ? {
+          contextWindow: selection.modelId.endsWith('[1m]') ? 1_000_000 : model?.contextWindows?.[0]
+        }
+      : {})
   }
 }

@@ -753,15 +753,6 @@
     scopeShoeComponent?.openScopeMenu()
   }
 
-  function showInferenceMenu(): void {
-    if (!supportsFast) return
-    inferenceMenuOpen = true
-    plusMenuOpen = false
-    modelMenuOpen = false
-    thinkingMenuOpen = false
-    accountMenuOpen = false
-  }
-
   // Focus restoration on close for every menu/overlay that steals focus from
   // the editor: each returns the caret to its last published position rather
   // than the end, so mid-sentence editing stays seamless.
@@ -770,11 +761,6 @@
   trackMenuCloseFocus(() => accountMenuOpen, focusComposerAtSavedCaret)
   trackMenuCloseFocus(() => permissionMenuOpen, focusComposerAtSavedCaret)
   trackMenuCloseFocus(() => inferenceMenuOpen, focusComposerAtSavedCaret)
-
-  function toggleInferenceMenu(): void {
-    if (inferenceMenuOpen) closeAllMenus()
-    else showInferenceMenu()
-  }
 
   /**
    * Resolve against every catalog snapshot available to the renderer. The
@@ -985,6 +971,18 @@
   )
 
   let supportsFast = $derived(fastVariant !== null)
+  let supportsUltrafast = $derived(
+    resolved.harnessId === 'codex' &&
+      resolved.providerId === 'openai' &&
+      selectedModel?.ultrafastSupported === true
+  )
+  let contextWindows = $derived(selectedModel?.contextWindows ?? [])
+  let contextWindow = $derived(
+    resolved.contextWindow ??
+      (resolved.harnessId === 'codex' ? contextWindows[0] : selectedModel?.contextWindow) ??
+      contextWindows[0]
+  )
+  let showModelSettings = $derived(supportsFast || supportsUltrafast || contextWindows.length > 1)
 
   let inferenceMode = $derived(resolved.inferenceMode ?? 'normal')
   const slash = createComposerSlashActions({
@@ -1906,23 +1904,28 @@
         onSelectAccount={onAccountSelected}
         {onToggleFavorite}
         {onReorderFavorite}
-        fast={inferenceMode === 'fast'}
+        fast={inferenceMode !== 'normal'}
         thinkingLevel={resolved.thinkingLevel}
         {thinkingPresets}
         onSelectThinking={(level) => selectThinking({ id: level, label: level })}
-      />
+      >
+        {#snippet settingsPicker()}
+          {#if showModelSettings}
+            <ChatComposerInferencePicker
+              {inferenceMode}
+              fastSupported={supportsFast}
+              ultrafastSupported={supportsUltrafast}
+              fastMultiplier={fastVariant?.multiplier ?? 1}
+              {contextWindows}
+              {contextWindow}
+              bind:menuOpen={inferenceMenuOpen}
+              onSelect={selectInference}
+              onSelectContext={(tokens) => applySettings({ ...resolved, contextWindow: tokens })}
+            />
+          {/if}
+        {/snippet}
+      </ModelPicker>
     </div>
-
-    {#if fastVariant}
-      <ChatComposerInferencePicker
-        {inferenceMode}
-        fastMultiplier={fastVariant.multiplier}
-        menuOpen={inferenceMenuOpen}
-        onToggle={toggleInferenceMenu}
-        onClose={closeAllMenus}
-        onSelect={selectInference}
-      />
-    {/if}
 
     <!-- API usage credits   native harness command to bill this session's
          turns against pay-as-you-go API credits instead of a subscription. -->

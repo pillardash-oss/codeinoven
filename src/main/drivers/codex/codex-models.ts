@@ -87,6 +87,13 @@ export function mapCodexModel(value: unknown): ProviderModel | null {
     attachment: codexModelSupportsAttachments(model),
     toolcall: true,
     ...(contextWindow === undefined ? {} : { contextWindow }),
+    contextWindows:
+      (contextWindow ?? 0) >= 1_000_000 || /^gpt-(?:5\.[4-9]|[6-9])(?:[.-]|$)/u.test(id)
+        ? [272_000, 1_000_000]
+        : [272_000],
+    ultrafastSupported:
+      additionalSpeedTiers.includes('ultrafast') ||
+      serviceTiers.some((tier) => stringValue(record(tier)?.['id']) === 'ultrafast'),
     fastSupported:
       additionalSpeedTiers.includes('fast') ||
       serviceTiers.some((tier) => stringValue(record(tier)?.['id']) === 'priority')
@@ -102,6 +109,7 @@ export function fallbackCodexModels(): ProviderModel[] {
     thinkingPresets: THINKING_PRESETS,
     attachment: true,
     toolcall: true,
-    fastSupported: true
+    fastSupported: true,
+    contextWindows: [272_000, 1_000_000]
   }))
 }

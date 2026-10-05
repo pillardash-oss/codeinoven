@@ -617,14 +617,20 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     if (session.nativeSessionId) args.push('--resume', session.nativeSessionId)
     const fastInference =
       options.settings.inferenceMode === 'fast' && options.settings.providerId === 'anthropic'
-    const modelId = fastInference
+    const selectedModelId = fastInference
       ? fastSelectionModelId(options.settings.harnessId, options.settings.modelId)
       : options.settings.modelId
+    const modelId =
+      firstParty && options.settings.contextWindow === 1_000_000
+        ? `${selectedModelId.replace(/\[1m\]$/u, '')}[1m]`
+        : firstParty && options.settings.contextWindow === 200_000
+          ? selectedModelId.replace(/\[1m\]$/u, '')
+          : selectedModelId
     if (modelId) args.push('--model', modelId)
     args.push('--effort', claudeEffort(options.settings.thinkingLevel))
     args.push(
       '--settings',
-      JSON.stringify({ showThinkingSummaries: true, ...(fastInference ? { fastMode: true } : {}) })
+      JSON.stringify({ showThinkingSummaries: true, fastMode: fastInference })
     )
     if (options.systemPrompt) args.push('--append-system-prompt', options.systemPrompt)
     if (options.allowedTools !== undefined)
@@ -636,6 +642,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       args.push('--permission-mode', 'bypassPermissions')
     else args.push('--permission-mode', 'manual')
     const env = await this.customProviderEnv(options.settings.providerId)
+    if (firstParty && options.settings.contextWindow) {
+      env.CLAUDE_CODE_DISABLE_1M_CONTEXT = options.settings.contextWindow === 200_000 ? '1' : '0'
+    }
     const input = await claudeStreamInput(options.text, options.attachments)
     const trackAuthentication =
       !this.isTitleSession(session.id) &&

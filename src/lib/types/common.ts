@@ -30,7 +30,7 @@ export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'm
  * model id, for codex a `service_tier = "fast"` config override. Only models
  * the harness catalog marks fast-capable expose the choice. Defaults to `normal`.
  */
-export type InferenceMode = 'normal' | 'fast'
+export type InferenceMode = 'normal' | 'fast' | 'ultrafast'
 
 /** How tool-call permissions are handled for a thread. */
 export type PermissionLevel = 'auto_review' | 'full_access'

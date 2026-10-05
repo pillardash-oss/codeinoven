@@ -342,6 +342,12 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const fastInference =
       options.settings.inferenceMode === 'fast' && options.settings.providerId === 'openai'
+    const serviceTier =
+      options.settings.providerId === 'openai' && options.settings.inferenceMode === 'ultrafast'
+        ? 'ultrafast'
+        : fastInference
+          ? 'fast'
+          : 'default'
     const host = await this.ensureAppServerHost(projectPath)
     const active: CodexAppServerTurn = {
       host,
@@ -369,16 +375,27 @@ export class CodexDriver extends PersistentCliDriver {
           : [])
       ]
       const developerInstructions = codexDeveloperInstructions(options.systemPrompt)
+      const contextConfig =
+        options.settings.contextWindow && options.settings.providerId === 'openai'
+          ? {
+              config: {
+                model_context_window: options.settings.contextWindow,
+                model_auto_compact_token_limit: Math.floor(options.settings.contextWindow * 0.9)
+              }
+            }
+          : {}
       const threadResult = session.nativeSessionId
         ? await this.appServerRequest(host, 'thread/resume', {
             threadId: session.nativeSessionId,
             // The app keeps its own transcript. Fetching unused native turns
             // can fail when Codex's history projection schema is unavailable.
             excludeTurns: true,
+            ...contextConfig,
             dynamicTools,
             developerInstructions
           })
         : await this.appServerRequest(host, 'thread/start', {
+            ...contextConfig,
             cwd: projectPath,
             dynamicTools,
             developerInstructions,
@@ -424,7 +441,7 @@ export class CodexDriver extends PersistentCliDriver {
           options.settings.permissionLevel
         ),
         model: options.settings.modelId,
-        ...(fastInference ? { serviceTier: 'fast' } : {}),
+        serviceTier,
         effort: codexEffort(options.settings.thinkingLevel),
         summary: this.modelsWithoutReasoningSummaries.has(options.settings.modelId)
           ? 'none'
@@ -1933,8 +1950,25 @@ export class CodexDriver extends PersistentCliDriver {
     if (options.settings.modelId) args.push('--model', options.settings.modelId)
     const fastInference =
       options.settings.inferenceMode === 'fast' && options.settings.providerId === 'openai'
-    if (fastInference) {
-      args.push('-c', 'service_tier=fast', '-c', 'features.fast_mode=true')
+    const serviceTier =
+      options.settings.providerId === 'openai' && options.settings.inferenceMode === 'ultrafast'
+        ? 'ultrafast'
+        : fastInference
+          ? 'fast'
+          : 'default'
+    args.push(
+      '-c',
+      `service_tier=${serviceTier}`,
+      '-c',
+      `features.fast_mode=${serviceTier !== 'default'}`
+    )
+    if (options.settings.contextWindow && options.settings.providerId === 'openai') {
+      args.push(
+        '-c',
+        `model_context_window=${options.settings.contextWindow}`,
+        '-c',
+        `model_auto_compact_token_limit=${Math.floor(options.settings.contextWindow * 0.9)}`
+      )
     }
     const { env, args: providerArgs } = await this.customProviderOverlay()
     args.push(...providerArgs)

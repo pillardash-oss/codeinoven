@@ -1,70 +1,100 @@
 <script lang="ts">
-  import { Zap } from '@lucide/svelte'
+  import { Check, Gauge, Settings2, Snail, Zap } from '@lucide/svelte'
+  import { DropdownMenu } from 'bits-ui'
   import type { InferenceMode } from '$shared/types'
 
   interface Props {
     inferenceMode: InferenceMode
-    /** Usage multiplier shown on the fast row. */
+    fastSupported: boolean
+    ultrafastSupported: boolean
     fastMultiplier: number
+    contextWindows: number[]
+    contextWindow?: number
     menuOpen: boolean
-    onToggle: () => void
-    onClose: () => void
     onSelect: (mode: InferenceMode) => void
+    onSelectContext: (tokens: number) => void
   }
 
-  let { inferenceMode, fastMultiplier, menuOpen, onToggle, onClose, onSelect }: Props = $props()
+  let {
+    inferenceMode,
+    fastSupported,
+    ultrafastSupported,
+    fastMultiplier,
+    contextWindows,
+    contextWindow,
+    menuOpen = $bindable(false),
+    onSelect,
+    onSelectContext
+  }: Props = $props()
+
+  const speeds = [
+    { id: 'normal', label: 'Standard', icon: Snail },
+    { id: 'fast', label: 'Fast', icon: Gauge },
+    { id: 'ultrafast', label: 'Ultrafast', icon: Zap }
+  ] satisfies { id: InferenceMode; label: string; icon: typeof Snail }[]
+  let availableSpeeds = $derived(
+    speeds.filter(
+      (speed) => speed.id === 'normal' || (speed.id === 'fast' ? fastSupported : ultrafastSupported)
+    )
+  )
+  let currentSpeed = $derived(speeds.find((speed) => speed.id === inferenceMode) ?? speeds[0])
+  function contextLabel(tokens: number): string {
+    return tokens >= 1_000_000 ? `${tokens / 1_000_000}m` : `${tokens / 1_000}k`
+  }
+  let summary = $derived(
+    `${currentSpeed.label}${contextWindow ? ` · ${contextLabel(contextWindow)}` : ''}`
+  )
 </script>
 
-<!-- Fast inference   native harness tier or catalog-provided fast variant -->
-<div class="relative">
-  <button
-    type="button"
-    class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground {inferenceMode ===
-    'fast'
-      ? 'text-accent'
-      : ''}"
-    aria-label={`Inference mode: ${inferenceMode === 'fast' ? 'Fast' : 'Normal'}`}
-    title="Inference mode   fast prioritizes speed over cost"
-    onclick={onToggle}
+<DropdownMenu.Root bind:open={menuOpen}>
+  <DropdownMenu.Trigger
+    class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+    title={`Model settings: ${summary}`}
+    aria-label={`Model settings: ${summary}`}
   >
-    <Zap
-      size={13}
-      class={inferenceMode === 'fast' ? 'text-accent' : ''}
-      fill={inferenceMode === 'fast' ? 'currentColor' : 'none'}
-    />
-  </button>
-
-  {#if menuOpen}
-    <button class="fixed inset-0 z-30 cursor-default" aria-label="Close menu" onclick={onClose}
-    ></button>
-    <div
-      class="absolute bottom-9 left-0 z-40 w-52 overflow-hidden rounded-xl border bg-surface shadow-lg"
+    <Settings2 size={10} class="shrink-0" />
+    <currentSpeed.icon size={10} class="shrink-0" />
+    {#if contextWindow}<span aria-hidden="true">·</span><span>{contextLabel(contextWindow)}</span
+      >{/if}
+  </DropdownMenu.Trigger>
+  <DropdownMenu.Portal>
+    <DropdownMenu.Content
+      side="bottom"
+      align="start"
+      sideOffset={4}
+      collisionPadding={12}
+      onCloseAutoFocus={(event) => event.preventDefault()}
+      class="z-90 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
     >
-      <div class="p-1">
-        <button
-          class="flex w-full items-center rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-elevated {inferenceMode ===
-          'normal'
-            ? 'text-primary'
-            : 'text-foreground'}"
-          title="Normal inference   full-cost standard tier"
-          onclick={() => onSelect('normal')}
+      <div class="px-2 py-1.5 text-[0.625rem] font-medium text-muted">Speed</div>
+      {#each availableSpeeds as speed (speed.id)}
+        <DropdownMenu.Item
+          class="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus:bg-elevated"
+          title={`Use ${speed.label.toLowerCase()} speed`}
+          onSelect={() => onSelect(speed.id)}
         >
-          Normal
-        </button>
-        <button
-          class="flex w-full items-center rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-elevated {inferenceMode ===
-          'fast'
-            ? 'text-primary'
-            : 'text-foreground'}"
-          title="Fast inference   prioritizes speed over cost"
-          onclick={() => onSelect('fast')}
-        >
-          <span class="flex flex-col">
-            <span>Fast</span>
-            <span class="text-[0.625rem] text-muted">~{fastMultiplier}× usage</span>
-          </span>
-        </button>
-      </div>
-    </div>
-  {/if}
-</div>
+          <speed.icon size={12} class="shrink-0" />
+          <span class="flex-1">{speed.label}</span>
+          {#if speed.id === 'fast'}<span class="text-[0.625rem] text-muted"
+              >~{fastMultiplier}× usage</span
+            >{/if}
+          {#if inferenceMode === speed.id}<Check size={11} class="shrink-0 text-primary" />{/if}
+        </DropdownMenu.Item>
+      {/each}
+      {#if contextWindows.length > 0}
+        <DropdownMenu.Separator class="my-1 h-px bg-border" />
+        <div class="px-2 py-1.5 text-[0.625rem] font-medium text-muted">Context window</div>
+        {#each contextWindows as tokens (tokens)}
+          <DropdownMenu.Item
+            class="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus:bg-elevated"
+            title={`Use ${contextLabel(tokens)} context window`}
+            onSelect={() => onSelectContext(tokens)}
+          >
+            <span class="flex-1">{contextLabel(tokens)}</span>
+            {#if tokens === contextWindow}<Check size={11} class="shrink-0 text-primary" />{/if}
+          </DropdownMenu.Item>
+        {/each}
+      {/if}
+    </DropdownMenu.Content>
+  </DropdownMenu.Portal>
+</DropdownMenu.Root>

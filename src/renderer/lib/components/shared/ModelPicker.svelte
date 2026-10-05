@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, type Snippet } from 'svelte'
   import { DropdownMenu, Popover } from 'bits-ui'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -66,6 +66,8 @@
     selectedModelKeys?: string[]
     /** Shows that the selected model is using its fast inference tier. */
     fast?: boolean
+    /** Settings segment between thinking and account controls. */
+    settingsPicker?: Snippet
     /** When true, only models that report vision capability are shown. */
     visionOnly?: boolean
     /** Current thinking level. Whenever the selected model declares thinking
@@ -117,6 +119,7 @@
     multiSelect = false,
     selectedModelKeys = [],
     fast = false,
+    settingsPicker,
     visionOnly = false,
     thinkingLevel = null,
     thinkingPresets,
@@ -469,7 +472,7 @@
             {selectedPeak.triggerLabel}
           </span>
         {/if}
-        {#if fast}
+        {#if fast && !settingsPicker}
           <Zap
             size={11}
             class="shrink-0 text-accent"
@@ -528,6 +531,7 @@
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
       {/if}
+      {@render settingsPicker?.()}
       {#if showAccountPicker}
         <DropdownMenu.Root bind:open={accountMenuOpen}>
           <DropdownMenu.Trigger

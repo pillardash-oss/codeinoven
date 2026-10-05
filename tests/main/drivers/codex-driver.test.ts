@@ -507,7 +507,12 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     })
     await driver.sendPrompt('/project', {
       sessionId,
-      settings: { ...settings, permissionLevel: 'full_access' },
+      settings: {
+        ...settings,
+        permissionLevel: 'full_access',
+        inferenceMode: 'ultrafast',
+        contextWindow: 1_000_000
+      },
       text: 'second',
       attachments: []
     })
@@ -518,6 +523,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       params: {
         threadId: 'native-1',
         excludeTurns: true,
+        config: { model_context_window: 1_000_000, model_auto_compact_token_limit: 900_000 },
         developerInstructions: codexQuestionInstruction,
         dynamicTools: expect.arrayContaining([
           expect.objectContaining({ name: 'cio_ask_user' }),
@@ -529,6 +535,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       expect.objectContaining({
         method: 'turn/start',
         params: expect.objectContaining({
+          serviceTier: 'ultrafast',
           sandboxPolicy: { type: 'dangerFullAccess' }
         })
       })

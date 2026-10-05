@@ -128,7 +128,20 @@ export async function discoverClaudeModels(
         )
       })
     ])
-    return models.map(mapClaudeModel)
+    const extendedIds = new Set(
+      models.filter((model) => model.value.endsWith('[1m]')).map((model) => model.value)
+    )
+    return models.map((model) => {
+      const mapped = mapClaudeModel(model)
+      const baseId = model.value.replace(/\[1m\]$/u, '')
+      const extended = extendedIds.has(`${baseId}[1m]`)
+      const nativeExtended = /(?:1m|1 million)/iu.test(model.description)
+      return {
+        ...mapped,
+        contextWindow: model.value.endsWith('[1m]') || nativeExtended ? 1_000_000 : 200_000,
+        contextWindows: extended || nativeExtended ? [200_000, 1_000_000] : [200_000]
+      }
+    })
   } finally {
     if (timer) clearTimeout(timer)
     handle.close()
