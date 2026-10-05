@@ -2,10 +2,12 @@
   import { contentThreadFamily } from '$lib/content-view-threads'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { feature } from '$lib/feature-registry'
+  import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
   import { motionDuration } from '$lib/motion'
+  import { isOverlayOpen } from '$lib/overlay-close.svelte'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -2912,6 +2914,40 @@
   $effect(() => {
     const projectId = scopeState.sidebarContext?.projectId
     if (projectId) void scopeState.ensureProjectThreadsLoaded(projectId)
+  })
+
+  /**
+   * Return the caret to the chat composer when the shell takes the screen back
+   * from a takeover view (Settings, the Scope board, the global browser).
+   *
+   * A switch between content views needs nothing here: it changes the thread,
+   * which remounts the conversation and the composer's own autofocus puts the
+   * caret back. A return from a takeover view keeps the same thread, so nothing
+   * remounts and the caret used to stay on the control that was clicked. The
+   * switch is the user asking for the conversation, so the composer on screen
+   * takes the keyboard exactly as it does after a thread switch.
+   *
+   * The request waits for the next frame rather than running in this flush: the
+   * composer probe measures the element it is about to focus, which forces a
+   * style and layout pass, and the switch flush is the wrong place to pay for
+   * one. A frame is early enough that the caret is back before the user can
+   * reach the keyboard.
+   *
+   * A surface with its own focus trap (modal, sheet, palette) keeps the keyboard
+   * it owns, the same guard the double-modifier composer gesture uses, because
+   * a view shortcut can still fire behind such a surface.
+   */
+  let composerFocusWasActive: boolean | null = null
+  $effect(() => {
+    const nowActive = active
+    const returnedToShell = composerFocusWasActive === false && nowActive
+    composerFocusWasActive = nowActive
+    if (!returnedToShell || isOverlayOpen()) return
+    const frame = requestAnimationFrame(() => {
+      if (isOverlayOpen()) return
+      focusVisibleComposer()
+    })
+    return () => cancelAnimationFrame(frame)
   })
 
   let wasActive: boolean | null = null

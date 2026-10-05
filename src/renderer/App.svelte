@@ -1604,11 +1604,25 @@
          mounted across Settings/Scope so returning never reloads the thread
          list or reconnects the harness. It fades out rather than going
          `display: none`, so the swap cross-fades with the page arriving on top
-         while keeping it out of the tab order and the accessibility tree. -->
+         while keeping it out of the tab order and the accessibility tree.
+
+         Visibility is transitioned on the way OUT only, and the arriving shell
+         takes `transition-property: opacity` without it. A transitioned
+         visibility computes `hidden` for the instant a switch starts   the
+         after-change value of an interpolated visibility is `visible` only
+         once the transition has actually begun, and that first frame is
+         exactly when a return to the conversation asks its composer to take
+         the caret. Measured in this app: with visibility transitioned in both
+         directions, no element inside the arriving shell accepts focus until a
+         later frame, so the composer silently refused the caret; with the
+         incoming direction untransitioned the same focus request lands on the
+         frame it is made. The outgoing direction keeps the transition, which is
+         what holds the fading shell on screen instead of blanking it the moment
+         the other page arrives. -->
       <div
-        class="h-full transition-[opacity,visibility] duration-200 ease-out motion-reduce:transition-none {showsContentView
-          ? 'visible opacity-100'
-          : 'invisible pointer-events-none opacity-0'}"
+        class="h-full duration-200 ease-out motion-reduce:transition-none {showsContentView
+          ? 'visible opacity-100 transition-[opacity]'
+          : 'invisible pointer-events-none opacity-0 transition-[opacity,visibility]'}"
       >
         <Workspace
           mode={lastContentView}
