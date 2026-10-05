@@ -42,3 +42,18 @@ export function viewShowsProject(
   }
   return false
 }
+
+/**
+ * True while the shell shows the scoped-threads view: its own registered view,
+ * or the plain projects view carrying a live scope sidebar (a restore can land
+ * there).
+ *
+ * The scoped state is the one projects state whose sidebar is docked on a
+ * single project, so "am I on Scoped?" has to answer the same way in the header
+ * switcher, the sidebar and the new-thread router. Nothing else decides it: a
+ * view that merely sits over projects (Chats, the board, Settings) is not
+ * Scoped, and neither is a projects view whose sidebar was let go.
+ */
+export function viewShowsScopedSidebar(view: MainView, hasSidebarContext: boolean): boolean {
+  return view === 'projects-scope' || (view === 'projects' && hasSidebarContext)
+}

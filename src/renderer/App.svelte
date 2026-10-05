@@ -38,7 +38,7 @@
     viewShowsThread,
     type ContentThreadFamily
   } from '$lib/content-view-threads'
-  import { viewShowsProject } from '$lib/content-view-projects'
+  import { viewShowsProject, viewShowsScopedSidebar } from '$lib/content-view-projects'
   import {
     navigationHistoryState,
     type NavigationLocation
@@ -461,6 +461,7 @@
     // its chunks and its runtime are both warmed here rather than at boot.
     if (id === 'browser') void loadBrowser()
     if (id === 'chats') navigation.preloadNavigationThreads('chats')
+    else if (id === 'scoped-threads') navigation.preloadScopedThreads()
     else navigation.preloadNavigationThreads('projects')
   }
 
@@ -607,7 +608,7 @@
     }
 
     const scopedContext = scopeState.sidebarContext
-    if ((activeView === 'projects' || activeView === 'projects-scope') && scopedContext) {
+    if (scopedContext && viewShowsScopedSidebar(activeView, true)) {
       // Docked scoped-threads sidebar: create in the docked scope's project and
       // bucket, never in whatever thread happens to be open.
       workspaceState.requestCreateThread(scopedContext.bucketId)
@@ -999,8 +1000,7 @@
     const family = contentThreadFamily(thread)
     const inScopeState =
       activeView === 'scope' ||
-      activeView === 'projects-scope' ||
-      (activeView === 'projects' && Boolean(scopeState.sidebarContext))
+      viewShowsScopedSidebar(activeView, scopeState.sidebarContext !== null)
 
     if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
       // A browser tab's conversation has no workspace thread and is deliberately
