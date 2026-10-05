@@ -27314,6 +27314,11 @@ export class ChatEngine {
     this.searchNudgeAttempts.delete(sessionId)
     this.pendingSpecRevisions.delete(sessionId)
     this.pendingBrainstormTurns.delete(sessionId)
+    // The turn is settling without an idle of its own, so nothing else will
+    // mirror what it did. Awaited before the checkpoint completion below
+    // broadcasts, so the renderer's own refresh of that update already shows the
+    // failed turn's work instead of a conversation that looks empty.
+    await this.captureFailedTurnTranscript(info, sessionId)
     try {
       await this.clearPendingSpecRevision(info.projectId, info.threadId)
       const currentThread = await this.threadManager.getThread(info.projectId, info.threadId)
@@ -27402,6 +27407,85 @@ export class ChatEngine {
       Logger.error('session error recovery failed:', failure)
     } finally {
       await this.cleanupTurnUtilities(sessionId)
+    }
+  }
+
+  /**
+   * Persist a failed turn's transcript into the message mirror.
+   *
+   * The mirror is the thread's durable record of what the agent did, but the
+   * only writer of a streamed turn is the idle finalization, and a turn that
+   * ends on a provider failure can settle with no idle of its own: a harvested
+   * process, a paused usage-reset wait, a watchdog abort. Its work then exists
+   * only in the per-thread stream log, where the next turn's fold boundary
+   * hides it and the log's own compaction eventually deletes it, so the
+   * conversation reads as if the agent never ran. Reading the harness
+   * transcript here makes the failed attempt ordinary conversation history:
+   * visible, reloadable, and immune to the next turn's boundary.
+   *
+   * Best-effort and non-throwing: a driver that cannot be read (a dead native
+   * session, a missing transcript) must never change how the failure itself is
+   * handled. Merged by message id, so a later idle finalization refines the
+   * same rows instead of duplicating them.
+   */
+  private async captureFailedTurnTranscript(info: SessionInfo, sessionId: string): Promise<void> {
+    try {
+      const driver = this.driverForRuntime(info.driverId, info.accountId)
+      if (!driver) return
+      const account = await this.accountRegistry.resolve(info.driverId, info.accountId)
+      const loadedMessages = stampAccount(
+        stampHarnessId(
+          info.activeTurnUserMessageId && driver.loadMessagesSince
+            ? await driver.loadMessagesSince(
+                info.projectPath,
+                sessionId,
+                info.activeTurnUserMessageId
+              )
+            : await driver.loadMessages(info.projectPath, sessionId),
+          info.driverId
+        ),
+        account.id,
+        account.label
+      )
+      if (loadedMessages.length === 0) return
+      const activeTurnStartIndex = info.activeTurnUserMessageId
+        ? loadedMessages.findLastIndex((message) => message.id === info.activeTurnUserMessageId)
+        : -1
+      const messages =
+        activeTurnStartIndex > 0 ? loadedMessages.slice(activeTurnStartIndex) : loadedMessages
+      const mirrorAnchorId = info.activeTurnUserMessageId ?? messages.at(-1)?.id
+      const mirror = mirrorAnchorId
+        ? (
+            await this.threadManager.loadMessagePageAround(
+              info.projectId,
+              info.threadId,
+              mirrorAnchorId,
+              40
+            )
+          ).messages
+        : []
+      const classifiedMessages = classifyProviderMessages(messages, false).filter(
+        (message) => !(message.role === 'user' && message.visibility === 'hidden')
+      )
+      this.applyReasoningStamps(sessionId, classifiedMessages)
+      this.applyToolStamps(sessionId, classifiedMessages)
+      // A thread truncation   deleting a message, editing one, clearing the
+      // conversation   forgets the session precisely so a late sync cannot
+      // resurrect what the user removed. The transcript read above gave it that
+      // chance, so the mirror write stands down when it did.
+      if (!this.sessionRegistry.has(sessionId)) return
+      const merged = restoreMirrorAccount(
+        restoreMirrorThinkingLevel(mergeAgentMessages(mirror, classifiedMessages), mirror),
+        mirror
+      )
+      await this.threadManager.upsertMessages(info.projectId, info.threadId, merged, sessionId)
+    } catch (error) {
+      Logger.dev('Failed-turn transcript capture skipped:', {
+        projectId: info.projectId,
+        threadId: info.threadId,
+        sessionId,
+        error: rawErrorMessage(error)
+      })
     }
   }
 

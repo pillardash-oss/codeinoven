@@ -281,6 +281,31 @@ export function lastTurnStartIndex(messages: readonly AgentMessage[]): number {
 }
 
 /**
+ * Index of the newest user message that opens a turn and still has no assistant
+ * message mirrored after it, or -1 when the transcript's own turn already has
+ * its assistant row (or has no user message at all).
+ *
+ * A turn that settles before the mirror captures it - a provider failure, a
+ * user stop, a paused will-retry wait - has no assistant row, so the durable
+ * working trace streaming for it has no turn of its own to render under. This
+ * finds the prompt that work belongs to: the newest real user message, never an
+ * activity notice (a compaction summary or sub-agent envelope). An assistant
+ * row after the prompt means the turn is already represented by the mirror and
+ * a durable duplicate must not mount.
+ */
+export function pendingTurnAnchorIndex(messages: readonly AgentMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (!message || message.role !== 'user' || isActivityOnlyUserMessage(message)) continue
+    const assistantMirrored = messages
+      .slice(index + 1)
+      .some((candidate) => candidate.role === 'assistant')
+    return assistantMirrored ? -1 : index
+  }
+  return -1
+}
+
+/**
  * Find the last text part in a turn ending at the given message index.
  * Activity-only user messages are transparent to the turn span.
  */

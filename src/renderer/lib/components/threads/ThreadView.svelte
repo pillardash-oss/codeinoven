@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
-  import { mergeWorkingParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
+  import {
+    latestWorkingTraceParts,
+    mergeWorkingParts,
+    shouldMountWorkingTrace
+  } from '$lib/working-trace-parts'
   import { formatDurationMs } from '$lib/format/duration'
   import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
   import { reconcilesPendingAttention } from '$lib/session-attention'
@@ -312,6 +316,7 @@
     isActivityOnlyUserMessage,
     isTurnCompleted,
     lastTurnStartIndex,
+    pendingTurnAnchorIndex,
     resolvedSubagentPart,
     streamWorkingPartsForTurn,
     turnStartPromptsBefore,
@@ -700,6 +705,29 @@
     return assistantMirrored ? null : { userMessageId, userMessageIndex }
   })
   let pendingLiveTurnParts = $derived(pendingLiveTurn ? streamWorkingPartsForPendingTurn() : [])
+  /**
+   * The durable work of a turn that settled without ever mirroring an assistant
+   * message: a provider error, a user stop, a paused will-retry wait.
+   *
+   * The live pending block above only exists while the run is busy, and the
+   * assistant-message branch below only exists once an assistant row is
+   * mirrored, so a settled turn with neither had no renderer at all: the trace
+   * the reader was watching vanished on the error and only the user's message
+   * was left, even though the durable fold still held every part. This keeps
+   * that work on screen for as long as it is the transcript's own turn, in the
+   * settled (not busy) presentation, and yields to the assistant branch the
+   * moment the assistant row lands. */
+  let settledTurnParts = $derived.by(() => {
+    if (conversationBusy || brainstormReportRefreshing) return []
+    if (pendingTurnAnchorIndex(structureMessages) === -1) return []
+    // Only when no assistant row exists at all. An earlier assistant turn is
+    // itself a mount point for this fold (`streamWorkingPartsForTurn` keeps
+    // every part the mirror does not already carry before that turn), so
+    // mounting a second card here would render the same work twice.
+    if (lastTurnStartIndex(structureMessages) !== -1) return []
+    const parts = streamWorkingPartsForPendingTurn()
+    return latestWorkingTraceParts(parts).length > 0 ? parts : []
+  })
   /** Whether the latest turn currently has any renderable working-trace parts.
    *  When the thread is busy but nothing has materialized to write to the
    *  screen yet (the agent is still connecting/assembling, or the hydrated
@@ -12392,11 +12420,11 @@
             {/if}
           {/each}
 
-          {#if pendingLiveTurn}
+          {#if pendingLiveTurn || settledTurnParts.length > 0}
             <WorkingTrace
-              parts={pendingLiveTurnParts}
+              parts={pendingLiveTurn ? pendingLiveTurnParts : settledTurnParts}
               open
-              busy
+              busy={Boolean(pendingLiveTurn)}
               latest
               {active}
               olderPartsAvailable={streamHasOlder}
