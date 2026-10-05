@@ -72,27 +72,6 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     manifest: manifest({ loadsAgentsMd: false, manualCompaction: true, multipleAccounts: false })
   },
   {
-    id: 'codex',
-    name: 'Codex CLI',
-    command: 'codex',
-    versionArgs: ['--version'],
-    integration: 'ready',
-    supportsCustomProviders: true,
-    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true, multipleAccounts: false })
-  },
-  {
-    id: 'claude-code',
-    name: 'Claude Code',
-    command: 'claude',
-    versionArgs: ['--version'],
-    integration: 'ready',
-    supportsCustomProviders: true,
-    // Claude Code reads CLAUDE.md natively. Project behavior is supplied by
-    // CodeInOven's application prompt layer rather than project AGENTS.md.
-    // Manual compaction: `claude -p /compact --resume <id>` (verified live).
-    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true, multipleAccounts: false })
-  },
-  {
     // One OpenCode harness. V1 and V2 both install as `opencode` and are no
     // longer installed side by side by default (the V2 installer replaces the
     // V1 binary); a package-managed V2 install may also add the `opencode2`
@@ -112,6 +91,27 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     // integration, and the CLI can switch which one is active
     // (`opencode auth switch <integration> <credential>`, V2 only).
     manifest: manifest({ loadsAgentsMd: true, manualCompaction: true, multipleAccounts: true })
+  },
+  {
+    id: 'codex',
+    name: 'Codex CLI',
+    command: 'codex',
+    versionArgs: ['--version'],
+    integration: 'ready',
+    supportsCustomProviders: true,
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true, multipleAccounts: false })
+  },
+  {
+    id: 'claude-code',
+    name: 'Claude Code',
+    command: 'claude',
+    versionArgs: ['--version'],
+    integration: 'ready',
+    supportsCustomProviders: true,
+    // Claude Code reads CLAUDE.md natively. Project behavior is supplied by
+    // CodeInOven's application prompt layer rather than project AGENTS.md.
+    // Manual compaction: `claude -p /compact --resume <id>` (verified live).
+    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true, multipleAccounts: false })
   },
   {
     id: 'cline',
