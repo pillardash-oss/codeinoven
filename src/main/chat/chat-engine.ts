@@ -21500,11 +21500,12 @@ export class ChatEngine {
    *
    * Deleting a thread is cleanup, not execution, so it never fails closed. The
    * scope resolver stays the authority for every turn, file surface, and Git
-   * operation, but a thread whose scope was removed (or whose managed checkout
-   * is unhealthy) must still be deletable. Refusing here leaves a conversation
-   * the user cannot remove and an eviction candidate that is re-picked on every
-   * create without ever making room. The persisted compatibility directory is
-   * exactly the path this thread's harness session was opened with, and the two
+   * operation, but a thread whose managed checkout is unhealthy (or whose board
+   * entry disappears between reads) must still be deletable. Refusing here
+   * leaves a conversation the user cannot remove and an eviction candidate that
+   * is re-picked on every create without ever making room. The persisted
+   * compatibility directory is exactly the path this thread's harness session
+   * was opened with, and the two
    * teardown calls that use it, abort and session removal, are already
    * best-effort.
    */
@@ -21512,7 +21513,13 @@ export class ChatEngine {
     try {
       return await this.resolveThreadPath(thread.projectId, thread.id)
     } catch (error) {
-      Logger.dev('Thread teardown resolved its scope root from the compatibility directory:', error)
+      // The fallback is expected behavior for an unhealthy checkout, so it logs
+      // one concise dev line with the reason instead of a failure-looking stack.
+      Logger.dev('Thread teardown fell back to the persisted directory', {
+        threadId: thread.id,
+        scopeBucketId: thread.scopeBucketId,
+        reason: error instanceof Error ? error.message : String(error)
+      })
     }
     const persisted = thread.workingDirectory.trim()
     const projectPath = await this.resolveProjectPath(thread.projectId)
