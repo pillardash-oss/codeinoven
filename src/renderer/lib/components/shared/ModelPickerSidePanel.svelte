@@ -20,6 +20,9 @@
    * own surface instead: the picker keeps exactly one row for them, and both the
    * profiles and the harness filter scroll inside the panel.
    *
+   * Every picker that owns a profiles group renders this, so the panel is the same
+   * object whether it was reached from the composer or from a settings field.
+   *
    * The panel is portaled beside the popover rather than nested in its markup.
    * bits-ui registers every open layer and lets only the topmost one answer an
    * outside interaction, so pointing inside the panel never dismisses the picker
@@ -29,7 +32,10 @@
   interface Props {
     /** Harness filter the panel hosts; null when the catalog holds one harness. */
     filter?: PickerHarnessFilterControls | null
-    /** Profiles the panel lists; unset on a picker that has no profiles surface. */
+    /**
+     * Profiles the panel lists; null on a picker that cannot apply one, such as a
+     * multi-select or vision-only list, which keeps the harness filter alone.
+     */
     profiles?: ModelPickerProfilesGroup | null
   }
 
@@ -45,13 +51,17 @@
   let activeProfile = $derived(
     profiles ? activeModelProfile(profiles.profiles, profiles.settings) : null
   )
-  let panelLabel = $derived(profiles ? 'Model profiles and harnesses' : 'Model harness filter')
+  let panelLabel = $derived(
+    profiles ? (filter ? 'Model profiles and harnesses' : 'Model profiles') : 'Model harness filter'
+  )
   /**
-   * Row label. A picker that has profiles names both surfaces it holds, because
+   * Row label. A picker that has profiles names every surface it holds, because
    * the row is the only thing that says the harness filter is in there; a picker
    * without profiles names the filter's own scope instead.
    */
-  let rowLabel = $derived(profiles ? 'Profiles & harnesses' : (filter?.label ?? ''))
+  let rowLabel = $derived(
+    profiles ? (filter ? 'Profiles & harnesses' : 'Model profiles') : (filter?.label ?? '')
+  )
   /**
    * Which preset is in force, named in the row's title only.
    *

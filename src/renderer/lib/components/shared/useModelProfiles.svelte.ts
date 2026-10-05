@@ -3,22 +3,16 @@ import { reportError } from '$lib/stores/app-errors.svelte'
 import { appConfigState } from '$lib/stores/app-config.svelte'
 import {
   MAX_MODEL_PROFILES,
-  applyModelProfile,
   normalizeModelProfileName,
   renameModelProfile,
   uniqueModelProfileId,
-  usableModelProfiles
+  usableModelProfiles,
+  type ModelProfileSettings
 } from '$shared/model-profiles'
-import type {
-  AppConfigPatch,
-  ModelProfile,
-  PermissionLevel,
-  ProviderCatalog,
-  ThreadSettings
-} from '$shared/types'
+import type { AppConfigPatch, ModelProfile, ProviderCatalog } from '$shared/types'
 
 /**
- * Saved model profiles, as a composer-scoped controller.
+ * Saved model profiles, as a picker-scoped controller.
  *
  * The profiles themselves live in `AppConfig.modelProfiles` and are mirrored into
  * `appConfigState`, so this controller never keeps its own copy: it reads the
@@ -26,8 +20,9 @@ import type {
  * `config:changed` and re-syncs the mirror. That is why there is no local array
  * and no separate save path here.
  *
- * A controller rather than plain functions because the picker needs reactive state
- * for the pending-delete confirmation.
+ * One controller per mounted picker, because `pendingDelete` is per-surface UI
+ * state: the picker that was asked to delete a row owns the confirmation that
+ * follows, and two open pickers must not share one dialog.
  */
 export interface ModelProfilesController {
   /** Profiles that can be applied, in the order the user listed them. */
@@ -36,46 +31,21 @@ export interface ModelProfilesController {
   readonly atCapacity: boolean
   /** The profile waiting on delete confirmation, if any. */
   readonly pendingDelete: ModelProfile | null
-  /** A starting name for a profile saved from the current settings. */
-  draftName(settings: ThreadSettings, catalogs: readonly ProviderCatalog[]): string
+  /** A starting name for a profile saved from the given settings. */
+  draftName(settings: ModelProfileSettings, catalogs: readonly ProviderCatalog[]): string
   /** Ask to delete a profile. Nothing is removed until `confirmDelete` runs. */
   requestDelete(profile: ModelProfile): void
   /** Abandon the pending delete. */
   cancelDelete(): void
   /** Remove the pending profile for good. */
   confirmDelete(): Promise<void>
-  /** Save the current settings as a new profile under `name`. */
-  save(settings: ThreadSettings, name: string): Promise<boolean>
+  /** Save the given settings as a new profile under `name`. */
+  save(settings: ModelProfileSettings, name: string): Promise<boolean>
   /** Give an existing profile a new name, keeping everything else it stores. */
   rename(profile: ModelProfile, name: string): Promise<boolean>
-  /** The settings produced by applying a profile, clamped for this surface. */
-  apply(
-    profile: ModelProfile,
-    settings: ThreadSettings,
-    catalogs: readonly ProviderCatalog[]
-  ): ThreadSettings
 }
 
-/**
- * What the caller must resolve before the controller can clamp permissions.
- *
- * A predicate rather than a value because the answer changes while the composer is
- * mounted: a chat unlocks Full Access the moment File System is switched on, so a
- * value read once at setup would keep clamping a profile that is now allowed.
- */
-export interface ModelProfileClampOptions {
-  /**
-   * True when the surface must not grant Full Access. A chat only unlocks it once
-   * the user turns on File System for that chat, matching `effectiveSettings` in
-   * the thread settings store, so a profile carrying `full_access` cannot hand a
-   * web-only chat file access nobody granted it.
-   */
-  readonly lockedToAutoReview: () => boolean
-}
-
-export function createModelProfilesController(
-  options: ModelProfileClampOptions
-): ModelProfilesController {
+export function createModelProfilesController(): ModelProfilesController {
   let pendingDelete = $state<ModelProfile | null>(null)
 
   async function persist(next: ModelProfile[], failureMessage: string): Promise<boolean> {
@@ -117,7 +87,7 @@ export function createModelProfilesController(
         'The model profile was not deleted.'
       )
     },
-    async save(settings: ThreadSettings, name: string): Promise<boolean> {
+    async save(settings: ModelProfileSettings, name: string): Promise<boolean> {
       const trimmed = normalizeModelProfileName(name)
       // A profile with no model names nothing the app could run, so it is refused
       // here rather than stored as a row that applies to a plausible default.
@@ -142,12 +112,6 @@ export function createModelProfilesController(
       const next = renameModelProfile(appConfigState.modelProfiles, profile.id, name)
       if (!next) return false
       return persist(next, 'The model profile was not renamed.')
-    },
-    apply(profile, settings, catalogs): ThreadSettings {
-      const applied = applyModelProfile(settings, profile, catalogs)
-      return options.lockedToAutoReview()
-        ? { ...applied, permissionLevel: 'auto_review' as PermissionLevel }
-        : applied
     }
   }
 }
@@ -160,7 +124,10 @@ export function createModelProfilesController(
  * catalog has not resolved yet falls back to the harness, which still says more
  * than nothing.
  */
-function draftProfileName(settings: ThreadSettings, catalogs: readonly ProviderCatalog[]): string {
+function draftProfileName(
+  settings: ModelProfileSettings,
+  catalogs: readonly ProviderCatalog[]
+): string {
   const provider = catalogs.find(
     (candidate) =>
       candidate.harnessId === settings.harnessId && candidate.id === settings.providerId

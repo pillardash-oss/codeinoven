@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { onMount, tick, type Snippet } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { DropdownMenu, Popover } from 'bits-ui'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { Brain, Check, Cpu, Star, UserRound } from '@lucide/svelte'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { isGeneratedAccountLabelFor } from '$shared/account-label'
-  import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
+  import { applyModelProfile, type ModelProfileSettings } from '$shared/model-profiles'
+  import { DEFAULT_THINKING_LEVEL, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { modelKey } from '$lib/model-keys'
   import { peakHoursBadgeFor } from '$shared/peak-hours'
@@ -19,7 +20,10 @@
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import type {
     HarnessAccount,
+    InferenceMode,
+    ModelProfile,
     ModelRuntimeSettings,
+    PermissionLevel,
     ProviderCatalog,
     ThinkingLevel,
     ThinkingPreset
@@ -31,10 +35,16 @@
   import { modelRuntimeDefaults } from '$lib/stores/model-runtime-defaults.svelte'
   import ModelSettingsPicker from './ModelSettingsPicker.svelte'
   import { fastMultiplierFor, fastSelectionModelId } from '$shared/fast-inference'
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
   import ModelPickerList from './ModelPickerList.svelte'
   import ModelPickerVendorIcons from './ModelPickerVendorIcons.svelte'
-  import { findModelEntry, truncateLabel, type PickerSidePanelParams } from './model-picker-helpers'
+  import { createModelProfilesController } from './useModelProfiles.svelte'
+  import {
+    findModelEntry,
+    truncateLabel,
+    type ModelPickerProfilesGroup
+  } from './model-picker-helpers'
 
   interface Props {
     providers: ProviderCatalog[]
@@ -61,14 +71,34 @@
      *  the picker lazily fetches that project's catalog (network only when stale). */
     projectId?: string | null
     /**
-     * Optional profiles surface, mounted as the picker's side panel.
+     * Whether the picker lists the saved model profiles.
      *
-     * A snippet rather than profile props so only the callers that actually have
-     * profiles opt in, and the ones that do keep ownership of the profile state
-     * instead of passing it through this component. It receives the harness filter
-     * controls the model list owns, since the filter narrows that list.
+     * On by default, because the profiles surface belongs to the picker and not to
+     * one caller: every picker used to offer the harness filter alone, which read as
+     * a half-built panel. A picker whose gesture is not "run this whole setup"
+     * turns it off: `multiSelect` adds models to a list, and `visionOnly` picks a
+     * model for an image gate rather than for a conversation.
      */
-    sidePanel?: Snippet<[PickerSidePanelParams]>
+    showProfiles?: boolean
+    /**
+     * How a profile's permission level is committed, for a caller that owns one.
+     *
+     * A picker that cannot grant permissions still lists profiles, because the
+     * harness, model, thinking level, and speed are worth applying on their own; it
+     * just stores the app's default for the level it cannot set.
+     */
+    permissionLevel?: PermissionLevel
+    /**
+     * Applies a saved profile, for a caller that stores more than a model.
+     *
+     * Given, the picker hands the preset over whole rather than replaying it through
+     * `onSelect`, `onSelectThinking`, and `onSelectRuntime`: those are separate
+     * writes, and a caller that rebuilds a stored record from the value it was
+     * rendered with would write the model it just accepted back out. Unset applies
+     * the profile through those callbacks, which is exact for a caller that stores
+     * nothing but the choice itself.
+     */
+    onApplyProfile?: (profile: ModelProfile) => void
     /** Restricts the picker to one harness. Unset shows every harness as today. */
     harnessFilter?: string | null
     side?: 'top' | 'bottom'
@@ -129,7 +159,9 @@
     thinkingMenuOpen = $bindable(false),
     accountMenuOpen = $bindable(false),
     projectId = null,
-    sidePanel,
+    showProfiles = true,
+    permissionLevel = 'auto_review',
+    onApplyProfile,
     harnessFilter = null,
     side = 'top',
     disabled = false,
@@ -281,6 +313,146 @@
       ])
   )
   let soleAccountLabel = $derived(providerAccounts.length === 1 ? providerAccounts[0].label : '')
+
+  /**
+   * Saved profiles, read from the app config through the picker's own controller.
+   *
+   * The controller is created here rather than handed in because profiles are the
+   * picker's surface, not one caller's: every picker can apply a saved setup, and
+   * the one that was asked to delete a row owns the confirmation that follows.
+   */
+  const modelProfiles = createModelProfilesController()
+
+  /**
+   * The settings a profile is applied to and saved from.
+   *
+   * Built from this picker's own props rather than a caller's settings record, so a
+   * picker that holds no more than a model choice can still apply the part of a
+   * profile it owns. `accountId` keeps the account the picker already resolved when
+   * the caller did not name one.
+   */
+  let profileSettings = $derived<ModelProfileSettings>({
+    harnessId,
+    providerId,
+    modelId,
+    accountId: accountId ?? effectiveAccountId,
+    thinkingLevel: thinkingLevel ?? fallbackThinkingLevel ?? DEFAULT_THINKING_LEVEL,
+    inferenceMode: runtimeSettings?.inferenceMode ?? (fast ? 'fast' : 'normal'),
+    permissionLevel,
+    contextWindow: runtimeSettings?.contextWindow
+  })
+
+  /**
+   * Profiles this picker may apply.
+   *
+   * A picker pinned to one harness (`harnessFilter`) keeps that harness, so a
+   * profile that would switch it is not offered: the harness is chosen by the
+   * surface around the picker, and applying one would leave the two disagreeing.
+   */
+  let scopedProfiles = $derived(
+    harnessFilter
+      ? modelProfiles.profiles.filter((profile) => profile.harnessId === harnessFilter)
+      : modelProfiles.profiles
+  )
+
+  /** True while this picker has a profiles surface rather than the filter alone. */
+  let profilesVisible = $derived(showProfiles && !multiSelect && !visionOnly)
+
+  let profilesGroup = $derived<ModelPickerProfilesGroup | null>(
+    profilesVisible
+      ? {
+          profiles: scopedProfiles,
+          settings: profileSettings,
+          catalogs: displayProviders,
+          atCapacity: modelProfiles.atCapacity,
+          draftName: modelProfiles.draftName(profileSettings, displayProviders),
+          onApply: applyProfile,
+          onSave: (name) => void modelProfiles.save(profileSettings, name),
+          onRename: (profile, name) => void modelProfiles.rename(profile, name),
+          onRequestDelete: requestDeleteProfile
+        }
+      : null
+  )
+
+  /**
+   * Apply a saved profile.
+   *
+   * A caller that owns settings this picker cannot commit (the composer's own
+   * permission gate) hands over its applier; every other caller gets the profile
+   * applied through the callbacks it already gave the picker, which is what picking
+   * those same values by hand would do.
+   */
+  function applyProfile(profile: ModelProfile): void {
+    close()
+    thinkingMenuOpen = false
+    accountMenuOpen = false
+    if (onApplyProfile) {
+      onApplyProfile(profile)
+      return
+    }
+    const applied = applyModelProfile(profileSettings, profile, displayProviders)
+    const inferenceMode = applied.inferenceMode ?? 'normal'
+    onSelect(applied.providerId, applied.modelId, applied.harnessId, applied.accountId)
+    void applyProfileExtras(applied, inferenceMode)
+  }
+
+  /**
+   * The rest of a profile, once the model change it travels with has landed.
+   *
+   * The picker's callbacks are three separate writes, and a caller that rebuilds a
+   * stored record from the value it was rendered with would write the model it just
+   * accepted back out. So the thinking level and the speed tier are committed after
+   * a flush, against the render that already carries the new model, and they are
+   * left alone when the surface never took the model change at all.
+   */
+  async function applyProfileExtras(
+    applied: ModelProfileSettings,
+    inferenceMode: InferenceMode
+  ): Promise<void> {
+    await tick()
+    if (
+      applied.harnessId !== harnessId ||
+      applied.providerId !== providerId ||
+      applied.modelId !== modelId
+    ) {
+      return
+    }
+    if (applied.thinkingLevel !== profileSettings.thinkingLevel) {
+      onSelectThinking?.(applied.thinkingLevel)
+    }
+    if (
+      inferenceMode !== profileSettings.inferenceMode ||
+      applied.contextWindow !== profileSettings.contextWindow
+    ) {
+      onSelectRuntime?.({ inferenceMode, contextWindow: applied.contextWindow })
+    }
+  }
+
+  /**
+   * Ask to delete a profile.
+   *
+   * The picker closes first: its popover paints above the modal layer, so leaving
+   * it up put the model list on top of the very dialog waiting to be answered.
+   */
+  function requestDeleteProfile(profile: ModelProfile): void {
+    close()
+    thinkingMenuOpen = false
+    accountMenuOpen = false
+    modelProfiles.requestDelete(profile)
+  }
+
+  /**
+   * Open the picker on its profiles panel, for the `/profile` slash action.
+   *
+   * The panel is mounted with the popover rather than beside it, so it only exists
+   * once that popover has opened; the ask waits for the open to land before handing
+   * the panel to the arrow keys.
+   */
+  export function openProfiles(): void {
+    if (!profilesVisible) return
+    open = true
+    void tick().then(() => pickerList?.openProfilesPanel())
+  }
 
   $effect(() => {
     onAccountPickerVisibleChange?.(showAccountPicker)
@@ -705,9 +877,10 @@
         }}
       >
         <ModelPickerList
+          bind:this={pickerList}
           {displayProviders}
           {cachedProviders}
-          {sidePanel}
+          profiles={profilesGroup}
           {harnessFilter}
           {favoriteModels}
           {recentModels}
@@ -731,4 +904,27 @@
       </Popover.Content>
     </Popover.Portal>
   </Popover.Root>
+
+  <!--
+    Deleting a profile is destructive, so a row's trash icon only arms this and
+    nothing is removed until it is confirmed here. Rendered outside the popover on
+    purpose: the picker closes when the ask is made, and the dialog has to outlive
+    the surface that raised it. `pendingDelete` is cleared by the controller before
+    the write, so a double confirm cannot remove a second row.
+  -->
+  <ConfirmDialog
+    open={modelProfiles.pendingDelete !== null}
+    title={`Delete the ${modelProfiles.pendingDelete?.name ?? ''} profile?`}
+    confirmLabel="Delete profile"
+    variant="danger"
+    note="This cannot be undone. The model setup it captured is not changed."
+    onCancel={() => modelProfiles.cancelDelete()}
+    onConfirm={() => modelProfiles.confirmDelete()}
+  >
+    <p>
+      Every model picker will stop offering <strong>{modelProfiles.pendingDelete?.name}</strong>.
+      The harness, model, thinking level, speed, and permissions already in force stay exactly as
+      they are.
+    </p>
+  </ConfirmDialog>
 </div>

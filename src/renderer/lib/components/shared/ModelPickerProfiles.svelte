@@ -9,9 +9,10 @@
     isUsableModelProfile,
     modelProfileDisplay,
     modelProfileSummary,
-    type ModelProfileDisplay
+    type ModelProfileDisplay,
+    type ModelProfileSettings
   } from '$shared/model-profiles'
-  import type { ModelProfile, ProviderCatalog, ThreadSettings } from '$shared/types'
+  import type { ModelProfile, ProviderCatalog } from '$shared/types'
   import ModelPickerVendorIcons from './ModelPickerVendorIcons.svelte'
   import { harnessName } from './model-picker-helpers'
 
@@ -31,9 +32,9 @@
    * gesture: as a row of its own at the bottom it took a row's height from the
    * list on every open.
    *
-   * Everything here is presentational. Persistence, the applied-settings maths,
-   * and the delete confirmation belong to the composer, which owns the settings it
-   * commits; this component only reports intent.
+   * Everything here is presentational. Persistence, the applied-settings maths, and
+   * the delete confirmation belong to the picker this section is rendered in; this
+   * component only reports intent.
    *
    * The side panel's arrow keys walk this section through the `data-picker-entry`
    * marker, which is on the save control and on each row's apply button. A row's
@@ -44,7 +45,7 @@
     /** Saved profiles, in the order the user listed them. */
     profiles: ModelProfile[]
     /** Settings in force, used to tick the profile that is currently live. */
-    settings: ThreadSettings
+    settings: ModelProfileSettings
     /** Catalogs, so a row shows the model name rather than a raw id. */
     catalogs: ProviderCatalog[]
     /** True when the user has saved as many profiles as the app allows. */
@@ -57,7 +58,7 @@
     onSave: (name: string) => void
     /** Give an existing profile a new name. */
     onRename: (profile: ModelProfile, name: string) => void
-    /** Ask to delete; the composer confirms before anything is removed. */
+    /** Ask to delete; the picker confirms before anything is removed. */
     onRequestDelete: (profile: ModelProfile) => void
   }
 
@@ -355,7 +356,7 @@
               <Pencil size={11} />
             </button>
             <!--
-              Delete only asks. The composer runs the shared confirmation, so a
+              Delete only asks. The picker runs the shared confirmation, so a
               profile is never removed by a stray click beside the row that applies
               it.
             -->

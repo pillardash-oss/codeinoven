@@ -14,6 +14,7 @@
   import { ipcErrorMessage } from '$lib/ipc-errors'
   import { invoke } from '$lib/ipc.svelte'
   import { hasModelRuntimeSettings } from '$shared/model-runtime-settings'
+  import { applyModelProfile } from '$shared/model-profiles'
   import { modelKey } from '$lib/model-keys'
   import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
   import { visionModels } from '$lib/stores/vision-models.svelte'
@@ -67,10 +68,6 @@
   import EngineeringToolbox from './EngineeringToolbox.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import ModelPickerSidePanel from '../shared/ModelPickerSidePanel.svelte'
-  import type { PickerSidePanelParams } from '../shared/model-picker-helpers'
-  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
-  import { createModelProfilesController } from './useModelProfiles.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { filterActions, permissionLevelForAction } from '$lib/actions'
@@ -596,8 +593,8 @@
   let accountPickerVisible = $state(false)
   /** The scope shoe instance, so the `/scope` slash action can open its picker. */
   let scopeShoeComponent: ComposerShoe | undefined = $state(undefined)
-  /** The profiles panel instance, so the `/profile` slash action can open it. */
-  let profilesPanel: ModelPickerSidePanel | undefined = $state(undefined)
+  /** The shared model picker, so the `/profile` action can open its profiles panel. */
+  let modelPicker: ModelPicker | undefined = $state(undefined)
   /** The scope picker is live on the shoe (project mode, new thread)   gates
    *  the `/scope` slash action the same way the shoe's badge chevron does. */
   let scopePickerAvailable = $derived(scopeShoe !== undefined && scopeShoe.isNewThread === true)
@@ -744,15 +741,13 @@
   /**
    * Open the model picker on its profiles panel, for the `/profile` action.
    *
-   * The panel is mounted with the picker's popover rather than beside it, so it
-   * only exists once that popover has opened: the ask waits for the open to land
-   * before handing the panel to the arrow keys.
+   * The picker owns that surface, so the ask is one call: it opens its popover and
+   * hands the panel to the arrow keys once the panel has mounted.
    */
   function showProfilesMenu(): void {
     if (readOnlyMode) return
     closeAllMenus()
-    modelMenuOpen = true
-    void tick().then(() => profilesPanel?.openPanel())
+    modelPicker?.openProfiles()
   }
 
   function showThinkingMenu(): void {
@@ -1470,52 +1465,22 @@
   }
 
   /**
-   * Saved profiles, applied through the picker's profile rows.
+   * Run a saved profile, closing the picker it was picked from.
    *
-   * The controller holds no copy of the profiles: they live in the app config and
-   * come back through the mirrored store, so creating one from any composer is
-   * immediately available in every other one.
-   *
-   * Permission clamping is handed to the controller rather than re-derived per
-   * apply, because a chat only unlocks Full Access once File System is on and the
-   * picker must not be able to grant it any other way.
+   * The composer is the one caller that hands the picker an applier, because it
+   * holds settings a profile writes that the picker cannot see: a chat only unlocks
+   * Full Access once File System is on, so a profile carrying `full_access` must not
+   * be able to grant it any other way.
    */
-  const modelProfiles = createModelProfilesController({
-    lockedToAutoReview: () => hidePermissionSelector && resolved.fileSystemMode !== true
-  })
-
-  /** Run a saved profile, closing the picker it was picked from. */
   function applyProfile(profile: ModelProfile): void {
     closeAllMenus()
     onModelUsed?.(modelKey(profile.harnessId, profile.providerId, profile.modelId))
-    applySettings(modelProfiles.apply(profile, resolved, resolvedProviders))
-  }
-
-  function saveProfile(name: string): void {
-    void modelProfiles.save(resolved, name)
-  }
-
-  /**
-   * Rename a saved profile.
-   *
-   * Nothing here changes what the composer runs, so the panel and the picker it
-   * sits in stay open: closing the surface the user is working in would only make
-   * them reopen it.
-   */
-  function renameProfile(profile: ModelProfile, name: string): void {
-    void modelProfiles.rename(profile, name)
-  }
-
-  /**
-   * Ask to delete a profile.
-   *
-   * The picker closes first. The confirmation is a modal, and an open picker
-   * popover paints above the modal layer, so leaving it up put the model list on
-   * top of the very dialog waiting to be answered.
-   */
-  function requestDeleteProfile(profile: ModelProfile): void {
-    closeAllMenus()
-    modelProfiles.requestDelete(profile)
+    const applied = applyModelProfile(resolved, profile, resolvedProviders)
+    applySettings(
+      hidePermissionSelector && resolved.fileSystemMode !== true
+        ? { ...applied, permissionLevel: 'auto_review' }
+        : applied
+    )
   }
 
   function selectThinking(preset: ThinkingPreset): void {
@@ -1812,27 +1777,6 @@
     />
   {/if}
 
-  <!--
-    Deleting a profile is destructive, so the picker's trash icon only arms this and
-    nothing is removed until it is confirmed here. `pendingDelete` is cleared by
-    the controller before the write, so a double confirm cannot remove a second row.
-  -->
-  <ConfirmDialog
-    open={modelProfiles.pendingDelete !== null}
-    title={`Delete the ${modelProfiles.pendingDelete?.name ?? ''} profile?`}
-    confirmLabel="Delete profile"
-    variant="danger"
-    note="This cannot be undone. The model setup it captured is not changed."
-    onCancel={() => modelProfiles.cancelDelete()}
-    onConfirm={() => modelProfiles.confirmDelete()}
-  >
-    <p>
-      Every composer will stop offering <strong>{modelProfiles.pendingDelete?.name}</strong>. The
-      harness, model, thinking level, speed, and permissions already in force stay exactly as they
-      are.
-    </p>
-  </ConfirmDialog>
-
   {#if expertGateOpen && expertGateState}
     <ExpertCard
       expertState={expertGateState}
@@ -2021,8 +1965,10 @@
         onSelect={selectPermission}
       />
 
-      <!-- Shared model selector   model + thinking level in one control -->
+      <!-- Shared model selector   model + thinking level in one control, and the
+           saved profiles every other picker offers too. -->
       <ModelPicker
+        bind:this={modelPicker}
         {providers}
         {projectId}
         {harnessId}
@@ -2048,32 +1994,10 @@
         thinkingLevel={resolved.thinkingLevel}
         {thinkingPresets}
         onSelectThinking={(level) => selectThinking({ id: level, label: level })}
-      >
-        {#snippet sidePanel({ filter }: PickerSidePanelParams)}
-          <!--
-            A read-only composer has no settings a profile could commit, so it
-            offers the harness filter alone; the panel is shared, and the profiles
-            it lists are supplied only by composers that can apply them.
-          -->
-          <ModelPickerSidePanel
-            bind:this={profilesPanel}
-            {filter}
-            profiles={readOnlyMode
-              ? null
-              : {
-                  profiles: modelProfiles.profiles,
-                  settings: resolved,
-                  catalogs: resolvedProviders,
-                  atCapacity: modelProfiles.atCapacity,
-                  draftName: modelProfiles.draftName(resolved, resolvedProviders),
-                  onApply: applyProfile,
-                  onSave: saveProfile,
-                  onRename: renameProfile,
-                  onRequestDelete: requestDeleteProfile
-                }}
-          />
-        {/snippet}
-      </ModelPicker>
+        permissionLevel={resolved.permissionLevel}
+        onApplyProfile={applyProfile}
+        showProfiles={!readOnlyMode}
+      />
     </div>
 
     <!-- API usage credits   native harness command to bill this session's

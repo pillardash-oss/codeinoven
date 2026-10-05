@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick, type Snippet } from 'svelte'
+  import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import {
     Check,
@@ -35,24 +35,22 @@
     searchWords,
     visiblePickerItems,
     type ModelEntry,
+    type ModelPickerProfilesGroup,
     type PickerHarnessFilterControls,
-    type PickerListItem,
-    type PickerSidePanelParams
+    type PickerListItem
   } from './model-picker-helpers'
 
   interface Props {
     displayProviders: ProviderCatalog[]
     cachedProviders: ProviderCatalog[]
     /**
-     * Optional profiles surface, rendered as the picker's side panel.
+     * Profiles the side panel lists, built by the model picker from its own props.
      *
-     * The model picker hands this down as a snippet rather than as profile props so
-     * the ~25 call sites that mount this list without profiles are untouched, and so
-     * profile state stays owned by the composer rather than threaded down through
-     * two layers. The snippet receives the harness filter controls this list owns,
-     * because the filter narrows the list and the panel is only where it is drawn.
+     * The list only draws the panel; it does not own the profiles, so a picker that
+     * cannot apply one passes `null` and the panel falls back to the harness filter
+     * it already owns.
      */
-    sidePanel?: Snippet<[PickerSidePanelParams]>
+    profiles?: ModelPickerProfilesGroup | null
     /** Restricts the list to one harness. Unset shows every harness as today. */
     harnessFilter?: string | null
     favoriteModels: string[]
@@ -81,7 +79,7 @@
   let {
     displayProviders,
     cachedProviders,
-    sidePanel,
+    profiles = null,
     harnessFilter = null,
     favoriteModels,
     recentModels,
@@ -109,6 +107,14 @@
   let search = $state('')
   let searchInput: HTMLInputElement | undefined
   let modelList: HTMLDivElement | undefined
+  /**
+   * The side panel, so the picker can open it directly.
+   *
+   * The `/profile` slash action asks for the profiles surface rather than the model
+   * list, and this list is what renders that surface; the picker reaches it through
+   * here instead of reaching around the list into the panel.
+   */
+  let profilesPanel: ModelPickerSidePanel | undefined = $state(undefined)
   const collapsedGroups = new SvelteSet<string>()
   const selectedHarnesses = new SvelteSet<string>()
   let showAllHarnesses = $state(true)
@@ -384,6 +390,11 @@
     }
   }
 
+  /** Open the side panel, for a caller that asked for profiles directly. */
+  export function openProfilesPanel(): void {
+    profilesPanel?.openPanel()
+  }
+
   /** Reset the list surface when the popover opens or closes. */
   export function resetPicker(): void {
     search = ''
@@ -515,11 +526,7 @@
   {/if}
 </div>
 
-{#if sidePanel}
-  {@render sidePanel({ filter: harnessFilterControls })}
-{:else if harnessFilterControls}
-  <ModelPickerSidePanel filter={harnessFilterControls} />
-{/if}
+<ModelPickerSidePanel bind:this={profilesPanel} filter={harnessFilterControls} {profiles} />
 
 <div
   id={listId}

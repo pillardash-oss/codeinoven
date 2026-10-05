@@ -9,7 +9,12 @@ import {
   uniqueModelProfileId,
   usableModelProfiles
 } from '../../src/lib/model-profiles'
-import type { ModelProfile, ProviderCatalog, ThreadSettings } from '../../src/lib/types'
+import type {
+  ModelProfile,
+  ProviderCatalog,
+  ProviderModel,
+  ThreadSettings
+} from '../../src/lib/types'
 
 function profile(overrides: Partial<ModelProfile> = {}): ModelProfile {
   return {
@@ -37,22 +42,32 @@ function settings(overrides: Partial<ThreadSettings> = {}): ThreadSettings {
   } as ThreadSettings
 }
 
+function model(overrides: Partial<ProviderModel> = {}): ProviderModel {
+  return {
+    id: 'claude-opus-4-8',
+    providerId: 'anthropic',
+    name: 'Claude Opus 4.8',
+    reasoning: true,
+    attachment: false,
+    toolcall: true,
+    ...overrides
+  }
+}
+
 function catalog(overrides: Partial<ProviderCatalog> = {}): ProviderCatalog {
   return {
     id: 'anthropic',
     harnessId: 'opencode',
-    label: 'Anthropic',
+    name: 'Anthropic',
     models: [
-      {
-        id: 'claude-opus-4-8',
-        name: 'Claude Opus 4.8',
+      model({
         fastSupported: true,
         contextWindows: [200_000, 1_000_000],
         contextWindow: 200_000
-      }
+      })
     ],
     ...overrides
-  } as ProviderCatalog
+  }
 }
 
 describe('profile ids', () => {
@@ -143,6 +158,34 @@ describe('applyModelProfile', () => {
     expect(applied.permissionLevel).toBe('full_access')
   })
 
+  it('applies to a picker-sized record without inventing fields it does not own', () => {
+    // A model picker holds a harness, a provider, a model, and whatever it was
+    // handed for thinking, speed, and permissions. A profile has to apply to that
+    // record exactly as it is: a secondary-agent picker has no thread settings to
+    // fill in, and must not gain any.
+    const applied = applyModelProfile(
+      {
+        harnessId: 'opencode',
+        providerId: 'anthropic',
+        modelId: 'claude-sonnet-4-5',
+        accountId: 'opencode.default',
+        thinkingLevel: 'low' as const,
+        inferenceMode: 'normal' as const,
+        permissionLevel: 'auto_review' as const
+      },
+      profile()
+    )
+    expect(applied).toEqual({
+      harnessId: 'opencode',
+      providerId: 'anthropic',
+      modelId: 'claude-opus-4-8',
+      accountId: 'opencode.default',
+      thinkingLevel: 'high',
+      inferenceMode: 'normal',
+      permissionLevel: 'full_access'
+    })
+  })
+
   it('keeps the stored thinking level when the catalog has not resolved the model', () => {
     // A cold catalog says nothing about the level, so the profile's own choice
     // stands rather than whatever happened to be selected before.
@@ -155,14 +198,12 @@ describe('applyModelProfile', () => {
     const applied = applyModelProfile(settings(), profile({ thinkingLevel: 'ultra' }), [
       catalog({
         models: [
-          {
-            id: 'claude-opus-4-8',
-            name: 'Claude Opus 4.8',
+          model({
             thinkingPresets: [
               { id: 'low', label: 'Low', description: '' },
               { id: 'high', label: 'High', description: '' }
             ]
-          }
+          })
         ]
       })
     ])
@@ -175,9 +216,7 @@ describe('applyModelProfile', () => {
     ).toBe('fast')
     expect(
       applyModelProfile(settings(), profile({ inferenceMode: 'fast' }), [
-        catalog({
-          models: [{ id: 'claude-opus-4-8', name: 'Claude Opus 4.8', fastSupported: false }]
-        })
+        catalog({ models: [model({ fastSupported: false })] })
       ]).inferenceMode
     ).toBe('normal')
   })
@@ -282,17 +321,19 @@ describe('activeModelProfile', () => {
   })
 
   it('ignores the account, which a profile never stores', () => {
-    expect(
-      activeModelProfile([profile()], {
-        harnessId: 'opencode',
-        providerId: 'anthropic',
-        modelId: 'claude-opus-4-8',
-        accountId: 'opencode.work',
-        thinkingLevel: 'high',
-        inferenceMode: 'normal',
-        permissionLevel: 'full_access'
-      })?.id
-    ).toBe('deep-review')
+    // A held record carries an account even though the profile does not, so the
+    // comparison is written to see past one: this stands in for the composer's own
+    // settings, which `activeModelProfile` is never told about.
+    const current = {
+      harnessId: 'opencode',
+      providerId: 'anthropic',
+      modelId: 'claude-opus-4-8',
+      accountId: 'opencode.work',
+      thinkingLevel: 'high' as const,
+      inferenceMode: 'normal' as const,
+      permissionLevel: 'full_access' as const
+    }
+    expect(activeModelProfile([profile()], current)?.id).toBe('deep-review')
   })
 })
 

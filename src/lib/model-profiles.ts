@@ -6,7 +6,7 @@ import type {
   ModelProfile,
   PermissionLevel,
   ProviderCatalog,
-  ThreadSettings
+  ThinkingLevel
 } from './types'
 
 /**
@@ -21,6 +21,28 @@ import type {
  * IPC boundary all read one definition of what a usable profile is and one
  * implementation of the account rule below.
  */
+
+/**
+ * The settings a profile reads and writes.
+ *
+ * Every surface that can apply a profile holds at least these fields, but not
+ * every surface holds a whole `ThreadSettings`: a secondary-agent picker pins a
+ * harness, provider, model, and account and owns nothing else. `applyModelProfile`
+ * is generic over this shape, so applying a profile returns exactly the record it
+ * was handed and a picker never has to invent settings it does not own.
+ */
+export interface ModelProfileSettings {
+  harnessId: string
+  providerId: string
+  modelId: string
+  /** Kept while the harness is unchanged; never stored by a profile itself. */
+  accountId?: string
+  thinkingLevel: ThinkingLevel
+  inferenceMode?: InferenceMode
+  permissionLevel: PermissionLevel
+  /** Carried across a model change only when the new model offers it. */
+  contextWindow?: number
+}
 
 /** Ceiling on saved profiles, so the picker row and the config stay bounded. */
 export const MAX_MODEL_PROFILES = 24
@@ -165,7 +187,7 @@ export function usableModelProfiles(
  */
 export function modelProfileAccountId(
   profile: ModelProfile,
-  current: Pick<ThreadSettings, 'harnessId' | 'accountId'>
+  current: Pick<ModelProfileSettings, 'harnessId' | 'accountId'>
 ): string | undefined {
   if (isCodeInOvenCustomProviderId(profile.providerId)) return undefined
   if (profile.harnessId === current.harnessId) {
@@ -184,11 +206,11 @@ export function modelProfileAccountId(
  * profile written months ago against a model that has since dropped its fast
  * tier must not resurrect a model id that no longer exists.
  */
-export function applyModelProfile(
-  current: ThreadSettings,
+export function applyModelProfile<T extends ModelProfileSettings>(
+  current: T,
   profile: ModelProfile,
   catalogs: readonly ProviderCatalog[] = []
-): ThreadSettings {
+): T {
   const model = findProfileModel(profile, catalogs)
   // A profile's stored level is the user's own choice, so it wins outright whenever
   // the catalog cannot contradict it. `resolveDefaultThinkingLevel` only reports
@@ -304,7 +326,7 @@ export function modelProfileModelId(profile: ModelProfile): string {
 export function activeModelProfile(
   profiles: readonly ModelProfile[] | undefined | null,
   settings: Pick<
-    ThreadSettings,
+    ModelProfileSettings,
     'harnessId' | 'providerId' | 'modelId' | 'thinkingLevel' | 'inferenceMode' | 'permissionLevel'
   >
 ): ModelProfile | null {

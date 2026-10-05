@@ -4,7 +4,8 @@ import { modelKey } from '$lib/model-keys'
 import { providerStore } from '$lib/stores/providers.svelte'
 import { visionModels } from '$lib/stores/vision-models.svelte'
 import { getVendorSlug } from '$lib/vendor-icons/registry'
-import type { ModelProfile, ProviderCatalog, ProviderModel, ThreadSettings } from '$shared/types'
+import type { ModelProfileSettings } from '$shared/model-profiles'
+import type { ModelProfile, ProviderCatalog, ProviderModel } from '$shared/types'
 
 export type ModelEntry = { provider: ProviderCatalog; model: ProviderModel }
 
@@ -44,30 +45,18 @@ export interface PickerHarnessFilterControls {
 }
 
 /**
- * What the model list hands a picker's side panel when it renders it.
- *
- * The panel is provided by the caller that owns the profiles, so the list passes
- * the filter controls it owns into that caller's snippet instead of the caller
- * reaching into list state.
- */
-export interface PickerSidePanelParams {
-  /** Harness filter controls, or null when the catalog holds a single harness. */
-  filter: PickerHarnessFilterControls | null
-}
-
-/**
  * The profiles a picker's side panel lists.
  *
  * One object rather than eight props: the panel forwards it whole to the profiles
- * section, so a picker without a profiles surface simply passes `null` and the
- * panel lists the harness filter alone. The stored profiles and the operations
- * over them stay owned by the composer that created the controller.
+ * section, so a picker that cannot apply a profile simply passes `null` and the
+ * panel lists the harness filter alone. The model picker builds this from its own
+ * props, because profiles are the picker's surface rather than one caller's.
  */
 export interface ModelPickerProfilesGroup {
   /** Saved profiles, in the order the user listed them. */
   profiles: ModelProfile[]
   /** Settings in force, used to tick the profile that is currently live. */
-  settings: ThreadSettings
+  settings: ModelProfileSettings
   /** Catalogs, so a row shows the model name rather than a raw id. */
   catalogs: ProviderCatalog[]
   /** True when the user has saved as many profiles as the app allows. */
