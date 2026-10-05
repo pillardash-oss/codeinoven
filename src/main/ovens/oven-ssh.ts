@@ -66,13 +66,19 @@ export class OvenSsh {
   constructor(private readonly registry: OvenSshRegistry) {}
 
   /** Serialize transport work so reconnect/probe cannot flood a low-end device. */
-  execute(id: string, command: string, input = '', timeoutMs = 30_000): Promise<string> {
+  execute(
+    id: string,
+    command: string,
+    input = '',
+    timeoutMs = 30_000,
+    onOutput?: (chunk: string) => void
+  ): Promise<string> {
     const result = this.tail
       .catch(() => undefined)
       .then(async () => {
         this.initialized ??= this.cleanStaleCredentials()
         await this.initialized
-        return this.run(id, command, input, timeoutMs)
+        return this.run(id, command, input, timeoutMs, undefined, onOutput)
       })
     this.tail = result
     return result
@@ -83,11 +89,18 @@ export class OvenSsh {
     id: string,
     argv: string[],
     timeoutMs: number,
-    authenticate: boolean
+    authenticate: boolean,
+    onOutput?: (chunk: string) => void
   ): Promise<string> {
     const oven = await this.registry.require(id)
     if (!authenticate || oven.connection?.authentication !== 'password' || !oven.passwordRef)
-      return this.execute(id, ['sudo', '-n', ...argv].map(sshQuote).join(' '), '', timeoutMs)
+      return this.execute(
+        id,
+        ['sudo', '-n', ...argv].map(sshQuote).join(' '),
+        '',
+        timeoutMs,
+        onOutput
+      )
     const password = await this.registry.vault.resolve(oven.passwordRef)
     if (!password || /[\r\n\0]/u.test(password))
       throw new Error('The Oven login credential cannot authenticate sudo.')
@@ -105,7 +118,7 @@ export class OvenSsh {
     ]
       .map(sshQuote)
       .join(' ')
-    return this.execute(id, command, `${password}\n`, timeoutMs)
+    return this.execute(id, command, `${password}\n`, timeoutMs, onOutput)
   }
 
   /**
@@ -405,7 +418,8 @@ export class OvenSsh {
     command: string,
     input: string,
     timeoutMs: number,
-    channel?: { socket: Socket; remotePort: number }
+    channel?: { socket: Socket; remotePort: number },
+    onOutput?: (chunk: string) => void
   ): Promise<string> {
     if (channel?.socket.destroyed) throw new Error('The preview connection closed.')
     const prepared = await this.prepare(
@@ -443,7 +457,9 @@ export class OvenSsh {
             child.kill('SIGKILL')
             return
           }
-          output += chunk.toString('utf8')
+          const text = chunk.toString('utf8')
+          output += text
+          onOutput?.(text)
         }
         if (channel) {
           channel.socket.pipe(child.stdin)
@@ -455,6 +471,7 @@ export class OvenSsh {
         child.stderr.on('data', (chunk: Buffer) => {
           const text = chunk.toString('utf8')
           remoteStderr = (remoteStderr + text).slice(-8192)
+          onOutput?.(text)
           if (/REMOTE HOST IDENTIFICATION HAS CHANGED/u.test(text)) {
             sshIssue =
               'The host key changed. Verify the host identity before updating OpenSSH trust.'

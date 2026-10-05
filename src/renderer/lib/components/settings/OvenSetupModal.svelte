@@ -3,6 +3,7 @@
   import Modal from '../ui/Modal.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
+  import DownloadProgress from '../ui/DownloadProgress.svelte'
   import Switch from '../ui/Switch.svelte'
   import HarnessToggleGroup from '../shared/HarnessToggleGroup.svelte'
   import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
@@ -176,6 +177,14 @@
     selectedHarnesses = enabled
       ? [...new Set([...selectedHarnesses, harnessId])]
       : selectedHarnesses.filter((value) => value !== harnessId)
+  }
+
+  function installStageLabel(stage: 'downloading' | 'installing' | 'verifying'): string {
+    return stage === 'downloading'
+      ? 'Downloading'
+      : stage === 'verifying'
+        ? 'Verifying installation'
+        : 'Installing'
   }
 
   function closeProgress(): void {
@@ -366,7 +375,11 @@
               />{:else}<AlertCircle size={14} class="text-danger" />{/if}
             <span
               >Oven setup · {completedSteps}/{operation?.steps.length ?? 0} · {currentStep?.name ??
-                operation?.status}{#if currentStep && !active}
+                operation?.status}{#if active && currentStep?.installProgress}
+                · {installStageLabel(
+                  currentStep.installProgress.stage
+                )}{#if currentStep.installProgress.percent !== undefined}
+                  {currentStep.installProgress.percent}%{/if}{/if}{#if currentStep && !active}
                 · {operation?.status}{/if}</span
             >
           </button>
@@ -421,8 +434,18 @@
                 size={15}
                 class="mt-0.5 shrink-0 animate-spin text-primary"
               />{:else}<Circle size={15} class="mt-0.5 shrink-0 text-muted" />{/if}
-            <div class="min-w-0">
+            <div class="min-w-0 flex-1">
               <p class="text-sm">{step.name}</p>
+              {#if step.status === 'running' && step.installProgress}
+                <div class="mt-2">
+                  <DownloadProgress
+                    label={installStageLabel(step.installProgress.stage)}
+                    percent={step.installProgress.percent}
+                    indeterminate={step.installProgress.percent === undefined}
+                    ariaLabel={`${step.name} ${installStageLabel(step.installProgress.stage)}`}
+                  />
+                </div>
+              {/if}
               {#if step.detail || step.error}<p
                   class="mt-0.5 break-words whitespace-pre-wrap text-xs text-muted"
                 >

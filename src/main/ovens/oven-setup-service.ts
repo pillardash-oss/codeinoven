@@ -22,6 +22,7 @@ import { OVEN_SETUP_SCRIPT_VERSION } from './oven-setup-bootstrap'
 import { sshQuote, type OvenSsh } from './oven-ssh'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
+import { OvenInstallProgress } from './oven-install-progress'
 import { withOvenHarnessMutation } from './oven-operation-lock'
 
 const OPERATION_PATH = 'ovens/setup'
@@ -349,6 +350,7 @@ export class OvenSetupService {
     step.startedAt = Date.now()
     step.finishedAt = undefined
     step.error = undefined
+    step.installProgress = undefined
     step.detail = planned.detail
     operation.status = 'running'
     operation.updatedAt = Date.now()
@@ -360,7 +362,13 @@ export class OvenSetupService {
       if (planned.handledByApp) await this.runAppStep(ovenId, operation, planned)
       else await this.runShellStep(ovenId, planned)
 
-      if (planned.verify) await this.verify(ovenId, planned)
+      if (planned.verify) {
+        if (planned.phase === 'harnesses') {
+          step.installProgress = { stage: 'verifying' }
+          await this.publish(ovenId, planned.phase, step.id, undefined, false)
+        }
+        await this.verify(ovenId, planned)
+      }
       step.status = 'succeeded'
     } catch (error) {
       const message = messageOf(error)
@@ -455,9 +463,11 @@ export class OvenSetupService {
       for (const [commandIndex, entry] of planned.commands.entries()) {
         if (this.cancellations.has(ovenId))
           throw new Error('Setup was cancelled before this command started.')
-        const argv = entry.elevated
-          ? ['-n', entry.command, ...entry.args]
-          : [entry.command, ...entry.args]
+        const args =
+          planned.phase === 'harnesses' && entry.command === 'npm'
+            ? [...entry.args, '--loglevel=http']
+            : entry.args
+        const argv = entry.elevated ? ['-n', entry.command, ...args] : [entry.command, ...args]
         const line = (entry.elevated ? ['sudo', ...argv] : argv).map(sshQuote).join(' ')
         const timeout =
           planned.id === 'packages'
@@ -475,14 +485,50 @@ export class OvenSetupService {
         }
         Logger.info('Oven setup command started', context)
         const started = Date.now()
-        if (entry.elevated)
-          await this.ports.ssh.executeElevated(
-            ovenId,
-            [entry.command, ...entry.args],
-            timeout,
-            this.reports.get(ovenId)?.privilege === 'sudo'
-          )
-        else await this.ports.ssh.execute(ovenId, line, '', timeout)
+        const run = (onOutput?: (chunk: string) => void): Promise<string> =>
+          entry.elevated
+            ? this.ports.ssh.executeElevated(
+                ovenId,
+                [entry.command, ...args],
+                timeout,
+                this.reports.get(ovenId)?.privilege === 'sudo',
+                onOutput
+              )
+            : this.ports.ssh.execute(ovenId, line, '', timeout, onOutput)
+        if (planned.phase === 'harnesses') {
+          const step = this.operations
+            .get(ovenId)
+            ?.steps.find((candidate) => candidate.id === planned.id)
+          const parser = new OvenInstallProgress()
+          let latest: OvenSetupStep['installProgress'] = { stage: 'installing' }
+          let previous = ''
+          let publishing: Promise<void> | undefined
+          const flush = (): void => {
+            if (!step || step.status !== 'running' || publishing) return
+            const signature = JSON.stringify(latest)
+            if (signature === previous) return
+            previous = signature
+            step.installProgress = latest
+            publishing = this.publish(ovenId, planned.phase, planned.id, undefined, false).finally(
+              () => {
+                publishing = undefined
+              }
+            )
+          }
+          flush()
+          const timer = setInterval(flush, 750)
+          try {
+            await run((chunk) => {
+              latest = parser.consume(chunk) ?? latest
+            })
+          } finally {
+            clearInterval(timer)
+            latest = parser.consume('\n') ?? latest
+            await publishing
+            flush()
+            await publishing
+          }
+        } else await run()
         Logger.info('Oven setup command finished', { ...context, durationMs: Date.now() - started })
       }
     }
@@ -533,7 +579,8 @@ export class OvenSetupService {
     ovenId: string,
     phase: OvenSetupPhase,
     currentStepId?: string,
-    message?: string
+    message?: string,
+    logLifecycle = true
   ): Promise<void> {
     const operation = this.operations.get(ovenId)
     if (!operation) return
@@ -549,9 +596,11 @@ export class OvenSetupService {
       ...(message ? { message } : {}),
       ...(operation.error ? { error: operation.error } : {})
     }
-    if (['failed', 'blocked'].includes(operation.status))
-      Logger.error('Oven setup progress', context)
-    else Logger.info('Oven setup progress', context)
+    if (logLifecycle) {
+      if (['failed', 'blocked'].includes(operation.status))
+        Logger.error('Oven setup progress', context)
+      else Logger.info('Oven setup progress', context)
+    }
     const journal = this.journals.get(ovenId) ?? { sequence: 0, events: [] }
     const event: OvenSetupProgressEvent = {
       sequence: ++journal.sequence,
@@ -589,6 +638,7 @@ function summarizeStep(step: OvenSetupStep): OvenSetupStep {
     ...(step.durationMs !== undefined ? { durationMs: step.durationMs } : {}),
     ...(step.error ? { error: step.error } : {}),
     ...(step.detail ? { detail: step.detail } : {}),
+    ...(step.installProgress ? { installProgress: { ...step.installProgress } } : {}),
     ...(step.retryCount ? { retryCount: step.retryCount } : {}),
     ...(step.skippedReason ? { skippedReason: step.skippedReason } : {}),
     ...(step.requiresElevation ? { requiresElevation: true } : {})

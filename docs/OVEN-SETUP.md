@@ -10,6 +10,8 @@ Oven setup prepares an SSH Oven for CodeInOven runs. It does not perform full se
 4. Select **Start setup** to authorize package upgrades and the selected installs. Package registry refresh and package upgrades run before Node bootstrap. OS release upgrades and reboots are never automatic.
 5. Follow progress in the global docked setup panel. Leaving Settings or switching views keeps the panel and progress tracking alive. Failed steps include their error. Retry rechecks completed steps and resumes work that still needs attention.
 
+Harness install steps show live download/install progress in the setup panel and dock chip. Percentages come from installer-reported percentages or transferred-byte totals. Installers such as npm that do not provide a measurable total show an indeterminate stage instead. Raw installer output is not copied into progress records.
+
 Linux system package commands run directly as root or through sudo for other users. Password-authenticated Oven connections use the vaulted login password through SSH stdin when sudo requires authentication. The elevated command receives no password input. Other connections require passwordless sudo. Remote command failures are reported separately from SSH connection and trust errors.
 
 Package updates use the detected package manager: apt, dnf, yum, pacman, Homebrew, winget, Chocolatey, or Scoop. Harness installs use the same documented channel metadata as the Local installer. A selected harness without a supported one-command install path blocks setup rather than running a guessed command.
