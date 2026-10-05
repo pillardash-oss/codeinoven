@@ -342,6 +342,13 @@ export interface InstalledSkillLocation {
   path: string
   /** Activation of a registry-managed copy. */
   activation?: UtilityActivation
+  /**
+   * Marketplace source the copy was installed from (`owner/repo`, or a domain
+   * for a well-known index). Absent for hand-placed copies, which no install
+   * record knows, so the catalog can attribute an installed skill to the
+   * vendor that published it.
+   */
+  source?: string
 }
 
 /**
@@ -447,6 +454,19 @@ export interface NativeSkillContent {
   description: string
   instructions: string
   path: string
+}
+
+/** Where a native skill should live after an editor changes its availability. */
+export interface SkillRelocationRequest {
+  /**
+   * Harnesses the skill should be available to. `*` means the shared layer
+   * every harness reads; any other set names harness skill folders.
+   */
+  harnessIds: string[]
+  /** Full `SKILL.md` written into every destination after the move. */
+  instructions: string
+  /** Project whose skill folders the move stays inside; omitted for home-level skills. */
+  projectId?: string
 }
 
 /** Full editable representation of a harness-native MCP server. */

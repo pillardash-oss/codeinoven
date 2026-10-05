@@ -10,6 +10,7 @@ import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { InstalledSkillLocation } from '../../lib/types'
 import { UtilityRegistryService } from './utility-registry-service'
+import { SkillInstallRecordStore } from './skill-install-records'
 
 /** One project the scan looks into, reduced to what the scan needs. */
 export interface InstalledSkillScanProject {
@@ -167,9 +168,20 @@ export async function listInstalledSkillLocations(
   projects: readonly InstalledSkillScanProject[]
 ): Promise<InstalledSkillLocation[]> {
   const projectNames = new Map(projects.map((project) => [project.id, project.name]))
-  const [registryLocations, nativeLocations] = await Promise.all([
+  const [registryLocations, nativeLocations, records] = await Promise.all([
     registrySkillLocations(storage, projectNames),
-    nativeSkillLocations(projects)
+    nativeSkillLocations(projects),
+    new SkillInstallRecordStore(storage).list()
   ])
-  return [...registryLocations, ...nativeLocations]
+  // The install record is the only place that remembers where a copy came
+  // from, and it is keyed by skill id. First record wins, so the earliest
+  // install of a skill names its vendor even after a re-install.
+  const sources = new Map<string, string>()
+  for (const record of records) {
+    if (!sources.has(record.skillId)) sources.set(record.skillId, record.source)
+  }
+  return [...registryLocations, ...nativeLocations].map((location) => {
+    const source = sources.get(location.skillId)
+    return source ? { ...location, source } : location
+  })
 }

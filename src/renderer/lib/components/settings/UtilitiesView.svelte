@@ -10,6 +10,7 @@
     LayoutGrid,
     Loader2,
     Monitor,
+    Package,
     Pencil,
     Plus,
     Puzzle,
@@ -36,6 +37,15 @@
   import SkillInstalledBadge from './SkillInstalledBadge.svelte'
   import UtilityEditorModal, { type UtilityEditorTarget } from './UtilityEditorModal.svelte'
   import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
+  import { utilitiesViewPrefs } from '$lib/stores/utilities-view-prefs.svelte'
+  import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
+  import {
+    bookmarkVendor,
+    groupRowsByVendor,
+    nativeCapabilityVendor,
+    registryUtilityVendor,
+    type UtilityVendor
+  } from './utility-vendors'
   import { APP_NAME } from '$shared/brand'
   import { skillSearchKeywords } from '$shared/skill-search-keywords'
   import type {
@@ -79,6 +89,8 @@
         enabled: boolean
         appOwned: boolean
         tags: string[]
+        /** Vendor the row is grouped and attributed to. */
+        vendor: UtilityVendor
       }
     | {
         id: string
@@ -90,6 +102,8 @@
         enabled: boolean
         appOwned: false
         tags: string[]
+        /** Vendor the row is grouped and attributed to. */
+        vendor: UtilityVendor
       }
 
   /** A marketplace skill the user bookmarked without installing it. */
@@ -101,6 +115,8 @@
     description: string
     keywords: string
     tags: string[]
+    /** Vendor the row is grouped and attributed to. */
+    vendor: UtilityVendor
   }
 
   type RowItem = UtilityRowItem | BookmarkRowItem
@@ -211,7 +227,8 @@
       keywords: entry.searchKeywords ?? '',
       enabled: entry.enabled,
       appOwned: false,
-      tags: nativeTags(entry)
+      tags: nativeTags(entry),
+      vendor: nativeCapabilityVendor(entry, harnessName)
     }))
   }
 
@@ -228,7 +245,8 @@
       keywords: utility.kind === 'skill' ? skillSearchKeywords(utility.config.instructions) : '',
       enabled: utility.enabled,
       appOwned: Boolean(utility.appOwned),
-      tags: registryTags(utility)
+      tags: registryTags(utility),
+      vendor: registryUtilityVendor(utility, installedSkillState.locations)
     }))
   }
 
@@ -285,7 +303,8 @@
       name: bookmark.name,
       description: bookmark.source,
       keywords: '',
-      tags: []
+      tags: [],
+      vendor: bookmarkVendor(bookmark)
     }))
   }
 
@@ -342,9 +361,15 @@
    */
   let activeTagFilter = $derived(availableTags.includes(scopeFilter) ? scopeFilter : 'all')
 
+  /** A built-in utility: seeded by the app, never user-installed. */
+  function isBuiltInRow(row: RowItem): boolean {
+    return row.src === 'registry' && row.appOwned
+  }
+
   let filteredRows = $derived.by(() => {
     const needle = query.trim().toLowerCase()
     return tabRows.filter((row) => {
+      if (utilitiesViewPrefs.hideBuiltIn && isBuiltInRow(row)) return false
       if (activeTagFilter !== 'all' && !row.tags.includes(activeTagFilter)) return false
       if (!needle) return true
       return [row.name, row.description, row.keywords, ...row.tags].some((value) =>
@@ -352,6 +377,15 @@
       )
     })
   })
+
+  /** Visible rows under the vendor they came from, app first and local last. */
+  let vendorGroups = $derived(groupRowsByVendor(filteredRows))
+
+  /** Built-in rows in the section, so the filter chip only shows when it matters. */
+  let builtInRowCount = $derived(tabRows.filter(isBuiltInRow).length)
+
+  /** Built-in rows the current filters hide, so an empty list can explain itself. */
+  let hiddenBuiltInCount = $derived(utilitiesViewPrefs.hideBuiltIn ? builtInRowCount : 0)
 
   function scopeTagLabel(tag: string): string {
     if (tag === 'App') return 'CIO'
@@ -623,6 +657,145 @@
   {/if}
 {/snippet}
 
+{#snippet bookmarkRow(row: BookmarkRowItem)}
+  <div class="flex items-start gap-3 p-4">
+    <div
+      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-accent"
+    >
+      <Bookmark size={15} fill="currentColor" />
+    </div>
+    <button
+      class="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      type="button"
+      title="Open {row.name} in the marketplace"
+      onclick={() => onOpenSkill(row.entry)}
+    >
+      <span class="flex flex-wrap items-center gap-2">
+        <span class="truncate font-mono text-sm font-semibold">{row.name}</span>
+        <span
+          class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
+        >
+          Marketplace
+        </span>
+        {#if installedSkillState.isInstalled(row.entry.skillId)}
+          <SkillInstalledBadge />
+        {/if}
+        {#if row.entry.isOfficial}
+          <span
+            class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
+          >
+            Official
+          </span>
+        {/if}
+      </span>
+      <span class="mt-1 block truncate text-xs text-muted">{row.entry.source}</span>
+      <span class="mt-1 block text-[0.6875rem] tabular-nums text-dimmed">
+        {row.entry.installs.toLocaleString()} installs at bookmark time
+      </span>
+    </button>
+    <div class="flex shrink-0 items-center gap-1">
+      <SkillBookmarkButton entry={row.entry} title={skillBookmarkTitle(row.name, true)} />
+    </div>
+  </div>
+{/snippet}
+
+{#snippet utilityRow(row: UtilityRowItem)}
+  {@const Icon = rowIcon(row)}
+  <div class="flex items-start gap-3 p-4">
+    <div
+      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-muted"
+    >
+      <Icon size={15} />
+    </div>
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-wrap items-center gap-2">
+        <p class="text-sm font-semibold">{row.name}</p>
+        <span
+          class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
+        >
+          {rowKindBadge(row)}
+        </span>
+        {#if row.src === 'registry' && row.appOwned}
+          <span
+            class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
+            title={canToggleUtilityEnabled(row.utility)
+              ? 'Built into the app. It cannot be deleted, and you can switch it off so it stops competing with your own skill for a topic.'
+              : 'Built into the app and always available; it cannot be deleted'}
+          >
+            Built-in
+          </span>
+        {/if}
+        {#if row.src === 'registry'}
+          <span class="text-[0.6875rem] text-dimmed">
+            {row.utility.activation === 'always' ? 'Always available' : 'On demand'}
+          </span>
+        {/if}
+      </div>
+      {#if row.description}
+        <p class="mt-1 text-xs leading-relaxed text-muted">{row.description}</p>
+      {/if}
+      {#if row.src === 'native' && row.entry.detail}
+        <p class="mt-1 truncate font-mono text-[0.625rem] text-dimmed">{row.entry.detail}</p>
+      {/if}
+      <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-dimmed">
+        {#each row.tags as tag (tag)}
+          <span
+            class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
+          >
+            {@render tagChip(tag)}
+          </span>
+        {/each}
+        {#if row.src === 'registry' && row.utility.credentials.length}
+          <span class="flex items-center gap-1">
+            <KeyRound size={11} />
+            {row.utility.credentials.length}
+            {row.utility.credentials.length === 1 ? 'credential' : 'credentials'}
+          </span>
+        {/if}
+      </div>
+      {#if isMcpRow(row)}
+        {#if isComputerUseRow(row)}
+          <p class="mt-2 text-[0.6875rem] text-dimmed">
+            Started by each computer-use run, so Cua Driver settings report this connection.
+          </p>
+        {:else}
+          <McpConnectionTester variant="row" subject={row.name} probe={() => mcpProbeTarget(row)} />
+        {/if}
+      {/if}
+    </div>
+    <div class="flex shrink-0 items-center gap-1">
+      {#if row.src === 'registry' && canToggleUtilityEnabled(row.utility)}
+        <Switch
+          checked={row.enabled}
+          onchange={() => void toggleEnabled(row)}
+          aria-label="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
+          title="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
+        />
+      {/if}
+      {#if !row.appOwned || (row.src === 'registry' && canToggleUtilityEnabled(row.utility))}
+        <button
+          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
+          aria-label="Edit {row.name}"
+          title="Edit {row.name}"
+          onclick={() => openEdit(row)}
+        >
+          <Pencil size={14} />
+        </button>
+      {/if}
+      {#if !row.appOwned}
+        <button
+          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+          aria-label="Delete {row.name}"
+          title="Delete {row.name}"
+          onclick={() => (deleteTarget = row)}
+        >
+          <Trash2 size={14} />
+        </button>
+      {/if}
+    </div>
+  </div>
+{/snippet}
+
 <div class="p-6 pb-24">
   <!-- Header: title and description, matching the flow of every other page. -->
   <div class="min-w-0">
@@ -796,31 +969,49 @@
             </button>
           {/each}
         {/if}
-      {:else if availableTags.length > 0}
-        <button
-          type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
-          'all'
-            ? 'border-primary bg-primary text-on-primary'
-            : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-          aria-pressed={activeTagFilter === 'all'}
-          onclick={() => (scopeFilter = 'all')}
-        >
-          All
-        </button>
-        {#each availableTags as tag (tag)}
+      {:else}
+        {#if activeTab !== 'bookmarks' && builtInRowCount > 0}
+          <button
+            type="button"
+            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {utilitiesViewPrefs.hideBuiltIn
+              ? 'border-primary bg-primary text-on-primary'
+              : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+            aria-pressed={utilitiesViewPrefs.hideBuiltIn}
+            title={utilitiesViewPrefs.hideBuiltIn
+              ? 'Show the utilities built into CodeInOven'
+              : `Hide the ${builtInRowCount} ${builtInRowCount === 1 ? 'utility' : 'utilities'} built into CodeInOven`}
+            onclick={() => utilitiesViewPrefs.setHideBuiltIn(!utilitiesViewPrefs.hideBuiltIn)}
+          >
+            Hide built-in
+            <span class="tabular-nums opacity-70">{builtInRowCount}</span>
+          </button>
+        {/if}
+        {#if availableTags.length > 0 && activeTab !== 'bookmarks'}
           <button
             type="button"
             class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
-            tag
+            'all'
               ? 'border-primary bg-primary text-on-primary'
               : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-            aria-pressed={activeTagFilter === tag}
-            onclick={() => (scopeFilter = tag)}
+            aria-pressed={activeTagFilter === 'all'}
+            onclick={() => (scopeFilter = 'all')}
           >
-            {@render tagChip(tag)}
+            All
           </button>
-        {/each}
+          {#each availableTags as tag (tag)}
+            <button
+              type="button"
+              class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
+              tag
+                ? 'border-primary bg-primary text-on-primary'
+                : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+              aria-pressed={activeTagFilter === tag}
+              onclick={() => (scopeFilter = tag)}
+            >
+              {@render tagChip(tag)}
+            </button>
+          {/each}
+        {/if}
       {/if}
     </div>
   {/if}
@@ -849,7 +1040,22 @@
         </div>
       {:else if filteredRows.length === 0}
         <div class="rounded-xl border border-dashed p-8 text-center">
-          {#if activeTab === 'bookmarks'}
+          {#if hiddenBuiltInCount > 0}
+            <Package size={18} class="mx-auto mb-2 text-dimmed" />
+            <p class="text-sm font-medium">Built-in utilities are hidden</p>
+            <p class="mt-1 text-xs text-dimmed">
+              Your filter hides {hiddenBuiltInCount} built-in
+              {hiddenBuiltInCount === 1 ? 'utility' : 'utilities'} from this list.
+            </p>
+            <button
+              class="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              type="button"
+              title="Show the utilities built into CodeInOven"
+              onclick={() => utilitiesViewPrefs.setHideBuiltIn(false)}
+            >
+              Show built-in
+            </button>
+          {:else if activeTab === 'bookmarks'}
             <Bookmark size={18} class="mx-auto mb-2 text-dimmed" />
             <p class="text-sm font-medium">No bookmarked skills</p>
             <p class="mt-1 text-xs text-dimmed">
@@ -870,156 +1076,41 @@
           {/if}
         </div>
       {:else}
-        <div class="divide-y rounded-xl border bg-surface">
-          {#each filteredRows as row (row.id)}
-            {#if row.src === 'bookmark'}
-              <div class="flex items-start gap-3 p-4">
-                <div
-                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-accent"
-                >
-                  <Bookmark size={15} fill="currentColor" />
-                </div>
-                <button
-                  class="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                  type="button"
-                  title="Open {row.name} in the marketplace"
-                  onclick={() => onOpenSkill(row.entry)}
-                >
-                  <span class="flex flex-wrap items-center gap-2">
-                    <span class="truncate font-mono text-sm font-semibold">{row.name}</span>
-                    <span
-                      class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
-                    >
-                      Marketplace
-                    </span>
-                    {#if installedSkillState.isInstalled(row.entry.skillId)}
-                      <SkillInstalledBadge />
-                    {/if}
-                    {#if row.entry.isOfficial}
-                      <span
-                        class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
-                      >
-                        Official
-                      </span>
-                    {/if}
-                  </span>
-                  <span class="mt-1 block truncate text-xs text-muted">{row.entry.source}</span>
-                  <span class="mt-1 block text-[0.6875rem] tabular-nums text-dimmed">
-                    {row.entry.installs.toLocaleString()} installs at bookmark time
-                  </span>
-                </button>
-                <div class="flex shrink-0 items-center gap-1">
-                  <SkillBookmarkButton
-                    entry={row.entry}
-                    title={skillBookmarkTitle(row.name, true)}
+        <div class="space-y-5">
+          {#each vendorGroups as group (group.vendor.id)}
+            <section aria-label={group.vendor.label}>
+              <header class="flex items-center gap-2 px-1 pb-2">
+                {#if group.vendor.kind === 'app'}
+                  <img class="h-3.5 w-3.5 shrink-0 object-contain" src={cioIconUrl} alt="" />
+                {:else if group.vendor.kind === 'harness'}
+                  <AgentIcon
+                    agentId={group.vendor.harnessId ?? group.vendor.id}
+                    label={group.vendor.label}
+                    size={14}
                   />
-                </div>
+                {:else if group.vendor.kind === 'marketplace'}
+                  <VendorIcon name={group.vendor.label} id={group.vendor.iconName} size={14} />
+                {:else}
+                  <Package size={13} class="shrink-0 text-dimmed" />
+                {/if}
+                <h2 class="text-xs font-semibold">{group.vendor.label}</h2>
+                <span class="text-[0.6875rem] tabular-nums text-dimmed">{group.rows.length}</span>
+                {#if group.vendor.source}
+                  <span class="truncate font-mono text-[0.625rem] text-dimmed">
+                    {group.vendor.source}
+                  </span>
+                {/if}
+              </header>
+              <div class="divide-y rounded-xl border bg-surface">
+                {#each group.rows as row (row.id)}
+                  {#if row.src === 'bookmark'}
+                    {@render bookmarkRow(row)}
+                  {:else}
+                    {@render utilityRow(row)}
+                  {/if}
+                {/each}
               </div>
-            {:else}
-              {@const Icon = rowIcon(row)}
-              <div class="flex items-start gap-3 p-4">
-                <div
-                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-muted"
-                >
-                  <Icon size={15} />
-                </div>
-                <div class="min-w-0 flex-1">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <p class="text-sm font-semibold">{row.name}</p>
-                    <span
-                      class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
-                    >
-                      {rowKindBadge(row)}
-                    </span>
-                    {#if row.src === 'registry' && row.appOwned}
-                      <span
-                        class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
-                        title={canToggleUtilityEnabled(row.utility)
-                          ? 'Built into the app. It cannot be deleted, and you can switch it off so it stops competing with your own skill for a topic.'
-                          : 'Built into the app and always available; it cannot be deleted'}
-                      >
-                        Built-in
-                      </span>
-                    {/if}
-                    {#if row.src === 'registry'}
-                      <span class="text-[0.6875rem] text-dimmed">
-                        {row.utility.activation === 'always' ? 'Always available' : 'On demand'}
-                      </span>
-                    {/if}
-                  </div>
-                  {#if row.description}
-                    <p class="mt-1 text-xs leading-relaxed text-muted">{row.description}</p>
-                  {/if}
-                  {#if row.src === 'native' && row.entry.detail}
-                    <p class="mt-1 truncate font-mono text-[0.625rem] text-dimmed">
-                      {row.entry.detail}
-                    </p>
-                  {/if}
-                  <div
-                    class="mt-2 flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-dimmed"
-                  >
-                    {#each row.tags as tag (tag)}
-                      <span
-                        class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
-                      >
-                        {@render tagChip(tag)}
-                      </span>
-                    {/each}
-                    {#if row.src === 'registry' && row.utility.credentials.length}
-                      <span class="flex items-center gap-1">
-                        <KeyRound size={11} />
-                        {row.utility.credentials.length}
-                        {row.utility.credentials.length === 1 ? 'credential' : 'credentials'}
-                      </span>
-                    {/if}
-                  </div>
-                  {#if isMcpRow(row)}
-                    {#if isComputerUseRow(row)}
-                      <p class="mt-2 text-[0.6875rem] text-dimmed">
-                        Started by each computer-use run, so Cua Driver settings report this
-                        connection.
-                      </p>
-                    {:else}
-                      <McpConnectionTester
-                        variant="row"
-                        subject={row.name}
-                        probe={() => mcpProbeTarget(row)}
-                      />
-                    {/if}
-                  {/if}
-                </div>
-                <div class="flex shrink-0 items-center gap-1">
-                  {#if row.src === 'registry' && canToggleUtilityEnabled(row.utility)}
-                    <Switch
-                      checked={row.enabled}
-                      onchange={() => void toggleEnabled(row)}
-                      aria-label="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
-                      title="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
-                    />
-                  {/if}
-                  {#if !row.appOwned || (row.src === 'registry' && canToggleUtilityEnabled(row.utility))}
-                    <button
-                      class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
-                      aria-label="Edit {row.name}"
-                      title="Edit {row.name}"
-                      onclick={() => openEdit(row)}
-                    >
-                      <Pencil size={14} />
-                    </button>
-                  {/if}
-                  {#if !row.appOwned}
-                    <button
-                      class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
-                      aria-label="Delete {row.name}"
-                      title="Delete {row.name}"
-                      onclick={() => (deleteTarget = row)}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  {/if}
-                </div>
-              </div>
-            {/if}
+            </section>
           {/each}
         </div>
       {/if}
@@ -1169,6 +1260,7 @@
   <UtilityEditorModal
     open
     target={editorTarget}
+    skillCatalog={capabilities?.skill ?? []}
     onClose={() => (editorOpen = false)}
     onSaved={replaceUtility}
     onChanged={() => void load()}

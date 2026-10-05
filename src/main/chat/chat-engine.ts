@@ -270,6 +270,7 @@ import type {
   AgentCapabilitySource,
   AgentRunningProcess,
   NativeMcpContent,
+  SkillRelocationRequest,
   TaskManagerSnapshot,
   UsageBearingMessage,
   AssignmentPlan,
@@ -2032,6 +2033,36 @@ export class ChatEngine {
       'capabilities:updateSkill',
       (_, source: AgentCapabilitySource, instructions: string) =>
         this.capabilityDiscovery.updateSkill(source, instructions)
+    )
+    ipcMain.handle(
+      'capabilities:relocateSkill',
+      async (_, source: AgentCapabilitySource, request: SkillRelocationRequest) => {
+        if (source?.kind !== 'skill') throw new TypeError('A skill source is required')
+        if (typeof request?.instructions !== 'string') {
+          throw new TypeError('Skill instructions are required')
+        }
+        const harnessIds = Array.isArray(request.harnessIds)
+          ? request.harnessIds.filter(
+              (harnessId): harnessId is string =>
+                typeof harnessId === 'string' && harnessId.trim().length > 0
+            )
+          : []
+        if (harnessIds.length === 0) throw new TypeError('Select at least one harness')
+        const projectId =
+          typeof request.projectId === 'string' && request.projectId.trim().length > 0
+            ? validateEntityId(request.projectId, 'Project ID')
+            : ''
+        const projectPath = projectId ? await this.resolveProjectPath(projectId) : undefined
+        return this.capabilityDiscovery.relocateSkill(
+          source,
+          {
+            harnessIds,
+            instructions: request.instructions,
+            ...(projectId ? { projectId } : {})
+          },
+          projectPath
+        )
+      }
     )
     ipcMain.handle('capabilities:deleteSkill', (_, source: AgentCapabilitySource) =>
       this.capabilityDiscovery.deleteSkill(source)
