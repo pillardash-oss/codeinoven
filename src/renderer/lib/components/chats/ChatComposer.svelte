@@ -13,6 +13,7 @@
   import { showToastWarning } from '$lib/stores/app-errors.svelte'
   import { ipcErrorMessage } from '$lib/ipc-errors'
   import { invoke } from '$lib/ipc.svelte'
+  import { hasModelRuntimeSettings } from '$shared/model-runtime-settings'
   import { modelKey } from '$lib/model-keys'
   import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
   import { visionModels } from '$lib/stores/vision-models.svelte'
@@ -732,6 +733,12 @@
     accountMenuOpen = false
   }
 
+  function showModelSettingsMenu(): void {
+    if (!modelSettingsVisible) return
+    closeAllMenus()
+    inferenceMenuOpen = true
+  }
+
   function showThinkingMenu(): void {
     if (!supportsThinking) return
     thinkingMenuOpen = true
@@ -1010,7 +1017,21 @@
   /** Thinking controls only appear when the model explicitly declares presets. */
   let supportsThinking = $derived(thinkingPresets.length > 0)
 
+  let modelSettingsVisible = $derived(
+    hasModelRuntimeSettings(
+      resolvedProviders
+        .find(
+          (provider) =>
+            provider.harnessId === resolved.harnessId && provider.id === resolved.providerId
+        )
+        ?.models.find((model) => model.id === resolved.modelId),
+      resolved.harnessId,
+      resolved.providerId
+    )
+  )
+
   const slash = createComposerSlashActions({
+    getModelSettingsVisible: () => modelSettingsVisible,
     getShowChatModes: () => showChatModes,
     getFileSystemMode: () => resolved.fileSystemMode,
     getSupportsThinking: () => supportsThinking,
@@ -1137,6 +1158,11 @@
 
     if (action.id === 'selector:models') {
       showModelMenu()
+      return
+    }
+
+    if (action.id === 'selector:model-setting') {
+      showModelSettingsMenu()
       return
     }
 

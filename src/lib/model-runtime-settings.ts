@@ -1,4 +1,4 @@
-import type { ModelRuntimeSettings } from './types'
+import type { ModelRuntimeSettings, ProviderModel } from './types'
 
 /** Shared validation for persisted role selections and thread overrides. */
 export function validateModelRuntimeSettings(
@@ -27,4 +27,17 @@ export function validateModelRuntimeSettings(
     ...(inferenceMode === undefined ? {} : { inferenceMode }),
     ...(contextWindow === undefined ? {} : { contextWindow })
   }
+}
+
+/** Whether the selected model can render the shared runtime settings menu. */
+export function hasModelRuntimeSettings(
+  model: ProviderModel | undefined,
+  harnessId: string,
+  providerId: string
+): boolean {
+  return (
+    model?.fastSupported === true ||
+    (harnessId === 'codex' && providerId === 'openai' && model?.ultrafastSupported === true) ||
+    (model?.contextWindows?.length ?? 0) > 0
+  )
 }

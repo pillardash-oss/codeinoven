@@ -24,6 +24,7 @@
     ThinkingLevel,
     ThinkingPreset
   } from '$shared/types'
+  import { hasModelRuntimeSettings } from '$shared/model-runtime-settings'
   import ModelSettingsPicker from './ModelSettingsPicker.svelte'
   import { fastMultiplierFor, fastSelectionModelId } from '$shared/fast-inference'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
@@ -190,9 +191,7 @@
   )
   let contextWindows = $derived(runtimeModel?.contextWindows ?? [])
   let showRuntimeSettings = $derived(
-    !multiSelect &&
-      Boolean(modelId) &&
-      (fastSupported || ultrafastSupported || contextWindows.length > 0)
+    !multiSelect && Boolean(modelId) && hasModelRuntimeSettings(runtimeModel, harnessId, providerId)
   )
   let currentInferenceMode = $derived(runtimeSettings?.inferenceMode ?? (fast ? 'fast' : 'normal'))
 

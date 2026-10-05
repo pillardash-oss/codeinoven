@@ -6,6 +6,7 @@ import type { ThinkingPreset } from '$shared/types'
 export interface ComposerSlashActionsOptions {
   getShowChatModes: () => boolean
   getFileSystemMode: () => boolean | undefined
+  getModelSettingsVisible: () => boolean
   getSupportsThinking: () => boolean
   getAccountPickerVisible: () => boolean
   /** The scope shoe's picker is live (project mode, new thread). */
@@ -45,6 +46,18 @@ export function createComposerSlashActions(options: ComposerSlashActionsOptions)
         source: composerActionSource,
         keywords: ['model', 'favorites', 'provider']
       },
+      ...(options.getModelSettingsVisible()
+        ? [
+            {
+              id: 'selector:model-setting',
+              title: '/model-setting',
+              description: 'Choose model speed and context window',
+              category: 'model',
+              source: composerActionSource,
+              keywords: ['settings', 'speed', 'context', 'window', 'fast']
+            } satisfies ActionDefinition
+          ]
+        : []),
       ...(options.getSupportsThinking()
         ? [
             {
