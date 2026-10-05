@@ -579,6 +579,25 @@ export function wouldThreadChangePosition(prev: Thread, next: Thread): boolean {
   return false
 }
 
+/**
+ * The key a thread sorts by inside its own bucket: the newer of the thread's
+ * last activity and its manual drag anchor.
+ *
+ * Any new activity (a send, rename, status change, a working thread) always
+ * pushes the thread to the top, because its `lastActivity` (epoch time, always
+ * growing) outranks an older manual anchor. A manual drag sets a newer anchor so
+ * the thread holds its place, until something moves again, at which point it can
+ * be dragged back above. Threads without an anchor fall back to last activity,
+ * so the default is pure recency ordering.
+ *
+ * Both sidebar orders (the project folders' and the Threads view's) and the drop
+ * handler that writes the anchor share this one function, so an anchor means the
+ * same thing everywhere it is read or written.
+ */
+export function threadOrderKey(thread: Thread): number {
+  return Math.max(thread.sortOrder ?? 0, thread.lastActivity)
+}
+
 export function threadSort(
   a: Thread,
   b: Thread,
@@ -591,14 +610,9 @@ export function threadSort(
   if (a.status === 'created' && b.status !== 'created') return -1
   if (b.status === 'created' && a.status !== 'created') return 1
   // Order by the newer of the thread's last activity and its manual sort-order
-  // anchor. Any new activity (a send, rename, status change, a working thread,
-  // etc.) always pushes the thread to the top, because its lastActivity (epoch
-  // time, always growing) outranks an older manual anchor. A manual drag sets a
-  // newer timestamp so the thread holds its place — until something moves again,
-  // at which point it can be dragged back above. Threads without an anchor just
-  // fall back to last activity, so the default is pure recency ordering.
-  const aKey = Math.max(a.sortOrder ?? 0, a.lastActivity)
-  const bKey = Math.max(b.sortOrder ?? 0, b.lastActivity)
+  // anchor; see {@link threadOrderKey}.
+  const aKey = threadOrderKey(a)
+  const bKey = threadOrderKey(b)
   if (aKey !== bKey) return bKey - aKey
   return a.id.localeCompare(b.id)
 }
@@ -634,14 +648,19 @@ export function threadStatusSortKey(
   if (t.status === 'created') return 0
   // To-do stays at the top; done always sinks to the bottom; everything in
   // between (working, spec, error, needs attention, ...) is one pool ordered
-  // purely by last activity   last action wins. Read state and project never
-  // influence the order. Ambiguity inside a group is resolved by lastActivity
-  // in threadStatusSort.
+  // by {@link threadOrderKey}   last action wins, unless the user dropped the
+  // row somewhere. Read state and project never influence the order. Ties
+  // inside a bucket are broken by the same key in threadStatusSort.
   if (threadStatusPolicy(t.status).scopeSlice === 'done') return 2
   return 1
 }
 
-/** Threads view sort: to-do first, then everything by last activity, done last. */
+/**
+ * Threads view sort: to-do first, then last activity inside the bucket, done
+ * last. The bucket outranks everything: a manual drag reorders rows inside the
+ * bucket the thread's status puts it in, never across buckets, because the
+ * status is what decides where a row belongs at all.
+ */
 export function threadStatusSort(
   a: Thread,
   b: Thread,
@@ -650,8 +669,11 @@ export function threadStatusSort(
   const ka = threadStatusSortKey(a, draftThreadKeys)
   const kb = threadStatusSortKey(b, draftThreadKeys)
   if (ka !== kb) return ka - kb
-  const activityDiff = b.lastActivity - a.lastActivity
-  if (activityDiff !== 0) return activityDiff
+  // Same anchor rule as the project folders' sort, so a dropped row holds the
+  // slot the user put it in until newer activity or another drop moves it.
+  const aKey = threadOrderKey(a)
+  const bKey = threadOrderKey(b)
+  if (aKey !== bKey) return bKey - aKey
   return a.id.localeCompare(b.id)
 }
 

@@ -47,6 +47,7 @@
   import {
     findEmptyNewThread,
     pinnedThreadSort,
+    threadOrderKey,
     threadSort,
     threadStatusSort,
     threadStatusSortKey,
@@ -3264,36 +3265,27 @@
     }
   }
 
-  async function handleThreadMove(
+  /**
+   * Persist a drop in a sidebar list.
+   *
+   * `ordered` is the arrangement the pane was showing when the user dropped the
+   * row, so the anchor is written against the neighbours the user actually saw,
+   * whatever order that pane keeps (project folders, chats, or the status-grouped
+   * Threads view). The dragged row takes a "frozen recency" anchor between those
+   * neighbours' effective keys, so it holds that slot while newer activity can
+   * still bubble above it.
+   */
+  async function handleThreadDrop(
     projectId: string,
-    draggedId: string,
-    targetId: string,
-    position: 'before' | 'after',
-    includePinned = false
+    ordered: readonly Thread[],
+    draggedId: string
   ): Promise<void> {
-    const projectThreads = allThreads
-      .filter((t) => t.projectId === projectId && !t.archived && (includePinned || !t.pinned))
-      .sort((a, b) => threadSort(a, b, draftThreadKeys))
-    const fromIdx = projectThreads.findIndex((t) => t.id === draggedId)
-    const toIdx = projectThreads.findIndex((t) => t.id === targetId)
-    if (fromIdx === -1 || toIdx === -1) return
-
-    const dragged = projectThreads[fromIdx]
-    projectThreads.splice(fromIdx, 1)
-    const adjustedTo = projectThreads.findIndex((t) => t.id === targetId)
-    if (adjustedTo === -1) return
-    projectThreads.splice(position === 'before' ? adjustedTo : adjustedTo + 1, 0, dragged)
-
-    // Assign a "frozen recency" anchor between the dragged thread's new
-    // neighbours' effective keys, so it holds position while newer activity
-    // can still bubble above it. The dragged thread's index in the new list is
-    // where its anchor must sit.
-    const idx = projectThreads.findIndex((t) => t.id === draggedId)
-    const above = projectThreads[idx - 1]
-    const below = projectThreads[idx + 1]
-    const effectiveKey = (t: Thread) => Math.max(t.sortOrder ?? 0, t.lastActivity)
-    const aboveKey = above ? effectiveKey(above) : Number.MAX_SAFE_INTEGER
-    const belowKey = below ? effectiveKey(below) : 0
+    const idx = ordered.findIndex((t) => t.id === draggedId)
+    if (idx === -1) return
+    const above = ordered[idx - 1]
+    const below = ordered[idx + 1]
+    const aboveKey = above ? threadOrderKey(above) : Number.MAX_SAFE_INTEGER
+    const belowKey = below ? threadOrderKey(below) : 0
     let sortOrder: number
     if (above && below) {
       sortOrder = (aboveKey + belowKey) / 2
@@ -4545,7 +4537,7 @@
       onTogglePin={togglePin}
       onDelete={handleDelete}
       onFork={forkThread}
-      onThreadMove={handleThreadMove}
+      onThreadDrop={handleThreadDrop}
       onPinnedThreadMove={handlePinnedThreadMove}
       onTimelinePinnedMove={handleTimelinePinnedMove}
       onProjectMove={handleProjectMove}

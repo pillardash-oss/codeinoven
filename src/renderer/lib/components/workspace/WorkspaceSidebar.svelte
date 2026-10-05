@@ -61,6 +61,8 @@
     groupThreadsByStatus,
     threadHasVisibleWork
   } from './workspace-thread-helpers'
+  import { moveThreadInList, resolveTimelineDrop } from './sidebar-thread-drop'
+  import { ThreadOrderSettle } from './thread-order-settle.svelte'
 
   interface Props {
     mode: 'projects' | 'chats' | 'threads' | 'assistant'
@@ -96,13 +98,7 @@
     onTogglePin: (thread: Thread) => Promise<void>
     onDelete: (thread: Thread) => Promise<void>
     onFork: (thread: Thread) => Promise<void>
-    onThreadMove: (
-      projectId: string,
-      draggedId: string,
-      targetId: string,
-      position: 'before' | 'after',
-      includePinned?: boolean
-    ) => Promise<void>
+    onThreadDrop: (projectId: string, ordered: Thread[], draggedId: string) => Promise<void>
     onPinnedThreadMove: (
       draggedId: string,
       targetId: string,
@@ -156,7 +152,7 @@
     onTogglePin,
     onDelete,
     onFork,
-    onThreadMove,
+    onThreadDrop,
     onPinnedThreadMove,
     onTimelinePinnedMove,
     onProjectMove,
@@ -183,6 +179,56 @@
   const searchResultsById = $derived(
     new Map(sidebar.threadsSearchResults.map((result) => [result.thread.id, result]))
   )
+
+  /**
+   * Holds activity-driven reordering back so a burst of ticks becomes one move
+   * instead of rows fighting over a slot; see {@link ThreadOrderSettle}.
+   */
+  const threadOrderSettle = new ThreadOrderSettle()
+
+  /** The settle key of one project's folder list. */
+  function projectOrderKey(projectId: string): string {
+    return `project:${projectId}`
+  }
+
+  /**
+   * Hand every list this sidebar draws to the settle, and let go of a project's
+   * order once its folder is gone so neither outlives it.
+   */
+  $effect(() => {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const activeKeys = new Set<string>(['threads', 'chats'])
+    threadOrderSettle.sync('threads', unpinnedTimelineThreads, draftThreadKeys)
+    threadOrderSettle.sync('chats', standaloneThreads, draftThreadKeys)
+    for (const [projectId, list] of threadsByProject) {
+      const key = projectOrderKey(projectId)
+      activeKeys.add(key)
+      threadOrderSettle.sync(key, list, draftThreadKeys)
+    }
+    threadOrderSettle.prune(activeKeys)
+  })
+
+  /** The Threads list as the settle last committed it. */
+  const settledTimelineThreads = $derived(
+    threadOrderSettle.view('threads', unpinnedTimelineThreads)
+  )
+  /** The Chats list as the settle last committed it. */
+  const settledStandaloneThreads = $derived(threadOrderSettle.view('chats', standaloneThreads))
+
+  /**
+   * The list a drop in the Threads view resolves against: the rows the pane is
+   * showing, so an anchor is written against the neighbours the user saw.
+   */
+  function timelineDropOrder(
+    draggedId: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ): Thread[] | null {
+    return resolveTimelineDrop(settledTimelineThreads, draggedId, targetId, position, {
+      grouped: threadGroupingState.enabled,
+      draftThreadKeys
+    })
+  }
   // Grouping runs over unpinned threads only: pinned threads keep their own
   // section above every status group, exactly like the flat list. Search
   // results keep pinned entries, since search mode has no pinned section.
@@ -193,7 +239,7 @@
             ? sidebar.threadsSearchResults
                 .filter((result) => threadProjectFilterState.matches(result.thread.projectId))
                 .map((result) => result.thread)
-            : unpinnedTimelineThreads,
+            : settledTimelineThreads,
           draftThreadKeys
         )
       : []
@@ -209,7 +255,7 @@
     if (!threadGroupingState.enabled) {
       const threads = searchingThreads
         ? sidebar.threadsSearchResults.map((result) => result.thread)
-        : unpinnedTimelineThreads
+        : settledTimelineThreads
       return threads.map((thread) => ({
         key: `thread:${thread.projectId}:${thread.id}`,
         kind: 'thread',
@@ -679,14 +725,14 @@
             {onFork}
             onMovePinnedThread={(draggedId, targetId, pos) => {
               const thread = pinnedInboxThreads.find((t) => t.id === draggedId)
-              if (thread) onThreadMove(thread.projectId, draggedId, targetId, pos)
+              if (thread) onPinnedThreadMove(draggedId, targetId, pos)
             }}
           />
         {/if}
 
-        {#if standaloneThreads.length > 0}
+        {#if settledStandaloneThreads.length > 0}
           <div class="space-y-px" role="list">
-            {#each standaloneThreads.slice(0, 50) as thread (thread.id)}
+            {#each settledStandaloneThreads.slice(0, 50) as thread (thread.id)}
               <ThreadRow
                 {thread}
                 selected={activeThreadId === thread.id}
@@ -695,8 +741,15 @@
                 {onTogglePin}
                 {onDelete}
                 {onFork}
-                onMoveThread={(draggedId, targetId, pos) =>
-                  onThreadMove(thread.projectId, draggedId, targetId, pos)}
+                onMoveThread={(draggedId, targetId, pos) => {
+                  const ordered = moveThreadInList(
+                    settledStandaloneThreads,
+                    draggedId,
+                    targetId,
+                    pos
+                  )
+                  if (ordered) void onThreadDrop(thread.projectId, ordered, draggedId)
+                }}
               />
             {/each}
           </div>
@@ -767,6 +820,15 @@
                     {onTogglePin}
                     {onDelete}
                     {onFork}
+                    onMoveThread={(draggedId, targetId, pos) => {
+                      // The Threads view spans projects, so the anchor belongs to
+                      // the dragged row's project, not the row it was dropped on.
+                      const dragged = settledTimelineThreads.find((t) => t.id === draggedId)
+                      const ordered = timelineDropOrder(draggedId, targetId, pos)
+                      if (dragged && ordered) {
+                        void onThreadDrop(dragged.projectId, ordered, draggedId)
+                      }
+                    }}
                   />
                 {/if}
               {/if}
@@ -845,7 +907,10 @@
             <div class="space-y-px" role="list">
               {#if !pinnedFold.isFolded('projects-projects')}
                 {#each pinnedProjects as project (project.id)}
-                  {@const folderThreads = threadsByProject.get(project.id) ?? []}
+                  {@const folderThreads = threadOrderSettle.view(
+                    projectOrderKey(project.id),
+                    threadsByProject.get(project.id) ?? []
+                  )}
                   {@const expanded =
                     sidebar.expandedFolders.has(project.id) ||
                     sidebar.projectSearchOpen.has(project.id)}
@@ -948,8 +1013,17 @@
                                   {onTogglePin}
                                   {onDelete}
                                   {onFork}
-                                  onMoveThread={(draggedId, targetId, pos) =>
-                                    onThreadMove(project.id, draggedId, targetId, pos)}
+                                  onMoveThread={(draggedId, targetId, pos) => {
+                                    const ordered = moveThreadInList(
+                                      folderThreads,
+                                      draggedId,
+                                      targetId,
+                                      pos
+                                    )
+                                    if (ordered) {
+                                      void onThreadDrop(project.id, ordered, draggedId)
+                                    }
+                                  }}
                                 />
                               {/each}
                             </div>
@@ -1059,7 +1133,10 @@
         {:else if regularProjects.length > 0}
           <div class="space-y-0.5" role="list">
             {#each regularProjects as project (project.id)}
-              {@const folderThreads = threadsByProject.get(project.id) ?? []}
+              {@const folderThreads = threadOrderSettle.view(
+                projectOrderKey(project.id),
+                threadsByProject.get(project.id) ?? []
+              )}
               {@const expanded =
                 sidebar.expandedFolders.has(project.id) ||
                 sidebar.projectSearchOpen.has(project.id)}
@@ -1164,8 +1241,17 @@
                               {onTogglePin}
                               {onDelete}
                               {onFork}
-                              onMoveThread={(draggedId, targetId, pos) =>
-                                onThreadMove(project.id, draggedId, targetId, pos)}
+                              onMoveThread={(draggedId, targetId, pos) => {
+                                const ordered = moveThreadInList(
+                                  folderThreads,
+                                  draggedId,
+                                  targetId,
+                                  pos
+                                )
+                                if (ordered) {
+                                  void onThreadDrop(project.id, ordered, draggedId)
+                                }
+                              }}
                             />
                           {/each}
                         </div>
