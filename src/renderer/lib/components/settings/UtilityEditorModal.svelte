@@ -37,7 +37,7 @@
   import UtilityEditorModalHarnessSelector from './UtilityEditorModalHarnessSelector.svelte'
   import UtilityEditorModalPluginBundle from './UtilityEditorModalPluginBundle.svelte'
   import { canToggleUtilityEnabled, isComputerUseUtility } from '$shared/utility-ids'
-  import { utilityInstallFolderName } from '$shared/utility-scope-paths'
+  import { utilityInstallFolderNameFor } from '$shared/utility-scope-paths'
   import {
     allHarnessBinding,
     buildBindings,
@@ -306,10 +306,14 @@
     if (isNative || isAppOwned || draft.scopeLevel === 'global') return ''
     if (draft.kind !== 'skill' && draft.kind !== 'mcp') return ''
     const file = draft.kind === 'skill' ? 'SKILL.md' : 'mcp.json'
-    const folder = utilityInstallFolderName(
-      draft.name,
-      draft.bindings.map((binding) => binding.transportName).find((name) => name.trim() !== '')
-    )
+    const folder = utilityInstallFolderNameFor({
+      kind: draft.kind,
+      name: draft.name,
+      ...(draft.kind === 'skill' ? { instructions: draft.instructions } : {}),
+      transportName: draft.bindings
+        .map((binding) => binding.transportName)
+        .find((name) => name.trim() !== '')
+    })
     if (draft.scopeLevel === 'project') {
       return `Installed into .cio/utilities/${folder}/ in this project as ${file}, so only this project's threads reach it.`
     }

@@ -1,5 +1,5 @@
 /**
- * Where a scoped utility is installed on disk.
+ * Where a scoped utility is installed on disk, and what its folder is called.
  *
  * A utility scoped to a project lives inside that project's own scratch pad, so
  * the user sees the install next to the work it belongs to. A utility scoped to
@@ -11,6 +11,8 @@
  * The shapes live here because the main-process installer and the editor's
  * "installs to" copy must agree on them.
  */
+import type { UtilityKind } from './types/utility'
+import { skillFrontmatterName } from './skill-frontmatter'
 
 /** Folder a project's own scoped utilities are installed into, inside its `.cio`. */
 export const PROJECT_UTILITIES_DIRECTORY = 'utilities'
@@ -38,6 +40,35 @@ export const UTILITY_INSTALL_MANIFEST_VERSION = 1
  * carries one (a marketplace skill keeps its marketplace id), otherwise a slug
  * of its name. The installer appends a short id when two utilities would
  * otherwise claim one folder, so a name is never a reason to refuse an install.
+ */
+/**
+ * Folder one utility installs under, by kind.
+ *
+ * A skill's folder is the skill's own name: a harness resolves a skill by the
+ * folder holding its SKILL.md and reads the `name` beside it, so the two have to
+ * agree. The name the file declares wins over everything else, because that is
+ * the identity the skill answers to; a marketplace copy keeps its marketplace
+ * id, which is the name its source publishes. An MCP server has no such rule, so
+ * it keeps the transport name its gateway binding already carries.
+ */
+export function utilityInstallFolderNameFor(input: {
+  kind: UtilityKind
+  /** The registry entry's name, the fallback identity for any kind. */
+  name: string
+  /** A skill's document, whose frontmatter names it. */
+  instructions?: string
+  /** The binding's transport name, the identity an MCP server loads under. */
+  transportName?: string | null
+}): string {
+  if (input.kind === 'skill') {
+    return utilityInstallFolderName(skillFrontmatterName(input.instructions ?? '') ?? input.name)
+  }
+  return utilityInstallFolderName(input.name, input.transportName)
+}
+
+/**
+ * Slug one folder name takes: the transport name when a binding carries one (a
+ * marketplace skill keeps its marketplace id), otherwise the utility's own name.
  */
 export function utilityInstallFolderName(name: string, transportName?: string | null): string {
   const candidate = (transportName ?? '').trim() || name

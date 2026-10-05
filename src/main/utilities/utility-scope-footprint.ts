@@ -16,8 +16,9 @@ import {
   THREAD_UTILITIES_DIRECTORY,
   UTILITY_INSTALL_MANIFEST,
   UTILITY_INSTALL_MANIFEST_VERSION,
-  utilityInstallFolderName
+  utilityInstallFolderNameFor
 } from '../../lib/utility-scope-paths'
+import { skillInstallDocument } from '../../lib/skill-frontmatter'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 
@@ -98,12 +99,20 @@ function manifestFor(utility: UtilityDefinition): UtilityInstallManifest {
   }
 }
 
-/** The folder name a utility prefers: its marketplace id or a slug of its name. */
+/**
+ * The folder name a utility prefers, following the layout its kind is read by.
+ * A skill folder is the skill's own name, so a folder and the SKILL.md inside it
+ * name the same skill; an MCP server keeps the transport name its binding uses.
+ */
 function preferredFolderName(utility: UtilityDefinition): string {
-  const transportName = utility.harnessBindings
-    .map((binding) => binding.transportName ?? '')
-    .find((name) => name.trim() !== '')
-  return utilityInstallFolderName(utility.name, transportName)
+  return utilityInstallFolderNameFor({
+    kind: utility.kind,
+    name: utility.name,
+    ...(utility.kind === 'skill' ? { instructions: utility.config.instructions } : {}),
+    transportName: utility.harnessBindings
+      .map((binding) => binding.transportName ?? '')
+      .find((name) => name.trim() !== '')
+  })
 }
 
 /** The connection an MCP install writes; credential values never reach a file. */
@@ -211,9 +220,11 @@ export class UtilityScopeFootprintService {
   }
 
   /**
-   * Folder each member owns in one root: the folder already carrying its id,
-   * otherwise its preferred name when that name is free, otherwise the name plus
-   * as much of the id as it takes to be unique.
+   * Folder each member owns in one root: the name its kind calls for when that
+   * name is free, otherwise the folder already carrying its id, otherwise that
+   * name plus as much of the id as it takes to be unique. The conventional name
+   * leads, so an install an earlier version filed under a placeholder name moves
+   * to it rather than staying wrong forever.
    */
   private async resolveFolders(
     root: string,
@@ -223,8 +234,11 @@ export class UtilityScopeFootprintService {
     const folders = new Map<string, string>()
     const claimed = new Map<string, string>()
     for (const utility of members) {
+      const preferred = preferredFolderName(utility)
       const owned = [...existing.entries()].find(([, manifest]) => manifest?.id === utility.id)
-      const folder = owned?.[0] ?? freeFolderName(utility, existing, claimed)
+      const folder = folderIsTaken(preferred, existing, claimed, utility.id)
+        ? (owned?.[0] ?? uniqueFolderName(preferred, utility, existing, claimed))
+        : preferred
       folders.set(utility.id, folder)
       claimed.set(folder, utility.id)
     }
@@ -244,9 +258,15 @@ export class UtilityScopeFootprintService {
       `${JSON.stringify(manifestFor(utility), null, 2)}\n`
     )
     if (utility.kind === 'skill') {
+      // The folder is the skill's identity, so the copy installed under it is
+      // written to agree with that folder whatever the source document said.
       await writeIfChanged(
         join(directory, SKILL_INSTALL_FILE),
-        `${utility.config.instructions.trimEnd()}\n`
+        `${skillInstallDocument({
+          markdown: utility.config.instructions,
+          name: folder,
+          description: utility.description
+        })}\n`
       )
       return
     }
@@ -307,23 +327,29 @@ export class UtilityScopeFootprintService {
   }
 }
 
-/** A folder name of this utility's own, never one another utility already holds. */
-function freeFolderName(
+/** True when one folder already belongs to some other utility in this pass. */
+function folderIsTaken(
+  folder: string,
+  existing: ReadonlyMap<string, UtilityInstallManifest | null>,
+  claimed: ReadonlyMap<string, string>,
+  utilityId: string
+): boolean {
+  const holder = claimed.get(folder)
+  if (holder !== undefined && holder !== utilityId) return true
+  const manifest = existing.get(folder)
+  return manifest !== undefined && manifest !== null && manifest.id !== utilityId
+}
+
+/** The preferred name with as much of the id appended as it takes to be free. */
+function uniqueFolderName(
+  preferred: string,
   utility: UtilityDefinition,
   existing: ReadonlyMap<string, UtilityInstallManifest | null>,
   claimed: ReadonlyMap<string, string>
 ): string {
-  const preferred = preferredFolderName(utility)
-  const taken = (folder: string): boolean => {
-    const holder = claimed.get(folder)
-    if (holder !== undefined && holder !== utility.id) return true
-    const manifest = existing.get(folder)
-    return manifest !== undefined && manifest !== null && manifest.id !== utility.id
-  }
-  if (!taken(preferred)) return preferred
   for (const length of [8, 16]) {
     const candidate = `${preferred}--${utility.id.slice(0, length)}`
-    if (!taken(candidate)) return candidate
+    if (!folderIsTaken(candidate, existing, claimed, utility.id)) return candidate
   }
   return `${preferred}--${utility.id}`
 }
