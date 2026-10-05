@@ -57,7 +57,7 @@ function manifest(behaviors: Record<HarnessManifestBehavior, boolean>): HarnessM
   return { schemaVersion: HARNESS_MANIFEST_SCHEMA_VERSION, behaviors }
 }
 
-/** The canonical ordered harness manifest. Pi first; Cline is deliberately last. */
+/** The canonical ordered harness manifest. Pi first because it is bundled and doesn't need a cli */
 const HARNESSES: readonly HarnessDescriptor[] = [
   {
     id: 'pi',
@@ -66,10 +66,9 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    // Pi has no native AGENTS.md/CLAUDE.md instruction loading; the app-level
     // behavior prompt remains available for Engineering implementation turns.
     // Manual compaction: `compact` RPC, idle-safe.
-    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true, multipleAccounts: false })
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true, multipleAccounts: false })
   },
   {
     // One OpenCode harness. V1 and V2 both install as `opencode` and are no
@@ -108,10 +107,8 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    // Claude Code reads CLAUDE.md natively. Project behavior is supplied by
-    // CodeInOven's application prompt layer rather than project AGENTS.md.
     // Manual compaction: `claude -p /compact --resume <id>` (verified live).
-    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true, multipleAccounts: false })
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true, multipleAccounts: false })
   },
   {
     id: 'cline',
