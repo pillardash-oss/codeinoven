@@ -24,6 +24,35 @@ export const THINKING_PRESETS: ThinkingPreset[] = [
 /** Last-resort catalog for older Codex versions without the app-server model API. */
 const CODEX_FALLBACK_MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
 
+/** Documented capacity fallback when model/list omits context metadata.
+ * https://developers.openai.com/api/docs/models/gpt-6.1-sol
+ * https://developers.openai.com/api/docs/models/compare
+ * https://developers.openai.com/api/docs/models/gpt-6-sol
+ * https://developers.openai.com/api/docs/models/gpt-5.4
+ * https://developers.openai.com/api/docs/models/gpt-5.5
+ * https://developers.openai.com/api/docs/models/gpt-5.6-sol
+ * https://developers.openai.com/api/docs/models/gpt-5.6-terra
+ * https://developers.openai.com/api/docs/models/gpt-5.6-luna
+ * Keep exact identities: version numbers do not establish capabilities.
+ */
+const CODEX_EXTENDED_CONTEXT_MODELS = new Set([
+  'gpt-6.1-sol',
+  'gpt-6-sol',
+  'gpt-5.4',
+  'gpt-5.4-pro',
+  'gpt-5.5',
+  'gpt-6-astra',
+  'gpt-6-luna',
+  'gpt-5.6',
+  ...CODEX_FALLBACK_MODELS
+])
+
+function codexContextWindows(id: string, reportedContextWindow?: number): number[] {
+  return (reportedContextWindow ?? 0) >= 1_000_000 || CODEX_EXTENDED_CONTEXT_MODELS.has(id)
+    ? [272_000, 1_000_000]
+    : [272_000]
+}
+
 export function codexThinkingPresets(value: unknown): ThinkingPreset[] | undefined {
   if (!Array.isArray(value) || value.length === 0) return undefined
   const presets: ThinkingPreset[] = []
@@ -87,7 +116,7 @@ export function mapCodexModel(value: unknown): ProviderModel | null {
     attachment: codexModelSupportsAttachments(model),
     toolcall: true,
     ...(contextWindow === undefined ? {} : { contextWindow }),
-    contextWindows: (contextWindow ?? 0) >= 1_000_000 ? [272_000, 1_000_000] : [272_000],
+    contextWindows: codexContextWindows(id, contextWindow),
     ultrafastSupported:
       additionalSpeedTiers.includes('ultrafast') ||
       serviceTiers.some((tier) => stringValue(record(tier)?.['id']) === 'ultrafast'),
@@ -107,6 +136,6 @@ export function fallbackCodexModels(): ProviderModel[] {
     attachment: true,
     toolcall: true,
     fastSupported: false,
-    contextWindows: [272_000]
+    contextWindows: codexContextWindows(id)
   }))
 }
