@@ -41,11 +41,17 @@
       (speed) => speed.id === 'normal' || (speed.id === 'fast' ? fastSupported : ultrafastSupported)
     )
   )
-  let currentSpeed = $derived(speeds.find((speed) => speed.id === inferenceMode) ?? speeds[0])
+  let currentSpeed = $derived(
+    availableSpeeds.find((speed) => speed.id === inferenceMode) ?? speeds[0]
+  )
   function contextLabel(tokens: number): string {
     return tokens >= 1_000_000 ? `${tokens / 1_000_000}m` : `${tokens / 1_000}k`
   }
-  let displayedContextWindow = $derived(contextWindow ?? defaultContextWindow)
+  let displayedContextWindow = $derived(
+    contextWindow !== undefined && contextWindows.includes(contextWindow)
+      ? contextWindow
+      : defaultContextWindow
+  )
   let summary = $derived(
     `${currentSpeed.label}${displayedContextWindow ? ` · ${contextLabel(displayedContextWindow)}${contextWindow === undefined ? ' (default)' : ''}` : ''}`
   )
@@ -85,30 +91,23 @@
           {#if speed.id === 'fast'}<span class="text-[0.625rem] text-muted"
               >~{fastMultiplier}× usage</span
             >{/if}
-          {#if inferenceMode === speed.id}<Check size={11} class="shrink-0 text-primary" />{/if}
+          {#if currentSpeed.id === speed.id}<Check size={11} class="shrink-0 text-primary" />{/if}
         </DropdownMenu.Item>
       {/each}
       {#if contextWindows.length > 0}
         <DropdownMenu.Separator class="my-1 h-px bg-border" />
         <div class="px-2 py-1.5 text-[0.625rem] font-medium text-muted">Context window</div>
-        <DropdownMenu.Item
-          class="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus:bg-elevated"
-          title="Use the default context window"
-          onSelect={() => onSelectContext(undefined)}
-        >
-          <span class="flex-1"
-            >Default{defaultContextWindow ? ` · ${contextLabel(defaultContextWindow)}` : ''}</span
-          >
-          {#if contextWindow === undefined}<Check size={11} class="shrink-0 text-primary" />{/if}
-        </DropdownMenu.Item>
         {#each contextWindows as tokens (tokens)}
           <DropdownMenu.Item
             class="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus:bg-elevated"
             title={`Use ${contextLabel(tokens)} context window`}
-            onSelect={() => onSelectContext(tokens)}
+            onSelect={() => onSelectContext(tokens === defaultContextWindow ? undefined : tokens)}
           >
             <span class="flex-1">{contextLabel(tokens)}</span>
-            {#if tokens === contextWindow}<Check size={11} class="shrink-0 text-primary" />{/if}
+            {#if tokens === displayedContextWindow}<Check
+                size={11}
+                class="shrink-0 text-primary"
+              />{/if}
           </DropdownMenu.Item>
         {/each}
       {/if}

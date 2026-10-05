@@ -25,11 +25,7 @@
     ThinkingPreset
   } from '$shared/types'
   import ModelSettingsPicker from './ModelSettingsPicker.svelte'
-  import {
-    fastMultiplierFor,
-    fastSelectionModelId,
-    supportsFastInference
-  } from '$shared/fast-inference'
+  import { fastMultiplierFor, fastSelectionModelId } from '$shared/fast-inference'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
   import ModelPickerList from './ModelPickerList.svelte'
   import ModelPickerVendorIcons from './ModelPickerVendorIcons.svelte'
@@ -183,13 +179,16 @@
     selectedProvider?.models.find((model) => model.id === modelId) ??
       displayProviders.flatMap((provider) => provider.models).find((model) => model.id === modelId)
   )
-  let fastSupported = $derived(
-    supportsFastInference(harnessId, providerId, selectedModel?.fastSupported)
+  let runtimeModel = $derived(
+    displayProviders
+      .find((provider) => provider.id === providerId && provider.harnessId === harnessId)
+      ?.models.find((model) => model.id === modelId)
   )
+  let fastSupported = $derived(runtimeModel?.fastSupported === true)
   let ultrafastSupported = $derived(
-    harnessId === 'codex' && providerId === 'openai' && selectedModel?.ultrafastSupported === true
+    harnessId === 'codex' && providerId === 'openai' && runtimeModel?.ultrafastSupported === true
   )
-  let contextWindows = $derived(selectedModel?.contextWindows ?? [])
+  let contextWindows = $derived(runtimeModel?.contextWindows ?? [])
   let showRuntimeSettings = $derived(
     !multiSelect &&
       Boolean(modelId) &&
@@ -574,7 +573,7 @@
           contextWindow={runtimeSettings?.contextWindow}
           defaultContextWindow={harnessId === 'codex' && providerId === 'openai'
             ? contextWindows[0]
-            : (selectedModel?.contextWindow ?? contextWindows[0])}
+            : (runtimeModel?.contextWindow ?? contextWindows[0])}
           bind:menuOpen={runtimeMenuOpen}
           disabled={disabled || !onSelectRuntime}
           onSelect={chooseSpeed}
