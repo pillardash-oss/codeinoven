@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, Plus, Trash2, X } from '@lucide/svelte'
+  import { Check, Pencil, Plus, Trash2, X } from '@lucide/svelte'
   import { permissionLevelLabel } from '$lib/actions'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import {
@@ -46,6 +46,8 @@
     onApply: (profile: ModelProfile) => void
     /** Store the current settings under `name`. */
     onSave: (name: string) => void
+    /** Give an existing profile a new name. */
+    onRename: (profile: ModelProfile, name: string) => void
     /** Ask to delete; the composer confirms before anything is removed. */
     onRequestDelete: (profile: ModelProfile) => void
   }
@@ -58,11 +60,20 @@
     draftName,
     onApply,
     onSave,
+    onRename,
     onRequestDelete
   }: Props = $props()
 
-  /** True while the save row is showing its name field instead of its label. */
-  let naming = $state(false)
+  /**
+   * Which name field is open, if any.
+   *
+   * One value rather than one flag per surface: the field is rendered by a single
+   * snippet, so the save row and a row being renamed can never both open one, and
+   * there is exactly one draft to commit or abandon.
+   */
+  type NameEditor = { kind: 'new' } | { kind: 'rename'; profile: ModelProfile }
+
+  let editor = $state<NameEditor | null>(null)
   let name = $state('')
 
   let usable = $derived(profiles.filter(isUsableModelProfile))
@@ -98,16 +109,27 @@
   function beginNaming(): void {
     if (atCapacity) return
     name = draftName
-    naming = true
+    editor = { kind: 'new' }
+  }
+
+  /**
+   * Rename in place, rather than by deleting and saving again.
+   *
+   * The id is not part of this: a profile keeps its identity across a rename, so
+   * only the name the user reads changes.
+   */
+  function beginRename(profile: ModelProfile): void {
+    name = profile.name
+    editor = { kind: 'rename', profile }
   }
 
   /**
    * Focus the name field the moment it appears.
    *
    * An attachment rather than a `bind:this` and a `tick`: the field only exists
-   * while `naming` is set, so mounting it is exactly the moment it should take
-   * the caret, and its text starts selected so a suggested name can be replaced
-   * by typing.
+   * while a name is being edited, so mounting it is exactly the moment it should
+   * take the caret, and its text starts selected so an existing name can be
+   * replaced by typing.
    */
   function focusNameField(node: HTMLInputElement): void {
     node.focus()
@@ -115,21 +137,51 @@
   }
 
   function cancelNaming(): void {
-    naming = false
+    editor = null
     name = ''
   }
 
-  function commitNaming(): void {
+  function commitName(): void {
     const trimmed = name.trim()
-    if (!trimmed) return
-    onSave(trimmed)
+    if (!trimmed || !editor) return
+    if (editor.kind === 'rename') onRename(editor.profile, trimmed)
+    else onSave(trimmed)
     cancelNaming()
+  }
+
+  /**
+   * The words a name field reads as, which differ by what it is naming.
+   *
+   * The save field describes a profile that does not exist yet, while a rename
+   * field names the row it sits in, so a screen reader hears which profile is
+   * about to change rather than just that something is being renamed.
+   */
+  function nameFieldCopy(
+    kind: NameEditor['kind'],
+    profile?: ModelProfile
+  ): {
+    label: string
+    save: string
+    cancel: string
+  } {
+    if (kind === 'rename') {
+      return {
+        label: profile ? `New name for the ${profile.name} profile` : 'New profile name',
+        save: 'Save the new profile name',
+        cancel: 'Cancel renaming this profile'
+      }
+    }
+    return {
+      label: 'Profile name',
+      save: 'Save this profile',
+      cancel: 'Cancel saving this profile'
+    }
   }
 
   function onNameKeydown(event: KeyboardEvent): void {
     if (event.key === 'Enter') {
       event.preventDefault()
-      commitNaming()
+      commitName()
       return
     }
     if (event.key === 'Escape') {
@@ -141,6 +193,45 @@
     }
   }
 </script>
+
+<!--
+  The name field, shared by the save row and by any row being renamed.
+
+  Rendered as a snippet so both surfaces commit, abandon, and focus identically;
+  a second copy of this markup is how the two would drift apart.
+-->
+{#snippet nameEditor(kind: NameEditor['kind'], profile?: ModelProfile)}
+  {@const copy = nameFieldCopy(kind, profile)}
+  <input
+    {@attach focusNameField}
+    bind:value={name}
+    maxlength={MODEL_PROFILE_NAME_MAX_LENGTH}
+    type="text"
+    class="min-w-0 flex-auto rounded-lg bg-transparent px-2 py-1.5 text-[0.6875rem] text-foreground outline-none ring-1 ring-border"
+    placeholder={copy.label}
+    aria-label={copy.label}
+    onkeydown={onNameKeydown}
+  />
+  <button
+    type="button"
+    class="shrink-0 rounded px-1.5 py-1 text-[0.6875rem] text-primary transition-colors hover:bg-elevated disabled:opacity-40"
+    title={copy.save}
+    aria-label={copy.save}
+    disabled={!name.trim()}
+    onclick={commitName}
+  >
+    Save
+  </button>
+  <button
+    type="button"
+    class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    title={copy.cancel}
+    aria-label={copy.cancel}
+    onclick={cancelNaming}
+  >
+    <X size={11} />
+  </button>
+{/snippet}
 
 <!-- Only the list scrolls: the header stays put and the save row stays reachable
      however many profiles are saved. -->
@@ -158,102 +249,101 @@
         {@const isActive = active?.id === profile.id}
         {@const display = displayFor(profile)}
         <li class="group flex items-center gap-0.5">
-          <button
-            type="button"
-            class={`flex min-w-0 flex-auto items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isActive ? 'bg-elevated' : ''}`}
-            title={titleFor(profile, display)}
-            aria-pressed={isActive}
-            onclick={() => onApply(profile)}
-          >
-            <span class="flex shrink-0 items-center gap-0.5">
-              <ModelPickerVendorIcons
-                harnessId={profile.harnessId}
-                providerName={display.providerName ?? profile.providerId}
-                providerId={profile.providerId}
-              />
-            </span>
-            <span class="flex min-w-0 flex-auto flex-col">
-              <span class="flex min-w-0 items-center gap-1">
-                <span
-                  class={`truncate text-[0.6875rem] ${
-                    isActive ? 'font-semibold text-primary' : 'text-foreground'
-                  }`}
-                >
-                  {profile.name}
-                </span>
-                {#if profile.permissionLevel === 'full_access'}
-                  <!--
-                    The one setting a profile can carry that the row would otherwise
-                    hide: applying it hands the harness unrestricted permissions.
-                  -->
-                  <StatusPill tone="warning" title="This profile applies Full Access">
-                    Full access
-                  </StatusPill>
-                {/if}
-                {#if isActive}
-                  <Check
-                    size={10}
-                    class="ml-auto shrink-0 text-primary"
-                    aria-label="Profile in force"
-                  />
-                {/if}
+          {#if editor?.kind === 'rename' && editor.profile.id === profile.id}
+            <div class="flex min-w-0 flex-auto items-center gap-1 px-1 py-1">
+              <!-- The row keeps its harness and provider marks while it is being
+                   renamed, so the field still sits in the row it belongs to. -->
+              <span class="flex shrink-0 items-center gap-0.5">
+                <ModelPickerVendorIcons
+                  harnessId={profile.harnessId}
+                  providerName={display.providerName ?? profile.providerId}
+                  providerId={profile.providerId}
+                />
               </span>
-              <span class="truncate text-[0.5625rem] text-muted">{summaryFor(profile)}</span>
-            </span>
-          </button>
-          <!--
-            Delete only asks. The composer runs the shared confirmation, so a
-            profile is never removed by a stray click beside the row that applies
-            it. It stays out of the way until the row is pointed at, because the
-            panel is dense and a permanently visible trash icon would invite
-            exactly that click.
-          -->
-          <button
-            type="button"
-            class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-overlay hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
-            title={`Delete the ${profile.name} profile`}
-            aria-label={`Delete the ${profile.name} profile`}
-            onclick={() => onRequestDelete(profile)}
-          >
-            <Trash2 size={11} />
-          </button>
+              {@render nameEditor('rename', profile)}
+            </div>
+          {:else}
+            <button
+              type="button"
+              class={`flex min-w-0 flex-auto items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isActive ? 'bg-elevated' : ''}`}
+              title={titleFor(profile, display)}
+              aria-pressed={isActive}
+              onclick={() => onApply(profile)}
+            >
+              <span class="flex shrink-0 items-center gap-0.5">
+                <ModelPickerVendorIcons
+                  harnessId={profile.harnessId}
+                  providerName={display.providerName ?? profile.providerId}
+                  providerId={profile.providerId}
+                />
+              </span>
+              <span class="flex min-w-0 flex-auto flex-col">
+                <span class="flex min-w-0 items-center gap-1">
+                  <span
+                    class={`truncate text-[0.6875rem] ${
+                      isActive ? 'font-semibold text-primary' : 'text-foreground'
+                    }`}
+                  >
+                    {profile.name}
+                  </span>
+                  {#if profile.permissionLevel === 'full_access'}
+                    <!--
+                      The one setting a profile can carry that the row would otherwise
+                      hide: applying it hands the harness unrestricted permissions.
+                    -->
+                    <StatusPill tone="warning" title="This profile applies Full Access">
+                      Full access
+                    </StatusPill>
+                  {/if}
+                  {#if isActive}
+                    <Check
+                      size={10}
+                      class="ml-auto shrink-0 text-primary"
+                      aria-label="Profile in force"
+                    />
+                  {/if}
+                </span>
+                <span class="truncate text-[0.5625rem] text-muted">{summaryFor(profile)}</span>
+              </span>
+            </button>
+            <!--
+              Both row actions stay out of the way until the row is pointed at,
+              because the panel is dense and a permanently visible pair of icons
+              would invite a stray click beside the row that applies the profile.
+            -->
+            <button
+              type="button"
+              class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-overlay hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+              title={`Rename the ${profile.name} profile`}
+              aria-label={`Rename the ${profile.name} profile`}
+              onclick={() => beginRename(profile)}
+            >
+              <Pencil size={11} />
+            </button>
+            <!--
+              Delete only asks. The composer runs the shared confirmation, so a
+              profile is never removed by a stray click beside the row that applies
+              it.
+            -->
+            <button
+              type="button"
+              class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-overlay hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
+              title={`Delete the ${profile.name} profile`}
+              aria-label={`Delete the ${profile.name} profile`}
+              onclick={() => onRequestDelete(profile)}
+            >
+              <Trash2 size={11} />
+            </button>
+          {/if}
         </li>
       {/each}
     </ul>
   {/if}
 
   <div class="shrink-0 p-1">
-    {#if naming}
+    {#if editor?.kind === 'new'}
       <div class="flex items-center gap-1">
-        <input
-          {@attach focusNameField}
-          bind:value={name}
-          maxlength={MODEL_PROFILE_NAME_MAX_LENGTH}
-          type="text"
-          class="min-w-0 flex-auto rounded-lg bg-transparent px-2 py-1.5 text-[0.6875rem] text-foreground outline-none ring-1 ring-border"
-          placeholder="Profile name"
-          aria-label="Profile name"
-          onkeydown={onNameKeydown}
-        />
-        <button
-          type="button"
-          class="shrink-0 rounded px-1.5 py-1 text-[0.6875rem] text-primary transition-colors hover:bg-elevated disabled:opacity-40"
-          title="Save this profile"
-          aria-label="Save this profile"
-          disabled={!name.trim()}
-          onclick={commitNaming}
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          title="Cancel saving this profile"
-          aria-label="Cancel saving this profile"
-          onclick={cancelNaming}
-        >
-          <X size={11} />
-        </button>
+        {@render nameEditor('new')}
       </div>
     {:else}
       <button

@@ -54,6 +54,19 @@ export const MODEL_PROFILE_INFERENCE_LABELS: Readonly<Record<InferenceMode, stri
 }
 
 /**
+ * The name a profile may store, or null when the input cannot be one.
+ *
+ * One definition, used by the save path and the rename path alike, because the
+ * config boundary refuses a longer name and would reject the whole write rather
+ * than the one field.
+ */
+export function normalizeModelProfileName(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.length > MODEL_PROFILE_NAME_MAX_LENGTH) return null
+  return trimmed
+}
+
+/**
  * Turn a name into a stable id.
  *
  * The id is what a row is keyed by, so it is derived once from the name the user
@@ -93,6 +106,24 @@ export function uniqueModelProfileId(
     if (!taken.has(candidate)) return candidate
   }
   return `${base.slice(0, MODEL_PROFILE_ID_MAX_LENGTH - 8)}-${taken.size + 2}`
+}
+
+/**
+ * The profiles with `id` renamed to `name`, or null when `name` cannot be stored.
+ *
+ * The id survives the rename, because it is the row's identity and not a handle
+ * derived from the name it currently carries. An id that is not in the list
+ * yields the list unchanged: the caller persists what it gets back, and a row
+ * that has already been deleted must not come back under a new name.
+ */
+export function renameModelProfile(
+  profiles: readonly ModelProfile[],
+  id: string,
+  name: string
+): ModelProfile[] | null {
+  const normalized = normalizeModelProfileName(name)
+  if (!normalized) return null
+  return profiles.map((profile) => (profile.id === id ? { ...profile, name: normalized } : profile))
 }
 
 /**

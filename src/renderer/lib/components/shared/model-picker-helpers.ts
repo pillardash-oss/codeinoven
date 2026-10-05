@@ -76,6 +76,7 @@ export interface ModelPickerProfilesGroup {
   draftName: string
   onApply: (profile: ModelProfile) => void
   onSave: (name: string) => void
+  onRename: (profile: ModelProfile, name: string) => void
   onRequestDelete: (profile: ModelProfile) => void
 }
 

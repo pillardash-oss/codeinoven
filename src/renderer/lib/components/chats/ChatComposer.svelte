@@ -1402,6 +1402,17 @@
   }
 
   /**
+   * Rename a saved profile.
+   *
+   * Nothing here changes what the composer runs, so the panel and the picker it
+   * sits in stay open: closing the surface the user is working in would only make
+   * them reopen it.
+   */
+  function renameProfile(profile: ModelProfile, name: string): void {
+    void modelProfiles.rename(profile, name)
+  }
+
+  /**
    * Ask to delete a profile.
    *
    * The picker closes first. The confirmation is a modal, and an open picker
@@ -1962,6 +1973,7 @@
                   draftName: modelProfiles.draftName(resolved, resolvedProviders),
                   onApply: applyProfile,
                   onSave: saveProfile,
+                  onRename: renameProfile,
                   onRequestDelete: requestDeleteProfile
                 }}
           />

@@ -4,6 +4,8 @@ import { appConfigState } from '$lib/stores/app-config.svelte'
 import {
   MAX_MODEL_PROFILES,
   applyModelProfile,
+  normalizeModelProfileName,
+  renameModelProfile,
   uniqueModelProfileId,
   usableModelProfiles
 } from '$shared/model-profiles'
@@ -44,6 +46,8 @@ export interface ModelProfilesController {
   confirmDelete(): Promise<void>
   /** Save the current settings as a new profile under `name`. */
   save(settings: ThreadSettings, name: string): Promise<boolean>
+  /** Give an existing profile a new name, keeping everything else it stores. */
+  rename(profile: ModelProfile, name: string): Promise<boolean>
   /** The settings produced by applying a profile, clamped for this surface. */
   apply(
     profile: ModelProfile,
@@ -114,7 +118,7 @@ export function createModelProfilesController(
       )
     },
     async save(settings: ThreadSettings, name: string): Promise<boolean> {
-      const trimmed = name.trim()
+      const trimmed = normalizeModelProfileName(name)
       // A profile with no model names nothing the app could run, so it is refused
       // here rather than stored as a row that applies to a plausible default.
       if (!trimmed || !settings.modelId || this.atCapacity) return false
@@ -130,6 +134,14 @@ export function createModelProfilesController(
         permissionLevel: settings.permissionLevel
       }
       return persist([...existing, profile], 'The model profile was not saved.')
+    },
+    async rename(profile: ModelProfile, name: string): Promise<boolean> {
+      // Over the raw list, not the usable subset. The panel lists only profiles it
+      // can apply, and a write that sent that subset back would drop any stored row
+      // the current catalog cannot resolve, deleting it as a side effect of a rename.
+      const next = renameModelProfile(appConfigState.modelProfiles, profile.id, name)
+      if (!next) return false
+      return persist(next, 'The model profile was not renamed.')
     },
     apply(profile, settings, catalogs): ThreadSettings {
       const applied = applyModelProfile(settings, profile, catalogs)
