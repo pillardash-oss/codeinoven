@@ -120,6 +120,13 @@
           "scenario": "Projects (including the scoped threads sidebar), Chats, Threads, or Scope view."
         },
         {
+          "id": "threads-toggle-grouping",
+          "keys": [],
+          "label": "Group threads by status",
+          "description": "Toggles foldable status groups for the filtered Threads view.",
+          "scenario": "Threads view."
+        },
+        {
           "id": "assistant-new-task",
           "keys": ["mod", "n"],
           "label": "New task",

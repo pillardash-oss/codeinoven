@@ -41,13 +41,18 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { STAGE_COLORS, STAGE_LABELS, STAGE_ORDER, scopeState } from '$lib/stores/scope.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
+  import { threadGroupingState } from '$lib/stores/thread-grouping.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { type Project, type Thread } from '$shared/types'
   import FolderRow from './FolderRow.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import type { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
-  import { filterThreadsByQuery, threadHasVisibleWork } from './workspace-thread-helpers'
+  import {
+    filterThreadsByQuery,
+    groupThreadsByStatus,
+    threadHasVisibleWork
+  } from './workspace-thread-helpers'
 
   interface Props {
     mode: 'projects' | 'chats' | 'threads' | 'assistant'
@@ -111,6 +116,7 @@
 
   let {
     mode,
+    active,
     scroller = $bindable(),
     projects,
     visibleProjects,
@@ -148,6 +154,24 @@
     onLoadHistoryPage,
     projectHasMoreInDb
   }: Props = $props()
+
+  const searchingThreads = $derived(
+    sidebar.threadsSearchOpen && Boolean(sidebar.threadsSearchQuery.trim())
+  )
+  const searchResultsById = $derived(
+    new Map(sidebar.threadsSearchResults.map((result) => [result.thread.id, result]))
+  )
+  const threadGroups = $derived(
+    mode === 'threads' && threadGroupingState.enabled
+      ? groupThreadsByStatus(
+          searchingThreads
+            ? sidebar.threadsSearchResults
+                .filter((result) => threadProjectFilterState.matches(result.thread.projectId))
+                .map((result) => result.thread)
+            : [...pinnedTimelineThreads, ...unpinnedTimelineThreads]
+        )
+      : []
+  )
 
   function getThreadIcon(thread: Thread): string | null {
     const project = projects.find((p) => p.id === thread.projectId)
@@ -252,6 +276,20 @@
     }
   }
 </script>
+
+<svelte:window
+  onkeydown={(event) => {
+    if (
+      active &&
+      mode === 'threads' &&
+      !event.defaultPrevented &&
+      keymapState.matches('threads-toggle-grouping', event)
+    ) {
+      event.preventDefault()
+      threadGroupingState.enabled = !threadGroupingState.enabled
+    }
+  }}
+/>
 
 <!-- Shared sidebar   shows Projects or Chats depending on the shell mode -->
 {#if !workspaceState.specStudioOpen || workspaceState.specAgentSidebarOpen}
@@ -589,7 +627,67 @@
         {/if}
       {/if}
       {#if mode === 'threads'}
-        {#if sidebar.threadsSearchOpen && sidebar.threadsSearchQuery.trim()}
+        {#if threadGroupingState.enabled}
+          {#each threadGroups as group (group.label)}
+            <PinnedSection
+              sectionKey="threads"
+              label={group.label}
+              threads={group.threads}
+              folded={threadGroupingState.folded[group.label]}
+              onToggleFold={() =>
+                (threadGroupingState.folded[group.label] =
+                  !threadGroupingState.folded[group.label])}
+              activeThreadId={activeThreadId ?? null}
+              onOpen={onOpenThread}
+              {onRename}
+              {onTogglePin}
+              {onDelete}
+              {onFork}
+            >
+              {#snippet row(thread: Thread)}
+                {@const result = searchingThreads ? searchResultsById.get(thread.id) : undefined}
+                {#if result}
+                  <ThreadSearchResultRow
+                    {result}
+                    selected={activeThreadId === thread.id}
+                    onOpen={onOpenThread}
+                  />
+                {:else}
+                  <ThreadRow
+                    {thread}
+                    projectIconUrl={getThreadIcon(thread)}
+                    selected={activeThreadId === thread.id}
+                    onOpen={onOpenThread}
+                    {onRename}
+                    {onTogglePin}
+                    {onDelete}
+                    {onFork}
+                    onMoveThread={thread.pinned ? onTimelinePinnedMove : undefined}
+                  />
+                {/if}
+              {/snippet}
+            </PinnedSection>
+          {:else}
+            <p class="px-2 py-6 text-center text-xs text-dimmed">
+              {searchingThreads
+                ? sidebar.threadsSearching
+                  ? 'Searching…'
+                  : 'No matching threads'
+                : threadProjectFilterState.isAll
+                  ? 'No threads yet'
+                  : 'No threads in the selected projects'}
+            </p>
+          {/each}
+          {#if !searchingThreads && hasMoreHistory}
+            <button
+              class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+              disabled={historyLoading}
+              onclick={() => void onLoadHistoryPage()}
+            >
+              {historyLoading ? 'Loading history…' : 'Load older threads'}
+            </button>
+          {/if}
+        {:else if sidebar.threadsSearchOpen && sidebar.threadsSearchQuery.trim()}
           <!-- Threads search: results render inline in the sidebar so the user
                  can open several results without the search dismissing. -->
           {#if sidebar.threadsSearching && sidebar.threadsSearchResults.length === 0}

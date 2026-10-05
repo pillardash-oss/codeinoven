@@ -29,6 +29,9 @@
      * the same pinned section: one header, one fold state, one row list.
      */
     row?: Snippet<[Thread]>
+    /** Controlled folding for other thread groups that reuse this section. */
+    folded?: boolean
+    onToggleFold?: () => void
   }
 
   let {
@@ -43,10 +46,12 @@
     onDelete,
     onFork,
     onMovePinnedThread,
-    row
+    row,
+    folded: controlledFolded,
+    onToggleFold
   }: Props = $props()
 
-  const folded = $derived(pinnedFold.isFolded(sectionKey))
+  const folded = $derived(controlledFolded ?? pinnedFold.isFolded(sectionKey))
 </script>
 
 {#if threads.length > 0}
@@ -57,7 +62,7 @@
       aria-expanded={!folded}
       aria-label="{folded ? 'Expand' : 'Fold'} {label}"
       title="{folded ? 'Expand' : 'Fold'} {label}"
-      onclick={() => pinnedFold.toggle(sectionKey)}
+      onclick={() => (onToggleFold ? onToggleFold() : pinnedFold.toggle(sectionKey))}
     >
       <ChevronDown
         size={12}

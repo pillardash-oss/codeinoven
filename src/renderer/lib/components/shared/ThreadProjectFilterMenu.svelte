@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Funnel } from '@lucide/svelte'
+  import { Funnel, Inbox } from '@lucide/svelte'
+  import { threadGroupingState } from '$lib/stores/thread-grouping.svelte'
   import ProjectSwitch from './ProjectSwitch.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
 
@@ -32,3 +33,16 @@
     {/if}
   </span>
 </ProjectSwitch>
+
+<button
+  type="button"
+  class="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-overlay {threadGroupingState.enabled
+    ? 'text-primary'
+    : 'text-muted'}"
+  title="Group threads by status"
+  aria-label="Group threads by status"
+  aria-pressed={threadGroupingState.enabled}
+  onclick={() => (threadGroupingState.enabled = !threadGroupingState.enabled)}
+>
+  <Inbox size={15} strokeWidth={1.8} />
+</button>
