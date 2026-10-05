@@ -42,7 +42,7 @@
   title="Group threads by status"
   aria-label="Group threads by status"
   aria-pressed={threadGroupingState.enabled}
-  onclick={() => (threadGroupingState.enabled = !threadGroupingState.enabled)}
+  onclick={() => threadGroupingState.toggleEnabled()}
 >
   <Inbox size={15} strokeWidth={1.8} />
 </button>

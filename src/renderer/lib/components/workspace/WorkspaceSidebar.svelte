@@ -317,7 +317,7 @@
       keymapState.matches('threads-toggle-grouping', event)
     ) {
       event.preventDefault()
-      threadGroupingState.enabled = !threadGroupingState.enabled
+      threadGroupingState.toggleEnabled()
     }
   }}
 />
@@ -684,10 +684,8 @@
               threads={group.threads}
               icon={THREAD_GROUP_ICONS[group.label]}
               accent={THREAD_GROUP_COLORS[group.label]}
-              folded={threadGroupingState.folded[group.label]}
-              onToggleFold={() =>
-                (threadGroupingState.folded[group.label] =
-                  !threadGroupingState.folded[group.label])}
+              folded={threadGroupingState.isFolded(group.label)}
+              onToggleFold={() => threadGroupingState.toggleFold(group.label)}
               activeThreadId={activeThreadId ?? null}
               onOpen={onOpenThread}
               {onRename}
