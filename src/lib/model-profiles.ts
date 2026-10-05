@@ -205,15 +205,24 @@ export function applyModelProfile(
   }
 }
 
+/** The catalog provider a profile names, when the catalog reports one. */
+function findProfileProvider(
+  profile: ModelProfile,
+  catalogs: readonly ProviderCatalog[]
+): ProviderCatalog | undefined {
+  return catalogs.find(
+    (candidate) => candidate.harnessId === profile.harnessId && candidate.id === profile.providerId
+  )
+}
+
 /** The catalog entry for the model a profile names, when the catalog reports one. */
 function findProfileModel(
   profile: ModelProfile,
   catalogs: readonly ProviderCatalog[]
 ): ProviderCatalog['models'][number] | undefined {
-  const provider = catalogs.find(
-    (candidate) => candidate.harnessId === profile.harnessId && candidate.id === profile.providerId
+  return findProfileProvider(profile, catalogs)?.models.find(
+    (candidate) => candidate.id === profile.modelId
   )
-  return provider?.models.find((candidate) => candidate.id === profile.modelId)
 }
 
 /**
@@ -284,19 +293,55 @@ export function activeModelProfile(
 }
 
 /**
+ * Everything a profile row names, resolved against the catalog.
+ *
+ * The harness and provider are drawn as icons by the row that lists profiles, so
+ * this carries the text left over: which model runs, how hard it reasons, and
+ * which speed tier it buys. Resolution is best-effort on purpose: a catalog that
+ * has not reported the model yet falls back to the stored names instead of
+ * leaving the row blank.
+ */
+export interface ModelProfileDisplay {
+  /** Model name, or the stored id while the catalog has not resolved it. */
+  modelName: string
+  /** Provider name, when the catalog reports one. */
+  providerName?: string
+  /** Label of the preset the stored thinking level maps to, when the model declares it. */
+  thinkingLabel?: string
+  /** Label of the stored speed tier. */
+  inferenceLabel: string
+}
+
+/** Resolve a profile's display names against the catalog. */
+export function modelProfileDisplay(
+  profile: ModelProfile,
+  catalogs: readonly ProviderCatalog[] = []
+): ModelProfileDisplay {
+  const model = findProfileModel(profile, catalogs)
+  return {
+    // The model name is preferred over the raw id because a row reads as a choice
+    // the user makes, not as a catalog key they would have to recognise.
+    modelName: model?.name ?? profile.modelId,
+    providerName: findProfileProvider(profile, catalogs)?.name,
+    thinkingLabel:
+      model?.thinkingPresets?.find((preset) => preset.id === profile.thinkingLevel)?.label ??
+      profile.thinkingLevel,
+    inferenceLabel: MODEL_PROFILE_INFERENCE_LABELS[profile.inferenceMode] ?? 'Standard'
+  }
+}
+
+/**
  * One line describing what a profile runs on, for a picker row.
  *
- * The model name is preferred over the raw id because a row reads as a choice
- * the user makes, not as a catalog key they would have to recognise.
+ * `undefined` joins are dropped: a profile saved before a model declared a
+ * thinking level must not read as `Opus 4.1 · undefined · Standard`.
  */
 export function modelProfileSummary(
   profile: ModelProfile,
   catalogs: readonly ProviderCatalog[] = []
 ): string {
-  const model = findProfileModel(profile, catalogs)
-  return [
-    model?.name ?? profile.modelId,
-    MODEL_PROFILE_INFERENCE_LABELS[profile.inferenceMode] ?? 'Standard',
-    profile.thinkingLevel
-  ].join(' · ')
+  const display = modelProfileDisplay(profile, catalogs)
+  return [display.modelName, display.thinkingLabel, display.inferenceLabel]
+    .filter((part): part is string => Boolean(part))
+    .join(' · ')
 }

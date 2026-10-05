@@ -1,23 +1,31 @@
 <script lang="ts">
-  import { tick } from 'svelte'
   import { Check, Plus, Trash2, X } from '@lucide/svelte'
+  import { permissionLevelLabel } from '$lib/actions'
+  import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import {
     MAX_MODEL_PROFILES,
     MODEL_PROFILE_NAME_MAX_LENGTH,
     activeModelProfile,
     isUsableModelProfile,
-    modelProfileSummary
+    modelProfileDisplay,
+    modelProfileSummary,
+    type ModelProfileDisplay
   } from '$shared/model-profiles'
   import type { ModelProfile, ProviderCatalog, ThreadSettings } from '$shared/types'
+  import ModelPickerVendorIcons from './ModelPickerVendorIcons.svelte'
+  import { harnessName } from './model-picker-helpers'
 
   /**
-   * The profile rows at the top of the model picker.
+   * The profiles section of the model picker's side panel.
    *
-   * A profile is the whole shape of a run, so it sits above the model list rather
-   * than inside it: applying one replaces the harness, model, thinking level,
-   * speed, and permission level at once, which is a different gesture from
-   * browsing models. Placing it in the fixed band above the virtualized list also
-   * leaves `buildPickerLayout` and the picker's keyboard scrolling untouched.
+   * A profile is the whole shape of a run, so it is listed as its own surface
+   * rather than inside the model list: applying one replaces the harness, model,
+   * thinking level, speed, and permission level at once, which is a different
+   * gesture from browsing models.
+   *
+   * Each row is identified the way the model list identifies a model: by the
+   * harness and provider marks, with the text naming what actually runs. Two
+   * profiles saved against different harnesses therefore never read alike.
    *
    * Everything here is presentational. Persistence, the applied-settings maths,
    * and the delete confirmation belong to the composer, which owns the settings it
@@ -53,7 +61,6 @@
     onRequestDelete
   }: Props = $props()
 
-  let nameInput = $state<HTMLInputElement>()
   /** True while the save row is showing its name field instead of its label. */
   let naming = $state(false)
   let name = $state('')
@@ -61,23 +68,50 @@
   let usable = $derived(profiles.filter(isUsableModelProfile))
   let active = $derived(activeModelProfile(profiles, settings))
 
-  // Nothing to show and nowhere to put a new one: a user who has never saved a
-  // profile and cannot save another yet pays no rows at all.
-  let visible = $derived(usable.length > 0 || !atCapacity)
+  /** Everything a row names, resolved against the catalog. */
+  function displayFor(profile: ModelProfile): ModelProfileDisplay {
+    return modelProfileDisplay(profile, catalogs)
+  }
 
   function summaryFor(profile: ModelProfile): string {
     return modelProfileSummary(profile, catalogs)
+  }
+
+  /**
+   * What hovering a row explains, in the order the row reads: which harness and
+   * provider it belongs to (drawn as icons), what runs, and what it is allowed to
+   * do. The permission level is spelled out because a profile is the one place a
+   * Full Access run can be applied without the composer's own selector saying so.
+   */
+  function titleFor(profile: ModelProfile, display: ModelProfileDisplay): string {
+    const detail = [
+      harnessName(profile.harnessId),
+      display.providerName,
+      display.modelName,
+      display.thinkingLabel,
+      display.inferenceLabel,
+      permissionLevelLabel(profile.permissionLevel)
+    ].filter((part): part is string => Boolean(part))
+    return `Apply the ${profile.name} profile: ${detail.join(' · ')}`
   }
 
   function beginNaming(): void {
     if (atCapacity) return
     name = draftName
     naming = true
-    // The field only exists once `naming` is set, so the focus has to wait a tick.
-    void tick().then(() => {
-      nameInput?.focus()
-      nameInput?.select()
-    })
+  }
+
+  /**
+   * Focus the name field the moment it appears.
+   *
+   * An attachment rather than a `bind:this` and a `tick`: the field only exists
+   * while `naming` is set, so mounting it is exactly the moment it should take
+   * the caret, and its text starts selected so a suggested name can be replaced
+   * by typing.
+   */
+  function focusNameField(node: HTMLInputElement): void {
+    node.focus()
+    node.select()
   }
 
   function cancelNaming(): void {
@@ -99,8 +133,8 @@
       return
     }
     if (event.key === 'Escape') {
-      // Stopped so Escape abandons the name field instead of closing the whole
-      // picker, which is what the popover's own key handler would otherwise do.
+      // Stopped so Escape abandons the name field instead of closing the panel it
+      // is rendered in, which is what the panel's own key handler would otherwise do.
       event.preventDefault()
       event.stopPropagation()
       cancelNaming()
@@ -108,62 +142,91 @@
   }
 </script>
 
-{#if visible}
-  <div class="border-b px-2.5 py-1.5">
-    {#if usable.length > 0}
-      <div class="px-2 pb-1 text-[0.625rem] font-medium text-dimmed">Profiles</div>
-      <ul class="flex flex-col">
-        {#each usable as profile (profile.id)}
-          {@const isActive = active?.id === profile.id}
-          <li class="group flex items-center gap-0.5">
-            <button
-              type="button"
-              class="flex min-w-0 flex-auto items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
-              title={`Apply the ${profile.name} profile: ${summaryFor(profile)}`}
-              aria-pressed={isActive}
-              onclick={() => onApply(profile)}
-            >
-              {#if isActive}
-                <Check size={11} class="shrink-0 text-primary" />
-              {:else}
-                <span class="w-[11px] shrink-0" aria-hidden="true"></span>
-              {/if}
-              <span class="flex min-w-0 flex-col">
+<!-- Only the list scrolls: the header stays put and the save row stays reachable
+     however many profiles are saved. -->
+<div class="flex min-h-0 flex-1 flex-col">
+  <div class="flex shrink-0 items-center gap-1.5 px-3 pb-1 pt-2">
+    <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">Profiles</span>
+    <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">
+      {usable.length}/{MAX_MODEL_PROFILES}
+    </span>
+  </div>
+
+  {#if usable.length > 0}
+    <ul class="min-h-0 flex-1 overflow-y-auto p-1">
+      {#each usable as profile (profile.id)}
+        {@const isActive = active?.id === profile.id}
+        {@const display = displayFor(profile)}
+        <li class="group flex items-center gap-0.5">
+          <button
+            type="button"
+            class={`flex min-w-0 flex-auto items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isActive ? 'bg-elevated' : ''}`}
+            title={titleFor(profile, display)}
+            aria-pressed={isActive}
+            onclick={() => onApply(profile)}
+          >
+            <span class="flex shrink-0 items-center gap-0.5">
+              <ModelPickerVendorIcons
+                harnessId={profile.harnessId}
+                providerName={display.providerName ?? profile.providerId}
+                providerId={profile.providerId}
+              />
+            </span>
+            <span class="flex min-w-0 flex-auto flex-col">
+              <span class="flex min-w-0 items-center gap-1">
                 <span
-                  class="truncate text-[0.6875rem] {isActive
-                    ? 'font-semibold text-primary'
-                    : 'text-foreground'}"
+                  class={`truncate text-[0.6875rem] ${
+                    isActive ? 'font-semibold text-primary' : 'text-foreground'
+                  }`}
                 >
                   {profile.name}
                 </span>
-                <span class="truncate text-[0.5625rem] text-muted">{summaryFor(profile)}</span>
+                {#if profile.permissionLevel === 'full_access'}
+                  <!--
+                    The one setting a profile can carry that the row would otherwise
+                    hide: applying it hands the harness unrestricted permissions.
+                  -->
+                  <StatusPill tone="warning" title="This profile applies Full Access">
+                    Full access
+                  </StatusPill>
+                {/if}
+                {#if isActive}
+                  <Check
+                    size={10}
+                    class="ml-auto shrink-0 text-primary"
+                    aria-label="Profile in force"
+                  />
+                {/if}
               </span>
-            </button>
-            <!--
-              Delete only asks. The composer runs the shared confirmation, so a
-              profile is never removed by a stray click beside the row that applies
-              it. It stays out of the way until the row is pointed at, because the
-              picker is dense and a permanently visible trash icon would invite
-              exactly that click.
-            -->
-            <button
-              type="button"
-              class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-overlay hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
-              title={`Delete the ${profile.name} profile`}
-              aria-label={`Delete the ${profile.name} profile`}
-              onclick={() => onRequestDelete(profile)}
-            >
-              <Trash2 size={11} />
-            </button>
-          </li>
-        {/each}
-      </ul>
-    {/if}
+              <span class="truncate text-[0.5625rem] text-muted">{summaryFor(profile)}</span>
+            </span>
+          </button>
+          <!--
+            Delete only asks. The composer runs the shared confirmation, so a
+            profile is never removed by a stray click beside the row that applies
+            it. It stays out of the way until the row is pointed at, because the
+            panel is dense and a permanently visible trash icon would invite
+            exactly that click.
+          -->
+          <button
+            type="button"
+            class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-overlay hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
+            title={`Delete the ${profile.name} profile`}
+            aria-label={`Delete the ${profile.name} profile`}
+            onclick={() => onRequestDelete(profile)}
+          >
+            <Trash2 size={11} />
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
 
+  <div class="shrink-0 p-1">
     {#if naming}
-      <div class="mt-1 flex items-center gap-1">
+      <div class="flex items-center gap-1">
         <input
-          bind:this={nameInput}
+          {@attach focusNameField}
           bind:value={name}
           maxlength={MODEL_PROFILE_NAME_MAX_LENGTH}
           type="text"
@@ -195,7 +258,7 @@
     {:else}
       <button
         type="button"
-        class="mt-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+        class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
         title={atCapacity
           ? `You can save up to ${MAX_MODEL_PROFILES} profiles`
           : 'Save the current harness, model, thinking level, speed, and permissions as a profile'}
@@ -210,4 +273,4 @@
       </button>
     {/if}
   </div>
-{/if}
+</div>

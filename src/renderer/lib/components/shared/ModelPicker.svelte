@@ -33,7 +33,7 @@
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
   import ModelPickerList from './ModelPickerList.svelte'
   import ModelPickerVendorIcons from './ModelPickerVendorIcons.svelte'
-  import { findModelEntry, truncateLabel } from './model-picker-helpers'
+  import { findModelEntry, truncateLabel, type PickerSidePanelParams } from './model-picker-helpers'
 
   interface Props {
     providers: ProviderCatalog[]
@@ -60,12 +60,14 @@
      *  the picker lazily fetches that project's catalog (network only when stale). */
     projectId?: string | null
     /**
-     * Band rendered at the top of the popover, above the harness filter and the
-     * model list. A snippet rather than profile props so only the callers that
-     * actually have profiles opt in, and the ones that do keep ownership of the
-     * profile state instead of passing it through this component.
+     * Optional profiles surface, mounted as the picker's side panel.
+     *
+     * A snippet rather than profile props so only the callers that actually have
+     * profiles opt in, and the ones that do keep ownership of the profile state
+     * instead of passing it through this component. It receives the harness filter
+     * controls the model list owns, since the filter narrows that list.
      */
-    aboveList?: Snippet
+    sidePanel?: Snippet<[PickerSidePanelParams]>
     /** Restricts the picker to one harness. Unset shows every harness as today. */
     harnessFilter?: string | null
     side?: 'top' | 'bottom'
@@ -126,7 +128,7 @@
     thinkingMenuOpen = $bindable(false),
     accountMenuOpen = $bindable(false),
     projectId = null,
-    aboveList,
+    sidePanel,
     harnessFilter = null,
     side = 'top',
     disabled = false,
@@ -692,7 +694,7 @@
         <ModelPickerList
           {displayProviders}
           {cachedProviders}
-          {aboveList}
+          {sidePanel}
           {harnessFilter}
           {favoriteModels}
           {recentModels}

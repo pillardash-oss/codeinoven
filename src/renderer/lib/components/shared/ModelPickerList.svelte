@@ -5,7 +5,6 @@
     Check,
     ChevronRight,
     GripVertical,
-    ListFilter,
     Plug,
     RefreshCw,
     Search,
@@ -17,7 +16,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { peakHoursBadgeFor } from '$shared/peak-hours'
   import type { ProviderCatalog } from '$shared/types'
-  import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
+  import ModelPickerSidePanel from './ModelPickerSidePanel.svelte'
   import ModelPickerVendorIcons from './ModelPickerVendorIcons.svelte'
   import {
     buildPickerLayout,
@@ -36,21 +35,24 @@
     searchWords,
     visiblePickerItems,
     type ModelEntry,
-    type PickerListItem
+    type PickerHarnessFilterControls,
+    type PickerListItem,
+    type PickerSidePanelParams
   } from './model-picker-helpers'
 
   interface Props {
     displayProviders: ProviderCatalog[]
     cachedProviders: ProviderCatalog[]
     /**
-     * Optional band rendered between the search field and the harness filter.
+     * Optional profiles surface, rendered as the picker's side panel.
      *
-     * The model picker takes this as a snippet rather than as profile props so the
-     * ~25 call sites that mount this list without profiles are untouched, and so
+     * The model picker hands this down as a snippet rather than as profile props so
+     * the ~25 call sites that mount this list without profiles are untouched, and so
      * profile state stays owned by the composer rather than threaded down through
-     * two layers.
+     * two layers. The snippet receives the harness filter controls this list owns,
+     * because the filter narrows the list and the panel is only where it is drawn.
      */
-    aboveList?: Snippet
+    sidePanel?: Snippet<[PickerSidePanelParams]>
     /** Restricts the list to one harness. Unset shows every harness as today. */
     harnessFilter?: string | null
     favoriteModels: string[]
@@ -79,7 +81,7 @@
   let {
     displayProviders,
     cachedProviders,
-    aboveList,
+    sidePanel,
     harnessFilter = null,
     favoriteModels,
     recentModels,
@@ -110,7 +112,6 @@
   const collapsedGroups = new SvelteSet<string>()
   const selectedHarnesses = new SvelteSet<string>()
   let showAllHarnesses = $state(true)
-  let harnessFilterOpen = $state(false)
   let pickerListScrollTop = $state(0)
   let pickerViewport = $state(240)
   /** True right after an arrow-key press, until the mouse physically moves.
@@ -249,6 +250,26 @@
         : `${effectiveHarnessCount} harnesses`
       : 'All harnesses'
   )
+  /**
+   * The harness filter as the side panel draws it, or null when the catalog holds
+   * a single harness and there is nothing to narrow.
+   *
+   * Rebuilt on every change rather than stored: the selection stays in this
+   * component's reactive set, and the panel receives it as one object so the row at
+   * the top of the picker and the chips inside the panel can never disagree.
+   */
+  const harnessFilterControls = $derived<PickerHarnessFilterControls | null>(
+    harnessOptions.length > 1
+      ? {
+          options: harnessOptions,
+          label: harnessFilterLabel,
+          active: harnessFilterActive,
+          selected: selectedHarnesses,
+          onToggle: toggleHarness,
+          onClear: clearHarnessFilter
+        }
+      : null
+  )
   const pickerLayout = $derived(
     buildPickerLayout({
       favoriteModelsList,
@@ -275,10 +296,6 @@
   /** Restrict to the caller-supplied harness. Unset/null is a no-op. */
   function passesPropHarnessFilter(candidateHarnessId: string): boolean {
     return !harnessFilter || candidateHarnessId === harnessFilter
-  }
-
-  function isHarnessSelected(candidateHarnessId: string): boolean {
-    return !showAllHarnesses && selectedHarnesses.has(candidateHarnessId)
   }
 
   function toggleHarness(nextHarnessId: string): void {
@@ -370,7 +387,6 @@
   /** Reset the list surface when the popover opens or closes. */
   export function resetPicker(): void {
     search = ''
-    harnessFilterOpen = false
     pickerListScrollTop = 0
     keyboardNavActive = false
   }
@@ -499,68 +515,10 @@
   {/if}
 </div>
 
-{@render aboveList?.()}
-
-{#if harnessOptions.length > 1}
-  <div class="border-b px-2.5 py-1.5">
-    <div class="flex items-center gap-1.5">
-      <button
-        type="button"
-        class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        aria-expanded={harnessFilterOpen}
-        aria-haspopup="true"
-        title={harnessFilterOpen ? 'Hide harness filter options' : 'Filter models by harness'}
-        onclick={() => (harnessFilterOpen = !harnessFilterOpen)}
-      >
-        <ListFilter size={11} class="shrink-0 text-dimmed" />
-        <span class="truncate">{harnessFilterLabel}</span>
-        {#if harnessFilterActive}
-          <span class="ml-auto shrink-0 text-[0.5625rem] text-primary">Filtered</span>
-        {/if}
-      </button>
-      {#if harnessFilterActive}
-        <button
-          type="button"
-          class="shrink-0 rounded-lg p-1 text-dimmed transition-colors hover:text-foreground"
-          title="Clear harness filter"
-          aria-label="Clear harness filter"
-          onclick={clearHarnessFilter}
-        >
-          <X size={11} />
-        </button>
-      {/if}
-    </div>
-    {#if harnessFilterOpen}
-      <div class="mt-1.5 flex flex-wrap gap-1" role="group" aria-label="Filter models by harness">
-        <button
-          type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
-            ? 'border-primary bg-primary text-on-primary'
-            : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-          aria-pressed={!harnessFilterActive}
-          onclick={clearHarnessFilter}
-        >
-          <ListFilter size={11} class="shrink-0" />
-          All
-        </button>
-        {#each harnessOptions as option (option.id)}
-          <button
-            type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {isHarnessSelected(
-              option.id
-            )
-              ? 'border-primary bg-primary text-on-primary'
-              : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-            aria-pressed={isHarnessSelected(option.id)}
-            onclick={() => toggleHarness(option.id)}
-          >
-            <ModelPickerHarnessIcon harnessId={option.id} />
-            <span class="truncate">{option.name}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-  </div>
+{#if sidePanel}
+  {@render sidePanel({ filter: harnessFilterControls })}
+{:else if harnessFilterControls}
+  <ModelPickerSidePanel filter={harnessFilterControls} />
 {/if}
 
 <div

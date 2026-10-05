@@ -65,7 +65,8 @@
   import EngineeringToolbox from './EngineeringToolbox.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import ModelPickerProfiles from '../shared/ModelPickerProfiles.svelte'
+  import ModelPickerSidePanel from '../shared/ModelPickerSidePanel.svelte'
+  import type { PickerSidePanelParams } from '../shared/model-picker-helpers'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { createModelProfilesController } from './useModelProfiles.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
@@ -1400,7 +1401,15 @@
     void modelProfiles.save(resolved, name)
   }
 
+  /**
+   * Ask to delete a profile.
+   *
+   * The picker closes first. The confirmation is a modal, and an open picker
+   * popover paints above the modal layer, so leaving it up put the model list on
+   * top of the very dialog waiting to be answered.
+   */
   function requestDeleteProfile(profile: ModelProfile): void {
+    closeAllMenus()
     modelProfiles.requestDelete(profile)
   }
 
@@ -1935,23 +1944,27 @@
         {thinkingPresets}
         onSelectThinking={(level) => selectThinking({ id: level, label: level })}
       >
-        {#snippet aboveList()}
+        {#snippet sidePanel({ filter }: PickerSidePanelParams)}
           <!--
-            Suppressed on a read-only composer: a profile commits settings, and a
-            viewer has no settings to commit them to.
+            A read-only composer has no settings a profile could commit, so it
+            offers the harness filter alone; the panel is shared, and the profiles
+            it lists are supplied only by composers that can apply them.
           -->
-          {#if !readOnlyMode}
-            <ModelPickerProfiles
-              profiles={modelProfiles.profiles}
-              settings={resolved}
-              catalogs={resolvedProviders}
-              atCapacity={modelProfiles.atCapacity}
-              draftName={modelProfiles.draftName(resolved, resolvedProviders)}
-              onApply={applyProfile}
-              onSave={saveProfile}
-              onRequestDelete={requestDeleteProfile}
-            />
-          {/if}
+          <ModelPickerSidePanel
+            {filter}
+            profiles={readOnlyMode
+              ? null
+              : {
+                  profiles: modelProfiles.profiles,
+                  settings: resolved,
+                  catalogs: resolvedProviders,
+                  atCapacity: modelProfiles.atCapacity,
+                  draftName: modelProfiles.draftName(resolved, resolvedProviders),
+                  onApply: applyProfile,
+                  onSave: saveProfile,
+                  onRequestDelete: requestDeleteProfile
+                }}
+          />
         {/snippet}
       </ModelPicker>
     </div>

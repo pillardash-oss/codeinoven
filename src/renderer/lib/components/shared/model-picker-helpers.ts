@@ -4,7 +4,7 @@ import { modelKey } from '$lib/model-keys'
 import { providerStore } from '$lib/stores/providers.svelte'
 import { visionModels } from '$lib/stores/vision-models.svelte'
 import { getVendorSlug } from '$lib/vendor-icons/registry'
-import type { ProviderCatalog, ProviderModel } from '$shared/types'
+import type { ModelProfile, ProviderCatalog, ProviderModel, ThreadSettings } from '$shared/types'
 
 export type ModelEntry = { provider: ProviderCatalog; model: ProviderModel }
 
@@ -14,6 +14,69 @@ export interface UnavailableFavorite {
   harnessId?: string
   providerId: string
   modelId: string
+}
+
+/** One harness the picker can narrow the model list to. */
+export interface PickerHarnessOption {
+  id: string
+  name: string
+}
+
+/**
+ * The harness filter a picker's side panel renders.
+ *
+ * The selection itself stays owned by the model list, because the list is what
+ * the filter narrows; the panel only draws the controls and reports intent. It
+ * travels as one object so the row at the top of the picker and the chips inside
+ * the panel can never disagree about what is selected.
+ */
+export interface PickerHarnessFilterControls {
+  /** Harness choices, in the registry's canonical order. */
+  options: readonly PickerHarnessOption[]
+  /** Row label: `All harnesses`, or how many harnesses are selected. */
+  label: string
+  /** True while the selection is narrowing the model list. */
+  active: boolean
+  /** Selected harness ids; always empty while everything is shown. */
+  selected: ReadonlySet<string>
+  onToggle: (harnessId: string) => void
+  onClear: () => void
+}
+
+/**
+ * What the model list hands a picker's side panel when it renders it.
+ *
+ * The panel is provided by the caller that owns the profiles, so the list passes
+ * the filter controls it owns into that caller's snippet instead of the caller
+ * reaching into list state.
+ */
+export interface PickerSidePanelParams {
+  /** Harness filter controls, or null when the catalog holds a single harness. */
+  filter: PickerHarnessFilterControls | null
+}
+
+/**
+ * The profiles a picker's side panel lists.
+ *
+ * One object rather than eight props: the panel forwards it whole to the profiles
+ * section, so a picker without a profiles surface simply passes `null` and the
+ * panel lists the harness filter alone. The stored profiles and the operations
+ * over them stay owned by the composer that created the controller.
+ */
+export interface ModelPickerProfilesGroup {
+  /** Saved profiles, in the order the user listed them. */
+  profiles: ModelProfile[]
+  /** Settings in force, used to tick the profile that is currently live. */
+  settings: ThreadSettings
+  /** Catalogs, so a row shows the model name rather than a raw id. */
+  catalogs: ProviderCatalog[]
+  /** True when the user has saved as many profiles as the app allows. */
+  atCapacity: boolean
+  /** Name a new profile starts from, derived from the current settings. */
+  draftName: string
+  onApply: (profile: ModelProfile) => void
+  onSave: (name: string) => void
+  onRequestDelete: (profile: ModelProfile) => void
 }
 
 /** Cap the trigger label at this length, suffixing an ellipsis when exceeded. */
