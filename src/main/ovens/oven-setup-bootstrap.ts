@@ -19,6 +19,7 @@ import {
   isSetupPlatform,
   resolvePackageManager
 } from './oven-setup-capabilities'
+import { OVEN_HARNESS_PATH } from './oven-harness-paths'
 import { Logger } from '../system/logger'
 
 /**
@@ -44,6 +45,7 @@ const DETECT = `echo %OS%; uname -s 2>/dev/null || echo CIO_NO_UNAME`
 
 /** Read-only POSIX preflight. Emits tab-separated `key<TAB>value` lines. */
 const POSIX_PREFLIGHT = `set -u
+${OVEN_HARNESS_PATH}
 clean() { printf '%s' "$1" | tr '\\t\\n\\r' '   ' | cut -c1-512; }
 field() { printf '%s\\t%s\\n' "$1" "$(clean "$2")"; }
 harness() { field harness "$1|$2|$3"; }

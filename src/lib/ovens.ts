@@ -355,7 +355,7 @@ export interface OvenSetupStep {
   error?: string
   detail?: string
   retryCount?: number
-  installProgress?: { stage: 'downloading' | 'installing' | 'verifying'; percent?: number }
+  installProgress?: { stage: 'starting' | 'downloading' | 'installing' | 'verifying'; percent?: number }
   skippedReason?: string
   requiresElevation?: boolean
 }

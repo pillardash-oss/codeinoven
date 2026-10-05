@@ -22,6 +22,7 @@ import { OVEN_SETUP_SCRIPT_VERSION } from './oven-setup-bootstrap'
 import { sshQuote, type OvenSsh } from './oven-ssh'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
+import { OVEN_HARNESS_PATH, OVEN_NPM_ENV } from './oven-harness-paths'
 import { OvenInstallProgress } from './oven-install-progress'
 import { withOvenHarnessMutation } from './oven-operation-lock'
 
@@ -372,6 +373,7 @@ export class OvenSetupService {
       step.status = 'succeeded'
     } catch (error) {
       const message = messageOf(error)
+      step.installProgress = undefined
       step.finishedAt = Date.now()
       step.durationMs = Date.now() - started
       if (planned.requiresElevation && isElevationRefusal(message)) {
@@ -468,7 +470,12 @@ export class OvenSetupService {
             ? [...entry.args, '--loglevel=http']
             : entry.args
         const argv = entry.elevated ? ['-n', entry.command, ...args] : [entry.command, ...args]
-        const line = (entry.elevated ? ['sudo', ...argv] : argv).map(sshQuote).join(' ')
+        const rawLine = (entry.elevated ? ['sudo', ...argv] : argv).map(sshQuote).join(' ')
+        const userNpm =
+          planned.phase === 'harnesses' &&
+          entry.command === 'npm' &&
+          this.reports.get(ovenId)?.platform !== 'win32'
+        const line = userNpm ? `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} ${rawLine}` : rawLine
         const timeout =
           planned.id === 'packages'
             ? PACKAGE_TIMEOUT_MS
@@ -481,7 +488,8 @@ export class OvenSetupService {
           stepId: planned.id,
           commandIndex,
           executable: entry.command,
-          elevated: entry.elevated
+          elevated: entry.elevated,
+          ...(userNpm ? { installScope: 'managed-user' } : {})
         }
         Logger.info('Oven setup command started', context)
         const started = Date.now()
@@ -500,7 +508,7 @@ export class OvenSetupService {
             .get(ovenId)
             ?.steps.find((candidate) => candidate.id === planned.id)
           const parser = new OvenInstallProgress()
-          let latest: OvenSetupStep['installProgress'] = { stage: 'installing' }
+          let latest: OvenSetupStep['installProgress'] = { stage: 'starting' }
           let previous = ''
           let publishing: Promise<void> | undefined
           const flush = (): void => {
@@ -544,7 +552,9 @@ export class OvenSetupService {
       planned.id === 'node'
         ? `${sshQuote('node')} ${sshQuote('-e')} ${sshQuote('if(Number(process.versions.node.split(String.fromCharCode(46))[0])<22)process.exit(1)')}`
         : [planned.verify.command, ...planned.verify.args].map(sshQuote).join(' ')
-    await this.ports.ssh.execute(ovenId, line, '', VERIFY_TIMEOUT_MS)
+    const command =
+      this.reports.get(ovenId)?.platform === 'win32' ? line : `${OVEN_HARNESS_PATH} ${line}`
+    await this.ports.ssh.execute(ovenId, command, '', VERIFY_TIMEOUT_MS)
   }
 
   private async fail(ovenId: string, error: string): Promise<void> {

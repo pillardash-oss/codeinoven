@@ -26,6 +26,8 @@ export function sshQuote(value: string): string {
 
 /** Translate bounded stderr into actionable diagnostics without exposing remote secrets. */
 function remoteCommandIssue(stderr: string): string {
+  if (/npm (?:ERR!|error).*EACCES/iu.test(stderr))
+    return 'Permission denied: npm cannot write to its installation prefix or cache. The Oven needs a writable user-owned npm directory.'
   if (
     /sudo:.*(?:password is required|a terminal is required|interactive authentication is required)/iu.test(
       stderr

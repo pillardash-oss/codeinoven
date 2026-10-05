@@ -179,12 +179,16 @@
       : selectedHarnesses.filter((value) => value !== harnessId)
   }
 
-  function installStageLabel(stage: 'downloading' | 'installing' | 'verifying'): string {
-    return stage === 'downloading'
-      ? 'Downloading'
-      : stage === 'verifying'
-        ? 'Verifying installation'
-        : 'Installing'
+  function installStageLabel(
+    stage: 'starting' | 'downloading' | 'installing' | 'verifying'
+  ): string {
+    return stage === 'starting'
+      ? 'Starting installer'
+      : stage === 'downloading'
+        ? 'Downloading'
+        : stage === 'verifying'
+          ? 'Verifying installation'
+          : 'Installing'
   }
 
   function closeProgress(): void {

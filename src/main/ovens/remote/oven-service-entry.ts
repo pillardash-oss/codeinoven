@@ -11,6 +11,7 @@ import type { OvenProbe, OvenRun, OvenRunEvent } from '../../../lib/ovens'
 import { ovenHarnessIdForCommand } from '../../../lib/ovens'
 import { listHarnesses } from '../../agents/harness-registry'
 import { OPENCODE_COMMAND_ALIASES } from '../../../lib/opencode-version'
+import { OVEN_NPM_PREFIX } from '../oven-harness-paths'
 import { ovenWorkspace } from './oven-workspace'
 
 const PROTOCOL = 1
@@ -37,9 +38,23 @@ const COMMANDS = [
 const VERSION_TIMEOUT_MS = 4_000
 const INVENTORY_TTL_MS = 10 * 60_000
 const INVENTORY_REFRESH_CONCURRENCY = 3
-const versionCache = new Map<string, { path: string | null; version: string | null; health: string; issueCategory?: string; checkedAt: number }>()
+const versionCache = new Map<
+  string,
+  {
+    path: string | null
+    version: string | null
+    health: string
+    issueCategory?: string
+    checkedAt: number
+  }
+>()
 const root =
   process.env['CODEINOVEN_OVEN_DATA_ROOT'] ?? join(homedir(), '.config/pillardash/codeinoven-oven')
+if (process.platform !== 'win32') {
+  const npmPrefix = join(homedir(), OVEN_NPM_PREFIX)
+  process.env['PATH'] = `${join(npmPrefix, 'bin')}:${process.env['PATH'] ?? ''}`
+  process.env['npm_config_prefix'] = npmPrefix
+}
 const socketPath = join(root, 'service.sock')
 const lockPath = join(root, 'service.pid')
 const jobs = new Map<string, Job>()
@@ -52,7 +67,12 @@ const MAX_JOURNAL = 64 * 1024 * 1024
 
 function stopChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
   if (process.platform !== 'win32' && child.pid) {
-    try { process.kill(-child.pid, signal); return } catch { /* Process group already exited. */ }
+    try {
+      process.kill(-child.pid, signal)
+      return
+    } catch {
+      /* Process group already exited. */
+    }
   }
   child.kill(signal)
 }
@@ -135,7 +155,10 @@ function harnessVersion(path: string, versionArgs: readonly string[]): Promise<s
       if (settled) return
       settled = true
       clearTimeout(timer)
-      const line = output.split(/\r?\n/u).map((entry) => entry.trim()).find(Boolean)
+      const line = output
+        .split(/\r?\n/u)
+        .map((entry) => entry.trim())
+        .find(Boolean)
       resolve(line ? line.slice(0, 200) : null)
     })
   })
@@ -168,7 +191,11 @@ async function probeInventory(force = false): Promise<NonNullable<OvenProbe['inv
             installedVersion: cached.version,
             health: cached.health as NonNullable<OvenProbe['inventory']>[number]['health'],
             ...(cached.issueCategory
-              ? { issueCategory: cached.issueCategory as NonNullable<OvenProbe['inventory']>[number]['issueCategory'] }
+              ? {
+                  issueCategory: cached.issueCategory as NonNullable<
+                    OvenProbe['inventory']
+                  >[number]['issueCategory']
+                }
               : {}),
             updateAvailable: false,
             checkedAt: cached.checkedAt,
@@ -179,11 +206,7 @@ async function probeInventory(force = false): Promise<NonNullable<OvenProbe['inv
         const path = await executable(harness.command)
         const version = path ? await harnessVersion(path, harness.versionArgs) : null
         const health = !path ? 'missing' : version ? 'healthy' : 'broken'
-        const issueCategory = !path
-          ? 'not-installed'
-          : version
-            ? undefined
-            : 'broken-executable'
+        const issueCategory = !path ? 'not-installed' : version ? undefined : 'broken-executable'
         const entry = { path, version, health, issueCategory, checkedAt: Date.now() }
         versionCache.set(harness.id, entry)
         inventory.push({

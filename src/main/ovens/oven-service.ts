@@ -10,6 +10,7 @@ import {
   type StartOvenRunInput
 } from '../../lib/ovens'
 import type { OvenWorkspaceRequest, OvenWorkspaceResult } from '../../lib/ovens'
+import { OVEN_HARNESS_PATH } from './oven-harness-paths'
 import { OvenSsh, sshQuote } from './oven-ssh'
 import type { OvenRegistry } from './oven-registry'
 import { beginOvenHarnessRun } from './oven-operation-lock'
@@ -18,6 +19,7 @@ const REMOTE_ROOT = '"$HOME/.config/pillardash/codeinoven-oven"'
 const SERVICE = `${REMOTE_ROOT}/service.mjs`
 // The login shell supplies version-manager PATH. Only a verified Node runtime is used.
 const NODE_CHECK =
+  `${OVEN_HARNESS_PATH} ` +
   'set -eu; command -v node >/dev/null 2>&1 || { printf "Node.js is required on this Oven\\n" >&2; exit 1; }; node -e \'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)\''
 
 export class OvenService {
@@ -45,7 +47,9 @@ export class OvenService {
    * that, so ordinary connection probes stay cheap.
    */
   async probe(id: string, refresh = false): Promise<OvenProbe> {
-    return this.parseProbe(await this.request(id, refresh ? { method: 'probe', refresh: true } : { method: 'probe' }))
+    return this.parseProbe(
+      await this.request(id, refresh ? { method: 'probe', refresh: true } : { method: 'probe' })
+    )
   }
 
   async runs(id: string): Promise<OvenRun[]> {

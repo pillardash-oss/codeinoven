@@ -6,7 +6,7 @@ type InstallProgress = NonNullable<OvenSetupStep['installProgress']>
 /** Consume bounded installer records; only fixed labels and measured numbers escape. */
 export class OvenInstallProgress {
   private pending = ''
-  private stage: InstallProgress['stage'] = 'installing'
+  private stage: InstallProgress['stage'] = 'starting'
 
   consume(chunk: string): InstallProgress | undefined {
     const records = stripVTControlCharacters(this.pending + chunk).split(/[\r\n]/u)
@@ -43,7 +43,7 @@ export class OvenInstallProgress {
       }
       if (/downloading|npm http fetch|fetching|retrieving/iu.test(line)) this.stage = 'downloading'
       else if (/installing|extracting|unpacking|npm info run|linking/iu.test(line))
-        this.stage = 'installing'
+        this.stage = 'starting'
       else if (!/^[#=> .\d%+-]+$/u.test(line.trim()) || !/%/u.test(line)) continue
       const percentage = line.match(/(?:^|\s)(\d{1,3}(?:\.\d+)?)\s*%(?:\s|$)/u)
       const value = percentage ? Number(percentage[1]) : undefined

@@ -9,6 +9,7 @@ import {
 import type { HarnessInstallMethod } from '../../lib/types'
 import { compareVersions } from '../../lib/version-compare'
 import { harnessUninstallCommand } from '../agents/harness-install-service'
+import { OVEN_HARNESS_PATH, OVEN_NPM_ENV } from './oven-harness-paths'
 import { sshQuote } from './oven-ssh'
 import type { OvenService } from './oven-service'
 import { Logger } from '../system/logger'
@@ -26,6 +27,7 @@ type InventoryHealth = OvenHarnessInventoryItem['health']
 interface CachedInventory {
   items: OvenHarnessInventoryItem[]
   checkedAt: number
+  platform: string
 }
 
 /**
@@ -172,7 +174,7 @@ export class OvenHarnessService {
     if (!refresh && cached && Date.now() - cached.checkedAt < INVENTORY_TTL_MS) return cached.items
     const probe = await this.service.probe(ovenId, refresh)
     const items = await this.mergeLatest(this.probeItems(probe))
-    this.inventories.set(ovenId, { items, checkedAt: Date.now() })
+    this.inventories.set(ovenId, { items, checkedAt: Date.now(), platform: probe.platform })
     return items
   }
 
@@ -239,10 +241,12 @@ export class OvenHarnessService {
           )
         return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
           await this.waitForHarnessIdle(ovenId, descriptor.command)
+          const platform =
+            this.inventories.get(ovenId)?.platform ?? (await this.service.probe(ovenId)).platform
           Logger.info('Updating a harness on an oven', { ovenId, harnessId })
           await this.service.ssh.execute(
             ovenId,
-            [descriptor.command, ...args].map(sshQuote).join(' '),
+            `${platform === 'win32' ? '' : `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} `}${[descriptor.command, ...args].map(sshQuote).join(' ')}`,
             '',
             UPDATE_TIMEOUT_MS
           )
@@ -278,7 +282,7 @@ export class OvenHarnessService {
           Logger.info('Uninstalling a harness on an oven', { ovenId, harnessId, method })
           await this.service.ssh.execute(
             ovenId,
-            [removal.command, ...removal.args].map(sshQuote).join(' '),
+            `${current.executablePath?.includes('/harnesses/npm/') ? `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} ` : ''}${[removal.command, ...removal.args].map(sshQuote).join(' ')}`,
             '',
             UPDATE_TIMEOUT_MS
           )
@@ -330,7 +334,12 @@ export class OvenHarnessService {
 /** Infer the install method from the resolved binary path so removal matches it. */
 function methodForPath(path: string | null): HarnessInstallMethod {
   const lower = (path ?? '').toLowerCase()
-  if (lower.includes('node_modules') || lower.includes('.npm-global') || lower.includes('nvm'))
+  if (
+    lower.includes('/harnesses/npm/') ||
+    lower.includes('node_modules') ||
+    lower.includes('.npm-global') ||
+    lower.includes('nvm')
+  )
     return 'npm'
   if (lower.includes('cellar') || lower.includes('homebrew')) return 'brew'
   if (lower.includes('windowsapps')) return 'winget'
