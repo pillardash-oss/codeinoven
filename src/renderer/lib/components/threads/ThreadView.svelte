@@ -45,7 +45,6 @@
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import ForeignRunCard from './ForeignRunCard.svelte'
-  import MessageSendErrorCard from './MessageSendErrorCard.svelte'
   import type { ComposerScopeShoe } from '../chats/ComposerShoe.svelte'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage } from '../chats/composer-mentions'
@@ -11965,9 +11964,6 @@
                         </div>
                       {/if}
                     </div>
-                    {#if msg.error}
-                      <MessageSendErrorCard message={msg.error} onEdit={() => editMessage(msg)} />
-                    {/if}
                     <div
                       class="mt-1 flex items-center gap-1.5 self-end opacity-0 transition-opacity group-hover:opacity-100"
                     >
