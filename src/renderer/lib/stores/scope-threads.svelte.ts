@@ -26,17 +26,50 @@ export interface ScopeThreadsHost {
 }
 
 /**
- * Shallow field compare for the `thread:updated` guard in `updateThread`.
- * Nested values compare by reference, which is the right granularity here: a
- * broadcast carrying a genuinely changed nested object must rebuild the list
- * anyway, so only a fully unchanged row is worth short-circuiting.
+ * Whether two values describe the same thing.
+ *
+ * Scalars compare by value; objects and arrays compare structurally. A thread
+ * snapshot that came back over IPC is a fresh object graph, so a nested object
+ * or array is never the same reference as the copy already in memory: comparing
+ * `settings`, `contextUsage` or `usedHarnessIds` by reference reported every
+ * unchanged row as moved. Threads carry those three on nearly every row, so the
+ * whole list was replaced on every fold and every consumer re-rendered for a
+ * page that had not moved at all.
+ */
+function snapshotValueEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    for (let index = 0; index < a.length; index += 1) {
+      if (!snapshotValueEqual(a[index], b[index])) return false
+    }
+    return true
+  }
+  const left = a as Record<string, unknown>
+  const right = b as Record<string, unknown>
+  const keys = Object.keys(left)
+  if (keys.length !== Object.keys(right).length) return false
+  for (const key of keys) {
+    if (!(key in right)) return false
+    if (!snapshotValueEqual(left[key], right[key])) return false
+  }
+  return true
+}
+
+/**
+ * Whether a thread snapshot describes the same row as the copy in memory.
+ *
+ * Used by the `thread:updated` guard in `updateThread` and by the page merge:
+ * a broadcast or a page carrying a genuinely changed nested object must rebuild
+ * the list anyway, so only a fully unchanged row is worth short-circuiting.
  */
 function threadSnapshotEqual(a: Thread, b: Thread): boolean {
   if (a === b) return true
   const keys = Object.keys(a) as Array<keyof Thread>
   if (keys.length !== Object.keys(b).length) return false
   for (const key of keys) {
-    if (a[key] !== b[key]) return false
+    if (!snapshotValueEqual(a[key], b[key])) return false
   }
   return true
 }
@@ -271,6 +304,73 @@ export class ScopeThreads {
         threadId: updated.id
       })
       this.host.persist()
+    }
+  }
+
+  /**
+   * Fold a list of thread snapshots into memory in one pass.
+   *
+   * {@link updateThread} has to find the row it replaces, so it costs a walk of
+   * the whole list, and a caller that folds a hydration page row by row pays that
+   * walk once per row: the Threads view's entry hydration folded two hundred rows
+   * into a list of a few hundred that way, and on a deeply reactive array that
+   * quadratic pass measured as a third of a second on every entry into the view.
+   * A page is a list, so it merges as one: one walk, one new array, and no
+   * reassignment at all when nothing moved.
+   */
+  mergeThreads(threads: readonly Thread[]): void {
+    if (threads.length === 0) return
+    // A scratch index for this one pass: it is never read reactively, and making
+    // it a SvelteMap would put a signal behind every lookup in the loop this
+    // method exists to make cheap.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const incoming = new Map<string, Thread>()
+    for (const thread of threads) {
+      // A browser tab's assistant conversation is a real thread in the reserved
+      // hidden browser container; see {@link updateThread} for why it never
+      // enters this list. An archived row is excluded from the listing by design,
+      // so a page must not be able to put one in either.
+      if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID || thread.archived) continue
+      incoming.set(thread.id, thread)
+    }
+    if (incoming.size === 0) return
+
+    const next: Thread[] = []
+    let changed = 0
+    for (const thread of this.allScopeThreads) {
+      const replacement = incoming.get(thread.id)
+      if (replacement === undefined) {
+        next.push(thread)
+        continue
+      }
+      incoming.delete(thread.id)
+      if (threadSnapshotEqual(thread, replacement)) {
+        next.push(thread)
+      } else {
+        next.push(replacement)
+        changed += 1
+      }
+    }
+    // A row the list did not hold yet takes the head, matching `updateThread`,
+    // so nothing re-sorts.
+    const additions = [...incoming.values()]
+    changed += additions.length
+    if (changed === 0) return
+    this.allScopeThreads = additions.length === 0 ? next : [...additions, ...next]
+    // The remembered sidebar context carries the row's own fields, so a page
+    // that moved it has to hand the fresh copy back   once, not once per row.
+    const context = this.host.currentSidebarContext()
+    if (context) {
+      const updated = this.allScopeThreads.find((thread) => thread.id === context.threadId)
+      if (updated) {
+        this.host.updateSidebarContext({
+          projectId: updated.projectId,
+          bucketId: this.bucketForThread(updated),
+          stage: this.stageForThread(updated),
+          threadId: updated.id
+        })
+        this.host.persist()
+      }
     }
   }
 

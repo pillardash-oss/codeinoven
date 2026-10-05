@@ -1840,6 +1840,58 @@
     })
   }
 
+  /** Whether a sidebar row already carries everything a refresh would give it.
+   *  Only the fields the row draws are compared: the list must not be rebuilt
+   *  for a thread whose settings or context usage moved. */
+  function sidebarRowUnchanged(existing: Thread, incoming: Thread): boolean {
+    return (
+      existing.updatedAt === incoming.updatedAt &&
+      existing.lastActivity === incoming.lastActivity &&
+      existing.status === incoming.status &&
+      existing.title === incoming.title &&
+      existing.pinned === incoming.pinned &&
+      existing.read === incoming.read &&
+      existing.routineId === incoming.routineId
+    )
+  }
+
+  /**
+   * Fold a page of thread snapshots into the sidebar list in one pass.
+   *
+   * {@link upsertThreadInList} takes a row on its own: it walks the list twice
+   * and then rebuilds the whole array through `flatMap`, which allocates a
+   * one-element array per row it keeps. Folding a refresh page that way cost two
+   * walks and a hundred-odd allocations per row, which measured as a hundred and
+   * fifty milliseconds of blocked main thread behind every return to the
+   * workspace. A page is a list, so it merges as one.
+   */
+  function mergeThreadsInList(threads: readonly Thread[]): void {
+    // Same scratch-index reasoning as the scope store's merge: never read
+    // reactively, and a SvelteMap would put a signal behind every lookup.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const incoming = new Map<string, Thread>()
+    for (const thread of threads) {
+      // Orchestration children are internals; see `upsertThreadInList`.
+      if (isOrchestrationChildThread(thread)) continue
+      incoming.set(thread.id, thread)
+    }
+    if (incoming.size === 0) return
+    let changed = false
+    const next = allThreads.map((existing) => {
+      const replacement = incoming.get(existing.id)
+      if (replacement === undefined) return existing
+      incoming.delete(existing.id)
+      if (sidebarRowUnchanged(existing, replacement)) return existing
+      changed = true
+      return replacement
+    })
+    // A thread the list has not seen takes the head, matching the single-row path.
+    const additions = [...incoming.values()]
+    if (additions.length > 0) changed = true
+    if (!changed) return
+    allThreads = additions.length === 0 ? next : [...additions, ...next]
+  }
+
   /** Insert or refresh a thread in the sidebar list. The bounded hydration
    *  query only loads recent threads, so a thread opened from the scope board
    *  or history   or one the harness just started working on   must be added
@@ -1863,18 +1915,7 @@
     const hasDuplicate = allThreads.some(
       (candidate, candidateIndex) => candidateIndex !== index && candidate.id === thread.id
     )
-    if (
-      !hasDuplicate &&
-      existing.updatedAt === thread.updatedAt &&
-      existing.lastActivity === thread.lastActivity &&
-      existing.status === thread.status &&
-      existing.title === thread.title &&
-      existing.pinned === thread.pinned &&
-      existing.read === thread.read &&
-      existing.routineId === thread.routineId
-    ) {
-      return
-    }
+    if (!hasDuplicate && sidebarRowUnchanged(existing, thread)) return
     let replaced = false
     allThreads = allThreads.flatMap((candidate) => {
       if (candidate.id !== thread.id) return [candidate]
@@ -2730,7 +2771,7 @@
       ])
       projects = projectList
       const uniqueThreads = uniqueThreadList(threadList)
-      for (const thread of uniqueThreads) upsertThreadInList(thread)
+      mergeThreadsInList(uniqueThreads)
       notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
@@ -2754,29 +2795,93 @@
     }
   }
 
-  /** Threads whose unsent composer content fell outside the bounded first-paint
-   *  hydration - drafts persist in renderer storage only (never the DB), so the
-   *  SQL slice cannot know about them. Drafts load unbounded, like unread:
-   *  each is fetched with `thread:get` and merged into both the project-list
-   *  (`allThreads`) and the scope store so it shows everywhere immediately,
-   *  pinned to its project list via the draft sort. */
+  /**
+   * Draft refs a pass already resolved as unreachable for a reason that is
+   * reversible, so one app run asks about each exactly once.
+   *
+   * A thread that was archived, or that is an orchestration child, is excluded
+   * from the listing by design and can be unarchived later, so its draft has to
+   * survive. But re-asking on every pass is what turned a stored draft into a
+   * per-switch cost: the sidebar refresh runs on every return to the workspace,
+   * and each pass re-fetched the same rows to reach the same verdict. A ref that
+   * becomes reachable again shows up in `allThreads`, which the candidate check
+   * already skips, so remembering the verdict can never hide a live draft.
+   */
+  const unreachableDraftRefs = new SvelteSet<string>()
+
+  /** One draft ref's identity as a set key. */
+  function draftRefKey(projectId: string, threadId: string): string {
+    return `${projectId}:${threadId}`
+  }
+
+  /** How many draft refs are resolved at once. Draft rescue only ever fetches
+   *  refs the bounded slice did not cover, which is small once the dead ones are
+   *  gone, but it must not become a serial waterfall or a burst that hammers the
+   *  single-flight database worker when it is not. */
+  const DRAFT_RESCUE_CONCURRENCY = 8
+
+  /**
+   * Threads whose unsent composer content fell outside the bounded first-paint
+   * hydration - drafts persist in renderer storage only (never the DB), so the
+   * SQL slice cannot know about them. Drafts load unbounded, like unread:
+   * each is fetched with `thread:get` and merged into both the project-list
+   * (`allThreads`) and the scope store so it shows everywhere immediately,
+   * pinned to its project list via the draft sort.
+   *
+   * The fetch is where this used to cost a third of a second on every return to
+   * the workspace: one `thread:get` per stored draft, awaited in sequence, for a
+   * set that only ever grew because a draft whose thread had been deleted was
+   * never dropped. A ref whose row is gone is now forgotten on the spot, other
+   * verdicts are remembered for the run, and the refs that remain are resolved a
+   * few at a time.
+   */
   let rescuingDraftThreads = false
   async function rescueDraftThreads(): Promise<void> {
     if (rescuingDraftThreads) return
     rescuingDraftThreads = true
     try {
-      for (const ref of rendererRecovery.listDraftThreadRefs()) {
-        if (
-          allThreads.some((t) => t.id === ref.threadId) ||
-          scopeState.allScopeThreads.some((t) => t.id === ref.threadId)
-        ) {
-          continue
+      const known = new Set([
+        ...allThreads.map((thread) => thread.id),
+        ...scopeState.allScopeThreads.map((thread) => thread.id)
+      ])
+      const candidates = rendererRecovery
+        .listDraftThreadRefs()
+        .filter(
+          (ref) =>
+            !known.has(ref.threadId) &&
+            !unreachableDraftRefs.has(draftRefKey(ref.projectId, ref.threadId))
+        )
+      const gone: Array<{ projectId: string; threadId: string }> = []
+      let next = 0
+      const resolveOne = async (): Promise<void> => {
+        while (next < candidates.length) {
+          const ref = candidates[next]
+          next += 1
+          if (!ref) continue
+          let thread: Thread | null
+          try {
+            thread = await invoke('thread:get', ref.projectId, ref.threadId)
+          } catch {
+            // A read that failed says nothing about the thread, so neither the
+            // draft nor a verdict may be drawn from it: leave both for the next
+            // pass rather than forgetting content on a transient error.
+            continue
+          }
+          if (!thread) {
+            gone.push(ref)
+            continue
+          }
+          if (thread.archived || isOrchestrationChildThread(thread)) {
+            unreachableDraftRefs.add(draftRefKey(ref.projectId, ref.threadId))
+            continue
+          }
+          upsertThreadInList(thread)
+          scopeState.updateThread(thread)
         }
-        const thread = await invoke('thread:get', ref.projectId, ref.threadId)
-        if (!thread || thread.archived || isOrchestrationChildThread(thread)) continue
-        upsertThreadInList(thread)
-        scopeState.updateThread(thread)
       }
+      const workers = Math.min(DRAFT_RESCUE_CONCURRENCY, candidates.length)
+      await Promise.all(Array.from({ length: workers }, resolveOne))
+      rendererRecovery.forgetDraftRefs(gone)
       // Threads flagged drafting in the DB (this or another instance's draft
       // commits) must surface too, even when they fell outside the bounded
       // first-paint slice: a thread being dictated in another window can never
@@ -2788,8 +2893,8 @@
         if (
           thread.archived ||
           isOrchestrationChildThread(thread) ||
-          allThreads.some((t) => t.id === thread.id) ||
-          scopeState.allScopeThreads.some((t) => t.id === thread.id)
+          allThreads.some((candidate) => candidate.id === thread.id) ||
+          scopeState.allScopeThreads.some((candidate) => candidate.id === thread.id)
         ) {
           continue
         }
@@ -2851,9 +2956,7 @@
       const additions = uniqueThreadList(page).filter(
         (thread) => !known.has(thread.id) && !isOrchestrationChildThread(thread)
       )
-      for (const thread of page) {
-        if (!thread.archived) scopeState.updateThread(thread)
-      }
+      scopeState.mergeThreads(page)
       if (additions.length > 0 || uniqueCurrentThreads.length !== allThreads.length) {
         allThreads = [...uniqueCurrentThreads, ...additions]
       }
@@ -2955,9 +3058,7 @@
       const additions = uniqueThreadList(page).filter(
         (thread) => !known.has(thread.id) && !isOrchestrationChildThread(thread)
       )
-      for (const thread of page) {
-        if (!thread.archived) scopeState.updateThread(thread)
-      }
+      scopeState.mergeThreads(page)
       if (additions.length > 0 || uniqueCurrentThreads.length !== allThreads.length) {
         allThreads = [...uniqueCurrentThreads, ...additions]
       }
