@@ -57,6 +57,7 @@ import {
   DEFAULT_BACKGROUND_WAKE_LEAD_MS,
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_BROWSER_HISTORY_LIMIT,
+  DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS
 } from '../../src/lib/types/settings'
 import { ProjectManager } from '../../src/lib/engines/project-manager'
@@ -136,6 +137,7 @@ const defaultConfig: AppConfig = {
   maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   browserSearchEngine: 'duckduckgo',
   browserCustomSearchEngines: [],
+  cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
 }
 
