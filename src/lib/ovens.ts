@@ -96,6 +96,14 @@ export interface OvenProbe {
   architecture: string
   home: string
   nodeVersion: string
+  /**
+   * The zone the Oven service runs on, as an IANA id.
+   *
+   * The service reports its own process zone, which is the Oven's system zone
+   * and always an IANA id even on Windows, where the platform's own catalogue
+   * names zones differently. Missing while an older service is deployed.
+   */
+  timezone?: string
   specs?: NonNullable<OvenConnectionStatus['specs']>
   harnesses: { command: string; path: string | null }[]
   activeRuns: number
@@ -282,6 +290,30 @@ export interface OvenToolStatus {
   path?: string | null
 }
 
+/** How an Oven's clock zone can be set, as preflight observed it. */
+export type OvenTimezoneMethod =
+  'timedatectl' | 'systemsetup' | 'zoneinfo' | 'powershell' | 'unsupported'
+
+/** An Oven's own clock zone, read without changing anything. */
+export interface OvenTimezone {
+  /**
+   * Zone the Oven runs on now: an IANA id such as `Africa/Lagos` everywhere but
+   * Windows, where the platform names zones in its own catalogue instead.
+   */
+  current: string | null
+  /** Mechanism available for setting it, or `unsupported` when there is none. */
+  method: OvenTimezoneMethod
+}
+
+/** Outcome of matching one Oven's clock to this computer's time zone. */
+export interface OvenTimezoneSyncResult {
+  status: 'updated' | 'current' | 'unsupported'
+  /** Zone the Oven is on after the attempt, as the Oven reports it. */
+  zone: string | null
+  /** One sentence for the toast that reports the attempt. */
+  message: string
+}
+
 export interface OvenHarnessPreflight {
   harnessId: string
   command: string
@@ -314,6 +346,8 @@ export interface OvenPreflightReport {
   curl: OvenToolStatus
   node: OvenToolStatus
   npm: OvenToolStatus
+  /** The Oven's own clock zone, read read-only alongside everything else. */
+  timezone: OvenTimezone
   harnesses: OvenHarnessPreflight[]
   /** Set when the oven reports pending OS updates or a required reboot. Never acted on. */
   osUpdateRequired: boolean
@@ -357,6 +391,7 @@ export interface OvenPreflightAssessment {
   packageManager: OvenPackageManager
   privilege: OvenPrivilege
   nodeVersion: string | null
+  timezone: OvenTimezone
   osUpdateRequired: boolean
   osUpdateDetail?: string
   rebootRequired: boolean

@@ -77,9 +77,7 @@ export function nodeSatisfiesServiceRequirement(version: string | null): boolean
  * the oven resolved its executable and got a version back, so a present-but-dead
  * binary reads as broken rather than installed.
  */
-export function assessHarnesses(
-  observed: readonly OvenHarnessPreflight[]
-): OvenHarnessPreflight[] {
+export function assessHarnesses(observed: readonly OvenHarnessPreflight[]): OvenHarnessPreflight[] {
   return observed.map((harness) => {
     if (!harness.supported) {
       return {
@@ -222,6 +220,7 @@ export function assessPreflight(report: OvenPreflightReport): OvenPreflightAsses
     packageManager: report.packageManager,
     privilege: report.privilege,
     nodeVersion: report.node.version,
+    timezone: report.timezone,
     osUpdateRequired: report.osUpdateRequired,
     ...(report.osUpdateDetail ? { osUpdateDetail: report.osUpdateDetail } : {}),
     rebootRequired: report.rebootRequired
@@ -229,9 +228,12 @@ export function assessPreflight(report: OvenPreflightReport): OvenPreflightAsses
 }
 
 /** Steps that cannot complete on this privilege level without the user elevating. */
-export function stepRequiresElevation(stepId: string, privilege: OvenPreflightReport['privilege']): boolean {
+export function stepRequiresElevation(
+  stepId: string,
+  privilege: OvenPreflightReport['privilege']
+): boolean {
   if (privilege === 'root' || privilege === 'passwordless-sudo') return false
-  return stepId === 'packages' || stepId === 'node'
+  return stepId === 'packages' || stepId === 'node' || stepId === 'timezone'
 }
 
 /** Build one harness observation row for a preflight report. */

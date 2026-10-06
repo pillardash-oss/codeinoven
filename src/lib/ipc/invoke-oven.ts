@@ -12,6 +12,7 @@ import type {
   OvenSetupProgressEvent,
   OvenSetupOperation,
   OvenHarnessInventoryItem,
+  OvenTimezoneSyncResult,
   StartOvenSetupInput
 } from '../ovens'
 import type { OvenConnectionStatus } from '../ovens'
@@ -58,6 +59,7 @@ export const invokeOvenContract = {
   'oven:setup:cancel': {} as Contract<[id: string], OvenSetupOperation>,
   'oven:setup:retry': {} as Contract<[id: string], OvenSetupOperation>,
   'oven:harness:inventory': {} as Contract<[id: string], OvenHarnessInventoryItem[]>,
+  'oven:timezone:sync': {} as Contract<[id: string], OvenTimezoneSyncResult>,
   'oven:harness:update': {} as Contract<[id: string, harnessId: string], OvenHarnessInventoryItem>,
   'oven:harness:uninstall': {} as Contract<
     [id: string, harnessId: string],

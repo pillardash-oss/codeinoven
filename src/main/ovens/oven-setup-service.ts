@@ -10,7 +10,8 @@ import {
   type OvenSetupStep,
   type OvenSetupStepStatus,
   type OvenPreflightAssessment,
-  type OvenPreflightReport
+  type OvenPreflightReport,
+  type OvenTimezoneSyncResult
 } from '../../lib/ovens'
 import {
   buildSetupPlan,
@@ -19,6 +20,7 @@ import {
 } from './remote/oven-setup-script'
 import { assessPreflight } from './oven-setup-capabilities'
 import { OVEN_SETUP_SCRIPT_VERSION } from './oven-setup-bootstrap'
+import { deviceTimezone, type OvenClockObservation } from './oven-timezone'
 import { sshQuote, type OvenSsh } from './oven-ssh'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
@@ -48,6 +50,12 @@ export interface OvenSetupPorts {
   ) => Promise<string[]>
   /** Install and verify the dedicated Git identity. Returns readiness issues. */
   configureGit: (ovenId: string, configuration: OvenSetupGitConfiguration) => Promise<string[]>
+  /** Match the Oven's clock to one zone, verifying what the Oven reports back. */
+  syncTimezone: (
+    ovenId: string,
+    zone: string,
+    observation: OvenClockObservation
+  ) => Promise<OvenTimezoneSyncResult>
   /** Wait until a selected harness has no active Oven run before changing it. */
   waitForHarnessIdle?: (ovenId: string, command: string) => Promise<void>
 }
@@ -183,7 +191,7 @@ export class OvenSetupService {
     if (blockers.length > 0)
       throw new Error(`${blockers[0]?.message} Fix this on the Oven, then run setup again.`)
 
-    const plan = buildSetupPlan(assessment, configuration)
+    const plan = buildSetupPlan(assessment, configuration, deviceTimezone())
     if (plan.blockers.length > 0)
       throw new Error(`${plan.blockers[0]} Fix this on the Oven, then run setup again.`)
     const operation: OvenSetupOperation = {
@@ -221,7 +229,7 @@ export class OvenSetupService {
 
     const report = await this.ports.preflight(ovenId)
     const assessment = assessPreflight(report)
-    const refreshed = buildSetupPlan(assessment, operation.configuration)
+    const refreshed = buildSetupPlan(assessment, operation.configuration, deviceTimezone())
     if (refreshed.blockers.length > 0)
       throw new Error(`${refreshed.blockers[0]} Fix this on the Oven, then retry setup.`)
     this.plans.set(ovenId, refreshed)
@@ -360,8 +368,27 @@ export class OvenSetupService {
 
     const started = Date.now()
     try {
-      if (planned.handledByApp) await this.runAppStep(ovenId, operation, planned)
-      else await this.runShellStep(ovenId, planned)
+      if (planned.handledByApp) {
+        const outcome = await this.runAppStep(ovenId, operation, planned)
+        /* The Oven answered that it cannot do this at all. That is a skip with a
+           reason, not a failure of an operation the user authorized. */
+        if (outcome?.skippedReason) {
+          step.status = 'skipped'
+          step.skippedReason = outcome.skippedReason
+          step.finishedAt = Date.now()
+          step.durationMs = Date.now() - started
+          operation.updatedAt = Date.now()
+          Logger.info('Oven setup step skipped', {
+            ovenId,
+            operationId: operation.id,
+            stepId: step.id,
+            reason: outcome.skippedReason
+          })
+          await this.persist(operation)
+          await this.publish(ovenId, planned.phase, step.id)
+          return
+        }
+      } else await this.runShellStep(ovenId, planned)
 
       if (planned.verify) {
         if (planned.phase === 'harnesses') {
@@ -405,7 +432,7 @@ export class OvenSetupService {
     ovenId: string,
     operation: OvenSetupOperation,
     planned: SetupPlan['steps'][number]
-  ): Promise<void> {
+  ): Promise<{ skippedReason?: string } | void> {
     const step = operation.steps.find((entry) => entry.id === planned.id)
     switch (planned.id) {
       case 'preflight': {
@@ -432,6 +459,20 @@ export class OvenSetupService {
       case 'git-identity': {
         const issues = await this.ports.configureGit(ovenId, operation.configuration.git)
         if (issues.length > 0) throw new Error(issues[0])
+        return
+      }
+      case 'timezone': {
+        const zone = planned.timezoneZone
+        if (!zone) return { skippedReason: 'This computer did not report a time zone.' }
+        const report = this.reports.get(ovenId) ?? (await this.ports.preflight(ovenId))
+        this.reports.set(ovenId, report)
+        const outcome = await this.ports.syncTimezone(ovenId, zone, {
+          platform: report.platform,
+          privilege: report.privilege,
+          timezone: report.timezone
+        })
+        if (step) step.detail = outcome.message
+        if (outcome.status === 'unsupported') return { skippedReason: outcome.message }
         return
       }
       case 'service':

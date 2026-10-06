@@ -20,6 +20,18 @@ import {
   resolvePackageManager
 } from './oven-setup-capabilities'
 import { OVEN_HARNESS_PATH } from './oven-harness-paths'
+import {
+  POSIX_PLATFORM_FIELD,
+  POSIX_PRIVILEGE_FIELDS,
+  POSIX_PROBE_HELPERS,
+  detectRemoteShell,
+  type RemoteShell
+} from './oven-remote-shell'
+import {
+  TIMEZONE_POSIX_FIELDS,
+  TIMEZONE_POWERSHELL_FIELDS,
+  parseOvenTimezone
+} from './oven-timezone'
 import { Logger } from '../system/logger'
 
 /**
@@ -31,23 +43,10 @@ export const OVEN_SETUP_SCRIPT_VERSION = 1
 
 const HARNESS_TIMEOUT_SECONDS = 10
 
-/**
- * Detect which remote shell the Oven presents before running anything that
- * assumes one.
- *
- * Windows OpenSSH runs either cmd.exe or PowerShell, and a POSIX Oven runs
- * `sh`, `bash`, or a login shell. `echo %OS%` is unambiguous: cmd.exe expands
- * it to `Windows_NT`, every POSIX shell echoes it literally, and PowerShell
- * echoes it literally too, which is what lets PowerShell fall through to the
- * PowerShell collector instead of failing mid-script.
- */
-const DETECT = `echo %OS%; uname -s 2>/dev/null || echo CIO_NO_UNAME`
-
 /** Read-only POSIX preflight. Emits tab-separated `key<TAB>value` lines. */
 const POSIX_PREFLIGHT = `set -u
 ${OVEN_HARNESS_PATH}
-clean() { printf '%s' "$1" | tr '\\t\\n\\r' '   ' | cut -c1-512; }
-field() { printf '%s\\t%s\\n' "$1" "$(clean "$2")"; }
+${POSIX_PROBE_HELPERS}
 harness() { field harness "$1|$2|$3"; }
 limit() { if command -v timeout >/dev/null 2>&1; then timeout ${HARNESS_TIMEOUT_SECONDS} "$@"; else "$@"; fi; }
 tool() {
@@ -59,18 +58,15 @@ tool() {
   shift
   field "$key.version" "$(limit "$probe_path" "$@" 2>/dev/null | head -n 1 || true)"
 }
-field os.uname "$(uname -s 2>/dev/null || echo unknown)"
+${POSIX_PLATFORM_FIELD}
 field os.arch "$(uname -m 2>/dev/null || echo unknown)"
 field os.name "$(uname -s 2>/dev/null || echo unknown)"
 if [ -r /etc/os-release ]; then . /etc/os-release 2>/dev/null || true; fi
 field os.version "\${PRETTY_NAME:-\${VERSION:-unknown}}"
 if [ "$(uname -s 2>/dev/null || echo)" = "Darwin" ]; then field os.version "$(sw_vers -productVersion 2>/dev/null || echo unknown)"; fi
 field user.name "$(id -un 2>/dev/null || echo unknown)"
-if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then field privilege root
-elif sudo -n true 2>/dev/null; then field privilege passwordless-sudo
-elif command -v sudo >/dev/null 2>&1; then field privilege sudo
-else field privilege none
-fi
+${POSIX_PRIVILEGE_FIELDS}
+${TIMEZONE_POSIX_FIELDS}
 for manager in brew winget apt-get dnf yum pacman zypper scoop choco; do
   if command -v "$manager" >/dev/null 2>&1; then field packageManager "$manager"; break; fi
 done
@@ -115,6 +111,7 @@ Field 'os.uname' 'Windows_NT'
 Field 'os.arch' $env:PROCESSOR_ARCHITECTURE
 Field 'os.version' ([string](Get-CimInstance Win32_OperatingSystem).Version)
 Field 'user.name' $env:USERNAME
+${TIMEZONE_POWERSHELL_FIELDS}
 foreach ($manager in @('winget', 'choco', 'scoop')) {
   if (Get-Command $manager -ErrorAction SilentlyContinue) { Field 'packageManager' $manager; break }
 }
@@ -136,16 +133,8 @@ if ($resolved${command}) {
 } else { Field 'harness' "${command}|" }`
 ).join('\n')}`
 
-export type RemoteShell = 'posix' | 'cmd' | 'powershell'
-
-/** Detect the remote shell without mutating anything on the Oven. */
-export async function detectRemoteShell(ssh: OvenSsh, id: string): Promise<RemoteShell> {
-  const output = (await ssh.execute(id, DETECT, '', 15_000)).trim()
-  if (output.includes('Windows_NT')) return 'cmd'
-  const lines = output.split(/\r?\n/u).map((line) => line.trim())
-  if (lines.includes('Linux') || lines.includes('Darwin')) return 'posix'
-  return 'powershell'
-}
+export type { RemoteShell }
+export { detectRemoteShell }
 
 interface ParsedFields {
   fields: Map<string, string>
@@ -275,6 +264,7 @@ export function buildPreflightReport(
     curl: toolStatus(fields, 'curl'),
     node: toolStatus(fields, 'node'),
     npm: toolStatus(fields, 'npm'),
+    timezone: parseOvenTimezone(fields),
     harnesses: observations,
     osUpdateRequired: Number.isFinite(updates) && updates > 0,
     ...(Number.isFinite(updates) && updates > 0

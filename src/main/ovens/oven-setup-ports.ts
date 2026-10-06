@@ -1,5 +1,6 @@
 import type { OvenPreflightReport, OvenSetupGitConfiguration } from '../../lib/ovens'
 import { collectPreflight } from './oven-setup-bootstrap'
+import { syncOvenTimezone } from './oven-timezone'
 import { OvenGitIdentityService } from './oven-git-identity'
 import { syncOvenAccount } from './oven-accounts'
 import type { OvenSetupPorts } from './oven-setup-service'
@@ -49,6 +50,11 @@ export function createOvenSetupPorts(dependencies: OvenSetupPortDependencies): O
     },
     installService: async (ovenId) => {
       await dependencies.service.install(ovenId)
+    },
+    syncTimezone: async (ovenId, zone, observation) => {
+      const result = await syncOvenTimezone(dependencies.service.ssh, ovenId, zone, observation)
+      Logger.info('Oven clock matched', { ovenId, zone: result.zone, status: result.status })
+      return result
     },
     syncAccounts: async (ovenId, selections, synchronizeConfiguration) => {
       const issues: string[] = []

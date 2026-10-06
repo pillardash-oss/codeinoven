@@ -47,6 +47,8 @@ export interface PlannedStep {
   skippedReason?: string
   /** The app, not the Oven shell, owns this step. */
   handledByApp?: boolean
+  /** Clock step only: the zone this computer resolved at plan time. */
+  timezoneZone?: string
 }
 
 export interface SetupPlan {
@@ -135,9 +137,13 @@ function packageCommands(
     case 'winget':
       return {
         commands: [
-          command('winget', ['upgrade', '--all', '--accept-source-agreements', '--disable-interactivity'], {
-            elevated: false
-          })
+          command(
+            'winget',
+            ['upgrade', '--all', '--accept-source-agreements', '--disable-interactivity'],
+            {
+              elevated: false
+            }
+          )
         ],
         notice: `winget upgrades packages only. ${releaseNotice}`
       }
@@ -251,7 +257,8 @@ export function harnessInstallCommands(input: {
   shouldUpdate: boolean
 }): HarnessPlanResult {
   const harnessId = ovenHarnessIdForCommand(input.command)
-  if (!harnessId) return { commands: [], channel: undefined, skippedReason: 'not a registered harness' }
+  if (!harnessId)
+    return { commands: [], channel: undefined, skippedReason: 'not a registered harness' }
   if (!input.shouldInstall && !input.shouldUpdate)
     return { commands: [], channel: undefined, skippedReason: 'not selected for this setup' }
   const channel = preferredHarnessInstallChannel(harnessId, input.platform as NodeJS.Platform)
@@ -269,7 +276,8 @@ export function harnessInstallCommands(input: {
         skippedReason: `already installed (${input.installedVersion})`
       }
     const upgrade = upgradeCommandsFor(harnessId, input.platform as NodeJS.Platform)
-    if (upgrade) return { commands: upgrade.map((entry) => command(entry.command, entry.args)), channel }
+    if (upgrade)
+      return { commands: upgrade.map((entry) => command(entry.command, entry.args)), channel }
     // Most of these CLIs document their install channel as the update path, so
     // re-running it is the published upgrade rather than an invention.
   }
@@ -304,9 +312,7 @@ function harnessStep(
     (candidate) => ovenHarnessIdForCommand(candidate) === harnessId
   )
   if (!command_) return undefined
-  const selection = configuration.selectedHarnesses.find(
-    (entry) => entry.harnessId === harnessId
-  )
+  const selection = configuration.selectedHarnesses.find((entry) => entry.harnessId === harnessId)
   const observation = assessment.harnesses.find((entry) => entry.command === command_)
   const result = harnessInstallCommands({
     command: command_,
@@ -323,22 +329,70 @@ function harnessStep(
     commands: result.commands,
     verify: { command: command_, args: ['--version'] },
     ...(result.channel?.pageUrl
-      ? { detail: `Installed with ${result.channel.method}. Official instructions: ${result.channel.pageUrl}` }
+      ? {
+          detail: `Installed with ${result.channel.method}. Official instructions: ${result.channel.pageUrl}`
+        }
       : {}),
     ...(result.skippedReason ? { skippedReason: result.skippedReason } : {})
   }
 }
 
 /**
+ * Put the Oven's clock on this computer's zone.
+ *
+ * The step is app-owned rather than a shell command because the zone has to be
+ * read back from the Oven to be trusted, and because a platform that cannot
+ * express the zone must be skipped with its reason rather than failing a setup
+ * that is otherwise complete.
+ */
+function timezoneStep(assessment: OvenPreflightAssessment, deviceZone: string | null): PlannedStep {
+  const base = {
+    id: 'timezone',
+    name: 'Match the Oven clock',
+    phase: 'prerequisites' as const,
+    requiresElevation: stepRequiresElevation('timezone', assessment.privilege),
+    commands: [],
+    handledByApp: true
+  }
+  if (!deviceZone)
+    return {
+      ...base,
+      requiresElevation: false,
+      detail: 'This computer did not report a time zone.',
+      skippedReason: 'This computer did not report a time zone.'
+    }
+  if (assessment.timezone.method === 'unsupported')
+    return {
+      ...base,
+      requiresElevation: false,
+      detail: 'The Oven reports no supported way to change its clock zone.',
+      skippedReason: 'The Oven reports no supported way to change its clock zone.'
+    }
+  const alreadyMatches =
+    assessment.platform !== 'win32' && assessment.timezone.current === deviceZone
+  const detail = alreadyMatches
+    ? `The Oven already runs on ${deviceZone}.`
+    : `Sets the Oven clock to ${deviceZone}, this computer's time zone.`
+  return {
+    ...base,
+    timezoneZone: deviceZone,
+    detail,
+    ...(alreadyMatches ? { skippedReason: detail } : {})
+  }
+}
+
+/**
  * Build the whole setup plan for one oven.
  *
- * Pure by construction: the same assessment and configuration always produce
- * the same plan, which is what lets a resumed operation compare its stored plan
- * against the one it would build now and refuse to continue when they differ.
+ * Pure by construction: the same assessment, configuration, and device time zone
+ * always produce the same plan, which is what lets a resumed operation compare
+ * its stored plan against the one it would build now and refuse to continue when
+ * they differ.
  */
 export function buildSetupPlan(
   assessment: OvenPreflightAssessment,
-  configuration: OvenSetupConfiguration
+  configuration: OvenSetupConfiguration,
+  deviceTimezone: string | null = null
 ): SetupPlan {
   const platform = assessment.platform
   const privilege = assessment.privilege
@@ -348,7 +402,8 @@ export function buildSetupPlan(
   const notices: string[] = []
   for (const issue of assessment.issues) {
     if (issue.blocking) blockers.push(issue.message)
-    else if (issue.code === 'os-update-pending' || issue.code === 'reboot-required') notices.push(issue.message)
+    else if (issue.code === 'os-update-pending' || issue.code === 'reboot-required')
+      notices.push(issue.message)
   }
 
   /* Phase: preflight. The only phase that never mutates anything. */
@@ -364,7 +419,8 @@ export function buildSetupPlan(
   })
 
   /* Phase: bootstrap. A Node runtime must exist before the service can run. */
-  const nodeMissing = !assessment.nodeVersion || !/^v?22\.|^v?(?:2[3-9]|[3-9]\d)\./u.test(assessment.nodeVersion)
+  const nodeMissing =
+    !assessment.nodeVersion || !/^v?22\.|^v?(?:2[3-9]|[3-9]\d)\./u.test(assessment.nodeVersion)
   if (nodeMissing) {
     const plan = planNodeInstall(
       platform,
@@ -376,8 +432,13 @@ export function buildSetupPlan(
       id: 'node',
       name: `Install Node.js ${OVEN_MINIMUM_NODE_VERSION}+`,
       phase: 'bootstrap',
-      requiresElevation: needsElevation(privilege, plan.commands.some((entry) => entry.elevated)),
-      commands: plan.commands.map((entry) => command(entry.command, entry.args, { elevated: entry.elevated })),
+      requiresElevation: needsElevation(
+        privilege,
+        plan.commands.some((entry) => entry.elevated)
+      ),
+      commands: plan.commands.map((entry) =>
+        command(entry.command, entry.args, { elevated: entry.elevated })
+      ),
       verify: { command: 'node', args: ['--version'] },
       detail: plan.detail,
       ...(plan.commands.length === 0 ? { skippedReason: plan.detail } : {})
@@ -431,7 +492,9 @@ export function buildSetupPlan(
   // preflight. Bootstrap Node only after that authorized package pass.
   for (const tool of ['git', 'curl'] as const) {
     const missing = assessment.issues.some((issue) => issue.code === `missing-${tool}`)
-    const commands = missing ? toolInstallCommands(tool, platform, assessment.packageManager, privilege) : []
+    const commands = missing
+      ? toolInstallCommands(tool, platform, assessment.packageManager, privilege)
+      : []
     steps.push({
       id: tool,
       name: `Check ${tool}`,
@@ -459,10 +522,16 @@ export function buildSetupPlan(
       commands,
       verify: { command: 'npm', args: ['--version'] },
       detail: 'npm is missing from this Node.js installation.',
-      ...(commands.length === 0 ? { skippedReason: 'Install npm on the Oven, then retry setup.' } : {})
+      ...(commands.length === 0
+        ? { skippedReason: 'Install npm on the Oven, then retry setup.' }
+        : {})
     })
-    if (commands.length === 0) blockers.push('npm is missing and cannot be installed with the detected package manager.')
+    if (commands.length === 0)
+      blockers.push('npm is missing and cannot be installed with the detected package manager.')
   }
+
+  /* Phase: prerequisites. The Oven's clock follows this computer's zone. */
+  steps.push(timezoneStep(assessment, deviceTimezone))
 
   /* Phase: harnesses. One step per selection so a retry resumes exactly. */
   for (const selection of configuration.selectedHarnesses) {
@@ -475,7 +544,8 @@ export function buildSetupPlan(
   }
 
   /* Phase: accounts. The app, not the Oven shell, owns this one. */
-  const syncingAccounts = configuration.synchronizeAccounts || configuration.synchronizeConfiguration
+  const syncingAccounts =
+    configuration.synchronizeAccounts || configuration.synchronizeConfiguration
   steps.push({
     id: 'accounts',
     name: 'Synchronize accounts and configuration',

@@ -1,3 +1,21 @@
+<script module lang="ts">
+  /**
+   * A tab's own presentation, resolved by the rail that owns it.
+   *
+   * The shell draws every tab from its stored title and its kind's icon. A tool
+   * that names itself dynamically can replace both: the Oven panel wears the
+   * Oven's own mark and name, which only the rail beside it can resolve.
+   */
+  export interface ContextSidebarTabPresentation {
+    /** Name the tab shows in place of its stored title. */
+    title: string
+    /** The tab's own mark as a data URL, when it has one. */
+    iconUrl?: string | null
+    /** Colour of the plain dot drawn when the tool has no image. */
+    color?: string | null
+  }
+</script>
+
 <script lang="ts">
   import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -38,6 +56,7 @@
     PanelRight,
     Plus,
     Puzzle,
+    Server,
     SquareTerminal,
     TriangleAlert,
     X
@@ -77,6 +96,13 @@
     onNewBrowser?: () => void
     /** Dismiss extension action popups and close page-created popup windows. */
     onDismissPopups?: () => void
+    /**
+     * Resolve a tab's own presentation, for a tool that names itself from state
+     * the shell does not hold (the Oven panel wears the Oven's mark and name).
+     * A returned value replaces the shell's default icon and title; null keeps
+     * them.
+     */
+    tabPresentation?: (tab: ContextSidebarTab) => ContextSidebarTabPresentation | null
   }
 
   let {
@@ -97,11 +123,22 @@
     onNewTerminal,
     onNewBrowser,
     onDismissPopups,
-    tabMenu
+    tabMenu,
+    tabPresentation
   }: Props = $props()
 
   let resizing = $state(false)
   let activeTab = $derived(tabs.find((tab) => tab.id === activeTabId) ?? null)
+
+  /** A tab's own presentation, when the rail that owns it resolves one. */
+  function presentationFor(tab: ContextSidebarTab): ContextSidebarTabPresentation | null {
+    return tabPresentation?.(tab) ?? null
+  }
+
+  /** The name a tab shows: its own resolved title, else the stored one. */
+  function titleFor(tab: ContextSidebarTab): string {
+    return presentationFor(tab)?.title ?? tab.title
+  }
 
   // Resolve favicons for browser tab URLs so the strip can show the site's icon
   // once available. Resolution is deduped per hostname inside the store.
@@ -180,7 +217,7 @@
 
   /** Closing a popup rail tab destroys that popup page. */
   function closeLabel(tab: ContextSidebarTab): string {
-    return `Close ${tab.title}`
+    return `Close ${titleFor(tab)}`
   }
 
   /** Files are headerless like the other single-panel tools right up until a
@@ -208,10 +245,20 @@
   let siblingTabs = $derived(
     activeTab && !tabbedMode ? tabs.filter((tab) => tab.kind === activeTab.kind) : []
   )
+  /**
+   * Tools the context rail toggles on and off. Their panel is dismissed from the
+   * rail icon that opened it, so the header names the tool without offering a
+   * second, competing way to close it.
+   */
+  const RAIL_DISMISSED_KINDS = new Set<ContextSidebarTab['kind']>(['oven'])
+
   /** Temporary chats close from their own tab, so they need no header cluster
    *  rendering it anyway would leave a stray divider on the right edge. */
   let showHeaderControls = $derived(
-    terminalMode || browserMode || popupMode || (activeTab !== null && !tabbedMode)
+    terminalMode ||
+      browserMode ||
+      popupMode ||
+      (activeTab !== null && !tabbedMode && !RAIL_DISMISSED_KINDS.has(activeTab.kind))
   )
 
   let dragTabId = $state<string | null>(null)
@@ -352,7 +399,22 @@
   ></div>
 
   {#snippet tabIcon(tab: ContextSidebarTab)}
-    {#if tab.kind === 'files'}
+    {@const presentation = presentationFor(tab)}
+    {#if presentation}
+      {#if presentation.iconUrl}
+        <img
+          src={presentation.iconUrl}
+          alt=""
+          class="h-3 w-3 shrink-0 object-contain"
+          aria-hidden="true"
+        />
+      {:else}
+        <span
+          class="h-2.5 w-2.5 shrink-0 rounded-full bg-muted"
+          style={presentation.color ? `background-color: ${presentation.color}` : ''}
+        ></span>
+      {/if}
+    {:else if tab.kind === 'files'}
       {#if tab.fileTabId}
         <FileTypeIcon path={tab.path ?? tab.title} size={12} />
       {:else}
@@ -413,6 +475,8 @@
       <Puzzle size={12} class="shrink-0" />
     {:else if tab.kind === 'coordinator'}
       <Network size={12} class="shrink-0 text-primary" />
+    {:else if tab.kind === 'oven'}
+      <Server size={12} class="shrink-0" />
     {:else if tab.kind === 'assistant-how-to'}
       <Hammer size={12} class="shrink-0 text-primary" />
     {:else}
@@ -461,7 +525,7 @@
         class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
         aria-current={activeTabId === tab.id ? 'page' : undefined}
         data-active-tab={activeTabId === tab.id ? 'true' : undefined}
-        title={tab.title}
+        title={titleFor(tab)}
         onclick={() => onSelect(tab.id)}
       >
         {#if indicators.length > 0}
@@ -557,7 +621,7 @@
               ? 'italic'
               : ''}"
           >
-            {activeTab.title}
+            {titleFor(activeTab)}
           </span>
           {#if activeTab.kind === 'subagent' && activeTab.activity.status === 'running'}
             <StatusBadge stage="working" animated title="Running" />
@@ -582,12 +646,12 @@
                   {#each siblingTabs as tab (tab.id)}
                     <DropdownMenu.Item
                       class="flex items-center gap-2 rounded-md px-2.5 py-1.5 outline-none transition-colors data-[highlighted]:bg-elevated"
-                      textValue={tab.title}
+                      textValue={titleFor(tab)}
                       onSelect={() => onSelect(tab.id)}
                     >
                       {@render tabIcon(tab)}
                       <span class="min-w-0 flex-1 truncate text-xs text-foreground"
-                        >{tab.title}</span
+                        >{titleFor(tab)}</span
                       >
                       {#if tab.id === activeTabId}
                         <span class="text-[0.625rem] text-dimmed">open</span>

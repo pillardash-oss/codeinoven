@@ -1000,6 +1000,23 @@
   })
 
   /**
+   * The Oven panel names itself.
+   *
+   * The sidebar header shows the Oven's own mark and name instead of the generic
+   * title the tab was opened with, so the panel reads as that box and nothing
+   * else. The Oven is the one the thread's last turn ran on, which is the value
+   * main writes onto the thread when a turn is sent.
+   */
+  function ovenTabPresentation(tab: ContextSidebarTab) {
+    if (tab.kind !== 'oven') return null
+    const thread = selectedThread
+    if (!thread || thread.projectId !== tab.projectId || thread.id !== tab.threadId) return null
+    const identity = ovens.identity(thread.settings?.ovenId)
+    if (!identity || identity.local) return null
+    return { title: identity.name, iconUrl: identity.iconUrl, color: identity.color }
+  }
+
+  /**
    * Dock contents, grouped: history, then workspace tools, then session tools.
    * Every entry is a toggle   the rail itself is always visible, only the
    * panel (or, for history, the floating jump menu) comes and goes.
@@ -4644,6 +4661,7 @@
             height={contextSidebarState.terminalHeight}
             placement="right"
             content={contextSidebarContent}
+            tabPresentation={ovenTabPresentation}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}

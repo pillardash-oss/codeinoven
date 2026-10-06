@@ -18,8 +18,10 @@ import { isThreadBusyStatus } from '../../lib/thread-status-policy'
 import { OvenSetupService } from './oven-setup-service'
 import { OvenHarnessService } from './oven-harness-service'
 import { createOvenSetupPorts } from './oven-setup-ports'
+import { deviceTimezone, syncOvenTimezone } from './oven-timezone'
 import { HarnessAccountRegistry } from '../providers/harness-account-registry'
 import { validateOvenHarnessId, validateStartOvenSetup } from './oven-validation'
+import { Logger } from '../system/logger'
 
 export function registerOvenIpc(
   storage: StorageEngine,
@@ -200,6 +202,27 @@ export function registerOvenIpc(
   ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown) =>
     harnessService.getInventory(ovenId(rawId))
   )
+  ipcMain.handle('oven:timezone:sync', async (_event, rawId: unknown) => {
+    const id = requireRemoteOven(rawId)
+    const zone = deviceTimezone()
+    if (!zone)
+      throw new Error('This computer does not report a time zone, so there is nothing to match.')
+    // The clock change needs the Oven's own platform, privilege, and current zone:
+    // the same read-only preflight the setup flow runs answers all three.
+    const { report } = await setupService.preflight(id)
+    Logger.info('Oven timezone sync started', { ovenId: id, zone })
+    const result = await syncOvenTimezone(service.ssh, id, zone, {
+      platform: report.platform,
+      privilege: report.privilege,
+      timezone: report.timezone
+    })
+    Logger.info('Oven timezone sync finished', {
+      ovenId: id,
+      status: result.status,
+      zone: result.zone
+    })
+    return result
+  })
   ipcMain.handle('oven:harness:update', (_event, rawId: unknown, rawHarnessId: unknown) =>
     harnessService.updateHarness(ovenId(rawId), validateOvenHarnessId(rawHarnessId))
   )

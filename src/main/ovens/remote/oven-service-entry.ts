@@ -244,6 +244,9 @@ async function probe(refresh = false): Promise<OvenProbe> {
     architecture: process.arch,
     home,
     nodeVersion: process.versions.node,
+    // The service reports the zone its own process runs on, which is the Oven's
+    // system zone and always an IANA id, even where the platform names its own.
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     specs: {
       hostname: hostname(),
       platform: process.platform,

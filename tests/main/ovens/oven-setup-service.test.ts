@@ -17,6 +17,7 @@ const healthyReport: OvenPreflightReport = {
   curl: { installed: true, version: '8.5.0', path: '/usr/bin/curl' },
   node: { installed: true, version: 'v22.13.1', path: '/usr/bin/node' },
   npm: { installed: true, version: '10.5.0', path: '/usr/bin/npm' },
+  timezone: { current: 'Africa/Lagos', method: 'timedatectl' },
   harnesses: [],
   osUpdateRequired: false,
   rebootRequired: false,
@@ -35,7 +36,12 @@ function createService() {
     preflight: vi.fn(async () => healthyReport),
     installService: vi.fn(async () => undefined),
     syncAccounts: vi.fn(async () => []),
-    configureGit: vi.fn(async () => [])
+    configureGit: vi.fn(async () => []),
+    syncTimezone: vi.fn(async () => ({
+      status: 'current' as const,
+      zone: 'Africa/Lagos',
+      message: 'The Oven already runs on Africa/Lagos.'
+    }))
   }
   return { service: new OvenSetupService(storage, ports), ports, execute }
 }
