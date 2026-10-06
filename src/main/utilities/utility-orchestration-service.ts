@@ -44,7 +44,7 @@ import { VIDEO_CAPABILITY_SEARCH_QUERY, videoCapabilityDocs } from '../../lib/vi
 import { NO_EXPERTS, type EffectiveExperts } from '../../lib/experts'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { currentWorkRoots } from '../design/work-roots-state'
-import { resultWithImageParts } from '../../lib/image-payload'
+import { gatewayStructuredResult } from '../../lib/image-payload'
 import { acquireCuaSnapshotLease } from './cua-snapshot-lease'
 import {
   cuaActionReference,
@@ -443,6 +443,8 @@ export class UtilityOrchestrationService {
   private gatewayBaseUrl: string | null = null
   private gatewayStarting: Promise<string> | null = null
   private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
+  /** Routes answered with a structured payload beside their content parts. */
+  private readonly structuredRoutes: ReadonlySet<string>
   private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
@@ -466,6 +468,7 @@ export class UtilityOrchestrationService {
     this.registry = new UtilityRegistryService(storage)
     this.vault = new SecretVault(storage)
     this.bridgeHandlers = this.buildBridgeHandlers()
+    this.structuredRoutes = this.buildStructuredRoutes()
   }
 
   /**
@@ -507,6 +510,19 @@ export class UtilityOrchestrationService {
       handlers.set(tool.route, handler)
     }
     return handlers
+  }
+
+  /**
+   * Routes whose result travels as a structured payload as well as text.
+   *
+   * Read from the catalog rather than listed here, so a tool that declares an
+   * `outputSchema` is answered in the shape that schema promises and no surface
+   * can drift: a script resolves these calls to fields, a model reads the text.
+   */
+  private buildStructuredRoutes(): ReadonlySet<string> {
+    return new Set(
+      GATEWAY_TOOLS.filter((tool) => tool.outputSchema !== undefined).map((tool) => tool.route)
+    )
   }
 
   private bridgeHandlerFor(name: string): GatewayBridgeHandler | null {
@@ -1296,7 +1312,14 @@ export class UtilityOrchestrationService {
         return
       }
       const result = await handler(state, input)
-      this.respond(response, 200, result)
+      // A tool that declares an output schema is answered with the payload both
+      // ways: content parts for a model, the same data for a script. Every other
+      // route keeps the exact body it has always returned.
+      this.respond(
+        response,
+        200,
+        this.structuredRoutes.has(request.url) ? gatewayStructuredResult(result) : result
+      )
     } catch (error) {
       this.respond(response, 400, {
         error: error instanceof Error ? error.message : 'Utility gateway request failed'
@@ -1952,10 +1975,11 @@ export class UtilityOrchestrationService {
     // A picture that travels inline as base64 is billed as text, at roughly one
     // token per character; the same bytes delivered as an image content part are
     // billed on the pixels they cover, which measured about 22x cheaper on a real
-    // screenshot (40,788 tokens against 1,844 at 1568px). Both bridges forward a
-    // `content` array verbatim, so an image-bearing result is handed back in that
-    // shape and everything else keeps its existing form.
-    return resultWithImageParts(result) ?? result
+    // screenshot (40,788 tokens against 1,844 at 1568px). The route exit shapes
+    // the result into content parts plus a structured payload, so nothing is
+    // converted here: a raw result stays raw, and the computer-use snapshot keeps
+    // the shape it was given above.
+    return result
   }
 
   /**

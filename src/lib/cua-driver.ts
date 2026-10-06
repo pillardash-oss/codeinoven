@@ -34,7 +34,12 @@
  * process can consume it directly.
  */
 
-import type { GatewayContentPart, GatewayImagePart } from './image-payload'
+import {
+  SHAPED_GATEWAY_RESULT,
+  type GatewayContentPart,
+  type GatewayImagePart,
+  type GatewayStructuredResult
+} from './image-payload'
 
 /** A rectangle in the driver's own units: window bounds in points, frames in
  *  window points. */
@@ -574,14 +579,16 @@ function uniqueFrameMatch(view: CuaSnapshotView, row: CuaElementRow): CuaElement
 }
 
 /**
- * How a snapshot reaches the model: one text part with the structured payload,
- * then the screenshot as an image part.
+ * How a snapshot reaches its readers: one text part with the structured
+ * payload, then the screenshot as an image part, and the same payload as
+ * `structuredContent` so a codemode script reads element tokens and geometry as
+ * fields instead of parsing the text.
  *
  * Returns null for every result that is not a window snapshot, so a refusal, a
  * window list, a skill or any other MCP server keeps exactly the shape it has
  * today.
  */
-export function shapeCuaResult(result: unknown): { content: GatewayContentPart[] } | null {
+export function shapeCuaResult(result: unknown): GatewayStructuredResult | null {
   if (!isRecord(result)) return null
   const structured = result['structuredContent']
   if (!isRecord(structured)) return null
@@ -616,7 +623,13 @@ export function shapeCuaResult(result: unknown): { content: GatewayContentPart[]
   // surface could not be resolved). Those keep their words.
   const elements = Array.isArray(structured['elements']) ? structured['elements'] : []
   if (elements.length === 0) parts.push(...texts.map((text) => ({ type: 'text' as const, text })))
-  return { content: [...parts, ...images] }
+  // Marked as already shaped: the route exit must forward a snapshot as it is,
+  // not walk it a second time.
+  return {
+    content: [...parts, ...images],
+    structuredContent: payload,
+    [SHAPED_GATEWAY_RESULT]: true
+  }
 }
 
 /**

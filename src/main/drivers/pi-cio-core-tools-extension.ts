@@ -29,6 +29,7 @@
  * this module   they are conditional overlays, not part of the always-on set.
  */
 
+import { UTILITY_ACTIVATE_TOOL_NAME, UTILITY_MANAGE_TOOL_NAME } from '../../lib/gateway-tools'
 import { piCoreToolsExtension } from './pi-core-tools-extension'
 import { piCompactionExtension } from './pi-compaction-extension'
 import { piMcpServersExtension } from './pi-mcp-servers-extension'
@@ -181,7 +182,15 @@ export function piCioCoreToolsExtension(options: CioCoreToolsExtensionOptions): 
     { factory: '__cioStatusExtension', source: piStatusExtension() },
     { factory: '__cioUsageExtension', source: piUsageExtension() },
     { factory: '__cioGatewayExtension', source: piUtilityGatewayExtension() },
-    { factory: '__cioMcpServersExtension', source: piMcpServersExtension() },
+    {
+      factory: '__cioMcpServersExtension',
+      // The gateway calls that can change which servers the thread has activated.
+      // Reconciling right after one of them is what makes an activation mid-session
+      // native to the running pi process rather than the next turn's business.
+      source: piMcpServersExtension({
+        activationTools: [UTILITY_ACTIVATE_TOOL_NAME, UTILITY_MANAGE_TOOL_NAME]
+      })
+    },
     {
       factory: '__cioCoreToolsExtension',
       source: piCoreToolsExtension({ questionCap: options.questionCap })

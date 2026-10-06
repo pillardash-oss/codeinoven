@@ -496,7 +496,23 @@ async function respondToCall(request) {
   try {
     const result = await callUtility(request, controller)
     if (cancelled.has(key)) return
-    write({ jsonrpc: '2.0', id: id, result: { content: resultContent(result) } })
+    // An operation that declares an output schema answers with its payload both
+    // ways. A client that runs scripts resolves the call to \`structuredContent\`,
+    // and one that does not still reads the content parts, so forwarding both
+    // costs the shape nothing and makes the structured payload reach a harness
+    // that used to lose it at this hop.
+    const structured =
+      result && typeof result === 'object' && !Array.isArray(result)
+        ? result.structuredContent
+        : undefined
+    write({
+      jsonrpc: '2.0',
+      id: id,
+      result:
+        structured === undefined
+          ? { content: resultContent(result) }
+          : { content: resultContent(result), structuredContent: structured }
+    })
   } catch (error) {
     if (cancelled.has(key)) return
     write({

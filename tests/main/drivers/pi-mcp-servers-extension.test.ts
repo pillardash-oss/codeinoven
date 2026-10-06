@@ -19,9 +19,14 @@ interface StubExtensionApi {
   registerMcpServer: (name: string, config: Record<string, unknown>) => void
   unregisterMcpServer: (name: string) => void
   on: (event: string, handler: (event: McpHookEvent) => void) => void
+  getAllTools: () => Array<{ name: string }>
+  getActiveTools: () => string[]
+  setActiveTools: (names: string[]) => void
   /** Every registration this extension made, in order, newest last. */
   registrations: Array<{ name: string; config: Record<string, unknown> }>
   unregistrations: string[]
+  /** What pi reports as the session's active tools. */
+  activeTools: string[]
   emit: (event: string, payload?: McpHookEvent) => void
 }
 
@@ -31,7 +36,16 @@ interface StubExtensionApi {
  * the real module can be imported here without pi's runtime.
  */
 async function loadExtension(
-  options: { document?: unknown; raw?: string; withApi?: boolean } = {}
+  options: {
+    document?: unknown
+    raw?: string
+    withApi?: boolean
+    /** Whether pi registered the script runner at all. */
+    codemode?: boolean
+    activeTools?: string[]
+    /** Server names whose first registration pi refuses, as it does for a bad config. */
+    refuseOnce?: readonly string[]
+  } = {}
 ): Promise<{ api: StubExtensionApi; documentPath: string }> {
   const scratch = join(process.cwd(), '.cio', 'tmp')
   await mkdir(scratch, { recursive: true })
@@ -42,21 +56,34 @@ async function loadExtension(
   else if (options.document !== undefined) {
     await writeFile(documentPath, JSON.stringify(options.document))
   }
-  const source = piMcpServersExtension().replace(
-    '__CIO_MCP_SERVERS_PATH__',
-    JSON.stringify(documentPath).slice(1, -1)
-  )
+  const source = piMcpServersExtension({
+    activationTools: ['cio_util_init', 'cio_util_manage']
+  }).replace('__CIO_MCP_SERVERS_PATH__', JSON.stringify(documentPath).slice(1, -1))
   const extensionPath = join(root, 'mcp-servers.ts')
   await writeFile(extensionPath, source)
   const handlers = new Map<string, Array<(event: McpHookEvent) => void>>()
+  const refusedOnce = new Set(options.refuseOnce ?? [])
   const api = {
     registrations: [] as StubExtensionApi['registrations'],
     unregistrations: [] as string[],
+    activeTools: options.activeTools ?? [],
     registerMcpServer: (name: string, config: Record<string, unknown>) => {
+      if (refusedOnce.has(name)) {
+        refusedOnce.delete(name)
+        throw new Error(`refused: ${name}`)
+      }
       api.registrations.push({ name, config })
     },
     unregisterMcpServer: (name: string) => {
       api.unregistrations.push(name)
+    },
+    getAllTools: () =>
+      options.codemode === false
+        ? [{ name: 'read' }, { name: 'bash' }]
+        : [{ name: 'read' }, { name: 'bash' }, { name: 'codemode' }],
+    getActiveTools: () => api.activeTools,
+    setActiveTools: (names: string[]) => {
+      api.activeTools = names
     },
     on: (event: string, handler: (event: McpHookEvent) => void) => {
       const existing = handlers.get(event) ?? []
@@ -171,6 +198,65 @@ describe('piMcpServersExtension', () => {
 
     api.emit('tool_call', { toolName: 'codemode' })
     expect(api.registrations.map((entry) => entry.name)).toEqual(['slack'])
+  })
+
+  it('registers a server the gateway activated mid-session, without a restart', async () => {
+    const { api, documentPath } = await loadExtension({ document: { version: 1, servers: [] } })
+
+    api.emit('session_start')
+    expect(api.registrations).toEqual([])
+
+    // The activation the model just ran rewrote the document. Reconciling on the
+    // activation call itself is what makes the server native to the running
+    // process rather than the next turn's business.
+    await writeFile(documentPath, JSON.stringify({ version: 1, servers: [server('slack', 'npx')] }))
+    api.emit('tool_call', { toolName: 'cio_util_init' })
+
+    expect(api.registrations.map((entry) => entry.name)).toEqual(['slack'])
+  })
+
+  it('retries a registration pi refused, on the next reconcile', async () => {
+    // A refusal (a malformed config, a namespace another server claimed) must
+    // not be cached as "already reconciled", or a corrected document could never
+    // recover inside the session.
+    const { api } = await loadExtension({
+      document: { version: 1, servers: [server('svelte_mcp', 'bunx')] },
+      refuseOnce: ['svelte_mcp']
+    })
+
+    api.emit('session_start')
+    expect(api.registrations).toEqual([])
+
+    api.emit('before_agent_start')
+    expect(api.registrations.map((entry) => entry.name)).toEqual(['svelte_mcp'])
+  })
+
+  it('activates the script runner pi left inactive', async () => {
+    const { api } = await loadExtension({ document: { version: 1, servers: [] } })
+
+    api.emit('session_start')
+
+    expect(api.activeTools).toContain('codemode')
+  })
+
+  it('leaves a runtime that never registered the script runner alone', async () => {
+    const { api } = await loadExtension({ document: { version: 1, servers: [] }, codemode: false })
+
+    api.emit('session_start')
+
+    expect(api.activeTools).toEqual([])
+  })
+
+  it('does not activate the script runner twice', async () => {
+    const { api } = await loadExtension({
+      document: { version: 1, servers: [] },
+      activeTools: ['read', 'codemode']
+    })
+
+    api.emit('session_start')
+    api.emit('before_agent_start')
+
+    expect(api.activeTools).toEqual(['read', 'codemode'])
   })
 
   it('closes every server with the session', async () => {

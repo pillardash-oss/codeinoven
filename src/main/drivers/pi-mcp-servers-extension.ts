@@ -13,11 +13,21 @@
  * turns and loads its extensions once at spawn. The driver therefore publishes
  * a session-keyed document (the servers this thread has activated, with the
  * credential values they read), and this extension reconciles the live
- * registration set against it: at session start, before every agent start, and
- * before a script surface runs (which is what makes a utility activated in the
- * current turn callable from the very next script). `session_shutdown`
- * unregisters everything, so pi closes the servers' child processes with the
- * session.
+ * registration set against it. Reconciles happen at session start, before every
+ * agent start, before a script surface runs, and immediately after a gateway
+ * call that can change the set, so a utility activated mid-session is connected
+ * inside the running process: nothing here ever needs a restart, and a script
+ * that follows the activation can call the server natively. The document's
+ * revision is cached, so a reconcile costs one `stat` until the app rewrites it.
+ * `session_shutdown` unregisters everything, so pi closes the servers' child
+ * processes with the session.
+ *
+ * This extension also owns the script surface itself. Pi registers `codemode`
+ * inactive and activates it only when an MCP server of its own asks for that
+ * exposure, which would leave a thread that has activated no server with no way
+ * to script at all   including the app's own gateway tools, which are scriptable
+ * whether or not any MCP server exists. The surface is therefore activated here,
+ * once, and never turned off.
  *
  * Nothing is registered eagerly: only the utilities the thread has already
  * activated appear in the document, so a session that never touches an MCP
@@ -33,9 +43,25 @@
  * generated source is itself built by a template literal here, and a nested
  * interpolation would be swallowed by this module instead of reaching pi.
  */
-export function piMcpServersExtension(): string {
+
+export interface PiMcpServersExtensionOptions {
+  /**
+   * Gateway tool names whose call can change the activated set   activation and
+   * management. Reconciling right after one of them is what makes a utility
+   * activated mid-session reachable from the running process, instead of
+   * waiting for the next turn.
+   */
+  activationTools: readonly string[]
+}
+
+export function piMcpServersExtension(options: PiMcpServersExtensionOptions): string {
+  const reconcileTools = JSON.stringify([
+    'codemode',
+    'tool_search',
+    ...options.activationTools.filter((name) => name !== 'codemode' && name !== 'tool_search')
+  ])
   return `import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 
 /** Absolute path of the per-session MCP server document the driver rewrites. */
 const CIO_MCP_SERVERS_PATH = '__CIO_MCP_SERVERS_PATH__'
@@ -44,12 +70,14 @@ const CIO_MCP_SERVERS_PATH = '__CIO_MCP_SERVERS_PATH__'
 const CIO_MCP_SERVERS_VERSION = 1
 
 /**
- * Script surfaces a server's tools become reachable through. Reconcile before
- * one of these runs so a utility activated earlier in the same turn is
- * connected by the time the script asks for it; a tool call of any other kind
- * cannot reach an MCP tool and does not need the read.
+ * Tool calls worth a reconcile: the script surfaces, whose tool table is built
+ * from the registrations at that moment, and the gateway calls that rewrite the
+ * document. Any other call cannot change or read the registration set.
  */
-const CIO_MCP_SCRIPT_TOOLS = ['codemode', 'tool_search']
+const CIO_MCP_RECONCILE_TOOLS = ${reconcileTools}
+
+/** Pi's script runner. Registered inactive, so this extension activates it. */
+const CIO_MCP_SCRIPT_SURFACE = 'codemode'
 
 interface CioMcpServerEntry {
   name: string
@@ -59,11 +87,29 @@ interface CioMcpServerEntry {
 /** One server this session registered, keyed by name, with the config it used. */
 type CioMcpRegistered = Map<string, string>
 
+/** What the last reconcile saw, so an unchanged document costs one stat. */
+interface CioMcpRevision {
+  value: string
+}
+
 /**
- * Read the document. A missing or unreadable file answers with null, which
- * means "no instruction" rather than "no servers": a turn that never published
- * must not tear down servers a previous turn started, and a document that was
- * written while the file was half-visible heals on the next write.
+ * The document's revision, or null when there is no document to read. A missing
+ * or unreadable file means "no instruction" rather than "no servers": a turn
+ * that never published must not tear down servers a previous turn started.
+ */
+function readCioMcpRevision(): string | null {
+  try {
+    const info = statSync(CIO_MCP_SERVERS_PATH)
+    return String(info.mtimeMs) + ':' + String(info.size)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Read the document. Null means the file is gone, half-written, or written by a
+ * revision this extension does not know, and the previous registrations stay in
+ * force until the next publication heals it.
  */
 function readCioMcpServers(): CioMcpServerEntry[] | null {
   let raw: string
@@ -94,17 +140,43 @@ function readCioMcpServers(): CioMcpServerEntry[] | null {
 }
 
 /**
+ * Keep pi's script runner available for this session.
+ *
+ * Pi leaves it inactive until an MCP server with \`codemode\` exposure connects,
+ * which is later than the app needs it: the gateway's own operations are
+ * scriptable, and a utility activated mid-session must be reachable from the
+ * script that follows it. A runtime that never registered the tool (a build
+ * without the built-in codemode extension) is left alone.
+ */
+function ensureCioScriptSurface(pi: ExtensionAPI): void {
+  if (typeof pi.getAllTools !== 'function') return
+  const registered = pi.getAllTools().some((tool) => tool && tool.name === CIO_MCP_SCRIPT_SURFACE)
+  if (!registered) return
+  const active = pi.getActiveTools()
+  if (active.includes(CIO_MCP_SCRIPT_SURFACE)) return
+  pi.setActiveTools([...active, CIO_MCP_SCRIPT_SURFACE])
+}
+
+/**
  * Bring pi's registration set in line with the document: register a server that
  * is new or whose config changed, unregister one the app no longer publishes.
  * The registered map is the only record of what this extension owns, so a
  * server somebody else registered is never touched.
  */
-function reconcileCioMcpServers(pi: ExtensionAPI, registered: CioMcpRegistered): void {
+function reconcileCioMcpServers(
+  pi: ExtensionAPI,
+  registered: CioMcpRegistered,
+  revision: CioMcpRevision
+): void {
   if (typeof pi.registerMcpServer !== 'function' || typeof pi.unregisterMcpServer !== 'function') {
     return
   }
+  const current = readCioMcpRevision()
+  if (current === null) return
+  if (current === revision.value) return
   const servers = readCioMcpServers()
   if (servers === null) return
+  revision.value = current
   const desired = new Map<string, string>()
   for (const server of servers) desired.set(server.name, JSON.stringify(server.config))
   for (const name of Array.from(registered.keys())) {
@@ -126,6 +198,7 @@ function reconcileCioMcpServers(pi: ExtensionAPI, registered: CioMcpRegistered):
       // server already claims. Report once on the harness's stderr and retry on
       // the next reconcile: a corrected document then recovers without a restart.
       registered.delete(name)
+      revision.value = ''
       process.stderr.write(
         '[cio-mcp] server "' + name + '" could not be registered: ' +
           (error instanceof Error ? error.message : String(error)) +
@@ -137,12 +210,19 @@ function reconcileCioMcpServers(pi: ExtensionAPI, registered: CioMcpRegistered):
 
 export default function codeInOvenMcpServersExtension(pi: ExtensionAPI): void {
   const registered: CioMcpRegistered = new Map()
-  const reconcile = (): void => reconcileCioMcpServers(pi, registered)
+  const revision: CioMcpRevision = { value: '' }
+  const reconcile = (): void => reconcileCioMcpServers(pi, registered, revision)
 
-  pi.on('session_start', () => reconcile())
-  pi.on('before_agent_start', () => reconcile())
+  pi.on('session_start', () => {
+    ensureCioScriptSurface(pi)
+    reconcile()
+  })
+  pi.on('before_agent_start', () => {
+    ensureCioScriptSurface(pi)
+    reconcile()
+  })
   pi.on('tool_call', (event) => {
-    if (!CIO_MCP_SCRIPT_TOOLS.includes(event.toolName)) return
+    if (!CIO_MCP_RECONCILE_TOOLS.includes(event.toolName)) return
     reconcile()
   })
   pi.on('session_shutdown', () => {
