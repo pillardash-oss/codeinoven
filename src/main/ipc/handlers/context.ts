@@ -130,6 +130,7 @@ export interface RegisterIpcHandlersOptions {
 export type IpcChatEngine = Pick<
   ChatEngine,
   | 'loadMessages'
+  | 'connectionRestored'
   | 'deleteThreadSession'
   | 'activeTurnChangeSummary'
   | 'hasActiveProcessesInScope'

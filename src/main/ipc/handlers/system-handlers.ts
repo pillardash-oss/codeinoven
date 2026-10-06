@@ -1,4 +1,4 @@
-import { app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
+import { net, app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
 import { lstat, readFile, writeFile, mkdir } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
@@ -32,6 +32,10 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     privileged,
     attachmentStorageDirectory
   } = ctx
+
+  ipcMain.handle('network:restored', () => {
+    if (net.isOnline()) ctx.chatEngine?.connectionRestored()
+  })
 
   // ─── System dialogs ────────────────────────────────────────────────────────
   ipcMain.handle('dialog:pickFolder', async () => {
