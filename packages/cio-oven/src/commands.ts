@@ -153,6 +153,7 @@ async function publish(
   note('Open Settings, then Ovens, then Add via agent, and paste this code:')
   copyBlock(registrationCode(descriptor))
   note(`A copy is saved at ${layout.registrationFile}`)
+  note('Then open the Oven and run its setup to install the harnesses you want.')
   blank()
 }
 
