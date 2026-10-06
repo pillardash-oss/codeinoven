@@ -47,7 +47,7 @@
   const usageColumn: DataTableColumn<HarnessAccount, AccountSortKey> = {
     key: null,
     header: 'Usage',
-    width: 'w-80',
+    width: 'w-[27rem]',
     cellClass: 'align-middle'
   }
 
@@ -55,7 +55,7 @@
     {
       key: 'harness',
       header: 'Harness',
-      width: 'w-48',
+      width: 'w-36',
       cellClass: 'align-middle',
       sortValue: (account) =>
         (harnessFor(account.harnessId)?.name ?? account.harnessId).toLocaleLowerCase('en-US')
@@ -63,14 +63,14 @@
     {
       key: 'provider',
       header: 'Provider',
-      width: 'w-44',
+      width: 'w-36',
       cellClass: 'align-middle',
       sortValue: (account) => providerLabel(account).toLocaleLowerCase('en-US')
     },
     {
       key: 'label',
       header: 'Label',
-      width: 'w-64',
+      width: 'w-48',
       cellClass: 'align-middle',
       sortValue: (account) => account.label.toLocaleLowerCase('en-US')
     },
@@ -78,8 +78,7 @@
     {
       key: null,
       header: 'Actions',
-      headerClass: 'sr-only',
-      width: 'w-28',
+      width: 'w-64',
       cellClass: 'align-middle'
     }
   ]
@@ -508,31 +507,34 @@
             {#if hasSiblingAccounts(account) && !account.isDefault}
               <button
                 type="button"
-                class="flex size-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-accent"
+                class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-accent"
                 title={`Set ${account.label} as the default account for ${providerLabel(account)}`}
                 aria-label={`Set ${account.label} as the default account for ${providerLabel(account)}`}
                 onclick={() => void setDefault(account)}
               >
-                <Star size={12} />
+                <Star size={12} aria-hidden="true" />
+                Make default
               </button>
             {/if}
             <button
               type="button"
-              class="flex size-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               title={`Edit label for ${account.label}`}
               aria-label={`Edit label for ${account.label}`}
               onclick={() => openEdit(account)}
             >
-              <Pencil size={12} />
+              <Pencil size={12} aria-hidden="true" />
+              Edit
             </button>
             <button
               type="button"
-              class="flex size-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+              class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
               title={`Disconnect ${account.label}`}
               aria-label={`Disconnect ${account.label}`}
               onclick={() => (disconnectTarget = account)}
             >
-              <Unplug size={12} />
+              <Unplug size={12} aria-hidden="true" />
+              Disconnect
             </button>
           </div>
         {/if}
