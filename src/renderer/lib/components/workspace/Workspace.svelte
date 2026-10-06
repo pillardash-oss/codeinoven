@@ -1369,15 +1369,39 @@
   /** Close a tab from a fullscreen strip without tearing the fullscreen down
    *  unless it was the last tab of that kind. */
   function closeFullscreenTab(kind: 'terminal' | 'browser', tabId: string): void {
-    const openTabs = contextSidebarState.tabs.filter((tab) => tab.kind === kind)
-    const remaining = openTabs.filter((tab) => tab.id !== tabId)
     closeContextTab(tabId)
-    // Nothing left of that kind: the surface has no tab to show, so the record
-    // has to go with it rather than point at the tab that just closed.
-    const fallback = remaining.at(-1)?.id ?? null
-    if (kind === 'terminal') terminalFullscreenTabId = fallback
-    else browserFullscreenTabId = fallback
+    if (kind === 'terminal') {
+      // Nothing left of that kind: the surface has no tab to show, so the record
+      // has to go with it rather than point at the tab that just closed.
+      const remaining = contextSidebarState.tabs.filter(
+        (tab) => tab.kind === 'terminal' && tab.id !== tabId
+      )
+      terminalFullscreenTabId = remaining.at(-1)?.id ?? null
+      return
+    }
+    // The store already fell back when the tab closed, so its active browser tab
+    // is the one to show. Reading it here instead of the last browser-kind tab
+    // keeps the overlay inside the conversation on screen even while other
+    // projects' browser tabs are open, and nulls it when nothing is left.
+    browserFullscreenTabId = contextSidebarState.activeBrowserTabId
   }
+
+  /**
+   * Keep the full screen browser on the sidebar's active browser tab.
+   *
+   * The overlay records the tab it shows separately from the sidebar's store,
+   * and that store's active tab moves from many places: a tab a page opened, a
+   * reopened tab, a close that fell back, a tab selected in the overlay's own
+   * strip. Mirroring it here means the two can never drift apart, so minimizing
+   * always lands on the tab the user was reading rather than the one that was
+   * active when the fullscreen opened.
+   */
+  $effect(() => {
+    if (!browserFullscreenTabId) return
+    const active = contextSidebarState.activeBrowserTabId
+    if (active === browserFullscreenTabId) return
+    browserFullscreenTabId = active
+  })
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
 

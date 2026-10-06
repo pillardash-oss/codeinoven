@@ -81,6 +81,20 @@
   })
 
   /**
+   * Settle the full screen surface onto one tab.
+   *
+   * The sidebar's own strip and the overlay record the tab separately, so both
+   * are told here: focusing the store is what makes minimizing land back on the
+   * tab the user was reading instead of the one that was active when the
+   * fullscreen opened. Every in-surface gesture (a strip selection, a Ctrl+Tab
+   * step) goes through this one function, so the two can never drift apart.
+   */
+  function showTab(id: string): void {
+    contextSidebarState.focus(id)
+    onTabIdChange(id)
+  }
+
+  /**
    * Walk the browser's recently-used tabs, exactly as the browser's own Ctrl+Tab
    * does: the first press goes to the tab in use before this one, each further
    * press keeps walking the order that was frozen when the gesture began, and
@@ -92,8 +106,7 @@
     if (!target || target === tabId) return
     // Focus keeps the sidebar's own strip on the tab the browser settled on, and
     // the overlay follows the same id.
-    contextSidebarState.focus(target)
-    onTabIdChange(target)
+    showTab(target)
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
@@ -136,7 +149,7 @@
       newLabel="New browser tab"
       minimizeLabel="Minimize browser"
       hostsBrowserView
-      onSelect={(id) => onTabIdChange(id)}
+      onSelect={showTab}
       onCloseTab={(id) => onCloseTab(id)}
       onNew={onNewBrowser}
       onMinimize={() => onTabIdChange(null)}

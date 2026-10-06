@@ -205,6 +205,18 @@ class ContextSidebarState {
   }
 
   /**
+   * The browser tab the sidebar's browser region is on for the conversation on
+   * screen, or null when it holds none.
+   *
+   * The full screen browser shows this tab: it is the single source of truth
+   * the overlay mirrors, so a tab a link opened, a reopened tab or a close that
+   * fell back all land the overlay on the tab the user is actually reading.
+   */
+  get activeBrowserTabId(): string | null {
+    return this.browser.activeTabIdOrLast()
+  }
+
+  /**
    * Tabs shown in the right sidebar. When the terminal is docked at the
    * bottom, terminal tabs live in the dock and are excluded here; otherwise
    * every tab (including terminals) renders in the sidebar.
