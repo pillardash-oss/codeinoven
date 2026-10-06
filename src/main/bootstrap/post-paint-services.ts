@@ -16,6 +16,7 @@ import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../lib/routine-agents'
+import { settingsWithRoutineTarget } from '../../lib/routine-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { workRootsFromConfig } from '../../lib/design/work-roots'
@@ -430,7 +431,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       // to, so the models the user picked for the routine are the models its
       // runs actually use. A routine without a model set keeps the thread's own.
       const primary = routinePrimaryModel(routine?.agents)
-      const runSettings = primary ? settingsWithRoutineModel(task.settings, primary) : task.settings
+      // The routine's execution target is the default for every run it
+      // dispatches; a task that already picked an Oven of its own keeps it.
+      const targeted = settingsWithRoutineTarget(task.settings, routine?.execution)
+      const runSettings = primary ? settingsWithRoutineModel(targeted, primary) : targeted
       return chatEngine.createAssistantRunThread({
         task,
         settings: runSettings,

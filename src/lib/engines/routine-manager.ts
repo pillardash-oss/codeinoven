@@ -113,6 +113,7 @@ export class RoutineManager {
       delivery: input.delivery,
       priority: input.priority,
       agents: input.agents,
+      execution: input.execution,
       paused: input.paused ?? false,
       sortOrder: this.topPosition(),
       createdAt: now,
@@ -153,6 +154,7 @@ export class RoutineManager {
       delivery: 'delivery' in input ? (input.delivery ?? undefined) : existing.delivery,
       priority: 'priority' in input ? (input.priority ?? undefined) : existing.priority,
       agents: input.agents !== undefined ? input.agents : existing.agents,
+      execution: 'execution' in input ? (input.execution ?? undefined) : existing.execution,
       paused: input.paused !== undefined ? input.paused : existing.paused,
       updatedAt: now
     }

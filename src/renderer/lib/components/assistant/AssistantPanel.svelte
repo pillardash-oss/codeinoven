@@ -78,6 +78,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ConnectionRow from './ConnectionRow.svelte'
   import RoutineAgentPicker from './RoutineAgentPicker.svelte'
+  import RoutineExecutionPicker from './RoutineExecutionPicker.svelte'
   import UtilityPicker from './UtilityPicker.svelte'
   import UtilityEditorModal, {
     type UtilityEditorTarget
@@ -1149,14 +1150,17 @@
       {#if !routine}
         {@render noRoutineState()}
       {:else}
-        <div class="p-3">
+        <div class="flex flex-col gap-4 p-3">
           {#key routine.id}
-            <RoutineAgentPicker
-              agents={routine.agents}
-              {providers}
-              projectId={projectIdForCatalog}
-              onChange={setAgents}
-            />
+            <RoutineExecutionPicker routineId={routine.id} execution={routine.execution} />
+            <div class="border-t border-border pt-4">
+              <RoutineAgentPicker
+                agents={routine.agents}
+                {providers}
+                projectId={projectIdForCatalog}
+                onChange={setAgents}
+              />
+            </div>
           {/key}
         </div>
       {/if}

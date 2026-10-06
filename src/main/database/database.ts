@@ -867,6 +867,7 @@ export class Database {
       this.migrateStickyNoteImagePath(connection)
       this.migrateCustomIconLibrary(connection)
       this.migrateRoutineScheduleAnchor(connection)
+      this.migrateRoutineExecution(connection)
       this.migrateThreadDesignKind(connection)
       this.migrateThreadAuthoredWorkKind(connection)
     })()
@@ -1019,6 +1020,23 @@ export class Database {
     }
     if (!columns.has('priority')) {
       connection.exec('ALTER TABLE routines ADD COLUMN priority TEXT')
+    }
+  }
+
+  /**
+   * Add the routine execution-target column to databases created before a
+   * routine could name an Oven its runs execute on. Fresh databases already
+   * carry it, and the guarded `ALTER TABLE` is idempotent. An existing routine
+   * keeps the column NULL, which means this computer.
+   */
+  private migrateRoutineExecution(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('execution')) {
+      connection.exec('ALTER TABLE routines ADD COLUMN execution TEXT')
     }
   }
 

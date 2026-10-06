@@ -4,6 +4,7 @@ import type {
   RoutineAgents,
   RoutineConnection,
   RoutineDelivery,
+  RoutineExecution,
   RoutinePriority,
   RoutineSchedule
 } from '../../../lib/types'
@@ -25,6 +26,7 @@ interface RoutineRow {
   delivery: string | null
   priority: string | null
   agents: string | null
+  execution: string | null
   paused: number
   pinned: number
   pinned_at: number | null
@@ -103,6 +105,29 @@ function parsePriority(raw: string | null): RoutinePriority | undefined {
   }
 }
 
+/**
+ * Read the stored execution target. A missing or malformed value means this
+ * computer, so an older row and a corrupt one both fall back to local instead
+ * of failing the whole routine read.
+ */
+function parseExecution(raw: string | null): RoutineExecution | undefined {
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed !== 'object' || parsed === null) return undefined
+    const record = parsed as Record<string, unknown>
+    if (typeof record.ovenId !== 'string' || !record.ovenId) return undefined
+    return {
+      ovenId: record.ovenId,
+      ...(typeof record.ovenPath === 'string' && record.ovenPath
+        ? { ovenPath: record.ovenPath }
+        : {})
+    }
+  } catch {
+    return undefined
+  }
+}
+
 /** Whether a persisted value is a usable model selection. */
 function isModelSelection(value: unknown): value is RoutineAgents['fallbacks'][number] {
   if (typeof value !== 'object' || value === null) return false
@@ -131,6 +156,7 @@ function rowToRoutine(row: RoutineRow): Routine {
     delivery: parseDelivery(row.delivery ?? null),
     priority: parsePriority(row.priority ?? null),
     agents: parseAgents(row.agents ?? null),
+    execution: parseExecution(row.execution ?? null),
     paused: row.paused === 1,
     pinned: row.pinned === 1,
     pinnedAt: row.pinned_at ?? undefined,
@@ -147,9 +173,9 @@ export class RoutineRepo {
     this.db.run(
       `INSERT INTO routines(
         id, name, description, color, icon, icon_type, custom_svg, schedule, schedule_updated_at, how_to,
-        how_to_updated_at, connections, delivery, priority, agents, paused, pinned, pinned_at,
-        sort_order, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        how_to_updated_at, connections, delivery, priority, agents, execution, paused, pinned,
+        pinned_at, sort_order, created_at, updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         description = excluded.description,
@@ -165,6 +191,7 @@ export class RoutineRepo {
         delivery = excluded.delivery,
         priority = excluded.priority,
         agents = excluded.agents,
+        execution = excluded.execution,
         paused = excluded.paused,
         pinned = excluded.pinned,
         pinned_at = excluded.pinned_at,
@@ -186,6 +213,7 @@ export class RoutineRepo {
       routine.delivery ? JSON.stringify(routine.delivery) : null,
       routine.priority ? JSON.stringify(routine.priority) : null,
       routine.agents ? JSON.stringify(routine.agents) : null,
+      routine.execution ? JSON.stringify(routine.execution) : null,
       routine.paused ? 1 : 0,
       routine.pinned ? 1 : 0,
       routine.pinnedAt ?? null,

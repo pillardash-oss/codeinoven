@@ -9,6 +9,18 @@ import type { RoutineSchedule } from './schedule'
 export type RoutineDeliveryChannel =
   'in-app' | 'telegram' | 'whatsapp' | 'signal' | 'slack' | 'email' | 'other'
 
+/**
+ * Where a routine's runs execute. An absent target means this computer. A
+ * target names an Oven the runs are dispatched to, so scheduled assistant work
+ * can run off the user's device, plus the workspace root it uses there.
+ */
+export interface RoutineExecution {
+  /** Oven id, or the local sentinel. Absence of the whole object means local. */
+  ovenId: string
+  /** Absolute workspace on the selected Oven, independent of the local project path. */
+  ovenPath?: string
+}
+
 /** Where a routine's output goes, and to which concrete destination. */
 export interface RoutineDelivery {
   /** The channel the user agreed on. */
@@ -100,6 +112,12 @@ export interface Routine {
    */
   agents?: RoutineAgents
   /**
+   * Where this routine's runs execute. Absent means this computer. A task may
+   * override it with an Oven of its own; otherwise every dispatched run uses
+   * this target, so a routine can be kept off the user's device.
+   */
+  execution?: RoutineExecution
+  /**
    * A paused routine keeps its tasks and how-to but the scheduler never fires
    * it. Resumed from the assistant panel's All tab.
    */
@@ -172,6 +190,7 @@ export interface CreateRoutineInput {
   delivery?: RoutineDelivery
   priority?: RoutinePriority
   agents?: RoutineAgents
+  execution?: RoutineExecution
   paused?: boolean
 }
 
@@ -194,6 +213,8 @@ export interface UpdateRoutineInput {
   /** `null` clears the priority default, leaving it to each run. */
   priority?: RoutinePriority | null
   agents?: RoutineAgents
+  /** `null` clears the target, moving the routine's runs back to this computer. */
+  execution?: RoutineExecution | null
   paused?: boolean
 }
 
