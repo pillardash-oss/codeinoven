@@ -67,6 +67,7 @@ import {
   type BrowserTabHistoryRecord
 } from '../../lib/browser/browser-tab-history'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
+import { getGlobalBrowserContextMenuBoxes } from '../ipc/global-browser-ipc'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
@@ -5168,7 +5169,8 @@ export class BrowserService {
     return {
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward(),
-      searchEngineName: this.contextMenuSearchEngine.name
+      searchEngineName: this.contextMenuSearchEngine.name,
+      boxes: getGlobalBrowserContextMenuBoxes()
     }
   }
 
@@ -5234,6 +5236,15 @@ export class BrowserService {
       inspectElement: (x, y) => live()?.inspectElement(x, y),
       selectAll: () => live()?.selectAll(),
       openLinkInNewTab: openInNewTab,
+      openLinkInBox: (url, rawBoxId) => {
+        const boxId = validateOptionalBoxId(rawBoxId)
+        if (!boxId || !getGlobalBrowserContextMenuBoxes().some((box) => box.id === boxId)) return
+        try {
+          this.openNewTabFor({ ...owner, boxId }, validateBrowserUrl(url))
+        } catch (error: unknown) {
+          Logger.error('Browser context menu refused a link in a box:', error)
+        }
+      },
       ...(owner.projectId === GLOBAL_BROWSER_PROJECT_ID
         ? {
             openPeekWindow: (url?: string): void => {
