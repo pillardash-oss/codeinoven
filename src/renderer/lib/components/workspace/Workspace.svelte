@@ -592,8 +592,12 @@
     if (!selectedThread) return
     if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') {
       projectFilesWorkspace.setThreadMount(selectedThread.projectId, selectedThread.id)
-      await projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
+      // Open first and read after. The read is an SSH round trip that can outlast
+      // the click that asked for it, so awaiting it here made a down Oven look
+      // like a dead button. Opened first, the panel shows its loading layer and,
+      // when the Oven cannot answer, the reason with a retry.
       contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
+      void projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
       return
     }
     // Conversations browse their own app-owned workspace directory instead of a

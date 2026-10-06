@@ -26,6 +26,19 @@ class SettingsUiState {
    * silently fails to find.
    */
   harnessesTab = $state<HarnessesTab>('harnesses')
+
+  /**
+   * An Oven another surface asked the Ovens page to reveal.
+   *
+   * `sequence` lets a second request for the same Oven (a right-click after the
+   * first reveal) run again instead of looking already handled.
+   */
+  ovenFocus = $state<{ id: string; sequence: number } | null>(null)
+
+  /** Ask the Ovens page to scroll to and flash one Oven. */
+  focusOven(id: string): void {
+    this.ovenFocus = { id, sequence: (this.ovenFocus?.sequence ?? 0) + 1 }
+  }
 }
 
 export const settingsUiState = new SettingsUiState()

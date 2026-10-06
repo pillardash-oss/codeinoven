@@ -10,7 +10,7 @@ import { HarnessAccountRegistry } from '../providers/harness-account-registry'
 import { OvenRegistry } from './oven-registry'
 import { OvenService } from './oven-service'
 import { syncOvenAccount } from './oven-accounts'
-import { remoteShell } from './oven-remote-shell'
+import { detectRemoteShell } from './oven-remote-shell'
 import { remoteTerminalCommand } from './oven-remote-command'
 
 /** Resolve terminal/action work to the chat's Oven before looking at local files. */
@@ -70,8 +70,14 @@ export function ovenTerminalLaunch(
       (!script.trim() || script.length > 100_000 || script.includes('\0'))
     )
       throw new Error('Action script is invalid.')
+    // Detect the shell on every open instead of reading the cached answer. A
+    // cached answer skips the round trip, and with it the only reachable check
+    // this path makes: a down Oven then spawned a PTY whose ssh died at once,
+    // which the renderer respawned into a wall of repeated failures. An explicit
+    // detection fails here, before any PTY exists, so the panel shows one reason.
+    const shell = await detectRemoteShell(service.ssh, ovenId)
     const command = remoteTerminalCommand({
-      shell: await remoteShell(service.ssh, ovenId),
+      shell,
       root: root || undefined,
       environment,
       script

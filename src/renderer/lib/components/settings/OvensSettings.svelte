@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
   import {
     Loader2,
     Plus,
@@ -50,6 +51,8 @@
   import type { CustomIcon } from '$shared/types'
   import { formatDateTime } from '$shared/date-time-format'
   import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import { flashElement } from '$lib/reveal-flash'
 
   const fieldClass = 'w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground'
 
@@ -303,6 +306,34 @@
   onMount(() => {
     void load()
   })
+
+  let lastOvenFocus = 0
+  /**
+   * Reveal the Oven another surface asked for: expand it, bring it into view,
+   * and flash it.
+   *
+   * An attachment rather than an `$effect` because this reacts to a request, not
+   * to derived state, and running it from the list's own update means it also
+   * lands when the request arrived before the registry finished loading (the
+   * `ovenState` argument changes and the attachment runs again).
+   */
+  function revealOven(
+    focus: { id: string; sequence: number } | null,
+    state: OvenState | null
+  ): Attachment<HTMLDivElement> {
+    return () => {
+      if (!focus || !state || focus.sequence === lastOvenFocus) return
+      if (!state.ovens.some((oven) => oven.id === focus.id)) return
+      lastOvenFocus = focus.sequence
+      folded = { ...folded, [focus.id]: false }
+      requestAnimationFrame(() => {
+        const element = document.getElementById(`oven-row-${focus.id}`)
+        if (!element) return
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        flashElement(element)
+      })
+    }
+  }
 
   async function refreshSetupStatuses(state: OvenState): Promise<void> {
     const remote = state.ovens.filter((oven) => oven.kind === 'ssh')
@@ -654,13 +685,14 @@
       <Loader2 size={14} class="animate-spin" /> Loading Ovens
     </p>
   {:else}
-    <div class="space-y-3" role="list">
+    <div class="space-y-3" role="list" {@attach revealOven(settingsUiState.ovenFocus, ovenState)}>
       {#each ovenState.ovens as oven (oven.id)}
         {@const probe = probes[oven.id]}
         {@const checkingNow = checking === oven.id}
         {@const state = health[oven.id]?.state}
         <div
           class="relative rounded-xl"
+          id={`oven-row-${oven.id}`}
           role="listitem"
           draggable={canDragOven(oven)}
           ondragstart={(event) => startOvenDrag(event, oven)}

@@ -10,6 +10,8 @@
   import { isTypeableKey } from '../shared/model-picker-helpers'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
 
   interface Props {
     /** Currently selected Oven id; `LOCAL_OVEN_ID` means this computer. */
@@ -92,6 +94,17 @@
     void loadHarnessBadges(ovens?.ovens ?? [])
   }
 
+  /**
+   * Right-clicking the selected Oven opens Settings > Ovens on that Oven, so
+   * the badge that names where a thread runs is also the way to edit it.
+   * Local is not an editable Oven, so it only opens the page.
+   */
+  function openOvenSettings(event: MouseEvent): void {
+    event.preventDefault()
+    if (selectedId !== LOCAL_OVEN_ID) settingsUiState.focusOven(selectedId)
+    workspaceState.navigateToSettings?.('ovens')
+  }
+
   async function choose(ovenId: string): Promise<void> {
     saving = true
     error = ''
@@ -117,6 +130,7 @@
     aria-expanded={editor}
     disabled={busy || saving}
     onclick={() => void openPicker()}
+    oncontextmenu={openOvenSettings}
   >
     {#if selectedId === LOCAL_OVEN_ID}
       <Monitor size={10} class="shrink-0" />
