@@ -11,7 +11,9 @@ import {
   type OvenConnection,
   type OvenSetupConfiguration,
   type OvenSetupSelectedHarness,
-  type OvenSetupGitConfiguration
+  type OvenSetupGitConfiguration,
+  type OvenAgentScriptRequest,
+  type OvenAgentRegistrationInput
 } from '../../lib/ovens'
 import { findHarness } from '../agents/harness-registry'
 import type { SecretVault } from '../storage/secret-vault'
@@ -162,14 +164,17 @@ function boolean(value: unknown, label: string, fallback: boolean): boolean {
 const MAX_SELECTED_HARNESSES = OVEN_HARNESS_COMMANDS.length
 
 function validateSelectedHarness(value: unknown): OvenSetupSelectedHarness {
-  if (typeof value !== 'object' || !value) throw new TypeError('Each harness selection must be an object.')
+  if (typeof value !== 'object' || !value)
+    throw new TypeError('Each harness selection must be an object.')
   const raw = value as Record<string, unknown>
   const harnessId = text(raw.harnessId, 'Harness', 64)
   // The renderer sends the canonical harness id; accept only registered ones so
   // a typo cannot become an install of something unknown.
   if (!findHarness(harnessId)) throw new TypeError(`Unknown harness: ${harnessId}`)
   if (!OVEN_HARNESS_COMMANDS.some((command) => ovenHarnessIdForCommand(command) === harnessId))
-    throw new TypeError(`${findHarness(harnessId)?.name ?? harnessId} is not available on remote Ovens.`)
+    throw new TypeError(
+      `${findHarness(harnessId)?.name ?? harnessId} is not available on remote Ovens.`
+    )
   const selection: OvenSetupSelectedHarness = { harnessId }
   if (raw.accountId !== undefined) selection.accountId = text(raw.accountId, 'Account', 128)
   if (raw.install !== undefined) selection.install = boolean(raw.install, 'Install selection', true)
@@ -202,12 +207,17 @@ function validateGitConfiguration(value: unknown): OvenSetupGitConfiguration {
     enabled: boolean(raw.enabled, 'Git setup', false),
     host
   }
-  if (raw.privateKeyRef !== undefined) git.privateKeyRef = text(raw.privateKeyRef, 'Key reference', 256)
+  if (raw.privateKeyRef !== undefined)
+    git.privateKeyRef = text(raw.privateKeyRef, 'Key reference', 256)
   if (raw.publicKeyFingerprint !== undefined)
     git.publicKeyFingerprint = text(raw.publicKeyFingerprint, 'Key fingerprint', 128)
   if (raw.publicKey !== undefined) {
     const publicKey = text(raw.publicKey, 'Public key', 16_384)
-    if (!/^(?:ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/]+=*(?: [^\r\n]*)?$/u.test(publicKey))
+    if (
+      !/^(?:ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+|sk-[a-z0-9@.-]+) [A-Za-z0-9+/]+=*(?: [^\r\n]*)?$/u.test(
+        publicKey
+      )
+    )
       throw new TypeError('Paste an OpenSSH public key.')
     git.publicKey = publicKey
   }
@@ -226,18 +236,26 @@ export function validateOvenSetupConfiguration(value: unknown): OvenSetupConfigu
   if (JSON.stringify(value).length > 64 * 1024)
     throw new TypeError('The setup configuration is too large.')
   const raw = value as Record<string, unknown>
-  if (!Array.isArray(raw.selectedHarnesses) || raw.selectedHarnesses.length > MAX_SELECTED_HARNESSES)
+  if (
+    !Array.isArray(raw.selectedHarnesses) ||
+    raw.selectedHarnesses.length > MAX_SELECTED_HARNESSES
+  )
     throw new TypeError('Choose at most one entry per available harness.')
   const selectedHarnesses = raw.selectedHarnesses.map(validateSelectedHarness)
   const seen = new Set<string>()
   for (const selection of selectedHarnesses) {
-    if (seen.has(selection.harnessId)) throw new TypeError('Each harness can only be selected once.')
+    if (seen.has(selection.harnessId))
+      throw new TypeError('Each harness can only be selected once.')
     seen.add(selection.harnessId)
   }
   return {
     selectedHarnesses,
     synchronizeAccounts: boolean(raw.synchronizeAccounts, 'Account synchronization', true),
-    synchronizeConfiguration: boolean(raw.synchronizeConfiguration, 'Configuration synchronization', true),
+    synchronizeConfiguration: boolean(
+      raw.synchronizeConfiguration,
+      'Configuration synchronization',
+      true
+    ),
     git: validateGitConfiguration(raw.git),
     packageUpgrades: boolean(raw.packageUpgrades, 'Package upgrades', false)
   }
@@ -279,24 +297,33 @@ export async function validateStartOvenSetup(
     throw new TypeError('Invalid setup configuration.')
   const submitted = value as Record<string, unknown>
   const wrapped = Object.hasOwn(submitted, 'configuration')
-  if (wrapped && Object.keys(submitted).some((key) => !['configuration', 'gitIdentity'].includes(key)))
+  if (
+    wrapped &&
+    Object.keys(submitted).some((key) => !['configuration', 'gitIdentity'].includes(key))
+  )
     throw new TypeError('The setup request contains unsupported fields.')
-  const raw = submitted.configuration && typeof submitted.configuration === 'object' && !Array.isArray(submitted.configuration)
-    ? { ...(submitted.configuration as Record<string, unknown>) }
-    : { ...submitted }
+  const raw =
+    submitted.configuration &&
+    typeof submitted.configuration === 'object' &&
+    !Array.isArray(submitted.configuration)
+      ? { ...(submitted.configuration as Record<string, unknown>) }
+      : { ...submitted }
   const identity = submitted.gitIdentity
   if (identity !== undefined) {
     if (!identity || typeof identity !== 'object' || Array.isArray(identity))
       throw new TypeError('Invalid Git identity configuration.')
     if (Object.keys(identity).some((key) => !['privateKey', 'passphrase'].includes(key)))
       throw new TypeError('The Git identity contains unsupported fields.')
-    const git = raw.git && typeof raw.git === 'object' && !Array.isArray(raw.git)
-      ? { ...(raw.git as Record<string, unknown>) }
-      : {}
+    const git =
+      raw.git && typeof raw.git === 'object' && !Array.isArray(raw.git)
+        ? { ...(raw.git as Record<string, unknown>) }
+        : {}
     const identityFields = identity as Record<string, unknown>
     if (identityFields.privateKey !== undefined) git.privateKey = identityFields.privateKey
     if (identityFields.passphrase !== undefined)
-      throw new TypeError('Oven Git setup does not accept key passphrases. Load the encrypted key into the Oven ssh-agent first.')
+      throw new TypeError(
+        'Oven Git setup does not accept key passphrases. Load the encrypted key into the Oven ssh-agent first.'
+      )
     raw.git = git
   }
   const gitInput = raw.git
@@ -304,7 +331,8 @@ export async function validateStartOvenSetup(
     const git = { ...(gitInput as Record<string, unknown>) }
     if (git.privateKey !== undefined) {
       const privateKey = text(git.privateKey, 'Private key', 64 * 1024)
-      if (!PRIVATE_KEY_PATTERN.test(privateKey)) throw new TypeError('Paste an OpenSSH private key.')
+      if (!PRIVATE_KEY_PATTERN.test(privateKey))
+        throw new TypeError('Paste an OpenSSH private key.')
       git.privateKeyRef = await vault.save(
         privateKey,
         typeof git.privateKeyRef === 'string' && git.privateKeyRef ? git.privateKeyRef : undefined
@@ -317,4 +345,55 @@ export async function validateStartOvenSetup(
   // Nothing secret may survive into a persisted operation. Fail closed if it did.
   assertNoSecretFields(configuration, 'The setup configuration')
   return configuration
+}
+
+/** Options for building the standalone Oven agent installer. */
+export function validateOvenAgentScriptRequest(value: unknown): OvenAgentScriptRequest {
+  if (typeof value !== 'object' || !value || Array.isArray(value))
+    throw new TypeError('Agent script options are required.')
+  const raw = value as Record<string, unknown>
+  if (raw.platform !== 'linux' && raw.platform !== 'darwin' && raw.platform !== 'win32')
+    throw new TypeError('Choose Linux, macOS, or Windows for the agent script.')
+  if (typeof raw.identity !== 'boolean' || typeof raw.bootstrapNode !== 'boolean')
+    throw new TypeError('Agent script options must be true or false.')
+  return { platform: raw.platform, identity: raw.identity, bootstrapNode: raw.bootstrapNode }
+}
+
+/**
+ * A registration code plus the few fields a user may override before saving.
+ *
+ * The code stays a bounded string here; the descriptor codec is what enforces
+ * its real shape. Overrides are range-checked so a bad host or port cannot reach
+ * the registry as a stored Oven.
+ */
+export function validateOvenAgentRegistration(value: unknown): OvenAgentRegistrationInput {
+  if (typeof value !== 'object' || !value || Array.isArray(value))
+    throw new TypeError('A registration code is required.')
+  const raw = value as Record<string, unknown>
+  const result: OvenAgentRegistrationInput = {
+    code: text(raw.code, 'Registration code', 256 * 1024)
+  }
+  if (raw.host !== undefined) {
+    const host = text(raw.host, 'SSH host', 255)
+    if (!/^(?:[a-zA-Z0-9][a-zA-Z0-9._-]*|[a-fA-F0-9:]+)$/u.test(host))
+      throw new TypeError('SSH host must be an alias, DNS name, or IP address.')
+    result.host = host
+  }
+  if (raw.user !== undefined) {
+    const user = text(raw.user, 'SSH user', 128)
+    if (!/^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/u.test(user)) throw new TypeError('Invalid SSH user.')
+    result.user = user
+  }
+  if (raw.name !== undefined) result.name = text(raw.name, 'Oven name', 80)
+  if (raw.port !== undefined) {
+    if (
+      typeof raw.port !== 'number' ||
+      !Number.isInteger(raw.port) ||
+      raw.port < 1 ||
+      raw.port > 65535
+    )
+      throw new TypeError('SSH port must be between 1 and 65535.')
+    result.port = raw.port
+  }
+  return result
 }

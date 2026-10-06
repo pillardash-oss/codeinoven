@@ -21,6 +21,8 @@ import { createOvenSetupPorts } from './oven-setup-ports'
 import { deviceTimezone, syncOvenTimezone } from './oven-timezone'
 import { HarnessAccountRegistry } from '../providers/harness-account-registry'
 import { validateOvenHarnessId, validateStartOvenSetup } from './oven-validation'
+import { validateOvenAgentRegistration, validateOvenAgentScriptRequest } from './oven-validation'
+import { OvenAgentService } from './oven-agent-service'
 import { Logger } from '../system/logger'
 
 export function registerOvenIpc(
@@ -54,6 +56,7 @@ export function registerOvenIpc(
   })
   const setupService = new OvenSetupService(storage, setupRuntime)
   const harnessService = new OvenHarnessService(service, storage)
+  const agentService = new OvenAgentService(registry)
   harnessService.startAutoUpdates()
   app.once('before-quit', () => harnessService.stopAutoUpdates())
   /**
@@ -201,6 +204,16 @@ export function registerOvenIpc(
   })
   ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown) =>
     harnessService.getInventory(ovenId(rawId))
+  )
+  ipcMain.handle('oven:agent:script', (_event, raw: unknown) =>
+    agentService.script(validateOvenAgentScriptRequest(raw))
+  )
+  ipcMain.handle('oven:agent:preview', (_event, raw: unknown) => {
+    if (typeof raw !== 'string') throw new TypeError('A registration code is required.')
+    return agentService.preview(raw)
+  })
+  ipcMain.handle('oven:agent:register', (_event, raw: unknown) =>
+    agentService.register(validateOvenAgentRegistration(raw))
   )
   ipcMain.handle('oven:timezone:sync', async (_event, rawId: unknown) => {
     const id = requireRemoteOven(rawId)

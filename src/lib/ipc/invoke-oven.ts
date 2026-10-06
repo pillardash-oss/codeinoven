@@ -13,7 +13,12 @@ import type {
   OvenSetupOperation,
   OvenHarnessInventoryItem,
   OvenTimezoneSyncResult,
-  StartOvenSetupInput
+  StartOvenSetupInput,
+  OvenAgentScript,
+  OvenAgentScriptRequest,
+  OvenAgentPreview,
+  OvenAgentRegistrationInput,
+  OvenAgentRegistration
 } from '../ovens'
 import type { OvenConnectionStatus } from '../ovens'
 import type { Contract } from './contract-helpers'
@@ -64,5 +69,8 @@ export const invokeOvenContract = {
   'oven:harness:uninstall': {} as Contract<
     [id: string, harnessId: string],
     OvenHarnessInventoryItem
-  >
+  >,
+  'oven:agent:script': {} as Contract<[input: OvenAgentScriptRequest], OvenAgentScript>,
+  'oven:agent:preview': {} as Contract<[code: string], OvenAgentPreview>,
+  'oven:agent:register': {} as Contract<[input: OvenAgentRegistrationInput], OvenAgentRegistration>
 }

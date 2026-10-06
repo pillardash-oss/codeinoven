@@ -19,6 +19,7 @@ import {
   validateRemoteImageUrls
 } from '../ipc-validation'
 import { isMissingFilesystemError, requireString, validateAttachmentStorageScope } from './shared'
+import type { SaveFileInput } from '../../../lib/ipc/invoke-app'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import type { IpcHandlerContext } from './context'
 
@@ -123,6 +124,29 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       return tempPath
     } catch (error) {
       Logger.error('clipboard:saveImage failed:', error)
+      return null
+    }
+  })
+
+  ipcMain.handle('dialog:saveFile', async (_event, raw: unknown) => {
+    try {
+      const input = validateSaveFileInput(raw)
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      if (win && !win.isFocused()) win.focus()
+      const options: Electron.SaveDialogOptions = {
+        title: 'Save File',
+        defaultPath: input.suggestedName,
+        ...(input.filters ? { filters: input.filters } : {})
+      }
+      const result = win
+        ? await dialog.showSaveDialog(win, options)
+        : await dialog.showSaveDialog(options)
+      if (result.canceled || !result.filePath) return null
+      await writeFile(result.filePath, input.contents, 'utf8')
+      await privilegedIpc.registerUserSelectedFile(result.filePath)
+      return result.filePath
+    } catch (error) {
+      Logger.error('dialog:saveFile failed:', error)
       return null
     }
   })
@@ -607,5 +631,40 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       electronVersion: process.versions.electron
     })
     return result.filePath
+  })
+}
+
+/** Validate a renderer-provided save request before it reaches a save dialog. */
+function validateSaveFileInput(value: unknown): SaveFileInput {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new TypeError('A save request is required.')
+  const raw = value as Record<string, unknown>
+  const suggestedName = requireString(raw.suggestedName, 'File name')
+  if (suggestedName.length > 255 || /[\\/\0\r\n]/u.test(suggestedName))
+    throw new TypeError('Choose a plain file name without a path.')
+  const contents = requireString(raw.contents, 'File contents', true)
+  if (Buffer.byteLength(contents, 'utf8') > 16 * 1024 * 1024)
+    throw new TypeError('The file is too large to save.')
+  const filters = validateSaveFileFilters(raw.filters)
+  return { suggestedName, contents, ...(filters ? { filters } : {}) }
+}
+
+function validateSaveFileFilters(value: unknown): SaveFileInput['filters'] {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length === 0 || value.length > 8)
+    throw new TypeError('Invalid file filters.')
+  return value.map((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+      throw new TypeError('Invalid file filter.')
+    const filter = entry as Record<string, unknown>
+    const name = requireString(filter.name, 'Filter name')
+    const extensions = filter.extensions
+    if (
+      !Array.isArray(extensions) ||
+      extensions.length === 0 ||
+      extensions.some((item) => typeof item !== 'string')
+    )
+      throw new TypeError('Invalid file filter extensions.')
+    return { name, extensions: extensions.map((item) => String(item)) }
   })
 }

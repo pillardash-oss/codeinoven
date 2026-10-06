@@ -12,6 +12,13 @@ import type {
 import type { RendererLogEntry } from './logging'
 import type { Contract } from './contract-helpers'
 
+/** One file the user explicitly chooses to save from the renderer. */
+export interface SaveFileInput {
+  suggestedName: string
+  contents: string
+  filters?: { name: string; extensions: string[] }[]
+}
+
 export const invokeAppContract = {
   'config:get': {} as Contract<[], AppConfig>,
   'config:update': {} as Contract<[patch: AppConfigPatch], AppConfig>,
@@ -25,6 +32,7 @@ export const invokeAppContract = {
   'clipboard:writeText': {} as Contract<[text: string], void>,
   'clipboard:readText': {} as Contract<[], string>,
   'dialog:pickFile': {} as Contract<[scope?: AttachmentStorageScope], string | null>,
+  'dialog:saveFile': {} as Contract<[input: SaveFileInput], string | null>,
   'dialog:pickFiles': {} as Contract<[scope?: AttachmentStorageScope], string[]>,
   'dialog:pickImage': {} as Contract<[], string | null>,
   /** Store a picked appearance image (a browser tab, group, box, bookmark or
