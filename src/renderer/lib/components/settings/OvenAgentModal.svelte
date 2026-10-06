@@ -26,6 +26,10 @@
   /** The address this computer reaches the machine on, editable before saving. */
   let host = $state('')
   let port = $state(22)
+  /** True while the machine's own candidates are being dialed. */
+  let detecting = $state(false)
+  /** The candidate that answered, when one did. */
+  let detected = $state<string | null>(null)
   let error = $state('')
 
   function message(value: unknown): string {
@@ -50,6 +54,7 @@
     // A preview belongs to the code it was read from. Editing the code
     // invalidates it rather than letting a stale machine be registered.
     if (preview) preview = null
+    detected = null
   }
 
   async function checkCode(): Promise<void> {
@@ -57,17 +62,44 @@
     previewing = true
     error = ''
     preview = null
+    detected = null
     try {
       const checked = await invoke('oven:agent:preview', code)
       preview = checked
-      // The agent can only report the machine's own host name. Default the
-      // address to it, but let the user correct it before anything is saved.
-      host = checked.host
+      // The code carries every address the machine answers on. Show the first
+      // one immediately so the field is never empty, then replace it with the
+      // one that actually answers here.
+      host = checked.addresses[0] ?? checked.host
       port = checked.port
+      previewing = false
+      void detectAddress()
     } catch (cause) {
       error = message(cause)
-    } finally {
       previewing = false
+    }
+  }
+
+  /**
+   * Dial the machine's own candidates and keep the one that answers.
+   *
+   * A machine reports its interface addresses but cannot know which one this
+   * computer can reach, so the choice is made here. When nothing answers, the
+   * field keeps the machine's own first choice and the user can still edit it.
+   */
+  async function detectAddress(): Promise<void> {
+    if (detecting) return
+    detecting = true
+    try {
+      const reachable = await invoke('oven:agent:reachable', code)
+      if (reachable) {
+        detected = reachable
+        host = reachable
+      }
+    } catch {
+      // A probe that cannot run is not a registration failure: the field already
+      // holds a usable candidate from the machine itself.
+    } finally {
+      detecting = false
     }
   }
 
@@ -100,6 +132,8 @@
     code = ''
     preview = null
     host = ''
+    detected = null
+    detecting = false
     error = ''
     onClose()
   }
@@ -127,9 +161,9 @@
       <header class="space-y-0.5">
         <h3 class="text-sm font-medium">1. Prepare the machine</h3>
         <p class="text-xs text-muted">
-          Run this command on the machine that will become an Oven. It installs the durable
-          service, starts it in the background, and prints the code you register below. The app
-          never needs SSH access to install it.
+          Run this command on the machine that will become an Oven. It installs the durable service,
+          starts it in the background, and prints the code you register below. The app never needs
+          SSH access to install it.
         </p>
       </header>
 
@@ -152,8 +186,8 @@
       </div>
 
       <p class="text-xs text-muted">
-        The machine needs Node.js 22 or later already installed. The command asks for the Oven
-        name, the SSH port this computer connects on, and whether to provision a dedicated key.
+        The machine needs Node.js 22 or later already installed. The command asks for the Oven name,
+        the SSH port this computer connects on, and whether to provision a dedicated key.
       </p>
     </section>
 
@@ -161,8 +195,8 @@
       <header class="space-y-0.5">
         <h3 class="text-sm font-medium">2. Register the machine</h3>
         <p class="text-xs text-muted">
-          Paste the registration code the command printed. Checking it first shows exactly what
-          will be saved.
+          Paste the registration code the command printed. Checking it first shows exactly what will
+          be saved.
         </p>
       </header>
 
@@ -235,11 +269,46 @@
               />
             </label>
           </div>
+
+          {#if detecting}
+            <span class="flex items-center gap-1.5 text-muted" role="status">
+              <Loader2 size={12} class="animate-spin" /> Reaching the machine on the addresses it reported…
+            </span>
+          {:else if detected}
+            <span class="flex items-center gap-1.5 text-success">
+              <CheckCircle2 size={12} />
+              {detected} answered, so that is where the Oven will connect.
+            </span>
+          {:else}
+            <span class="text-warning">
+              None of the machine's own addresses answered from this computer. Pick one below, or
+              enter the address you reach it on.
+            </span>
+          {/if}
+
+          {#if preview.addresses.length > 1}
+            <div class="flex flex-wrap gap-1.5">
+              {#each preview.addresses as address (address)}
+                <button
+                  type="button"
+                  class="rounded-md border px-2 py-1 font-mono transition-colors {host === address
+                    ? 'border-primary bg-primary/10 text-foreground'
+                    : 'bg-elevated text-muted hover:text-foreground'}"
+                  aria-pressed={host === address}
+                  title={`Use ${address}`}
+                  onclick={() => (host = address)}
+                >
+                  {address}
+                </button>
+              {/each}
+            </div>
+          {/if}
+
           <p class="text-muted">
-            The agent can only report the machine's own host name (<span class="text-foreground"
+            The machine reports every address it answers on. This computer dials them and uses the
+            first that connects; the machine's host name (<span class="text-foreground"
               >{preview.hostname}</span
-            >), which may not resolve on this computer. Enter the address or SSH alias this computer
-            reaches it on.
+            >) is only a fallback, since it often does not resolve here.
           </p>
 
           <p class={preview.serviceCurrent ? 'text-success' : 'text-warning'}>

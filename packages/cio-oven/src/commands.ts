@@ -143,6 +143,7 @@ async function publish(
   section('Oven ready')
   field('Name', descriptor.name)
   field('Host', descriptor.hostname)
+  field('Addresses', (descriptor.addresses ?? []).join(', '))
   field('User', descriptor.user)
   field('SSH port', String(descriptor.port))
   field('Data root', layout.dataRoot)

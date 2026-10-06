@@ -64,6 +64,34 @@ describe('oven agent descriptor codec', () => {
     expect(decodeOvenAgentDescriptor(code)).toEqual(source)
   })
 
+  it('carries the machine’s candidate addresses through the code', () => {
+    const source = descriptor({ addresses: ['192.168.64.10', '10.0.0.5', 'build-box'] })
+    expect(decodeOvenAgentDescriptor(encodeOvenAgentDescriptor(source)).addresses).toEqual([
+      '192.168.64.10',
+      '10.0.0.5',
+      'build-box'
+    ])
+  })
+
+  it('rejects an address list that is not a bounded set of real hosts', () => {
+    expect(() => validateOvenAgentDescriptor({ ...descriptor(), addresses: 'build-box' })).toThrow()
+    expect(() =>
+      validateOvenAgentDescriptor({ ...descriptor(), addresses: ['ok', 'bad host'] })
+    ).toThrow()
+    expect(() =>
+      validateOvenAgentDescriptor({
+        ...descriptor(),
+        addresses: Array.from({ length: 17 }, (_, index) => `10.0.0.${index + 1}`)
+      })
+    ).toThrow()
+  })
+
+  it('still reads a code written before candidates existed', () => {
+    const legacy = descriptor()
+    delete (legacy as { addresses?: string[] }).addresses
+    expect(decodeOvenAgentDescriptor(encodeOvenAgentDescriptor(legacy)).addresses).toBeUndefined()
+  })
+
   it('reads the code out of the surrounding terminal output the agent prints', () => {
     const code = encodeOvenAgentDescriptor(descriptor())
     const pasted = `The Oven is ready. Paste this:\n\n${code}\n\nA copy is saved on the machine.`
@@ -223,6 +251,10 @@ describe('oven agent runtime programs', () => {
     expect(decoded.user).toBe('deploy')
     expect(decoded.serviceRevision).toBe(REVISION)
     expect(decoded.identity?.publicKey).toBe(PUBLIC_KEY)
+    // The program enumerates this machine's real interfaces, so only the shape
+    // and the guaranteed host-name fallback are pinned here.
+    expect(decoded.addresses?.length).toBeGreaterThan(0)
+    expect(decoded.addresses?.at(-1)).toBe(decoded.hostname)
     const saved = JSON.parse(readFileSync(descriptorFile, 'utf8')) as OvenAgentDescriptor
     expect(saved.kind).toBe('codeinoven-oven-agent')
   })

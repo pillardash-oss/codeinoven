@@ -13,6 +13,7 @@ import {
 } from '../../lib/ovens'
 import type { OvenRegistry } from './oven-registry'
 import { buildOvenAgentScript, normalizeServiceBundle } from './oven-agent-script'
+import { firstReachableAddress } from './oven-agent-address'
 import { fingerprint } from './oven-agent-descriptor'
 import { serviceBundleRevision } from './oven-service-bundle'
 import { decodeOvenAgentDescriptor, descriptorHasIdentity } from './oven-agent-descriptor'
@@ -54,6 +55,19 @@ export class OvenAgentService {
     return this.previewOf(descriptor, revision)
   }
 
+  /**
+   * Name the address from a code that this computer can actually reach.
+   *
+   * Registration codes carry every address the machine answers on, because only
+   * the machine can enumerate them and only this computer can decide which one
+   * works. Probing here means the common case needs no input at all, and the
+   * fallback stays the machine's own first choice rather than an empty field.
+   */
+  async reachableAddress(code: string): Promise<string | null> {
+    const descriptor = decodeOvenAgentDescriptor(code)
+    return firstReachableAddress(descriptor.addresses ?? [], descriptor.port)
+  }
+
   /** Validate a descriptor and save it as an Oven, storing any identity in the vault. */
   async register(input: OvenAgentRegistrationInput): Promise<OvenAgentRegistration> {
     const descriptor = decodeOvenAgentDescriptor(input.code)
@@ -82,7 +96,7 @@ export class OvenAgentService {
     input: OvenAgentRegistrationInput
   ): SaveOvenInput {
     const connection = {
-      host: this.field(input.host, 'host') ?? descriptor.hostname,
+      host: this.field(input.host, 'host') ?? descriptor.addresses?.[0] ?? descriptor.hostname,
       user: this.field(input.user, 'user') ?? descriptor.user,
       port: input.port ?? descriptor.port,
       authentication: descriptorHasIdentity(descriptor) ? ('vault' as const) : ('agent' as const)
@@ -104,6 +118,7 @@ export class OvenAgentService {
     const identity = descriptor.identity
     return {
       host: descriptor.hostname,
+      addresses: descriptor.addresses ?? [descriptor.hostname],
       port: descriptor.port,
       user: descriptor.user,
       name: descriptor.name,

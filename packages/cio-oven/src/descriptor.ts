@@ -9,6 +9,7 @@ import {
   type OvenAgentPlatform
 } from '../../../src/lib/ovens'
 import { encodeOvenAgentDescriptor } from '../../../src/main/ovens/oven-agent-descriptor'
+import { candidateAddresses } from './addresses'
 import type { OvenLayout } from './paths'
 
 export interface DescriptorInput {
@@ -54,6 +55,7 @@ export function buildDescriptor(input: DescriptorInput): OvenAgentDescriptor {
     platform: agentPlatform(),
     architecture: process.arch,
     hostname: defaultName(),
+    addresses: candidateAddresses(),
     user: input.user,
     port: input.port,
     name: input.name,

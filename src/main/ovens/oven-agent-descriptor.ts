@@ -97,6 +97,7 @@ export function validateOvenAgentDescriptor(value: unknown): OvenAgentDescriptor
     platform: label(raw.platform, 'Platform', 32),
     architecture: label(raw.architecture, 'Architecture', 32),
     hostname: label(raw.hostname, 'Host name', 255),
+    ...(raw.addresses === undefined ? {} : { addresses: addressList(raw.addresses) }),
     user: label(raw.user, 'SSH user', 128),
     port,
     name: label(raw.name, 'Oven name', 80),
@@ -154,6 +155,28 @@ function path(value: unknown, name: string): string {
   if (!(text.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(text)))
     throw new TypeError(`${name} must be an absolute path.`)
   return text
+}
+
+/**
+ * The addresses a machine offers, in its own priority order.
+ *
+ * The list is advisory: the app probes it and picks one that answers, so a
+ * candidate that is unreachable from this computer is harmless. It is still
+ * bounded and shape-checked, because the value is dialed and stored.
+ */
+const HOST_NAME = /^(?:[a-zA-Z0-9][a-zA-Z0-9._-]*|[a-fA-F0-9:]+)$/u
+
+function addressList(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 16)
+    throw new TypeError('The descriptor address list is invalid.')
+  const seen = new Set<string>()
+  for (const entry of value) {
+    const candidate = label(entry, 'Address', 255)
+    if (!HOST_NAME.test(candidate))
+      throw new TypeError('The descriptor carries an invalid address.')
+    seen.add(candidate)
+  }
+  return [...seen]
 }
 
 function hasControlCharacters(value: string): boolean {

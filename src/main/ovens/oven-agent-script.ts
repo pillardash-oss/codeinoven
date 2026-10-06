@@ -51,6 +51,28 @@ if (process.env.CIO_AGENT_IDENTITY === '1') {
     publicKey: fs.readFileSync(base + '.pub', 'utf8').trim()
   }
 }
+// The machine reports every address it answers on, not one guess at which of
+// them another computer can reach. The app dials the list and keeps the first
+// that connects; the host name is last because it is the value that fails most.
+const private4 = [], other4 = [], v6 = []
+for (const entries of Object.values(os.networkInterfaces())) {
+  for (const entry of entries || []) {
+    if (entry.internal) continue
+    const address = String(entry.address).split('%')[0]
+    if (!address) continue
+    if (entry.family === 'IPv4') {
+      const [a, b] = address.split('.').map(Number)
+      const priv = a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
+      ;(priv ? private4 : other4).push(address)
+    } else if (entry.family === 'IPv6') {
+      // Only global unicast: link-local names a link and unique-local names a
+      // site, so neither is reachable from a machine outside them.
+      const first = Number.parseInt(address.split(':')[0] || '0', 16)
+      if (first >= 0x2000 && first <= 0x3fff) v6.push(address)
+    }
+  }
+}
+const addresses = [...new Set([...private4, ...other4, ...v6, os.hostname()])]
 const descriptor = {
   kind: 'codeinoven-oven-agent',
   version: 1,
@@ -59,6 +81,7 @@ const descriptor = {
   platform: process.platform,
   architecture: process.arch,
   hostname: os.hostname(),
+  addresses,
   user: process.env.CIO_AGENT_USER,
   port: Number(process.env.CIO_AGENT_PORT || '22'),
   name: os.hostname(),

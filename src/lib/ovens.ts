@@ -555,6 +555,14 @@ export interface OvenAgentDescriptor {
   platform: string
   architecture: string
   hostname: string
+  /**
+   * Addresses this machine answers on, most likely first, as the machine itself
+   * can see them: its interface addresses and its host name. A machine cannot
+   * know which of them this computer can reach, so it reports the candidates
+   * and the app picks one that actually connects. Missing on codes written
+   * before candidates existed, where the host name stands alone.
+   */
+  addresses?: string[]
   user: string
   port: number
   /** Suggested display name for the app entry. */
@@ -590,6 +598,8 @@ export interface OvenAgentScript {
 /** What the app shows about a descriptor before saving it. Never includes the key. */
 export interface OvenAgentPreview {
   host: string
+  /** Every address the machine offered, in the order it ranked them. */
+  addresses: string[]
   port: number
   user: string
   name: string
