@@ -6,6 +6,7 @@ import type {
   ProjectFileTransferMode
 } from '$shared/types'
 import { invoke } from '$lib/ipc.svelte'
+import { readOvenSurface, ovenSurfaceCacheKey, writeOvenSurface } from '$lib/oven-surface-cache'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import {
@@ -101,6 +102,7 @@ export class ProjectFilesExplorer {
       // The held entries belonged to the previous mount and are being dropped,
       // so nothing is renderable until the new root answers.
       state.listingMountKey = null
+      state.listingFromCache = false
       state.entriesByDirectory = {}
       state.loadingDirectories = {}
       state.directoryErrors = {}
@@ -114,18 +116,25 @@ export class ProjectFilesExplorer {
     if (!force && state.entriesByDirectory[directory]) return
 
     const load = (async (): Promise<void> => {
+      // Paint what this checkout read last time before asking it again: the
+      // answer lives on another machine, and an empty tree that is really just
+      // a slow Oven reads as an empty project.
+      this.hydrateRootFromCache(projectId, directory, state)
       // Silent refreshes never surface loading spinners in the explorer; the
       // existing listing stays visible until a successful read replaces it.
       if (!options.silent) state.loadingDirectories[directory] = true
       delete state.directoryErrors[directory]
       try {
-        state.entriesByDirectory[directory] = await invoke(
+        const entries = await invoke(
           'projectFiles:list',
           projectId,
           directory,
           this.host.scopeFor(projectId),
           this.host.threadArg(projectId)
         )
+        state.entriesByDirectory[directory] = entries
+        state.listingFromCache = false
+        if (directory === '') this.rememberRoot(projectId, state, entries)
         state.listingMountKey = mountKey
         // The first time the root is listed for a freshly hydrated project,
         // cheaply restore the last-viewed position: only the ancestor chain of
@@ -142,7 +151,11 @@ export class ProjectFilesExplorer {
           // been deleted externally) without flashing an error banner; the next
           // user-driven load retries and surfaces any real error normally.
           delete state.entriesByDirectory[directory]
+          state.listingFromCache = false
         } else {
+          // The last-known read is deliberately kept here: the surface shows it
+          // dimmed behind the error so the panel still describes the checkout
+          // rather than going blank.
           state.directoryErrors[directory] = errorMessage(error)
         }
       } finally {
@@ -155,6 +168,46 @@ export class ProjectFilesExplorer {
     } finally {
       this.directoryLoads.delete(loadKey)
     }
+  }
+
+  /**
+   * Paint the root listing this Oven read last time, before asking it again.
+   *
+   * Only the root, and only when nothing is on screen already: the cache exists
+   * so a panel opens describing the checkout instead of empty, not to mirror the
+   * whole tree. A local project, or one whose checkout was never read, hydrates
+   * nothing and behaves exactly as before.
+   */
+  private hydrateRootFromCache(
+    projectId: string,
+    directory: string,
+    state: ProjectFilesState
+  ): void {
+    if (directory !== '' || state.entriesByDirectory['']) return
+    const key = this.ovenSurfaceKey(projectId, state)
+    if (!key) return
+    const cached = readOvenSurface<ProjectFileEntry[]>(key)
+    if (!Array.isArray(cached) || cached.length === 0) return
+    state.entriesByDirectory[''] = cached
+    state.listingFromCache = true
+  }
+
+  /** Keep the root listing for the next open, for a checkout that lives on an Oven. */
+  private rememberRoot(
+    projectId: string,
+    state: ProjectFilesState,
+    entries: ProjectFileEntry[]
+  ): void {
+    const key = this.ovenSurfaceKey(projectId, state)
+    if (!key) return
+    writeOvenSurface(key, entries)
+  }
+
+  /** This checkout's cache key, or null when the tree reads this computer. */
+  private ovenSurfaceKey(projectId: string, state: ProjectFilesState): string | null {
+    const ovenId = state.ovenId
+    const threadId = state.ovenThreadId
+    return ovenId && threadId ? ovenSurfaceCacheKey('files', ovenId, threadId) : null
   }
 
   /** Restore the tree's position cheaply on first open. Only the ancestor

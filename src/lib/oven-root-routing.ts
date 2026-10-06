@@ -170,3 +170,24 @@ export const OVEN_ROOT_SCOPE_ARGUMENTS: Readonly<Record<string, number>> = {
 export function isOvenRootChannel(channel: string): boolean {
   return OVEN_ROOT_GIT_CHANNELS.has(channel) || OVEN_ROOT_FILE_CHANNELS.has(channel)
 }
+
+/**
+ * The scope key a remote panel passes where a local scope bucket id goes.
+ *
+ * One shape, minted by the renderer and parsed by the main process, so the two
+ * ends can never disagree about it: the renderer builds the key a panel's calls
+ * carry, and main reads back the thread and Oven a routed call belongs to.
+ */
+export function ovenRootKeyFor(threadId: string, ovenId: string): string {
+  return `oven.${threadId}.${ovenId}`
+}
+
+/** Matches exactly the keys {@link ovenRootKeyFor} mints. */
+const OVEN_ROOT_KEY = /^oven\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/u
+
+/** The thread and Oven a remote scope key names, or null for anything else. */
+export function parseOvenRootKey(value: unknown): { threadId: string; ovenId: string } | null {
+  if (typeof value !== 'string') return null
+  const match = OVEN_ROOT_KEY.exec(value)
+  return match ? { threadId: match[1], ovenId: match[2] } : null
+}

@@ -1,5 +1,5 @@
 import type { Thread } from '$shared/types'
-import { OVEN_ROOT_SCOPE_ARGUMENTS } from '$shared/oven-root-routing'
+import { OVEN_ROOT_SCOPE_ARGUMENTS, ovenRootKeyFor } from '$shared/oven-root-routing'
 
 /** One remote thread's checkout, as the renderer addressed it. */
 export interface OvenRootBinding {
@@ -45,7 +45,7 @@ export function ovenRootKey(projectId: string): string | null {
   const thread = ovenRootThread(projectId)
   const ovenId = thread?.settings?.ovenId
   if (!thread || !ovenId) return null
-  const key = `oven.${thread.id}.${ovenId}`
+  const key = ovenRootKeyFor(thread.id, ovenId)
   bindings.set(key, { projectId: thread.projectId, threadId: thread.id, ovenId })
   if (bindings.size > MAX_BINDINGS) {
     const oldest = bindings.keys().next()

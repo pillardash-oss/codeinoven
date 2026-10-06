@@ -12,7 +12,7 @@ import type { OvenTransfers } from './oven-transfers'
 import type { OvenPreview } from './oven-preview'
 import { LOCAL_OVEN_ID } from '../../lib/ovens'
 import { resolveOvenThreadRoot, type OvenThreadRoot } from './oven-thread-root'
-import { isOvenRootChannel } from '../../lib/oven-root-routing'
+import { isOvenRootChannel, parseOvenRootKey } from '../../lib/oven-root-routing'
 import { validateBoundedString, validateEntityId } from '../ipc/validation/primitives'
 
 export interface OvenRootDependencies {
@@ -28,17 +28,8 @@ export interface OvenRootDependencies {
   authorizePath: (value: unknown) => Promise<string>
 }
 
-/** A renderer-issued scope key for a remote thread: `oven.<threadId>.<ovenId>`. */
-const OVEN_SCOPE_KEY = /^oven\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/u
-
 /** Routed Git channels after which the checkout's branch may have changed. */
 const BRANCH_CHANGING_CHANNELS = new Set(['git:checkout', 'git:createBranch', 'git:init'])
-
-function parseScopeKey(value: unknown): { threadId: string; ovenId: string } | null {
-  if (typeof value !== 'string') return null
-  const match = OVEN_SCOPE_KEY.exec(value)
-  return match ? { threadId: match[1], ovenId: match[2] } : null
-}
 
 /**
  * Root operations for remote threads.
@@ -97,7 +88,7 @@ export function registerOvenRootIpc(dependencies: OvenRootDependencies): void {
     scope: unknown,
     thread: unknown
   ): Promise<OvenRootTarget> => {
-    const selected = parseScopeKey(scope)
+    const selected = parseOvenRootKey(scope)
     const threadId = typeof thread === 'string' ? thread : selected?.threadId
     if (threadId) {
       const bound = await threads.getThread(projectId, validateEntityId(threadId, 'Thread ID'))
