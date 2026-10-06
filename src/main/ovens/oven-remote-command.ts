@@ -74,9 +74,13 @@ export function remoteServiceCommand(
     const prefix = posixEnvironment(environment)
     return `${POSIX_NODE_CHECK}; ${prefix}node ${POSIX_SERVICE} ${args.map(sshQuote).join(' ')}`
   }
-  const windowsRoot = `Join-Path $env:USERPROFILE ${powershellLiteral(WINDOWS_ROOT_SEGMENT)}`
+  // The root is joined once into a variable: composing `Join-Path` calls inline
+  // produced `Join-Path Join-Path $env:USERPROFILE ...`, which PowerShell rejects
+  // with "A positional parameter cannot be found", failing every Windows request.
+  const windowsRoot = `(Join-Path $env:USERPROFILE ${powershellLiteral(WINDOWS_ROOT_SEGMENT)})`
   const script = [
-    `$service = Join-Path ${windowsRoot} 'service.mjs'`,
+    `$root = ${windowsRoot}`,
+    `$service = Join-Path $root 'service.mjs'`,
     `if (-not (Get-Command node -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine('Node.js is required on this Oven'); exit 1 }`,
     ...environmentAssignments(environment),
     `$reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)`,
@@ -103,25 +107,44 @@ export function remoteInstallServiceCommand(
   if (!isWindowsShell(shell)) {
     return `${POSIX_NODE_CHECK}; umask 077; mkdir -p ${POSIX_ROOT}; staged="$HOME/${OVEN_DATA_DIRECTORY}/service.${token}.next"; trap 'rm -f "$staged"' EXIT; cat > "$staged"; hash=$( (sha256sum < "$staged" 2>/dev/null || shasum -a 256 "$staged") | cut -d ' ' -f 1); test "$hash" = ${sshQuote(revision)}; mv "$staged" ${POSIX_SERVICE}; CODEINOVEN_OVEN_REVISION=${sshQuote(revision)} node ${POSIX_SERVICE} ensure`
   }
-  const windowsRoot = `Join-Path $env:USERPROFILE ${powershellLiteral(WINDOWS_ROOT_SEGMENT)}`
-  const script = [
-    `$ErrorActionPreference = 'Stop'`,
-    `$root = ${windowsRoot}`,
-    `New-Item -ItemType Directory -Force -Path $root | Out-Null`,
-    `$service = Join-Path $root 'service.mjs'`,
-    `$staged = Join-Path $root ('service.' + [guid]::NewGuid().ToString('N') + '.next')`,
-    `$reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)`,
-    `$content = $reader.ReadToEnd()`,
-    `[System.IO.File]::WriteAllText($staged, $content, (New-Object System.Text.UTF8Encoding($false)))`,
-    `$actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $staged).Hash.ToLowerInvariant()`,
-    `if ($actual -ne ${powershellLiteral(revision)}) { Remove-Item -LiteralPath $staged -Force; throw 'The Oven service failed its integrity check after it was written.' }`,
-    `Move-Item -LiteralPath $staged -Destination $service -Force`,
-    `$env:CODEINOVEN_OVEN_REVISION = ${powershellLiteral(revision)}`,
-    `$ErrorActionPreference = 'Continue'`,
-    `& node $service ensure`,
-    `exit $LASTEXITCODE`
-  ].join('\n')
-  return windowsEncodedCommand(script)
+  return `node -e "${windowsInstallProgram(revision)}"`
+}
+
+/**
+ * The Windows install program, run under Node rather than PowerShell.
+ *
+ * PowerShell cannot be handed the bundle on stdin: a redirected
+ * `[Console]::OpenStandardInput()` read hangs on a payload the size of the
+ * service bundle, while Node reads the same 429 KB off the same SSH channel in
+ * well under a second. The Oven always has Node (it runs the service), so the
+ * bundle travels through the runtime that can actually take it.
+ *
+ * One line, single quotes only, and no double quote anywhere inside: it has to
+ * survive cmd.exe and PowerShell quoting unchanged, and a newline would end the
+ * remote command before Node ever started. The bundle stays on stdin, so the
+ * command line remains a few hundred characters whatever the payload weighs.
+ */
+export function windowsInstallProgram(revision: string): string {
+  if (!/^[a-f0-9]{64}$/u.test(revision)) throw new TypeError('Invalid service revision.')
+  return [
+    `const fs=require('fs'),path=require('path'),crypto=require('crypto'),{spawnSync}=require('child_process')`,
+    `const root=path.join(process.env.USERPROFILE,'.config','pillardash','codeinoven','ovens')`,
+    `const staged=path.join(root,'service.next')`,
+    `const target=path.join(root,'service.mjs')`,
+    `const expected='${revision}'`,
+    `const chunks=[]`,
+    `process.stdin.on('data',(chunk)=>chunks.push(chunk))`,
+    `process.stdin.on('end',()=>{`,
+    `const buf=Buffer.concat(chunks)`,
+    `if(crypto.createHash('sha256').update(buf).digest('hex')!==expected){process.stderr.write('The Oven service failed its integrity check after it was written.');process.exit(3)}`,
+    `fs.mkdirSync(root,{recursive:true})`,
+    `fs.writeFileSync(staged,buf)`,
+    `fs.renameSync(staged,target)`,
+    `const env=Object.assign({},process.env,{CODEINOVEN_OVEN_REVISION:expected})`,
+    `const done=spawnSync(process.execPath,[target,'ensure'],{stdio:['ignore','inherit','inherit'],env})`,
+    `process.exit(done.status===null?1:done.status)`,
+    `})`
+  ].join(';')
 }
 
 /**

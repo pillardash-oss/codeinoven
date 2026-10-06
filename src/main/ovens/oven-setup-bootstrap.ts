@@ -278,6 +278,41 @@ export function buildPreflightReport(
 }
 
 /**
+ * How one read-only probe program reaches a given shell.
+ *
+ * POSIX sends the script on the command line because it is small. A Windows
+ * Oven cannot: the PowerShell preflight is over 4000 characters, and
+ * `-EncodedCommand` would inflate it past cmd.exe's 8191-character command line
+ * (and PowerShell's own limit), which fails with "The command line is too long"
+ * before PowerShell ever starts. The envelope is therefore a short command that
+ * reads the script from stdin and runs it as a script block, which is also the
+ * only form that survives cmd.exe, since `-Command -` executes line by line and
+ * would break a multi-line function.
+ */
+export interface PreflightInvocation {
+  command: string
+  /** Text written to the remote stdin, empty when the command carries itself. */
+  input: string
+}
+
+/** A short command that executes the script arriving on stdin as one block. */
+const WINDOWS_SCRIPT_BLOCK =
+  'powershell -NoProfile -NonInteractive -Command "& ([scriptblock]::Create([Console]::In.ReadToEnd()))"'
+
+/**
+ * The read-only probe for one remote shell, as the transport must send it.
+ *
+ * A Windows Oven is read through a PowerShell program whichever shell OpenSSH
+ * starts: cmd.exe is the OpenSSH default and runs this envelope as well as
+ * PowerShell does, so a cmd Oven needs no reconfiguration to be driven.
+ */
+export function preflightInvocation(shell: RemoteShell): PreflightInvocation {
+  return shell === 'posix'
+    ? { command: POSIX_PREFLIGHT, input: '' }
+    : { command: WINDOWS_SCRIPT_BLOCK, input: POWERSHELL_PREFLIGHT }
+}
+
+/**
  * Observe an oven without changing it. One bounded SSH round trip collects
  * hardware, privileges, package manager, prerequisites, and every harness
  * version together, because the transport serializes work and a setup check
@@ -286,17 +321,8 @@ export function buildPreflightReport(
 export async function collectPreflight(ssh: OvenSsh, id: string): Promise<OvenPreflightReport> {
   const start = Date.now()
   const shell = await detectRemoteShell(ssh, id)
-  const command =
-    shell === 'posix'
-      ? POSIX_PREFLIGHT
-      : shell === 'powershell'
-        ? `powershell -NoProfile -NonInteractive -Command @'\n${POWERSHELL_PREFLIGHT}\n'@`
-        : null
-  if (!command)
-    throw new Error(
-      'This Oven presents a Windows command shell CodeInOven cannot read. Configure OpenSSH on the Oven to use PowerShell, then try again.'
-    )
-  const output = await ssh.execute(id, command, '', 90_000)
+  const invocation = preflightInvocation(shell)
+  const output = await ssh.execute(id, invocation.command, invocation.input, 90_000)
   return buildPreflightReport(id, shell, output, Date.now() - start)
 }
 

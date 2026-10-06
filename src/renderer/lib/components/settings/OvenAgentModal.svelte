@@ -4,7 +4,7 @@
   import Modal from '../ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
-  import type { OvenAgentPreview } from '$shared/ovens'
+  import type { OvenAgentPreview, OvenEndpoint } from '$shared/ovens'
 
   interface Props {
     open: boolean
@@ -28,8 +28,8 @@
   let port = $state(22)
   /** True while the machine's own candidates are being dialed. */
   let detecting = $state(false)
-  /** The candidate that answered, when one did. */
-  let detected = $state<string | null>(null)
+  /** The endpoint that answered, when one did. */
+  let detected = $state<OvenEndpoint | null>(null)
   let error = $state('')
 
   function message(value: unknown): string {
@@ -80,11 +80,14 @@
   }
 
   /**
-   * Dial the machine's own candidates and keep the one that answers.
+   * Dial the machine's own candidates and keep the endpoint that answers.
    *
    * A machine reports its interface addresses but cannot know which one this
-   * computer can reach, so the choice is made here. When nothing answers, the
-   * field keeps the machine's own first choice and the user can still edit it.
+   * computer can reach, and the port it was told is an answer the machine cannot
+   * verify from the outside. Both are settled here: the address and port that
+   * answered are written back into the fields, so a wrong port is corrected
+   * rather than saved and timed out on later. When nothing answers, the field
+   * keeps the machine's own first choice and the user can still edit it.
    */
   async function detectAddress(): Promise<void> {
     if (detecting) return
@@ -93,7 +96,8 @@
       const reachable = await invoke('oven:agent:reachable', code)
       if (reachable) {
         detected = reachable
-        host = reachable
+        host = reachable.host
+        port = reachable.port
       }
     } catch {
       // A probe that cannot run is not a registration failure: the field already
@@ -272,17 +276,26 @@
 
           {#if detecting}
             <span class="flex items-center gap-1.5 text-muted" role="status">
-              <Loader2 size={12} class="animate-spin" /> Reaching the machine on the addresses it reported…
+              <Loader2 size={12} class="animate-spin" /> Reaching the machine on the addresses and port
+              it reported…
             </span>
           {:else if detected}
             <span class="flex items-center gap-1.5 text-success">
               <CheckCircle2 size={12} />
-              {detected} answered, so that is where the Oven will connect.
+              SSH answered on {detected.host}:{detected.port}, so that is where the Oven will
+              connect.
             </span>
+            {#if detected.port !== preview.port}
+              <span class="text-warning">
+                The command on the machine reported port {preview.port}, but SSH is not answering
+                there. This computer uses {detected.port}. Update the machine's SSH port if that is
+                wrong.
+              </span>
+            {/if}
           {:else}
             <span class="text-warning">
-              None of the machine's own addresses answered from this computer. Pick one below, or
-              enter the address you reach it on.
+              Nothing is serving SSH on the machine's own addresses and port from this computer.
+              Check the machine's SSH port and firewall, or enter the address you reach it on.
             </span>
           {/if}
 

@@ -21,14 +21,16 @@ describe('oven remote commands', () => {
   it('runs the service with stdin on POSIX', () => {
     const command = remoteServiceCommand('posix', ['request'])
     expect(command).toContain(POSIX_NODE_CHECK)
-    expect(command).toContain('node "$HOME/.config/pillardash/codeinoven/ovens/service.mjs" \'request\'')
+    expect(command).toContain(
+      'node "$HOME/.config/pillardash/codeinoven/ovens/service.mjs" \'request\''
+    )
   })
 
   it('passes a POSIX environment assignment ahead of node', () => {
     const command = remoteServiceCommand('posix', ['request'], {
       environment: { CODEINOVEN_OVEN_REVISION: 'abc' }
     })
-    expect(command).toContain('CODEINOVEN_OVEN_REVISION=\'abc\' node ')
+    expect(command).toContain("CODEINOVEN_OVEN_REVISION='abc' node ")
   })
 
   it('envelopes every Windows command as encoded PowerShell', () => {
@@ -50,17 +52,21 @@ describe('oven remote commands', () => {
     const command = remoteInstallServiceCommand('posix', 'deadbeef', 'token-1')
     expect(command).toContain('sha256sum')
     expect(command).toContain('shasum -a 256')
-    expect(command).toContain("test \"$hash\" = 'deadbeef'")
-    expect(command).toContain('CODEINOVEN_OVEN_REVISION=\'deadbeef\' node ')
+    expect(command).toContain('test "$hash" = \'deadbeef\'')
+    expect(command).toContain("CODEINOVEN_OVEN_REVISION='deadbeef' node ")
     expect(command).toContain('service.token-1.next')
   })
 
   it('verifies the bundle revision before installing on Windows', () => {
-    const script = decode(remoteInstallServiceCommand('cmd', 'deadbeef', 'token-1'))
-    expect(script).toContain('Get-FileHash -Algorithm SHA256')
-    expect(script).toContain("if ($actual -ne 'deadbeef')")
-    expect(script).toContain("$env:CODEINOVEN_OVEN_REVISION = 'deadbeef'")
-    expect(script).toContain('& node $service ensure')
+    const revision = 'd'.repeat(64)
+    const command = remoteInstallServiceCommand('cmd', revision, 'token-1')
+    // The hash is checked in Node, which is the only runtime that can take the
+    // bundle on stdin on Windows.
+    expect(command).toContain("crypto.createHash('sha256')")
+    expect(command).toContain(`expected='${revision}'`)
+    expect(command).toContain('CODEINOVEN_OVEN_REVISION:expected')
+    expect(command).toContain(",'ensure'")
+    expect(command).toContain('process.exit(3)')
   })
 
   it('rejects an unsafe install token', () => {
@@ -121,5 +127,34 @@ describe('oven remote commands', () => {
     })
     expect(command).toContain('-NonInteractive')
     expect(decode(command)).toContain('& { echo hi }')
+  })
+
+  it('joins the Windows service root once, not twice', () => {
+    // `Join-Path Join-Path ...` is not valid PowerShell: it failed every Windows
+    // request with "A positional parameter cannot be found".
+    const script = decode(remoteServiceCommand('cmd', ['request']))
+    expect(script).toContain('$root = (Join-Path $env:USERPROFILE ')
+    expect(script).toContain("$service = Join-Path $root 'service.mjs'")
+    expect(script).not.toContain('Join-Path Join-Path')
+  })
+
+  it('carries a Windows install through Node, not a PowerShell stdin read', () => {
+    const revision = 'a'.repeat(64)
+    const command = remoteInstallServiceCommand('cmd', revision, 'token-1')
+    // A newline would end the remote command before Node ever started.
+    expect(command).not.toContain('\n')
+    expect(command.startsWith('node -e "')).toBe(true)
+    expect(command.endsWith('"')).toBe(true)
+    const program = command.slice('node -e "'.length, -1)
+    // One quoting layer only: a double quote inside would break cmd.exe.
+    expect(program).not.toContain('"')
+    expect(program).toContain(`'${revision}'`)
+    expect(program).toContain('spawnSync')
+    // PowerShell cannot take the bundle on stdin: the read hung on a real Oven.
+    expect(command).not.toContain('-EncodedCommand')
+  })
+
+  it('refuses a Windows install without a valid revision', () => {
+    expect(() => remoteInstallServiceCommand('cmd', 'nope', 'token-1')).toThrow()
   })
 })

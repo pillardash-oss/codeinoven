@@ -5,7 +5,7 @@ import {
   rankAddresses,
   type AddressCandidate
 } from '../../../packages/cio-oven/src/addresses'
-import { firstReachableAddress } from '../../../src/main/ovens/oven-agent-address'
+import { firstReachableEndpoint } from '../../../src/main/ovens/oven-agent-address'
 
 /** Build one interface entry the way `os.networkInterfaces()` reports it. */
 function entry(address: string, family = 'IPv4', internal = false): AddressCandidate {
@@ -80,26 +80,73 @@ describe('oven agent reachability probe', () => {
     })
   }
 
+  /** A port with nothing on it: claimed by a listener, then released. */
+  function closedPort(): Promise<number> {
+    return new Promise((resolve) => {
+      const server = createServer()
+      server.listen(0, () => {
+        const address = server.address()
+        const port = address && typeof address !== 'string' ? address.port : 0
+        server.close(() => resolve(port))
+      })
+    })
+  }
+
   it('keeps the machine’s own order among the addresses that answer', async () => {
     const port = await listen()
-    expect(await firstReachableAddress(['127.0.0.1'], port)).toBe('127.0.0.1')
+    expect(await firstReachableEndpoint(['127.0.0.1'], [port])).toEqual({
+      host: '127.0.0.1',
+      port
+    })
     // Only meaningful where IPv6 loopback exists; the probe itself decides.
-    if ((await firstReachableAddress(['::1'], port)) === null) return
-    expect(await firstReachableAddress(['::1', '127.0.0.1'], port)).toBe('::1')
-    expect(await firstReachableAddress(['127.0.0.1', '::1'], port)).toBe('127.0.0.1')
+    if ((await firstReachableEndpoint(['::1'], [port])) === null) return
+    expect(await firstReachableEndpoint(['::1', '127.0.0.1'], [port])).toEqual({
+      host: '::1',
+      port
+    })
+    expect(await firstReachableEndpoint(['127.0.0.1', '::1'], [port])).toEqual({
+      host: '127.0.0.1',
+      port
+    })
+  })
+
+  it('corrects a reported port nothing is listening on', async () => {
+    const live = await listen()
+    const dead = await closedPort()
+    // The machine reported `dead`; SSH is really on `live`.
+    expect(await firstReachableEndpoint(['127.0.0.1'], [dead, live])).toEqual({
+      host: '127.0.0.1',
+      port: live
+    })
+  })
+
+  it('prefers the machine’s own port over the fallback', async () => {
+    const first = await listen()
+    const second = await listen()
+    expect(await firstReachableEndpoint(['127.0.0.1'], [first, second])).toEqual({
+      host: '127.0.0.1',
+      port: first
+    })
+    expect(await firstReachableEndpoint(['127.0.0.1'], [second, first])).toEqual({
+      host: '127.0.0.1',
+      port: second
+    })
   })
 
   it('skips an address that does not answer instead of failing', async () => {
     const port = await listen()
     // 192.0.2.0/24 is reserved for documentation, so nothing ever answers there.
-    expect(await firstReachableAddress(['192.0.2.1', '127.0.0.1'], port)).toBe('127.0.0.1')
+    expect(await firstReachableEndpoint(['192.0.2.1', '127.0.0.1'], [port])).toEqual({
+      host: '127.0.0.1',
+      port
+    })
   })
 
   it('answers null when nothing is listening, so the caller can fall back', async () => {
     // Bind then release, so the port is known to be closed on this machine.
-    const port = await listen()
-    for (const server of servers) server.close()
-    expect(await firstReachableAddress(['127.0.0.1'], port)).toBeNull()
-    expect(await firstReachableAddress([], port)).toBeNull()
+    const port = await closedPort()
+    expect(await firstReachableEndpoint(['127.0.0.1'], [port])).toBeNull()
+    expect(await firstReachableEndpoint([], [port])).toBeNull()
+    expect(await firstReachableEndpoint(['127.0.0.1'], [])).toBeNull()
   })
 })

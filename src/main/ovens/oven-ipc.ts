@@ -215,7 +215,7 @@ export function registerOvenIpc(
   })
   ipcMain.handle('oven:agent:reachable', (_event, raw: unknown) => {
     if (typeof raw !== 'string') throw new TypeError('A registration code is required.')
-    return agentService.reachableAddress(raw)
+    return agentService.reachableEndpoint(raw)
   })
   ipcMain.handle('oven:agent:register', (_event, raw: unknown) =>
     agentService.register(validateOvenAgentRegistration(raw))

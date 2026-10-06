@@ -23,6 +23,7 @@
   } from '$shared/ovens'
   import type { CustomIcon } from '$shared/types'
   import {
+    Activity,
     AlertCircle,
     Boxes,
     Cable,
@@ -146,6 +147,12 @@
    */
   function ovenMenuItems(oven: Oven): MenuItem[] {
     const items: MenuItem[] = []
+    items.push({
+      label: 'Check Oven',
+      icon: Activity,
+      disabled: Boolean(busy) || Boolean(checking) || Boolean(timezoneBusy),
+      onClick: () => void checkOven(oven)
+    })
     if (ovenState?.defaultOvenId !== oven.id)
       items.push({
         label: 'Set as default',
@@ -181,6 +188,71 @@
       await load()
     } catch (failure) {
       error = message(failure)
+    }
+  }
+
+  /**
+   * Run the read-only check for one Oven on demand.
+   *
+   * This is the same probe the row draws its details from, so a check the user
+   * asks for and the check that runs when the list opens can never disagree.
+   * Nothing on the Oven changes: it reads the service, the hardware, and the
+   * harness inventory. A failure is reported where the user asked for it rather
+   * than only inside the setup flow.
+   */
+  async function checkOven(oven: Oven): Promise<void> {
+    if (busy || checking || timezoneBusy) return
+    checking = oven.id
+    try {
+      if (oven.kind === 'local') {
+        const result = await invoke('oven:connectionHealth', oven.id)
+        health = {
+          ...health,
+          [oven.id]: { ...result, specs: result.specs ?? health[oven.id]?.specs }
+        }
+        toast.success('Local is ready', {
+          description: `${ovenPlatformName(result.specs?.platform)} · ${result.specs?.cpuCount ?? '?'} logical cores`
+        })
+        return
+      }
+      const probe = await invoke('oven:probe', oven.id)
+      probes = { ...probes, [oven.id]: probe }
+      health = {
+        ...health,
+        [oven.id]: { state: 'connected', checkedAt: Date.now(), specs: probe.specs }
+      }
+      const inventory = probe.inventory ?? []
+      const healthy = inventory.filter((item) => item.health === 'healthy').length
+      const attention = inventory.filter(
+        (item) => item.health === 'broken' || item.health === 'unknown'
+      ).length
+      toast.success(`${oven.name} answered`, {
+        description: [
+          ovenPlatformName(probe.platform) || probe.platform,
+          `Node ${probe.nodeVersion}`,
+          `${healthy} harness${healthy === 1 ? '' : 'es'} installed`,
+          attention > 0 ? `${attention} need attention` : '',
+          probe.activeRuns > 0
+            ? `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
+            : ''
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      })
+    } catch (failure) {
+      const detail = message(failure)
+      health = {
+        ...health,
+        [oven.id]: {
+          state: 'disconnected',
+          checkedAt: Date.now(),
+          error: detail,
+          specs: health[oven.id]?.specs
+        }
+      }
+      toast.error(`${oven.name} could not be checked`, { description: detail })
+    } finally {
+      checking = ''
     }
   }
 

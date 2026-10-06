@@ -19,10 +19,13 @@ import {
   stopService
 } from './service'
 import { askConfirm, askPort, askText, promptsAvailable } from './prompt'
+import { candidateAddresses } from './addresses'
 import { blank, code as copyBlock, fail, field, note, out, section, step, warn } from './output'
 
 /** The oldest Node the Oven service runs on, matching the app's own requirement. */
 const MINIMUM_NODE = 22
+/** The port SSH uses unless the machine is configured otherwise. */
+const DEFAULT_SSH_PORT = 22
 
 export interface CommonOptions {
   dataRoot: string
@@ -64,10 +67,10 @@ async function detectSshPort(): Promise<number | null> {
   return null
 }
 
-/** Whether anything is listening for SSH on loopback, so the app can connect. */
-function sshListening(port: number): Promise<boolean> {
+/** Whether anything accepts a TCP connection on one host and port. */
+function portOpen(host: string, port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = connect({ host: '127.0.0.1', port })
+    const socket = connect({ host, port })
     const done = (result: boolean): void => {
       socket.destroy()
       resolve(result)
@@ -77,6 +80,67 @@ function sshListening(port: number): Promise<boolean> {
     socket.once('timeout', () => done(false))
     socket.once('error', () => done(false))
   })
+}
+
+/**
+ * Whether this machine is actually serving SSH on a port.
+ *
+ * Loopback is the fast path, but `sshd` can be bound to one interface only, so
+ * the machine's own addresses are tried too rather than declaring a live server
+ * dead. A port is only reported as serving when something really answers on it.
+ */
+async function sshServing(port: number): Promise<boolean> {
+  if (await portOpen('127.0.0.1', port)) return true
+  for (const host of candidateAddresses()) if (await portOpen(host, port)) return true
+  return false
+}
+
+/**
+ * The ports worth dialling for SSH, most specific claim first.
+ *
+ * The reported port leads because it is the more specific claim, and the
+ * standard one follows so a wrong answer still finds the live server.
+ */
+export function sshPortCandidates(preferred: number | null): number[] {
+  return [...new Set([preferred, DEFAULT_SSH_PORT])].filter(
+    (port): port is number =>
+      port !== null && Number.isSafeInteger(port) && port >= 1 && port <= 65535
+  )
+}
+
+/**
+ * The port SSH is really served on, among the candidate ports.
+ *
+ * A port the user typed is a claim the machine cannot check from the outside:
+ * unless `sshd` is configured for it, the app saves it and every later
+ * connection times out. Here it is settled where the truth is available.
+ * Returns null when nothing is serving SSH on any candidate, and the caller is
+ * expected to refuse rather than publish an endpoint that can only fail.
+ */
+export async function resolveServingSshPort(
+  preferred: number | null,
+  serving: (port: number) => Promise<boolean>
+): Promise<number | null> {
+  for (const port of sshPortCandidates(preferred)) if (await serving(port)) return port
+  return null
+}
+
+/** The port SSH is really served on, among the ports worth trying. */
+async function servingSshPort(preferred: number | null): Promise<number | null> {
+  return resolveServingSshPort(preferred, sshServing)
+}
+
+/** What to do when the machine is not serving SSH on the port that was chosen. */
+function sshUnavailable(port: number): string {
+  const config =
+    process.platform === 'win32' ? 'C:\\ProgramData\\ssh\\sshd_config' : '/etc/ssh/sshd_config'
+  const restart =
+    process.platform === 'win32' ? 'Restart-Service sshd' : 'sudo systemctl restart sshd'
+  return [
+    `Nothing is serving SSH on port ${port} on this machine, so a registration code now would only time out later.`,
+    `Install the OpenSSH server if it is missing, set "Port ${port}" in ${config}, allow that port through the firewall, then run: ${restart}`,
+    'Then run this command again.'
+  ].join(' ')
 }
 
 interface ResolvedInputs {
@@ -95,12 +159,17 @@ async function resolveInputs(options: StartOptions): Promise<ResolvedInputs> {
     options.name ?? (attachable ? await askText('Oven name', defaultName()) : defaultName())
   let port = options.port
   if (port === undefined) {
-    const detected = await detectSshPort()
+    const configured = await detectSshPort()
+    // Offer the port something is really serving on. The sshd configuration is
+    // the machine's own claim; a live listener is the fact, and the fact wins.
+    const offered = (await servingSshPort(configured)) ?? configured ?? DEFAULT_SSH_PORT
     if (attachable) {
-      if (detected === null)
-        note('Could not read an sshd configuration, so port 22 is offered. Change it if needed.')
-      port = await askPort('SSH port the app should connect on', detected ?? 22)
-    } else port = detected ?? 22
+      if (offered === DEFAULT_SSH_PORT && configured === null)
+        note(
+          'No SSH server or configuration was found, so port 22 is offered. Change it if needed.'
+        )
+      port = await askPort('SSH port the app should connect on', offered)
+    } else port = offered
   }
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
     fail('The SSH port must be between 1 and 65535.')
@@ -170,6 +239,19 @@ export async function start(options: StartOptions): Promise<void> {
   const layout = ovenLayout(options.dataRoot)
   const bundle = await readBundle()
   const inputs = await resolveInputs(options)
+
+  // Settle the port against what the machine actually serves before anything is
+  // installed or published. A code for a port nothing answers on is worse than
+  // no code: it registers an Oven that can only time out.
+  const serving = await servingSshPort(inputs.port)
+  if (serving === null) fail(sshUnavailable(inputs.port))
+  if (serving !== inputs.port) {
+    warn(
+      `Nothing is serving SSH on port ${inputs.port}, but port ${serving} answers. Using ${serving}.`
+    )
+    inputs.port = serving
+  }
+
   const before = await serviceState(layout)
 
   if (before.running && !options.force) {
@@ -182,10 +264,6 @@ export async function start(options: StartOptions): Promise<void> {
       if (revision !== bundle.revision)
         warn(
           'The running Oven service was installed by a different release. Run start with --force to replace it.'
-        )
-      if (!(await sshListening(inputs.port)))
-        warn(
-          `Nothing is listening for SSH on port ${inputs.port}. Enable the SSH server before the app can connect.`
         )
       await publish(
         layout,
@@ -215,11 +293,6 @@ export async function start(options: StartOptions): Promise<void> {
 
   step('Starting the Oven service in the background.')
   const probe = await ensureService(layout, bundle)
-
-  if (!(await sshListening(inputs.port)))
-    warn(
-      `Nothing is listening for SSH on port ${inputs.port}. Enable the SSH server before the app can connect.`
-    )
 
   await publish(
     layout,

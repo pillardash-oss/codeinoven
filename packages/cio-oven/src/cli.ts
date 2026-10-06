@@ -33,7 +33,7 @@ Options
 
 Examples
   npx cio-oven start
-  npx cio-oven start --yes --port 2222
+  npx cio-oven start --yes
   npx cio-oven status
   npx cio-oven stop
 `

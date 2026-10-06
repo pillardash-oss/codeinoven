@@ -595,6 +595,18 @@ export interface OvenAgentScript {
   bootstrapNode: boolean
 }
 
+/**
+ * The address and port this computer reaches a machine on.
+ *
+ * The pair, not just the address: a registration code carries the port the
+ * machine believed its SSH server was on, and the app verifies both before it
+ * saves an endpoint it would only time out on later.
+ */
+export interface OvenEndpoint {
+  host: string
+  port: number
+}
+
 /** What the app shows about a descriptor before saving it. Never includes the key. */
 export interface OvenAgentPreview {
   host: string

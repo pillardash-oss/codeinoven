@@ -7,7 +7,7 @@ import type { OvenPreflightReport } from '../../../src/lib/ovens'
 import { validateStartOvenSetup } from '../../../src/main/ovens/oven-validation'
 import type { SecretVault } from '../../../src/main/storage/secret-vault'
 import { buildSetupPlan } from '../../../src/main/ovens/remote/oven-setup-script'
-import { planNodeInstall } from '../../../src/main/ovens/oven-setup-bootstrap'
+import { planNodeInstall, preflightInvocation } from '../../../src/main/ovens/oven-setup-bootstrap'
 
 function report(overrides: Partial<OvenPreflightReport> = {}): OvenPreflightReport {
   return {
@@ -211,5 +211,23 @@ describe('oven setup assessment', () => {
         vault
       )
     ).rejects.toThrow('does not accept key passphrases')
+  })
+
+  it('carries the Windows probe on stdin instead of the command line', () => {
+    const posix = preflightInvocation('posix')
+    expect(posix.input).toBe('')
+    expect(posix.command.length).toBeGreaterThan(0)
+
+    // One envelope for both Windows shells: cmd.exe is the OpenSSH default and
+    // runs it as well as PowerShell does, so a cmd Oven needs no reconfiguration.
+    const cmd = preflightInvocation('cmd')
+    const powershell = preflightInvocation('powershell')
+    expect(cmd).toEqual(powershell)
+    expect(cmd.input.length).toBeGreaterThan(0)
+    expect(cmd.command).toContain('scriptblock')
+    // cmd.exe refuses a command line past 8191 characters, which is what the
+    // encoded form hit on a real Windows Oven.
+    expect(cmd.command.length).toBeLessThan(8191)
+    expect(cmd.input).toContain('timezone.current')
   })
 })
