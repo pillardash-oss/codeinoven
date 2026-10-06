@@ -18,14 +18,15 @@ Linux system package commands run directly as root or through sudo for other use
 
 ## Add a machine with the Oven agent
 
-A machine can become an Oven without this computer reaching it first. **Settings → Ovens → Add via agent** creates a self-contained installer for Linux, macOS, or Windows:
+**Settings → Ovens → Add via agent** registers a machine that prepared itself, without this computer reaching it first. The first step shows the one command to run on the machine:
 
-- It needs nothing but a shell. When Node.js 22 is absent it installs it with the machine's own package manager, unless you turn that off.
-- It writes the same service bundle this app would push, verifies its SHA-256, and starts the durable service. The service keeps running after the shell exits and after this app closes.
-- With **Provision a dedicated key** on, it creates an ed25519 key under the machine's `.ssh`, authorizes its public half for that account, and includes the private half in the registration code. With it off, register the Oven against an identity you already use. On a Windows machine whose SSH account is an administrator, OpenSSH reads the machine-wide `administrators_authorized_keys` instead of the per-user file; the installer authorizes the key there too, and prints exactly what to add when that file needs an elevated shell to write.
-- It prints a registration code and saves a copy at `~/.config/pillardash/codeinoven/ovens/agent-registration.json` (owner-readable only).
+```sh
+npx cio-oven start
+```
 
-Run the installer on the machine, then paste its code into the second step of the same dialog. **Check code** shows the machine, the SSH account, the key fingerprint, and whether the machine already runs this app's service, all before anything is saved. The code can only carry the machine's own host name, which this computer may not resolve, so the same step shows an editable **Address this computer uses** field and SSH port, prefilled from the code; enter the address or SSH alias you connect with. **Register Oven** then stores the descriptor and, when one was provisioned, the key in the encrypted vault, and adds the Oven. An Oven registered from an agent is an ordinary Oven: it gets the same probe, harness inventory, checkout, and run operations as any other.
+The command needs Node.js 22 or later already installed. It writes the same service bundle this app would push, verifies its SHA-256, starts the durable service, and prints a registration code; the service keeps running after the shell exits and after this app closes. The command and its flags are described in **Add a machine with one command** below.
+
+Paste the printed code into the second step of the same dialog. **Check code** shows the machine, the SSH account, the key fingerprint, and whether the machine already runs this app's service, all before anything is saved. The code can only carry the machine's own host name, which this computer may not resolve, so the same step shows an editable **Address this computer uses** field and SSH port, prefilled from the code; enter the address or SSH alias you connect with. **Register Oven** then stores the descriptor and, when one was provisioned, the key in the encrypted vault, and adds the Oven. An Oven registered from an agent is an ordinary Oven: it gets the same probe, harness inventory, checkout, and run operations as any other.
 
 The app reaches the machine the same way it reaches any Oven: over SSH to the durable service. Host keys are still trusted through OpenSSH on this computer, so a machine this computer has never connected to needs its host key trusted before the app can reach it. The registration code carries no login password. Treat the printed code and the saved descriptor file as secrets: the dedicated private key is inside them.
 

@@ -1,19 +1,10 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    CheckCircle2,
-    ClipboardCopy,
-    FileDown,
-    Loader2,
-    ShieldCheck,
-    Terminal
-  } from '@lucide/svelte'
+  import { AlertTriangle, CheckCircle2, ClipboardCopy, Loader2, ShieldCheck } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
-  import Switch from '../ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
-  import type { OvenAgentPlatform, OvenAgentPreview, OvenAgentScript } from '$shared/ovens'
+  import type { OvenAgentPreview } from '$shared/ovens'
 
   interface Props {
     open: boolean
@@ -24,23 +15,14 @@
 
   let { open, onClose, onRegistered }: Props = $props()
 
-  const PLATFORMS: { id: OvenAgentPlatform; name: string }[] = [
-    { id: 'linux', name: 'Linux' },
-    { id: 'darwin', name: 'macOS' },
-    { id: 'win32', name: 'Windows' }
-  ]
+  /** The one command that prepares a machine; the pasted code carries the rest. */
+  const START_COMMAND = 'npx cio-oven start'
 
-  let platform = $state<OvenAgentPlatform>('linux')
-  let identity = $state(true)
-  let bootstrapNode = $state(true)
-  let script = $state<OvenAgentScript | null>(null)
-  let generating = $state(false)
-  let saving = $state(false)
-  let savedPath = $state('')
   let code = $state('')
   let preview = $state<OvenAgentPreview | null>(null)
   let previewing = $state(false)
   let registering = $state(false)
+  let copying = $state(false)
   /** The address this computer reaches the machine on, editable before saving. */
   let host = $state('')
   let port = $state(22)
@@ -50,53 +32,16 @@
     return value instanceof Error ? value.message : 'The Oven agent operation failed.'
   }
 
-  function invalidateScript(): void {
-    script = null
-    savedPath = ''
-  }
-
-  async function createScript(): Promise<void> {
-    if (generating) return
-    generating = true
-    error = ''
-    savedPath = ''
+  async function copyCommand(): Promise<void> {
+    if (copying) return
+    copying = true
     try {
-      script = await invoke('oven:agent:script', { platform, identity, bootstrapNode })
-    } catch (cause) {
-      script = null
-      error = message(cause)
-    } finally {
-      generating = false
-    }
-  }
-
-  async function copyScript(): Promise<void> {
-    if (!script) return
-    try {
-      await copyText(script.content)
-      toast.success('Agent installer copied')
-    } catch (cause) {
-      error = message(cause)
-    }
-  }
-
-  async function saveScript(): Promise<void> {
-    if (!script || saving) return
-    saving = true
-    error = ''
-    try {
-      const path = await invoke('dialog:saveFile', {
-        suggestedName: script.filename,
-        contents: script.content
-      })
-      if (path) {
-        savedPath = path
-        toast.success('Agent installer saved')
-      }
+      await copyText(START_COMMAND)
+      toast.success('Command copied')
     } catch (cause) {
       error = message(cause)
     } finally {
-      saving = false
+      copying = false
     }
   }
 
@@ -163,14 +108,9 @@
 <Modal
   {open}
   title="Add a machine with the Oven agent"
-  description="Run a self-contained installer on a machine, then register the code it prints."
+  description="Run one command on a machine, then register the code it prints."
   size="lg"
   onClose={close}
-  claimInitialFocus={(panel) => {
-    const button = panel.querySelector<HTMLElement>('[data-agent-create]')
-    button?.focus()
-    return Boolean(button)
-  }}
 >
   {#if error}
     <p
@@ -187,111 +127,41 @@
       <header class="space-y-0.5">
         <h3 class="text-sm font-medium">1. Prepare the machine</h3>
         <p class="text-xs text-muted">
-          Create the installer, run it on the machine that will become an Oven, then register the
-          code it prints. The app never needs SSH access to install it.
+          Run this command on the machine that will become an Oven. It installs the durable
+          service, starts it in the background, and prints the code you register below. The app
+          never needs SSH access to install it.
         </p>
       </header>
 
-      <div class="space-y-1.5">
-        <span class="text-xs font-medium">Target platform</span>
-        <div class="flex flex-wrap gap-1.5" role="group" aria-label="Target platform">
-          {#each PLATFORMS as option (option.id)}
-            <button
-              type="button"
-              class="flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {platform ===
-              option.id
-                ? 'border-primary bg-primary text-on-primary'
-                : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-              aria-pressed={platform === option.id}
-              onclick={() => {
-                platform = option.id
-                invalidateScript()
-              }}>{option.name}</button
-            >
-          {/each}
-        </div>
-      </div>
-
-      <div class="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
-        <span class="text-xs">
-          <span class="font-medium">Provision a dedicated key</span>
-          <span class="block text-muted">
-            Creates an ed25519 key on the machine and includes it in the registration code.
-          </span>
-        </span>
-        <Switch
-          checked={identity}
-          onchange={(value) => {
-            identity = value
-            invalidateScript()
-          }}
-          aria-label="Provision a dedicated key"
-        />
-      </div>
-
-      <div class="flex items-center justify-between gap-3 rounded-lg border px-3 py-2">
-        <span class="text-xs">
-          <span class="font-medium">Install Node.js when missing</span>
-          <span class="block text-muted">
-            Uses the machine's own package manager. Off requires Node.js 22 or later already.
-          </span>
-        </span>
-        <Switch
-          checked={bootstrapNode}
-          onchange={(value) => {
-            bootstrapNode = value
-            invalidateScript()
-          }}
-          aria-label="Install Node.js when missing"
-        />
-      </div>
-
-      <div class="flex flex-wrap items-center gap-2">
+      <div class="flex items-center gap-2">
+        <code
+          class="min-w-0 flex-1 truncate rounded-lg border bg-elevated px-3 py-2 font-mono text-xs text-foreground"
+          >{START_COMMAND}</code
+        >
         <button
           type="button"
-          data-agent-create
-          class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          disabled={generating}
-          onclick={() => void createScript()}
+          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
+          disabled={copying}
+          onclick={() => void copyCommand()}
         >
-          {#if generating}<Loader2 size={14} class="animate-spin" />{:else}<Terminal
+          {#if copying}<Loader2 size={14} class="animate-spin" />{:else}<ClipboardCopy
               size={14}
             />{/if}
-          {script ? 'Regenerate installer' : 'Create installer'}
+          Copy
         </button>
-        {#if script}
-          <button
-            type="button"
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
-            onclick={() => void copyScript()}
-          >
-            <ClipboardCopy size={14} /> Copy script
-          </button>
-          <button
-            type="button"
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
-            disabled={saving}
-            onclick={() => void saveScript()}
-          >
-            {#if saving}<Loader2 size={14} class="animate-spin" />{:else}<FileDown size={14} />{/if}
-            Save file
-          </button>
-        {/if}
       </div>
 
-      {#if script}
-        <p class="text-xs text-muted">
-          {script.filename} · {script.identity ? 'dedicated key included' : 'no key included'}
-          {#if savedPath}<span class="block">Saved to {savedPath}</span>{/if}
-        </p>
-      {/if}
+      <p class="text-xs text-muted">
+        The machine needs Node.js 22 or later already installed. The command asks for the Oven
+        name, the SSH port this computer connects on, and whether to provision a dedicated key.
+      </p>
     </section>
 
     <section class="space-y-3 border-t pt-5">
       <header class="space-y-0.5">
         <h3 class="text-sm font-medium">2. Register the machine</h3>
         <p class="text-xs text-muted">
-          Paste the registration code the installer printed. Checking it first shows exactly what
+          Paste the registration code the command printed. Checking it first shows exactly what
           will be saved.
         </p>
       </header>
