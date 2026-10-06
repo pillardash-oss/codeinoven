@@ -105,6 +105,7 @@
     "@eslint/js": "^10.0.1",
     "@lobehub/icons-static-svg": "^1.95.1",
     "@lucide/svelte": "^1.47.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@resvg/resvg-js": "^2.6.2",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tailwindcss/vite": "^4.3.3",

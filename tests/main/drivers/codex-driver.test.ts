@@ -12,11 +12,10 @@ import {
   mapCodexRateLimits,
   mapCodexUsage
 } from '../../../src/main/drivers/codex-driver'
+import { CODEX_QUESTION_INSTRUCTION } from '../../../src/main/drivers/codex/codex-tools'
 import { InactiveQuestionTurnError } from '../../../src/main/drivers/driver.interface'
 
 const spawnMock = vi.hoisted(() => vi.fn())
-const codexQuestionInstruction =
-  'The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode.'
 vi.mock('child_process', async (importOriginal) => {
   const original = await importOriginal<typeof import('child_process')>()
   return { ...original, spawn: spawnMock }
@@ -275,7 +274,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       expect.objectContaining({
         method: 'thread/start',
         params: expect.objectContaining({
-          developerInstructions: `Internal memory contract\n\n${codexQuestionInstruction}`,
+          developerInstructions: `Internal memory contract\n\n${CODEX_QUESTION_INSTRUCTION}`,
           dynamicTools: expect.arrayContaining([
             expect.objectContaining({ name: 'cio_ask_user' }),
             ...dynamicTools
@@ -542,7 +541,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
         threadId: 'native-1',
         excludeTurns: true,
         config: { model_context_window: 1_000_000, model_auto_compact_token_limit: 900_000 },
-        developerInstructions: codexQuestionInstruction,
+        developerInstructions: CODEX_QUESTION_INSTRUCTION,
         dynamicTools: expect.arrayContaining([
           expect.objectContaining({ name: 'cio_ask_user' }),
           ...dynamicTools

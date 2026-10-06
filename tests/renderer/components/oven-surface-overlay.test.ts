@@ -1,14 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createRawSnippet, mount, unmount } from 'svelte'
+import { createRawSnippet, mount, unmount, type ComponentProps } from 'svelte'
 import OvenSurfaceOverlay from '$lib/components/shared/OvenSurfaceOverlay.svelte'
+
+/** Everything the surface accepts except its content, which the tests own. */
+type OverlayProps = Omit<ComponentProps<typeof OvenSurfaceOverlay>, 'children'>
 
 /** The surface's own content, so the tests can assert how it is presented. */
 const body = createRawSnippet(() => ({
   render: () => '<span data-testid="body">checkout contents</span>'
 }))
 
-function renderOverlay(props: Record<string, unknown>): HTMLElement {
+function renderOverlay(props: OverlayProps): HTMLElement {
   const target = document.createElement('div')
   document.body.append(target)
   const instance = mount(OvenSurfaceOverlay, { target, props: { children: body, ...props } })
