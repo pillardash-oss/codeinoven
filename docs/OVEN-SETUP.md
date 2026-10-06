@@ -2,6 +2,8 @@
 
 Oven setup prepares an SSH Oven for CodeInOven runs. It does not perform full setup or package upgrades on the Local Oven. Setup supports Linux, macOS, and native Windows on x64 and arm64. The remote service requires Node.js 22 or later.
 
+An Oven is driven the same way whatever its operating system. On a native Windows Oven, whether OpenSSH starts cmd.exe or PowerShell as the login shell, every managed command the app runs is carried as an encoded PowerShell 5.1 program, so a Windows Oven takes the same install, probe, run, workspace, root-operation, harness-management, and setup traffic a POSIX Oven takes. No extra shell configuration is needed on the Oven.
+
 ## Run setup
 
 1. Add and test the SSH Oven in Settings → Ovens.
@@ -23,7 +25,7 @@ A machine can become an Oven without this computer reaching it first. **Settings
 - With **Provision a dedicated key** on, it creates an ed25519 key under the machine's `.ssh`, authorizes its public half for that account, and includes the private half in the registration code. With it off, register the Oven against an identity you already use. On a Windows machine whose SSH account is an administrator, OpenSSH reads the machine-wide `administrators_authorized_keys` instead of the per-user file; the installer authorizes the key there too, and prints exactly what to add when that file needs an elevated shell to write.
 - It prints a registration code and saves a copy at `~/.config/pillardash/codeinoven/ovens/agent-registration.json` (owner-readable only).
 
-Run the installer on the machine, then paste its code into the second step of the same dialog. **Check code** shows the machine, the SSH account, the key fingerprint, and whether the machine already runs this app's service, all before anything is saved. **Register Oven** then stores the descriptor and, when one was provisioned, the key in the encrypted vault, and adds the Oven. An Oven registered from an agent is an ordinary Oven: it gets the same probe, harness inventory, checkout, and run operations as any other.
+Run the installer on the machine, then paste its code into the second step of the same dialog. **Check code** shows the machine, the SSH account, the key fingerprint, and whether the machine already runs this app's service, all before anything is saved. The code can only carry the machine's own host name, which this computer may not resolve, so the same step shows an editable **Address this computer uses** field and SSH port, prefilled from the code; enter the address or SSH alias you connect with. **Register Oven** then stores the descriptor and, when one was provisioned, the key in the encrypted vault, and adds the Oven. An Oven registered from an agent is an ordinary Oven: it gets the same probe, harness inventory, checkout, and run operations as any other.
 
 The app reaches the machine the same way it reaches any Oven: over SSH to the durable service. Host keys are still trusted through OpenSSH on this computer, so a machine this computer has never connected to needs its host key trusted before the app can reach it. The registration code carries no login password. Treat the printed code and the saved descriptor file as secrets: the dedicated private key is inside them.
 

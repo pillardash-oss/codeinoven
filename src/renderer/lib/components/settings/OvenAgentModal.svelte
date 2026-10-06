@@ -41,6 +41,9 @@
   let preview = $state<OvenAgentPreview | null>(null)
   let previewing = $state(false)
   let registering = $state(false)
+  /** The address this computer reaches the machine on, editable before saving. */
+  let host = $state('')
+  let port = $state(22)
   let error = $state('')
 
   function message(value: unknown): string {
@@ -110,7 +113,12 @@
     error = ''
     preview = null
     try {
-      preview = await invoke('oven:agent:preview', code)
+      const checked = await invoke('oven:agent:preview', code)
+      preview = checked
+      // The agent can only report the machine's own host name. Default the
+      // address to it, but let the user correct it before anything is saved.
+      host = checked.host
+      port = checked.port
     } catch (cause) {
       error = message(cause)
     } finally {
@@ -120,10 +128,19 @@
 
   async function register(): Promise<void> {
     if (!preview || registering) return
+    const address = host.trim()
+    if (!address) {
+      error = 'Enter the address or SSH alias this computer reaches the machine on.'
+      return
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      error = 'SSH port must be between 1 and 65535.'
+      return
+    }
     registering = true
     error = ''
     try {
-      const result = await invoke('oven:agent:register', { code })
+      const result = await invoke('oven:agent:register', { code, host: address, port })
       toast.success(`${result.oven.name} registered`)
       onRegistered(result.oven.id)
       close()
@@ -137,6 +154,7 @@
   function close(): void {
     code = ''
     preview = null
+    host = ''
     error = ''
     onClose()
   }
@@ -299,21 +317,21 @@
       </button>
 
       {#if preview}
-        <div class="space-y-1.5 rounded-lg border bg-elevated/40 p-3 text-xs">
+        <div class="space-y-3 rounded-lg border bg-elevated/40 p-3 text-xs">
           <div class="flex items-center gap-2">
             {#if preview.identityPresent}
               <CheckCircle2 size={14} class="text-success" />
-              <span class="font-medium">{preview.name}</span>
             {:else}
               <AlertTriangle size={14} class="text-warning" />
-              <span class="font-medium">{preview.name}</span>
             {/if}
+            <span class="font-medium">{preview.name}</span>
           </div>
+
           <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-muted">
             <dt>Machine</dt>
-            <dd class="truncate text-foreground">{preview.host}</dd>
-            <dt>SSH</dt>
-            <dd class="truncate text-foreground">{preview.user}@{preview.host}:{preview.port}</dd>
+            <dd class="truncate text-foreground">{preview.hostname}</dd>
+            <dt>SSH user</dt>
+            <dd class="truncate text-foreground">{preview.user}</dd>
             <dt>Platform</dt>
             <dd class="text-foreground">{preview.platform} · {preview.architecture}</dd>
             <dt>Node.js</dt>
@@ -323,13 +341,41 @@
               <dd class="break-all text-foreground">{preview.identityFingerprint}</dd>
             {/if}
           </dl>
+
+          <div class="grid grid-cols-[minmax(0,1fr)_6rem] gap-2">
+            <label class="space-y-1">
+              <span class="text-muted">Address this computer uses</span>
+              <input
+                class="w-full rounded-lg border bg-elevated px-3 py-2 text-foreground"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                bind:value={host}
+                placeholder="192.168.64.10 or an SSH alias"
+              />
+            </label>
+            <label class="space-y-1">
+              <span class="text-muted">SSH port</span>
+              <input
+                class="w-full rounded-lg border bg-elevated px-3 py-2 text-foreground"
+                type="number"
+                min="1"
+                max="65535"
+                bind:value={port}
+              />
+            </label>
+          </div>
+          <p class="text-muted">
+            The agent can only report the machine's own host name (<span class="text-foreground"
+              >{preview.hostname}</span
+            >), which may not resolve on this computer. Enter the address or SSH alias this computer
+            reaches it on.
+          </p>
+
           <p class={preview.serviceCurrent ? 'text-success' : 'text-warning'}>
             {preview.serviceCurrent
               ? 'The machine runs the same service as this app.'
               : 'The machine runs a different service. Register it, then update the Oven service from its row.'}
-          </p>
-          <p class="text-muted">
-            Edit the Oven afterwards if this computer reaches the machine under another name.
           </p>
           {#if !preview.identityPresent}
             <p class="text-warning">
