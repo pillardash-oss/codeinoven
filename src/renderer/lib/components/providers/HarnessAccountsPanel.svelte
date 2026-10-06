@@ -17,6 +17,9 @@
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import type { HarnessAccount, ProviderConnectionInfo } from '$shared/types'
+  import { relativeTime } from '$lib/format/relative-time'
+  import { bankedResetSummary, creditsLabel } from '$lib/format/usage'
+  import { formatDateTimeWithWeekday } from '$shared/date-time-format'
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
   import HarnessAccountUsageCell from './HarnessAccountUsageCell.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -40,35 +43,39 @@
   let disconnectTarget = $state<HarnessAccount | null>(null)
   let disconnecting = $state(false)
 
-  type AccountSortKey = 'harness' | 'provider' | 'label'
+  type AccountSortKey = 'account'
 
   /** Quota telemetry column. Not sortable, so the cell snippet identifies it by
    *  reference instead of a sort key. */
   const usageColumn: DataTableColumn<HarnessAccount, AccountSortKey> = {
     key: null,
     header: 'Usage',
-    width: 'w-72'
+    width: 'w-[44rem]',
+    cellClass: 'align-middle'
   }
 
   const accountColumns: DataTableColumn<HarnessAccount, AccountSortKey>[] = [
     {
-      key: 'harness',
-      header: 'Harness',
+      key: 'account',
+      header: 'Account',
+      width: 'w-56',
+      cellClass: 'align-middle',
       sortValue: (account) =>
-        (harnessFor(account.harnessId)?.name ?? account.harnessId).toLocaleLowerCase('en-US')
-    },
-    {
-      key: 'provider',
-      header: 'Provider',
-      sortValue: (account) => providerLabel(account).toLocaleLowerCase('en-US')
-    },
-    {
-      key: 'label',
-      header: 'Label',
-      sortValue: (account) => account.label.toLocaleLowerCase('en-US')
+        [
+          harnessFor(account.harnessId)?.name ?? account.harnessId,
+          providerLabel(account),
+          account.label
+        ]
+          .join('\u0000')
+          .toLocaleLowerCase('en-US')
     },
     usageColumn,
-    { key: null, header: 'Actions', headerClass: 'sr-only' }
+    {
+      key: null,
+      header: 'Actions',
+      width: 'w-64',
+      cellClass: 'align-middle'
+    }
   ]
 
   let filterHarnesses = $derived.by(() => {
@@ -455,6 +462,7 @@
       columns={accountColumns}
       getRowId={(account) => account.id}
       label="Harness accounts"
+      rowClass="transition-colors hover:bg-elevated/40"
       clearable
     >
       {#snippet cell(
@@ -462,31 +470,52 @@
         column: DataTableColumn<HarnessAccount, AccountSortKey>
       )}
         {@const harness = harnessFor(account.harnessId)}
-        {#if column.key === 'harness'}
-          <div class="flex min-w-0 items-center gap-2">
+        {@const usageSnapshot = harnessAccountUsageCache.snapshotFor(account.id)}
+        {@const accountUsage = usageSnapshot?.usage}
+        {@const hasReportedLimits =
+          !!accountUsage &&
+          (accountUsage.rateLimits.length > 0 ||
+            bankedResetSummary(accountUsage.bankedResets) !== undefined ||
+            creditsLabel(accountUsage) !== undefined)}
+        {#if column.key === 'account'}
+          <div class="flex min-w-0 items-center gap-2.5">
             <AgentIcon
               agentId={account.harnessId}
               label={harness?.name ?? account.harnessId}
               size={20}
             />
-            <span class="truncate text-xs font-medium">{harness?.name ?? account.harnessId}</span>
-          </div>
-        {:else if column.key === 'provider'}
-          <span class="block truncate font-mono text-xs text-muted" title={providerLabel(account)}>
-            {providerLabel(account)}
-          </span>
-        {:else if column.key === 'label'}
-          <span class="flex min-w-0 items-center gap-1.5">
-            <span class="block truncate text-xs">{account.label}</span>
-            {#if account.isDefault}
-              <span
-                class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
-                title="Default account for this provider"
+            <div class="min-w-0 flex-1 space-y-0.5">
+              <div class="flex min-w-0 items-center gap-1.5">
+                <span class="truncate text-xs font-medium">{account.label}</span>
+                {#if account.isDefault}
+                  <span
+                    class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                    title="Default account for this provider"
+                  >
+                    Default
+                  </span>
+                {/if}
+              </div>
+              <p
+                class="truncate text-[0.625rem] text-muted"
+                title={`${harness?.name ?? account.harnessId} · ${providerLabel(account)}`}
               >
-                Default
-              </span>
-            {/if}
-          </span>
+                {harness?.name ?? account.harnessId} · {providerLabel(account)}
+              </p>
+              {#if hasReportedLimits && usageSnapshot && usageSnapshot.fetchedAt > 0}
+                {#if harnessAccountUsageCache.isProbing(account.id) && !usageSnapshot.error}
+                  <p class="truncate text-[0.625rem] text-dimmed">Checking…</p>
+                {:else}
+                  <p
+                    class="truncate text-[0.625rem] text-dimmed"
+                    title={`Last checked ${formatDateTimeWithWeekday(usageSnapshot.fetchedAt)}${usageSnapshot.error ? ` · ${usageSnapshot.error}` : ''}`}
+                  >
+                    Updated {relativeTime(usageSnapshot.fetchedAt)}
+                  </p>
+                {/if}
+              {/if}
+            </div>
+          </div>
         {:else if column === usageColumn}
           <HarnessAccountUsageCell {account} />
         {:else}
@@ -494,31 +523,34 @@
             {#if hasSiblingAccounts(account) && !account.isDefault}
               <button
                 type="button"
-                class="flex size-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-accent"
+                class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-accent"
                 title={`Set ${account.label} as the default account for ${providerLabel(account)}`}
                 aria-label={`Set ${account.label} as the default account for ${providerLabel(account)}`}
                 onclick={() => void setDefault(account)}
               >
-                <Star size={12} />
+                <Star size={12} aria-hidden="true" />
+                Make default
               </button>
             {/if}
             <button
               type="button"
-              class="flex size-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               title={`Edit label for ${account.label}`}
               aria-label={`Edit label for ${account.label}`}
               onclick={() => openEdit(account)}
             >
-              <Pencil size={12} />
+              <Pencil size={12} aria-hidden="true" />
+              Edit
             </button>
             <button
               type="button"
-              class="flex size-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+              class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
               title={`Disconnect ${account.label}`}
               aria-label={`Disconnect ${account.label}`}
               onclick={() => (disconnectTarget = account)}
             >
-              <Unplug size={12} />
+              <Unplug size={12} aria-hidden="true" />
+              Disconnect
             </button>
           </div>
         {/if}

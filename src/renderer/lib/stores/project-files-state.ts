@@ -65,6 +65,11 @@ export interface ProjectFilesState {
    *  or `null` while nothing is loaded. Used to tell a mounted file tree that
    *  it is still showing another scope's root after a thread switch. */
   listingMountKey: string | null
+  /** Whether the root listing on screen is the last-known read kept for this
+   *  Oven, painted before the live read answers. The tree dims it and the
+   *  surface overlay marks it stale, so a cached tree is never mistaken for the
+   *  checkout's current contents. */
+  listingFromCache: boolean
   /** Thread whose own workspace directory this project's file tree is mounted
    *  on: a chat's `chats-cwd/<threadId>` or an assistant task's
    *  `assistant-cwd/<routineId ?? threadId>`; `null` for real projects and
@@ -122,6 +127,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     sessions: {},
     activeScope: DEFAULT_SCOPE_BUCKET_ID,
     listingMountKey: null,
+    listingFromCache: false,
     mountThreadId: null,
     lastTurnOnly: false,
     previewReloadTokens: {},

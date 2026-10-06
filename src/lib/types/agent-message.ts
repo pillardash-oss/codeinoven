@@ -21,6 +21,12 @@ import type {
 export interface AgentQuestionOption {
   label: string
   description?: string
+  /**
+   * Optional step-by-step text the user must follow to produce this answer
+   * (a command to paste, a sequence to run). It is never sent back to the
+   * agent: the UI surfaces it in a copyable modal so the user can act on it.
+   */
+  instruction?: string
   /** Explicit provider recommendation, or inferred from a “(Recommended)” label. */
   recommended?: boolean
 }

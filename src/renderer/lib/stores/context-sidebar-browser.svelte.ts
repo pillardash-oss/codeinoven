@@ -292,21 +292,35 @@ export class SidebarBrowserTabs {
         // The main-process browser boundary reports malformed custom URLs.
       }
     }
-    this.tabs = [
-      ...this.tabs,
-      {
-        id,
-        kind: 'browser',
-        title,
-        projectId,
-        threadId,
-        url,
-        favicon: null,
-        // The box the scope is currently creating tabs in, or the scope's own
-        // jar when the user has not picked one this session.
-        boxId: this.boxForScope(this.host.threadScopeId(projectId, threadId))
-      }
-    ]
+    const tab: BrowserContextTab = {
+      id,
+      kind: 'browser',
+      title,
+      projectId,
+      threadId,
+      url,
+      favicon: null,
+      // The box the scope is currently creating tabs in, or the scope's own jar
+      // when the user has not picked one this session.
+      boxId: this.boxForScope(this.host.threadScopeId(projectId, threadId))
+    }
+    // A tab a page asked for (a link, an image, a popup) belongs beside the page
+    // that asked, exactly as a browser places it: next to the tab in use, not at
+    // the end of the strip. A request for a scope that is not on screen is
+    // appended instead, because there is no page in use to sit beside and it
+    // must not reorder the strip the user is looking at.
+    const anchorId =
+      reveal && this.isShownConversation(projectId, threadId) ? this.activeTabId : null
+    const anchorIndex = anchorId
+      ? this.tabs.findIndex((candidate) => candidate.id === anchorId)
+      : -1
+    if (anchorIndex >= 0) {
+      const ordered = [...this.tabs]
+      ordered.splice(anchorIndex + 1, 0, tab)
+      this.tabs = ordered
+    } else {
+      this.tabs = [...this.tabs, tab]
+    }
     this.persist()
     if (reveal && this.isShownConversation(projectId, threadId)) {
       this.focus(id)

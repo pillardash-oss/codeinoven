@@ -120,7 +120,12 @@
   import { cubicOut } from 'svelte/easing'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { fly } from 'svelte/transition'
-  import { groupRunsByRoutine, groupRunsByTask } from '../assistant/assistant-view'
+  import {
+    groupRunsByRoutine,
+    groupRunsByTask,
+    assistantForeignThread
+  } from '../assistant/assistant-view'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
   import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
@@ -587,8 +592,12 @@
     if (!selectedThread) return
     if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') {
       projectFilesWorkspace.setThreadMount(selectedThread.projectId, selectedThread.id)
-      await projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
+      // Open first and read after. The read is an SSH round trip that can outlast
+      // the click that asked for it, so awaiting it here made a down Oven look
+      // like a dead button. Opened first, the panel shows its loading layer and,
+      // when the Oven cannot answer, the reason with a retry.
       contextSidebarState.openFiles(selectedThread.projectId, selectedThread.id)
+      void projectFilesWorkspace.loadDirectory(selectedThread.projectId, '')
       return
     }
     // Conversations browse their own app-owned workspace directory instead of a
@@ -1360,15 +1369,39 @@
   /** Close a tab from a fullscreen strip without tearing the fullscreen down
    *  unless it was the last tab of that kind. */
   function closeFullscreenTab(kind: 'terminal' | 'browser', tabId: string): void {
-    const openTabs = contextSidebarState.tabs.filter((tab) => tab.kind === kind)
-    const remaining = openTabs.filter((tab) => tab.id !== tabId)
     closeContextTab(tabId)
-    // Nothing left of that kind: the surface has no tab to show, so the record
-    // has to go with it rather than point at the tab that just closed.
-    const fallback = remaining.at(-1)?.id ?? null
-    if (kind === 'terminal') terminalFullscreenTabId = fallback
-    else browserFullscreenTabId = fallback
+    if (kind === 'terminal') {
+      // Nothing left of that kind: the surface has no tab to show, so the record
+      // has to go with it rather than point at the tab that just closed.
+      const remaining = contextSidebarState.tabs.filter(
+        (tab) => tab.kind === 'terminal' && tab.id !== tabId
+      )
+      terminalFullscreenTabId = remaining.at(-1)?.id ?? null
+      return
+    }
+    // The store already fell back when the tab closed, so its active browser tab
+    // is the one to show. Reading it here instead of the last browser-kind tab
+    // keeps the overlay inside the conversation on screen even while other
+    // projects' browser tabs are open, and nulls it when nothing is left.
+    browserFullscreenTabId = contextSidebarState.activeBrowserTabId
   }
+
+  /**
+   * Keep the full screen browser on the sidebar's active browser tab.
+   *
+   * The overlay records the tab it shows separately from the sidebar's store,
+   * and that store's active tab moves from many places: a tab a page opened, a
+   * reopened tab, a close that fell back, a tab selected in the overlay's own
+   * strip. Mirroring it here means the two can never drift apart, so minimizing
+   * always lands on the tab the user was reading rather than the one that was
+   * active when the fullscreen opened.
+   */
+  $effect(() => {
+    if (!browserFullscreenTabId) return
+    const active = contextSidebarState.activeBrowserTabId
+    if (active === browserFullscreenTabId) return
+    browserFullscreenTabId = active
+  })
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
 
@@ -1713,6 +1746,21 @@
   )
   /** Every task's runs, newest first, for the sidebar's nested rows. */
   let assistantRunsByTask = $derived(groupRunsByTask(assistantThreads))
+  /**
+   * The run of the open assistant task that another instance is streaming, when
+   * the task itself is not. A run executes on its own thread, so opening the
+   * task would otherwise show no card for work happening elsewhere; ThreadView
+   * renders the transfer card for this run above the composer.
+   */
+  let selectedAssistantForeignRunThreadId = $derived.by(() => {
+    const thread = selectedThread
+    if (mode !== 'assistant' || !thread || thread.projectId !== ASSISTANT_SPACE_ID) return null
+    const runs = assistantRunsByTask.get(thread.id) ?? []
+    const foreign = assistantForeignThread(thread, runs, (projectId, threadId) =>
+      foreignRuns.isForeign(projectId, threadId)
+    )
+    return foreign && foreign.id !== thread.id ? foreign.id : null
+  })
   /** Every routine's runs, newest first, for the sidebar's sibling run rows. */
   let assistantRunsByRoutine = $derived(groupRunsByRoutine(assistantThreads))
   /** Every run thread, for the header search's Runs results. */
@@ -2297,6 +2345,14 @@
   // The app header owns the view switcher now; the workspace only registers
   // the per-view quick actions that render next to it.
   $effect(() => {
+    // The workspace owns the header's quick-action slot only while it is the
+    // surface on screen, or while the Scope Board (which it also draws) is.
+    // Every other top-level view publishes its own actions and this effect must
+    // leave them alone - the browser does exactly that, and its teardown clears
+    // the slot. Reading `active` here is also what re-runs the effect the moment
+    // the workspace comes back, which is what restores a view's actions after a
+    // trip to the browser; without it the slot stayed empty on return.
+    if (!active && !scopeViewActive) return
     if (workspaceState.specStudioOpen) {
       viewActions.set('none', [])
       return
@@ -3044,8 +3100,47 @@
    *  recent slice simply never included an old done thread would distort the
    *  order. Switching to Threads view hydrates the global recent list, bounded
    *  to 200 combined rows with last-activity as the source of truth; deeper
-   *  history stays available through the existing "Load older threads" pager. */
+   *  history stays available through the existing "Load older threads" pager.
+   *
+   *  The 200-row window only ranks by activity, so on its own it hides a
+   *  non-done thread that has gone quiet and every thread of a pinned scope,
+   *  even though the view ranks those above the done rows that did load. Those
+   *  arrive through a second, side-loaded hydration query
+   *  (`thread:listAlwaysVisible`) that never gates the window, so the view keeps
+   *  its instant first-paint slice and the guarantee set joins it as it lands. */
   const THREADS_VIEW_HYDRATION_LIMIT = 200
+
+  /**
+   * Fold a hydrated page over `allThreads`. `thread:listRecent` carries
+   * harness-usage decoration, while the bounded first-paint slice
+   * (`thread:listRecentPerProject`) deliberately omits it. Adding only the ids
+   * the list had never seen left every first-paint row on its usage-less copy,
+   * so a thread that used several harnesses over its session only ever drew the
+   * fallback from `settings.harnessId`. Known rows must take the page's copy;
+   * unseen rows append after the list. A scratch index for this one pass, never
+   * read reactively.
+   */
+  function foldHydratedThreads(threads: Thread[]): void {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const incoming = new Map<string, Thread>()
+    for (const thread of threads) {
+      if (isOrchestrationChildThread(thread)) continue
+      incoming.set(thread.id, thread)
+    }
+    let changed = false
+    const refreshed = allThreads.map((existing) => {
+      const replacement = incoming.get(existing.id)
+      if (replacement === undefined) return existing
+      incoming.delete(existing.id)
+      if (replacement === existing) return existing
+      changed = true
+      return replacement
+    })
+    const additions = [...incoming.values()]
+    if (additions.length > 0) changed = true
+    if (changed) allThreads = additions.length > 0 ? [...refreshed, ...additions] : refreshed
+  }
+
   let threadsViewHydrating = false
   async function ensureThreadsViewFullyLoaded(): Promise<void> {
     if (threadsViewHydrating) return
@@ -3055,15 +3150,9 @@
         limit: THREADS_VIEW_HYDRATION_LIMIT,
         offset: 0
       })
-      const uniqueCurrentThreads = uniqueThreadList(allThreads)
-      const known = new Set(uniqueCurrentThreads.map((thread) => thread.id))
-      const additions = uniqueThreadList(page).filter(
-        (thread) => !known.has(thread.id) && !isOrchestrationChildThread(thread)
-      )
-      scopeState.mergeThreads(page)
-      if (additions.length > 0 || uniqueCurrentThreads.length !== allThreads.length) {
-        allThreads = [...uniqueCurrentThreads, ...additions]
-      }
+      const uniquePage = uniqueThreadList(page)
+      scopeState.mergeThreads(uniquePage)
+      foldHydratedThreads(uniquePage)
       historyOffset = Math.max(historyOffset, page.length)
       hasMoreHistory = page.length === THREADS_VIEW_HYDRATION_LIMIT
     } finally {
@@ -3071,8 +3160,30 @@
     }
   }
 
+  /**
+   * The Threads view's guarantee set, side-loaded beside the recency window:
+   * pinned rows, non-done rows, and every row of a pinned scope. It resolves on
+   * its own and folds in when it lands, so the window's own hydration and the
+   * first-paint slice are never made to wait on it.
+   */
+  let threadsViewGuaranteesHydrating = false
+  async function hydrateThreadsViewGuarantees(): Promise<void> {
+    if (threadsViewGuaranteesHydrating) return
+    threadsViewGuaranteesHydrating = true
+    try {
+      const alwaysVisible = await invoke('thread:listAlwaysVisible')
+      const unique = uniqueThreadList(alwaysVisible)
+      scopeState.mergeThreads(unique)
+      foldHydratedThreads(unique)
+    } finally {
+      threadsViewGuaranteesHydrating = false
+    }
+  }
+
   $effect(() => {
-    if (mode === 'threads' && active) void ensureThreadsViewFullyLoaded()
+    if (mode !== 'threads' || !active) return
+    void ensureThreadsViewFullyLoaded()
+    void hydrateThreadsViewGuarantees()
   })
 
   /** The chat a Chats view with nothing to restore should land on: the last chat
@@ -4606,6 +4717,7 @@
         {updateConfig}
         restoreKey={chatsComposerRestoreKey}
         sidebarHasContent={workspaceSidebarHasContent}
+        assistantForeignRunThreadId={selectedAssistantForeignRunThreadId}
         onNavigate={navigate}
         onForked={handleForkedThread}
         onContinueInProject={handleContinuedInProject}

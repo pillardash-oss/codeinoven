@@ -1175,19 +1175,15 @@
       state.errors.push('action-wrap-' + key + ': ' + String(error))
     }
   }
-  const routeActionPopupRequest = () => {
+  const routeActionPopupRequest = async () => {
     try {
-      const tabId = tabActivity.activeTabId
-      if (typeof tabId === 'number' && Number.isFinite(tabId) && tabId >= 0) {
-        actionPopupRequests.push({ seq: ++actionPopupRequestSeq, tabId, kind: 'action' })
-        if (actionPopupRequests.length > 16)
-          actionPopupRequests.splice(0, actionPopupRequests.length - 16)
-        scheduleMailbox()
-      }
+      // The worker may not know a tab yet: a request from a worker that has just
+      // started is one this app must still answer. See
+      // `routeRequestWhenTabKnown`.
+      await routeRequestWhenTabKnown('action')
     } catch (error) {
       state.errors.push('action-open-popup: ' + String(error))
     }
-    return Promise.resolve()
   }
   const wrapActionApi = (api) => {
     if (!api || typeof api !== 'object') return
@@ -1419,6 +1415,27 @@
     return true
   }
 
+  /**
+   * Route a request the worker makes about the window it is acting for, waiting
+   * out a worker that does not know a tab yet.
+   *
+   * A worker that has just been started has been handed no tab events, and a
+   * password manager's passkey save is issued by exactly such a worker: the click
+   * that begins the ceremony is what wakes it. Routing straight away finds no tab,
+   * and every caller then falls through to a runtime that implements no window at
+   * all, so the request is dropped with nothing to show for it and the page waits
+   * on a promise that never settles. That is indistinguishable, from the user's
+   * side, from a browser with no passkey support. The tab replay the app always
+   * sends on a worker's first snapshot is what is waited for, and the wait is
+   * bounded, so a worker that never learns a tab is still answered rather than
+   * held forever.
+   */
+  const routeRequestWhenTabKnown = async (kind, url) => {
+    if (routePopupWindowRequest(kind, url)) return true
+    await waitForTabReplay()
+    return routePopupWindowRequest(kind, url)
+  }
+
   const hostedWindow = (id, focused) => ({
     id,
     focused,
@@ -1472,14 +1489,22 @@
         const args = Array.prototype.slice.call(arguments)
         const data = args[0] && typeof args[0] === 'object' ? args[0] : {}
         const url = typeof data.url === 'string' ? data.url : ''
-        if (isExtensionPopoutUrl(url) && routePopupWindowRequest('open-window', url)) {
-          hostedPopout.url = url
-          hostedPopout.focused = true
-          const callback =
-            typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
-          return answerWith(callback, hostedWindow(HOSTED_POPUP_WINDOW_ID, true))
-        }
-        return originalCreate.apply(this, args)
+        if (!isExtensionPopoutUrl(url)) return originalCreate.apply(this, args)
+        const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+        return routeRequestWhenTabKnown('open-window', url).then(
+          (routed) => {
+            if (!routed) return originalCreate.apply(this, args)
+            hostedPopout.url = url
+            hostedPopout.focused = true
+            return answerWith(callback, hostedWindow(HOSTED_POPUP_WINDOW_ID, true))
+          },
+          (error) => {
+            // This file must never throw, so a wait that failed is a window the
+            // runtime is asked for instead of a promise the caller cannot settle.
+            state.errors.push('windows-create-route: ' + String(error))
+            return originalCreate.apply(this, args)
+          }
+        )
       }
       wrapped.__cioHostedPopoutWrapped = true
       install('create', wrapped)

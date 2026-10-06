@@ -49,7 +49,7 @@
     <button
       type="button"
       class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 font-medium transition-colors hover:bg-info/15"
-      title="Take over scheduled work in this window so it runs here instead"
+      title="Make this the main instance: scheduled work runs here and keeps running here after a restart"
       onclick={onTakeOver}
     >
       <ArrowLeftRight size={12} aria-hidden="true" />

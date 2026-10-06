@@ -90,14 +90,19 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
   { file: 'src/main/database/repositories/note-repo.ts', maxSites: 4, reason: REPOSITORY_READ },
   { file: 'src/main/database/repositories/project-repo.ts', maxSites: 5, reason: REPOSITORY_READ },
   { file: 'src/main/database/repositories/routine-repo.ts', maxSites: 1, reason: REPOSITORY_READ },
-  { file: 'src/main/database/repositories/thread-repo.ts', maxSites: 9, reason: REPOSITORY_READ },
+  { file: 'src/main/database/repositories/thread-repo.ts', maxSites: 10, reason: REPOSITORY_READ },
   { file: 'src/lib/engines/assignment-engine.ts', maxSites: 2, reason: ENGINE_READ },
   { file: 'src/lib/engines/audit-engine.ts', maxSites: 4, reason: ENGINE_READ },
   { file: 'src/lib/engines/brainstorm-engine.ts', maxSites: 2, reason: ENGINE_READ },
   { file: 'src/lib/engines/engineering-lifecycle-engine.ts', maxSites: 2, reason: ENGINE_READ },
   { file: 'src/lib/engines/plan-engine.ts', maxSites: 3, reason: ENGINE_READ },
   { file: 'src/lib/engines/prd-engine.ts', maxSites: 5, reason: ENGINE_READ },
-  { file: 'src/lib/engines/scope-manager.ts', maxSites: 2, reason: ENGINE_READ },
+  {
+    file: 'src/lib/engines/scope-manager.ts',
+    maxSites: 3,
+    reason:
+      'lifecycle engine read on the synchronous API, plus the primary-connection fallback for the worker-backed board-id read'
+  },
   { file: 'src/lib/engines/spec-engine.ts', maxSites: 2, reason: ENGINE_READ },
   {
     file: 'src/main/storage/checkpoint-manager.ts',

@@ -4,6 +4,7 @@ import { validateEntityId } from '../ipc-validation'
 import { requireString } from './shared'
 import { ROUTINE_NEXT_STEPS_PROMPT } from '../../../lib/assistant-next-steps'
 import { routinePrimaryModel, settingsWithRoutineModel } from '../../../lib/routine-agents'
+import { LOCAL_OVEN_ID } from '../../../lib/ovens'
 import {
   ROUTINE_DELIVERY_CHANNEL_IDS,
   ROUTINE_IMPACT_IDS,
@@ -25,6 +26,7 @@ import type {
   RoutineConnection,
   RoutineDelivery,
   RoutineDeliveryChannel,
+  RoutineExecution,
   RoutineImpact,
   RoutinePriority,
   RoutineSchedule,
@@ -197,6 +199,22 @@ function sanitizePriority(value: unknown): RoutinePriority | null {
   }
 }
 
+/**
+ * Validate an untrusted execution target into a RoutineExecution, or null to
+ * clear it (run on this computer). A target must name an Oven; the path stays
+ * optional so the Oven's default checkout can be used.
+ */
+function sanitizeExecution(value: unknown): RoutineExecution | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'object') throw new TypeError('Routine execution must be an object or null')
+  const record = value as Record<string, unknown>
+  const ovenId = typeof record.ovenId === 'string' ? record.ovenId.trim() : ''
+  if (!ovenId) throw new TypeError('Routine execution must name an Oven')
+  const ovenPath = typeof record.ovenPath === 'string' ? record.ovenPath.trim() : ''
+  if (ovenId === LOCAL_OVEN_ID) return null
+  return { ovenId: ovenId.slice(0, 200), ...(ovenPath ? { ovenPath } : {}) }
+}
+
 function validateCreateInput(value: unknown): CreateRoutineInput {
   if (typeof value !== 'object' || value === null) throw new TypeError('Invalid routine input')
   const record = value as Record<string, unknown>
@@ -213,6 +231,9 @@ function validateCreateInput(value: unknown): CreateRoutineInput {
       ? { connections: sanitizeConnections(record.connections) }
       : {}),
     ...(record.agents !== undefined ? { agents: sanitizeAgents(record.agents) ?? undefined } : {}),
+    ...(record.execution !== undefined
+      ? { execution: sanitizeExecution(record.execution) ?? undefined }
+      : {}),
     ...(record.delivery !== undefined
       ? { delivery: sanitizeDelivery(record.delivery) ?? undefined }
       : {}),
@@ -271,6 +292,7 @@ function validateUpdateInput(value: unknown): UpdateRoutineInput {
   }
   if (record.delivery !== undefined) patch.delivery = sanitizeDelivery(record.delivery)
   if (record.priority !== undefined) patch.priority = sanitizePriority(record.priority)
+  if (record.execution !== undefined) patch.execution = sanitizeExecution(record.execution)
   if (typeof record.paused === 'boolean') patch.paused = record.paused
   return patch
 }

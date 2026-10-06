@@ -3,7 +3,7 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { OvenRegistry } from './oven-registry'
 import { OvenService } from './oven-service'
 import { inspectOvenConnection, testDraftConnection, localOvenConnection } from './oven-connection'
-import { ovenId, validateSaveOven, validateIdentityPath } from './oven-validation'
+import { ovenId, ovenOrder, validateSaveOven, validateIdentityPath } from './oven-validation'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { SecretVault } from '../storage/secret-vault'
 import type { ProjectManager } from '../../lib/engines/project-manager'
@@ -21,6 +21,8 @@ import { createOvenSetupPorts } from './oven-setup-ports'
 import { deviceTimezone, syncOvenTimezone } from './oven-timezone'
 import { HarnessAccountRegistry } from '../providers/harness-account-registry'
 import { validateOvenHarnessId, validateStartOvenSetup } from './oven-validation'
+import { validateOvenAgentRegistration, validateOvenAgentScriptRequest } from './oven-validation'
+import { OvenAgentService } from './oven-agent-service'
 import { Logger } from '../system/logger'
 
 export function registerOvenIpc(
@@ -54,6 +56,7 @@ export function registerOvenIpc(
   })
   const setupService = new OvenSetupService(storage, setupRuntime)
   const harnessService = new OvenHarnessService(service, storage)
+  const agentService = new OvenAgentService(registry)
   harnessService.startAutoUpdates()
   app.once('before-quit', () => harnessService.stopAutoUpdates())
   /**
@@ -87,6 +90,7 @@ export function registerOvenIpc(
   })
   ipcMain.handle('oven:remove', (_event, raw: unknown) => registry.remove(ovenId(raw)))
   ipcMain.handle('oven:setDefault', (_event, raw: unknown) => registry.setDefault(ovenId(raw)))
+  ipcMain.handle('oven:reorder', (_event, raw: unknown) => registry.reorder(ovenOrder(raw)))
   ipcMain.handle('oven:install', (_event, raw: unknown) => service.install(ovenId(raw)))
   ipcMain.handle('oven:probe', async (_event, raw: unknown) => {
     const id = ovenId(raw)
@@ -201,6 +205,20 @@ export function registerOvenIpc(
   })
   ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown) =>
     harnessService.getInventory(ovenId(rawId))
+  )
+  ipcMain.handle('oven:agent:script', (_event, raw: unknown) =>
+    agentService.script(validateOvenAgentScriptRequest(raw))
+  )
+  ipcMain.handle('oven:agent:preview', (_event, raw: unknown) => {
+    if (typeof raw !== 'string') throw new TypeError('A registration code is required.')
+    return agentService.preview(raw)
+  })
+  ipcMain.handle('oven:agent:reachable', (_event, raw: unknown) => {
+    if (typeof raw !== 'string') throw new TypeError('A registration code is required.')
+    return agentService.reachableEndpoint(raw)
+  })
+  ipcMain.handle('oven:agent:register', (_event, raw: unknown) =>
+    agentService.register(validateOvenAgentRegistration(raw))
   )
   ipcMain.handle('oven:timezone:sync', async (_event, rawId: unknown) => {
     const id = requireRemoteOven(rawId)

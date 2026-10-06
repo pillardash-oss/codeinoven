@@ -13,7 +13,13 @@ import type {
   OvenSetupOperation,
   OvenHarnessInventoryItem,
   OvenTimezoneSyncResult,
-  StartOvenSetupInput
+  StartOvenSetupInput,
+  OvenAgentScript,
+  OvenAgentScriptRequest,
+  OvenAgentPreview,
+  OvenEndpoint,
+  OvenAgentRegistrationInput,
+  OvenAgentRegistration
 } from '../ovens'
 import type { OvenConnectionStatus } from '../ovens'
 import type { Contract } from './contract-helpers'
@@ -37,6 +43,7 @@ export const invokeOvenContract = {
   'oven:save': {} as Contract<[input: SaveOvenInput], Oven>,
   'oven:remove': {} as Contract<[id: string], OvenState>,
   'oven:setDefault': {} as Contract<[id: string], OvenState>,
+  'oven:reorder': {} as Contract<[ids: string[]], OvenState>,
   'oven:install': {} as Contract<[id: string], OvenProbe>,
   'oven:probe': {} as Contract<[id: string], OvenProbe>,
   'oven:runs': {} as Contract<[id: string], OvenRun[]>,
@@ -64,5 +71,9 @@ export const invokeOvenContract = {
   'oven:harness:uninstall': {} as Contract<
     [id: string, harnessId: string],
     OvenHarnessInventoryItem
-  >
+  >,
+  'oven:agent:script': {} as Contract<[input: OvenAgentScriptRequest], OvenAgentScript>,
+  'oven:agent:preview': {} as Contract<[code: string], OvenAgentPreview>,
+  'oven:agent:reachable': {} as Contract<[code: string], OvenEndpoint | null>,
+  'oven:agent:register': {} as Contract<[input: OvenAgentRegistrationInput], OvenAgentRegistration>
 }

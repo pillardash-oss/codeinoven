@@ -1,4 +1,4 @@
-import type { AgentQuestion, AgentQuestionRequest } from '../../../lib/types'
+import type { AgentQuestion, AgentQuestionOption, AgentQuestionRequest } from '../../../lib/types'
 import { recordFromUnknown, recordValue, stringValue } from './opencode-values'
 
 /** Extract the question text from the tool input, tolerating several field names. */
@@ -17,7 +17,7 @@ export function extractQuestionPrompt(input: Record<string, unknown>, title?: st
 /** Extract options from either `options` or `richOptions`. */
 export function extractQuestionOptions(input: Record<string, unknown>): {
   options: string[]
-  richOptions: { label: string; description?: string }[]
+  richOptions: AgentQuestionOption[]
 } {
   const rawOptions = Array.isArray(input['options']) ? input['options'] : []
   const rawRichOptions = Array.isArray(input['richOptions']) ? input['richOptions'] : []
@@ -38,6 +38,9 @@ export function extractQuestionOptions(input: Record<string, unknown>): {
         ? {
             label,
             description: stringValue(opt['description']),
+            ...((stringValue(opt['instruction']) ?? stringValue(opt['instructions']))
+              ? { instruction: stringValue(opt['instruction']) ?? stringValue(opt['instructions']) }
+              : {}),
             ...(opt['recommended'] === true || /\(recommended\)/iu.test(label)
               ? { recommended: true }
               : {})

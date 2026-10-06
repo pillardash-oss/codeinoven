@@ -5,6 +5,7 @@
     BookOpen,
     Bookmark,
     Boxes,
+    ChevronDown,
     Globe2,
     KeyRound,
     Loader2,
@@ -1104,8 +1105,21 @@
       {:else}
         <div class="space-y-5">
           {#each vendorGroups as group (group.vendor.id)}
+            {@const folded = utilitiesViewPrefs.isVendorFolded(group.vendor.id)}
             <section aria-label={group.vendor.label}>
-              <header class="flex items-center gap-2 px-1 pb-2">
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-left transition-colors hover:bg-overlay"
+                aria-expanded={!folded}
+                aria-label="{folded ? 'Expand' : 'Fold'} {group.vendor.label}"
+                title="{folded ? 'Expand' : 'Fold'} {group.vendor.label}"
+                onclick={() => utilitiesViewPrefs.toggleVendorFold(group.vendor.id)}
+              >
+                <ChevronDown
+                  size={12}
+                  class="shrink-0 text-dimmed transition-transform {folded ? '-rotate-90' : ''}"
+                  aria-hidden="true"
+                />
                 {#if group.vendor.kind === 'app'}
                   <img class="h-3.5 w-3.5 shrink-0 object-contain" src={cioIconUrl} alt="" />
                 {:else if group.vendor.kind === 'harness'}
@@ -1126,16 +1140,18 @@
                     {group.vendor.source}
                   </span>
                 {/if}
-              </header>
-              <div class="divide-y rounded-xl border bg-surface">
-                {#each group.rows as row (row.id)}
-                  {#if row.src === 'bookmark'}
-                    {@render bookmarkRow(row)}
-                  {:else}
-                    {@render utilityRow(row)}
-                  {/if}
-                {/each}
-              </div>
+              </button>
+              {#if !folded}
+                <div class="divide-y rounded-xl border bg-surface">
+                  {#each group.rows as row (row.id)}
+                    {#if row.src === 'bookmark'}
+                      {@render bookmarkRow(row)}
+                    {:else}
+                      {@render utilityRow(row)}
+                    {/if}
+                  {/each}
+                </div>
+              {/if}
             </section>
           {/each}
         </div>

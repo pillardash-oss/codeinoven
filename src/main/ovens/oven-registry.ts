@@ -30,6 +30,27 @@ interface OvenRegistryFile {
 const REGISTRY_PATH = 'ovens/registry.json'
 const tails = new WeakMap<StorageEngine, Promise<unknown>>()
 
+/**
+ * Ovens in list order.
+ *
+ * The stored `order` wins; an Oven that never had one falls back to creation
+ * time so importing an old registry keeps the list stable. `byStoredOrder`
+ * false sorts by creation time alone, which is how a missing order is filled in.
+ */
+function orderedOvens(ovens: StoredOven[], byStoredOrder = true): StoredOven[] {
+  return [...ovens].sort((a, b) =>
+    byStoredOrder
+      ? (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) ||
+        a.createdAt - b.createdAt
+      : a.createdAt - b.createdAt
+  )
+}
+
+/** The order a newly created Oven takes: one past the current last. */
+function nextOrder(registry: { ovens: StoredOven[] }): number {
+  return registry.ovens.reduce((max, oven) => Math.max(max, oven.order ?? -1), -1) + 1
+}
+
 export class OvenRegistry {
   constructor(
     readonly storage: StorageEngine,
@@ -38,8 +59,9 @@ export class OvenRegistry {
 
   async state(): Promise<OvenState> {
     const stored = await this.read()
+    if (this.assignMissingOrder(stored)) await this.storage.write(REGISTRY_PATH, stored)
     const ovens: Oven[] = []
-    for (const oven of stored.ovens) ovens.push(await this.present(oven))
+    for (const oven of orderedOvens(stored.ovens)) ovens.push(await this.present(oven))
     return {
       ovens: [
         {
@@ -102,6 +124,7 @@ export class OvenRegistry {
         customSvg: input.customSvg,
         color: input.color,
         connection: input.connection,
+        order: existing?.order ?? nextOrder(registry),
         createdAt: existing?.createdAt ?? Date.now(),
         updatedAt: Date.now()
       }
@@ -143,7 +166,11 @@ export class OvenRegistry {
           if (existing?.imageFile) await removeIconFile(imageDirectory, existing.imageFile)
           oven.imageFile = undefined
         }
-        registry.ovens = [...registry.ovens.filter((item) => item.id !== oven.id), oven]
+        const index = registry.ovens.findIndex((item) => item.id === oven.id)
+        // An edit keeps the Oven where it sits; only a new Oven is appended.
+        // Rewriting the list on every edit was what reordered the whole panel.
+        if (index >= 0) registry.ovens[index] = oven
+        else registry.ovens.push(oven)
         await this.storage.write(REGISTRY_PATH, registry)
       } catch (error) {
         for (const ref of added) await this.vault.remove(ref)
@@ -171,6 +198,36 @@ export class OvenRegistry {
       await this.storage.write(REGISTRY_PATH, registry)
     })
     return this.state()
+  }
+
+  /**
+   * Persist a manual order. The ids are the SSH Ovens in the order the user
+   * dropped them; Local is never part of the list because it is always first.
+   * An id the registry does not know is ignored rather than failing the whole
+   * drag, so a stale renderer cannot wedge reordering.
+   */
+  async reorder(ids: string[]): Promise<OvenState> {
+    await this.mutate(async (registry) => {
+      const positions = new Map(ids.map((id, index) => [id, index]))
+      for (const oven of registry.ovens) {
+        const position = positions.get(oven.id)
+        if (position !== undefined) oven.order = position
+      }
+      await this.storage.write(REGISTRY_PATH, registry)
+    })
+    return this.state()
+  }
+
+  /**
+   * Give every Oven an order, using creation time for any that never had one.
+   * Returns whether anything changed so callers can persist the migration once.
+   */
+  private assignMissingOrder(registry: OvenRegistryFile): boolean {
+    if (registry.ovens.every((oven) => typeof oven.order === 'number')) return false
+    orderedOvens(registry.ovens, false).forEach((oven, index) => {
+      oven.order = index
+    })
+    return true
   }
 
   async remove(id: string): Promise<OvenState> {
@@ -220,7 +277,15 @@ export class OvenRegistry {
 
   private async mutate<T>(operation: (registry: OvenRegistryFile) => Promise<T>): Promise<T> {
     const previous = tails.get(this.storage) ?? Promise.resolve()
-    const current = previous.catch(() => undefined).then(async () => operation(await this.read()))
+    const current = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const registry = await this.read()
+        // Every mutation normalizes order first, so a save or reorder can never
+        // work from partially-ordered data.
+        this.assignMissingOrder(registry)
+        return operation(registry)
+      })
     tails.set(this.storage, current)
     return current
   }

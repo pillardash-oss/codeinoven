@@ -182,6 +182,12 @@ class ContextSidebarState {
     return this.tabContexts.temporaryChatTab(tabId)
   }
 
+  /** Live temporary (side) chats hanging off one thread, so a thread row can
+   *  mark that a side chat exists without owning the tab contexts. */
+  temporaryChatsFor(projectId: string, threadId: string): TemporaryChatContextTab[] {
+    return this.tabContexts.temporaryChatsFor(projectId, threadId)
+  }
+
   get activeTabId(): string | null {
     return this.sidebarActiveTabId
   }
@@ -196,6 +202,18 @@ class ContextSidebarState {
 
   get rememberedBrowserTabId(): string | null {
     return this.browser.rememberedTabId
+  }
+
+  /**
+   * The browser tab the sidebar's browser region is on for the conversation on
+   * screen, or null when it holds none.
+   *
+   * The full screen browser shows this tab: it is the single source of truth
+   * the overlay mirrors, so a tab a link opened, a reopened tab or a close that
+   * fell back all land the overlay on the tab the user is actually reading.
+   */
+  get activeBrowserTabId(): string | null {
+    return this.browser.activeTabIdOrLast()
   }
 
   /**

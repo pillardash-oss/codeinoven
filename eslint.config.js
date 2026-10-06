@@ -10,9 +10,9 @@ export default defineConfig(
   globalIgnores([
     '.cio/**',
     '.svelte-check/**',
-    'dist/**',
-    'node_modules/**',
-    'out/**',
+    '**/dist/**',
+    '**/node_modules/**',
+    '**/out/**',
     'services/**',
     'resources/harnesses/**'
   ]),

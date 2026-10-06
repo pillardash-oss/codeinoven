@@ -2,7 +2,6 @@ import { mkdir } from 'node:fs/promises'
 import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { resolveOvenThreadRoot } from './oven-thread-root'
-import { OVEN_HARNESS_PATH } from './oven-harness-paths'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { SecretVault } from '../storage/secret-vault'
@@ -10,8 +9,9 @@ import type { PtyRemoteLaunchHook } from '../system/pty-service'
 import { HarnessAccountRegistry } from '../providers/harness-account-registry'
 import { OvenRegistry } from './oven-registry'
 import { OvenService } from './oven-service'
-import { sshQuote } from './oven-ssh'
 import { syncOvenAccount } from './oven-accounts'
+import { detectRemoteShell } from './oven-remote-shell'
+import { remoteTerminalCommand } from './oven-remote-command'
 
 /** Resolve terminal/action work to the chat's Oven before looking at local files. */
 export function ovenTerminalLaunch(
@@ -70,11 +70,18 @@ export function ovenTerminalLaunch(
       (!script.trim() || script.length > 100_000 || script.includes('\0'))
     )
       throw new Error('Action script is invalid.')
-    const assignments = Object.entries(environment)
-      .map(([name, value]) => `${name}=${sshQuote(value)}`)
-      .join(' ')
-    const shell = '"${SHELL:-/bin/sh}"'
-    const command = `${OVEN_HARNESS_PATH} cd ${root ? sshQuote(root) : '"$HOME"'} && exec env ${assignments} ${shell} ${script === undefined ? '-l' : `-lc ${sshQuote(script)}`}`
+    // Detect the shell on every open instead of reading the cached answer. A
+    // cached answer skips the round trip, and with it the only reachable check
+    // this path makes: a down Oven then spawned a PTY whose ssh died at once,
+    // which the renderer respawned into a wall of repeated failures. An explicit
+    // detection fails here, before any PTY exists, so the panel shows one reason.
+    const shell = await detectRemoteShell(service.ssh, ovenId)
+    const command = remoteTerminalCommand({
+      shell,
+      root: root || undefined,
+      environment,
+      script
+    })
     const launch = await service.ssh.prepare(ovenId, command, script === undefined, undefined, true)
     try {
       const localCwd = storage.resolve('ovens/terminals')

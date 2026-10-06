@@ -1,5 +1,5 @@
 import { validateModelRuntimeSettings } from '../../lib/model-runtime-settings'
-import { BrowserWindow, powerMonitor } from 'electron'
+import { BrowserWindow, net, powerMonitor } from 'electron'
 import { readdir, readFile, rm, stat } from 'fs/promises'
 import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -22405,12 +22405,18 @@ export class ChatEngine {
         eventOwner &&
         !eventOwner.ephemeral &&
         !this.userAbortedSessions.has(event.sessionId) &&
-        isUsageResetWaitIssue(event.status.issue)
+        (isUsageResetWaitIssue(event.status.issue) || event.status.issue.kind === 'network')
       ) {
         this.enterRetryWait(event.sessionId, event.status.issue, event.status.issue.message)
         return
       }
       const currentStatus = this.sessionStatuses.get(event.sessionId)
+      if (
+        event.status.state === 'idle' &&
+        currentStatus?.state === 'waiting' &&
+        currentStatus.issue.kind === 'network'
+      )
+        return
       if (event.status.state !== 'idle' || currentStatus?.state !== 'error') {
         this.sessionStatuses.set(event.sessionId, event.status)
       }
@@ -22438,9 +22444,11 @@ export class ChatEngine {
         // harnesses that schedule their own retry (OpenCode). Their native
         // resume emits `working` and clears the record; the recorded wait keeps
         // the thread retryable after an app restart.
-        void this.scheduleAutomaticRetry(event.sessionId, event.status.issue).catch((error) =>
-          Logger.dev('Retry scheduling failed for waiting session:', error)
-        )
+        void (
+          event.status.issue.kind === 'network' && event.status.issue.retryAt === undefined
+            ? Promise.resolve(false)
+            : this.scheduleAutomaticRetry(event.sessionId, event.status.issue)
+        ).catch((error) => Logger.dev('Retry scheduling failed for waiting session:', error))
       }
       if (event.status.state === 'working' || event.status.state === 'idle') {
         updateRetryWakeWindow(event.sessionId, null)
@@ -22670,7 +22678,8 @@ export class ChatEngine {
       // suppress this trailing idle broadcast so the card survives until the
       // auto-resume (or native harness retry) drives the session again.
       const resetWaitIdle =
-        currentStatus?.state === 'waiting' && isUsageResetWaitIssue(currentStatus.issue)
+        currentStatus?.state === 'waiting' &&
+        (isUsageResetWaitIssue(currentStatus.issue) || currentStatus.issue.kind === 'network')
       if (currentStatus?.state !== 'error' && !resetWaitIdle) {
         this.sessionStatuses.set(event.sessionId, { state: 'idle' })
       }
@@ -22699,7 +22708,7 @@ export class ChatEngine {
             event.error ?? 'Agent session failed',
             event.rawError
           )
-        if (isUsageResetWaitIssue(issue)) {
+        if (isUsageResetWaitIssue(issue) || issue.kind === 'network') {
           // Unified contract: a usage/rate-limit reset is a scheduled wait, not
           // a failure. Re-surface the reset-wait as a `waiting` card and let
           // the scheduler resume the thread once the reset passes.
@@ -22712,7 +22721,7 @@ export class ChatEngine {
         // exited" failure classifies as unknown. It arrived AFTER the wait was
         // entered, so honoring it here would flip the visible will-retry card
         // into a red error badge milliseconds later.
-        if (this.isUsageResetWaitActive(event.sessionId) && !event.issue) {
+        if (this.isAutomaticRetryWaitActive(event.sessionId) && !event.issue) {
           Logger.dev(
             'Ignored provider teardown failure trailing an active usage-reset wait:',
             event.error
@@ -22736,7 +22745,7 @@ export class ChatEngine {
       } else if (!this.userAbortedSessions.has(event.sessionId)) {
         const issue: AgentProviderIssue =
           event.issue ?? this.fallbackProviderIssue(driverId, event.error, event.rawError)
-        if (isUsageResetWaitIssue(issue)) {
+        if (isUsageResetWaitIssue(issue) || issue.kind === 'network') {
           // The failed message still broadcasts below; the provider card is
           // replaced by the unified waiting state instead of an error.
           this.enterRetryWait(event.sessionId, issue, event.error)
@@ -23668,6 +23677,10 @@ export class ChatEngine {
     sourceSessionId: string,
     issue: AgentProviderIssue
   ): Promise<void> {
+    if (issue.kind === 'network' && !this.userAbortedSessions.has(sourceSessionId)) {
+      this.enterRetryWait(sourceSessionId, issue, issue.message)
+      return
+    }
     const sessionIds = new Set<string>([sourceSessionId])
     for (const [registeredSessionId, registered] of this.sessionRegistry) {
       if (registered.projectId === projectId && registered.threadId === threadId) {
@@ -23700,6 +23713,11 @@ export class ChatEngine {
     })
   }
 
+  /** Wake retained connection failures when the device reports a reconnection. */
+  connectionRestored(): void {
+    this.retryScheduler?.connectionRestored()
+  }
+
   /**
    * Register the auto-resume scheduler. Its resume callback routes back into
    * this engine so a timed retry flows through the same sendPrompt pipeline as
@@ -23707,6 +23725,7 @@ export class ChatEngine {
    */
   attachRetryScheduler(scheduler: RetrySchedulerService): void {
     this.retryScheduler = scheduler
+    scheduler.attachNetworkTest(() => net.isOnline())
     scheduler.attachStoppedThreadTest((projectId, threadId) =>
       this.threadManager.wasStoppedByUser(projectId, threadId)
     )
@@ -24079,20 +24098,26 @@ export class ChatEngine {
     // An assistant task whose routine carries fallback models moves onto the
     // next model and re-runs at once. The fallback exists so a failed model
     // never stops the routine, so it is applied before any reset wait.
-    if (await this.tryAssistantModelFallback(info, sessionId, issue)) return true
+    if (issue.kind !== 'network' && (await this.tryAssistantModelFallback(info, sessionId, issue)))
+      return true
     // A provider with an explicit retry deadline has declared that the issue
     // is safe to retry later. Known reset-based issues may also derive their
     // deadline from account telemetry; everything else stays manual unless it
     // carries both retryable=true and retryAt.
     const canDeriveReset =
       issue.kind === 'quota' || issue.kind === 'rate_limit' || issue.kind === 'provider_unavailable'
-    if (!canDeriveReset && !(issue.retryable && issue.retryAt !== undefined)) {
+    if (
+      issue.kind !== 'network' &&
+      !canDeriveReset &&
+      !(issue.retryable && issue.retryAt !== undefined)
+    ) {
       return false
     }
     const driver = this.driverForRuntime(info.driverId, info.accountId)
     if (!driver) return false
-    let retryAt = issue.retryAt
-    if (retryAt !== undefined) retryAt += RETRY_FIRE_GRACE_MS
+    // Allow the failed turn to finish tearing down before admitting a continuation.
+    let retryAt = issue.kind === 'network' ? Date.now() + 3_000 : issue.retryAt
+    if (retryAt !== undefined && issue.kind !== 'network') retryAt += RETRY_FIRE_GRACE_MS
     if (retryAt === undefined) {
       // Some harnesses surface a usage reset without attaching it to the error
       // (e.g. Codex reports windows via account/rateLimits/read, OpenCode Go via
@@ -24344,6 +24369,16 @@ export class ChatEngine {
    * through the same provider-failure path used for errors.
    */
   private enterRetryWait(sessionId: string, issue: AgentProviderIssue, error?: string): void {
+    if (issue.kind === 'network') {
+      issue = {
+        ...issue,
+        retryable: true,
+        retryAt: undefined,
+        rawError: issue.rawError ?? error ?? issue.message,
+        message:
+          'Connection interrupted. This thread will resume automatically when the device reconnects.'
+      }
+    }
     this.sessionStatuses.set(sessionId, { state: 'waiting', issue })
     updateRetryWakeWindow(sessionId, issue.retryAt ?? null)
     this.clearSessionWatchdog(sessionId)
@@ -24354,14 +24389,17 @@ export class ChatEngine {
   }
 
   /**
-   * True when the session is currently showing a usage/rate-limit reset wait  
+   * True when the session is currently showing a provider reset or connection wait.
    * the unified will-retry state. Any later terminal-looking signal (trailing
    * idle finalization, issue-less teardown failure) must defer to it instead of
    * overwriting the pause with a terminal error.
    */
-  private isUsageResetWaitActive(sessionId: string): boolean {
+  private isAutomaticRetryWaitActive(sessionId: string): boolean {
     const status = this.sessionStatuses.get(sessionId)
-    return status?.state === 'waiting' && isUsageResetWaitIssue(status.issue)
+    return (
+      status?.state === 'waiting' &&
+      (isUsageResetWaitIssue(status.issue) || status.issue.kind === 'network')
+    )
   }
 
   /**
@@ -24383,7 +24421,7 @@ export class ChatEngine {
     sessionId: string,
     info: SessionInfo
   ): Promise<void> {
-    if (this.isUsageResetWaitActive(sessionId)) return
+    if (this.isAutomaticRetryWaitActive(sessionId)) return
     if (this.sessionStatuses.get(sessionId)?.state === 'error') return
     const driver = this.driverForRuntime(driverId, info.accountId)
     if (!driver) return
@@ -24491,6 +24529,17 @@ export class ChatEngine {
     if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) return
     const current = this.sessionStatuses.get(sessionId)
     if (current?.state === 'working') return
+    if (record.issueKind === 'network') {
+      if (!net.isOnline()) throw new Error('Device disconnected before thread recovery')
+      const info = this.sessionRegistry.get(sessionId)
+      const driver = info ? this.driverForRuntime(info.driverId, info.accountId) : undefined
+      if (
+        driver?.isSessionBusy &&
+        info &&
+        (await driver.isSessionBusy(info.projectPath, sessionId))
+      )
+        return
+    }
     // A waiting session is the retry-wait we are resuming   clear the waiting
     // card so the scheduled Continue can transition working-paused → working.
     if (current?.state === 'waiting' || current?.state === 'error') {
@@ -25329,7 +25378,7 @@ export class ChatEngine {
       // here would race that scheduled retry and, once it also fails to
       // resume immediately, fall into the catch below and flip the thread
       // from the will-retry wait to a terminal error.
-      const resetWaitActiveForRecovery = !userAborted && this.isUsageResetWaitActive(sessionId)
+      const resetWaitActiveForRecovery = !userAborted && this.isAutomaticRetryWaitActive(sessionId)
       if (missingFinalResponse && !failure && !resetWaitActiveForRecovery && liveThread?.settings) {
         this.incompleteTurnRecoveryAttempts.set(sessionId, 1)
         await this.finishCheckpoint(sessionId, info, 'failed', INCOMPLETE_TURN_MESSAGE)
@@ -25592,7 +25641,7 @@ export class ChatEngine {
       // "hit an error" notification while the will-retry card is on screen.
       // The checkpoint still finalizes (same as the session-error wait path);
       // only the thread status stays paused.
-      const resetWaitActive = !userAborted && this.isUsageResetWaitActive(sessionId)
+      const resetWaitActive = !userAborted && this.isAutomaticRetryWaitActive(sessionId)
       const finalStatus = resetWaitActive
         ? 'working-paused'
         : userAborted || contractBlocked

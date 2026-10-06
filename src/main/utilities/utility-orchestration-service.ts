@@ -290,16 +290,28 @@ export interface UtilityTurnGateway {
  * plainly, but a script is the path that receives a tool's whole
  * `CallToolResult`: an image or a structured payload that the gateway's JSON
  * hop flattens (a computer-use snapshot, for one) arrives intact.
+ *
+ * Two mistakes have cost a thread whole turns, so this note names them: the
+ * discovery helpers return promises (an un-awaited `searchTools` serialises as
+ * `{}`, which a model reads as "no such tool"), and a large file handed to a
+ * parser from a capped read arrives truncated, so the parser reports the cut
+ * point as a syntax error that is not in the file.
  */
 function nativeMcpHostHint(server: string): { namespace: string; note: string } {
   return {
     namespace: `mcp__${server}`,
     note:
       `This server also runs on your own MCP host as \`mcp__${server}\`: its tools are named ` +
-      `\`mcp__${server}__<tool>\`, they are not declared to you, and you call them from the body of a codemode script, ` +
-      'finding them by name or by intent with `searchTools`. Prefer that path whenever a tool returns an ' +
-      'image or a structured payload, because a script receives the complete result: a large result can also be ' +
-      'filtered there before it reaches you. The gateway operations in this payload remain a fallback for the same server.'
+      `\`mcp__${server}__<tool>\`, they are not declared to you, and you call them from the body of a ` +
+      'codemode script. Reach them by intent with `await searchTools(query)`, or by name with ' +
+      `\`await describeTool(name)\` and \`await describeNamespace("mcp__${server}")\`; each of those helpers ` +
+      'returns a promise, and an un-awaited one serialises as `{}`, which means the `await` is missing, not the ' +
+      'tool. `ALL_TOOLS` lists every callable tool, so check it before concluding a tool does not exist. Prefer ' +
+      'this path whenever a tool returns an image or a structured payload, because a script receives the complete ' +
+      'result and can filter a large one before it reaches you. When a tool takes file content, such as a parser ' +
+      'or an autofixer, pass the path to the file whenever the tool accepts one rather than the source read out of ' +
+      'it: a file read past its cap arrives truncated, and the cut point surfaces as a phantom syntax error. The ' +
+      'gateway operations in this payload remain a fallback for the same server.'
   }
 }
 

@@ -19,13 +19,15 @@
  */
 
 import {
+  MAX_BROWSER_GROUP_NAME_LENGTH,
   MAX_BROWSER_TAB_PAGE_TITLE_LENGTH,
   MAX_BROWSER_TAB_URL_LENGTH,
   MAX_GLOBAL_BROWSER_BOXES,
   DEFAULT_BOX_ID,
   isBrowserBoxId,
   isStorableBrowserFavicon,
-  parseAppearance
+  parseAppearance,
+  type BrowserAppearance
 } from './global-browser-tabs'
 import { looksLikeBrowserAddress } from '../browser-search-engines'
 import { normalizeBrowserUrl } from '../local-development-url'
@@ -48,6 +50,9 @@ export const MAX_BROWSER_HISTORY_RECORDS = 10_000
 /** How many bookmarks are kept. A bookmark is a user intent, so it is never
  *  evicted for a newer one: the ceiling only bounds a corrupt file. */
 export const MAX_BROWSER_BOOKMARKS = 5_000
+/** How many bookmark groups a list may hold. A group is a user's own fold, so
+ *  the ceiling only bounds a corrupt file, the way the bookmark cap does. */
+export const MAX_BROWSER_BOOKMARK_GROUPS = 200
 
 /**
  * How long a change to either library waits before it is written.
@@ -78,6 +83,19 @@ export interface BrowserHistorySnapshot {
   boxEntries?: Record<string, BrowserHistoryEntry[]>
 }
 
+/**
+ * One saved-page group: a named fold the user files bookmarks under.
+ *
+ * A group wears the same appearance vocabulary a tab group, a box and a project
+ * do (a hex colour, a library icon key, a pasted SVG, a picked image), so it
+ * resolves its mark through the very resolver every other identity uses instead
+ * of inventing a second icon path.
+ */
+export interface BrowserBookmarkGroup extends BrowserAppearance {
+  id: string
+  name: string
+}
+
 /** One saved page. */
 export interface BrowserBookmark {
   id: string
@@ -106,11 +124,20 @@ export interface BrowserBookmark {
   iconType: string | null
   customSvg: string | null
   imagePath: string | null
+  /**
+   * The group this page is filed under, or null while it is ungrouped.
+   *
+   * A removed group clears this on every page it held rather than deleting the
+   * pages, because a fold is an arrangement and losing it must never lose a
+   * bookmark.
+   */
+  groupId: string | null
 }
 
 /** The stored bookmark list, in the order the user put it in. */
 export interface BrowserBookmarksSnapshot {
   bookmarks: BrowserBookmark[]
+  groups: BrowserBookmarkGroup[]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -226,13 +253,14 @@ function mergeHistoryEntry(kept: BrowserHistoryEntry, duplicate: BrowserHistoryE
   }
 }
 
-function bookmark(value: unknown): BrowserBookmark | null {
+function bookmark(value: unknown, groupIds: ReadonlySet<string>): BrowserBookmark | null {
   if (!isRecord(value)) return null
   const url = normalizeBrowserLibraryUrl(value['url'])
   if (url === null) return null
   const rawId = value['id']
   const id = typeof rawId === 'string' && rawId !== '' && rawId.length <= 128 ? rawId : null
   const title = boundedString(value['title'], MAX_BROWSER_TAB_PAGE_TITLE_LENGTH).trim()
+  const storedGroupId = value['groupId']
   const appearance = parseAppearance(value)
   return {
     id: id ?? `bookmark:${crypto.randomUUID()}`,
@@ -242,8 +270,41 @@ function bookmark(value: unknown): BrowserBookmark | null {
     favicon: isStorableBrowserFavicon(value['favicon']) ? value['favicon'] : null,
     iconType: appearance.iconType,
     customSvg: appearance.customSvg,
-    imagePath: appearance.imagePath
+    imagePath: appearance.imagePath,
+    // A page filed under a group that no longer exists is ungrouped rather than
+    // dropped, so the bookmark survives its fold.
+    groupId: typeof storedGroupId === 'string' && groupIds.has(storedGroupId) ? storedGroupId : null
   }
+}
+
+/** One repaired bookmark group, or null when the stored entry is not one. */
+function bookmarkGroup(value: unknown): BrowserBookmarkGroup | null {
+  if (!isRecord(value)) return null
+  const rawId = value['id']
+  const id = typeof rawId === 'string' && rawId !== '' && rawId.length <= 128 ? rawId : null
+  const name = boundedString(value['name'], MAX_BROWSER_GROUP_NAME_LENGTH).trim()
+  return {
+    id: id ?? `bookmark-group:${crypto.randomUUID()}`,
+    name: name === '' ? 'Group' : name,
+    ...parseAppearance(value)
+  }
+}
+
+/** The bounded, repaired groups of a stored bookmark list, in stored order. */
+function parseBookmarkGroups(value: unknown): BrowserBookmarkGroup[] {
+  if (!Array.isArray(value)) return []
+  const groups: BrowserBookmarkGroup[] = []
+  const seen = new Set<string>()
+  for (const stored of value) {
+    if (groups.length >= MAX_BROWSER_BOOKMARK_GROUPS) break
+    const parsed = bookmarkGroup(stored)
+    if (!parsed) continue
+    let id = parsed.id
+    while (seen.has(id)) id = `bookmark-group:${crypto.randomUUID()}`
+    seen.add(id)
+    groups.push({ ...parsed, id })
+  }
+  return groups
 }
 
 /**
@@ -251,16 +312,21 @@ function bookmark(value: unknown): BrowserBookmark | null {
  *
  * The stored order is kept: the list is the user's own, and its order is what
  * their reordering produced. A file written before order was theirs is already
- * newest first, so preserving it is also the shape it was written in.
+ * newest first, so preserving it is also the shape it was written in. A page
+ * whose group id names a group the same file does not hold is ungrouped, and a
+ * file written before groups existed parses to a flat list.
  */
 export function parseBrowserBookmarksSnapshot(value: unknown): BrowserBookmarksSnapshot {
-  if (!isRecord(value) || !Array.isArray(value['bookmarks'])) return { bookmarks: [] }
+  if (!isRecord(value)) return { bookmarks: [], groups: [] }
+  const groups = parseBookmarkGroups(value['groups'])
+  if (!Array.isArray(value['bookmarks'])) return { bookmarks: [], groups }
+  const groupIds = new Set(groups.map((group) => group.id))
   const bookmarks: BrowserBookmark[] = []
   const seenUrls = new Set<string>()
   const seenIds = new Set<string>()
   for (const stored of value['bookmarks']) {
     if (bookmarks.length >= MAX_BROWSER_BOOKMARKS) break
-    const parsed = bookmark(stored)
+    const parsed = bookmark(stored, groupIds)
     if (!parsed) continue
     let id = parsed.id
     while (seenIds.has(id)) id = `bookmark:${crypto.randomUUID()}`
@@ -271,7 +337,7 @@ export function parseBrowserBookmarksSnapshot(value: unknown): BrowserBookmarksS
     seenIds.add(id)
     bookmarks.push({ ...parsed, id })
   }
-  return { bookmarks }
+  return { bookmarks, groups }
 }
 
 /**
@@ -309,7 +375,7 @@ export function browserHistorySnapshotPayload(
 export function browserBookmarksSnapshotPayload(
   snapshot: BrowserBookmarksSnapshot
 ): Record<string, unknown> {
-  return librarySnapshotPayload({ bookmarks: snapshot.bookmarks })
+  return librarySnapshotPayload({ bookmarks: snapshot.bookmarks, groups: snapshot.groups })
 }
 
 /**

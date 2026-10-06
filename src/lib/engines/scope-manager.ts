@@ -1,5 +1,6 @@
 import type { Database } from '../../main/database/database'
 import { Logger } from '../../main/system/logger'
+import { scopedBucketIdsFromBoard } from './thread-manager-capacity'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   DEFAULT_SCOPE_WORKTREE_DEFAULTS,
@@ -222,6 +223,32 @@ export class ScopeManager {
       this.persist(projectId, board)
     }
     return board
+  }
+
+  /**
+   * Every scope bucket across every project that gets its own thread bucket: a
+   * pinned scope or a managed worktree root. Read on the database worker so the
+   * main thread never pays for the scan, and read-only (no board healing), so a
+   * caller that only needs the ids never persists or reassigns anything. A
+   * board that cannot be parsed is skipped rather than failing the whole read.
+   */
+  async scopedBucketIds(): Promise<Set<string>> {
+    const result = await this.db.queryViaWorker('SELECT data FROM scope_boards', [], 0)
+    const rows: Record<string, unknown>[] = result.ok
+      ? result.rows
+      : this.db.all('SELECT data FROM scope_boards')
+    const ids = new Set<string>()
+    for (const row of rows) {
+      const data = row['data']
+      if (typeof data !== 'string') continue
+      try {
+        for (const id of scopedBucketIdsFromBoard(this.parsePersisted(data))) ids.add(id)
+      } catch {
+        // A malformed board is reported on its own read; it must not hide the
+        // other projects' pinned scopes here.
+      }
+    }
+    return ids
   }
 
   /**

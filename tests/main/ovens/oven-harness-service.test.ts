@@ -19,7 +19,8 @@ const probe: OvenProbe = {
     memoryBytes: 8 * 1024 ** 3,
     diskBytes: 50 * 1024 ** 3,
     diskAvailableBytes: 25 * 1024 ** 3,
-    nodeVersion: 'v22.13.1'
+    nodeVersion: 'v22.13.1',
+    uptimeSeconds: 98_765
   },
   harnesses: [
     { command: 'codex', path: '/home/test/.npm/bin/codex' },

@@ -1,53 +1,69 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
-  import {
-    Loader2,
-    Plus,
-    CheckCircle2,
-    AlertCircle,
-    Boxes,
-    Circle,
-    Clock,
-    Cpu,
-    MemoryStick,
-    HardDrive,
-    Monitor,
-    Pencil,
-    RefreshCw,
-    Star,
-    Terminal,
-    Trash2
-  } from '@lucide/svelte'
-  import { toast } from 'svelte-sonner'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { randomOvenAppearance } from '$lib/oven-appearance'
+  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { flashElement } from '$lib/reveal-flash'
+  import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
+  import { ovens } from '$lib/stores/ovens.svelte'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import { formatDateTime } from '$shared/date-time-format'
+  import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
   import {
     LOCAL_OVEN_ID,
     ovenHarnessIdForCommand,
     parseOvenAddress,
     type Oven,
-    type OvenIcon,
-    type OvenState,
-    type OvenProbe,
-    type OvenHarnessInventoryItem,
     type OvenConnectionStatus,
+    type OvenHarnessInventoryItem,
+    type OvenIcon,
+    type OvenProbe,
+    type OvenState,
     type SaveOvenInput
   } from '$shared/ovens'
-  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import type { CustomIcon } from '$shared/types'
+  import {
+    Activity,
+    AlertCircle,
+    Boxes,
+    Cable,
+    CheckCircle2,
+    Circle,
+    Clock,
+    Cpu,
+    HardDrive,
+    Loader2,
+    MemoryStick,
+    Monitor,
+    Pencil,
+    Plug,
+    Plus,
+    RefreshCw,
+    Star,
+    Terminal,
+    Trash2
+  } from '@lucide/svelte'
+  import { onDestroy, onMount } from 'svelte'
+  import { toast } from 'svelte-sonner'
+  import type { Attachment } from 'svelte/attachments'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
-  import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
   import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../shared/SettingsEntry.svelte'
-  import ThreadDropdown from '../shared/ThreadDropdown.svelte'
+  import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
   import type { MenuItem } from '../shared/ThreadDropdown.svelte'
-  import Modal from '../ui/Modal.svelte'
+  import ThreadDropdown from '../shared/ThreadDropdown.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
-  import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
-  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
-  import type { CustomIcon } from '$shared/types'
-  import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
+  import Modal from '../ui/Modal.svelte'
 
   const fieldClass = 'w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground'
+
+  interface Props {
+    /** Open the app's own harness settings, where Local harnesses are managed. */
+    onOpenHarnessSettings: () => void
+  }
+
+  let { onOpenHarnessSettings }: Props = $props()
   let ovenState = $state.raw<OvenState | null>(null)
   let health = $state<Record<string, OvenConnectionStatus>>({})
   let folded = $state<Record<string, boolean>>({})
@@ -61,6 +77,7 @@
   let modalError = $state('')
   let editing = $state<Oven | null>(null)
   let editorOpen = $state(false)
+  let agentOpen = $state(false)
   let name = $state('')
   let pendingIcon = $state<{ path: string; dataUrl: string } | undefined>()
   let clearImage = $state(false)
@@ -68,6 +85,13 @@
   let customSvg = $state<string | undefined>()
   let customIcons = $state<CustomIcon[]>([])
   let color = $state('#22c55e')
+  /**
+   * The appearance the editor treats as unchanged: the saved values when editing,
+   * or the random pair picked for a new Oven. Comparing against this is what
+   * decides whether the Reset control is offered.
+   */
+  let baselineIcon = $state<OvenIcon>('server')
+  let baselineColor = $state('#22c55e')
   let address = $state('ubuntu@')
   let authentication = $state<SaveOvenInput['connection']['authentication']>('agent')
   let identityFile = $state('')
@@ -86,8 +110,8 @@
   let timezoneBusy = $state('')
   const hasAppearance = $derived(
     Boolean(
-      color !== (editing?.color ?? '#22c55e') ||
-      icon !== (editing?.icon ?? 'server') ||
+      color !== baselineColor ||
+      icon !== baselineIcon ||
       customSvg !== editing?.customSvg ||
       pendingIcon ||
       clearImage
@@ -123,16 +147,18 @@
    */
   function ovenMenuItems(oven: Oven): MenuItem[] {
     const items: MenuItem[] = []
+    items.push({
+      label: 'Check Oven',
+      icon: Activity,
+      disabled: Boolean(busy) || Boolean(checking) || Boolean(timezoneBusy),
+      onClick: () => void checkOven(oven)
+    })
     if (ovenState?.defaultOvenId !== oven.id)
       items.push({
         label: 'Set as default',
         icon: Star,
         disabled: Boolean(busy),
-        onClick: () => {
-          void invoke('oven:setDefault', oven.id)
-            .then((next) => (ovenState = next))
-            .catch((failure: unknown) => (error = message(failure)))
-        }
+        onClick: () => void setDefaultOven(oven.id)
       })
     items.push({ label: 'Edit Oven', icon: Pencil, onClick: () => openEditor(oven) })
     if (oven.id !== LOCAL_OVEN_ID) {
@@ -152,6 +178,140 @@
       })
     }
     return items
+  }
+
+  /** Make an Oven the default, then republish the registry to every surface. */
+  async function setDefaultOven(id: string): Promise<void> {
+    if (busy) return
+    try {
+      await invoke('oven:setDefault', id)
+      await load()
+    } catch (failure) {
+      error = message(failure)
+    }
+  }
+
+  /**
+   * Run the read-only check for one Oven on demand.
+   *
+   * This is the same probe the row draws its details from, so a check the user
+   * asks for and the check that runs when the list opens can never disagree.
+   * Nothing on the Oven changes: it reads the service, the hardware, and the
+   * harness inventory. A failure is reported where the user asked for it rather
+   * than only inside the setup flow.
+   */
+  async function checkOven(oven: Oven): Promise<void> {
+    if (busy || checking || timezoneBusy) return
+    checking = oven.id
+    try {
+      if (oven.kind === 'local') {
+        const result = await invoke('oven:connectionHealth', oven.id)
+        health = {
+          ...health,
+          [oven.id]: { ...result, specs: result.specs ?? health[oven.id]?.specs }
+        }
+        toast.success('Local is ready', {
+          description: `${ovenPlatformName(result.specs?.platform)} · ${result.specs?.cpuCount ?? '?'} logical cores`
+        })
+        return
+      }
+      const probe = await invoke('oven:probe', oven.id)
+      probes = { ...probes, [oven.id]: probe }
+      health = {
+        ...health,
+        [oven.id]: { state: 'connected', checkedAt: Date.now(), specs: probe.specs }
+      }
+      const inventory = probe.inventory ?? []
+      const healthy = inventory.filter((item) => item.health === 'healthy').length
+      const attention = inventory.filter(
+        (item) => item.health === 'broken' || item.health === 'unknown'
+      ).length
+      toast.success(`${oven.name} answered`, {
+        description: [
+          ovenPlatformName(probe.platform) || probe.platform,
+          `Node ${probe.nodeVersion}`,
+          `${healthy} harness${healthy === 1 ? '' : 'es'} installed`,
+          attention > 0 ? `${attention} need attention` : '',
+          probe.activeRuns > 0
+            ? `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
+            : ''
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      })
+    } catch (failure) {
+      const detail = message(failure)
+      health = {
+        ...health,
+        [oven.id]: {
+          state: 'disconnected',
+          checkedAt: Date.now(),
+          error: detail,
+          specs: health[oven.id]?.specs
+        }
+      }
+      toast.error(`${oven.name} could not be checked`, { description: detail })
+    } finally {
+      checking = ''
+    }
+  }
+
+  let dragOvenId = $state<string | null>(null)
+  let dropTarget = $state<{ id: string; position: 'before' | 'after' } | null>(null)
+
+  /** Local is pinned first, so only remote Ovens are dragged. */
+  function canDragOven(oven: Oven): boolean {
+    return oven.kind === 'ssh'
+  }
+
+  function startOvenDrag(event: DragEvent, oven: Oven): void {
+    if (!canDragOven(oven)) return
+    dragOvenId = oven.id
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move'
+      // A private type keeps the reorder out of every text/drop handler that
+      // watches the document; the id itself is read from component state.
+      event.dataTransfer.setData('application/x-cio-oven', oven.id)
+    }
+  }
+
+  function hoverOven(event: DragEvent, oven: Oven): void {
+    if (!dragOvenId || !canDragOven(oven) || oven.id === dragOvenId) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    const row = event.currentTarget as HTMLElement
+    const bounds = row.getBoundingClientRect()
+    const position = event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after'
+    dropTarget = { id: oven.id, position }
+  }
+
+  function endOvenDrag(): void {
+    dragOvenId = null
+    dropTarget = null
+  }
+
+  /** Persist the order the drag produced and republish it to every surface. */
+  async function dropOven(event: DragEvent): Promise<void> {
+    event.preventDefault()
+    const dragged = dragOvenId
+    const target = dropTarget
+    endOvenDrag()
+    if (!dragged || !target || !ovenState || busy) return
+    const before = ovenState.ovens.filter((oven) => oven.kind === 'ssh').map((oven) => oven.id)
+    const next = before.filter((id) => id !== dragged)
+    const at = next.indexOf(target.id)
+    if (at < 0) return
+    next.splice(target.position === 'before' ? at : at + 1, 0, dragged)
+    if (next.every((id, index) => id === before[index])) return
+    busy = 'reorder'
+    try {
+      ovenState = await invoke('oven:reorder', next)
+      ovens.adopt(ovenState)
+    } catch (failure) {
+      error = message(failure)
+    } finally {
+      busy = ''
+    }
   }
 
   /** One installed harness's occasional actions, behind the badge it belongs to. */
@@ -198,6 +358,9 @@
   async function load(): Promise<void> {
     try {
       ovenState = await invoke('oven:state')
+      // Publishing what was just read is what makes a saved icon or colour, a
+      // new Oven, or a manual order show up on every other surface at once.
+      ovens.adopt(ovenState)
       folded = Object.fromEntries(ovenState.ovens.map((oven) => [oven.id, folded[oven.id] ?? true]))
       for (const oven of ovenState.ovens) {
         if (
@@ -208,6 +371,7 @@
       }
       void refreshSetupStatuses(ovenState)
       void refreshHealth(ovenState)
+      void ovens.ensureInventory(LOCAL_OVEN_ID)
     } catch (failure) {
       error = message(failure)
     }
@@ -215,6 +379,34 @@
   onMount(() => {
     void load()
   })
+
+  let lastOvenFocus = 0
+  /**
+   * Reveal the Oven another surface asked for: expand it, bring it into view,
+   * and flash it.
+   *
+   * An attachment rather than an `$effect` because this reacts to a request, not
+   * to derived state, and running it from the list's own update means it also
+   * lands when the request arrived before the registry finished loading (the
+   * `ovenState` argument changes and the attachment runs again).
+   */
+  function revealOven(
+    focus: { id: string; sequence: number } | null,
+    state: OvenState | null
+  ): Attachment<HTMLDivElement> {
+    return () => {
+      if (!focus || !state || focus.sequence === lastOvenFocus) return
+      if (!state.ovens.some((oven) => oven.id === focus.id)) return
+      lastOvenFocus = focus.sequence
+      folded = { ...folded, [focus.id]: false }
+      requestAnimationFrame(() => {
+        const element = document.getElementById(`oven-row-${focus.id}`)
+        if (!element) return
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        flashElement(element)
+      })
+    }
+  }
 
   async function refreshSetupStatuses(state: OvenState): Promise<void> {
     const remote = state.ovens.filter((oven) => oven.kind === 'ssh')
@@ -285,18 +477,32 @@
   function bytes(value: number): string {
     return (value / 1024 ** 3).toFixed(1) + ' GiB'
   }
+
+  /** A duration in seconds as a short "3d 4h" / "4h 12m" / "12m" phrase. */
+  function formatUptime(seconds: number): string {
+    if (!Number.isFinite(seconds) || seconds <= 0) return ''
+    const days = Math.floor(seconds / 86_400)
+    const hours = Math.floor((seconds % 86_400) / 3_600)
+    const minutes = Math.floor((seconds % 3_600) / 60)
+    if (days > 0) return `${days}d ${hours}h`
+    if (hours > 0) return `${hours}h ${minutes}m`
+    return `${minutes}m`
+  }
   function openEditor(oven?: Oven): void {
     pendingIcon = undefined
     clearImage = false
     editing = oven ?? null
     connectionResult = null
     name = oven?.name ?? ''
-    icon = oven?.icon ?? 'server'
+    const appearance = oven ? { icon: oven.icon, color: oven.color } : randomOvenAppearance()
+    baselineIcon = appearance.icon
+    baselineColor = appearance.color
+    icon = appearance.icon
     customSvg = oven?.customSvg
     void invoke('icon-library:list')
       .then((icons) => (customIcons = icons))
       .catch((failure: unknown) => (modalError = message(failure)))
-    color = oven?.color ?? '#22c55e'
+    color = appearance.color
     const connection = oven?.connection
     const host = connection?.host.includes(':') ? `[${connection.host}]` : connection?.host
     address = connection
@@ -330,9 +536,9 @@
   }
 
   function resetAppearance(): void {
-    icon = editing?.icon ?? 'server'
+    icon = baselineIcon
     customSvg = editing?.customSvg
-    color = editing?.color ?? '#22c55e'
+    color = baselineColor
     pendingIcon = undefined
     clearImage = false
   }
@@ -451,12 +657,19 @@
     }
   }
 
+  /** Reveal a freshly registered Oven so its setup action is immediately visible. */
+  async function onAgentRegistered(ovenId: string): Promise<void> {
+    folded = { ...folded, [ovenId]: false }
+    await load()
+  }
+
   async function remove(): Promise<void> {
     if (!pendingRemoval || busy) return
     busy = 'remove'
     error = ''
     try {
       ovenState = await invoke('oven:remove', pendingRemoval.id)
+      ovens.adopt(ovenState)
       pendingRemoval = null
     } catch (failure) {
       error = message(failure)
@@ -520,13 +733,22 @@
       <h1 class="text-xl font-bold tracking-tight">Ovens</h1>
       <p class="mt-0.5 text-sm text-muted">This computer and your remote SSH environments.</p>
     </div>
-    <button
-      type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
-      onclick={() => openEditor()}
-    >
-      <Plus size={14} /> New Oven
-    </button>
+    <div class="flex items-center gap-2">
+      <button
+        type="button"
+        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
+        onclick={() => (agentOpen = true)}
+      >
+        <Terminal size={14} /> Add via agent
+      </button>
+      <button
+        type="button"
+        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
+        onclick={() => openEditor()}
+      >
+        <Plus size={14} /> New Oven
+      </button>
+    </div>
   </div>
   {#if error}<p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
       {error}
@@ -536,234 +758,313 @@
       <Loader2 size={14} class="animate-spin" /> Loading Ovens
     </p>
   {:else}
-    <div class="space-y-3">
+    <div class="space-y-3" role="list" {@attach revealOven(settingsUiState.ovenFocus, ovenState)}>
       {#each ovenState.ovens as oven (oven.id)}
         {@const probe = probes[oven.id]}
         {@const checkingNow = checking === oven.id}
         {@const state = health[oven.id]?.state}
-        <SettingsEntry expanded={!folded[oven.id]}>
-          <div class="grid grid-cols-1 items-center gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
-            <div class="flex min-w-0 items-center gap-3">
-              {#if oven.id === LOCAL_OVEN_ID}
-                <Monitor size={20} class="shrink-0 text-muted" />
-              {:else}
-                <img
-                  src={oven.imageDataUrl ??
-                    (oven.customSvg
-                      ? getCustomSvgDataUrl(oven.customSvg, oven.color)
-                      : getIconSvgDataUrl(oven.icon, oven.color))}
-                  alt=""
-                  class="h-5 w-5 object-contain"
-                />
-              {/if}
-              <div class="min-w-0">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class="truncate text-sm font-semibold">{oven.name}</span>
-                  {#if ovenState.defaultOvenId === oven.id}<span
-                      class="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">Default</span
-                    >{/if}
-                  <SettingsStatusBadge
-                    label={checkingNow
-                      ? 'Checking…'
-                      : state === 'connected'
-                        ? 'Connected'
-                        : state === 'disconnected'
-                          ? 'Disconnected'
-                          : 'Not checked'}
-                    classes={checkingNow
-                      ? 'border-info/30 bg-info/10 text-info'
-                      : state === 'connected'
-                        ? 'border-success/30 bg-success/10 text-success'
-                        : state === 'disconnected'
-                          ? 'border-danger/30 bg-danger/10 text-danger'
-                          : 'border-border bg-elevated text-dimmed'}
-                  >
-                    {#if checkingNow}<Loader2
-                        size={12}
-                        class="shrink-0 animate-spin"
-                      />{:else if state === 'connected'}<CheckCircle2
-                        size={12}
-                        class="shrink-0"
-                      />{:else if state === 'disconnected'}<AlertCircle
-                        size={12}
-                        class="shrink-0"
-                      />{:else}<Circle size={12} class="shrink-0" />{/if}
-                  </SettingsStatusBadge>
+        <div
+          class="relative rounded-xl"
+          id={`oven-row-${oven.id}`}
+          role="listitem"
+          draggable={canDragOven(oven)}
+          ondragstart={(event) => startOvenDrag(event, oven)}
+          ondragover={(event) => hoverOven(event, oven)}
+          ondrop={(event) => void dropOven(event)}
+          ondragend={endOvenDrag}
+        >
+          {#if dropTarget?.id === oven.id}
+            <span
+              class={'pointer-events-none absolute inset-x-0 h-0.5 rounded-full bg-primary ' +
+                (dropTarget.position === 'before' ? 'top-0' : 'bottom-0')}
+              aria-hidden="true"
+            ></span>
+          {/if}
+          <SettingsEntry expanded={!folded[oven.id]}>
+            <div class="grid grid-cols-1 items-center gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+              <div class="flex min-w-0 items-center gap-3">
+                {#if oven.id === LOCAL_OVEN_ID}
+                  <Monitor size={20} class="shrink-0 text-muted" />
+                {:else}
+                  <img
+                    src={oven.imageDataUrl ??
+                      (oven.customSvg
+                        ? getCustomSvgDataUrl(oven.customSvg, oven.color)
+                        : getIconSvgDataUrl(oven.icon, oven.color))}
+                    alt=""
+                    class="h-5 w-5 object-contain"
+                  />
+                {/if}
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="truncate text-sm font-semibold">{oven.name}</span>
+                    {#if ovenState.defaultOvenId === oven.id}<span
+                        class="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary"
+                        >Default</span
+                      >{/if}
+                    <SettingsStatusBadge
+                      label={checkingNow
+                        ? 'Checking…'
+                        : state === 'connected'
+                          ? 'Connected'
+                          : state === 'disconnected'
+                            ? 'Disconnected'
+                            : 'Not checked'}
+                      classes={checkingNow
+                        ? 'border-info/30 bg-info/10 text-info'
+                        : state === 'connected'
+                          ? 'border-success/30 bg-success/10 text-success'
+                          : state === 'disconnected'
+                            ? 'border-danger/30 bg-danger/10 text-danger'
+                            : 'border-border bg-elevated text-dimmed'}
+                    >
+                      {#if checkingNow}<Loader2
+                          size={12}
+                          class="shrink-0 animate-spin"
+                        />{:else if state === 'connected'}<CheckCircle2
+                          size={12}
+                          class="shrink-0"
+                        />{:else if state === 'disconnected'}<AlertCircle
+                          size={12}
+                          class="shrink-0"
+                        />{:else}<Circle size={12} class="shrink-0" />{/if}
+                    </SettingsStatusBadge>
+                  </div>
                 </div>
               </div>
-            </div>
-            <div class="flex items-center gap-2">
-              {#if busy === oven.id}<Loader2 size={14} class="animate-spin text-muted" />{/if}
-              {#if oven.id !== LOCAL_OVEN_ID}
-                <button
-                  type="button"
-                  class="rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
-                  disabled={Boolean(busy)}
-                  onclick={() => void openOvenSetup(oven)}
-                  >{ovenSetupActionLabel(
-                    ovenSetupStore.completed[oven.id] || setupComplete[oven.id] || false
-                  )}</button
-                >
-              {/if}
-              <ThreadDropdown
-                items={ovenMenuItems(oven)}
-                title={`${oven.name} actions`}
-                ariaLabel={`${oven.name} actions`}
-              />
-              <SettingsDisclosure
-                expanded={!folded[oven.id]}
-                title={`${folded[oven.id] ? 'Show' : 'Hide'} ${oven.name} details`}
-                onclick={() => (folded[oven.id] = !folded[oven.id])}
-              />
-            </div>
-          </div>
-          {#if !folded[oven.id]}
-            <div class="mt-3 space-y-3 border-t border-border pt-3">
-              <p class="mt-0.5 truncate text-xs text-muted">
-                {oven.kind === 'local'
-                  ? 'This computer'
-                  : `${oven.connection?.user ? `${oven.connection.user}@` : ''}${oven.connection?.host}:${oven.connection?.port} · SSH`}
-              </p>
-              {#if health[oven.id]?.specs}
-                {@const specs = health[oven.id].specs!}
-                {@const usedPercent =
-                  specs.diskBytes > 0
-                    ? Math.max(
-                        0,
-                        Math.min(100, (1 - specs.diskAvailableBytes / specs.diskBytes) * 100)
-                      )
-                    : 0}
-                <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  <div class="space-y-1.5">
-                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                      <Monitor size={14} />System
-                    </dt>
-                    <dd class="text-sm font-medium text-foreground">
-                      {ovenPlatformName(specs.platform)}
-                    </dd>
-                    <dd class="text-xs text-muted">{specs.hostname}</dd>
-                  </div>
-                  <div class="space-y-1.5">
-                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                      <Cpu size={14} />Processor
-                    </dt>
-                    <dd class="text-sm font-medium text-foreground">
-                      {specs.cpuCount} logical cores
-                    </dd>
-                    <dd class="text-xs text-muted">
-                      {ovenArchitectureName(specs.architecture)}
-                    </dd>
-                  </div>
-                  <div class="space-y-1.5">
-                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                      <MemoryStick size={14} />Memory
-                    </dt>
-                    <dd class="text-sm font-medium text-foreground">{bytes(specs.memoryBytes)}</dd>
-                    <dd class="text-xs text-muted">Total RAM</dd>
-                  </div>
-                  <div class="space-y-1.5">
-                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                      <HardDrive size={14} />Storage
-                    </dt>
-                    <dd class="text-sm font-medium text-foreground">{bytes(specs.diskBytes)}</dd>
-                    <dd class="text-xs text-muted">{bytes(specs.diskAvailableBytes)} available</dd>
-                    <dd
-                      class="h-1 overflow-hidden rounded-full bg-elevated"
-                      title={usedPercent.toFixed(0) + '% storage used'}
+              <div class="flex items-center gap-2">
+                {#if busy === oven.id}<Loader2 size={14} class="animate-spin text-muted" />{/if}
+                {#if oven.id === LOCAL_OVEN_ID}
+                  <button
+                    type="button"
+                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
+                    disabled={Boolean(busy)}
+                    onclick={onOpenHarnessSettings}
+                  >
+                    <Plug size={12} />Setup
+                  </button>
+                  {#if ovenState?.defaultOvenId !== oven.id}
+                    <button
+                      type="button"
+                      class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
+                      disabled={Boolean(busy)}
+                      onclick={() => void setDefaultOven(oven.id)}
                     >
-                      <div
-                        class="h-full rounded-full bg-primary"
-                        style:width={usedPercent + '%'}
-                      ></div>
-                    </dd>
-                  </div>
-                </dl>
-              {/if}
-              {#if health[oven.id]?.error}<p class="text-xs text-danger" role="status">
-                  {health[oven.id].error}
-                </p>{/if}
-              {#if probe || health[oven.id]?.specs}
-                {@const nodeVersion =
-                  probe?.nodeVersion ?? health[oven.id]?.specs?.nodeVersion ?? null}
-                <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-2">
-                  <div class="space-y-1.5">
-                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                      <Terminal size={14} />Service runtime
-                    </dt>
-                    <dd class="text-sm font-medium text-foreground">
-                      {nodeVersion ? `Node.js ${nodeVersion.replace(/^v/, '')}` : 'Not installed'}
-                    </dd>
-                    <dd class="text-xs text-muted">
-                      {probe
-                        ? [
-                            ovenPlatformName(probe.platform),
-                            ovenArchitectureName(probe.architecture),
-                            `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')
-                        : 'No service has answered from this Oven yet.'}
-                    </dd>
-                    {#if probe?.timezone}
-                      <dd class="text-xs text-muted">Time zone: {probe.timezone}</dd>
-                    {/if}
-                  </div>
-                  <div class="space-y-1.5">
-                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                      <Boxes size={14} />Installed harnesses
-                    </dt>
-                    <dd class="flex flex-wrap items-center gap-1.5">
-                      {#if probe?.inventory?.length}
-                        {#each probe.inventory.filter((item) => item.health !== 'missing') as item (item.harnessId)}
-                          <span
-                            class="flex items-center gap-0.5 rounded-lg bg-elevated py-0.5 pr-0.5 pl-1.5"
-                            title={`${item.command}${
-                              item.installedVersion ? ` ${item.installedVersion}` : ''
-                            }${item.health === 'healthy' ? '' : ` · ${item.health}`}`}
-                          >
-                            <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
-                            {#if harnessBusy === `${oven.id}:${item.harnessId}`}
-                              <Loader2 size={11} class="animate-spin text-muted" />
-                            {:else}
-                              <ThreadDropdown
-                                vertical
-                                items={harnessMenuItems(oven.id, item)}
-                                title={`${item.command} actions`}
-                                ariaLabel={`${item.command} actions`}
-                              />
-                            {/if}
-                          </span>
-                        {/each}
-                        {#if !probe.inventory.some((item) => item.health !== 'missing')}
-                          <span class="text-xs text-muted">None found</span>
-                        {/if}
-                      {:else if probe?.harnesses.some((harness) => harness.path)}
-                        {#each probe.harnesses.filter((harness) => harness.path) as harness (harness.command)}
-                          <span
-                            class="flex items-center rounded-lg bg-elevated p-1"
-                            title={harness.command}
-                          >
-                            <AgentIcon
-                              agentId={ovenHarnessIdForCommand(harness.command) ?? harness.command}
-                              label={harness.command}
-                              size={14}
-                            />
-                          </span>
-                        {/each}
-                      {:else if probe}
-                        <span class="text-xs text-muted">None found</span>
-                      {:else}
-                        <span class="text-xs text-muted"
-                          >Connect to read this Oven's harnesses.</span
-                        >
-                      {/if}
-                    </dd>
-                  </div>
-                </dl>
-              {/if}
+                      <Star size={12} />Set as default
+                    </button>
+                  {/if}
+                {:else}
+                  <button
+                    type="button"
+                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
+                    disabled={Boolean(busy)}
+                    onclick={() => void openOvenSetup(oven)}
+                  >
+                    <Terminal size={12} />{ovenSetupActionLabel(
+                      ovenSetupStore.completed[oven.id] || setupComplete[oven.id] || false
+                    )}</button
+                  >
+                  <ThreadDropdown
+                    items={ovenMenuItems(oven)}
+                    title={`${oven.name} actions`}
+                    ariaLabel={`${oven.name} actions`}
+                  />
+                {/if}
+                <SettingsDisclosure
+                  expanded={!folded[oven.id]}
+                  title={`${folded[oven.id] ? 'Show' : 'Hide'} ${oven.name} details`}
+                  onclick={() => (folded[oven.id] = !folded[oven.id])}
+                />
+              </div>
             </div>
-          {/if}
-        </SettingsEntry>
+            {#if !folded[oven.id]}
+              <div class="mt-3 space-y-3 border-t border-border pt-3">
+                {#if health[oven.id]?.specs}
+                  {@const specs = health[oven.id].specs!}
+                  {@const usedPercent =
+                    specs.diskBytes > 0
+                      ? Math.max(
+                          0,
+                          Math.min(100, (1 - specs.diskAvailableBytes / specs.diskBytes) * 100)
+                        )
+                      : 0}
+                  <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <div class="space-y-1.5">
+                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                        <Monitor size={14} />System
+                      </dt>
+                      <dd class="text-sm font-medium text-foreground">
+                        {ovenPlatformName(specs.platform)}
+                      </dd>
+                      <dd class="text-xs text-muted">{specs.hostname}</dd>
+                      {#if formatUptime(specs.uptimeSeconds)}
+                        <dd class="text-xs text-muted">Up {formatUptime(specs.uptimeSeconds)}</dd>
+                      {/if}
+                    </div>
+                    <div class="space-y-1.5">
+                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                        <Cpu size={14} />Processor
+                      </dt>
+                      <dd class="text-sm font-medium text-foreground">
+                        {specs.cpuCount} logical cores
+                      </dd>
+                      <dd class="text-xs text-muted">
+                        {ovenArchitectureName(specs.architecture)}
+                      </dd>
+                    </div>
+                    <div class="space-y-1.5">
+                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                        <MemoryStick size={14} />Memory
+                      </dt>
+                      <dd class="text-sm font-medium text-foreground">
+                        {bytes(specs.memoryBytes)}
+                      </dd>
+                      <dd class="text-xs text-muted">Total RAM</dd>
+                    </div>
+                    <div class="space-y-1.5">
+                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                        <HardDrive size={14} />Storage
+                      </dt>
+                      <dd class="text-sm font-medium text-foreground">{bytes(specs.diskBytes)}</dd>
+                      <dd class="text-xs text-muted">
+                        {bytes(specs.diskAvailableBytes)} available
+                      </dd>
+                      <dd
+                        class="h-1 overflow-hidden rounded-full bg-elevated"
+                        title={usedPercent.toFixed(0) + '% storage used'}
+                      >
+                        <div
+                          class="h-full rounded-full bg-primary"
+                          style:width={usedPercent + '%'}
+                        ></div>
+                      </dd>
+                    </div>
+                  </dl>
+                {/if}
+                {#if health[oven.id]?.error}<p class="text-xs text-danger" role="status">
+                    {health[oven.id].error}
+                  </p>{/if}
+                {#if probe || health[oven.id]?.specs}
+                  {@const nodeVersion =
+                    probe?.nodeVersion ?? health[oven.id]?.specs?.nodeVersion ?? null}
+                  <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-3">
+                    <div class="space-y-1.5">
+                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                        <Terminal size={14} />Service runtime
+                      </dt>
+                      <dd class="text-sm font-medium text-foreground">
+                        {nodeVersion ? `Node.js ${nodeVersion.replace(/^v/, '')}` : 'Not installed'}
+                      </dd>
+                      <dd class="text-xs text-muted">
+                        {probe
+                          ? [
+                              ovenPlatformName(probe.platform),
+                              ovenArchitectureName(probe.architecture),
+                              `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')
+                          : oven.kind === 'local'
+                            ? `${ovenPlatformName(health[oven.id]?.specs?.platform)} · this computer`
+                            : 'No service has answered from this Oven yet.'}
+                      </dd>
+                      {#if probe?.timezone}
+                        <dd class="text-xs text-muted">Time zone: {probe.timezone}</dd>
+                      {/if}
+                    </div>
+                    <div class="space-y-1.5">
+                      <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                        <Boxes size={14} />Installed harnesses
+                      </dt>
+                      <dd class="flex flex-wrap items-center gap-1.5">
+                        {#if oven.kind === 'local'}
+                          {@const localItems = ovens.inventory(LOCAL_OVEN_ID) ?? []}
+                          {#each localItems.filter((item) => item.health === 'healthy') as item (item.harnessId)}
+                            <span
+                              class="flex items-center rounded-lg bg-elevated p-1"
+                              title={`${item.command}${
+                                item.installedVersion ? ` ${item.installedVersion}` : ''
+                              }`}
+                            >
+                              <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
+                            </span>
+                          {/each}
+                          {#if !localItems.some((item) => item.health === 'healthy')}
+                            <span class="text-xs text-muted">None found</span>
+                          {/if}
+                        {:else if probe?.inventory?.length}
+                          {#each probe.inventory.filter((item) => item.health !== 'missing') as item (item.harnessId)}
+                            <span
+                              class="flex items-center gap-0.5 rounded-lg bg-elevated py-0.5 pr-0.5 pl-1.5"
+                              title={`${item.command}${
+                                item.installedVersion ? ` ${item.installedVersion}` : ''
+                              }${item.health === 'healthy' ? '' : ` · ${item.health}`}`}
+                            >
+                              <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
+                              {#if harnessBusy === `${oven.id}:${item.harnessId}`}
+                                <Loader2 size={11} class="animate-spin text-muted" />
+                              {:else}
+                                <ThreadDropdown
+                                  vertical
+                                  items={harnessMenuItems(oven.id, item)}
+                                  title={`${item.command} actions`}
+                                  ariaLabel={`${item.command} actions`}
+                                />
+                              {/if}
+                            </span>
+                          {/each}
+                          {#if !probe.inventory.some((item) => item.health !== 'missing')}
+                            <span class="text-xs text-muted">None found</span>
+                          {/if}
+                        {:else if probe?.harnesses.some((harness) => harness.path)}
+                          {#each probe.harnesses.filter((harness) => harness.path) as harness (harness.command)}
+                            <span
+                              class="flex items-center rounded-lg bg-elevated p-1"
+                              title={harness.command}
+                            >
+                              <AgentIcon
+                                agentId={ovenHarnessIdForCommand(harness.command) ??
+                                  harness.command}
+                                label={harness.command}
+                                size={14}
+                              />
+                            </span>
+                          {/each}
+                        {:else if probe}
+                          <span class="text-xs text-muted">None found</span>
+                        {:else}
+                          <span class="text-xs text-muted"
+                            >Connect to read this Oven's harnesses.</span
+                          >
+                        {/if}
+                      </dd>
+                    </div>
+                    <div>
+                      <div class="space-y-1.5">
+                        <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                          <Cable size={14} />Connection Info
+                        </dt>
+                        <dd class="flex flex-col gap-1.5">
+                          <p class="mt-0.5 truncate text-xs text-muted">
+                            {#if oven.kind === 'local'}
+                              This computer
+                            {:else}
+                              {oven.connection?.user ? `${oven.connection.user}@` : ''}{oven
+                                .connection?.host}:{oven.connection?.port}
+                            {/if}
+                          </p>
+                          <p class="mt-0.5 truncate text-xs text-muted">
+                            Added {formatDateTime(oven.createdAt)}
+                          </p>
+                        </dd>
+                      </div>
+                    </div>
+                  </dl>
+                {/if}
+              </div>
+            {/if}
+          </SettingsEntry>
+        </div>
       {/each}
     </div>
     <p class="mt-4 text-xs text-dimmed">
@@ -1028,3 +1329,13 @@
     running before uninstalling it.
   </p>
 </ConfirmDialog>
+
+{#if agentOpen}
+  {#await import('./OvenAgentModal.svelte') then { default: OvenAgentModal }}
+    <OvenAgentModal
+      open={agentOpen}
+      onClose={() => (agentOpen = false)}
+      onRegistered={(ovenId) => void onAgentRegistered(ovenId)}
+    />
+  {/await}
+{/if}

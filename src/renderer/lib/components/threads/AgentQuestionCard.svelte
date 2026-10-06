@@ -1,5 +1,14 @@
 <script lang="ts">
-  import { Check, ChevronLeft, ChevronRight, Clock, Paperclip, Send, X } from '@lucide/svelte'
+  import {
+    Check,
+    ChevronLeft,
+    ChevronRight,
+    ClipboardList,
+    Clock,
+    Paperclip,
+    Send,
+    X
+  } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import { onDestroy } from 'svelte'
   import { SvelteSet, createSubscriber } from 'svelte/reactivity'
@@ -16,12 +25,14 @@
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type {
     AgentQuestion,
+    AgentQuestionOption,
     PendingAgentQuestionRequest,
     ProviderCatalog,
     ThreadSettings
   } from '$shared/types'
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
   import AgentCardChatActions from './AgentCardChatActions.svelte'
+  import AgentQuestionInstructionModal from './AgentQuestionInstructionModal.svelte'
   import { fitQuestionCard } from './question-card-fit'
 
   interface Props {
@@ -93,6 +104,8 @@
   let working = $state(false)
   let actionError = $state('')
   let folded = $state(false)
+  /** The option whose instruction the user opened for copying, or null. */
+  let instructionOption = $state<AgentQuestionOption | null>(null)
   // svelte-ignore state_referenced_locally
   let interactedIndexes = new SvelteSet(request.interactedQuestionIndexes)
   let syncedServerState = $state('')
@@ -387,6 +400,12 @@
     }
   }
 
+  /** Opens the copyable instruction modal for one option. */
+  function openInstruction(option: AgentQuestionOption): void {
+    if (working) return
+    instructionOption = option
+  }
+
   function openQuestionChat(
     onOpen: ((requestId: string, question: AgentQuestion) => void) | undefined
   ): void {
@@ -495,60 +514,87 @@
           <div class="grid gap-2" role="group" aria-label="Answer options">
             {#each question.richOptions as option (option.label)}
               {@const selected = currentAnswers.includes(option.label) && !currentCustomAnswer}
-              <button
+              <!-- The option is a split control: selecting it is one button, and an
+                   instruction it carries gets its own button so the copyable text
+                   never sits inside the selection target. -->
+              <div
                 class={[
-                  'flex min-h-12 w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                  'flex min-h-12 w-full items-stretch overflow-hidden rounded-lg border transition-colors',
                   selected
                     ? 'border-primary bg-primary text-on-primary'
-                    : 'border-border bg-surface text-foreground hover:bg-elevated'
+                    : 'border-border bg-surface text-foreground'
                 ]}
-                disabled={working}
-                aria-pressed={selected}
-                onclick={() => toggleOption(option.label)}
               >
-                <span
+                <button
                   class={[
-                    'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border text-[0.5625rem]',
-                    question.multiple ? 'rounded' : 'rounded-full',
-                    selected ? 'border-on-primary bg-on-primary text-primary' : 'border-muted'
+                    'flex min-h-12 min-w-0 flex-1 items-start gap-3 p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                    !selected && 'hover:bg-elevated'
                   ]}
+                  disabled={working}
+                  aria-pressed={selected}
+                  onclick={() => toggleOption(option.label)}
                 >
-                  {#if selected}<Check size={11} />{/if}
-                </span>
-                <span class="min-w-0 flex-1">
-                  <span class="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
-                    {#if question.fileRequest}
-                      <span class="break-all font-mono text-[0.6875rem] font-medium"
-                        >{option.label}</span
-                      >
-                    {:else}
-                      {option.label}
-                    {/if}
-                    {#if option.recommended}
+                  <span
+                    class={[
+                      'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border text-[0.5625rem]',
+                      question.multiple ? 'rounded' : 'rounded-full',
+                      selected ? 'border-on-primary bg-on-primary text-primary' : 'border-muted'
+                    ]}
+                  >
+                    {#if selected}<Check size={11} />{/if}
+                  </span>
+                  <span class="min-w-0 flex-1">
+                    <span class="flex flex-wrap items-center gap-1.5 text-xs font-semibold">
+                      {#if question.fileRequest}
+                        <span class="break-all font-mono text-[0.6875rem] font-medium"
+                          >{option.label}</span
+                        >
+                      {:else}
+                        {option.label}
+                      {/if}
+                      {#if option.recommended}
+                        <span
+                          class={[
+                            'rounded px-1.5 py-0.5 text-[0.625rem] font-semibold',
+                            selected
+                              ? 'bg-on-primary/15 text-on-primary'
+                              : 'bg-primary/10 text-primary'
+                          ]}
+                        >
+                          Recommended
+                        </span>
+                      {/if}
+                    </span>
+                    {#if option.description}
                       <span
                         class={[
-                          'rounded px-1.5 py-0.5 text-[0.625rem] font-semibold',
-                          selected
-                            ? 'bg-on-primary/15 text-on-primary'
-                            : 'bg-primary/10 text-primary'
+                          'mt-0.5 block text-[0.6875rem] leading-relaxed',
+                          selected ? 'text-on-primary/80' : 'text-muted'
                         ]}
                       >
-                        Recommended
+                        {option.description}
                       </span>
                     {/if}
                   </span>
-                  {#if option.description}
-                    <span
-                      class={[
-                        'mt-0.5 block text-[0.6875rem] leading-relaxed',
-                        selected ? 'text-on-primary/80' : 'text-muted'
-                      ]}
-                    >
-                      {option.description}
-                    </span>
-                  {/if}
-                </span>
-              </button>
+                </button>
+                {#if option.instruction}
+                  <button
+                    type="button"
+                    class={[
+                      'flex w-11 shrink-0 items-center justify-center border-l transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                      selected
+                        ? 'border-on-primary/25 text-on-primary hover:bg-on-primary/10'
+                        : 'border-border text-muted hover:bg-overlay hover:text-foreground'
+                    ]}
+                    disabled={working}
+                    onclick={() => openInstruction(option)}
+                    title={`View instruction: ${option.label}`}
+                    aria-label={`View instruction for ${option.label}`}
+                  >
+                    <ClipboardList size={15} />
+                  </button>
+                {/if}
+              </div>
             {/each}
           </div>
         {:else if question.options && question.options.length > 0}
@@ -732,6 +778,13 @@
       </div>
     </div>
   {/if}
+
+  <AgentQuestionInstructionModal
+    open={instructionOption !== null}
+    optionLabel={instructionOption?.label ?? ''}
+    instruction={instructionOption?.instruction ?? ''}
+    onClose={() => (instructionOption = null)}
+  />
 </section>
 
 <style>

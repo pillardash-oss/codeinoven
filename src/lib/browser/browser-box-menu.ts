@@ -36,6 +36,12 @@ export interface BrowserBoxMenuChoice {
  *  boxes is lower; this only bounds a call main cannot take on trust. */
 export const MAX_BROWSER_BOX_MENU_ENTRIES = 50
 
+/** A page context menu only needs names and ids for the profile's boxes. */
+export interface BrowserContextMenuBoxEntry {
+  id: string
+  name: string
+}
+
 /** Everything one call to open the menu carries. */
 export interface BrowserBoxMenuInput {
   /** The name of the scope's own jar. It heads the menu, and main spells out

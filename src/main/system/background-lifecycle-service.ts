@@ -332,12 +332,14 @@ export class BackgroundLifecycleService {
   }
 
   /**
-   * Make this instance the owner of scheduled work, at the user's request. A
-   * secondary's "Make this the main instance" action asks for it, which is the
-   * escape hatch when the elected owner is a stale window, or a crashed process
-   * still in the registry, and the user wants the schedule where they are
-   * working. The previous owner steps down through the same ownership
-   * notification and shows the secondary notice instead.
+   * Make this instance the main instance that owns scheduled work, at the user's
+   * request. A secondary's "Make this the main instance" action asks for it,
+   * which is the escape hatch when the elected owner is a stale window, or a
+   * crashed process still in the registry, and the user wants the schedule where
+   * they are working. The choice is durable: it is remembered for this app, so a
+   * later launch of it reclaims the schedule after a restart. The previous owner
+   * steps down through the same ownership notification and shows the secondary
+   * notice instead.
    */
   takeOverControl(): boolean {
     return instanceRegistry.transferOwnership(process.pid)

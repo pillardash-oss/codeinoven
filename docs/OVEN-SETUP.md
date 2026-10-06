@@ -2,6 +2,8 @@
 
 Oven setup prepares an SSH Oven for CodeInOven runs. It does not perform full setup or package upgrades on the Local Oven. Setup supports Linux, macOS, and native Windows on x64 and arm64. The remote service requires Node.js 22 or later.
 
+An Oven is driven the same way whatever its operating system. On a native Windows Oven, whether OpenSSH starts cmd.exe or PowerShell as the login shell, every managed command the app runs is carried as an encoded PowerShell 5.1 program, so a Windows Oven takes the same install, probe, run, workspace, root-operation, harness-management, and setup traffic a POSIX Oven takes. No extra shell configuration is needed on the Oven.
+
 ## Run setup
 
 1. Add and test the SSH Oven in Settings → Ovens.
@@ -14,13 +16,57 @@ Harness install steps show live download/install progress in the setup panel and
 
 Linux system package commands run directly as root or through sudo for other users. Password-authenticated Oven connections use the vaulted login password through SSH stdin when sudo requires authentication. The elevated command receives no password input. Other connections require passwordless sudo. Remote command failures are reported separately from SSH connection and trust errors.
 
+## Add a machine with the Oven agent
+
+**Settings → Ovens → Add via agent** registers a machine that prepared itself, without this computer reaching it first. The first step shows the one command to run on the machine:
+
+```sh
+npx cio-oven start
+```
+
+The command needs Node.js 22 or later already installed. It writes the same service bundle this app would push, verifies its SHA-256, starts the durable service, and prints a registration code; the service keeps running after the shell exits and after this app closes. The command and its flags are described in **Add a machine with one command** below.
+
+Paste the printed code into the second step of the same dialog. **Check code** shows the machine, the SSH account, the key fingerprint, and whether the machine already runs this app's service, all before anything is saved.
+
+A machine cannot know which of its own addresses this computer can reach: that depends on the network between them. So the code carries every address the machine answers on, ranked with its private LAN addresses first and its host name last, and the dialog dials them and uses the first that connects. The **Address this computer uses** field is prefilled with that answer, and the machine's other candidates sit below it as chips to pick from; nothing needs typing unless you reach the machine under a name it does not know, such as an SSH config alias or a forwarded port. **Register Oven** then stores the descriptor and, when one was provisioned, the key in the encrypted vault, and adds the Oven. An Oven registered from an agent is an ordinary Oven: it gets the same probe, harness inventory, checkout, and run operations as any other.
+
+The SSH port is verified the same way as the address. A port a person typed is a claim the machine cannot check from the outside, so the dialog dials the machine's addresses on the reported port and then on the standard one, and saves the pair that answered. When the port that answered is not the one the command reported, the dialog says so rather than saving an endpoint every later connection would time out on.
+
+The app reaches the machine the same way it reaches any Oven: over SSH to the durable service. Host keys are still trusted through OpenSSH on this computer, so a machine this computer has never connected to needs its host key trusted before the app can reach it. The registration code carries no login password. Treat the printed code and the saved descriptor file as secrets: the dedicated private key is inside them.
+
+**New Oven** is unchanged. Add a machine, test the connection, and install the service from this app. Both paths produce the same Oven.
+
+## Add a machine with one command
+
+The published `cio-oven` CLI prepares a machine from its own shell, without this app reaching it first. It writes the same service bundle, starts the same durable service, and prints the same registration code as the agent installer, so an Oven prepared either way registers identically.
+
+```sh
+npx cio-oven start
+```
+
+It asks for the Oven name and whether to provision a dedicated key, then starts the service in the background and prints a code for **Settings → Ovens → Add via agent**. Every question has a flag, so it also runs unattended: `npx cio-oven start --yes` or `npx cio-oven start --yes --no-identity`. The SSH port is not asked: the command uses the port `sshd` is really serving on, and refuses to print a code when nothing serves SSH at all, naming the configuration file and the restart command for the platform.
+
+## Windows Ovens
+
+Windows OpenSSH starts `cmd.exe` by default and PowerShell only when it is configured to, so both are driven the same way. Every managed command is carried as a PowerShell program, and the read-only setup probe travels on stdin because the Windows command line cannot hold it: the encoded form exceeded `cmd.exe`'s 8191-character limit and failed with "The command line is too long". A Windows Oven therefore needs no shell reconfiguration.
+
+```sh
+npx cio-oven status    # installed and running, with the service revision
+npx cio-oven stop      # stop the durable service
+npx cio-oven restart   # replace the running service with the current release
+```
+
+Everything it writes stays under the same app-managed directory this app uses, `~/.config/pillardash/codeinoven/ovens`. An Oven prepared by an earlier build kept that state in a sibling `codeinoven-oven` directory; the service moves it across the next time it starts, leaving behind only the runtime files of any daemon still running there, and never overwriting an entry the new location already has. A dedicated key is created at `~/.ssh/codeinoven-oven-agent` and authorized for the account; on a Windows administrator account the key is also authorized in the machine-wide `administrators_authorized_keys`, and the command prints the exact line to add when that file needs an elevated shell. Node.js 22 or later must already be installed, because the Oven service runs on it.
+
+The service survives the command exiting, the shell closing, and this app closing. It stops when the user runs `npx cio-oven stop`.
+
 ## The Oven clock
 
 Setup matches the Oven's clock to this computer's time zone as a prerequisite step. The zone is read before anything changes, set through the platform's own tool (`timedatectl` on Linux, `systemsetup` on macOS, PowerShell on Windows) and read back afterwards, so a change that did not take is reported instead of assumed. An Oven already on this computer's zone is skipped with that reason. An Oven with no supported way to change its zone, and a Windows Oven whose SSH session is not an administrator, skip the step with the reason rather than failing an otherwise complete setup.
 
 The same action is available at any time from the Oven's row under Settings → Ovens, in its actions menu: **Match your time zone**. The row's Service runtime section names the zone the Oven service reports.
 
-Package updates use the detected package manager: apt, dnf, yum, pacman, Homebrew, winget, Chocolatey, or Scoop. Harness installs use the same documented channel metadata as the Local installer. On Linux and macOS, npm harnesses install into the Oven user’s `.config/pillardash/codeinoven-oven/harnesses/npm` prefix instead of the system Node prefix. Discovery, verification, runs, updates, and uninstall use that managed location. A selected harness without a supported one-command install path blocks setup rather than running a guessed command.
+Package updates use the detected package manager: apt, dnf, yum, pacman, Homebrew, winget, Chocolatey, or Scoop. Harness installs use the same documented channel metadata as the Local installer. On Linux and macOS, npm harnesses install into the Oven user’s `.config/pillardash/codeinoven/ovens/harnesses/npm` prefix instead of the system Node prefix. Discovery, verification, runs, updates, and uninstall use that managed location. A selected harness without a supported one-command install path blocks setup rather than running a guessed command.
 
 ## Accounts and GitHub
 
@@ -44,7 +90,7 @@ Git failures are reported as the situation that caused them, and never as a bare
 
 A remote thread reads and writes one directory on its Oven. Files, Git, the file tree, previews, directory previews, transfers, and the Oven shell all resolve to that same checkout, so no panel can disagree about where the work lives.
 
-- The checkout lives under `~/.config/pillardash/codeinoven-oven/scopes/<project>/<scope>` on the Oven, keyed by hashes of the project id and the scope id rather than by their text.
+- The checkout lives under `~/.config/pillardash/codeinoven/ovens/scopes/<project>/<scope>` on the Oven, keyed by hashes of the project id and the scope id rather than by their text.
 - The project identifies the repository: the checkout is cloned from the project's GitHub remote in SSH form. Other Git hosts are not cloned automatically yet.
 - The scope identifies the checkout: a scope that owns its own worktree gets its own directory on the Oven. A thread that sets an explicit Oven path keeps it.
 - An existing checkout is verified and left untouched. A directory that already holds a different repository is reported, never overwritten.
@@ -54,7 +100,7 @@ Each remote thread has an **Oven** panel in the workspace rail. The rail item ca
 
 Preparing a checkout is visible while it happens. The first send on a remote thread publishes what the Oven is doing into the working trace: preparing the project, opening the checkout, or cloning the repository. The harness's own stream replaces that note once it starts producing output.
 
-Harness session transcripts live with the Oven's app state, at `~/.config/pillardash/codeinoven-oven/sessions/<session>.jsonl`, never inside the checkout. A transcript an older release left in the project root as `.cio-pi-<session>.jsonl` is moved into that directory the next time its thread runs, so the session keeps resuming and the working tree stays clean.
+Harness session transcripts live with the Oven's app state, at `~/.config/pillardash/codeinoven/ovens/sessions/<session>.jsonl`, never inside the checkout. A transcript an older release left in the project root as `.cio-pi-<session>.jsonl` is moved into that directory the next time its thread runs, so the session keeps resuming and the working tree stays clean.
 
 Thread rows carry the Oven's own mark and the checkout's branch beside the row's status indicator; a branch longer than four characters is shortened there. The hover card names the Oven, the branch, and the checkout path, and the search results name the Oven and branch too. Switching branches through the remote Changes panel updates the thread's recorded branch.
 
@@ -62,7 +108,7 @@ Thread rows carry the Oven's own mark and the checkout's branch beside the row's
 
 Setup operations and progress are persisted without secret values. A setup interrupted by an app restart is marked interrupted; the next run observes remote state before repeating steps. Cancel stops scheduling later commands. A command already running remotely can finish, so its result is checked on retry.
 
-The managed remote probe returns device details, the Oven service's own time zone, and installed harness versions together. Its version scan uses a small worker pool and caches results briefly. Every successful scan is also stored locally, so an unreachable Oven still answers with its last known harness list, and the scan covers every harness CodeInOven knows: a harness the user installs on the Oven themselves appears on the next probe instead of staying invisible. Installed harnesses appear as their own icons in the Oven entry and the Oven picker, with version and health in the tooltip, and the model picker disables a harness the selected Oven does not have installed. Each Oven row keeps **Setup Oven** (or **Update Oven Setup**) and its expand control on the row; the occasional actions, including matching the clock and removing the Oven, live in the row's actions menu. The main process caches update metadata for five minutes. When a harness's global auto-update preference is enabled, CodeInOven checks remote ovens shortly after startup and every fifteen minutes. If an Oven probe fails, its update batch is skipped. If SSH becomes unavailable during a harness update, the remaining harnesses on that Oven are skipped for that check; other Ovens still proceed. Harness-specific command failures do not stop the rest of the batch. Updates wait for active runs to finish. Setup installs, manual updates, and uninstalls share a per-oven harness gate that blocks new runs while a change is in progress. Uninstall is a destructive action and must ask for confirmation in the UI.
+The managed remote probe returns device details, the Oven service's own time zone, and installed harness versions together. Its version scan uses a small worker pool and caches results briefly. Every successful scan is also stored locally, so an unreachable Oven still answers with its last known harness list, and the scan covers every harness CodeInOven knows: a harness the user installs on the Oven themselves appears on the next probe instead of staying invisible. Installed harnesses appear as their own icons in the Oven entry and the Oven picker, with version and health in the tooltip, and the model picker disables a harness the selected Oven does not have installed. Each Oven row keeps **Setup Oven** (or **Update Oven Setup**) and its expand control on the row; the occasional actions, including checking the Oven, matching the clock, and removing the Oven, live in the row's actions menu. **Check Oven** runs the same read-only probe the row draws its details from and reports the result in place, without opening setup and without changing anything on the Oven. The main process caches update metadata for five minutes. When a harness's global auto-update preference is enabled, CodeInOven checks remote ovens shortly after startup and every fifteen minutes. If an Oven probe fails, its update batch is skipped. If SSH becomes unavailable during a harness update, the remaining harnesses on that Oven are skipped for that check; other Ovens still proceed. Harness-specific command failures do not stop the rest of the batch. Updates wait for active runs to finish. Setup installs, manual updates, and uninstalls share a per-oven harness gate that blocks new runs while a change is in progress. Uninstall is a destructive action and must ask for confirmation in the UI.
 
 ## Limits
 

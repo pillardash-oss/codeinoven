@@ -1,6 +1,8 @@
 import { invoke } from '$lib/ipc.svelte'
+import { providerStore } from '$lib/stores/providers.svelte'
 import { getIconSvgDataUrl } from '$lib/project-svg-icons'
 import { getCustomSvgDataUrl } from '$shared/custom-svg'
+import type { ProviderConnectionInfo } from '$shared/types'
 import {
   LOCAL_OVEN_ID,
   type Oven,
@@ -32,6 +34,14 @@ class OvenIdentityStore {
   #inventories = $state.raw<Record<string, OvenHarnessInventoryItem[] | null>>({})
   #inventoryPending = new Map<string, Promise<void>>()
 
+  /**
+   * The Local Oven's own harnesses.
+   *
+   * Local has no oven service to ask, so its inventory is the app's own provider
+   * probes: the same source the model picker and Providers settings already use.
+   */
+  #local = $derived.by(() => localHarnessInventory(providerStore.providers))
+
   /** Read the Oven registry once; later callers share the same answer. */
   ensure(): Promise<OvenState> {
     if (this.#state) return Promise.resolve(this.#state)
@@ -50,6 +60,18 @@ class OvenIdentityStore {
   async refresh(): Promise<OvenState> {
     this.#state = null
     return this.ensure()
+  }
+
+  /**
+   * Adopt a registry a caller already read.
+   *
+   * Every surface that names an Oven (thread rows, the hover card, the Oven
+   * picker) reads this store, so publishing the answer that Settings already
+   * fetched is what makes an icon or colour edit show up everywhere at once
+   * instead of waiting for the next app start.
+   */
+  adopt(state: OvenState): void {
+    this.#state = state
   }
 
   identity(ovenId: string | undefined | null): OvenIdentity | null {
@@ -75,6 +97,7 @@ class OvenIdentityStore {
    * harness the user installed on the Oven themselves.
    */
   ensureInventory(ovenId: string): Promise<void> {
+    if (ovenId === LOCAL_OVEN_ID) return providerStore.init().then(() => providerStore.checkAll())
     const pending = this.#inventoryPending.get(ovenId)
     if (pending) return pending
     const task = invoke('oven:harness:inventory', ovenId)
@@ -91,6 +114,7 @@ class OvenIdentityStore {
 
   /** One Oven's already-read harness rows, or null before the first read. */
   inventory(ovenId: string): OvenHarnessInventoryItem[] | null {
+    if (ovenId === LOCAL_OVEN_ID) return this.#local
     return this.#inventories[ovenId] ?? null
   }
 
@@ -100,7 +124,7 @@ class OvenIdentityStore {
    * probe could not read stays selectable rather than being disabled silently.
    */
   unavailableHarnesses(ovenId: string): ReadonlySet<string> | null {
-    const items = this.#inventories[ovenId]
+    const items = this.inventory(ovenId)
     if (!items) return null
     return new Set(
       items
@@ -108,6 +132,32 @@ class OvenIdentityStore {
         .map((item) => item.harnessId)
     )
   }
+}
+
+/**
+ * Turn the app's local provider probes into the same rows an Oven reports.
+ *
+ * `available` is the only status that means a usable binary answered, so it is
+ * the only `healthy`; a probe still running stays `unknown` rather than being
+ * reported missing and disabling the harness in the picker.
+ */
+function localHarnessInventory(
+  providers: readonly ProviderConnectionInfo[]
+): OvenHarnessInventoryItem[] {
+  return providers.map((provider) => ({
+    harnessId: provider.id,
+    command: provider.activeCommand ?? provider.command,
+    executablePath: provider.resolvedPath ?? null,
+    installedVersion: provider.version ?? null,
+    health:
+      provider.status === 'available'
+        ? 'healthy'
+        : provider.status === 'checking' || provider.status === 'idle'
+          ? 'unknown'
+          : 'missing',
+    updateAvailable: false,
+    checkedAt: Date.now()
+  }))
 }
 
 /** The Oven's own icon as a data URL, preferring an uploaded image. */

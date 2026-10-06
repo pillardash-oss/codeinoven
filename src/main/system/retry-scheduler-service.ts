@@ -3,7 +3,7 @@ import { instanceRegistry } from './instance-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { AgentProviderIssueKind } from '../../lib/types'
 
-/** One thread awaiting provider recovery after a usage/rate-limit reset. */
+/** One thread awaiting provider reset or device connection recovery. */
 export interface PendingRetryRecord {
   sessionId: string
   projectId: string
@@ -53,9 +53,9 @@ const MAX_SAVED_ISSUE_MESSAGE_LENGTH = 1_000
 const PERSISTENCE_FILE = 'scheduler/retry-scheduler.json'
 
 /**
- * RetrySchedulerService   remembers every thread whose turn ended in a
- * quota/rate-limit reset, then automatically resumes the thread once a known
- * reset time passes while the app is open. Records without a reset time remain
+ * RetrySchedulerService retains provider-reset and connection failures. Device
+ * connection recovery always resumes once online; usage resets honor the
+ * autoRetryAfterReset preference. Records without a retry deadline remain
  * persisted for restart recovery but are never fired automatically. Listeners
  * are notified on every pending-set change so dependents (e.g. the power-wake
  * service) can re-evaluate.
@@ -66,6 +66,7 @@ export class RetrySchedulerService {
   private timer: ReturnType<typeof setInterval> | null = null
   private timerStopped = false
   private enabled = false
+  private isOnline: (() => boolean) | null = null
   private continueThread: ((record: PendingRetryRecord) => Promise<void>) | null = null
   /** Fired whenever the pending set changes (track/clear/fire/restore). */
   private changeListener: (() => void) | null = null
@@ -115,6 +116,15 @@ export class RetrySchedulerService {
    */
   attachStoppedThreadTest(test: (projectId: string, threadId: string) => Promise<boolean>): void {
     this.isStopped = test
+  }
+
+  /** Main-process connectivity is authoritative; renderer events only wake the queue. */
+  attachNetworkTest(test: () => boolean): void {
+    this.isOnline = test
+  }
+
+  connectionRestored(): void {
+    this.tick()
   }
 
   /** Drop every pending record whose thread is currently user-stopped. */
@@ -194,12 +204,12 @@ export class RetrySchedulerService {
     }
     this.pending.set(record.sessionId, record)
     void this.persist()
-    Logger.info('Retry wait retained after usage reset', {
+    Logger.info('Retry wait retained', {
       projectId: record.projectId,
       threadId: record.threadId,
       harnessId: record.harnessId,
       retryAt: record.retryAt === undefined ? null : new Date(record.retryAt).toISOString(),
-      automatic: this.enabled && record.retryAt !== undefined
+      automatic: (this.enabled || record.issueKind === 'network') && record.retryAt !== undefined
     })
     this.refreshTimer()
     // The reset may already have passed   fire without waiting.
@@ -330,8 +340,9 @@ export class RetrySchedulerService {
   private refreshTimer(): void {
     const shouldRun =
       !this.timerStopped &&
-      this.enabled &&
-      [...this.pending.values()].some((record) => record.retryAt !== undefined)
+      [...this.pending.values()].some(
+        (record) => (this.enabled || record.issueKind === 'network') && record.retryAt !== undefined
+      )
     if (shouldRun && this.timer === null) {
       this.timer = setInterval(() => this.tick(), RETRY_TICK_MS)
     } else if (!shouldRun && this.timer !== null) {
@@ -341,12 +352,12 @@ export class RetrySchedulerService {
   }
 
   private tick(): void {
-    if (!this.enabled || this.timerStopped) return
+    if (this.timerStopped) return
     void this.tickAsync()
   }
 
   private async tickAsync(): Promise<void> {
-    if (!this.enabled || this.timerStopped || !this.continueThread) return
+    if (this.timerStopped || !this.continueThread) return
     // The ledger of pending resets is shared by every instance using this config
     // root, and each instance holds its own in-memory copy of it. Only the
     // longest-running instance fires a continuation, so a second window can
@@ -357,6 +368,8 @@ export class RetrySchedulerService {
     const due: PendingRetryRecord[] = []
     for (const record of this.pending.values()) {
       if (
+        (this.enabled || record.issueKind === 'network') &&
+        (record.issueKind !== 'network' || this.isOnline?.() === true) &&
         record.retryAt !== undefined &&
         record.retryAt <= now &&
         !this.resuming.has(record.sessionId)
@@ -378,14 +391,14 @@ export class RetrySchedulerService {
         }
       }
     }
-    if (
-      !this.enabled ||
-      this.timerStopped ||
-      !this.continueThread ||
-      !instanceRegistry.isIncumbentInstance()
+    if (this.timerStopped || !this.continueThread || !instanceRegistry.isIncumbentInstance()) return
+    const runnable = due.filter(
+      (record) =>
+        !vetoed.includes(record) &&
+        !deferred.has(record) &&
+        (this.enabled || record.issueKind === 'network') &&
+        (record.issueKind !== 'network' || this.isOnline?.() === true)
     )
-      return
-    const runnable = due.filter((record) => !vetoed.includes(record) && !deferred.has(record))
     for (const record of vetoed) {
       if (this.pending.get(record.sessionId) === record) {
         this.pending.delete(record.sessionId)
@@ -419,7 +432,7 @@ export class RetrySchedulerService {
       })
       return
     }
-    Logger.info('Auto-resuming thread after usage reset', {
+    Logger.info('Auto-resuming retained thread', {
       projectId: record.projectId,
       threadId: record.threadId,
       harnessId: record.harnessId

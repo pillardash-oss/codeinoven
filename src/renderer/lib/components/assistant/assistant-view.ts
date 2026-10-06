@@ -241,6 +241,25 @@ export function groupRunsByTask<T extends Pick<Thread, 'assistantTaskId' | 'crea
 }
 
 /**
+ * The thread another instance is running for an assistant task: the task itself
+ * when its own turn is foreign, else the task's first run that is. A run
+ * executes on its own thread, so a task can be idle in this window while one of
+ * its runs streams in another; this is what lets the row, and the task's own
+ * conversation, offer that run's transfer.
+ *
+ * The predicate is passed in, not imported, so this stays pure and the caller's
+ * reactive read of the foreign-run store is what drives re-evaluation.
+ */
+export function assistantForeignThread<T extends Pick<Thread, 'projectId' | 'id'>>(
+  task: T,
+  runs: readonly T[],
+  isForeign: (projectId: string, threadId: string) => boolean
+): T | null {
+  if (isForeign(task.projectId, task.id)) return task
+  return runs.find((run) => isForeign(run.projectId, run.id)) ?? null
+}
+
+/**
  * Runs grouped by the routine they ran for, newest first inside each group. A
  * run inherits its task's `routineId`, so a run whose task is no longer on
  * screen (an archived Getting started thread) still groups under its routine.

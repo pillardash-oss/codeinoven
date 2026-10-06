@@ -2,6 +2,7 @@
   import { ovenRootThread } from '$lib/oven-root-target'
   import type { Attachment } from 'svelte/attachments'
   import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+  import OvenSurfaceOverlay from '../shared/OvenSurfaceOverlay.svelte'
   import {
     terminalSessions,
     type TerminalSession,
@@ -142,38 +143,35 @@
 </script>
 
 <div class="flex h-full w-full flex-col overflow-hidden bg-terminal-background">
-  <div tabindex="-1" class="terminal-wrap relative min-h-0 flex-1 overflow-hidden">
-    <div
-      class="h-full w-full overflow-hidden py-1 pl-2"
-      {@attach attachTerminal(
-        scopedTerminalId,
-        projectId,
-        scopeKey,
-        threadId,
-        directory,
-        retrySequence
-      )}
-    ></div>
-    {#if loading}
-      <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">
-        Loading terminal…
-      </div>
-    {:else if terminalError}
-      <div class="absolute inset-0 flex items-center justify-center bg-app p-6">
-        <div class="max-w-md text-center">
-          <p class="text-sm font-semibold text-foreground">Terminal could not start</p>
-          <p class="mt-2 text-xs text-muted">{terminalError}</p>
-          <button
-            type="button"
-            class="mt-4 h-8 border border-border-strong bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
-            onclick={retry}
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    {/if}
-  </div>
+  <!--
+    The shell is spawned by the main process, which hands a remote thread's
+    spawn to its Oven over SSH. So opening one is a round trip like any other
+    remote read, and it reports through the surface overlay: the same spinner
+    while it starts, and the same reason with a retry when the Oven will not
+    open a shell.
+  -->
+  <OvenSurfaceOverlay
+    active
+    {loading}
+    error={terminalError ?? null}
+    title="Terminal could not start"
+    loadingLabel="Loading terminal…"
+    onRetry={retry}
+  >
+    <div tabindex="-1" class="terminal-wrap relative min-h-0 flex-1 overflow-hidden">
+      <div
+        class="h-full w-full overflow-hidden py-1 pl-2"
+        {@attach attachTerminal(
+          scopedTerminalId,
+          projectId,
+          scopeKey,
+          threadId,
+          directory,
+          retrySequence
+        )}
+      ></div>
+    </div>
+  </OvenSurfaceOverlay>
 </div>
 
 <style>

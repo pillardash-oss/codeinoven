@@ -7,6 +7,15 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Added
 
+- **An assistant run running in another instance is transferable in place.** An
+  assistant task and its runs are different threads, so opening the task showed
+  nothing when one of its runs streamed in a sibling CodeInOven window, because
+  the ownership notice belongs to the run thread. The task and run rows now wear
+  the still **running in another instance** window mark instead of a spinner and
+  carry a transfer action, opening the task shows its foreign run's transfer
+  card above the composer while the task stays usable, and a run thread opened
+  directly shows the card it always did.
+
 - **OpenCode is one harness, driven at whichever version is installed.**
   OpenCode V1 and V2 both install as the `opencode` command (the vendor's V2
   installer replaces a package-managed V1 binary, and a package-managed V2
@@ -148,6 +157,15 @@ All notable changes to CodeInOven are documented here. This project follows
   already on the clipboard and the reason stated in a toast.
 
 ### Changed
+
+- **The main instance is now an explicit, remembered choice.** Picking **Make this the main
+  instance** in a secondary window used to be honored only while that exact process lived:
+  once it restarted, ownership fell back to the longest-running live process, so a leftover
+  or development launch could take the schedule without the user asking. The transfer now
+  records the chosen app's stable identity (its executable path) alongside the pid, so a
+  later launch of that same app reclaims the schedule across restarts. While the chosen app
+  is not running the election still applies, so scheduled work is never stranded, and the
+  designated app takes the schedule back when it returns.
 
 - **A waiting update is now something you can act on.** The rail's update control used to
   go dead the moment a downloaded update hit the install gate, showing "Update waiting for

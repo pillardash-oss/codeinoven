@@ -734,6 +734,8 @@ describe('git IPC', () => {
     const gitDir = await mkdtemp(join(tmpdir(), 'codeinoven-git-ipc-'))
     const repo = simpleGit(gitDir)
     await repo.init()
+    await repo.addConfig('user.name', 'CodeInOven Test')
+    await repo.addConfig('user.email', 'test@codeinoven.invalid')
     await writeFile(join(gitDir, 'file.txt'), 'hello\n', 'utf-8')
     await repo.add('.')
     await repo.commit('initial')

@@ -767,6 +767,7 @@
             sectionKey="threads"
             label="Pinned Threads"
             threads={pinnedTimelineThreads}
+            detailed
             activeThreadId={activeThreadId ?? null}
             getRowIcon={(t) => getThreadIcon(t)}
             onOpen={onOpenThread}
@@ -813,6 +814,7 @@
                 {:else}
                   <ThreadRow
                     thread={entry.thread}
+                    detailed
                     projectIconUrl={getThreadIcon(entry.thread)}
                     selected={activeThreadId === entry.thread.id}
                     onOpen={onOpenThread}
@@ -865,6 +867,7 @@
           sectionKey="projects-threads"
           label="Pinned Threads"
           threads={pinnedThreads}
+          detailed
           activeThreadId={activeThreadId ?? null}
           getRowIcon={(t) => {
             const project = projects.find((p) => p.id === t.projectId)
@@ -1007,6 +1010,8 @@
                               {#each filteredThreads.slice(0, sidebar.getVisibleCount(project.id)) as thread (thread.id)}
                                 <ThreadRow
                                   {thread}
+                                  detailed
+                                  hideProjectName
                                   selected={activeThreadId === thread.id}
                                   onOpen={onOpenThread}
                                   {onRename}
@@ -1235,6 +1240,8 @@
                           {#each filteredThreads.slice(0, sidebar.getVisibleCount(project.id)) as thread (thread.id)}
                             <ThreadRow
                               {thread}
+                              detailed
+                              hideProjectName
                               selected={activeThreadId === thread.id}
                               onOpen={onOpenThread}
                               {onRename}

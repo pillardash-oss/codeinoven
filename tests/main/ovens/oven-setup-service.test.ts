@@ -27,6 +27,9 @@ const healthyReport: OvenPreflightReport = {
 function createService() {
   const execute = vi.fn(async () => '')
   const storage = {
+    // Setup operations are files, so recovery lists directory entries, not
+    // directories. Both are provided because the engine exposes both.
+    list: vi.fn(async () => []),
     listDirectories: vi.fn(async () => []),
     read: vi.fn(async () => null),
     write: vi.fn(async () => undefined)

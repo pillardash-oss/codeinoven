@@ -1002,6 +1002,7 @@ CREATE TABLE IF NOT EXISTS routines (
   delivery            TEXT,
   priority            TEXT,
   agents              TEXT,
+  execution           TEXT,
   paused              INTEGER NOT NULL DEFAULT 0,
   pinned              INTEGER NOT NULL DEFAULT 0,
   pinned_at           INTEGER,

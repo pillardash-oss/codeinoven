@@ -23,13 +23,23 @@
     const currentThread = workspaceState.selectedThread
     const threadId = currentThread?.projectId === projectId ? currentThread.id : originalThreadId
 
-    if (currentThread?.projectId !== projectId || currentThread.id !== threadId) {
-      const [project, thread] = await Promise.all([
+    let thread = currentThread && currentThread.projectId === projectId ? currentThread : null
+    if (!thread) {
+      const [project, fetchedThread] = await Promise.all([
         invoke('project:get', projectId).catch(() => null),
         invoke('thread:get', projectId, threadId).catch(() => null)
       ])
-      if (thread) workspaceState.openThread(thread, project)
+      if (fetchedThread) {
+        thread = fetchedThread
+        workspaceState.openThread(fetchedThread, project)
+      }
     }
+
+    // The global browser, Settings, and the Scope board own no thread, so
+    // selecting the PR's thread alone leaves those views on screen. Move the
+    // shell to the view that owns the thread before revealing the panel, so
+    // "View PR" always lands on the project's PR tab.
+    if (thread) workspaceState.navigateToThreadView?.(thread)
 
     gitPanelView.openPullRequest(projectId, threadId, pullRequest)
     contextSidebarState.openGit(projectId, threadId)

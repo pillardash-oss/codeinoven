@@ -126,6 +126,10 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
       }
       return [...preferred, ...rest]
     })
+    // The Threads view's guarantee set: pinned rows, non-done rows, and every
+    // row of a pinned-like scope, independent of the recency window. Mirrors the
+    // `thread:listRecent` fallback for a process without the hydration surface.
+    ipcMain.handle('thread:listAlwaysVisible', () => threadManager.listAlwaysVisibleThreads())
   }
   // Older active tasks are deliberately opt-in and never participate in
   // initial renderer hydration.

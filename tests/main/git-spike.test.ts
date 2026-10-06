@@ -31,12 +31,18 @@ async function commitEverything(repo: SimpleGit, message: string): Promise<void>
   await repo.commit(message)
 }
 
+async function initializeRepository(directory: string): Promise<SimpleGit> {
+  const repo = simpleGit(directory)
+  await repo.init({ '--initial-branch': 'main' })
+  await repo.addConfig('user.name', 'CodeInOven Test')
+  await repo.addConfig('user.email', 'test@codeinoven.invalid')
+  return repo
+}
+
 describe('simple-git spike against the system git binary', () => {
   it('initializes a repository and reports working-tree status', async () => {
     const directory = await temporaryDirectory()
-    const repo = simpleGit(directory)
-
-    await repo.init({ '--initial-branch': 'main' })
+    const repo = await initializeRepository(directory)
 
     await writeFile(join(directory, 'hello.txt'), 'one\n', 'utf-8')
     const dirty = await repo.status()
@@ -53,9 +59,7 @@ describe('simple-git spike against the system git binary', () => {
   it('stages, commits, and pushes to a bare local remote', async () => {
     const working = await temporaryDirectory('codeinoven-git-spike-working')
     const bare = await temporaryDirectory('codeinoven-git-spike-bare')
-    const repo = simpleGit(working)
-
-    await repo.init({ '--initial-branch': 'main' })
+    const repo = await initializeRepository(working)
     await writeFile(join(working, 'feature.txt'), 'feature\n', 'utf-8')
     await repo.add('.')
     await repo.commit('feature commit')
@@ -73,9 +77,7 @@ describe('simple-git spike against the system git binary', () => {
 
   it('surfaces a merge conflict via MergeSummary', async () => {
     const directory = await temporaryDirectory()
-    const repo = simpleGit(directory)
-
-    await repo.init({ '--initial-branch': 'main' })
+    const repo = await initializeRepository(directory)
     await writeFile(join(directory, 'conflict.txt'), 'base\n', 'utf-8')
     await commitEverything(repo, 'base')
 
@@ -103,9 +105,7 @@ describe('simple-git spike against the system git binary', () => {
 
   it('rebases onto a branch after a constructed conflict and allows abort', async () => {
     const directory = await temporaryDirectory()
-    const repo = simpleGit(directory)
-
-    await repo.init({ '--initial-branch': 'main' })
+    const repo = await initializeRepository(directory)
     await writeFile(join(directory, 'rebase.txt'), 'base\n', 'utf-8')
     await commitEverything(repo, 'base')
 

@@ -6,9 +6,19 @@ import { homedir } from 'node:os'
  *
  * The same convention is used by the remote service entry, the workspace
  * transfers, and the checkout resolver, so an Oven never scatters app state
- * outside one removable folder inside the user's home.
+ * outside one removable folder inside the user's home. It sits inside the
+ * CodeInOven namespace rather than beside it, so an Oven never adds a second
+ * `pillardash` entry for an app that already has one.
  */
-export const OVEN_DATA_DIRECTORY = '.config/pillardash/codeinoven-oven'
+export const OVEN_DATA_DIRECTORY = '.config/pillardash/codeinoven/ovens'
+
+/**
+ * Where earlier builds kept the same state, before it moved into that namespace.
+ *
+ * The remote service migrates an existing directory once, so checkouts and
+ * session transcripts written by an older release are not orphaned.
+ */
+export const OVEN_LEGACY_DATA_DIRECTORY = '.config/pillardash/codeinoven-oven'
 
 /** One stable, collision-resistant directory name for an id. */
 export function ovenDirKey(value: string): string {

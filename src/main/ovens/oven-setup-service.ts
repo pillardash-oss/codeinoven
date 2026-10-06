@@ -21,12 +21,14 @@ import {
 import { assessPreflight } from './oven-setup-capabilities'
 import { OVEN_SETUP_SCRIPT_VERSION } from './oven-setup-bootstrap'
 import { deviceTimezone, type OvenClockObservation } from './oven-timezone'
-import { sshQuote, type OvenSsh } from './oven-ssh'
+import { type OvenSsh } from './oven-ssh'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 import { OVEN_HARNESS_PATH, OVEN_NPM_ENV } from './oven-harness-paths'
 import { OvenInstallProgress } from './oven-install-progress'
 import { withOvenHarnessMutation } from './oven-operation-lock'
+import { isWindowsShell, shellForPlatform } from './oven-remote-shell'
+import { remoteArgvCommand } from './oven-remote-command'
 
 const OPERATION_PATH = 'ovens/setup'
 /** Bounded so a long setup cannot grow the journal without limit. */
@@ -124,13 +126,17 @@ export class OvenSetupService {
    * the next run before the oven is touched again.
    */
   async recover(): Promise<number> {
-    const directories = await this.storage
-      .listDirectories(OPERATION_PATH)
-      .catch(() => [] as string[])
+    // Operations and journals are files directly under OPERATION_PATH, so the
+    // listing must include files. A directory-only listing is always empty
+    // here, which dropped every persisted completion on the next app launch
+    // and made every remote Oven look like a first-time setup again.
+    const entries = await this.storage.list(OPERATION_PATH).catch(() => [] as string[])
+    const storedOvens = entries
+      .filter((entry) => entry.endsWith('.json') && !entry.endsWith('.journal.json'))
+      .map((entry) => entry.slice(0, -'.json'.length))
+      .filter((ovenId) => ovenId.length > 0 && !ovenId.includes('/'))
     let recoveredCount = 0
-    for (const entry of directories.slice(0, 64)) {
-      const ovenId = entry.split('/').filter(Boolean).pop()
-      if (!ovenId) continue
+    for (const ovenId of storedOvens.slice(0, 64)) {
       const stored = await this.storage.read<OvenSetupOperation>(`${OPERATION_PATH}/${ovenId}.json`)
       if (!stored) continue
       if (stored.status === 'running' || stored.status === 'preparing') {
@@ -500,6 +506,11 @@ export class OvenSetupService {
    * otherwise sudo stays noninteractive.
    */
   private async runShellStep(ovenId: string, planned: SetupPlan['steps'][number]): Promise<void> {
+    const shell = shellForPlatform(this.reports.get(ovenId)?.platform)
+    if (shell !== 'posix' && planned.commands.some((entry) => entry.elevated))
+      throw new Error(
+        'This setup step needs administrator rights, which CodeInOven does not request on a Windows Oven. Run it on the Oven, then retry.'
+      )
     const execute = async (): Promise<void> => {
       if (planned.phase === 'harnesses' && planned.verify?.command)
         await this.ports.waitForHarnessIdle?.(ovenId, planned.verify.command)
@@ -510,12 +521,11 @@ export class OvenSetupService {
           planned.phase === 'harnesses' && entry.command === 'npm'
             ? [...entry.args, '--loglevel=http']
             : entry.args
-        const argv = entry.elevated ? ['-n', entry.command, ...args] : [entry.command, ...args]
-        const rawLine = (entry.elevated ? ['sudo', ...argv] : argv).map(sshQuote).join(' ')
+        const rawLine = remoteArgvCommand(shell, [entry.command, ...args], {
+          elevated: entry.elevated
+        })
         const userNpm =
-          planned.phase === 'harnesses' &&
-          entry.command === 'npm' &&
-          this.reports.get(ovenId)?.platform !== 'win32'
+          planned.phase === 'harnesses' && entry.command === 'npm' && !isWindowsShell(shell)
         const line = userNpm ? `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} ${rawLine}` : rawLine
         const timeout =
           planned.id === 'packages'
@@ -589,12 +599,15 @@ export class OvenSetupService {
   /** Decide success by reading the oven back, never by trusting an exit code. */
   private async verify(ovenId: string, planned: SetupPlan['steps'][number]): Promise<void> {
     if (!planned.verify) return
-    const line =
+    const shell = shellForPlatform(this.reports.get(ovenId)?.platform)
+    const prefix = isWindowsShell(shell) ? '' : `${OVEN_HARNESS_PATH} `
+    const command = remoteArgvCommand(
+      shell,
       planned.id === 'node'
-        ? `${sshQuote('node')} ${sshQuote('-e')} ${sshQuote('if(Number(process.versions.node.split(String.fromCharCode(46))[0])<22)process.exit(1)')}`
-        : [planned.verify.command, ...planned.verify.args].map(sshQuote).join(' ')
-    const command =
-      this.reports.get(ovenId)?.platform === 'win32' ? line : `${OVEN_HARNESS_PATH} ${line}`
+        ? ['node', '-e', 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)']
+        : [planned.verify.command, ...planned.verify.args],
+      { prefix }
+    )
     await this.ports.ssh.execute(ovenId, command, '', VERIFY_TIMEOUT_MS)
   }
 

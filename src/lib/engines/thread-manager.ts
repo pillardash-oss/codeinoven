@@ -1482,6 +1482,16 @@ export class ThreadManager {
     return this.threadRepo.listAllViaWorker(options)
   }
 
+  /**
+   * Threads the Threads view must carry whatever the bounded recency window
+   * pulls: pinned rows, non-done rows, and every row of a pinned-like scope,
+   * across all projects.
+   */
+  async listAlwaysVisibleThreads(): Promise<Thread[]> {
+    const scopedBucketIds = await this.scopeManager.scopedBucketIds()
+    return this.threadRepo.listAlwaysVisibleViaWorker(scopedBucketIds)
+  }
+
   /** Bounded first-paint list without optional harness-usage decoration. */
   async listThreadsForHydration(options?: ThreadListOptions): Promise<Thread[]> {
     return this.threadRepo.listAllForHydrationViaWorker(options)

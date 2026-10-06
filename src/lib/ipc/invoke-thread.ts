@@ -132,6 +132,12 @@ export const invokeThreadContract = {
     [options: { projectId?: string; limit?: number; offset?: number }],
     Thread[]
   >,
+  /**
+   * Threads a Threads view must show whatever the bounded recency window pulls:
+   * pinned rows, rows in a status the view ranks above done, and every row of a
+   * pinned-like scope.
+   */
+  'thread:listAlwaysVisible': {} as Contract<[], Thread[]>,
   /** Paged history for an explicit older-task request. */
   'thread:listHistoryPage': {} as Contract<
     [options: { projectId?: string; limit?: number; offset?: number }],

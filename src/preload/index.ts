@@ -196,3 +196,8 @@ const bridge: AppBridge = {
 }
 
 contextBridge.exposeInMainWorld('api', bridge)
+
+// Forward device reconnection immediately; the main process verifies connectivity.
+window.addEventListener('online', () => {
+  void ipcRenderer.invoke('network:restored').catch(() => undefined)
+})

@@ -356,7 +356,11 @@
         {/each}
       </p>
 
-      {#if waiting && issue.retryAt && autoRetryEnabled && withinAutoScheduleWindow}
+      {#if waiting && issue.kind === 'network'}
+        <p class="mt-2 text-xs font-medium text-foreground">
+          Waiting for connection. Will resume automatically when the device reconnects.
+        </p>
+      {:else if waiting && issue.retryAt && autoRetryEnabled && withinAutoScheduleWindow}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           <span aria-live="polite">
             Auto-resume {formatDateTimeWithWeekday(issue.retryAt)} · in {relativeRetryTime(

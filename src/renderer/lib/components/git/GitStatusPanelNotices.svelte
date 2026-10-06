@@ -17,6 +17,15 @@
     conflicted: GitFileChange[]
     conflictRowAborts: boolean
     integrationActions: Snippet<[boolean?]>
+    /**
+     * Whether a surface overlay is already stating the failure.
+     *
+     * A remote checkout's failure is shown by the Oven surface overlay, which
+     * owns it as the state of the round trip and offers the retry. Repeating it
+     * here would put the same sentence on screen twice, once dimmed behind the
+     * overlay and once under it.
+     */
+    suppressError?: boolean
     onRepaired: () => void
   }
 
@@ -28,6 +37,7 @@
     conflicted,
     conflictRowAborts,
     integrationActions,
+    suppressError = false,
     onRepaired
   }: Props = $props()
 
@@ -92,7 +102,7 @@
   <div class="mx-2 mt-2">
     <ScopeHealthNotice {projectId} {scopeBucketId} variant="panel" {onRepaired} />
   </div>
-{:else if gitState.error}
+{:else if gitState.error && !suppressError}
   <div
     class="mx-2 mt-2 flex items-start gap-2 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-danger"
     role="alert"

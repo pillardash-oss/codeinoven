@@ -32,6 +32,12 @@ export interface Oven {
   hasPublicKey: boolean
   hasPassword?: boolean
   connectionStatus?: OvenConnectionStatus
+  /**
+   * Position among the SSH Ovens, ascending. Missing on an Oven written before
+   * ordering existed; the registry fills it from creation time on first read.
+   * Local never carries one: it is always the first row.
+   */
+  order?: number
   createdAt: number
   updatedAt: number
 }
@@ -72,6 +78,8 @@ export interface OvenConnectionStatus {
     diskBytes: number
     diskAvailableBytes: number
     nodeVersion: string | null
+    /** Seconds the Oven has been powered on, as the Oven reports it. */
+    uptimeSeconds: number
   }
 }
 
@@ -511,6 +519,130 @@ export interface OvenSetupOperation {
   finishedAt?: number
   error?: string
   updatedAt: number
+}
+
+/** Descriptor schema version for the standalone Oven agent. */
+export const OVEN_AGENT_DESCRIPTOR_VERSION = 1
+/** Prefix that makes a pasted registration code recognizable and versioned. */
+export const OVEN_AGENT_CODE_PREFIX = 'codeinoven-oven-agent-v1:'
+
+/** The three platform families the standalone agent installer can target. */
+export type OvenAgentPlatform = 'linux' | 'darwin' | 'win32'
+
+export interface OvenAgentIdentity {
+  algorithm: 'ed25519'
+  /** OpenSSH private key. A secret; the app stores it in the encrypted vault. */
+  privateKey: string
+  /** OpenSSH public key, for display and verification. */
+  publicKey: string
+}
+
+/**
+ * What a machine reports after the standalone Oven agent has prepared it.
+ *
+ * A descriptor is the machine's side of registration: it names the machine, the
+ * SSH account the agent prepared, the service it deployed, and optionally a
+ * dedicated key the agent created so the app can log in without the user typing
+ * anything else. It never carries a login password.
+ */
+export interface OvenAgentDescriptor {
+  kind: 'codeinoven-oven-agent'
+  version: number
+  /** The Oven wire protocol the deployed service speaks. */
+  protocolVersion: number
+  /** Hash of the deployed service bundle. */
+  serviceRevision: string
+  platform: string
+  architecture: string
+  hostname: string
+  /**
+   * Addresses this machine answers on, most likely first, as the machine itself
+   * can see them: its interface addresses and its host name. A machine cannot
+   * know which of them this computer can reach, so it reports the candidates
+   * and the app picks one that actually connects. Missing on codes written
+   * before candidates existed, where the host name stands alone.
+   */
+  addresses?: string[]
+  user: string
+  port: number
+  /** Suggested display name for the app entry. */
+  name: string
+  /** Absolute data root the daemon uses on the machine. */
+  dataRoot: string
+  nodeVersion: string
+  identity?: OvenAgentIdentity
+  createdAt: number
+}
+
+/** Options for generating the standalone agent installer. */
+export interface OvenAgentScriptRequest {
+  platform: OvenAgentPlatform
+  /** Bake a dedicated ed25519 identity into the script and its descriptor. */
+  identity: boolean
+  /** Attempt to install Node.js 22+ when the machine lacks it. */
+  bootstrapNode: boolean
+}
+
+export interface OvenAgentScript {
+  filename: string
+  /** The complete self-contained installer text. */
+  content: string
+  platform: OvenAgentPlatform
+  serviceRevision: string
+  /** True when the script provisions and reports a dedicated identity. */
+  identity: boolean
+  /** True when the script may install Node.js on the machine. */
+  bootstrapNode: boolean
+}
+
+/**
+ * The address and port this computer reaches a machine on.
+ *
+ * The pair, not just the address: a registration code carries the port the
+ * machine believed its SSH server was on, and the app verifies both before it
+ * saves an endpoint it would only time out on later.
+ */
+export interface OvenEndpoint {
+  host: string
+  port: number
+}
+
+/** What the app shows about a descriptor before saving it. Never includes the key. */
+export interface OvenAgentPreview {
+  host: string
+  /** Every address the machine offered, in the order it ranked them. */
+  addresses: string[]
+  port: number
+  user: string
+  name: string
+  platform: string
+  architecture: string
+  hostname: string
+  nodeVersion: string
+  serviceRevision: string
+  protocolVersion: number
+  identityPresent: boolean
+  /** SHA-256 fingerprint of the identity public key, when one was provisioned. */
+  identityFingerprint?: string
+  /** Whether the agent deployed the same service bundle and protocol this app speaks. */
+  serviceCurrent: boolean
+}
+
+export interface OvenAgentRegistrationInput {
+  /** The registration code the agent printed. */
+  code: string
+  /** Override the host the app connects to. Defaults to the agent's host name. */
+  host?: string
+  port?: number
+  user?: string
+  name?: string
+}
+
+export interface OvenAgentRegistration {
+  oven: Oven
+  preview: OvenAgentPreview
+  /** True when the descriptor's private key was stored in the vault. */
+  identityImported: boolean
 }
 
 /** Accept the familiar SSH form without ever accepting arbitrary CLI options. */

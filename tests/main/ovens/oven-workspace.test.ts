@@ -23,7 +23,9 @@ describe('oven SSH workspace writes', () => {
     const ssh = new OvenSsh({} as OvenRegistry)
     const execute = vi.spyOn(ssh, 'execute').mockResolvedValue('')
     const privateKey = 'private-key-material'
-    await ssh.putHomeSecretFile('oven-test', '.ssh/codeinoven-github', privateKey)
+    await ssh.putHomeSecretFile('oven-test', '.ssh/codeinoven-github', privateKey, {
+      windows: false
+    })
     expect(execute).toHaveBeenCalledOnce()
     expect(execute.mock.calls[0]?.[1]).not.toContain(privateKey)
     expect(execute.mock.calls[0]?.[2]).toBe(privateKey)

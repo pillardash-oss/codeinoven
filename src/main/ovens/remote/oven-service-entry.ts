@@ -1,9 +1,21 @@
 /** Standalone Node service. No Electron, desktop paths, or app-owned process markers. */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createServer, connect, type Socket } from 'node:net'
-import { mkdir, open, readFile, rename, unlink, chmod, readdir, statfs } from 'node:fs/promises'
-import { availableParallelism, hostname, homedir, totalmem } from 'node:os'
-import { join, isAbsolute } from 'node:path'
+import {
+  mkdir,
+  open,
+  readFile,
+  rename,
+  unlink,
+  chmod,
+  readdir,
+  statfs,
+  rm,
+  writeFile
+} from 'node:fs/promises'
+import { availableParallelism, hostname, homedir, totalmem, tmpdir, uptime } from 'node:os'
+import { dirname, join, isAbsolute } from 'node:path'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { once } from 'node:events'
@@ -11,6 +23,7 @@ import type { OvenProbe, OvenRun, OvenRunEvent } from '../../../lib/ovens'
 import { ovenHarnessIdForCommand } from '../../../lib/ovens'
 import { listHarnesses } from '../../agents/harness-registry'
 import { OPENCODE_COMMAND_ALIASES } from '../../../lib/opencode-version'
+import { OVEN_DATA_DIRECTORY, OVEN_LEGACY_DATA_DIRECTORY } from './oven-root-paths'
 import { OVEN_NPM_PREFIX } from '../oven-harness-paths'
 import { ovenRootOperation } from './oven-root-operations'
 import { ovenWorkspace } from './oven-workspace'
@@ -49,14 +62,40 @@ const versionCache = new Map<
     checkedAt: number
   }
 >()
-const root =
-  process.env['CODEINOVEN_OVEN_DATA_ROOT'] ?? join(homedir(), '.config/pillardash/codeinoven-oven')
+const root = process.env['CODEINOVEN_OVEN_DATA_ROOT'] ?? join(homedir(), OVEN_DATA_DIRECTORY)
+/** Where earlier releases kept the same state, before it moved into the app namespace. */
+const legacyRoot = join(homedir(), OVEN_LEGACY_DATA_DIRECTORY)
 if (process.platform !== 'win32') {
   const npmPrefix = join(homedir(), OVEN_NPM_PREFIX)
   process.env['PATH'] = `${join(npmPrefix, 'bin')}:${process.env['PATH'] ?? ''}`
   process.env['npm_config_prefix'] = npmPrefix
 }
-const socketPath = join(root, 'service.sock')
+/**
+ * Where clients reach the running service.
+ *
+ * POSIX binds a unix socket file under the data root. Windows cannot: the same
+ * call creates a named pipe there, so the path is the pipe name itself and no
+ * filesystem permission call below can apply to it.
+ *
+ * A unix socket path is capped by the platform (104 bytes on macOS, 108 on
+ * Linux). A data root nested deeply enough to exceed that still needs a
+ * reachable service, so the socket falls back to a short path keyed by the root
+ * instead of failing to bind.
+ */
+const MAX_POSIX_SOCKET_PATH = 100
+const socketPath =
+  process.platform === 'win32'
+    ? `\\\\.\\pipe\\codeinoven-oven-${createHash('sha256').update(root).digest('hex').slice(0, 16)}`
+    : posixSocketPath()
+
+function posixSocketPath(): string {
+  const preferred = join(root, 'service.sock')
+  if (Buffer.byteLength(preferred) <= MAX_POSIX_SOCKET_PATH) return preferred
+  return join(
+    tmpdir(),
+    `codeinoven-oven-${createHash('sha256').update(root).digest('hex').slice(0, 16)}.sock`
+  )
+}
 const lockPath = join(root, 'service.pid')
 const jobs = new Map<string, Job>()
 let shutDownServer: (() => void) | undefined
@@ -255,7 +294,8 @@ async function probe(refresh = false): Promise<OvenProbe> {
       memoryBytes: totalmem(),
       diskBytes: disk.blocks * disk.bsize,
       diskAvailableBytes: disk.bavail * disk.bsize,
-      nodeVersion: process.versions.node
+      nodeVersion: process.versions.node,
+      uptimeSeconds: Math.round(uptime())
     },
     harnesses,
     activeRuns: [...jobs.values()].filter((job) => job.run.status === 'running').length,
@@ -486,7 +526,96 @@ function receive(socket: Socket, handle: (data: string) => Promise<string>): voi
   })
 }
 
+/**
+ * Move a data root left by an earlier release into its current home.
+ *
+ * Only entries the new root does not already have are moved, so an interrupted
+ * migration can run again and an existing entry is never overwritten. The two
+ * runtime artifacts of a possibly still-running earlier daemon, `service.sock`
+ * and `service.pid`, are deliberately left behind: they belong to that daemon,
+ * which removes them itself when it stops.
+ */
+async function migrateLegacyRoot(): Promise<void> {
+  const entries = await readdir(legacyRoot).catch(() => [] as string[])
+  if (entries.length === 0) return
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  for (const entry of entries) {
+    if (entry === 'service.sock' || entry === 'service.pid') continue
+    const target = join(root, entry)
+    if (
+      await access(target).then(
+        () => true,
+        () => false
+      )
+    )
+      continue
+    await rename(join(legacyRoot, entry), target).catch(() => undefined)
+  }
+  const remaining = await readdir(legacyRoot).catch(() => [] as string[])
+  if (remaining.length === 0)
+    await rm(legacyRoot, { recursive: true, force: true }).catch(() => undefined)
+}
+
+/**
+ * Launch the daemon so it outlives whatever started it.
+ *
+ * POSIX can simply detach. Windows cannot: OpenSSH there ends the whole process
+ * tree when the session closes, so a detached child dies with it and the Oven
+ * goes offline the moment the user's shell exits. A process created by the WMI
+ * provider is owned by that provider rather than the session, which is what
+ * makes the service durable. It is launched through a command script so the
+ * daemon still receives the environment this call meant to give it.
+ */
+async function startDaemon(): Promise<void> {
+  if (process.platform !== 'win32') {
+    const child = spawn(process.execPath, [process.argv[1], 'daemon'], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env }
+    })
+    child.unref()
+    return
+  }
+  const revision = process.env['CODEINOVEN_OVEN_REVISION']
+  const launcher = join(root, 'service-start.cmd')
+  await writeFile(
+    launcher,
+    [
+      '@echo off',
+      `set "CODEINOVEN_OVEN_DATA_ROOT=${root}"`,
+      ...(revision ? [`set "CODEINOVEN_OVEN_REVISION=${revision}"`] : []),
+      `set "PATH=${dirname(process.execPath)};%PATH%"`,
+      `"${process.execPath}" "${process.argv[1]}" daemon`,
+      ''
+    ].join('\r\n'),
+    { mode: 0o600 }
+  )
+  // Encoded so no layer of shell quoting can mangle a path with a space in it.
+  const program = [
+    '$ErrorActionPreference = "Stop"',
+    `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'cmd.exe /c ""${launcher}""' }`,
+    'if ($r.ReturnValue -ne 0) { exit 1 }'
+  ].join('; ')
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-EncodedCommand',
+        Buffer.from(program, 'utf16le').toString('base64')
+      ],
+      { stdio: 'ignore', windowsHide: true }
+    )
+    child.once('error', reject)
+    child.once('close', (code) =>
+      code === 0 ? resolve() : reject(new Error('The Oven service could not be launched.'))
+    )
+  })
+}
+
 async function daemon(): Promise<void> {
+  await migrateLegacyRoot()
   await mkdir(join(root, 'runs'), { recursive: true, mode: 0o700 })
   // An exclusive pid file prevents simultaneous ensure calls from replacing a live socket.
   let lock
@@ -562,7 +691,8 @@ async function daemon(): Promise<void> {
   }
   server.listen(socketPath)
   await once(server, 'listening')
-  await chmod(socketPath, 0o600)
+  // A named pipe on Windows carries no file mode to restrict.
+  if (process.platform !== 'win32') await chmod(socketPath, 0o600)
 }
 
 function request(data: string): Promise<string> {
@@ -607,12 +737,7 @@ async function main(): Promise<void> {
       /* Start an absent service. */
     }
     // Same normalized remote environment as the Node client; no desktop ownership marker.
-    const child = spawn(process.execPath, [process.argv[1], 'daemon'], {
-      detached: true,
-      stdio: 'ignore',
-      env: { ...process.env }
-    })
-    child.unref()
+    await startDaemon()
     for (let attempt = 0; attempt < 50; attempt++) {
       await new Promise<void>((resolve) => setTimeout(resolve, 100))
       try {

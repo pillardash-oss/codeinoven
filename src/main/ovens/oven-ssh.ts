@@ -4,6 +4,7 @@ import { createServer, type Socket } from 'node:net'
 import { mkdir, mkdtemp, writeFile, rm, readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import { isWindowsShell, powershellLiteral, remoteShell, windowsEncodedCommand } from './oven-remote-shell'
 import type { OvenRegistry } from './oven-registry'
 import { validateIdentityPath } from './oven-validation'
 
@@ -156,24 +157,27 @@ export class OvenSsh {
   ): Promise<void> {
     if (contents.includes('\0')) throw new TypeError('Secret values cannot contain null bytes.')
     if (!/^[A-Za-z0-9._-]{1,120}$/u.test(path)) throw new TypeError('Invalid remote secret path.')
-    const command = options.windows
+    const windows = options.windows ?? isWindowsShell(await remoteShell(this, id))
+    const command = windows
       ? // Create the file with an owner-only ACL, then write through the handle
         // so the plaintext is never visible in a window where it is world-readable.
-        [
-          `$ErrorActionPreference = 'Stop'`,
-          `$dir = Split-Path -Parent ${sshQuote(path)}`,
-          `if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }`,
-          `$acl = Get-Acl -LiteralPath $dir`,
-          `$acl.SetAccessRuleProtection($true, $false)`,
-          `$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name`,
-          `$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')`,
-          `$acl.SetAccessRule($rule)`,
-          `Set-Acl -LiteralPath $dir -AclObject $acl`,
-          `$content = [Console]::In.ReadToEnd()`,
-          `$staged = ${sshQuote(path)} + '.next'`,
-          `[System.IO.File]::WriteAllText($staged, $content, (New-Object System.Text.UTF8Encoding($false)))`,
-          `Move-Item -LiteralPath $staged -Destination ${sshQuote(path)} -Force`
-        ].join('; ')
+        windowsEncodedCommand(
+          [
+            `$ErrorActionPreference = 'Stop'`,
+            `$dir = Split-Path -Parent ${powershellLiteral(path)}`,
+            `if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }`,
+            `$acl = Get-Acl -LiteralPath $dir`,
+            `$acl.SetAccessRuleProtection($true, $false)`,
+            `$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name`,
+            `$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')`,
+            `$acl.SetAccessRule($rule)`,
+            `Set-Acl -LiteralPath $dir -AclObject $acl`,
+            `$content = (New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)).ReadToEnd()`,
+            `$staged = ${powershellLiteral(path)} + '.next'`,
+            `[System.IO.File]::WriteAllText($staged, $content, (New-Object System.Text.UTF8Encoding($false)))`,
+            `Move-Item -LiteralPath $staged -Destination ${powershellLiteral(path)} -Force`
+          ].join('; ')
+        )
       : [
           `set -eu`,
           `umask 077`,
@@ -213,23 +217,26 @@ export class OvenSsh {
     if (!leaf) throw new TypeError('A remote secret path needs a file name.')
     const directory = segments.join('/')
     const stagedSuffix = `.${randomUUID()}.next`
-    const command = options.windows
-      ? [
-          `$ErrorActionPreference = 'Stop'`,
-          `$root = Join-Path $env:USERPROFILE ${sshQuote(directory)}`,
-          `if (-not (Test-Path -LiteralPath $root)) { New-Item -ItemType Directory -Force -Path $root | Out-Null }`,
-          `$acl = Get-Acl -LiteralPath $root`,
-          `$acl.SetAccessRuleProtection($true, $false)`,
-          `$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name`,
-          `$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')`,
-          `$acl.SetAccessRule($rule)`,
-          `Set-Acl -LiteralPath $root -AclObject $acl`,
-          `$content = [Console]::In.ReadToEnd()`,
-          `$target = Join-Path $root ${sshQuote(leaf)}`,
-          `$staged = $target + ${sshQuote(stagedSuffix)}`,
-          `[System.IO.File]::WriteAllText($staged, $content, (New-Object System.Text.UTF8Encoding($false)))`,
-          `Move-Item -LiteralPath $staged -Destination $target -Force`
-        ].join('; ')
+    const windows = options.windows ?? isWindowsShell(await remoteShell(this, id))
+    const command = windows
+      ? windowsEncodedCommand(
+          [
+            `$ErrorActionPreference = 'Stop'`,
+            `$root = Join-Path $env:USERPROFILE ${powershellLiteral(directory)}`,
+            `if (-not (Test-Path -LiteralPath $root)) { New-Item -ItemType Directory -Force -Path $root | Out-Null }`,
+            `$acl = Get-Acl -LiteralPath $root`,
+            `$acl.SetAccessRuleProtection($true, $false)`,
+            `$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name`,
+            `$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')`,
+            `$acl.SetAccessRule($rule)`,
+            `Set-Acl -LiteralPath $root -AclObject $acl`,
+            `$content = (New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)).ReadToEnd()`,
+            `$target = Join-Path $root ${powershellLiteral(leaf)}`,
+            `$staged = $target + ${powershellLiteral(stagedSuffix)}`,
+            `[System.IO.File]::WriteAllText($staged, $content, (New-Object System.Text.UTF8Encoding($false)))`,
+            `Move-Item -LiteralPath $staged -Destination $target -Force`
+          ].join('; ')
+        )
       : [
           `set -eu`,
           `umask 077`,
@@ -251,7 +258,11 @@ export class OvenSsh {
    */
   async readFile(id: string, path: string, timeoutMs = 20_000): Promise<string> {
     if (!/^[A-Za-z0-9._/-]{1,256}$/u.test(path)) throw new TypeError('Invalid remote path.')
-    return this.execute(id, `cat ${sshQuote(path)}`, '', timeoutMs)
+    const shell = await remoteShell(this, id)
+    const command = isWindowsShell(shell)
+      ? windowsEncodedCommand(`Get-Content -LiteralPath ${powershellLiteral(path)} -Raw`)
+      : `cat ${sshQuote(path)}`
+    return this.execute(id, command, '', timeoutMs)
   }
 
   /** Bound SSH direct TCP channels. Each channel streams with backpressure. */
