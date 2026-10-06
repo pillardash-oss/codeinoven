@@ -9,7 +9,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
-  import { formatCompactAge } from '$shared/date-time-format'
+  import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import {
     calculateThreadHoverPopoverPosition,
@@ -56,7 +56,7 @@
     isThreadBusy
   } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
-  import { AppWindow, Check, Clock, GitBranch, Pin, Server } from '@lucide/svelte'
+  import { AppWindow, Check, Clock, GitBranch, Monitor, Pin, Server } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
   import { tick } from 'svelte'
@@ -112,6 +112,14 @@
 
   /** Title shown in the UI   the real title once generated, else a draft label. */
   let displayTitle = $derived(effectiveThreadTitle(thread))
+
+  /** Project that owns this thread, resolved for the row's meta line. Hidden
+   *  containers (Chats, Assistant) have no project record, so the name falls
+   *  back to nothing and only the glyph shows. */
+  let project = $derived(
+    scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
+  )
+  let projectName = $derived(project?.name ?? null)
 
   /** How long the "todo" dot is held after a draft is cleared on send, so the
    *  badge does not flash to the thread's stale status before the harness
@@ -211,6 +219,9 @@
   function harnessName(id: string): string {
     return getAgentIcon(id)?.name ?? id
   }
+
+  /** Harness icons shown on the full row's footer line before the `+n` chip. */
+  const MAX_HARNESS_ICONS = 3
 
   /** Provider name for the thread's current model, resolved for its vendor icon. */
   let currentModelProviderName = $derived.by((): string | null => {
@@ -492,6 +503,68 @@
     return 'read'
   })
 
+  /** Title colour, shared by the compact and three-line row layouts. */
+  let titleClass = $derived(
+    threadState === 'approval'
+      ? 'font-medium text-warning'
+      : threadState === 'unread' || threadState === 'temporary-unread'
+        ? 'font-medium text-foreground'
+        : 'text-foreground'
+  )
+
+  /** Short textual state for the full row's footer, so a row's condition is
+   *  readable without decoding the dot. `null` for the plain read state. */
+  let stateLabel = $derived.by((): string | null => {
+    switch (threadState) {
+      case 'working':
+        return isRetryPaused ? 'Retrying' : delegatedWorkActive ? 'Coordinating' : 'Working'
+      case 'working-paused':
+        return 'Retrying'
+      case 'queued':
+        return 'Queued'
+      case 'scheduled':
+        return 'Scheduled'
+      case 'spec':
+        return 'Spec ready'
+      case 'approval':
+        return 'Attention'
+      case 'error':
+        return 'Failed'
+      case 'unread':
+        return 'Unread'
+      case 'temporary-unread':
+        return 'Side chat'
+      case 'todo':
+        return 'Draft'
+      case 'completed':
+        return 'Done'
+      default:
+        return null
+    }
+  })
+
+  /** Colour token for the footer state text, matching the status badge tone. */
+  let stateToneClass = $derived.by((): string => {
+    switch (threadState) {
+      case 'approval':
+        return 'text-warning'
+      case 'error':
+        return 'text-danger'
+      case 'unread':
+      case 'temporary-unread':
+        return 'text-foreground'
+      case 'working':
+      case 'working-paused':
+      case 'queued':
+      case 'scheduled':
+        return 'text-thread-working'
+      case 'spec':
+        return 'text-thread-spec'
+      default:
+        return 'text-dimmed'
+    }
+  })
+
   /** Human-readable stage label, only meaningful when isWorking is true. */
   let stageLabel = $derived.by((): string => {
     switch (thread.status) {
@@ -701,6 +774,59 @@
   {/if}
 {/snippet}
 
+{#snippet threadStatusSlot(centered: boolean)}
+  <span class="relative h-4 w-4 shrink-0">
+    <span
+      class="absolute inset-0 flex items-center transition-opacity duration-150 {centered
+        ? 'justify-center'
+        : 'justify-start'} {pinVisible ? 'opacity-0' : 'opacity-100'}"
+      aria-hidden={pinVisible}
+    >
+      {#if badgeProps}
+        <StatusBadge
+          stage={badgeProps.stage}
+          tone={badgeProps.tone}
+          kind={badgeProps.kind}
+          color={badgeProps.color}
+          variant={badgeProps.variant ?? 'dot'}
+          icon={badgeProps.icon}
+          animated={badgeProps.animated}
+          size="md"
+          title={badgeTitle}
+        />
+      {:else}
+        <span
+          class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
+          aria-label={threadState}
+          title={threadState}
+        ></span>
+      {/if}
+    </span>
+    <span
+      role="button"
+      tabindex={-1}
+      class="absolute inset-0 flex items-center justify-center rounded transition-opacity duration-150 hover:bg-overlay {pinVisible
+        ? 'opacity-100'
+        : 'pointer-events-none opacity-0'}"
+      aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
+      aria-hidden={!pinVisible}
+      title={effectivePinned ? 'Unpin' : 'Pin'}
+      onclick={(e: MouseEvent) => {
+        e.stopPropagation()
+        onTogglePin(thread)
+      }}
+      onkeydown={(e: KeyboardEvent) => {
+        if (keymapState.matches('thread-pin', e)) {
+          e.stopPropagation()
+          onTogglePin(thread)
+        }
+      }}
+    >
+      <Pin size={11} class={effectivePinned ? 'text-accent' : 'text-dimmed'} />
+    </span>
+  </span>
+{/snippet}
+
 {#if picker}
   <div
     class="flex min-h-11 w-full flex-col gap-1 px-2.5 py-1.5 text-left transition-colors {selected
@@ -892,9 +1018,9 @@
       : 'opacity-0'}"
   ></div>
   <button
-    class="relative mb-1 flex w-full flex-col gap-1 text-left transition-colors {compact
-      ? 'px-2 py-1'
-      : 'px-2 py-1.5'} {selected
+    class="relative mb-1 flex w-full flex-col text-left transition-colors {compact
+      ? 'gap-1 px-2 py-1'
+      : 'gap-1.5 px-2.5 py-2'} {selected
       ? 'bg-selected'
       : isBusyIndicator
         ? isRetryPaused
@@ -919,112 +1045,215 @@
       aria-hidden="true"
       style="background: linear-gradient(to right, transparent, var(--color-border-strong), transparent);"
     ></span>
-    <span class="flex w-full min-w-0 items-center gap-2">
-      <!-- Project icon -->
-      {#if projectIconUrl}
-        <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
-      {:else if projectIconGlyph}
-        {@const ContainerIcon = projectIconGlyph}
-        <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
-          <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
-        </span>
-      {/if}
-
-      <!-- State indicator / pin toggle   fixed slot, opacity crossfade, zero layout shift -->
-      <span class="relative h-4 w-4 shrink-0">
-        <span
-          class="absolute inset-0 flex items-center transition-opacity duration-150 {projectIconUrl ||
-          projectIconGlyph
-            ? 'justify-center'
-            : 'justify-start'} {pinVisible ? 'opacity-0' : 'opacity-100'}"
-          aria-hidden={pinVisible}
-        >
-          {#if badgeProps}
-            <StatusBadge
-              stage={badgeProps.stage}
-              tone={badgeProps.tone}
-              kind={badgeProps.kind}
-              color={badgeProps.color}
-              variant={badgeProps.variant ?? 'dot'}
-              icon={badgeProps.icon}
-              animated={badgeProps.animated}
-              size="md"
-              title={badgeTitle}
-            />
-          {:else}
-            <span
-              class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
-              aria-label={threadState}
-              title={threadState}
-            ></span>
-          {/if}
-        </span>
-        <span
-          role="button"
-          tabindex={-1}
-          class="absolute inset-0 flex items-center justify-center rounded transition-opacity duration-150 hover:bg-overlay {pinVisible
-            ? 'opacity-100'
-            : 'pointer-events-none opacity-0'}"
-          aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
-          aria-hidden={!pinVisible}
-          title={effectivePinned ? 'Unpin' : 'Pin'}
-          onclick={(e: MouseEvent) => {
-            e.stopPropagation()
-            onTogglePin(thread)
-          }}
-          onkeydown={(e: KeyboardEvent) => {
-            if (keymapState.matches('thread-pin', e)) {
-              e.stopPropagation()
-              onTogglePin(thread)
-            }
-          }}
-        >
-          <Pin size={11} class={effectivePinned ? 'text-accent' : 'text-dimmed'} />
-        </span>
-      </span>
-
-      <!-- Title -->
-      <span
-        class="min-w-0 flex-1 truncate text-[0.75rem] {threadState === 'approval'
-          ? 'font-medium text-warning'
-          : threadState === 'unread' || threadState === 'temporary-unread'
-            ? 'font-medium text-foreground'
-            : 'text-foreground'}"
-      >
-        {displayTitle}
-      </span>
-
-      <!-- Single-line default: time rides on the top line, swapped for the
-           working model's provider icon while the thread is working -->
-      {#if !showBottomRow}
-        {#if indicator}
-          <ThreadIndicatorSlot {indicator} />
-        {:else if isBusyIndicator && currentModelProviderName}
-          <span
-            class="flex shrink-0 items-center transition-opacity duration-150 {hovered
-              ? 'opacity-0'
-              : 'opacity-100'}"
-            aria-hidden={hovered}
-            title={thread.settings?.modelId ?? 'Model'}
-          >
-            <VendorIcon
-              name={currentModelProviderName}
-              id={currentModelProviderId ?? undefined}
-              size={13}
-            />
-          </span>
-        {:else}
-          <span
-            class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
-              ? 'opacity-0'
-              : 'opacity-100'}"
-            aria-hidden={hovered}
-          >
-            {formatCompactAge(thread.lastActivity)}
+    {#if compact}
+      <span class="flex w-full min-w-0 items-center gap-2">
+        <!-- Project icon -->
+        {#if projectIconUrl}
+          <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+        {:else if projectIconGlyph}
+          {@const ContainerIcon = projectIconGlyph}
+          <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
+            <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
           </span>
         {/if}
-      {:else}
-        <!-- Current working / last worked model   provider icon alone -->
+
+        <!-- State indicator / pin toggle   fixed slot, opacity crossfade, zero layout shift -->
+        {@render threadStatusSlot(Boolean(projectIconUrl || projectIconGlyph))}
+
+        <!-- Title -->
+        <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">
+          {displayTitle}
+        </span>
+
+        <!-- Single-line default: time rides on the top line, swapped for the
+           working model's provider icon while the thread is working -->
+        {#if !showBottomRow}
+          {#if indicator}
+            <ThreadIndicatorSlot {indicator} />
+          {:else if isBusyIndicator && currentModelProviderName}
+            <span
+              class="flex shrink-0 items-center transition-opacity duration-150 {hovered
+                ? 'opacity-0'
+                : 'opacity-100'}"
+              aria-hidden={hovered}
+              title={thread.settings?.modelId ?? 'Model'}
+            >
+              <VendorIcon
+                name={currentModelProviderName}
+                id={currentModelProviderId ?? undefined}
+                size={13}
+              />
+            </span>
+          {:else}
+            <span
+              class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
+                ? 'opacity-0'
+                : 'opacity-100'}"
+              aria-hidden={hovered}
+            >
+              {formatCompactAge(thread.lastActivity)}
+            </span>
+          {/if}
+        {:else}
+          <!-- Current working / last worked model   provider icon alone -->
+          {#if currentModelProviderName}
+            <span
+              class="flex shrink-0 items-center transition-opacity duration-150 {hovered
+                ? 'opacity-0'
+                : 'opacity-100'}"
+              aria-hidden={hovered}
+              title={thread.settings?.modelId ?? 'Model'}
+            >
+              <VendorIcon
+                name={currentModelProviderName}
+                id={currentModelProviderId ?? undefined}
+                size={13}
+              />
+            </span>
+          {/if}
+        {/if}
+      </span>
+
+      {#if showBottomRow}
+        <!-- Bottom line: harnesses (left), scope (center), time (right) -->
+        <span
+          class="grid w-full min-w-0 items-center gap-3 {harnessIds.length > 0
+            ? 'grid-cols-[minmax(3.2rem,1fr)_auto_minmax(0,1fr)]'
+            : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'}"
+        >
+          {#if harnessIds.length > 0}
+            <span
+              {@attach captureHarnessRowElement}
+              class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden"
+            >
+              {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
+                <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+              {/each}
+              {#if visibleHarnessCount < harnessIds.length}
+                <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
+                  +{harnessIds.length - visibleHarnessCount}
+                </span>
+              {/if}
+            </span>
+          {/if}
+
+          {#if scopeBucket && !hideScope}
+            <span
+              class="relative col-start-2 flex min-w-0 max-w-[7rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[0.5625rem] text-muted"
+              title={scopeBucket.name}
+              style="border-bottom-color: color-mix(in srgb, {scopeColor} 20%, var(--color-muted));"
+            >
+              {#if scopeIconUrl}
+                <img
+                  src={scopeIconUrl}
+                  alt=""
+                  class="h-2 w-2 shrink-0 object-contain opacity-45 grayscale"
+                  draggable="false"
+                />
+              {/if}
+              {#if scopeBucket.pinned}
+                <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
+              {/if}
+              <span class="truncate">{scopeBucket.name}</span>
+            </span>
+          {/if}
+
+          <span class="col-start-3 flex min-w-0 items-center justify-end gap-1 overflow-hidden">
+            {#if isRemote}
+              <span
+                class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
+                title={`Oven: ${oven?.name ?? 'unknown'}`}
+                aria-label={`Oven: ${oven?.name ?? 'unknown'}`}
+              >
+                {#if oven?.iconUrl}
+                  <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
+                {:else}
+                  <Server size={11} class="shrink-0" />
+                {/if}
+              </span>
+            {/if}
+            {#if branch}
+              <span
+                class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
+                title={`Branch: ${branch}`}
+              >
+                <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+                <span>{branchLabel}</span>
+              </span>
+            {/if}
+            {#if hasNote}
+              {@const ThreadNoteIcon = feature('thread-note').icon}
+              <span
+                class="flex shrink-0 items-center text-warning"
+                title={`${feature('thread-note').name} attached`}
+              >
+                <ThreadNoteIcon size={11} />
+              </span>
+            {/if}
+            {@render authoredWorkMarker(authoredWorkKind)}
+            {#if indicator}
+              <ThreadIndicatorSlot {indicator} />
+            {:else}
+              <span
+                class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
+                  ? 'opacity-0'
+                  : 'opacity-100'}"
+                aria-hidden={hovered}
+              >
+                {formatCompactAge(thread.lastActivity)}
+              </span>
+            {/if}
+          </span>
+        </span>
+      {/if}
+    {:else}
+      <!-- Meta line: project, last-edited time, where it runs, and the branch -->
+      <span class="flex w-full min-w-0 items-center gap-2 text-[0.625rem] text-dimmed">
+        {#if projectIconUrl}
+          <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+        {:else if projectIconGlyph}
+          {@const ContainerIcon = projectIconGlyph}
+          <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
+            <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
+          </span>
+        {/if}
+        {#if projectName}
+          <span class="min-w-0 truncate text-[0.6875rem] font-medium text-muted" title={projectName}
+            >{projectName}</span
+          >
+        {/if}
+        <span class="min-w-0 flex-1"></span>
+        <span
+          class="shrink-0 whitespace-nowrap tabular-nums"
+          title={`Edited ${formatDateTime(thread.lastActivity)}`}
+          >{formatCompactAge(thread.lastActivity)}</span
+        >
+        <span
+          class="flex shrink-0 items-center"
+          title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
+        >
+          {#if isRemote}
+            {#if oven?.iconUrl}
+              <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
+            {:else}
+              <Server size={11} class="shrink-0" />
+            {/if}
+          {:else}
+            <Monitor size={11} class="shrink-0" />
+          {/if}
+        </span>
+        {#if branch}
+          <span class="flex min-w-0 items-center gap-1" title={`Branch: ${branch}`}>
+            <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+            <span class="truncate">{branchLabel}</span>
+          </span>
+        {/if}
+      </span>
+
+      <!-- Primary line: status, title, current provider -->
+      <span class="flex w-full min-w-0 items-center gap-2">
+        {@render threadStatusSlot(true)}
+        <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">{displayTitle}</span>
         {#if currentModelProviderName}
           <span
             class="flex shrink-0 items-center transition-opacity duration-150 {hovered
@@ -1040,43 +1269,36 @@
             />
           </span>
         {/if}
-      {/if}
-    </span>
+        {#if selected}
+          <Check size={13} class="shrink-0 text-primary" />
+        {/if}
+      </span>
 
-    {#if showBottomRow}
-      <!-- Bottom line: harnesses (left), scope (center), time (right) -->
-      <span
-        class="grid w-full min-w-0 items-center gap-3 {harnessIds.length > 0
-          ? 'grid-cols-[minmax(3.2rem,1fr)_auto_minmax(0,1fr)]'
-          : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'}"
-      >
+      <!-- Footer line: harnesses, scope, then the row's indicators and state -->
+      <span class="flex w-full min-w-0 items-center gap-2 overflow-hidden">
         {#if harnessIds.length > 0}
-          <span
-            {@attach captureHarnessRowElement}
-            class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden"
-          >
-            {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
+          <span class="flex shrink-0 items-center gap-1">
+            {#each harnessIds.slice(0, MAX_HARNESS_ICONS) as harnessId (harnessId)}
               <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
             {/each}
-            {#if visibleHarnessCount < harnessIds.length}
-              <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
-                +{harnessIds.length - visibleHarnessCount}
-              </span>
+            {#if harnessIds.length > MAX_HARNESS_ICONS}
+              <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
+                >+{harnessIds.length - MAX_HARNESS_ICONS}</span
+              >
             {/if}
           </span>
         {/if}
-
         {#if scopeBucket && !hideScope}
           <span
-            class="relative col-start-2 flex min-w-0 max-w-[7rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[0.5625rem] text-muted"
+            class="flex max-w-[8rem] min-w-0 items-center gap-1 overflow-hidden border-b px-1 pb-0.5 text-[0.5625rem] text-muted"
             title={scopeBucket.name}
-            style="border-bottom-color: color-mix(in srgb, {scopeColor} 20%, var(--color-muted));"
+            style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
           >
             {#if scopeIconUrl}
               <img
                 src={scopeIconUrl}
                 alt=""
-                class="h-2 w-2 shrink-0 object-contain opacity-45 grayscale"
+                class="h-2 w-2 shrink-0 object-contain opacity-50 grayscale"
                 draggable="false"
               />
             {/if}
@@ -1086,30 +1308,8 @@
             <span class="truncate">{scopeBucket.name}</span>
           </span>
         {/if}
-
-        <span class="col-start-3 flex min-w-0 items-center justify-end gap-1 overflow-hidden">
-          {#if isRemote}
-            <span
-              class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
-              title={`Oven: ${oven?.name ?? 'unknown'}`}
-              aria-label={`Oven: ${oven?.name ?? 'unknown'}`}
-            >
-              {#if oven?.iconUrl}
-                <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
-              {:else}
-                <Server size={11} class="shrink-0" />
-              {/if}
-            </span>
-          {/if}
-          {#if branch}
-            <span
-              class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
-              title={`Branch: ${branch}`}
-            >
-              <GitBranch size={10} class="shrink-0" aria-hidden="true" />
-              <span>{branchLabel}</span>
-            </span>
-          {/if}
+        <span class="min-w-0 flex-1"></span>
+        <span class="flex shrink-0 items-center gap-2">
           {#if hasNote}
             {@const ThreadNoteIcon = feature('thread-note').icon}
             <span
@@ -1122,15 +1322,11 @@
           {@render authoredWorkMarker(authoredWorkKind)}
           {#if indicator}
             <ThreadIndicatorSlot {indicator} />
-          {:else}
-            <span
-              class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
-                ? 'opacity-0'
-                : 'opacity-100'}"
-              aria-hidden={hovered}
+          {/if}
+          {#if stateLabel}
+            <span class="whitespace-nowrap text-[0.5625rem] {stateToneClass}" title={badgeTitle}
+              >{stateLabel}</span
             >
-              {formatCompactAge(thread.lastActivity)}
-            </span>
           {/if}
         </span>
       </span>
@@ -1146,7 +1342,7 @@
       <ThreadDropdown
         bind:open={showMenu}
         items={actionsMenu.items}
-        vertical={showBottomRow}
+        vertical={compact ? showBottomRow : true}
         onOpen={() => {
           showPopover = false
           clearTimeout(popoverTimer)
