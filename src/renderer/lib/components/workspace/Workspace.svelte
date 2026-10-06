@@ -2297,6 +2297,14 @@
   // The app header owns the view switcher now; the workspace only registers
   // the per-view quick actions that render next to it.
   $effect(() => {
+    // The workspace owns the header's quick-action slot only while it is the
+    // surface on screen, or while the Scope Board (which it also draws) is.
+    // Every other top-level view publishes its own actions and this effect must
+    // leave them alone - the browser does exactly that, and its teardown clears
+    // the slot. Reading `active` here is also what re-runs the effect the moment
+    // the workspace comes back, which is what restores a view's actions after a
+    // trip to the browser; without it the slot stayed empty on return.
+    if (!active && !scopeViewActive) return
     if (workspaceState.specStudioOpen) {
       viewActions.set('none', [])
       return
