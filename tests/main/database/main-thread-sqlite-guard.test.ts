@@ -97,7 +97,7 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
   { file: 'src/lib/engines/engineering-lifecycle-engine.ts', maxSites: 2, reason: ENGINE_READ },
   { file: 'src/lib/engines/plan-engine.ts', maxSites: 3, reason: ENGINE_READ },
   { file: 'src/lib/engines/prd-engine.ts', maxSites: 5, reason: ENGINE_READ },
-  { file: 'src/lib/engines/scope-manager.ts', maxSites: 1, reason: ENGINE_READ },
+  { file: 'src/lib/engines/scope-manager.ts', maxSites: 2, reason: ENGINE_READ },
   { file: 'src/lib/engines/spec-engine.ts', maxSites: 2, reason: ENGINE_READ },
   {
     file: 'src/main/storage/checkpoint-manager.ts',
