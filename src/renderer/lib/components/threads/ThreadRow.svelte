@@ -1220,19 +1220,20 @@
       {#if showProjectLine}
         <!-- Project line: which project the thread belongs to. A project's own
              thread list skips it, since the folder above already names it. -->
-        <span class="flex w-full min-w-0 items-center gap-1.5">
-          {#if projectIconUrl}
-            <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
-          {:else if projectIconGlyph}
-            {@const ContainerIcon = projectIconGlyph}
-            <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
-              <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
+        <span class="flex w-full min-w-0 items-center gap-2">
+          {#if projectIconUrl || projectIconGlyph}
+            <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+              {#if projectIconUrl}
+                <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 rounded object-contain" />
+              {:else if projectIconGlyph}
+                {@const ContainerIcon = projectIconGlyph}
+                <ContainerIcon size={12} strokeWidth={1.8} class="text-muted" aria-hidden="true" />
+              {/if}
             </span>
           {/if}
           {#if projectName && !hideProjectName}
-            <span
-              class="min-w-0 truncate text-[0.6875rem] font-medium text-muted"
-              title={projectName}>{projectName}</span
+            <span class="min-w-0 truncate text-[0.6875rem] text-muted" title={projectName}
+              >{projectName}</span
             >
           {/if}
         </span>
@@ -1268,19 +1269,15 @@
             >{formatCompactAge(thread.lastActivity)}</span
           >
         {/if}
-        {#if selected}
-          <Check size={13} class="shrink-0 text-primary" />
-        {/if}
       </span>
 
       {#if hasRowExtras}
-        <!-- Footer line: harnesses (left), scope (centered), then where it runs,
-             the branch, the row's markers and its last-edited time (right) -->
-        <span
-          class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3"
-        >
+        <!-- Footer line: what the thread runs with (harnesses, scope) on the
+             left, then where it runs, its branch, its markers and its
+             last-edited time pushed to the right edge. -->
+        <span class="flex w-full min-w-0 items-center gap-1.5 overflow-hidden">
           {#if harnessIds.length > 0}
-            <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
+            <span class="flex min-w-0 items-center gap-1 overflow-hidden">
               {#each harnessIds.slice(0, MAX_HARNESS_ICONS) as harnessId (harnessId)}
                 <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
               {/each}
@@ -1292,9 +1289,9 @@
             </span>
           {/if}
           {#if !hideScope}
-            {@render scopeChip('col-start-2 max-w-[8rem]')}
+            {@render scopeChip('min-w-0 max-w-[8rem]')}
           {/if}
-          <span class="col-start-3 flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
+          <span class="ml-auto flex shrink-0 items-center justify-end gap-1.5">
             <span
               class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
               title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
