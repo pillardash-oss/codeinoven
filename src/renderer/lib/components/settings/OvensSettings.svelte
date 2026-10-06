@@ -61,6 +61,7 @@
   let modalError = $state('')
   let editing = $state<Oven | null>(null)
   let editorOpen = $state(false)
+  let agentOpen = $state(false)
   let name = $state('')
   let pendingIcon = $state<{ path: string; dataUrl: string } | undefined>()
   let clearImage = $state(false)
@@ -451,6 +452,12 @@
     }
   }
 
+  /** Reveal a freshly registered Oven so its setup action is immediately visible. */
+  async function onAgentRegistered(ovenId: string): Promise<void> {
+    folded = { ...folded, [ovenId]: false }
+    await load()
+  }
+
   async function remove(): Promise<void> {
     if (!pendingRemoval || busy) return
     busy = 'remove'
@@ -520,13 +527,22 @@
       <h1 class="text-xl font-bold tracking-tight">Ovens</h1>
       <p class="mt-0.5 text-sm text-muted">This computer and your remote SSH environments.</p>
     </div>
-    <button
-      type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
-      onclick={() => openEditor()}
-    >
-      <Plus size={14} /> New Oven
-    </button>
+    <div class="flex items-center gap-2">
+      <button
+        type="button"
+        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
+        onclick={() => (agentOpen = true)}
+      >
+        <Terminal size={14} /> Add via agent
+      </button>
+      <button
+        type="button"
+        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
+        onclick={() => openEditor()}
+      >
+        <Plus size={14} /> New Oven
+      </button>
+    </div>
   </div>
   {#if error}<p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
       {error}
@@ -1028,3 +1044,13 @@
     running before uninstalling it.
   </p>
 </ConfirmDialog>
+
+{#if agentOpen}
+  {#await import('./OvenAgentModal.svelte') then { default: OvenAgentModal }}
+    <OvenAgentModal
+      open={agentOpen}
+      onClose={() => (agentOpen = false)}
+      onRegistered={(ovenId) => void onAgentRegistered(ovenId)}
+    />
+  {/await}
+{/if}

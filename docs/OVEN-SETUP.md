@@ -14,6 +14,21 @@ Harness install steps show live download/install progress in the setup panel and
 
 Linux system package commands run directly as root or through sudo for other users. Password-authenticated Oven connections use the vaulted login password through SSH stdin when sudo requires authentication. The elevated command receives no password input. Other connections require passwordless sudo. Remote command failures are reported separately from SSH connection and trust errors.
 
+## Add a machine with the Oven agent
+
+A machine can become an Oven without this computer reaching it first. **Settings → Ovens → Add via agent** creates a self-contained installer for Linux, macOS, or Windows:
+
+- It needs nothing but a shell. When Node.js 22 is absent it installs it with the machine's own package manager, unless you turn that off.
+- It writes the same service bundle this app would push, verifies its SHA-256, and starts the durable service. The service keeps running after the shell exits and after this app closes.
+- With **Provision a dedicated key** on, it creates an ed25519 key under the machine's `.ssh`, authorizes its public half for that account, and includes the private half in the registration code. With it off, register the Oven against an identity you already use.
+- It prints a registration code and saves a copy at `~/.config/pillardash/codeinoven-oven/agent-registration.json` (owner-readable only).
+
+Run the installer on the machine, then paste its code into the second step of the same dialog. **Check code** shows the machine, the SSH account, the key fingerprint, and whether the machine already runs this app's service, all before anything is saved. **Register Oven** then stores the descriptor and, when one was provisioned, the key in the encrypted vault, and adds the Oven. An Oven registered from an agent is an ordinary Oven: it gets the same probe, harness inventory, checkout, and run operations as any other.
+
+The app reaches the machine the same way it reaches any Oven: over SSH to the durable service. Host keys are still trusted through OpenSSH on this computer, so a machine this computer has never connected to needs its host key trusted before the app can reach it. The registration code carries no login password. Treat the printed code and the saved descriptor file as secrets: the dedicated private key is inside them.
+
+**New Oven** is unchanged. Add a machine, test the connection, and install the service from this app. Both paths produce the same Oven.
+
 ## The Oven clock
 
 Setup matches the Oven's clock to this computer's time zone as a prerequisite step. The zone is read before anything changes, set through the platform's own tool (`timedatectl` on Linux, `systemsetup` on macOS, PowerShell on Windows) and read back afterwards, so a change that did not take is reported instead of assumed. An Oven already on this computer's zone is skipped with that reason. An Oven with no supported way to change its zone, and a Windows Oven whose SSH session is not an administrator, skip the step with the reason rather than failing an otherwise complete setup.
