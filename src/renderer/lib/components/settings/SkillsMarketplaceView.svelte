@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import { BookOpen, Bookmark, Flame, Loader2, Search, Sparkles, TrendingUp } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     cachedSkillMarketLeaderboard,
@@ -8,11 +6,13 @@
     preloadSkillMarketDetails,
     refreshSkillMarketLeaderboard
   } from '$lib/skill-market-cache'
-  import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
   import { installedSkillState } from '$lib/stores/installed-skills.svelte'
+  import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
+  import type { SkillMarketEntry, SkillMarketView } from '$shared/types'
+  import { BookOpen, Bookmark, Flame, Loader2, Search, TrendingUp } from '@lucide/svelte'
+  import { onMount } from 'svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
   import SkillInstalledBadge from './SkillInstalledBadge.svelte'
-  import type { SkillMarketEntry, SkillMarketView } from '$shared/types'
 
   interface Props {
     onOpenSkill: (entry: SkillMarketEntry) => void
@@ -130,7 +130,6 @@
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div class="flex items-center gap-2">
-            <Sparkles size={18} class="text-accent" />
             <h1 class="text-xl font-bold tracking-tight">Skills marketplace</h1>
           </div>
           <p class="mt-1 text-sm text-muted">

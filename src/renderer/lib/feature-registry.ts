@@ -1,4 +1,4 @@
-import { CpuIcon, Feather, Plug, Settings, StickyNotes, type LucideIcon } from '@lucide/svelte'
+import { CpuIcon, Feather, Settings, StickyNotes, ToolCase, type LucideIcon } from '@lucide/svelte'
 
 /**
  * Every feature's canonical name and mark live here, once.
@@ -19,7 +19,7 @@ export interface FeatureDefinition {
 }
 
 export const FEATURES: Record<FeatureId, FeatureDefinition> = {
-  utilities: { id: 'utilities', name: 'Utilities', icon: Plug },
+  utilities: { id: 'utilities', name: 'Utilities', icon: ToolCase },
   'thread-note': { id: 'thread-note', name: 'Thread note', icon: Feather },
   'tab-note': { id: 'tab-note', name: 'Tab note', icon: Feather },
   'sticky-notes': { id: 'sticky-notes', name: 'Sticky notes', icon: StickyNotes },
