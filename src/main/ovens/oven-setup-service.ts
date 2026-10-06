@@ -126,13 +126,17 @@ export class OvenSetupService {
    * the next run before the oven is touched again.
    */
   async recover(): Promise<number> {
-    const directories = await this.storage
-      .listDirectories(OPERATION_PATH)
-      .catch(() => [] as string[])
+    // Operations and journals are files directly under OPERATION_PATH, so the
+    // listing must include files. A directory-only listing is always empty
+    // here, which dropped every persisted completion on the next app launch
+    // and made every remote Oven look like a first-time setup again.
+    const entries = await this.storage.list(OPERATION_PATH).catch(() => [] as string[])
+    const storedOvens = entries
+      .filter((entry) => entry.endsWith('.json') && !entry.endsWith('.journal.json'))
+      .map((entry) => entry.slice(0, -'.json'.length))
+      .filter((ovenId) => ovenId.length > 0 && !ovenId.includes('/'))
     let recoveredCount = 0
-    for (const entry of directories.slice(0, 64)) {
-      const ovenId = entry.split('/').filter(Boolean).pop()
-      if (!ovenId) continue
+    for (const ovenId of storedOvens.slice(0, 64)) {
       const stored = await this.storage.read<OvenSetupOperation>(`${OPERATION_PATH}/${ovenId}.json`)
       if (!stored) continue
       if (stored.status === 'running' || stored.status === 'preparing') {
