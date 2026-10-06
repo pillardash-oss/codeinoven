@@ -17,18 +17,14 @@ import {
 import { mirrorLocalGitIdentity, OVEN_GIT_NETWORK_CHANNELS } from './oven-local-git-identity'
 import { serviceBundleRevision } from './oven-service-bundle'
 import { syncLocalGitHostTrust } from './oven-local-git-trust'
-import { OVEN_HARNESS_PATH } from './oven-harness-paths'
-import { OVEN_DATA_DIRECTORY } from './remote/oven-root-paths'
-import { OvenSsh, sshQuote } from './oven-ssh'
+import { OvenSsh } from './oven-ssh'
 import type { OvenRegistry } from './oven-registry'
 import { beginOvenHarnessRun } from './oven-operation-lock'
-
-const REMOTE_ROOT = `"$HOME/${OVEN_DATA_DIRECTORY}"`
-const SERVICE = `${REMOTE_ROOT}/service.mjs`
-// The login shell supplies version-manager PATH. Only a verified Node runtime is used.
-const NODE_CHECK =
-  `${OVEN_HARNESS_PATH} ` +
-  'set -eu; command -v node >/dev/null 2>&1 || { printf "Node.js is required on this Oven\\n" >&2; exit 1; }; node -e \'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)\''
+import { remoteShell } from './oven-remote-shell'
+import {
+  remoteInstallServiceCommand,
+  remoteServiceCommand
+} from './oven-remote-command'
 
 export class OvenService {
   readonly ssh: OvenSsh
@@ -43,8 +39,8 @@ export class OvenService {
     // one build yields one revision on every delivery path.
     const source = await readFile(path, 'utf8')
     const revision = serviceBundleRevision(source)
-    const staged = `${REMOTE_ROOT}/service.${randomUUID()}.next`
-    const command = `${NODE_CHECK}; umask 077; mkdir -p ${REMOTE_ROOT}; trap 'rm -f ${staged}' EXIT; cat > ${staged}; test "$(sha256sum < ${staged} | cut -d ' ' -f 1)" = ${sshQuote(revision)}; mv ${staged} ${SERVICE}; CODEINOVEN_OVEN_REVISION=${sshQuote(revision)} node ${SERVICE} ensure`
+    const shell = await remoteShell(this.ssh, id)
+    const command = remoteInstallServiceCommand(shell, revision, randomUUID())
     const output = await this.ssh.execute(id, command, source, 60_000)
     return this.parseProbe(output)
   }
@@ -108,7 +104,7 @@ export class OvenService {
       const mirror = await mirrorLocalGitIdentity(this.ssh, id, localRepository)
       const output = await this.ssh.execute(
         id,
-        `${NODE_CHECK}; node ${SERVICE} workspace`,
+        remoteServiceCommand(await remoteShell(this.ssh, id), ['workspace']),
         `${JSON.stringify({ ...input, ...(mirror ? { localIdentityFile: mirror.file } : {}) })}\n`,
         150_000,
         undefined,
@@ -156,7 +152,7 @@ export class OvenService {
       throw new Error('The Oven operation exceeds 8 MiB.')
     const output = await this.ssh.execute(
       id,
-      `${NODE_CHECK}; node ${SERVICE} root-operation`,
+      remoteServiceCommand(await remoteShell(this.ssh, id), ['root-operation']),
       `${data}\n`,
       150_000,
       undefined,
@@ -182,14 +178,20 @@ export class OvenService {
     await this.workspace(id, { operation: 'replace', root, path, staged, mode })
   }
 
-  private request(id: string, input: Record<string, unknown>): Promise<string> {
+  private async request(id: string, input: Record<string, unknown>): Promise<string> {
     const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
     if (Buffer.byteLength(data) > 1024 * 1024) throw new Error('The Oven request exceeds 1 MiB.')
-    return this.ssh.execute(id, `${NODE_CHECK}; node ${SERVICE} request`, `${data}\n`)
+    const shell = await remoteShell(this.ssh, id)
+    return this.ssh.execute(id, remoteServiceCommand(shell, ['request']), `${data}\n`)
   }
 
   private decode<T>(output: string): T {
-    const response = JSON.parse(output) as { ok: boolean; value?: T; error?: string }
+    // PowerShell can prefix a UTF-8 BOM; `JSON.parse` rejects it.
+    const response = JSON.parse(output.replace(/^\uFEFF/u, '')) as {
+      ok: boolean
+      value?: T
+      error?: string
+    }
     if (response.ok !== true) throw new Error(response.error || 'The Oven request failed.')
     return response.value as T
   }

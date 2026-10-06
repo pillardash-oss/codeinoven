@@ -1,5 +1,6 @@
 import type { OvenPreflightReport } from '../../lib/ovens'
 import { sshQuote, type OvenSsh } from './oven-ssh'
+import { powershellLiteral, windowsEncodedCommand } from './oven-remote-shell'
 import type { SecretVault } from '../storage/secret-vault'
 import { Logger } from '../system/logger'
 
@@ -113,7 +114,9 @@ export class OvenGitIdentityService {
       .execute(
         ovenId,
         this.windows(report)
-          ? `powershell -NoProfile -NonInteractive -Command "if (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.ssh\\${IDENTITY_FILE}')) { 'present' } else { 'absent' }"`
+          ? windowsEncodedCommand(
+              `if (Test-Path -LiteralPath (Join-Path $env:USERPROFILE ${powershellLiteral(`.ssh\\${IDENTITY_FILE}`)})) { 'present' } else { 'absent' }`
+            )
           : `test -f ~/.ssh/${IDENTITY_FILE} && printf present || printf absent`,
         '',
         20_000
@@ -134,11 +137,13 @@ export class OvenGitIdentityService {
       'ConnectTimeout=15'
     ].join(' ')
     const probe = this.windows(report)
-      ? [
-          `$identity = Join-Path $env:USERPROFILE '.ssh\\${IDENTITY_FILE}'`,
-           `$env:GIT_SSH_COMMAND = 'ssh -i "' + $identity + '" ${sshOptions}'`,
-          `& ssh -T -i "$identity" ${sshOptions} ${GITHUB_SSH} 2>&1 | Out-String`
-        ].join('; ')
+      ? windowsEncodedCommand(
+          [
+            `$identity = Join-Path $env:USERPROFILE ${powershellLiteral(`.ssh\\${IDENTITY_FILE}`)}`,
+            `$env:GIT_SSH_COMMAND = 'ssh -i "' + $identity + '" ${sshOptions}'`,
+            `& ssh -T -i "$identity" ${sshOptions} ${GITHUB_SSH} 2>&1 | Out-String`
+          ].join('; ')
+        )
       : `GIT_SSH_COMMAND="ssh -i ~/.ssh/${IDENTITY_FILE} ${sshOptions}" ssh -T ${sshQuote(GITHUB_SSH)} 2>&1; printf '\\nexit=%s\\n' "$?"`
 
     let output: string
@@ -218,7 +223,9 @@ export class OvenGitIdentityService {
   ): Promise<string | undefined> {
     const command =
       report.platform === 'win32'
-      ? `powershell -NoProfile -NonInteractive -Command "& ssh-keygen -y -f ${sshQuote(windowsIdentity(path))} 2>$null"`
+      ? windowsEncodedCommand(
+          `$identity = Join-Path $env:USERPROFILE ${powershellLiteral(`.ssh\\${IDENTITY_FILE}`)}; & ssh-keygen -y -f $identity 2>$null`
+        )
       : `ssh-keygen -y -f ${sshQuote(path)} 2>/dev/null`
     try {
       const output = await this.ports.ssh.execute(ovenId, command, '', 20_000)
@@ -233,8 +240,4 @@ export class OvenGitIdentityService {
   private identityPath(report: OvenPreflightReport): string {
     return report.platform === 'win32' ? `%USERPROFILE%\\${IDENTITY_RELATIVE.replace('/', '\\')}` : `~/${IDENTITY_RELATIVE}`
   }
-}
-
-function windowsIdentity(path: string): string {
-  return path.replace(/%USERPROFILE%/gu, '"$env:USERPROFILE"').replace(/\\/gu, '\\')
 }

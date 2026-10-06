@@ -10,7 +10,8 @@ import type { HarnessInstallMethod } from '../../lib/types'
 import { compareVersions } from '../../lib/version-compare'
 import { harnessUninstallCommand } from '../agents/harness-install-service'
 import { OVEN_HARNESS_PATH, OVEN_NPM_ENV } from './oven-harness-paths'
-import { sshQuote } from './oven-ssh'
+import { isWindowsShell, shellForPlatform } from './oven-remote-shell'
+import { remoteArgvCommand } from './oven-remote-command'
 import type { OvenService } from './oven-service'
 import { Logger } from '../system/logger'
 import { withOvenHarnessMutation } from './oven-operation-lock'
@@ -314,10 +315,12 @@ export class OvenHarnessService {
           await this.waitForHarnessIdle(ovenId, descriptor.command)
           const platform =
             this.inventories.get(ovenId)?.platform ?? (await this.service.probe(ovenId)).platform
+          const shell = shellForPlatform(platform)
+          const prefix = isWindowsShell(shell) ? '' : `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} `
           Logger.info('Updating a harness on an oven', { ovenId, harnessId })
           await this.service.ssh.execute(
             ovenId,
-            `${platform === 'win32' ? '' : `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} `}${[descriptor.command, ...args].map(sshQuote).join(' ')}`,
+            remoteArgvCommand(shell, [descriptor.command, ...args], { prefix }),
             '',
             UPDATE_TIMEOUT_MS
           )
@@ -350,10 +353,16 @@ export class OvenHarnessService {
           )
         return withOvenHarnessMutation(ovenId, descriptor.command, async () => {
           await this.waitForHarnessIdle(ovenId, descriptor.command)
+          const platform =
+            this.inventories.get(ovenId)?.platform ?? (await this.service.probe(ovenId)).platform
+          const shell = shellForPlatform(platform)
+          const managedNpm = current.executablePath?.includes('/harnesses/npm/') === true
+          const prefix =
+            managedNpm && !isWindowsShell(shell) ? `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} ` : ''
           Logger.info('Uninstalling a harness on an oven', { ovenId, harnessId, method })
           await this.service.ssh.execute(
             ovenId,
-            `${current.executablePath?.includes('/harnesses/npm/') ? `${OVEN_HARNESS_PATH} ${OVEN_NPM_ENV} ` : ''}${[removal.command, ...removal.args].map(sshQuote).join(' ')}`,
+            remoteArgvCommand(shell, [removal.command, ...removal.args], { prefix }),
             '',
             UPDATE_TIMEOUT_MS
           )

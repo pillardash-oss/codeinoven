@@ -1,6 +1,8 @@
 import type { OvenConnectionStatus, SaveOvenInput } from '../../lib/ovens'
 import type { OvenRegistry } from './oven-registry'
 import { OvenSsh } from './oven-ssh'
+import { remoteShell } from './oven-remote-shell'
+import { connectionInspectCommand } from './oven-remote-command'
 import { arch, availableParallelism, hostname, platform, totalmem, homedir } from 'node:os'
 import { statfs } from 'node:fs/promises'
 
@@ -24,20 +26,16 @@ export async function localOvenConnection(): Promise<OvenConnectionStatus> {
 }
 
 // Read-only OS tools: connection health never depends on the managed Node service.
-const INSPECT = `set -eu
-printf '%s\\n' "$(hostname)" "$(uname -s)" "$(uname -m)"
-getconf _NPROCESSORS_ONLN 2>/dev/null || printf '0\\n'
-if test -r /proc/meminfo; then awk '/^MemTotal:/ {printf "%.0f\\n", $2 * 1024; exit}' /proc/meminfo; else sysctl -n hw.memsize 2>/dev/null || printf '0\\n'; fi
-df -Pk "$HOME" | awk 'NR==2 {printf "%.0f\\n%.0f\\n", $2 * 1024, $4 * 1024}'
-command -v node >/dev/null 2>&1 && node --version || printf 'not-installed\\n'`
-
+// The command itself is chosen from the shell the Oven presents, so a native
+// Windows Oven reports its own facts instead of failing a POSIX probe.
 export async function inspectOvenConnection(
   ssh: OvenSsh,
   id: string
 ): Promise<OvenConnectionStatus> {
   const start = Date.now()
   try {
-    const lines = (await ssh.execute(id, INSPECT, '', 20_000)).trim().split(/\r?\n/u)
+    const command = connectionInspectCommand(await remoteShell(ssh, id))
+    const lines = (await ssh.execute(id, command, '', 20_000)).trim().split(/\r?\n/u)
     if (lines.length !== 8) throw new Error('The Oven returned an unexpected system response.')
     const number = (value: string): number => {
       const result = Number(value)
