@@ -17,7 +17,13 @@
   import AssistantRoutineRow from './AssistantRoutineRow.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
   import RoutineEditModal from './RoutineEditModal.svelte'
-  import { TASK_RUN_PREVIEW, previewRuns, routineSiblingRuns } from './assistant-view'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+  import {
+    TASK_RUN_PREVIEW,
+    assistantForeignThread,
+    previewRuns,
+    routineSiblingRuns
+  } from './assistant-view'
 
   interface Props {
     routines: Routine[]
@@ -359,9 +365,11 @@
       aria-label={ariaLabel}
     >
       {#each previewRuns(runs, expandedRuns.has(key)) as run (run.id)}
+        {@const runForeignThread = foreignRuns.isForeign(run.projectId, run.id) ? run : null}
         <AssistantTaskRow
           task={run}
           variant="run"
+          foreignThread={runForeignThread}
           {color}
           active={run.id === selectedThreadId}
           missed={false}
@@ -398,6 +406,9 @@
 )}
   <AssistantTaskRow
     {task}
+    foreignThread={assistantForeignThread(task, runsFor(task.id), (projectId, threadId) =>
+      foreignRuns.isForeign(projectId, threadId)
+    )}
     {color}
     active={task.id === selectedThreadId}
     missed={missedThreadIds.has(task.id)}

@@ -187,6 +187,15 @@ the app's clock for Assistant View.
   mode**), or, with no live designation, the longest-running live process.
   Build type never decides it: a packaged app and a development launch are equal
   candidates until one is designated.
+- **A run streaming in another instance offers its transfer.** An assistant task
+  and its runs are different threads, so an assistant run executes on its own
+  thread and the task can look idle in a window that is not running it. When
+  another instance owns a run, the task and run rows wear the still **running in
+  another instance** mark (the window icon, not a spinner) and carry a
+  **Transfer** action, and opening the task shows that run's transfer card above
+  the composer without locking the task's own composer. Opening the run thread
+  directly shows the same card in place of its composer, exactly as any other
+  thread does.
 - **A run is named for what it runs.** The run's visible prompt is built by
   `routineRunPrompt` (`src/lib/routine-run.ts`). A user's own task is named by
   its title, but a routine's Getting started thread is its authoring host, not

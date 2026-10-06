@@ -383,6 +383,13 @@
     assistantRoutineName?: string | null
     /** Whether the routine already has a saved how-to. */
     assistantHowToComplete?: boolean
+    /**
+     * A run of this assistant task that another instance is streaming, when the
+     * task itself is not foreign. A run executes on its own thread, so the task
+     * looks idle here while its run works elsewhere; this renders that run's
+     * transfer card above the composer without locking the task's own composer.
+     */
+    assistantForeignRunThreadId?: string | null
     /** Called with the new thread after a fork from a message succeeds. */
     onForked?: (forked: Thread) => void
     /** Projects the chat can be continued into (visible projects only). */
@@ -447,6 +454,7 @@
     assistantRoutineId = null,
     assistantRoutineName = null,
     assistantHowToComplete = false,
+    assistantForeignRunThreadId = null,
     onForked,
     projects = [],
     projectIcons = new SvelteMap<string, string>(),
@@ -12908,6 +12916,14 @@
                   onModelChange={updateSettings}
                   onConnect={openAiAccountSetup}
                   onDismiss={() => (aiAccountPromptOpen = false)}
+                />
+              </div>
+            {/if}
+            {#if assistantForeignRunThreadId}
+              <div class="mb-3">
+                <ForeignRunCard
+                  projectId={thread.projectId}
+                  threadId={assistantForeignRunThreadId}
                 />
               </div>
             {/if}

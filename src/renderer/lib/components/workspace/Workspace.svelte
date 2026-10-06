@@ -120,7 +120,12 @@
   import { cubicOut } from 'svelte/easing'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { fly } from 'svelte/transition'
-  import { groupRunsByRoutine, groupRunsByTask } from '../assistant/assistant-view'
+  import {
+    groupRunsByRoutine,
+    groupRunsByTask,
+    assistantForeignThread
+  } from '../assistant/assistant-view'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
   import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
@@ -1713,6 +1718,21 @@
   )
   /** Every task's runs, newest first, for the sidebar's nested rows. */
   let assistantRunsByTask = $derived(groupRunsByTask(assistantThreads))
+  /**
+   * The run of the open assistant task that another instance is streaming, when
+   * the task itself is not. A run executes on its own thread, so opening the
+   * task would otherwise show no card for work happening elsewhere; ThreadView
+   * renders the transfer card for this run above the composer.
+   */
+  let selectedAssistantForeignRunThreadId = $derived.by(() => {
+    const thread = selectedThread
+    if (mode !== 'assistant' || !thread || thread.projectId !== ASSISTANT_SPACE_ID) return null
+    const runs = assistantRunsByTask.get(thread.id) ?? []
+    const foreign = assistantForeignThread(thread, runs, (projectId, threadId) =>
+      foreignRuns.isForeign(projectId, threadId)
+    )
+    return foreign && foreign.id !== thread.id ? foreign.id : null
+  })
   /** Every routine's runs, newest first, for the sidebar's sibling run rows. */
   let assistantRunsByRoutine = $derived(groupRunsByRoutine(assistantThreads))
   /** Every run thread, for the header search's Runs results. */
@@ -4614,6 +4634,7 @@
         {updateConfig}
         restoreKey={chatsComposerRestoreKey}
         sidebarHasContent={workspaceSidebarHasContent}
+        assistantForeignRunThreadId={selectedAssistantForeignRunThreadId}
         onNavigate={navigate}
         onForked={handleForkedThread}
         onContinueInProject={handleContinuedInProject}

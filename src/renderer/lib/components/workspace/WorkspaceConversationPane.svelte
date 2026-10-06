@@ -47,6 +47,11 @@
     restoreKey: number
     /** Whether the view's own sidebar currently holds anything to show. */
     sidebarHasContent: boolean
+    /**
+     * The open assistant task's run that another instance is streaming, when the
+     * task itself is idle. The conversation shows that run's transfer card.
+     */
+    assistantForeignRunThreadId: string | null
     onNavigate: (view: MainView) => void
     onForked: (thread: Thread) => void
     onContinueInProject: (forked: Thread) => void
@@ -70,6 +75,7 @@
     updateConfig,
     restoreKey,
     sidebarHasContent,
+    assistantForeignRunThreadId,
     onNavigate,
     onForked,
     onContinueInProject,
@@ -234,6 +240,7 @@
             assistantHowToComplete={assistantRoutine
               ? routineHowToComplete(assistantRoutine)
               : false}
+            {assistantForeignRunThreadId}
             allowCenteredComposer={mode === 'chats' ||
               (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
                 ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||
