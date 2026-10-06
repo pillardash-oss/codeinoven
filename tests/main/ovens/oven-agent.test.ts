@@ -146,6 +146,7 @@ describe('oven agent script generation', () => {
     expect(script.filename).toBe('codeinoven-oven-agent.ps1')
     expect(script.content).toContain('$SERVICE_REVISION')
     expect(script.content).toContain('authorized_keys')
+    expect(script.content).toContain('administrators_authorized_keys')
     expect(script.content).toContain('Move-Item -Force')
   })
 

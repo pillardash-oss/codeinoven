@@ -253,6 +253,22 @@ $authorizedKeys = Join-Path $sshDirectory 'authorized_keys'
 if (-not (Test-Path $authorizedKeys)) { New-Item -ItemType File -Path $authorizedKeys | Out-Null }
 if (-not (Select-String -Path $authorizedKeys -SimpleMatch $identityPublic -Quiet -ErrorAction SilentlyContinue)) {
   Add-Content -Path $authorizedKeys -Value $identityPublic
+}
+# OpenSSH on Windows ignores the per-user file for administrator accounts, which
+# use the machine-wide file instead. Authorize the key there too, and say so
+# plainly when that file cannot be written without an elevated shell.
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($isAdmin) {
+  $adminKeys = Join-Path $env:ProgramData 'ssh\\administrators_authorized_keys'
+  try {
+    New-Item -ItemType Directory -Force -Path (Split-Path $adminKeys) | Out-Null
+    if (-not (Test-Path $adminKeys)) { New-Item -ItemType File -Path $adminKeys | Out-Null }
+    if (-not (Select-String -Path $adminKeys -SimpleMatch $identityPublic -Quiet -ErrorAction SilentlyContinue)) {
+      Add-Content -Path $adminKeys -Value $identityPublic
+    }
+  } catch {
+    Write-Warning "Could not authorize the key for the administrators group. As Administrator, add this line to $adminKeys : $identityPublic"
+  }
 }`
     : `Write-Host 'No dedicated identity was requested; register the Oven with the account you already use.'`
 
