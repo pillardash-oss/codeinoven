@@ -55,6 +55,8 @@ import type { AutoAnswerStore } from '../../system/auto-answer-store'
 import type { PrivilegedIpcValidator } from '../ipc-validation'
 import type { BrowserService } from '../../browser/browser-service'
 import type { AttachmentStorageScope } from '../../../lib/types'
+import type { CioCleanupService } from '../../cio-cleanup/cio-cleanup-service'
+import type { UtilityScopeFootprintService } from '../../utilities/utility-scope-footprint'
 
 export interface RegisterIpcHandlersOptions {
   projectManager?: ProjectManager
@@ -108,6 +110,16 @@ export interface RegisterIpcHandlersOptions {
    * the app-update check cycle rather than a scheduler of its own.
    */
   skillUpdates?: SkillUpdateService
+  /**
+   * CIO Cleanup: the daily sweep of stale scratch folders, and the manual run
+   * the dock tracks. Absent only in a bare handler set.
+   */
+  cioCleanup?: CioCleanupService
+  /**
+   * Installs a project- or thread-scoped skill or MCP server on disk, and keeps
+   * that install in step with the registry entry that owns it.
+   */
+  utilityFootprint?: UtilityScopeFootprintService
   /** Receives the privileged scoped-path resolver so other main-process
    *  boundaries (the `appfile://` preview protocol) authorize paths exactly
    *  like privileged IPC does. */
@@ -180,6 +192,8 @@ export interface IpcHandlerContext {
   githubAuthService: GitHubAuthService
   /** Background skill updater; absent only in tests that build a bare handler set. */
   skillUpdates?: SkillUpdateService
+  /** Keeps a scoped utility's install folder in step with its registry entry. */
+  utilityFootprint: UtilityScopeFootprintService | undefined
   diagnosticsService: DiagnosticsService
   memoryService: MemoryService
   attachmentGrantRepo: AttachmentGrantRepo

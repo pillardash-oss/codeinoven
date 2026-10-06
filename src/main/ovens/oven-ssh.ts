@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { createServer, type Socket } from 'node:net'
 import { mkdir, mkdtemp, writeFile, rm, readdir, readFile, stat } from 'node:fs/promises'
@@ -24,6 +25,43 @@ export function sshQuote(value: string): string {
   return `'${value.replace(/'/gu, `'"'"'`)}'`
 }
 
+/** Translate bounded stderr into actionable diagnostics without exposing remote secrets. */
+function remoteCommandIssue(stderr: string): string {
+  if (/npm (?:ERR!|error).*EACCES/iu.test(stderr))
+    return 'Permission denied: npm cannot write to its installation prefix or cache. The Oven needs a writable user-owned npm directory.'
+  if (
+    /sudo:.*(?:password is required|a terminal is required|interactive authentication is required)/iu.test(
+      stderr
+    )
+  )
+    return 'sudo: a password is required. Setup needs a password-authenticated Oven connection or passwordless sudo for system package changes.'
+  if (/not in the sudoers|not allowed to execute|may not run sudo/iu.test(stderr))
+    return 'Permission denied: the Oven user is not allowed to run this command with sudo.'
+  if (
+    /are you root|must be (?:run as )?root|requires root|superuser privilege|permission denied/iu.test(
+      stderr
+    )
+  )
+    return 'Permission denied: system package changes require root or sudo.'
+  if (
+    /could not get lock|unable to acquire.*lock|another (?:process|instance).*running/iu.test(
+      stderr
+    )
+  )
+    return 'Another package operation holds the package-manager lock. Wait for it to finish, then retry.'
+  if (/dpkg was interrupted/iu.test(stderr))
+    return 'The Oven has an interrupted package configuration. Repair it on the Oven before retrying setup.'
+  if (/command not found|is not recognized|No such file or directory/iu.test(stderr))
+    return 'A command or file required by this step is missing on the Oven.'
+  if (/no space left on device/iu.test(stderr))
+    return 'The Oven has insufficient free disk space for this command.'
+  if (
+    /could not resolve|temporary failure resolving|failed to fetch|could not connect/iu.test(stderr)
+  )
+    return 'The remote command could not reach its package source. Check the Oven network and repositories.'
+  return 'The remote command failed after connecting. Check the package manager or command on the Oven, then retry this step.'
+}
+
 export class OvenSsh {
   private tail: Promise<unknown> = Promise.resolve()
   private initialized: Promise<void> | undefined
@@ -31,16 +69,189 @@ export class OvenSsh {
   constructor(private readonly registry: OvenSshRegistry) {}
 
   /** Serialize transport work so reconnect/probe cannot flood a low-end device. */
-  execute(id: string, command: string, input = '', timeoutMs = 30_000): Promise<string> {
+  execute(
+    id: string,
+    command: string,
+    input = '',
+    timeoutMs = 30_000,
+    onOutput?: (chunk: string) => void,
+    forwardAgent = false,
+    maxOutputBytes = 2 * 1024 * 1024
+  ): Promise<string> {
+    if (
+      !Number.isSafeInteger(maxOutputBytes) ||
+      maxOutputBytes < 1 ||
+      maxOutputBytes > 8 * 1024 * 1024
+    )
+      throw new TypeError('Invalid Oven response limit.')
     const result = this.tail
       .catch(() => undefined)
       .then(async () => {
         this.initialized ??= this.cleanStaleCredentials()
         await this.initialized
-        return this.run(id, command, input, timeoutMs)
+        return this.run(
+          id,
+          command,
+          input,
+          timeoutMs,
+          undefined,
+          onOutput,
+          forwardAgent,
+          maxOutputBytes
+        )
       })
     this.tail = result
     return result
+  }
+
+  /** Authenticate sudo through stdin; the elevated command receives no credential input. */
+  async executeElevated(
+    id: string,
+    argv: string[],
+    timeoutMs: number,
+    authenticate: boolean,
+    onOutput?: (chunk: string) => void
+  ): Promise<string> {
+    const oven = await this.registry.require(id)
+    if (!authenticate || oven.connection?.authentication !== 'password' || !oven.passwordRef)
+      return this.execute(
+        id,
+        ['sudo', '-n', ...argv].map(sshQuote).join(' '),
+        '',
+        timeoutMs,
+        onOutput
+      )
+    const password = await this.registry.vault.resolve(oven.passwordRef)
+    if (!password || /[\r\n\0]/u.test(password))
+      throw new Error('The Oven login credential cannot authenticate sudo.')
+    const command = [
+      'sudo',
+      '-S',
+      '-p',
+      '',
+      '--',
+      'sh',
+      '-c',
+      'exec "$@" </dev/null',
+      'sh',
+      ...argv
+    ]
+      .map(sshQuote)
+      .join(' ')
+    return this.execute(id, command, `${password}\n`, timeoutMs, onOutput)
+  }
+
+  /**
+   * Write one secret file on the Oven through the channel's stdin.
+   *
+   * The value never appears in a command argument, in the remote process list,
+   * or in a log line, and the file is created with owner-only permissions in a
+   * single atomic move so a partially written key is never readable.
+   */
+  async putSecretFile(
+    id: string,
+    path: string,
+    contents: string,
+    options: { windows?: boolean; timeoutMs?: number } = {}
+  ): Promise<void> {
+    if (contents.includes('\0')) throw new TypeError('Secret values cannot contain null bytes.')
+    if (!/^[A-Za-z0-9._-]{1,120}$/u.test(path)) throw new TypeError('Invalid remote secret path.')
+    const command = options.windows
+      ? // Create the file with an owner-only ACL, then write through the handle
+        // so the plaintext is never visible in a window where it is world-readable.
+        [
+          `$ErrorActionPreference = 'Stop'`,
+          `$dir = Split-Path -Parent ${sshQuote(path)}`,
+          `if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }`,
+          `$acl = Get-Acl -LiteralPath $dir`,
+          `$acl.SetAccessRuleProtection($true, $false)`,
+          `$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name`,
+          `$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')`,
+          `$acl.SetAccessRule($rule)`,
+          `Set-Acl -LiteralPath $dir -AclObject $acl`,
+          `$content = [Console]::In.ReadToEnd()`,
+          `$staged = ${sshQuote(path)} + '.next'`,
+          `[System.IO.File]::WriteAllText($staged, $content, (New-Object System.Text.UTF8Encoding($false)))`,
+          `Move-Item -LiteralPath $staged -Destination ${sshQuote(path)} -Force`
+        ].join('; ')
+      : [
+          `set -eu`,
+          `umask 077`,
+          `dir=$(dirname ${sshQuote(path)})`,
+          `mkdir -p "$dir"`,
+          `chmod 700 "$dir"`,
+          `staged=${sshQuote(`${path}.next`)}`,
+          `cat > "$staged"`,
+          `chmod 600 "$staged"`,
+          `mv -f "$staged" ${sshQuote(path)}`
+        ].join('; ')
+    await this.execute(id, command, contents, options.timeoutMs ?? 30_000)
+  }
+
+  /**
+   * Write one secret file inside the Oven user's home directory.
+   *
+   * Used for the dedicated Git identity, which must live at a fixed, well-known
+   * location (`~/.ssh/<name>`) that OpenSSH itself resolves. Callers pass a
+   * home-relative path and a file name only: no absolute path, no traversal, and
+   * no user-controlled directory ever reaches the remote shell. As with
+   * `putSecretFile`, the value travels on stdin, never in an argument.
+   */
+  async putHomeSecretFile(
+    id: string,
+    relativePath: string,
+    contents: string,
+    options: { windows?: boolean; timeoutMs?: number } = {}
+  ): Promise<void> {
+    if (contents.includes('\0')) throw new TypeError('Secret values cannot contain null bytes.')
+    if (!/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/u.test(relativePath))
+      throw new TypeError('Invalid remote home-relative path.')
+    const segments = relativePath.split('/')
+    if (segments.some((segment) => segment === '.' || segment === '..'))
+      throw new TypeError('Invalid remote home-relative path.')
+    const leaf = segments.pop()
+    if (!leaf) throw new TypeError('A remote secret path needs a file name.')
+    const directory = segments.join('/')
+    const stagedSuffix = `.${randomUUID()}.next`
+    const command = options.windows
+      ? [
+          `$ErrorActionPreference = 'Stop'`,
+          `$root = Join-Path $env:USERPROFILE ${sshQuote(directory)}`,
+          `if (-not (Test-Path -LiteralPath $root)) { New-Item -ItemType Directory -Force -Path $root | Out-Null }`,
+          `$acl = Get-Acl -LiteralPath $root`,
+          `$acl.SetAccessRuleProtection($true, $false)`,
+          `$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name`,
+          `$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')`,
+          `$acl.SetAccessRule($rule)`,
+          `Set-Acl -LiteralPath $root -AclObject $acl`,
+          `$content = [Console]::In.ReadToEnd()`,
+          `$target = Join-Path $root ${sshQuote(leaf)}`,
+          `$staged = $target + ${sshQuote(stagedSuffix)}`,
+          `[System.IO.File]::WriteAllText($staged, $content, (New-Object System.Text.UTF8Encoding($false)))`,
+          `Move-Item -LiteralPath $staged -Destination $target -Force`
+        ].join('; ')
+      : [
+          `set -eu`,
+          `umask 077`,
+          `target="$HOME"/${sshQuote(relativePath)}`,
+          `dir=$(dirname "$target")`,
+          `mkdir -p "$dir"`,
+          `chmod 700 "$dir"`,
+          `staged="$target"${sshQuote(stagedSuffix)}`,
+          `cat > "$staged"`,
+          `chmod 600 "$staged"`,
+          `mv -f "$staged" "$target"`
+        ].join('; ')
+    await this.execute(id, command, contents, options.timeoutMs ?? 30_000)
+  }
+
+  /**
+   * Read one remote file as text. Used only for the Oven's own known_hosts and
+   * public keys, never for arbitrary paths supplied by the renderer.
+   */
+  async readFile(id: string, path: string, timeoutMs = 20_000): Promise<string> {
+    if (!/^[A-Za-z0-9._/-]{1,256}$/u.test(path)) throw new TypeError('Invalid remote path.')
+    return this.execute(id, `cat ${sshQuote(path)}`, '', timeoutMs)
   }
 
   /** Bound SSH direct TCP channels. Each channel streams with backpressure. */
@@ -109,7 +320,8 @@ export class OvenSsh {
     id: string,
     command: string | undefined,
     tty = false,
-    directPort?: number
+    directPort?: number,
+    forwardAgent = false
   ): Promise<OvenSshInvocation> {
     this.initialized ??= this.cleanStaleCredentials()
     await this.initialized
@@ -132,7 +344,7 @@ export class OvenSsh {
       '-o',
       'StrictHostKeyChecking=yes',
       '-o',
-      'ForwardAgent=no',
+      `ForwardAgent=${forwardAgent ? 'yes' : 'no'}`,
       '-o',
       `PasswordAuthentication=${connection.authentication === 'password' ? 'yes' : 'no'}`,
       '-o',
@@ -228,14 +440,18 @@ export class OvenSsh {
     command: string,
     input: string,
     timeoutMs: number,
-    channel?: { socket: Socket; remotePort: number }
+    channel?: { socket: Socket; remotePort: number },
+    onOutput?: (chunk: string) => void,
+    forwardAgent = false,
+    maxOutputBytes = 2 * 1024 * 1024
   ): Promise<string> {
     if (channel?.socket.destroyed) throw new Error('The preview connection closed.')
     const prepared = await this.prepare(
       id,
       channel ? undefined : command,
       false,
-      channel?.remotePort
+      channel?.remotePort,
+      forwardAgent
     )
     const { executable, args, env } = prepared
     try {
@@ -247,6 +463,7 @@ export class OvenSsh {
           stdio: ['pipe', 'pipe', 'pipe']
         })
         let output = ''
+        let remoteStderr = ''
         let bytes = 0
         let failure: Error | undefined
         let timedOut = false
@@ -260,12 +477,16 @@ export class OvenSsh {
             : undefined
         const capture = (chunk: Buffer): void => {
           bytes += chunk.length
-          if (bytes > 2 * 1024 * 1024) {
-            failure = new Error('The Oven response exceeded the 2 MiB limit.')
+          if (bytes > maxOutputBytes) {
+            failure = new Error(
+              `The Oven response exceeded the ${maxOutputBytes / 1024 / 1024} MiB limit.`
+            )
             child.kill('SIGKILL')
             return
           }
-          output += chunk.toString('utf8')
+          const text = chunk.toString('utf8')
+          output += text
+          onOutput?.(text)
         }
         if (channel) {
           channel.socket.pipe(child.stdin)
@@ -276,6 +497,8 @@ export class OvenSsh {
         // Recognize failures without echoing server/config stderr or credential paths.
         child.stderr.on('data', (chunk: Buffer) => {
           const text = chunk.toString('utf8')
+          remoteStderr = (remoteStderr + text).slice(-8192)
+          onOutput?.(text)
           if (/REMOTE HOST IDENTIFICATION HAS CHANGED/u.test(text)) {
             sshIssue =
               'The host key changed. Verify the host identity before updating OpenSSH trust.'
@@ -309,8 +532,12 @@ export class OvenSsh {
           if (failure) reject(failure)
           else if (timedOut)
             reject(new Error('The Oven did not respond before the connection timeout.'))
-          else if (code !== 0)
+          else if (code === 255 || code === null)
             reject(new Error(`SSH connection failed (${code ?? 'disconnected'}). ${sshIssue}`))
+          else if (code !== 0)
+            reject(
+              new Error(`Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`)
+            )
           else resolve(output)
         })
         if (!channel) child.stdin.end(input)

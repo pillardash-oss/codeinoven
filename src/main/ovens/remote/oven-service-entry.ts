@@ -1,20 +1,61 @@
 /** Standalone Node service. No Electron, desktop paths, or app-owned process markers. */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createServer, connect, type Socket } from 'node:net'
-import { mkdir, open, readFile, rename, unlink, chmod, readdir } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { mkdir, open, readFile, rename, unlink, chmod, readdir, statfs } from 'node:fs/promises'
+import { availableParallelism, hostname, homedir, totalmem } from 'node:os'
 import { join, isAbsolute } from 'node:path'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { once } from 'node:events'
 import type { OvenProbe, OvenRun, OvenRunEvent } from '../../../lib/ovens'
+import { ovenHarnessIdForCommand } from '../../../lib/ovens'
+import { listHarnesses } from '../../agents/harness-registry'
+import { OPENCODE_COMMAND_ALIASES } from '../../../lib/opencode-version'
+import { OVEN_NPM_PREFIX } from '../oven-harness-paths'
+import { ovenRootOperation } from './oven-root-operations'
 import { ovenWorkspace } from './oven-workspace'
 
 const PROTOCOL = 1
 const revision = process.env['CODEINOVEN_OVEN_REVISION'] ?? 'development'
-const COMMANDS = ['codex', 'claude', 'opencode', 'muse', 'pi', 'cline']
+/**
+ * The harnesses an oven can host, taken from the one canonical registry and
+ * narrowed to the commands the app is allowed to run remotely. Deriving this
+ * list instead of restating it means a harness added to the registry cannot
+ * silently become Local-only.
+ */
+const HARNESSES: readonly { id: string; command: string; versionArgs: readonly string[] }[] =
+  listHarnesses()
+    .filter((harness) => ovenHarnessIdForCommand(harness.command) === harness.id)
+    .map((harness) => ({
+      id: harness.id,
+      command: harness.command,
+      versionArgs: harness.versionArgs
+    }))
+/** Aliases a harness may also be installed under, accepted for starting runs. */
+const COMMANDS = [
+  ...new Set([...HARNESSES.map((harness) => harness.command), ...OPENCODE_COMMAND_ALIASES])
+]
+/** Version output is informational; a slow harness must not stall a probe. */
+const VERSION_TIMEOUT_MS = 4_000
+const INVENTORY_TTL_MS = 10 * 60_000
+const INVENTORY_REFRESH_CONCURRENCY = 3
+const versionCache = new Map<
+  string,
+  {
+    path: string | null
+    version: string | null
+    health: string
+    issueCategory?: string
+    checkedAt: number
+  }
+>()
 const root =
   process.env['CODEINOVEN_OVEN_DATA_ROOT'] ?? join(homedir(), '.config/pillardash/codeinoven-oven')
+if (process.platform !== 'win32') {
+  const npmPrefix = join(homedir(), OVEN_NPM_PREFIX)
+  process.env['PATH'] = `${join(npmPrefix, 'bin')}:${process.env['PATH'] ?? ''}`
+  process.env['npm_config_prefix'] = npmPrefix
+}
 const socketPath = join(root, 'service.sock')
 const lockPath = join(root, 'service.pid')
 const jobs = new Map<string, Job>()
@@ -27,7 +68,12 @@ const MAX_JOURNAL = 64 * 1024 * 1024
 
 function stopChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
   if (process.platform !== 'win32' && child.pid) {
-    try { process.kill(-child.pid, signal); return } catch { /* Process group already exited. */ }
+    try {
+      process.kill(-child.pid, signal)
+      return
+    } catch {
+      /* Process group already exited. */
+    }
   }
   child.kill(signal)
 }
@@ -67,33 +113,155 @@ async function atomicState(run: OvenRun): Promise<void> {
 }
 
 async function executable(command: string): Promise<string | null> {
-  for (const directory of (process.env['PATH'] ?? '').split(':').filter(Boolean)) {
-    const path = join(directory, command)
-    try {
-      await access(path, constants.X_OK)
-      return path
-    } catch {
-      /* Continue PATH search. */
+  const separator = process.platform === 'win32' ? ';' : ':'
+  const extensions =
+    process.platform === 'win32'
+      ? (process.env['PATHEXT'] ?? '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
+      : ['']
+  for (const directory of (process.env['PATH'] ?? '').split(separator).filter(Boolean)) {
+    for (const extension of extensions) {
+      const path = join(directory, command + extension.toLowerCase())
+      try {
+        await access(path, constants.X_OK)
+        return path
+      } catch {
+        /* Continue PATH search. */
+      }
     }
   }
   return null
 }
 
-async function probe(): Promise<OvenProbe> {
-  const harnesses: OvenProbe['harnesses'] = []
-  for (const command of COMMANDS) harnesses.push({ command, path: await executable(command) })
+/** Run one harness version command, bounded so a hung binary cannot stall a probe. */
+function harnessVersion(path: string, versionArgs: readonly string[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    let settled = false
+    let output = ''
+    const child = spawn(path, [...versionArgs], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const finish = (value: string | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.kill('SIGKILL')
+      resolve(value)
+    }
+    const timer = setTimeout(() => finish(null), VERSION_TIMEOUT_MS)
+    const capture = (chunk: Buffer): void => {
+      if (output.length < 4096) output += chunk.toString('utf8')
+    }
+    child.stdout?.on('data', capture)
+    child.stderr?.on('data', capture)
+    child.on('error', () => finish(null))
+    child.on('close', () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      const line = output
+        .split(/\r?\n/u)
+        .map((entry) => entry.trim())
+        .find(Boolean)
+      resolve(line ? line.slice(0, 200) : null)
+    })
+  })
+}
+
+/**
+ * Inventory every hosted harness.
+ *
+ * The desktop app drives `harness:install`, so installed versions are the only
+ * thing an oven can know on its own; latest versions and update availability are
+ * resolved by the client. The cache keeps a repeated probe cheap: an oven that
+ * was just inventoried answers from memory, and the desktop asks for a refresh
+ * only when it wants fresh versions.
+ */
+async function probeInventory(force = false): Promise<NonNullable<OvenProbe['inventory']>> {
+  const inventory: NonNullable<OvenProbe['inventory']> = []
+  let cursor = 0
+  const workers = Array.from(
+    { length: Math.min(INVENTORY_REFRESH_CONCURRENCY, HARNESSES.length) },
+    async () => {
+      for (;;) {
+        const harness = HARNESSES[cursor++]
+        if (!harness) return
+        const cached = versionCache.get(harness.id)
+        if (!force && cached && Date.now() - cached.checkedAt < INVENTORY_TTL_MS) {
+          inventory.push({
+            harnessId: harness.id,
+            command: harness.command,
+            executablePath: cached.path,
+            installedVersion: cached.version,
+            health: cached.health as NonNullable<OvenProbe['inventory']>[number]['health'],
+            ...(cached.issueCategory
+              ? {
+                  issueCategory: cached.issueCategory as NonNullable<
+                    OvenProbe['inventory']
+                  >[number]['issueCategory']
+                }
+              : {}),
+            updateAvailable: false,
+            checkedAt: cached.checkedAt,
+            cached: true
+          })
+          continue
+        }
+        const path = await executable(harness.command)
+        const version = path ? await harnessVersion(path, harness.versionArgs) : null
+        const health = !path ? 'missing' : version ? 'healthy' : 'broken'
+        const issueCategory = !path ? 'not-installed' : version ? undefined : 'broken-executable'
+        const entry = { path, version, health, issueCategory, checkedAt: Date.now() }
+        versionCache.set(harness.id, entry)
+        inventory.push({
+          harnessId: harness.id,
+          command: harness.command,
+          executablePath: path,
+          installedVersion: version,
+          health,
+          ...(issueCategory ? { issueCategory } : {}),
+          updateAvailable: false,
+          checkedAt: entry.checkedAt
+        })
+      }
+    }
+  )
+  await Promise.all(workers)
+  inventory.sort((left, right) => left.harnessId.localeCompare(right.harnessId))
+  return inventory
+}
+
+async function probe(refresh = false): Promise<OvenProbe> {
+  const inventory = await probeInventory(refresh)
+  const inventoryByCommand = new Map(inventory.map((item) => [item.command, item.executablePath]))
+  const harnesses: OvenProbe['harnesses'] = COMMANDS.map((command) => ({
+    command,
+    path: inventoryByCommand.get(command) ?? null
+  }))
+  const home = homedir()
+  const disk = await statfs(home)
   return {
     protocolVersion: PROTOCOL,
     serviceRevision: revision,
     platform: process.platform,
     architecture: process.arch,
-    home: homedir(),
+    home,
     nodeVersion: process.versions.node,
+    // The service reports the zone its own process runs on, which is the Oven's
+    // system zone and always an IANA id, even where the platform names its own.
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    specs: {
+      hostname: hostname(),
+      platform: process.platform,
+      architecture: process.arch,
+      cpuCount: availableParallelism(),
+      memoryBytes: totalmem(),
+      diskBytes: disk.blocks * disk.bsize,
+      diskAvailableBytes: disk.bavail * disk.bsize,
+      nodeVersion: process.versions.node
+    },
     harnesses,
-    activeRuns: [...jobs.values()].filter((job) => job.run.status === 'running').length
+    activeRuns: [...jobs.values()].filter((job) => job.run.status === 'running').length,
+    inventory
   }
 }
-
 function journal(job: Job, stream: OvenRunEvent['stream'], text: string): void {
   const event: OvenRunEvent = { sequence: ++job.sequence, stream, text }
   const line = `${JSON.stringify(event)}\n`
@@ -250,7 +418,7 @@ async function events(job: Job, after: unknown): Promise<{ run: OvenRun; events:
 async function dispatch(raw: unknown): Promise<unknown> {
   const request = record(raw)
   if (request.protocolVersion !== PROTOCOL) throw new Error('Oven protocol version mismatch.')
-  if (request.method === 'probe') return probe()
+  if (request.method === 'probe') return probe(request.refresh === true)
   if (request.method === 'runs') return [...jobs.values()].map((job) => job.run)
   if (request.method === 'workspace') return ovenWorkspace(request.input)
   if (request.method === 'shutdown') {
@@ -456,13 +624,35 @@ async function main(): Promise<void> {
     }
     throw new Error('The Oven service could not start.')
   }
-  if (process.argv[2] !== 'request') throw new Error('Use ensure, request, or daemon.')
+  if (!['request', 'workspace', 'root-operation'].includes(process.argv[2]))
+    throw new Error('Use ensure, request, workspace, or daemon.')
   let data = ''
   let bytes = 0
   for await (const chunk of process.stdin) {
     bytes += Buffer.byteLength(chunk)
-    if (bytes > MAX_REQUEST) throw new Error('Oven request exceeds 1 MiB.')
+    if (bytes > (process.argv[2] === 'root-operation' ? 8 * MAX_REQUEST : MAX_REQUEST))
+      throw new Error('The Oven request exceeds its size limit.')
     data += String(chunk)
+  }
+  if (process.argv[2] === 'workspace' || process.argv[2] === 'root-operation') {
+    try {
+      process.stdout.write(
+        JSON.stringify({
+          ok: true,
+          value: await (process.argv[2] === 'workspace'
+            ? ovenWorkspace(JSON.parse(data))
+            : ovenRootOperation(JSON.parse(data)))
+        }) + '\n'
+      )
+    } catch (error) {
+      process.stdout.write(
+        JSON.stringify({
+          ok: false,
+          error: error instanceof Error ? error.message : 'The remote workspace operation failed.'
+        }) + '\n'
+      )
+    }
+    return
   }
   process.stdout.write(await request(data))
 }

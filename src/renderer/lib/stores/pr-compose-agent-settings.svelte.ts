@@ -1,5 +1,6 @@
 import { APP_SLUG } from '$shared/brand'
-import type { ThinkingLevel } from '$shared/types'
+import { validateModelRuntimeSettings } from '$shared/model-runtime-settings'
+import type { ModelRuntimeSettings, ThinkingLevel } from '$shared/types'
 
 const PR_COMPOSE_AGENT_SETTINGS_KEY = `${APP_SLUG}.prComposeAgentSettings.v1`
 
@@ -13,7 +14,7 @@ const THINKING_LEVELS = new Set<ThinkingLevel>([
   'ultra'
 ])
 
-export interface PrComposeAgentSelection {
+export interface PrComposeAgentSelection extends ModelRuntimeSettings {
   harnessId: string
   providerId: string
   modelId: string
@@ -47,6 +48,7 @@ function loadSelection(): PrComposeAgentSelection | null {
       providerId: selection['providerId'],
       modelId: selection['modelId'],
       ...(typeof selection['accountId'] === 'string' ? { accountId: selection['accountId'] } : {}),
+      ...validateModelRuntimeSettings(selection),
       thinkingLevel: thinkingLevel as ThinkingLevel
     }
   } catch {

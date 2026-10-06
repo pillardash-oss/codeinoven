@@ -100,14 +100,21 @@ function fallbackDiff(before: string[], after: string[]): DiffLine[] {
  */
 export function computeDiffLines(
   before: string | undefined,
-  after: string | undefined
+  after: string | undefined,
+  beforeStartLine = 1,
+  afterStartLine = 1
 ): DiffLine[] {
   const beforeLines = sourceLines(before)
   const afterLines = sourceLines(after)
-  if (beforeLines.length * afterLines.length <= LCS_CELL_LIMIT) {
-    return exactLineDiff(beforeLines, afterLines)
+  const lines =
+    beforeLines.length * afterLines.length <= LCS_CELL_LIMIT
+      ? exactLineDiff(beforeLines, afterLines)
+      : largeLineDiff(beforeLines, afterLines)
+  for (const line of lines) {
+    if (line.beforeLine !== undefined) line.beforeLine += beforeStartLine - 1
+    if (line.afterLine !== undefined) line.afterLine += afterStartLine - 1
   }
-  return largeLineDiff(beforeLines, afterLines)
+  return lines
 }
 
 function exactLineDiff(beforeLines: string[], afterLines: string[]): DiffLine[] {
@@ -274,8 +281,13 @@ function diffHunks(lines: DiffLine[]): DiffHunk[] {
   return hunks
 }
 
-export function diffDetails(before: string | undefined, after: string | undefined): DiffDetails {
-  const lines = computeDiffLines(before, after)
+export function diffDetails(
+  before: string | undefined,
+  after: string | undefined,
+  beforeStartLine = 1,
+  afterStartLine = 1
+): DiffDetails {
+  const lines = computeDiffLines(before, after, beforeStartLine, afterStartLine)
   return {
     lines,
     hunks: diffHunks(lines),

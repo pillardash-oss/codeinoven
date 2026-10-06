@@ -38,6 +38,7 @@ import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordina
 import { ModelPricingService } from '../providers/model-pricing-service'
 import { getActiveThreadProjects } from '../database/active-thread-report'
 import { ThreadRepo } from '../database/repositories/thread-repo'
+import { ProjectRepo } from '../database/repositories/project-repo'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { startupTelemetry } from '../system/startup-telemetry'
@@ -188,7 +189,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     },
     { SkillUpdateService },
     { SecretVault },
-    { GitHubAuthService }
+    { GitHubAuthService },
+    { CioCleanupService },
+    { broadcastCioCleanupProgress, broadcastCioCleanupState }
   ] = await Promise.all([
     import('../ipc/ipc-handlers'),
     import('../../lib/engines/project-manager'),
@@ -214,7 +217,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../scheduler/assistant-events'),
     import('../utilities/skill-updates'),
     import('../storage/secret-vault'),
-    import('../git/github-auth-service')
+    import('../git/github-auth-service'),
+    import('../cio-cleanup/cio-cleanup-service'),
+    import('../cio-cleanup/cio-cleanup-events')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -235,6 +240,24 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     createThreadWorkspaceRoots(storage, database)
   )
   state.appfileProjectFiles = projectFilesService
+  // CIO Cleanup resolves the same roots the app boots a session in, and reports
+  // into the app-root dock exactly like the other background jobs do.
+  state.cioCleanup = new CioCleanupService({
+    database,
+    storage,
+    boards: scopeManager,
+    scopeRoots: {
+      resolve: async (target) => {
+        const resolution = await scopeRootResolver.resolve(target)
+        return resolution.ok ? { ok: true, root: resolution.root } : { ok: false }
+      }
+    },
+    hasActiveProcesses: (projectId, scopeBucketId) =>
+      state.chatEngine?.hasActiveProcessesInScope(projectId, scopeBucketId) ??
+      Promise.resolve(false),
+    onProgress: broadcastCioCleanupProgress,
+    onStateChanged: broadcastCioCleanupState
+  })
   state.computerUsePipService = new ComputerUsePipService(storage)
   state.harnessManifestService = new HarnessManifestService(storage)
   state.modelPricingService = new ModelPricingService(storage)
@@ -300,6 +323,25 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     if (!project?.path) throw new Error(`Project not found: ${projectId}`)
     return project.path
   }
+  // A scoped utility is not only a registry entry: the app installs it into the
+  // project's own `.cio/utilities`, or into the thread's folder under the config
+  // root. One service owns those folders, because the IPC writes, the
+  // marketplace installs and the sweep that removes a thread all have to agree
+  // on where a scoped capability lives.
+  const { UtilityScopeFootprintService } = await import('../utilities/utility-scope-footprint')
+  const utilityFootprint = new UtilityScopeFootprintService(storage, {
+    resolveProjectPath: async (projectId) => {
+      const project = await projectManager.getProject(projectId).catch(() => null)
+      return project?.path ?? null
+    },
+    listProjectPaths: async () =>
+      // Read on the database worker: an install pass runs on a user's write and
+      // over the background reconcile, and neither may hold the main thread on a
+      // SQLite read.
+      (await new ProjectRepo(database).listViaWorker())
+        .filter((project) => project.source !== 'ssh' && project.path)
+        .map((project) => ({ id: project.id, path: project.path }))
+  })
   // Installed skills ride the app-update check cycle: the same startup,
   // six-hourly and explicit check that looks for a new build also keeps the
   // marketplace skills CodeInOven placed up to date, in small batches.
@@ -308,7 +350,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       storage,
       home: app.getPath('home'),
       resolveProjectPath: resolveProjectRoot,
-      githubToken: () => githubAuthService.resolveToken()
+      githubToken: () => githubAuthService.resolveToken(),
+      // A managed copy the updater rewrites is a scoped install too, so a
+      // project-scoped one refreshes the file the project shows.
+      footprint: utilityFootprint
     },
     listProjectIds: async () => (await projectManager.listProjects()).map((project) => project.id)
   })
@@ -700,6 +745,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     heartbeatScheduler: state.heartbeatScheduler,
     routineManager: state.routineManager ?? undefined,
     routineScheduler: state.routineScheduler ?? undefined,
+    cioCleanup: state.cioCleanup ?? undefined,
     autoAnswerStore: state.autoAnswerStore ?? undefined,
     harnessManifestService: state.harnessManifestService,
     worktreeService: scopeWorktreeService,
@@ -707,6 +753,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     threadDeletion: context.threadDeletion,
     hydrationHandlersRegistered: true,
     speechService: state.speechService,
+    utilityFootprint,
     onScopedPathResolver: (resolve) => {
       state.appfileScopedPathResolver = resolve
     }
@@ -724,6 +771,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.threadTransfer.start()
   state.featuresReady = true
   startupTelemetry.mark('features:ready')
+  // Every scoped utility gets its install folder back once the app is up, so a
+  // registry entry written before this pass existed, or one whose project moved
+  // while the app was closed, never stays an entry with nothing on disk.
+  void (async () => {
+    const { UtilityRegistryService } = await import('../utilities/utility-registry-service')
+    await utilityFootprint.reconcile(await new UtilityRegistryService(storage).list())
+  })().catch((error) => Logger.dev('Utility install folders could not be reconciled:', error))
   context.onFeaturesReady()
   state.resolveFeaturesReady?.()
   state.resolveFeaturesReady = null
@@ -857,7 +911,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       state.computerUsePipService ?? undefined,
       // A capability the user switches off must stop being callable in the turns
       // that are already running, without the user restarting anything.
-      (utilityId) => state.chatEngine?.applyUtilityRegistryChange(utilityId) ?? Promise.resolve()
+      (utilityId) => state.chatEngine?.applyUtilityRegistryChange(utilityId) ?? Promise.resolve(),
+      utilityFootprint
     )
     state.gatewaySupervisor = registerGatewayIpc(
       storage,
@@ -915,6 +970,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       }
     } catch (error) {
       Logger.error('Routine scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      // Daily, silent, and bounded per pass: a stale scratch backlog is reclaimed
+      // in the background instead of hammering the disk in one go.
+      await state.cioCleanup?.start()
+    } catch (error) {
+      Logger.error('CIO Cleanup startup failed (non-fatal):', error)
     }
 
     // A machine that slept through a slot catches up when it wakes or unlocks.

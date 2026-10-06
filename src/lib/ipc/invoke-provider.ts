@@ -38,6 +38,7 @@ import type {
   SkillMarketLeaderboard,
   SkillMarketSearchResult,
   SkillMarketView,
+  SkillRelocationRequest,
   SkillUninstallReport,
   SkillUpdateStatus,
   ThreadSettings,
@@ -64,6 +65,10 @@ export const invokeProviderContract = {
   'capabilities:updateSkill': {} as Contract<
     [source: AgentCapabilitySource, instructions: string],
     boolean
+  >,
+  'capabilities:relocateSkill': {} as Contract<
+    [source: AgentCapabilitySource, request: SkillRelocationRequest],
+    NativeSkillContent | null
   >,
   'capabilities:deleteSkill': {} as Contract<[source: AgentCapabilitySource], boolean>,
   'capabilities:readMcp': {} as Contract<[source: AgentCapabilitySource], NativeMcpContent | null>,

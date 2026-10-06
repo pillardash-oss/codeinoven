@@ -1,5 +1,4 @@
 import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
-import { formatTime as formatClock } from '$shared/date-time-format'
 import type {
   AgentMessage,
   AgentPart,
@@ -43,10 +42,6 @@ export function textParts(message: AgentMessage): Extract<AgentPart, { type: 'te
 
 export function workingParts(message: AgentMessage): AgentPart[] {
   return message.parts.filter((part) => part.type !== 'text' && part.type !== 'question')
-}
-
-export function formatTime(timestamp: number): string {
-  return formatClock(timestamp)
 }
 
 /** Provider-neutral issue for a failure reported without any structured detail. */

@@ -98,6 +98,12 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    state.cioCleanup?.stop()
+  } catch (error) {
+    Logger.error('CIO Cleanup cleanup failed during shutdown:', error)
+  }
+
+  try {
     state.powerMonitorService?.stop()
     state.powerMonitorService = null
   } catch (error) {

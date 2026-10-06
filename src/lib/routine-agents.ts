@@ -19,9 +19,7 @@ export function routinePrimaryModel(
 }
 
 /** Every model a routine can run on, primary first, in the order to try them. */
-export function routineModelCandidates(
-  agents: RoutineAgents | undefined
-): AgentModelSelection[] {
+export function routineModelCandidates(agents: RoutineAgents | undefined): AgentModelSelection[] {
   if (!agents) return []
   return [agents.primary, ...agents.fallbacks].filter(
     (entry): entry is AgentModelSelection =>
@@ -63,6 +61,8 @@ export function settingsWithRoutineModel(
     providerId: selection.providerId,
     modelId: selection.modelId,
     ...(selection.accountId ? { accountId: selection.accountId } : {}),
+    inferenceMode: selection.inferenceMode,
+    contextWindow: selection.contextWindow,
     ...(selection.thinkingLevel ? { thinkingLevel: selection.thinkingLevel } : {})
   }
 }

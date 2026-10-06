@@ -4,6 +4,8 @@ import { listInstalledSkillLocations } from './installed-skill-locations'
 import { SkillInstallRecordStore } from './skill-install-records'
 import { runSkillsCli } from './skills-cli'
 import type { StorageEngine } from '../storage/storage-engine'
+import { Logger } from '../system/logger'
+import type { UtilityScopeFootprintService } from './utility-scope-footprint'
 import { UtilityRegistryService } from './utility-registry-service'
 
 /**
@@ -18,12 +20,17 @@ import { UtilityRegistryService } from './utility-registry-service'
  *
  * The install records go too: nothing left to keep fresh, and a later re-install
  * starts from a clean baseline.
+ *
+ * A copy CodeInOven installed into a project's or a thread's own folder goes with
+ * its registry entry: `footprint` is the same installer the Utilities page uses,
+ * so the uninstall removes what the install placed.
  */
 export async function uninstallMarketSkill(
   storage: StorageEngine,
   skillId: string,
   projects: readonly InstalledSkillScanProject[],
-  home: string
+  home: string,
+  footprint?: UtilityScopeFootprintService
 ): Promise<SkillUninstallReport> {
   const registry = new UtilityRegistryService(storage)
   let registryEntries = 0
@@ -33,6 +40,11 @@ export async function uninstallMarketSkill(
       (binding) => binding.strategy === 'skill' && binding.transportName === skillId
     )
     if (managesSkill && (await registry.delete(utility.id))) registryEntries += 1
+  }
+  if (registryEntries > 0 && footprint) {
+    await footprint
+      .reconcile(await registry.list())
+      .catch((error: unknown) => Logger.dev('Uninstalled skill folders were not removed:', error))
   }
 
   const nativeLocations = (await listInstalledSkillLocations(storage, projects)).filter(

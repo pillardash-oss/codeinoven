@@ -65,6 +65,7 @@ import {
   CODEX_QUESTION_TOOL_NAME,
   codexApprovalPolicy,
   codexEffort,
+  codexQuestionDecisionText,
   codexQuestionIds,
   codexQuestionTool,
   codexSandboxPolicy,
@@ -342,6 +343,12 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const fastInference =
       options.settings.inferenceMode === 'fast' && options.settings.providerId === 'openai'
+    const serviceTier =
+      options.settings.providerId === 'openai' && options.settings.inferenceMode === 'ultrafast'
+        ? 'ultrafast'
+        : fastInference
+          ? 'fast'
+          : 'default'
     const host = await this.ensureAppServerHost(projectPath)
     const active: CodexAppServerTurn = {
       host,
@@ -369,16 +376,27 @@ export class CodexDriver extends PersistentCliDriver {
           : [])
       ]
       const developerInstructions = codexDeveloperInstructions(options.systemPrompt)
+      const contextConfig =
+        options.settings.contextWindow && options.settings.providerId === 'openai'
+          ? {
+              config: {
+                model_context_window: options.settings.contextWindow,
+                model_auto_compact_token_limit: Math.floor(options.settings.contextWindow * 0.9)
+              }
+            }
+          : {}
       const threadResult = session.nativeSessionId
         ? await this.appServerRequest(host, 'thread/resume', {
             threadId: session.nativeSessionId,
             // The app keeps its own transcript. Fetching unused native turns
             // can fail when Codex's history projection schema is unavailable.
             excludeTurns: true,
+            ...contextConfig,
             dynamicTools,
             developerInstructions
           })
         : await this.appServerRequest(host, 'thread/start', {
+            ...contextConfig,
             cwd: projectPath,
             dynamicTools,
             developerInstructions,
@@ -424,7 +442,7 @@ export class CodexDriver extends PersistentCliDriver {
           options.settings.permissionLevel
         ),
         model: options.settings.modelId,
-        ...(fastInference ? { serviceTier: 'fast' } : {}),
+        serviceTier,
         effort: codexEffort(options.settings.thinkingLevel),
         summary: this.modelsWithoutReasoningSummaries.has(options.settings.modelId)
           ? 'none'
@@ -507,7 +525,7 @@ export class CodexDriver extends PersistentCliDriver {
       throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
     }
     if (isCodexDynamicQuestion(request)) {
-      this.completeDynamicQuestion(request, answers)
+      await this.completeDynamicQuestion(request, answers)
       return
     }
     if (isCodexAsyncQuestion(request)) {
@@ -519,6 +537,16 @@ export class CodexDriver extends PersistentCliDriver {
     questionIds.forEach((id, index) => {
       mappedAnswers[id] = { answers: answers[index] ?? [] }
     })
+    // A native question request can also be auto-resolved by Codex while the
+    // turn keeps running, which drops the result we write here. The turn input
+    // carries the same decision, so the answer survives either way.
+    await this.relayQuestionDecision(
+      request,
+      codexQuestionDecisionText(
+        request.questions ?? normalizeAgentQuestions(request.params),
+        answers
+      )
+    )
     this.writeServerResponse(request, { answers: mappedAnswers })
     this.serverRequests.delete(requestId)
   }
@@ -542,7 +570,7 @@ export class CodexDriver extends PersistentCliDriver {
       throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
     }
     if (isCodexDynamicQuestion(request)) {
-      this.completeDynamicQuestion(request)
+      await this.completeDynamicQuestion(request)
       return
     }
     if (isCodexAsyncQuestion(request)) {
@@ -551,6 +579,13 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const answers: Record<string, { answers: string[] }> = {}
     for (const id of codexQuestionIds(request.params)) answers[id] = { answers: [] }
+    await this.relayQuestionDecision(
+      request,
+      codexQuestionDecisionText(
+        request.questions ?? normalizeAgentQuestions(request.params),
+        undefined
+      )
+    )
     this.writeServerResponse(request, { answers })
     this.serverRequests.delete(requestId)
   }
@@ -565,7 +600,10 @@ export class CodexDriver extends PersistentCliDriver {
     )
   }
 
-  private completeDynamicQuestion(request: CodexServerRequest, answers?: string[][]): void {
+  private async completeDynamicQuestion(
+    request: CodexServerRequest,
+    answers?: string[][]
+  ): Promise<void> {
     // A reply written after the owning turn ended reaches nothing: Codex has
     // already finished, so the answer would be silently dropped and the thread
     // would sit idle with an answered card. Report the turn as inactive so the
@@ -575,22 +613,49 @@ export class CodexDriver extends PersistentCliDriver {
       throw new InactiveQuestionTurnError(request.sessionId, String(request.id), this.name)
     }
     const questions = request.questions ?? normalizeAgentQuestions(request.params)
-    const decisions = questions.map((question, index) => ({
-      question: question.prompt,
-      answers: answers?.[index] ?? []
-    }))
-    const text = answers
-      ? [
-          '[Authoritative agent question answer]',
-          'The user submitted these answers. Continue the original task using them.',
-          JSON.stringify(decisions)
-        ].join('\n')
-      : 'The user dismissed the structured question. Continue the original task without an answer.'
+    const text = codexQuestionDecisionText(questions, answers)
+    await this.relayQuestionDecision(request, text)
     this.writeServerResponse(request, {
       success: true,
       contentItems: [{ type: 'inputText', text }]
     })
     this.serverRequests.delete(String(request.id))
+  }
+
+  /**
+   * Write the user's decision onto the turn's own input channel.
+   *
+   * Codex parks a long-running `exec` script after about half a minute and
+   * hands the model a "Script running with cell ID ..." placeholder. When the
+   * user answers while that cell is parked, the app-server accepts the tool
+   * result, but the model can end its turn before the parked cell is collected,
+   * so the value never reaches the conversation: the card looks answered, the
+   * thread goes idle, and the next turn repeats the same question. Steering the
+   * live turn writes the decision as ordinary user input, which the model
+   * consumes on its next step. A turn that refuses input falls back to the
+   * result it is still blocked on, and a turn that already ended is reported as
+   * inactive by the caller so the chat engine resumes with the decision.
+   */
+  private async relayQuestionDecision(request: CodexServerRequest, text: string): Promise<void> {
+    const active = this.activeTurns.get(request.sessionId)
+    if (
+      !active?.nativeThreadId ||
+      !active.turnId ||
+      active.finished ||
+      active.host !== request.host
+    ) {
+      return
+    }
+    try {
+      await this.appServerRequest(active.host, 'turn/steer', {
+        threadId: active.nativeThreadId,
+        input: [{ type: 'text', text, text_elements: [] }],
+        expectedTurnId: active.turnId
+      })
+    } catch (error) {
+      if (active.finished || this.activeTurns.get(request.sessionId) !== active) return
+      Logger.dev('Codex question decision could not be steered into the live turn:', error)
+    }
   }
 
   private async continueAsyncQuestion(
@@ -609,17 +674,7 @@ export class CodexDriver extends PersistentCliDriver {
       throw new InactiveQuestionTurnError(request.sessionId, requestId, this.name)
     }
     const questions = request.questions ?? normalizeAgentQuestions(request.params)
-    const decisions = questions.map((question, index) => ({
-      question: question.prompt,
-      answers: answers?.[index] ?? []
-    }))
-    const text = answers
-      ? [
-          '[Authoritative agent question answer]',
-          'The user submitted these answers. Continue the original task using them.',
-          JSON.stringify(decisions)
-        ].join('\n')
-      : 'The user dismissed the structured question. Continue the original task without an answer.'
+    const text = codexQuestionDecisionText(questions, answers)
     try {
       await this.appServerRequest(active.host, 'turn/steer', {
         threadId: active.nativeThreadId,
@@ -1933,8 +1988,25 @@ export class CodexDriver extends PersistentCliDriver {
     if (options.settings.modelId) args.push('--model', options.settings.modelId)
     const fastInference =
       options.settings.inferenceMode === 'fast' && options.settings.providerId === 'openai'
-    if (fastInference) {
-      args.push('-c', 'service_tier=fast', '-c', 'features.fast_mode=true')
+    const serviceTier =
+      options.settings.providerId === 'openai' && options.settings.inferenceMode === 'ultrafast'
+        ? 'ultrafast'
+        : fastInference
+          ? 'fast'
+          : 'default'
+    args.push(
+      '-c',
+      `service_tier=${serviceTier}`,
+      '-c',
+      `features.fast_mode=${serviceTier !== 'default'}`
+    )
+    if (options.settings.contextWindow && options.settings.providerId === 'openai') {
+      args.push(
+        '-c',
+        `model_context_window=${options.settings.contextWindow}`,
+        '-c',
+        `model_auto_compact_token_limit=${Math.floor(options.settings.contextWindow * 0.9)}`
+      )
     }
     const { env, args: providerArgs } = await this.customProviderOverlay()
     args.push(...providerArgs)
@@ -2105,6 +2177,7 @@ export class CodexDriver extends PersistentCliDriver {
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
     bankedResets?: AgentBankedResets
+    reauthenticationRequired?: boolean
   } | null> {
     let temporaryHost: CodexAppServerHost | null = null
     try {
@@ -2121,6 +2194,14 @@ export class CodexDriver extends PersistentCliDriver {
       return telemetry
     } catch (error) {
       Logger.dev('Codex on-demand account usage refresh unavailable:', error)
+      if (
+        error instanceof Error &&
+        /401 Unauthorized[\s\S]*token_expired|token_expired[\s\S]*401 Unauthorized/iu.test(
+          error.message
+        )
+      ) {
+        return { rateLimits: [], reauthenticationRequired: true }
+      }
       return null
     } finally {
       if (temporaryHost) {

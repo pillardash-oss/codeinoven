@@ -5,33 +5,47 @@
     Plus,
     CheckCircle2,
     AlertCircle,
+    Boxes,
     Circle,
+    Clock,
     Cpu,
     MemoryStick,
     HardDrive,
     Monitor,
-    Terminal
+    Pencil,
+    RefreshCw,
+    Star,
+    Terminal,
+    Trash2
   } from '@lucide/svelte'
+  import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import {
     LOCAL_OVEN_ID,
+    ovenHarnessIdForCommand,
     parseOvenAddress,
     type Oven,
     type OvenIcon,
     type OvenState,
     type OvenProbe,
+    type OvenHarnessInventoryItem,
     type OvenConnectionStatus,
     type SaveOvenInput
   } from '$shared/ovens'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
   import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
   import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../shared/SettingsEntry.svelte'
+  import ThreadDropdown from '../shared/ThreadDropdown.svelte'
+  import type { MenuItem } from '../shared/ThreadDropdown.svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import type { CustomIcon } from '$shared/types'
+  import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
 
   const fieldClass = 'w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground'
   let ovenState = $state.raw<OvenState | null>(null)
@@ -41,6 +55,7 @@
   let refreshGeneration = 0
   let connectionResult = $state<OvenConnectionStatus | null>(null)
   let probes = $state<Record<string, OvenProbe>>({})
+  let setupComplete = $state<Record<string, boolean>>({})
   let busy = $state('')
   let error = $state('')
   let modalError = $state('')
@@ -64,6 +79,11 @@
   let showPassphrase = $state(false)
   let publicKey = $state('')
   let pendingRemoval = $state<Oven | null>(null)
+  let pendingHarnessRemoval = $state<{ ovenId: string; harnessId: string; command: string } | null>(
+    null
+  )
+  let harnessBusy = $state('')
+  let timezoneBusy = $state('')
   const hasAppearance = $derived(
     Boolean(
       color !== (editing?.color ?? '#22c55e') ||
@@ -77,6 +97,104 @@
   function message(value: unknown): string {
     return value instanceof Error ? value.message : 'The Oven operation failed.'
   }
+
+  /** The platform name an Oven reports, spelled the way a person reads it. */
+  function ovenPlatformName(platform: string | undefined): string {
+    if (platform === 'darwin') return 'macOS'
+    if (platform === 'win32') return 'Windows'
+    if (platform === 'linux') return 'Linux'
+    return platform ?? ''
+  }
+
+  /** The architecture an Oven reports, shortened to its familiar name. */
+  function ovenArchitectureName(architecture: string | undefined): string {
+    if (!architecture) return ''
+    if (['arm64', 'aarch64'].includes(architecture)) return 'ARM64'
+    if (['x64', 'x86_64'].includes(architecture)) return 'x86-64'
+    return architecture
+  }
+
+  /**
+   * Everything an Oven row can do, behind one menu.
+   *
+   * Setup stays its own button: it is the reason the row exists and the action
+   * the user reaches for. The occasional actions live here rather than pushing
+   * that button around the header.
+   */
+  function ovenMenuItems(oven: Oven): MenuItem[] {
+    const items: MenuItem[] = []
+    if (ovenState?.defaultOvenId !== oven.id)
+      items.push({
+        label: 'Set as default',
+        icon: Star,
+        disabled: Boolean(busy),
+        onClick: () => {
+          void invoke('oven:setDefault', oven.id)
+            .then((next) => (ovenState = next))
+            .catch((failure: unknown) => (error = message(failure)))
+        }
+      })
+    items.push({ label: 'Edit Oven', icon: Pencil, onClick: () => openEditor(oven) })
+    if (oven.id !== LOCAL_OVEN_ID) {
+      items.push({ label: 'separator:clock', divider: true })
+      items.push({
+        label: 'Match your time zone',
+        icon: Clock,
+        disabled: Boolean(busy) || Boolean(timezoneBusy),
+        onClick: () => void syncTimezone(oven)
+      })
+      items.push({ label: 'separator:remove', divider: true })
+      items.push({
+        label: 'Remove Oven',
+        icon: Trash2,
+        danger: true,
+        onClick: () => (pendingRemoval = oven)
+      })
+    }
+    return items
+  }
+
+  /** One installed harness's occasional actions, behind the badge it belongs to. */
+  function harnessMenuItems(ovenId: string, item: OvenHarnessInventoryItem): MenuItem[] {
+    const busyNow = Boolean(harnessBusy)
+    return [
+      {
+        label: `Update ${item.command}`,
+        icon: RefreshCw,
+        disabled: busyNow || item.health !== 'healthy',
+        onClick: () => void updateHarness(ovenId, item.harnessId)
+      },
+      { label: 'separator:harness', divider: true },
+      {
+        label: `Uninstall ${item.command}`,
+        icon: Trash2,
+        danger: true,
+        disabled: busyNow,
+        onClick: () =>
+          (pendingHarnessRemoval = {
+            ovenId,
+            harnessId: item.harnessId,
+            command: item.command
+          })
+      }
+    ]
+  }
+
+  /** Put an Oven's clock on this computer's zone, and say what the Oven did. */
+  async function syncTimezone(oven: Oven): Promise<void> {
+    if (timezoneBusy || busy) return
+    timezoneBusy = oven.id
+    try {
+      const result = await invoke('oven:timezone:sync', oven.id)
+      if (result.status === 'updated') toast.success(result.message)
+      else toast.info(result.message)
+    } catch (failure) {
+      toast.error(message(failure))
+    } finally {
+      timezoneBusy = ''
+    }
+  }
+
   async function load(): Promise<void> {
     try {
       ovenState = await invoke('oven:state')
@@ -88,6 +206,7 @@
         )
           health = { ...health, [oven.id]: oven.connectionStatus }
       }
+      void refreshSetupStatuses(ovenState)
       void refreshHealth(ovenState)
     } catch (failure) {
       error = message(failure)
@@ -96,6 +215,22 @@
   onMount(() => {
     void load()
   })
+
+  async function refreshSetupStatuses(state: OvenState): Promise<void> {
+    const remote = state.ovens.filter((oven) => oven.kind === 'ssh')
+    for (let offset = 0; offset < remote.length; offset += 3) {
+      const batch = await Promise.all(
+        remote.slice(offset, offset + 3).map(async (oven) => {
+          const operation = await invoke('oven:setup:status', oven.id).catch(() => null)
+          return [
+            oven.id,
+            operation?.setupComplete === true || operation?.status === 'succeeded'
+          ] as const
+        })
+      )
+      setupComplete = { ...setupComplete, ...Object.fromEntries(batch) }
+    }
+  }
 
   onDestroy(() => {
     refreshGeneration++
@@ -108,7 +243,23 @@
         if (generation !== refreshGeneration) return
         checking = oven.id
         try {
-          const result = await invoke('oven:connectionHealth', oven.id)
+          let result: OvenConnectionStatus
+          if (oven.kind === 'ssh') {
+            try {
+              const probe = await invoke('oven:probe', oven.id)
+              if (generation !== refreshGeneration) return
+              probes = { ...probes, [oven.id]: probe }
+              result = {
+                state: 'connected',
+                checkedAt: Date.now(),
+                specs: probe.specs ?? health[oven.id]?.specs
+              }
+            } catch {
+              result = await invoke('oven:connectionHealth', oven.id)
+            }
+          } else {
+            result = await invoke('oven:connectionHealth', oven.id)
+          }
           if (generation !== refreshGeneration) return
           health = {
             ...health,
@@ -291,17 +442,12 @@
     }
   }
 
-  async function connect(oven: Oven): Promise<void> {
-    if (busy) return
-    busy = oven.id
-    error = ''
-    try {
-      const probe = await invoke('oven:install', oven.id)
-      probes = { ...probes, [oven.id]: probe }
-    } catch (failure) {
-      error = `${oven.name}: ${message(failure)}`
-    } finally {
-      busy = ''
+  async function openOvenSetup(oven: Oven): Promise<void> {
+    ovenSetupStore.show(oven.id)
+    const operation = await invoke('oven:setup:status', oven.id).catch(() => null)
+    setupComplete = {
+      ...setupComplete,
+      [oven.id]: operation?.setupComplete === true || operation?.status === 'succeeded'
     }
   }
 
@@ -316,6 +462,54 @@
       error = message(failure)
     } finally {
       busy = ''
+    }
+  }
+
+  async function updateHarness(ovenId: string, harnessId: string): Promise<void> {
+    if (harnessBusy) return
+    harnessBusy = `${ovenId}:${harnessId}`
+    error = ''
+    try {
+      const item = await invoke('oven:harness:update', ovenId, harnessId)
+      const probe = probes[ovenId]
+      if (probe?.inventory)
+        probes = {
+          ...probes,
+          [ovenId]: {
+            ...probe,
+            inventory: probe.inventory.map((row) => (row.harnessId === harnessId ? item : row))
+          }
+        }
+    } catch (failure) {
+      error = message(failure)
+    } finally {
+      harnessBusy = ''
+    }
+  }
+
+  async function uninstallHarness(): Promise<void> {
+    if (!pendingHarnessRemoval || harnessBusy) return
+    const pending = pendingHarnessRemoval
+    harnessBusy = `${pending.ovenId}:${pending.harnessId}`
+    error = ''
+    try {
+      const item = await invoke('oven:harness:uninstall', pending.ovenId, pending.harnessId)
+      const probe = probes[pending.ovenId]
+      if (probe?.inventory)
+        probes = {
+          ...probes,
+          [pending.ovenId]: {
+            ...probe,
+            inventory: probe.inventory.map((row) =>
+              row.harnessId === pending.harnessId ? item : row
+            )
+          }
+        }
+      pendingHarnessRemoval = null
+    } catch (failure) {
+      error = message(failure)
+    } finally {
+      harnessBusy = ''
     }
   }
 </script>
@@ -398,37 +592,24 @@
                 </div>
               </div>
             </div>
-            <div class="flex flex-wrap items-center gap-2">
+            <div class="flex items-center gap-2">
               {#if busy === oven.id}<Loader2 size={14} class="animate-spin text-muted" />{/if}
-              {#if ovenState.defaultOvenId !== oven.id}
-                <button
-                  type="button"
-                  class="rounded-lg border px-2.5 py-1.5 text-xs hover:bg-elevated"
-                  disabled={Boolean(busy)}
-                  onclick={() =>
-                    void invoke('oven:setDefault', oven.id)
-                      .then((next) => (ovenState = next))
-                      .catch((failure: unknown) => (error = message(failure)))}>Set default</button
-                >
-              {/if}
               {#if oven.id !== LOCAL_OVEN_ID}
                 <button
                   type="button"
-                  class="rounded-lg border px-2.5 py-1.5 text-xs hover:bg-elevated disabled:opacity-50"
+                  class="rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
                   disabled={Boolean(busy)}
-                  onclick={() => void connect(oven)}>Set up service</button
-                >
-                <button
-                  type="button"
-                  class="rounded-lg px-2 py-1.5 text-xs text-muted hover:bg-elevated"
-                  onclick={() => openEditor(oven)}>Edit</button
-                >
-                <button
-                  type="button"
-                  class="rounded-lg px-2 py-1.5 text-xs text-danger hover:bg-danger/10"
-                  onclick={() => (pendingRemoval = oven)}>Remove</button
+                  onclick={() => void openOvenSetup(oven)}
+                  >{ovenSetupActionLabel(
+                    ovenSetupStore.completed[oven.id] || setupComplete[oven.id] || false
+                  )}</button
                 >
               {/if}
+              <ThreadDropdown
+                items={ovenMenuItems(oven)}
+                title={`${oven.name} actions`}
+                ariaLabel={`${oven.name} actions`}
+              />
               <SettingsDisclosure
                 expanded={!folded[oven.id]}
                 title={`${folded[oven.id] ? 'Show' : 'Hide'} ${oven.name} details`}
@@ -458,11 +639,7 @@
                       <Monitor size={14} />System
                     </dt>
                     <dd class="text-sm font-medium text-foreground">
-                      {specs.platform.toLowerCase() === 'darwin'
-                        ? 'macOS'
-                        : specs.platform === 'win32'
-                          ? 'Windows'
-                          : specs.platform}
+                      {ovenPlatformName(specs.platform)}
                     </dd>
                     <dd class="text-xs text-muted">{specs.hostname}</dd>
                   </div>
@@ -474,11 +651,7 @@
                       {specs.cpuCount} logical cores
                     </dd>
                     <dd class="text-xs text-muted">
-                      {['arm64', 'aarch64'].includes(specs.architecture)
-                        ? 'ARM64'
-                        : ['x64', 'x86_64'].includes(specs.architecture)
-                          ? 'x86-64'
-                          : specs.architecture}
+                      {ovenArchitectureName(specs.architecture)}
                     </dd>
                   </div>
                   <div class="space-y-1.5">
@@ -505,31 +678,88 @@
                     </dd>
                   </div>
                 </dl>
-                <div class="flex flex-wrap items-center gap-2 text-xs text-muted">
-                  <Terminal size={14} /><span>Service runtime</span><span
-                    class="font-medium text-foreground"
-                    >{specs.nodeVersion
-                      ? 'Node.js ' + specs.nodeVersion.replace(/^v/, '')
-                      : 'Not installed'}</span
-                  >
-                </div>
               {/if}
               {#if health[oven.id]?.error}<p class="text-xs text-danger" role="status">
                   {health[oven.id].error}
                 </p>{/if}
-              {#if probe}
-                <div class="space-y-1 pl-8 text-xs text-muted">
-                  <p>
-                    {probe.platform} · {probe.architecture} · Node {probe.nodeVersion} · {probe.activeRuns}
-                    active runs
-                  </p>
-                  <p>
-                    Installed harnesses: {probe.harnesses
-                      .filter((harness) => harness.path)
-                      .map((harness) => harness.command)
-                      .join(', ') || 'None found'}
-                  </p>
-                </div>
+              {#if probe || health[oven.id]?.specs}
+                {@const nodeVersion =
+                  probe?.nodeVersion ?? health[oven.id]?.specs?.nodeVersion ?? null}
+                <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-2">
+                  <div class="space-y-1.5">
+                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                      <Terminal size={14} />Service runtime
+                    </dt>
+                    <dd class="text-sm font-medium text-foreground">
+                      {nodeVersion ? `Node.js ${nodeVersion.replace(/^v/, '')}` : 'Not installed'}
+                    </dd>
+                    <dd class="text-xs text-muted">
+                      {probe
+                        ? [
+                            ovenPlatformName(probe.platform),
+                            ovenArchitectureName(probe.architecture),
+                            `${probe.activeRuns} active run${probe.activeRuns === 1 ? '' : 's'}`
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')
+                        : 'No service has answered from this Oven yet.'}
+                    </dd>
+                    {#if probe?.timezone}
+                      <dd class="text-xs text-muted">Time zone: {probe.timezone}</dd>
+                    {/if}
+                  </div>
+                  <div class="space-y-1.5">
+                    <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                      <Boxes size={14} />Installed harnesses
+                    </dt>
+                    <dd class="flex flex-wrap items-center gap-1.5">
+                      {#if probe?.inventory?.length}
+                        {#each probe.inventory.filter((item) => item.health !== 'missing') as item (item.harnessId)}
+                          <span
+                            class="flex items-center gap-0.5 rounded-lg bg-elevated py-0.5 pr-0.5 pl-1.5"
+                            title={`${item.command}${
+                              item.installedVersion ? ` ${item.installedVersion}` : ''
+                            }${item.health === 'healthy' ? '' : ` · ${item.health}`}`}
+                          >
+                            <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
+                            {#if harnessBusy === `${oven.id}:${item.harnessId}`}
+                              <Loader2 size={11} class="animate-spin text-muted" />
+                            {:else}
+                              <ThreadDropdown
+                                vertical
+                                items={harnessMenuItems(oven.id, item)}
+                                title={`${item.command} actions`}
+                                ariaLabel={`${item.command} actions`}
+                              />
+                            {/if}
+                          </span>
+                        {/each}
+                        {#if !probe.inventory.some((item) => item.health !== 'missing')}
+                          <span class="text-xs text-muted">None found</span>
+                        {/if}
+                      {:else if probe?.harnesses.some((harness) => harness.path)}
+                        {#each probe.harnesses.filter((harness) => harness.path) as harness (harness.command)}
+                          <span
+                            class="flex items-center rounded-lg bg-elevated p-1"
+                            title={harness.command}
+                          >
+                            <AgentIcon
+                              agentId={ovenHarnessIdForCommand(harness.command) ?? harness.command}
+                              label={harness.command}
+                              size={14}
+                            />
+                          </span>
+                        {/each}
+                      {:else if probe}
+                        <span class="text-xs text-muted">None found</span>
+                      {:else}
+                        <span class="text-xs text-muted"
+                          >Connect to read this Oven's harnesses.</span
+                        >
+                      {/if}
+                    </dd>
+                  </div>
+                </dl>
               {/if}
             </div>
           {/if}
@@ -782,4 +1012,19 @@
 >
   <p>Remove {pendingRemoval?.name} and its saved credentials from this computer?</p>
   <p>Its remote files and service remain on the host. Remote runs will continue there.</p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={Boolean(pendingHarnessRemoval)}
+  title="Uninstall harness?"
+  confirmLabel="Uninstall"
+  busy={Boolean(harnessBusy)}
+  onCancel={() => (pendingHarnessRemoval = null)}
+  onConfirm={uninstallHarness}
+>
+  <p>Uninstall {pendingHarnessRemoval?.command} from this Oven?</p>
+  <p>
+    The harness may remove its own configuration or credentials. CodeInOven checks that it is not
+    running before uninstalling it.
+  </p>
 </ConfirmDialog>

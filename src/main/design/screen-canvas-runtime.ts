@@ -46,7 +46,7 @@ export function screenCanvasRuntimeScript(): string {
   var DEFAULT_COLUMNS = 2;
   var MIN_COLUMNS = 1;
   var MAX_COLUMNS = 4;
-  var MIN_SCALE = 0.1;
+  var MIN_SCALE = 0.01;
   var MAX_SCALE = 4;
   var FIT_PADDING = 64;
   var RESIZE_DELAY = 200;
@@ -163,6 +163,7 @@ export function screenCanvasRuntimeScript(): string {
     surface.textContent = '';
     surface.appendChild(stage);
 
+    var transformTask = 0;
     var scale = 1;
     var panX = 0;
     var panY = 0;
@@ -176,6 +177,56 @@ export function screenCanvasRuntimeScript(): string {
     var measureTimer = 0;
     var readout = null;
     var records = [];
+    var frameRecords = new Map();
+    var loadingCount = 0;
+    var loadTask = 0;
+    var stopped = false;
+
+    // Observe transformed frame bounds without a layout read on every wheel
+    // event. Keep dimensions while suppressing offscreen descendant painting.
+    var frameObserver = new IntersectionObserver(function (entries) {
+      for (var index = 0; index < entries.length; index += 1) {
+        var record = frameRecords.get(entries[index].target);
+        if (!record) continue;
+        record.visible = entries[index].isIntersecting;
+        record.body.style.contentVisibility = record.visible ? 'visible' : 'hidden';
+        if (record.visible && record.started) measureFrame(record);
+      }
+      scheduleLoads();
+    }, { root: surface, rootMargin: '256px' });
+
+    function scheduleLoads() {
+      if (stopped || loadTask || loadingCount >= 2) return;
+      loadTask = requestAnimationFrame(function () {
+        loadTask = 0;
+        // One navigation per animation frame, at most two outstanding loads.
+        for (var index = 0; index < records.length; index += 1) {
+          var record = records[index];
+          if (!record.visible || record.started) continue;
+          record.started = true;
+          loadingCount += 1;
+          record.loadTimer = setTimeout(function () {
+            // Cancel a stalled navigation before giving its slot to another
+            // screen. The frame's Open link remains available for a retry.
+            record.frame.removeAttribute('src');
+            finishLoad(record);
+          }, 15000);
+          record.frame.setAttribute('src', record.entry);
+          break;
+        }
+        if (records.some(function (record) { return record.visible && !record.started; })) {
+          scheduleLoads();
+        }
+      });
+    }
+
+    function finishLoad(record) {
+      if (!record.loadTimer) return;
+      clearTimeout(record.loadTimer);
+      record.loadTimer = 0;
+      loadingCount -= 1;
+      scheduleLoads();
+    }
     // Until the user touches the view, the canvas keeps fitting itself while it
     // settles: the stylesheet lands after the first paint and the frames report
     // their heights as they load, so the first fit is a guess at the real size.
@@ -198,10 +249,14 @@ export function screenCanvasRuntimeScript(): string {
     // element on every apply: the app's element inspector reads it to map a
     // picked element's rectangle back to the page.
     function applyTransform() {
-      stage.style.transform =
-        'translate(' + panX + 'px, ' + panY + 'px) scale(' + scale + ')';
-      document.documentElement.dataset.cioCanvasScale = String(scale);
-      if (readout) readout.textContent = Math.round(scale * 100) + '%';
+      if (transformTask) return;
+      transformTask = requestAnimationFrame(function () {
+        transformTask = 0;
+        stage.style.transform =
+          'translate(' + panX + 'px, ' + panY + 'px) scale(' + scale + ')';
+        document.documentElement.dataset.cioCanvasScale = String(scale);
+        if (readout) readout.textContent = Math.round(scale * 100) + '%';
+      });
     }
 
     function zoomAt(x, y, factor) {
@@ -468,7 +523,7 @@ export function screenCanvasRuntimeScript(): string {
     }
 
     function measureFrame(record) {
-      if (record.declaredHeight !== null) return;
+      if (!record.loaded || !record.visible || record.declaredHeight !== null) return;
       var height = null;
       try {
         var doc = record.frame.contentDocument;
@@ -499,7 +554,9 @@ export function screenCanvasRuntimeScript(): string {
       // rather than left collapsed, and every measurement is clamped so a
       // runaway page cannot stretch the canvas.
       if (height === null || !isFinite(height) || height <= 0) height = DEFAULT_HEIGHT;
-      record.frame.style.height = Math.round(clamp(height, MIN_HEIGHT, MAX_HEIGHT)) + 'px';
+      var measuredHeight = Math.round(clamp(height, MIN_HEIGHT, MAX_HEIGHT)) + 'px';
+      record.frame.style.height = measuredHeight;
+      record.body.style.height = measuredHeight;
     }
 
     function scheduleMeasure() {
@@ -589,9 +646,11 @@ export function screenCanvasRuntimeScript(): string {
       var frame = document.createElement('iframe');
       frame.className = 'cio-canvas-body-frame';
       frame.setAttribute('title', title.textContent);
-      frame.setAttribute('src', entry);
+      // Navigation starts only when this screen approaches the viewport.
       frame.setAttribute('width', String(width));
       frame.style.height = (declaredHeight === null ? DEFAULT_HEIGHT : declaredHeight) + 'px';
+      body.style.height = frame.style.height;
+      body.style.contentVisibility = 'hidden';
       body.appendChild(frame);
       screen.appendChild(bar);
       screen.appendChild(body);
@@ -599,18 +658,32 @@ export function screenCanvasRuntimeScript(): string {
 
       var record = {
         frame: frame,
+        body: body,
+        entry: entry,
+        visible: false,
+        started: false,
+        loaded: false,
+        loadTimer: 0,
         declaredHeight: declaredHeight,
         document: null,
         window: null,
         handlers: null
       };
       frame.addEventListener('load', function () {
+        if (!record.started) return;
+        try {
+          if (frame.contentDocument && frame.contentDocument.URL === 'about:blank') return;
+        } catch {
+          // Cross-origin screens still release their navigation slot.
+        }
+        record.loaded = true;
+        finishLoad(record);
         measureFrame(record);
         attachFrameWindow(record);
         fitIfUntouched();
       });
-      measureFrame(record);
-      attachFrameWindow(record);
+      frameRecords.set(body, record);
+      frameObserver.observe(body);
       return record;
     }
 
@@ -684,6 +757,19 @@ export function screenCanvasRuntimeScript(): string {
     // would keep the screens unclickable until the key came back.
     globalThis.addEventListener('blur', function () { setSpaceHeld(false); });
     globalThis.addEventListener('resize', scheduleMeasure);
+    globalThis.addEventListener('pagehide', function (event) {
+      // A cached page resumes with its observer and frame listeners intact.
+      if (event.persisted) return;
+      stopped = true;
+      frameObserver.disconnect();
+      if (loadTask) cancelAnimationFrame(loadTask);
+      if (transformTask) cancelAnimationFrame(transformTask);
+      if (measureTimer) clearTimeout(measureTimer);
+      for (var index = 0; index < records.length; index += 1) {
+        if (records[index].loadTimer) clearTimeout(records[index].loadTimer);
+        detachFrameWindow(records[index]);
+      }
+    });
 
     // Ready is a contract: the app waits for this class before it treats the
     // page as a canvas. The scale is stamped by the first apply below.
@@ -802,7 +888,7 @@ html.cio-canvas-ready body {
   -webkit-font-smoothing: antialiased;
   color: var(--cio-canvas-fg);
   font-family: var(--cio-canvas-font);
-  font-size: 14px;
+  font-size: 0.875rem;
   line-height: 1.5;
 }
 .cio-canvas-surface.cio-canvas-space {
@@ -822,7 +908,6 @@ html.cio-canvas-ready body {
   top: 0;
   left: 0;
   transform-origin: 0 0;
-  will-change: transform;
 }
 .cio-canvas-grid {
   display: grid;
@@ -863,7 +948,7 @@ html.cio-canvas-ready body {
 .cio-canvas-bar-title {
   overflow: hidden;
   color: var(--cio-canvas-fg);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   line-height: 1.3;
   text-overflow: ellipsis;
@@ -872,7 +957,7 @@ html.cio-canvas-ready body {
 .cio-canvas-bar-caption {
   overflow: hidden;
   color: var(--cio-canvas-muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -884,7 +969,7 @@ html.cio-canvas-ready body {
   border: 1px solid var(--cio-canvas-border);
   border-radius: 6px;
   color: var(--cio-canvas-muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   text-decoration: none;
   white-space: nowrap;
@@ -905,12 +990,13 @@ html.cio-canvas-ready body {
   border-radius: 999px;
   background: var(--cio-canvas-badge-bg);
   color: var(--cio-canvas-accent);
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 .cio-canvas-body {
+  contain: layout paint;
   position: relative;
   background: var(--cio-canvas-surface);
 }
@@ -953,7 +1039,7 @@ html.cio-canvas-ready body {
   background: transparent;
   color: var(--cio-canvas-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
   transition: background-color 0.12s ease, color 0.12s ease;
@@ -978,7 +1064,7 @@ html.cio-canvas-ready body {
 .cio-canvas-readout {
   min-width: 44px;
   color: var(--cio-canvas-muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   text-align: center;
   -webkit-user-select: none;

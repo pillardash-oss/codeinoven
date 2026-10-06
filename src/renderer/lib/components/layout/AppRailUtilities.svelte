@@ -1,4 +1,14 @@
 <script lang="ts">
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import {
+    preloadSettingsChunk,
+    preloadTaskManagerChunk,
+    preloadUpdateBlockersChunk
+  } from '$lib/page-preload'
+  import { feature } from '$lib/feature-registry'
+  import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { updateBlockers } from '$lib/stores/update-blockers.svelte'
+  import { updaterState } from '$lib/stores/updater.svelte'
   import {
     AlertCircle,
     CheckCircle2,
@@ -6,20 +16,9 @@
     Download,
     Info,
     Loader2,
-    Plug,
-    RefreshCw,
-    Settings
+    RefreshCw
   } from '@lucide/svelte'
   import type { Component } from 'svelte'
-  import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import {
-    preloadSettingsChunk,
-    preloadTaskManagerChunk,
-    preloadUpdateBlockersChunk
-  } from '$lib/page-preload'
-  import { updaterState } from '$lib/stores/updater.svelte'
-  import { updateBlockers } from '$lib/stores/update-blockers.svelte'
-  import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import AppRailButton from './AppRailButton.svelte'
 
   interface Props {
@@ -204,16 +203,24 @@
   />
 
   <AppRailButton
-    label="Task manager: running processes"
-    icon={Plug}
+    label={`${feature('task-manager').name}: running processes`}
+    icon={feature('task-manager').icon}
     shortcut={taskManagerShortcut}
     onHover={preloadTaskManagerChunk}
     onSelect={() => (taskManagerOpen = true)}
   />
 
   <AppRailButton
-    label="Settings"
-    icon={Settings}
+    label={`${feature('utilities').name}: Skills, MCP, Plugins`}
+    icon={feature('utilities').icon}
+    shortcut={settingsShortcut}
+    onHover={preloadSettingsChunk}
+    onSelect={() => navigate('settings-utilities')}
+  />
+
+  <AppRailButton
+    label={feature('settings').name}
+    icon={feature('settings').icon}
     active={isSettingsView(activeView)}
     shortcut={settingsShortcut}
     onHover={preloadSettingsChunk}

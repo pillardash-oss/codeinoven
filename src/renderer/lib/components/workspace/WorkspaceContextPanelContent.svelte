@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SvelteMap } from 'svelte/reactivity'
+  import { ovenRootKey } from '$lib/oven-root-target'
   import { fly } from 'svelte/transition'
   import type { Thread } from '$shared/types'
   import { panelReveal } from '$lib/components/layout/page-reveal'
@@ -33,6 +34,8 @@
     active: boolean
     gitPanelProjectId: string | null
     gitPanelScopeBucketId: string
+    /** Whether the keep-mounted Git panel is the visible surface right now. */
+    gitPanelVisible: boolean
     terminalFullscreenTabId: string | null
     browserFullscreenTabId: string | null
     activeProject: Project | null
@@ -55,6 +58,7 @@
     active,
     gitPanelProjectId,
     gitPanelScopeBucketId,
+    gitPanelVisible,
     terminalFullscreenTabId,
     browserFullscreenTabId,
     activeProject,
@@ -87,7 +91,11 @@
     const tab = activeContextTab
     if (!tab) return ''
     if (tab.kind !== 'files') return tab.id
-    const mountThreadId = usesThreadWorkspaceMount(tab.projectId) ? tab.threadId : 'project'
+    const mountThreadId =
+      usesThreadWorkspaceMount(tab.projectId) ||
+      (selectedThread?.settings?.ovenId && selectedThread.settings.ovenId !== 'local')
+        ? `${tab.threadId}:${selectedThread?.settings?.ovenId}`
+        : 'project'
     return `files:${tab.projectId}:${mountThreadId}`
   })
 
@@ -162,14 +170,14 @@
   })
 </script>
 
-{#if gitPanelProjectId && !remoteThread}
+{#if gitPanelProjectId}
   {#key gitPanelProjectId}
     {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
-      <div class="h-full" style:display={activeContextTab?.kind === 'git' ? 'block' : 'none'}>
+      <div class="h-full" style:display={gitPanelVisible ? 'block' : 'none'}>
         <GitStatusPanel
           projectId={gitPanelProjectId}
           threadId={gitPanelThreadId}
-          scopeBucketId={gitPanelScopeBucketId}
+          scopeBucketId={ovenRootKey(gitPanelProjectId) ?? gitPanelScopeBucketId}
         />
       </div>
     {/await}
@@ -192,12 +200,13 @@
         in:fly={panelReveal(activePanelIsBrowser)}
         out:fly={panelReveal(true)}
       >
-        {#if remoteThread && ['files', 'git', 'diff'].includes(activeContextTab.kind)}
-          {#key `${remoteThread.id}:${remoteThread.settings?.ovenId}:${remoteThread.settings?.ovenPath}`}
-            {#await import('../threads/OvenWorkspacePanel.svelte') then { default: OvenWorkspacePanel }}
-              <OvenWorkspacePanel thread={remoteThread} />
-            {/await}
-          {/key}
+        {#if activeContextTab.kind === 'oven'}
+          {#await import('../threads/OvenSidebarPanel.svelte') then { default: OvenSidebarPanel }}
+            {#if remoteThread}<OvenSidebarPanel thread={remoteThread} />{/if}
+          {/await}
+        {:else if remoteThread && activeContextTab.kind === 'diff'}
+          <!-- Rendered by the persistent, keep-mounted Git panel above: an Oven
+               thread has no local turn checkpoints to diff. -->
         {:else if activeContextTab.kind === 'files'}
           {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
             <ProjectFilesPanel

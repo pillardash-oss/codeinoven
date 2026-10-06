@@ -10,6 +10,8 @@ import type {
   WebToolProviderId
 } from '$shared/types'
 import { ALL_HARNESSES_BINDING_ID } from '$shared/types'
+import { skillFrontmatterName } from '$shared/skill-frontmatter'
+import { utilityInstallFolderName } from '$shared/utility-scope-paths'
 
 export type ScopeLevel = UtilityScope['level']
 export type BindingStrategy = HarnessUtilityBinding['strategy']
@@ -152,12 +154,42 @@ export function newBinding(draft: UtilityDraft, harnessId: string): BindingDraft
         : draft.kind === 'image_descriptor'
           ? 'image_descriptor'
           : '',
-    transportName:
-      draft.name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/gu, '-')
-        .replace(/^-|-$/gu, '') || 'utility'
+    transportName: draft.kind === 'skill' ? skillTransportName(draft) : slug(draft.name)
   }
+}
+
+/** The slug one utility name takes as its folder and its transport name. */
+function slug(value: string): string {
+  return utilityInstallFolderName(value) || 'utility'
+}
+
+/**
+ * Names the editor writes before a utility has an identity of its own. They are
+ * placeholders, never the name a skill should keep.
+ */
+const PLACEHOLDER_TRANSPORT_NAMES = new Set(['custom-skill', 'custom-mcp', 'utility'])
+
+/**
+ * The name a skill answers to: the `name` its SKILL.md declares, which is also
+ * the folder it installs into, falling back to its draft name while the document
+ * still says nothing. Slugged, because a transport name is an identity every
+ * harness, folder, and marketplace id has to agree on.
+ */
+function skillTransportName(draft: UtilityDraft): string {
+  return slug(skillFrontmatterName(draft.instructions) ?? draft.name)
+}
+
+/**
+ * The transport name one binding is saved with. A skill's transport name is the
+ * skill's own identity, so a placeholder the editor wrote before the skill had a
+ * name is replaced by it; a real id, such as the marketplace id the updater
+ * matches an installed skill by, is kept exactly as it is.
+ */
+function resolveTransportName(draft: UtilityDraft, binding: BindingDraft): string {
+  const current = binding.transportName.trim()
+  if (draft.kind !== 'skill' || binding.strategy !== 'skill') return current
+  if (current && !PLACEHOLDER_TRANSPORT_NAMES.has(current.toLowerCase())) return current
+  return skillTransportName(draft)
 }
 
 export function setAllHarnessBindings(draft: UtilityDraft): void {
@@ -301,14 +333,17 @@ export function buildBindings(
         binding.harnessId === ALL_HARNESSES_BINDING_ID ||
         installedIds.has(binding.harnessId)
     )
-    .map((binding) => ({
-      harnessId: binding.harnessId.trim(),
-      strategy: binding.strategy,
-      ...(binding.nativeCapability.trim()
-        ? { nativeCapability: binding.nativeCapability.trim() }
-        : {}),
-      ...(binding.transportName.trim() ? { transportName: binding.transportName.trim() } : {})
-    }))
+    .map((binding) => {
+      const transportName = resolveTransportName(draft, binding)
+      return {
+        harnessId: binding.harnessId.trim(),
+        strategy: binding.strategy,
+        ...(binding.nativeCapability.trim()
+          ? { nativeCapability: binding.nativeCapability.trim() }
+          : {}),
+        ...(transportName ? { transportName } : {})
+      }
+    })
 }
 
 /**

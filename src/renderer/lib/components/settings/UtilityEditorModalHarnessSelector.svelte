@@ -9,6 +9,11 @@
     /** Inerts the chips while a save is in flight, so a stray Cmd/Ctrl+Enter
      *  cannot retarget the draft as the form is being written. */
     disabled?: boolean
+    /** Fieldset title, so a native skill and a registry utility can both name
+     *  what the selection decides. */
+    legend?: string
+    /** One line under the title explaining what the selection does here. */
+    description?: string
     onSelectAll: () => void
     onToggleHarness: (harnessId: string) => void
   }
@@ -17,6 +22,8 @@
     bindings,
     availableHarnesses,
     disabled = false,
+    legend = 'Available to',
+    description = 'All is selected by default and automatically includes harnesses added later. Choose individual harnesses only when this utility should have limited availability.',
     onSelectAll,
     onToggleHarness
   }: Props = $props()
@@ -31,10 +38,9 @@
 </script>
 
 <fieldset class="space-y-3 rounded-xl border p-3">
-  <legend class="px-1 text-xs font-semibold">Available to</legend>
+  <legend class="px-1 text-xs font-semibold">{legend}</legend>
   <p class="text-[0.6875rem] text-dimmed">
-    All is selected by default and automatically includes harnesses added later. Choose individual
-    harnesses only when this utility should have limited availability.
+    {description}
   </p>
   <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
     <button

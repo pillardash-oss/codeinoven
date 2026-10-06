@@ -1,20 +1,10 @@
-import {
-  Pencil,
-  Pin,
-  PinOff,
-  GitFork,
-  Kanban,
-  Send,
-  StickyNote,
-  Copy,
-  EyeOff,
-  Trash2
-} from '@lucide/svelte'
-import { toast } from 'svelte-sonner'
 import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
-import { scopeState } from '$lib/stores/scope.svelte'
 import { copyText } from '$lib/copy-text'
+import { feature } from '$lib/feature-registry'
+import { scopeState } from '$lib/stores/scope.svelte'
 import type { Thread } from '$shared/types'
+import { Copy, EyeOff, GitFork, Kanban, Pencil, Pin, PinOff, Send, Trash2 } from '@lucide/svelte'
+import { toast } from 'svelte-sonner'
 
 export interface ThreadActionsMenuConfig {
   /** Resolved on every access   callers pass a getter so the menu tracks the current thread. */
@@ -152,14 +142,12 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
             }
           ]
         : []),
-      ...(showScope
-        ? [{ label: 'Change Scope', icon: Kanban, onClick: startChangeScope }]
-        : []),
+      ...(showScope ? [{ label: 'Change Scope', icon: Kanban, onClick: startChangeScope }] : []),
       ...(showNotesItem
         ? [
             {
-              label: 'Notes',
-              icon: StickyNote,
+              label: feature('thread-note').name,
+              icon: feature('thread-note').icon,
               onClick: () => config.onOpenNotes?.(thread)
             }
           ]

@@ -25,10 +25,37 @@ export interface GatewayToolDefinition {
   description: string
   /** JSON schema accepted by the tool call. */
   inputSchema: Record<string, unknown>
+  /**
+   * JSON schema of the tool's structured result, for the tools that have one.
+   *
+   * A harness that runs scripts resolves a tool carrying this schema to the
+   * result's `structuredContent` rather than to its flattened text, so a script
+   * reads real fields   a snapshot's element tokens, a search's candidates,
+   * an activation's operations   instead of a JSON string it has to parse. The
+   * gateway therefore answers such a call with the payload both ways: content
+   * parts for a model to read, and the same payload as data for a script.
+   *
+   * Left off where a result is prose, and deliberately left off
+   * `cio_ask_secret`: its collected values travel as a top-level `environment`
+   * map that the in-process transport applies to the session and never shows,
+   * and a structured payload is one more place a secret must not appear.
+   */
+  outputSchema?: Record<string, unknown>
   /** HTTP bridge route handled by the main-process gateway server. */
   route: string
   /** When the tool is relevant, surfaced in the renderer tool catalog. */
   sentWhen: string
+}
+
+/**
+ * The structured result of a gateway operation: whatever the utility answered
+ * with. Deliberately permissive and identical for every operation that declares
+ * one, because the gateway must never refuse or reshape a result a utility
+ * produced, and a script decides what to read from it.
+ */
+const GATEWAY_OPERATION_RESULT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  additionalProperties: true
 }
 
 /**
@@ -55,6 +82,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
       },
       additionalProperties: false
     },
+    outputSchema: GATEWAY_OPERATION_RESULT_SCHEMA,
     route: '/search',
     sentWhen: 'Every agent turn; search when a needed skill or MCP is not directly available'
   },
@@ -70,6 +98,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
       required: ['utility_id'],
       additionalProperties: false
     },
+    outputSchema: GATEWAY_OPERATION_RESULT_SCHEMA,
     route: '/activate',
     sentWhen: 'After utility_search selects an installed capability'
   },
@@ -87,6 +116,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
       required: ['utility_id', 'operation'],
       additionalProperties: false
     },
+    outputSchema: GATEWAY_OPERATION_RESULT_SCHEMA,
     route: '/invoke',
     sentWhen: 'After a utility has been activated for the current turn'
   },
@@ -105,6 +135,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
       required: ['utility_id'],
       additionalProperties: false
     },
+    outputSchema: GATEWAY_OPERATION_RESULT_SCHEMA,
     route: '/docs-lookup',
     sentWhen: "After compaction, when a known utility's capability docs are no longer in context"
   },

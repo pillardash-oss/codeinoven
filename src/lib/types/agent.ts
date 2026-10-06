@@ -1,5 +1,6 @@
 import type {
   AgentModelSelection,
+  ModelRuntimeSettings,
   InferenceMode,
   ModelIdentity,
   PermissionLevel,
@@ -41,7 +42,7 @@ export type AuxiliaryAgentConfig = Record<string, AgentModelSelection>
 export type RankingJudgeKind = 'automatic' | 'typesafe' | 'model'
 
 /** Persisted ranking-judge preference. The model fields apply to `model` only. */
-export interface RankingJudgeConfig {
+export interface RankingJudgeConfig extends ModelRuntimeSettings {
   kind: RankingJudgeKind
   harnessId?: string
   providerId?: string
@@ -81,6 +82,8 @@ export interface ThreadSettings {
   thinkingLevel: ThinkingLevel
   /** Fast inference for this thread's turns; `fast` requests the harness fast tier. */
   inferenceMode?: InferenceMode
+  /** Per-thread context budget, applied by the native harness. */
+  contextWindow?: number
   permissionLevel: PermissionLevel
   /** Optional multi-agent planning workflow layered on Engineering mode. */
   assignmentMode?: boolean
@@ -172,6 +175,10 @@ export interface ProviderModel {
   maxOutputTokens?: number
   /** True when the harness exposes a fast-inference tier for this model. */
   fastSupported?: boolean
+  /** True when the catalog exposes the ultrafast service tier. */
+  ultrafastSupported?: boolean
+  /** Context budgets selectable through this harness. */
+  contextWindows?: number[]
 }
 
 /** A harness provider and the models it currently exposes. */

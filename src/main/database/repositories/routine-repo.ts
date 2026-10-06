@@ -224,6 +224,23 @@ export class RoutineRepo {
       .map(rowToRoutine)
   }
 
+  /**
+   * Every routine, read on the database worker.
+   *
+   * For a background service that must not touch SQLite on the main thread
+   * (see `docs/APP-BIBLE.md`): the same rows as `list()`, read where a page
+   * fault or a WAL wait cannot stall a frame.
+   */
+  async listViaWorker(): Promise<Routine[]> {
+    const result = await this.db.queryViaWorker(
+      'SELECT * FROM routines ORDER BY created_at DESC, id ASC',
+      [],
+      0
+    )
+    if (!result.ok) return []
+    return (result.rows as unknown as RoutineRow[]).map(rowToRoutine)
+  }
+
   delete(id: string): void {
     this.db.run('DELETE FROM routines WHERE id = ?', id)
   }

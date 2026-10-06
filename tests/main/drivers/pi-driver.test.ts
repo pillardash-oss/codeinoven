@@ -14,7 +14,14 @@ import type {
   CliLineParseContext,
   PersistentCliSession
 } from '../../../src/main/drivers/persistent-cli-driver'
-import type { SessionAgentEvent } from '../../../src/lib/types'
+import type {
+  AgentEvent,
+  NativeMcpServerFailure,
+  NativeUtilityInvocation,
+  SessionAgentEvent,
+  UtilityDefinitionFor
+} from '../../../src/lib/types'
+import { PI_MCP_FAILURE_STATUS_KEY } from '../../../src/main/drivers/pi-mcp-servers-extension'
 
 const rpcMock = vi.hoisted(() => {
   const clients: Array<{
@@ -288,7 +295,7 @@ describe('PiDriver', () => {
     const client = rpcMock.clients[0]
     expect(client).toBeDefined()
     const [promptText] = client.prompt.mock.calls[0] as [string, undefined]
-    // The system prompt must not be duplicated into the user turn's text  
+    // The system prompt must not be duplicated into the user turn's text
     // it is delivered as a real system-role field via the core-tools
     // extension's before_agent_start hook, which reads the handoff file
     // below. Re-sending it in every turn's text made models mistake the
@@ -850,5 +857,231 @@ describe('PiDriver', () => {
     expect(result?.events ?? []).toEqual([])
     // And it must not be mistaken for a user message.
     expect(context.session.messages).toHaveLength(0)
+  })
+})
+
+const slackUtility: UtilityDefinitionFor<'mcp'> = {
+  id: 'slack-mcp',
+  kind: 'mcp',
+  name: 'Slack MCP',
+  description: 'Post to Slack.',
+  enabled: true,
+  activation: 'on_demand',
+  scope: { level: 'global' },
+  config: { transport: 'stdio', command: 'npx', args: ['-y', 'slack-mcp'] },
+  credentials: [
+    {
+      id: 'token',
+      label: 'Slack token',
+      secretRef: 'secret_1',
+      required: false,
+      environmentVariable: 'SLACK_MCP_XOXP_TOKEN'
+    }
+  ],
+  harnessBindings: [],
+  appOwned: false,
+  createdAt: 0,
+  updatedAt: 0
+}
+
+describe('PiDriver MCP server document', () => {
+  it('publishes the activated utilities, their config and their credentials', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+
+    const publications = await driver.publishUtilityMcpServers('/project', 'session-1', [
+      { utility: slackUtility, environment: { SLACK_MCP_XOXP_TOKEN: 'xoxp-value' } }
+    ])
+
+    expect(publications.servers).toEqual([{ utilityId: 'slack-mcp', server: 'slack_mcp' }])
+    expect(publications.failures).toEqual([])
+    const document = JSON.parse(
+      (await engine.readRaw('runtime/cio-core-tools/session-1/mcp-servers.json')) ?? '{}'
+    ) as { version: number; servers: Array<{ name: string; config: unknown }> }
+    expect(document.version).toBe(1)
+    expect(document.servers).toEqual([
+      {
+        name: 'slack_mcp',
+        utilityId: 'slack-mcp',
+        utilityName: 'Slack MCP',
+        config: {
+          description: 'Post to Slack.',
+          exposure: 'codemode',
+          type: 'stdio',
+          command: 'npx',
+          args: ['-y', 'slack-mcp'],
+          env: { SLACK_MCP_XOXP_TOKEN: 'xoxp-value' }
+        }
+      }
+    ])
+  })
+
+  it('publishes an empty set when the thread activated nothing', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+
+    await driver.publishUtilityMcpServers('/project', 'session-1', [])
+
+    // Empty is a real instruction: pi drops the servers the app no longer
+    // publishes, which is how a disabled utility stops running.
+    expect(
+      JSON.parse(
+        (await engine.readRaw('runtime/cio-core-tools/session-1/mcp-servers.json')) ?? '{}'
+      )
+    ).toEqual({ version: 1, servers: [] })
+  })
+
+  it('removes the credential-bearing document when the session goes away', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const sessionId = await driver.createSession('/project', 'Pi')
+    await driver.publishUtilityMcpServers('/project', sessionId, [
+      { utility: slackUtility, environment: { SLACK_MCP_XOXP_TOKEN: 'xoxp-value' } }
+    ])
+    const relative = `runtime/cio-core-tools/${sessionId}/mcp-servers.json`
+
+    await driver.deleteSession('/project', sessionId)
+
+    expect(await engine.readRaw(relative)).toBeNull()
+  })
+})
+
+describe('PiDriver native MCP attribution', () => {
+  it('returns the utilities no pi server could be made for', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const broken: UtilityDefinitionFor<'mcp'> = {
+      ...slackUtility,
+      id: 'broken-mcp',
+      name: 'Broken MCP',
+      config: { transport: 'stdio' }
+    }
+
+    const published = await driver.publishUtilityMcpServers('/project', 'session-1', [
+      { utility: broken, environment: {} }
+    ])
+
+    expect(published.servers).toEqual([])
+    expect(published.failures).toEqual([
+      {
+        utilityId: 'broken-mcp',
+        utilityName: 'Broken MCP',
+        reason: 'MCP utility "Broken MCP" requires a stdio command'
+      }
+    ])
+  })
+
+  it('names the utility behind a script call and reports it once', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const sessionId = await driver.createSession('/project', 'Pi')
+    const calls: NativeUtilityInvocation[] = []
+    driver.onNativeUtilityCall((invocation) => calls.push(invocation))
+    await driver.publishUtilityMcpServers('/project', sessionId, [
+      { utility: slackUtility, environment: {} }
+    ])
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+
+    // A script's call arrives as its own record with a parent call id.
+    rpcMock.client.emit({
+      type: 'tool_execution_end',
+      toolCallId: 'call-1',
+      toolName: 'mcp__slack_mcp__chat_postMessage',
+      parentToolCallId: 'call-script',
+      isError: false,
+      result: { content: [{ type: 'text', text: 'posted' }] }
+    })
+    // The turn's repeat of the same terminal result must not report twice.
+    rpcMock.client.emit({
+      type: 'tool_execution_end',
+      toolCallId: 'call-1',
+      toolName: 'mcp__slack_mcp__chat_postMessage',
+      parentToolCallId: 'call-script',
+      isError: false,
+      result: { content: [{ type: 'text', text: 'posted' }] }
+    })
+    // The RPC record path is async (session lookup first), so let it settle.
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const part = events
+      .flatMap((event) => (event.type === 'message.part.updated' ? [event.part] : []))
+      .find((candidate) => candidate.type === 'tool' && candidate.callID === 'call-1')
+    expect(part?.type === 'tool' ? part.state.title : undefined).toBe('Slack MCP: chat_postMessage')
+    expect(part?.type === 'tool' ? part.state.metadata : undefined).toMatchObject({
+      utilityId: 'slack-mcp',
+      utilityName: 'Slack MCP',
+      server: 'slack_mcp',
+      tool: 'chat_postMessage'
+    })
+    expect(calls).toEqual([
+      {
+        sessionId,
+        utilityId: 'slack-mcp',
+        utilityName: 'Slack MCP',
+        server: 'slack_mcp',
+        tool: 'chat_postMessage',
+        status: 'completed'
+      }
+    ])
+  })
+
+  it('leaves a tool from a server the app did not register alone', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const sessionId = await driver.createSession('/project', 'Pi')
+    const calls: NativeUtilityInvocation[] = []
+    driver.onNativeUtilityCall((invocation) => calls.push(invocation))
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+
+    rpcMock.client.emit({
+      type: 'tool_execution_end',
+      toolCallId: 'call-2',
+      toolName: 'mcp__user_own_server__read_file',
+      isError: false,
+      result: { content: [{ type: 'text', text: 'ok' }] }
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const part = events
+      .flatMap((event) => (event.type === 'message.part.updated' ? [event.part] : []))
+      .find((candidate) => candidate.type === 'tool' && candidate.callID === 'call-2')
+    expect(part?.type === 'tool' ? part.state.title : undefined).toBeUndefined()
+    expect(calls).toEqual([])
+  })
+
+  it('reports a registration pi refused, with the utility it belongs to', async () => {
+    const engine = await storage()
+    const driver = new PiDriver(engine)
+    const sessionId = await driver.createSession('/project', 'Pi')
+    const failures: NativeMcpServerFailure[] = []
+    driver.onNativeMcpFailure((failure) => failures.push(failure))
+    await driver.publishUtilityMcpServers('/project', sessionId, [
+      { utility: slackUtility, environment: {} }
+    ])
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+
+    const report = {
+      statusKey: PI_MCP_FAILURE_STATUS_KEY,
+      statusText: JSON.stringify({ failures: [{ name: 'slack_mcp', reason: 'namespace taken' }] })
+    }
+    rpcMock.client.emitStatus(report)
+    // The extension retries on the next reconcile; the user hears it once.
+    rpcMock.client.emitStatus(report)
+
+    expect(failures).toEqual([
+      {
+        sessionId,
+        utilityId: 'slack-mcp',
+        utilityName: 'Slack MCP',
+        server: 'slack_mcp',
+        reason: 'namespace taken'
+      }
+    ])
   })
 })

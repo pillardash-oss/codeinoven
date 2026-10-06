@@ -6,7 +6,7 @@
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
   import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
-  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { type BrowserSurface, browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import BrowserFindBar from './BrowserFindBar.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
@@ -14,9 +14,22 @@
 
   interface Props {
     tab: GlobalBrowserTab
+    surface?: BrowserSurface
+    /**
+     * Keep this tab's page off screen while the surface around it is still
+     * arriving.
+     *
+     * The Peek Window grows out of the link it was opened from, and a native page
+     * cannot take part in that: the compositor draws it at one fixed rectangle, so
+     * it would sit at its final place while the surface it belongs to is still on
+     * its way, and it would cover the loading state that belongs there. The peek
+     * holds it until its flight has landed and its page has painted, which is why
+     * this is a prop rather than a rule of its own.
+     */
+    holdPage?: boolean
   }
 
-  let { tab }: Props = $props()
+  let { tab, surface = 'workspace', holdPage = false }: Props = $props()
 
   /**
    * The page frame.
@@ -52,6 +65,13 @@
    *  and whether a floating overlay covers this frame   so this surface never
    *  combines them itself. */
   let pageVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
+
+  /** Whether the page may actually be attached: the store's decision, held back
+   *  while the surface around the frame is still arriving. The distinction matters
+   *  because the two are not the same question: a peek that is still flying owns
+   *  the native view (it is the surface on screen) while its page is deliberately
+   *  not on it yet. */
+  let pageAttachable = $derived(pageVisible && !holdPage)
 
   /** Live state of this tab: the loading flag and progress and the failure that
    *  left it with nothing to show. */
@@ -118,7 +138,7 @@
     if (loadError) return
     // Ask the store directly instead of reading the template's `pageVisible`
     // derived: this also runs from ResizeObserver and attachment continuations.
-    if (!browserVisibility.isVisible(tabId, bounds)) return
+    if (holdPage || !browserVisibility.isVisible(tabId, bounds)) return
     try {
       await invoke(
         'browser:show',
@@ -132,10 +152,11 @@
         tab.boxId
       )
       // The store's answer can change while that call is in flight: another
-      // surface may claim the view, or an overlay may appear. Only one native
-      // view can exist at a time, so a stale attach would leave the page on
+      // surface may claim the view, an overlay may appear, or this frame's own
+      // surface may start holding the page off screen (a peek's flight). Only one
+      // native view can exist at a time, so a stale attach would leave the page on
       // screen on top of the surface that now owns it.
-      if (!browserVisibility.isVisible(tabId, contentBounds())) {
+      if (holdPage || !browserVisibility.isVisible(tabId, contentBounds())) {
         void invoke('browser:hide', tabId).catch(() => {})
       }
     } catch {
@@ -173,12 +194,12 @@
    * The visibility store owns the opposite question ("may this page be shown"),
    * which is what hides it; this is the answer anything that has to ask whether a
    * page covers it needs, and the toaster's corner check is the only reader
-   * today. A page behind a modal, or one parked for any other reason, publishes
-   * nothing, so the stack is never handed to the overlay for a view nobody can
-   * see.
+   * today. A page behind a modal, one held off screen while its surface arrives,
+   * or one parked for any other reason, publishes nothing, so the stack is never
+   * handed to the overlay for a view nobody can see.
    */
   $effect(() => {
-    const frame = pageVisible && !loadError ? contentRect : null
+    const frame = pageAttachable && !loadError ? contentRect : null
     if (!frame) {
       browserVisibility.clearNativeFrame(nativeFrameKey)
       return
@@ -207,8 +228,8 @@
    */
   $effect(() => {
     if (!pageVisible) return
-    browserKeyboardFocus.setClaim('workspace', tabId)
-    return () => browserKeyboardFocus.setClaim('workspace', null)
+    browserKeyboardFocus.setClaim(surface, tabId)
+    return () => browserKeyboardFocus.setClaim(surface, null)
   })
 
   onMount(() => {
@@ -216,7 +237,7 @@
     // The claim is released with the component, so a destroyed surface can never
     // keep the view. Publishing it also flips `pageVisible`, which is what
     // attaches the page on the first paint.
-    const releaseClaim = browserVisibility.claimTab(tabId, 'workspace')
+    const releaseClaim = browserVisibility.claimTab(tabId, surface)
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', onPanelShortcut)
     let destroyed = false
     const observer = new ResizeObserver(() => {
@@ -254,7 +275,7 @@
   {/if}
   <div
     {@attach attachContentElement}
-    {@attach pageVisible && !loadError && manageNativeView}
+    {@attach pageAttachable && !loadError && manageNativeView}
     class="relative min-h-0 flex-1"
     role="presentation"
     oncontextmenu={(event) => {

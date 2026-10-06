@@ -292,6 +292,8 @@ export interface AgentAccountUsage {
   contextWindow?: number
   /** Tokens currently occupying the model context, when known. */
   contextUsed?: number
+  /** Native usage endpoint rejected an expired account credential. */
+  reauthenticationRequired?: boolean
 }
 
 /**

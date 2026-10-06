@@ -7,7 +7,7 @@
   app header now that the view switcher itself lives on the left rail, so the
   active view's own controls stay next to the project/thread title.
 -->
-<div class="flex items-center gap-0.5">
+<div class="flex items-center gap-0.5" data-onboarding="view-actions">
   {#each viewActions.items as item (item.id)}
     {#if item.component}
       {@const ActionControl = item.component}

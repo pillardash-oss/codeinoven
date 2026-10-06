@@ -36,6 +36,7 @@
 </script>
 
 <script lang="ts">
+  import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import {
     ChevronDown,
     ClipboardCheck,
@@ -114,6 +115,14 @@
   /** The worker reporting dropdown, and the confirmation that guards turning it off. */
   let reportMenuOpen = $state(false)
   let reportConfirmOpen = $state(false)
+
+  trackEscapeMenu(() => menuOpen, closeMenu)
+  trackEscapeMenu(
+    () => reportMenuOpen,
+    () => {
+      reportMenuOpen = false
+    }
+  )
 
   async function assignScope(bucketId: string): Promise<void> {
     try {

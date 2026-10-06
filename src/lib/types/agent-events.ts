@@ -61,6 +61,13 @@ export type AgentSessionStatus =
         maxAttempts: number
         updatedAt: number
       }
+      /**
+       * Transient note for preparation the app itself performs before the
+       * harness streams: preparing a remote checkout, cloning a repository, or
+       * synchronizing an account on an Oven. Cleared by the next status that
+       * carries no note.
+       */
+      note?: string
     }
   | { state: 'idle' }
   | { state: 'waiting'; issue: AgentProviderIssue }

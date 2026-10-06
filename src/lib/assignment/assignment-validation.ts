@@ -1,3 +1,4 @@
+import { validateModelRuntimeSettings } from '../model-runtime-settings'
 import type {
   AssignmentModelSelection,
   AssignmentPhase,
@@ -47,6 +48,7 @@ function generatedModel(value: unknown): AssignmentModelSelection | undefined {
     throw new Error('Generated assignment model thinking level is invalid')
   }
   return {
+    ...validateModelRuntimeSettings(value),
     harnessId: requiredString(value.harnessId, 'model harness'),
     providerId: requiredString(value.providerId, 'model provider'),
     modelId: requiredString(value.modelId, 'model'),

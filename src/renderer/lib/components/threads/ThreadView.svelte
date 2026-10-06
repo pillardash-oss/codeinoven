@@ -1,9 +1,12 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
-  import { mergeWorkingParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
+  import {
+    latestWorkingTraceParts,
+    mergeWorkingParts,
+    shouldMountWorkingTrace
+  } from '$lib/working-trace-parts'
   import { formatDurationMs } from '$lib/format/duration'
   import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
-  import { formatTime } from '$shared/date-time-format'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -42,7 +45,6 @@
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import ForeignRunCard from './ForeignRunCard.svelte'
-  import MessageSendErrorCard from './MessageSendErrorCard.svelte'
   import type { ComposerScopeShoe } from '../chats/ComposerShoe.svelte'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage } from '../chats/composer-mentions'
@@ -167,6 +169,7 @@
     type RoutinePlanDraft
   } from '$lib/components/assistant/assistant-view'
   import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
+  import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
@@ -312,6 +315,7 @@
     isActivityOnlyUserMessage,
     isTurnCompleted,
     lastTurnStartIndex,
+    pendingTurnAnchorIndex,
     resolvedSubagentPart,
     streamWorkingPartsForTurn,
     turnStartPromptsBefore,
@@ -700,6 +704,29 @@
     return assistantMirrored ? null : { userMessageId, userMessageIndex }
   })
   let pendingLiveTurnParts = $derived(pendingLiveTurn ? streamWorkingPartsForPendingTurn() : [])
+  /**
+   * The durable work of a turn that settled without ever mirroring an assistant
+   * message: a provider error, a user stop, a paused will-retry wait.
+   *
+   * The live pending block above only exists while the run is busy, and the
+   * assistant-message branch below only exists once an assistant row is
+   * mirrored, so a settled turn with neither had no renderer at all: the trace
+   * the reader was watching vanished on the error and only the user's message
+   * was left, even though the durable fold still held every part. This keeps
+   * that work on screen for as long as it is the transcript's own turn, in the
+   * settled (not busy) presentation, and yields to the assistant branch the
+   * moment the assistant row lands. */
+  let settledTurnParts = $derived.by(() => {
+    if (conversationBusy || brainstormReportRefreshing) return []
+    if (pendingTurnAnchorIndex(structureMessages) === -1) return []
+    // Only when no assistant row exists at all. An earlier assistant turn is
+    // itself a mount point for this fold (`streamWorkingPartsForTurn` keeps
+    // every part the mirror does not already carry before that turn), so
+    // mounting a second card here would render the same work twice.
+    if (lastTurnStartIndex(structureMessages) !== -1) return []
+    const parts = streamWorkingPartsForPendingTurn()
+    return latestWorkingTraceParts(parts).length > 0 ? parts : []
+  })
   /** Whether the latest turn currently has any renderable working-trace parts.
    *  When the thread is busy but nothing has materialized to write to the
    *  screen yet (the agent is still connecting/assembling, or the hydrated
@@ -2990,7 +3017,8 @@
   let plainEngineeringAuditAvailable = $derived(
     studioOnlyAuditWorkflow &&
       (engineeringOn || plainAuditTriggered) &&
-      spec?.status === 'approved' &&
+      (spec?.status === 'approved' ||
+        (!spec && brainstormWorkflow?.finalizedBrainstormVersion !== undefined)) &&
       (auditState === 'offered' ||
         auditState === 'running' ||
         auditState === 'reworking' ||
@@ -3065,7 +3093,7 @@
     // "Run audit" there is what commits the choice durably.
     if (independentAuditDisplayEnabled) return 'audit'
     if (achievementTriggered && spec) return 'achievement'
-    if (plainEngineeringAuditAvailable && spec) return 'audit'
+    if (plainEngineeringAuditAvailable) return 'audit'
     return null
   })
 
@@ -3179,13 +3207,13 @@
       }
     }
     const auditSpec = spec
-    if (!auditSpec) return null
+    if (!auditSpec && !brainstormWorkflow?.finalizedBrainstormVersion) return null
     return {
       component: 'achievement',
       props: {
         mode: 'audit',
         specTitle: thread.title,
-        specSummary: auditSpec.content.resolutionSummary,
+        specSummary: auditSpec?.content.resolutionSummary ?? brainstorm?.content.summary ?? '',
         auditThread: durableAuditThread,
         auditState,
         reportAvailable: auditReport !== null,
@@ -3489,7 +3517,13 @@
       harnessId: agentDefaults.worker?.harnessId ?? settings.harnessId,
       providerId: agentDefaults.worker?.providerId ?? settings.providerId,
       modelId: agentDefaults.worker?.modelId ?? settings.modelId,
-      thinkingLevel: settings.thinkingLevel
+      thinkingLevel: settings.thinkingLevel,
+      inferenceMode: agentDefaults.worker
+        ? agentDefaults.worker.inferenceMode
+        : settings.inferenceMode,
+      contextWindow: agentDefaults.worker
+        ? agentDefaults.worker.contextWindow
+        : settings.contextWindow
     }
   }
 
@@ -3498,7 +3532,9 @@
       harnessId: settings.harnessId,
       providerId: settings.providerId,
       modelId: settings.modelId,
-      thinkingLevel: settings.thinkingLevel
+      thinkingLevel: settings.thinkingLevel,
+      inferenceMode: settings.inferenceMode,
+      contextWindow: settings.contextWindow
     }
   }
 
@@ -3513,6 +3549,11 @@
 
   /** Current activity label   shows agent status only in Engineering. */
   let loopAuditing = $derived(settings.loopMode === true && auditState === 'running')
+  /** What the app is doing before the harness streams (preparing a remote
+   *  checkout, cloning a repository), when main published such a note. */
+  let workingStatusNote = $derived(
+    providerStatus?.state === 'working' ? (providerStatus.note ?? null) : null
+  )
   let activityLabel = $derived.by((): string => {
     if (loopAuditing) return 'Auditing'
     if (activePlanningEntry === 'brainstorm') return 'Researching and discussing'
@@ -7667,7 +7708,9 @@
       harnessId: selection.harnessId,
       providerId: selection.providerId,
       modelId: selection.modelId,
-      thinkingLevel: selection.thinkingLevel
+      thinkingLevel: selection.thinkingLevel,
+      inferenceMode: selection.inferenceMode,
+      contextWindow: selection.contextWindow
     }
 
     settings = updated
@@ -8555,9 +8598,43 @@
 
   /** Next-step choices from the Brainstorm studio after a session. */
   async function brainstormNextStep(
-    step: 'lofi' | 'hifi' | 'prd' | 'spec',
+    step: 'lofi' | 'hifi' | 'prd' | 'spec' | 'implement',
     draft: BrainstormDocument
   ): Promise<void> {
+    if (brainstormBusy || busy) return
+    if (step === 'implement') {
+      brainstormBusy = true
+      brainstormError = ''
+      try {
+        const finalized = await invoke(
+          'brainstorm:implement',
+          draft.projectId,
+          draft.threadId,
+          draft.id,
+          draft.version
+        )
+        applyBrainstormDocument(finalized)
+        engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+        showSpecStudio = false
+        await sendMessage(
+          'Implement the agreed direction from this Brainstorm.',
+          [],
+          undefined,
+          true,
+          `The user selected Implement directly from Brainstorm version ${finalized.version}. Use this document as the implementation brief. Complete the implementation and relevant validation.\n\n${JSON.stringify(finalized.content)}`,
+          [],
+          [],
+          workflowActionPresentation('Implement Brainstorm', '')
+        )
+      } catch (error) {
+        brainstormError =
+          error instanceof Error ? error.message : 'Brainstorm implementation failed.'
+        errorMessage = brainstormError
+      } finally {
+        brainstormBusy = false
+      }
+      return
+    }
     if (step === 'lofi' || step === 'hifi') {
       const note =
         step === 'lofi'
@@ -8854,6 +8931,20 @@
     }, DEPENDENCY_PRELOAD_DEBOUNCE_MS)
   }
 
+  /** Ultrafast requires an advertised native Codex tier. */
+  function ultrafastSupportedFor(harnessId: string, providerId: string, modelId: string): boolean {
+    return (
+      harnessId === 'codex' &&
+      providerId === 'openai' &&
+      providers.some(
+        (provider) =>
+          provider.harnessId === harnessId &&
+          provider.id === providerId &&
+          provider.models.some((model) => model.id === modelId && model.ultrafastSupported)
+      )
+    )
+  }
+
   /** True when the selected model exposes a fast tier, per the live catalog. */
   function fastSupportedFor(harnessId: string, providerId: string, modelId: string): boolean {
     const provider = providers.find(
@@ -8900,7 +8991,8 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     try {
       const updatedWorker = await invoke(
@@ -9442,14 +9534,17 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     auditSettings = normalized
     const auditor = {
       harnessId: normalized.harnessId,
       providerId: normalized.providerId,
       modelId: normalized.modelId,
-      thinkingLevel: normalized.thinkingLevel
+      thinkingLevel: normalized.thinkingLevel,
+      inferenceMode: normalized.inferenceMode,
+      contextWindow: normalized.contextWindow
     }
     rendererRecovery.setAuditModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
@@ -9476,7 +9571,8 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     rendererRecovery.addRecentModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
@@ -9493,7 +9589,8 @@
       selected.harnessId,
       selected.providerId,
       selected.modelId,
-      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId),
+      ultrafastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
     rendererRecovery.addRecentModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
@@ -10302,7 +10399,9 @@
             harnessId: auditSettings.harnessId,
             providerId: auditSettings.providerId,
             modelId: auditSettings.modelId,
-            thinkingLevel: auditSettings.thinkingLevel
+            thinkingLevel: auditSettings.thinkingLevel,
+            inferenceMode: auditSettings.inferenceMode,
+            contextWindow: auditSettings.contextWindow
           }
         : undefined
     // Fast inference only exists for models that actually support it. A model
@@ -10367,7 +10466,9 @@
         harnessId: normalized.harnessId,
         providerId: normalized.providerId,
         modelId: normalized.modelId,
-        thinkingLevel: normalized.thinkingLevel
+        thinkingLevel: normalized.thinkingLevel,
+        inferenceMode: normalized.inferenceMode,
+        contextWindow: normalized.contextWindow
       })
     }
     // Persist immediately so the choice survives navigation away from this view.
@@ -11704,7 +11805,7 @@
                           >{formatDurationMs(previousTurnAudit.duration)}</span
                         >
                         <span>·</span>
-                        <span>{formatTime(previousTurnAudit.endTime)}</span>
+                        <MessageTimestamp at={previousTurnAudit.endTime} />
                       </div>
                     {/if}
                     {@const inlineTags = inlineFileTagsForMessage(msg)}
@@ -11868,9 +11969,6 @@
                         </div>
                       {/if}
                     </div>
-                    {#if msg.error}
-                      <MessageSendErrorCard message={msg.error} onEdit={() => editMessage(msg)} />
-                    {/if}
                     <div
                       class="mt-1 flex items-center gap-1.5 self-end opacity-0 transition-opacity group-hover:opacity-100"
                     >
@@ -11919,7 +12017,7 @@
                         {/if}
                       </div>
                       <span class="text-[0.625rem] text-dimmed">·</span>
-                      <span class="text-[0.625rem] text-dimmed">{formatTime(msg.createdAt)}</span>
+                      <MessageTimestamp at={msg.createdAt} class="text-[0.625rem] text-dimmed" />
                     </div>
                   {/if}
                 </div>
@@ -12290,9 +12388,11 @@
                                 {/if}
                                 {msgOvenLabel}
                               </span>
-                              <span class="text-[0.625rem] text-dimmed"
-                                >· {formatTime(msg.completedAt ?? msg.createdAt)}</span
-                              >
+                              <MessageTimestamp
+                                at={msg.completedAt ?? msg.createdAt}
+                                prefix="· "
+                                class="text-[0.625rem] text-dimmed"
+                              />
                               {#if turnDuration !== null}
                                 <span class="text-[0.625rem] text-dimmed tabular-nums"
                                   >· {formatDurationMs(turnDuration)}</span
@@ -12321,11 +12421,12 @@
             {/if}
           {/each}
 
-          {#if pendingLiveTurn}
+          {#if pendingLiveTurn || settledTurnParts.length > 0}
             <WorkingTrace
-              parts={pendingLiveTurnParts}
+              parts={pendingLiveTurn ? pendingLiveTurnParts : settledTurnParts}
               open
-              busy
+              busy={Boolean(pendingLiveTurn)}
+              note={workingStatusNote}
               latest
               {active}
               olderPartsAvailable={streamHasOlder}
@@ -13135,10 +13236,7 @@
                 busy={brainstormBusy}
                 onReview={openBrainstormStudio}
                 onOpenPrototype={openPrototypePreview}
-                finalizeLabel={engineeringLifecycle?.activeStage === 'brainstorm'
-                  ? 'Finalize Brainstorm'
-                  : 'Prepare spec'}
-                onFinalize={() => submitBrainstormDecision('finalize', readyBrainstorm, '')}
+                onNextStep={(step) => brainstormNextStep(step, readyBrainstorm)}
                 {settings}
                 {providers}
                 projectId={thread.projectId}

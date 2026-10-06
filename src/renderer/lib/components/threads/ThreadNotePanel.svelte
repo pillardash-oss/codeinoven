@@ -3,6 +3,7 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
+  import { feature } from '$lib/feature-registry'
   import { invoke } from '$lib/ipc.svelte'
   import type { ThreadNoteContextTab } from '$lib/stores/context-sidebar.svelte'
 
@@ -144,7 +145,7 @@
           value={tab.draftBody}
           onValueChange={(value) => (tab.draftBody = value)}
           placeholder="Remind yourself what you intended to do here   Markdown supported…"
-          ariaLabel="Thread note"
+          ariaLabel={feature('thread-note').name}
           autofocus
           containerClass="min-h-0 flex-1"
           class="min-h-full w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"

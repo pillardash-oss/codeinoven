@@ -91,6 +91,9 @@ export interface AuditReport {
   /** Audited specification; absent on independent (spec-less) audits. */
   specId?: string
   specVersion?: number
+  /** Finalized Brainstorm used when the implementation has no specification. */
+  brainstormId?: string
+  brainstormVersion?: number
   /** True when this report was produced by an independent spec-less audit. */
   independent?: boolean
   /** Exact Assignment implementation graph audited, when this is an Assignment audit. */

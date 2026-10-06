@@ -28,7 +28,7 @@
     UtilityDefinitionPatch,
     UtilitySetupReport
   } from '$shared/types'
-  import { isOrchestrationChildThread } from '$shared/types'
+  import { ALL_HARNESSES_BINDING_ID, isOrchestrationChildThread } from '$shared/types'
   import UtilityEditorModalAgentSetup from './UtilityEditorModalAgentSetup.svelte'
   import UtilityEditorModalConfigFields from './UtilityEditorModalConfigFields.svelte'
   import UtilityEditorModalCreateStep from './UtilityEditorModalCreateStep.svelte'
@@ -37,6 +37,7 @@
   import UtilityEditorModalHarnessSelector from './UtilityEditorModalHarnessSelector.svelte'
   import UtilityEditorModalPluginBundle from './UtilityEditorModalPluginBundle.svelte'
   import { canToggleUtilityEnabled, isComputerUseUtility } from '$shared/utility-ids'
+  import { utilityInstallFolderNameFor } from '$shared/utility-scope-paths'
   import {
     allHarnessBinding,
     buildBindings,
@@ -54,6 +55,7 @@
     skillPlaceholder,
     toggleHarnessBinding,
     utilityToDraft,
+    type BindingDraft,
     type CredentialDraft,
     type ScopeLevel,
     type UtilityDraft
@@ -78,9 +80,23 @@
      * has to pick a model and run the setup.
      */
     agentRequestSeed?: string
+    /**
+     * Every native skill the app discovered, so the editor can name the
+     * harnesses that already load the one it is showing. Callers that do not
+     * pass it still get the entry's own harness as its owner.
+     */
+    skillCatalog?: AgentCapabilityEntry[]
   }
 
-  let { open, target, onClose, onSaved, onChanged, agentRequestSeed = '' }: Props = $props()
+  let {
+    open,
+    target,
+    onClose,
+    onSaved,
+    onChanged,
+    agentRequestSeed = '',
+    skillCatalog = []
+  }: Props = $props()
 
   let saving = $state(false)
   let editorError = $state('')
@@ -88,6 +104,10 @@
   let pluginManifest = $state('')
   let deleteTarget = $state<UtilityEditorTarget | null>(null)
   let draft = $state<UtilityDraft>(emptyDraft())
+  /** Harnesses a native skill should stay available to; `*` is the shared layer. */
+  let nativeSkillHarnesses = $state<string[]>([])
+  /** Set while the confirmation for taking a skill out of the shared folder is open. */
+  let movingFromShared = $state(false)
   /** Credential the secret form writes to; `null` adds a brand-new secret. */
   let credentialTargetId = $state<string | null>(null)
   let credentialValue = $state('')
@@ -210,6 +230,96 @@
       isComputerUseUtility({ id: draft.id ?? '', harnessBindings: draft.bindings })
   )
 
+  /** Skill folder a native entry points at, with its layer, so two projects'
+   *  same-named skills never mix. */
+  function nativeSkillFolder(entry: AgentCapabilityEntry): string {
+    const path = entry.source.kind === 'skill' ? entry.source.path : ''
+    const folder = path.split(/[\\/]/u).filter(Boolean).at(-1) ?? ''
+    return `${entry.projectId ?? ''}\u0000${folder}`
+  }
+
+  /**
+   * Every harness that can already load the native skill on screen. The
+   * catalog holds one entry per skill folder the app found, so the siblings of
+   * this entry are exactly its owners; a shared-layer copy means every harness.
+   */
+  let nativeSkillOwners = $derived.by((): string[] => {
+    const entry = nativeEntry
+    if (!entry || entry.kind !== 'skill') return []
+    const folder = nativeSkillFolder(entry)
+    const siblings = skillCatalog.filter(
+      (candidate) => candidate.kind === 'skill' && nativeSkillFolder(candidate) === folder
+    )
+    if (siblings.some((candidate) => candidate.origin === 'global')) {
+      return [ALL_HARNESSES_BINDING_ID]
+    }
+    const owners = Array.from(
+      new Set(
+        siblings
+          .map((candidate) => candidate.harnessId)
+          .filter((harnessId): harnessId is string => Boolean(harnessId))
+      )
+    )
+    if (owners.length > 0) return owners
+    return [entry.harnessId ?? ALL_HARNESSES_BINDING_ID]
+  })
+
+  let nativeSkillBindings = $derived<BindingDraft[]>(
+    nativeSkillHarnesses.map((harnessId) => ({
+      harnessId,
+      strategy: 'skill' as const,
+      nativeCapability: '',
+      transportName: ''
+    }))
+  )
+
+  function sameHarnessSelection(left: readonly string[], right: readonly string[]): boolean {
+    const sortedLeft = [...left].sort()
+    const sortedRight = [...right].sort()
+    return (
+      sortedLeft.length === sortedRight.length &&
+      sortedLeft.every((value, index) => value === sortedRight[index])
+    )
+  }
+
+  /** True when saving must move the skill folder instead of editing in place. */
+  let nativeSkillAvailabilityChanged = $derived(
+    isNative &&
+      nativeEntry?.kind === 'skill' &&
+      !sameHarnessSelection(nativeSkillHarnesses, nativeSkillOwners)
+  )
+
+  /** Narrowing a shared skill removes the copy other harnesses read. */
+  let nativeSkillMoveDropsShared = $derived(
+    isNative &&
+      nativeEntry?.kind === 'skill' &&
+      nativeEntry.origin === 'global' &&
+      !nativeSkillHarnesses.includes(ALL_HARNESSES_BINDING_ID)
+  )
+
+  /**
+   * Where a scoped capability is installed, said plainly, because a scope is a
+   * place on disk as well as a reach decision. A kind the app answers itself
+   * (a web tool, a provider) has no files to place, so it stays quiet.
+   */
+  let installHint = $derived.by(() => {
+    if (isNative || isAppOwned || draft.scopeLevel === 'global') return ''
+    if (draft.kind !== 'skill' && draft.kind !== 'mcp') return ''
+    const file = draft.kind === 'skill' ? 'SKILL.md' : 'mcp.json'
+    const folder = utilityInstallFolderNameFor({
+      kind: draft.kind,
+      name: draft.name,
+      ...(draft.kind === 'skill' ? { instructions: draft.instructions } : {}),
+      transportName: draft.bindings
+        .map((binding) => binding.transportName)
+        .find((name) => name.trim() !== '')
+    })
+    if (draft.scopeLevel === 'project') {
+      return `Installed into .cio/utilities/${folder}/ in this project as ${file}, so only this project's threads reach it.`
+    }
+    return `Installed into this thread's own utilities/threads/<thread>/${folder}/ folder in the app data root as ${file}, and removed with the thread.`
+  })
+
   let title = $derived.by(() => {
     if (isNative) return `Edit ${nativeEntry?.name ?? 'capability'}`
     if (draft.id) return 'Edit utility'
@@ -242,6 +352,28 @@
 
   function toggleHarness(harnessId: string): void {
     toggleHarnessBinding(draft, harnessId)
+  }
+
+  function selectAllNativeSkillHarnesses(): void {
+    nativeSkillHarnesses = [ALL_HARNESSES_BINDING_ID]
+  }
+
+  /**
+   * Mirrors the registry selector: choosing a harness while All is selected
+   * narrows to that harness, and the last harness cannot be removed, because a
+   * skill with nowhere to live would have to be deleted instead of moved.
+   */
+  function toggleNativeSkillHarness(harnessId: string): void {
+    if (nativeSkillHarnesses.includes(ALL_HARNESSES_BINDING_ID)) {
+      nativeSkillHarnesses = [harnessId]
+      return
+    }
+    if (nativeSkillHarnesses.includes(harnessId)) {
+      const remaining = nativeSkillHarnesses.filter((candidate) => candidate !== harnessId)
+      if (remaining.length > 0) nativeSkillHarnesses = remaining
+      return
+    }
+    nativeSkillHarnesses = [...nativeSkillHarnesses, harnessId]
   }
 
   function chooseScopeLevel(level: ScopeLevel): void {
@@ -310,6 +442,7 @@
       draft = next
       resetCredential()
       setupPreset = null
+      if (entry.kind === 'skill') nativeSkillHarnesses = [...nativeSkillOwners]
     } catch (error) {
       editorError = error instanceof Error ? error.message : 'The capability could not be loaded.'
     } finally {
@@ -343,6 +476,7 @@
       agentProjectId = ''
       agentSettings = null
       editorError = ''
+      movingFromShared = false
       if (target.utility) openRegistryEdit(target.utility)
     } else if (target?.kind === 'native') {
       void openNative()
@@ -413,7 +547,16 @@
     if (!entry) return
     if (entry.kind === 'skill') {
       if (!draft.instructions.trim()) throw new Error('Skill instructions are required.')
-      await invoke('capabilities:updateSkill', entry.source, draft.instructions.trim())
+      if (nativeSkillAvailabilityChanged) {
+        const moved = await invoke('capabilities:relocateSkill', entry.source, {
+          harnessIds: [...nativeSkillHarnesses],
+          instructions: draft.instructions.trim(),
+          ...(entry.projectId ? { projectId: entry.projectId } : {})
+        })
+        if (!moved) throw new Error('The skill could not be moved to its new folder.')
+      } else {
+        await invoke('capabilities:updateSkill', entry.source, draft.instructions.trim())
+      }
     } else {
       const content: NativeMcpContent = {
         name: draft.name.trim(),
@@ -469,8 +612,20 @@
     }
   }
 
+  /**
+   * A move that takes a skill out of the shared folder is destructive for the
+   * harnesses reading it, so it confirms before the save runs.
+   */
   async function saveUtility(event: SubmitEvent): Promise<void> {
     event.preventDefault()
+    if (nativeSkillAvailabilityChanged && nativeSkillMoveDropsShared) {
+      movingFromShared = true
+      return
+    }
+    await commitSave()
+  }
+
+  async function commitSave(): Promise<void> {
     saving = true
     editorError = ''
     try {
@@ -485,6 +640,11 @@
     } finally {
       saving = false
     }
+  }
+
+  async function confirmSharedSkillMove(): Promise<void> {
+    movingFromShared = false
+    await commitSave()
   }
 
   async function deleteUtility(): Promise<void> {
@@ -727,6 +887,18 @@
             onSelectAll={selectAllHarnesses}
             onToggleHarness={toggleHarness}
           />
+        {:else if isNative && draft.kind === 'skill'}
+          <UtilityEditorModalHarnessSelector
+            bindings={nativeSkillBindings}
+            {availableHarnesses}
+            disabled={saving}
+            legend="Available to"
+            description={nativeEntry?.origin === 'harness'
+              ? 'All moves this skill into the shared skills folder every harness reads. Individual harnesses move it into their own skill folders instead.'
+              : 'All keeps this skill in the shared skills folder every harness reads. Individual harnesses move it out of that folder into their own skill folders.'}
+            onSelectAll={selectAllNativeSkillHarnesses}
+            onToggleHarness={toggleNativeSkillHarness}
+          />
         {/if}
 
         {#if draft.kind !== 'skill'}
@@ -751,21 +923,24 @@
           </div>
         {/if}
 
+        <!-- Scope decides where a capability is installed and which turns can
+             reach it, so every credential-free kind chooses it. An MCP server
+             always loads on demand behind the gateway, so its activation is
+             fixed rather than chosen. -->
         {#if !isNative && !isAppOwned}
-          <div class="grid grid-cols-2 gap-3">
-            <label class="space-y-1 text-xs font-medium">
-              <span>Activation</span>
-              <select
-                class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary disabled:opacity-50"
-                disabled={draft.kind === 'mcp'}
-                bind:value={draft.activation}
-              >
-                <option value="on_demand">On demand</option>
-                {#if draft.kind !== 'mcp'}
+          <div class="grid gap-3 {draft.kind === 'mcp' ? '' : 'grid-cols-2'}">
+            {#if draft.kind !== 'mcp'}
+              <label class="space-y-1 text-xs font-medium">
+                <span>Activation</span>
+                <select
+                  class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary disabled:opacity-50"
+                  bind:value={draft.activation}
+                >
+                  <option value="on_demand">On demand</option>
                   <option value="always">Always available</option>
-                {/if}
-              </select>
-            </label>
+                </select>
+              </label>
+            {/if}
             <label class="space-y-1 text-xs font-medium">
               <span>Scope</span>
               <select
@@ -820,6 +995,9 @@
               {/if}
             </div>
           {/if}
+          {#if installHint}
+            <p class="text-xs text-muted">{installHint}</p>
+          {/if}
         {/if}
 
         <UtilityEditorModalConfigFields bind:draft {isNative} {allowSse} />
@@ -873,6 +1051,9 @@
         onRequestDelete={requestDelete}
         onSelectAgentModel={selectAgentModel}
         onSelectAgentThinking={selectAgentThinking}
+        onSelectAgentRuntime={(runtime) => {
+          if (agentSettings) agentSettings = { ...agentSettings, ...runtime }
+        }}
       />
     {/snippet}
   </Modal>
@@ -913,5 +1094,19 @@
     {deleteTarget?.kind === 'native'
       ? 'This removes the file on disk. This cannot be undone.'
       : 'Its registry entry and credential references will be removed.'}
+  </p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={movingFromShared}
+  title="Move skill out of the shared folder"
+  confirmLabel="Move skill"
+  busy={saving}
+  onCancel={() => (movingFromShared = false)}
+  onConfirm={confirmSharedSkillMove}
+>
+  <p>
+    Move <strong class="text-foreground">{nativeEntry?.name ?? 'this skill'}</strong> out of the shared
+    skills folder? Harnesses that do not keep their own copy will stop loading it.
   </p>
 </ConfirmDialog>

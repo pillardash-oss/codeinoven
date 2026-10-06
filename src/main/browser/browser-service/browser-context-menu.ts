@@ -43,6 +43,10 @@ export interface BrowserContextMenuActions {
 
   /** Open a link in a new tab. Only called for a navigable http(s) address. */
   openLinkInNewTab(url: string): void
+  /** Open an ephemeral peek at a link, or at the page itself when no address is
+   *  given. The service already knows the point that was clicked, so the flight
+   *  it starts can grow out of the link there. */
+  openPeekWindow?(url?: string): void
   /** Save a link's target through the download manager. */
   saveLinkAs(url: string): void
 
@@ -112,6 +116,9 @@ export function buildBrowserPageMenuItems(
     { label: 'Back', enabled: context.canGoBack, click: () => actions.goBack() },
     { label: 'Forward', enabled: context.canGoForward, click: () => actions.goForward() },
     { type: 'separator' },
+    ...(actions.openPeekWindow
+      ? [{ label: 'Take a Peek', click: () => actions.openPeekWindow?.() }]
+      : []),
     { label: 'Reload', click: () => actions.reload() },
     { label: 'Hard Reload', click: () => actions.hardReload() },
     { type: 'separator' },
@@ -175,6 +182,8 @@ function buildLinkItems(
   const items: MenuItemConstructorOptions[] = []
   if (navigable) {
     items.push({ label: 'Open Link in New Tab', click: () => actions.openLinkInNewTab(url) })
+    if (actions.openPeekWindow)
+      items.push({ label: 'Take a Peek', click: () => actions.openPeekWindow?.(url) })
   }
   if (params.linkText.trim()) {
     items.push({ label: 'Copy Link Text', click: () => actions.copyText(params.linkText) })
@@ -272,7 +281,13 @@ export function buildBrowserContextMenuItems(
   }
 
   if (items.length > 0) items.push({ type: 'separator' })
-  items.push(...buildBrowserPageMenuItems(context, actions, !params.isEditable))
+  items.push(
+    ...buildBrowserPageMenuItems(
+      context,
+      params.linkURL ? { ...actions, openPeekWindow: undefined } : actions,
+      !params.isEditable
+    )
+  )
   // An extension's items sit last but before the app's own inspection, the way a
   // browser puts contributed items below its built-ins. Nothing changes for a
   // page no extension contributed to.

@@ -232,6 +232,70 @@ const METHOD_PREFERENCE: Partial<Record<Platform, HarnessInstallMethod[]>> = {
 /** Documented winget id for bootstrapping Node.js when an npm install needs it. */
 const NODE_WINGET_PACKAGE = 'OpenJS.NodeJS.LTS'
 
+export interface HarnessChannel {
+  method: HarnessInstallMethod
+  pageUrl?: string
+  command?: string
+  args?: string[]
+}
+
+/**
+ * Shared capability metadata for one harness on one platform.
+ *
+ * Local installs, oven setup, and setup preflight all resolve their channels
+ * here so a change to a documented install command lands in every consumer at
+ * once. Returns undefined when the harness has no documented channel on that
+ * platform, which is how "unsupported" is distinguished from "installation
+ * failed".
+ */
+export function harnessInstallChannels(
+  harnessId: string,
+  platform: Platform
+): HarnessChannel[] | undefined {
+  const methods = INSTALL_METHODS[harnessId]?.[platform]
+  if (!methods || methods.length === 0) return undefined
+  const preference = METHOD_PREFERENCE[platform] ?? ['npm']
+  const ordered = [
+    ...preference.filter((method) => methods.includes(method)),
+    ...methods.filter((method) => !preference.includes(method))
+  ]
+  const commands = INSTALL_COMMANDS[harnessId]?.[platform] ?? {}
+  const page = INSTALL_PAGES[harnessId]?.[platform] ?? INSTALL_PAGES[harnessId]?.linux
+  return ordered
+    .filter((method) => commands[method] || method === 'native' || page)
+    .map((method) => ({
+      method,
+      pageUrl: page,
+      ...(commands[method] ? { command: commands[method].command, args: commands[method].args } : {})
+    }))
+}
+
+/**
+ * The single channel that should be used for an unattended oven install, or
+ * undefined when the platform has no one-command documented channel.
+ */
+export function preferredHarnessInstallChannel(
+  harnessId: string,
+  platform: Platform
+): HarnessChannel | undefined {
+  const channels = harnessInstallChannels(harnessId, platform)
+  if (!channels) return undefined
+  return channels.find((channel) => channel.command && channel.args) ?? channels[0]
+}
+
+/** The documented uninstall command for one channel, if the harness documents one. */
+export function harnessUninstallCommand(
+  harnessId: string,
+  method: HarnessInstallMethod
+): { command: string; args: string[] } | undefined {
+  return UNINSTALL_COMMANDS[harnessId]?.[method]
+}
+
+/** True when this channel removes user data the oven must preserve. */
+export function harnessUninstallIsDestructive(harnessId: string, method: HarnessInstallMethod): boolean {
+  return method === 'native'
+}
+
 const NPM_PATH_MARKERS = ['node_modules', '.npm-global', 'nvm/versions', 'pnpm']
 const BREW_PATH_MARKERS = ['Cellar', 'homebrew']
 

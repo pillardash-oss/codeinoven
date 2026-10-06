@@ -1,4 +1,4 @@
-import type { PermissionLevel, ThreadSettings } from '../../../lib/types'
+import type { AgentQuestion, PermissionLevel, ThreadSettings } from '../../../lib/types'
 import type { CodexServerRequest } from './codex-protocol'
 import { recordValue, stringValue } from './codex-values'
 
@@ -188,6 +188,26 @@ export function isCodexDynamicQuestionItem(item: Record<string, unknown>): boole
     stringValue(item['type']) === 'function_call' &&
     (stringValue(item['tool']) ?? stringValue(item['name'])) === CODEX_QUESTION_TOOL_NAME
   )
+}
+
+/** The authoritative decision text for one structured question, shared by
+ *  every Codex delivery path (request result and turn input). */
+export function codexQuestionDecisionText(
+  questions: AgentQuestion[],
+  answers?: string[][]
+): string {
+  if (!answers) {
+    return 'The user dismissed the structured question. Continue the original task without an answer.'
+  }
+  const decisions = questions.map((question, index) => ({
+    question: question.prompt,
+    answers: answers[index] ?? []
+  }))
+  return [
+    '[Authoritative agent question answer]',
+    'The user submitted these answers. Continue the original task using them.',
+    JSON.stringify(decisions)
+  ].join('\n')
 }
 
 export function codexQuestionIds(params: Record<string, unknown>): string[] {

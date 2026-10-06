@@ -7,6 +7,8 @@ import {
   DEFAULT_BACKGROUND_WAKE_LEAD_MS,
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_BROWSER_HISTORY_LIMIT,
+  DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
+  DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   DEFAULT_MAX_CONFLICT_FILE_BYTES,
   DEFAULT_IN_APP_NOTIFICATION_SOUND,
@@ -31,6 +33,7 @@ export const defaultConfig: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},
   design: { assignments: [] },
+  modelProfiles: [],
   workRoots: { ...DEFAULT_WORK_ROOTS },
   mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
@@ -61,5 +64,7 @@ export const defaultConfig: AppConfig = {
   allowPrototypeExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
-  sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
+  sound: structuredClone(DEFAULT_SPEECH_SETTINGS),
+  cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
+  cioCleanupExcludedCategories: [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES]
 }

@@ -75,6 +75,20 @@ export interface OvenConnectionStatus {
   }
 }
 
+export interface OvenHarnessInventoryItem {
+  harnessId: string
+  command: string
+  executablePath: string | null
+  installedVersion: string | null
+  health: 'healthy' | 'missing' | 'broken' | 'unsupported' | 'unknown'
+  issueCategory?:
+    'not-installed' | 'broken-executable' | 'unsupported-platform' | 'timeout' | 'unknown'
+  updateAvailable: boolean
+  latestVersion?: string
+  checkedAt: number
+  cached?: boolean
+}
+
 export interface OvenProbe {
   protocolVersion: number
   serviceRevision: string
@@ -82,8 +96,18 @@ export interface OvenProbe {
   architecture: string
   home: string
   nodeVersion: string
+  /**
+   * The zone the Oven service runs on, as an IANA id.
+   *
+   * The service reports its own process zone, which is the Oven's system zone
+   * and always an IANA id even on Windows, where the platform's own catalogue
+   * names zones differently. Missing while an older service is deployed.
+   */
+  timezone?: string
+  specs?: NonNullable<OvenConnectionStatus['specs']>
   harnesses: { command: string; path: string | null }[]
   activeRuns: number
+  inventory?: OvenHarnessInventoryItem[]
 }
 
 export interface OvenRun {
@@ -113,7 +137,47 @@ export interface StartOvenRunInput {
   closeInput?: boolean
 }
 
-export const OVEN_HARNESS_COMMANDS = ['codex', 'claude', 'opencode', 'muse', 'pi', 'cline'] as const
+/**
+ * Remote commands CodeInOven probes, installation registry, and runs on an oven,
+ * mapped to their canonical harness id in the harness registry.
+ *
+ * The oven side can only resolve a bare executable name, so this table is the
+ * one place the two registries meet: `claude` on disk is the `claude-code`
+ * harness, and Antigravity's `agy` command is included so oven inventory matches
+ * the harnesses the app can actually drive. Adding a harness to the registry
+ * without adding its remote command here makes it Local-only.
+ */
+export const OVEN_HARNESS_COMMANDS = [
+  'codex',
+  'claude',
+  'opencode',
+  'muse',
+  'pi',
+  'cline',
+  'agy'
+] as const
+
+export type OvenHarnessCommand = (typeof OVEN_HARNESS_COMMANDS)[number]
+
+const OVEN_HARNESS_ID_BY_COMMAND: Record<string, string> = {
+  codex: 'codex',
+  claude: 'claude-code',
+  opencode: 'opencode',
+  muse: 'muse',
+  pi: 'pi',
+  cline: 'cline',
+  agy: 'antigravity'
+}
+
+/** Resolve the canonical harness id for a remote command, or undefined when unknown. */
+export function ovenHarnessIdForCommand(command: string): string | undefined {
+  return OVEN_HARNESS_ID_BY_COMMAND[command]
+}
+
+/** True when the command is one CodeInOven is allowed to run on an oven. */
+export function isOvenHarnessCommand(value: unknown): value is OvenHarnessCommand {
+  return typeof value === 'string' && OVEN_HARNESS_ID_BY_COMMAND[value] !== undefined
+}
 
 export interface OvenFile {
   path: string
@@ -138,7 +202,15 @@ export type OvenWorkspaceRequest =
       exclusive?: boolean
       mode?: number
     }
-  | { operation: 'mkdir'; root: string; path: string }
+  | { operation: 'mkdir'; root: string; path: string; exclusive?: boolean }
+  | { operation: 'publishFile'; root: string; path: string; staged: string }
+  /**
+   * Rename one entry inside the root, creating the destination's parents.
+   *
+   * Used to adopt app-owned files out of a checkout (a pi session transcript)
+   * into the Oven's app data directory, which shares a root with the checkout.
+   */
+  | { operation: 'move'; root: string; path: string; to: string }
   | { operation: 'symlink'; root: string; path: string; target: string }
   | { operation: 'stat'; root: string; path: string }
   | {
@@ -149,8 +221,35 @@ export type OvenWorkspaceRequest =
       mode: number
       expectedData?: string
     }
-  | { operation: 'git'; root: string; action: 'status' | 'diff' | 'log' }
-  | { operation: 'clone'; root: string; url: string }
+  | { operation: 'git'; root: string; action: 'status' | 'diff' | 'log' | 'branch' }
+  | {
+      operation: 'clone'
+      root: string
+      url: string
+      /**
+       * Home-relative identity the Oven's Git environment must use.
+       *
+       * The app mirrors the GitHub identity this machine already authenticates
+       * with: a file-backed key travels whole with owner-only permissions, an
+       * agent-held key travels as its public half and the forwarded agent
+       * supplies the secret half. A dedicated Oven identity, when configured,
+       * takes precedence over this path.
+       */
+      localIdentityFile?: string
+    }
+
+/** Scope checkouts that exist on one Oven, offered as the other end of a Git sync. */
+export interface OvenRootPeers {
+  /** Scope bucket id the running checkout belongs to. */
+  currentScope: string
+  checkouts: Array<{ id: string; name: string; root: string }>
+}
+
+/** One end of a file or Git operation: a checkout on an Oven, or a local root. */
+export interface OvenRootTarget {
+  ovenId: string
+  root: string
+}
 
 export interface OvenWorkspaceResult {
   root: string
@@ -174,6 +273,244 @@ export interface OvenTransferReview extends OvenTransferInput {
   files: number
   bytes: number
   expiresAt: number
+}
+
+export type OvenPackageManager =
+  'apt' | 'dnf' | 'yum' | 'pacman' | 'zypper' | 'brew' | 'winget' | 'choco' | 'scoop' | 'unknown'
+
+/** The minimum Node.js the oven service runtime requires. */
+export const OVEN_MINIMUM_NODE_VERSION = 22
+
+/** How much authority the authenticated oven user has for system mutation. */
+export type OvenPrivilege = 'root' | 'passwordless-sudo' | 'sudo' | 'none'
+
+export interface OvenToolStatus {
+  installed: boolean
+  version: string | null
+  path?: string | null
+}
+
+/** How an Oven's clock zone can be set, as preflight observed it. */
+export type OvenTimezoneMethod =
+  'timedatectl' | 'systemsetup' | 'zoneinfo' | 'powershell' | 'unsupported'
+
+/** An Oven's own clock zone, read without changing anything. */
+export interface OvenTimezone {
+  /**
+   * Zone the Oven runs on now: an IANA id such as `Africa/Lagos` everywhere but
+   * Windows, where the platform names zones in its own catalogue instead.
+   */
+  current: string | null
+  /** Mechanism available for setting it, or `unsupported` when there is none. */
+  method: OvenTimezoneMethod
+}
+
+/** Outcome of matching one Oven's clock to this computer's time zone. */
+export interface OvenTimezoneSyncResult {
+  status: 'updated' | 'current' | 'unsupported'
+  /** Zone the Oven is on after the attempt, as the Oven reports it. */
+  zone: string | null
+  /** One sentence for the toast that reports the attempt. */
+  message: string
+}
+
+export interface OvenHarnessPreflight {
+  harnessId: string
+  command: string
+  name: string
+  supported: boolean
+  unsupportedReason?: string
+  /** Documented install channels for this platform, in preference order. */
+  channels: string[]
+  executablePath: string | null
+  installedVersion: string | null
+  health: 'healthy' | 'missing' | 'broken' | 'unsupported' | 'unknown'
+  issueCategory?: 'not-installed' | 'broken-executable' | 'unsupported-platform' | 'timeout'
+}
+
+/**
+ * One read-only observation of a remote oven. Everything here comes from
+ * non-mutating commands, so collecting a report is always safe.
+ */
+export interface OvenPreflightReport {
+  ovenId: string
+  checkedAt: number
+  /** `process.platform` reported by the oven, normalized to a known value. */
+  platform: NodeJS.Platform
+  architecture: string
+  osName: string
+  osVersion: string | null
+  packageManager: OvenPackageManager
+  privilege: OvenPrivilege
+  git: OvenToolStatus
+  curl: OvenToolStatus
+  node: OvenToolStatus
+  npm: OvenToolStatus
+  /** The Oven's own clock zone, read read-only alongside everything else. */
+  timezone: OvenTimezone
+  harnesses: OvenHarnessPreflight[]
+  /** Set when the oven reports pending OS updates or a required reboot. Never acted on. */
+  osUpdateRequired: boolean
+  osUpdateDetail?: string
+  rebootRequired: boolean
+  durationMs: number
+}
+
+export interface OvenPreflightIssue {
+  code:
+    | 'unsupported-platform'
+    | 'unsupported-architecture'
+    | 'unknown-package-manager'
+    | 'missing-git'
+    | 'missing-curl'
+    | 'node-missing'
+    | 'node-too-old'
+    | 'npm-missing'
+    | 'harness-unsupported'
+    | 'harness-broken'
+    | 'os-update-pending'
+    | 'reboot-required'
+  message: string
+  /** Blocks setup outright rather than merely warning. */
+  blocking: boolean
+}
+
+/** The pure verdict computed from a preflight report. Never performs I/O. */
+export interface OvenPreflightAssessment {
+  ovenId: string
+  checkedAt: number
+  platform: NodeJS.Platform
+  architecture: string
+  osName: string
+  supported: boolean
+  /** Setup can mutate this oven once the user starts it. */
+  setupCapable: boolean
+  prerequisitesSatisfied: boolean
+  issues: OvenPreflightIssue[]
+  harnesses: OvenHarnessPreflight[]
+  packageManager: OvenPackageManager
+  privilege: OvenPrivilege
+  nodeVersion: string | null
+  timezone: OvenTimezone
+  osUpdateRequired: boolean
+  osUpdateDetail?: string
+  rebootRequired: boolean
+}
+
+export type OvenSetupStepStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'blocked'
+  | 'interrupted'
+  | 'cancelled'
+  | 'skipped'
+
+export interface OvenSetupStep {
+  id: string
+  name: string
+  status: OvenSetupStepStatus
+  startedAt?: number
+  finishedAt?: number
+  durationMs?: number
+  error?: string
+  detail?: string
+  retryCount?: number
+  installProgress?: {
+    stage: 'starting' | 'downloading' | 'installing' | 'verifying'
+    percent?: number
+  }
+  skippedReason?: string
+  requiresElevation?: boolean
+}
+
+export type OvenSetupOperationStatus =
+  | 'idle'
+  | 'preparing'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted'
+  | 'blocked'
+
+export interface OvenSetupSelectedHarness {
+  harnessId: string
+  accountId?: string
+  install?: boolean
+  update?: boolean
+}
+
+/**
+ * Git identity as it is persisted. Raw key material never reaches an operation
+ * record: the IPC layer converts a submitted private key into a vault reference.
+ * Only that reference is stored, journaled, or sent back to the renderer.
+ */
+export interface OvenSetupGitConfiguration {
+  enabled: boolean
+  host: 'github' | 'any'
+  privateKeyRef?: string
+  /** Fingerprint of the installed public key, used to detect a changed identity. */
+  publicKeyFingerprint?: string
+  publicKey?: string
+}
+
+/** Everything an operation needs to resume, with no secret values. */
+export interface OvenSetupConfiguration {
+  selectedHarnesses: OvenSetupSelectedHarness[]
+  synchronizeAccounts: boolean
+  synchronizeConfiguration: boolean
+  git: OvenSetupGitConfiguration
+  packageUpgrades: boolean
+}
+
+/**
+ * Start request. The Git identity is accepted exactly once, in the submission,
+ * and the IPC layer converts it into a vault reference before the operation is
+ * created. Nothing downstream ever sees the raw key value.
+ */
+export interface StartOvenSetupInput {
+  configuration: OvenSetupConfiguration
+  gitIdentity?: { privateKey: string }
+}
+
+export interface OvenSetupPreflightResult {
+  report: OvenPreflightReport
+  assessment: OvenPreflightAssessment
+}
+
+export interface OvenSetupProgressEvent {
+  /** Monotonic per operation so the renderer can resume from a cursor after a reload. */
+  sequence: number
+  operationId: string
+  ovenId: string
+  status: OvenSetupOperationStatus
+  phase: OvenSetupPhase
+  steps: OvenSetupStep[]
+  currentStepId?: string
+  startedAt: number
+  finishedAt?: number
+  error?: string
+  /** Operator-facing status. Never contains prompts, spec text, or secrets. */
+  message?: string
+}
+
+export type OvenSetupPhase =
+  'preflight' | 'bootstrap' | 'prerequisites' | 'harnesses' | 'accounts' | 'git' | 'finalize'
+
+export interface OvenSetupOperation {
+  id: string
+  ovenId: string
+  status: OvenSetupOperationStatus
+  /** Sticky flag set once the first complete setup succeeds. */
+  setupComplete?: boolean
+  configuration: OvenSetupConfiguration
+  steps: OvenSetupStep[]
+  startedAt: number
+  finishedAt?: number
+  error?: string
+  updatedAt: number
 }
 
 /** Accept the familiar SSH form without ever accepting arbitrary CLI options. */

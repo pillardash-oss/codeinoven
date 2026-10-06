@@ -14,6 +14,14 @@ export interface TerminalContextTab {
   startingDirectory?: string
 }
 
+export interface OvenContextTab {
+  id: string
+  kind: 'oven'
+  title: string
+  projectId: string
+  threadId: string
+}
+
 export interface FilesContextTab {
   id: string
   kind: 'files'
@@ -377,6 +385,7 @@ export interface TemporaryChatContextTab {
 
 export type ContextSidebarTab =
   | FilesContextTab
+  | OvenContextTab
   | DiffContextTab
   | TerminalContextTab
   | SubagentContextTab

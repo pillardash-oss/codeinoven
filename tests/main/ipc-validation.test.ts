@@ -118,13 +118,18 @@ describe('IPC structured input validation', () => {
     expect(
       validateThreadSettings({
         ...validSettings,
+        inferenceMode: 'ultrafast',
+        contextWindow: 1_000_000,
         harnessId: ' opencode ',
         modelId: ' anthropic/claude-sonnet-4 '
       })
-    ).toEqual(validSettings)
+    ).toEqual({ ...validSettings, inferenceMode: 'ultrafast', contextWindow: 1_000_000 })
   })
 
   it('rejects invalid, incomplete, and extended thread settings', () => {
+    expect(() => validateThreadSettings({ ...validSettings, contextWindow: 999_999 })).toThrow(
+      TypeError
+    )
     expect(() => validateThreadSettings({ ...validSettings, permissionLevel: 'all' })).toThrow(
       TypeError
     )

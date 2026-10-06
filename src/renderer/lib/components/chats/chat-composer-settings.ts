@@ -84,6 +84,26 @@ export function withModelSelection(
           ? `${nextHarness}.default`
           : (resolved.accountId ?? `${nextHarness}.default`))),
     ...(thinkingLevel ? { thinkingLevel } : {}),
-    ...(fastSupported ? {} : { inferenceMode: 'normal' })
+    ...(resolved.inferenceMode === 'ultrafast'
+      ? {
+          inferenceMode:
+            nextHarness === 'codex' && model?.ultrafastSupported ? 'ultrafast' : 'normal'
+        }
+      : fastSupported
+        ? {}
+        : { inferenceMode: 'normal' }),
+    ...(nextHarness !== resolved.harnessId ||
+    selection.providerId !== resolved.providerId ||
+    selection.modelId !== resolved.modelId
+      ? {
+          // An unset window belongs to the harness. Only carry an explicit
+          // user choice forward when the selected model supports it.
+          contextWindow:
+            resolved.contextWindow !== undefined &&
+            model?.contextWindows?.includes(resolved.contextWindow)
+              ? resolved.contextWindow
+              : undefined
+        }
+      : {})
   }
 }

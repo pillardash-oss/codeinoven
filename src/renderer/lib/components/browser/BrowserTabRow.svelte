@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Globe, Loader2, Mic, Moon, Pin, StickyNote, Volume2, VolumeX, X } from '@lucide/svelte'
+  import { Globe, Loader2, Mic, Moon, Pin, Volume2, VolumeX, X } from '@lucide/svelte'
+  import { feature } from '$lib/feature-registry'
   import { invoke } from '$lib/ipc.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
@@ -310,6 +311,7 @@
       : 'hover:bg-elevated'}"
   role="group"
   aria-label={`${label} tab row`}
+  data-browser-tab-id={tab.id}
   oncontextmenu={onContextMenu}
 >
   <button
@@ -395,13 +397,14 @@
       </span>
     {/if}
     {#if threadNotesState.has(tab.id)}
+      {@const TabNoteIcon = feature('tab-note').icon}
       <span
         role="img"
         class="flex h-6 w-6 items-center justify-center text-dimmed"
-        title="This tab has a note"
-        aria-label="Tab has a note"
+        title={`${feature('tab-note').name} available`}
+        aria-label={`${feature('tab-note').name} available`}
       >
-        <StickyNote size={12} />
+        <TabNoteIcon size={12} />
       </span>
     {/if}
     {#if runtime.capturing}

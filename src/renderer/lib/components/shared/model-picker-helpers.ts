@@ -4,7 +4,8 @@ import { modelKey } from '$lib/model-keys'
 import { providerStore } from '$lib/stores/providers.svelte'
 import { visionModels } from '$lib/stores/vision-models.svelte'
 import { getVendorSlug } from '$lib/vendor-icons/registry'
-import type { ProviderCatalog, ProviderModel } from '$shared/types'
+import type { ModelProfileSettings } from '$shared/model-profiles'
+import type { ModelProfile, ProviderCatalog, ProviderModel } from '$shared/types'
 
 export type ModelEntry = { provider: ProviderCatalog; model: ProviderModel }
 
@@ -16,8 +17,115 @@ export interface UnavailableFavorite {
   modelId: string
 }
 
+/** One harness the picker can narrow the model list to. */
+export interface PickerHarnessOption {
+  id: string
+  name: string
+  /**
+   * True when the current execution target (a remote Oven) does not have this
+   * harness installed, so its models cannot run there.
+   */
+  unavailable?: boolean
+  /** Why the harness is unavailable, used as the chip's and row's title. */
+  reason?: string
+}
+
+/**
+ * The harness filter a picker's side panel renders.
+ *
+ * The selection itself stays owned by the model list, because the list is what
+ * the filter narrows; the panel only draws the controls and reports intent. It
+ * travels as one object so the row at the top of the picker and the chips inside
+ * the panel can never disagree about what is selected.
+ */
+export interface PickerHarnessFilterControls {
+  /** Harness choices, in the registry's canonical order. */
+  options: readonly PickerHarnessOption[]
+  /** Row label: `All harnesses`, or how many harnesses are selected. */
+  label: string
+  /** True while the selection is narrowing the model list. */
+  active: boolean
+  /** Selected harness ids; always empty while everything is shown. */
+  selected: ReadonlySet<string>
+  onToggle: (harnessId: string) => void
+  onClear: () => void
+}
+
+/**
+ * The profiles a picker's side panel lists.
+ *
+ * One object rather than eight props: the panel forwards it whole to the profiles
+ * section, so a picker that cannot apply a profile simply passes `null` and the
+ * panel lists the harness filter alone. The model picker builds this from its own
+ * props, because profiles are the picker's surface rather than one caller's.
+ */
+export interface ModelPickerProfilesGroup {
+  /** Saved profiles, in the order the user listed them. */
+  profiles: ModelProfile[]
+  /** Settings in force, used to tick the profile that is currently live. */
+  settings: ModelProfileSettings
+  /** Catalogs, so a row shows the model name rather than a raw id. */
+  catalogs: ProviderCatalog[]
+  /** True when the user has saved as many profiles as the app allows. */
+  atCapacity: boolean
+  /** Name a new profile starts from, derived from the current settings. */
+  draftName: string
+  onApply: (profile: ModelProfile) => void
+  onSave: (name: string) => void
+  onRename: (profile: ModelProfile, name: string) => void
+  onRequestDelete: (profile: ModelProfile) => void
+}
+
 /** Cap the trigger label at this length, suffixing an ellipsis when exceeded. */
 export const MODEL_LABEL_MAX_LENGTH = 40
+
+/**
+ * Marks a control a picker's side panel walks between with the arrow keys.
+ *
+ * One marker per row, on the control that takes focus when the row is stepped
+ * to, rather than one per focusable control: a profile row owns its rename and
+ * delete buttons as well, and marking those too would stop the arrows three
+ * times on the same row. They are reached with Tab instead.
+ */
+export const PICKER_ENTRY_SELECTOR = '[data-picker-entry]'
+
+/**
+ * `Node.DOCUMENT_POSITION_FOLLOWING`.
+ *
+ * Spelled out rather than read off `Node` so this module stays importable where
+ * the DOM globals are not defined.
+ */
+const DOCUMENT_POSITION_FOLLOWING = 4
+
+/**
+ * The entry the arrows should move to from wherever focus currently is.
+ *
+ * `focused` is rarely an entry itself: a row hands focus to its rename and delete
+ * buttons too, and those sit beside the row's entry in the document rather than
+ * inside it. So the walk is measured in document order: the entry focus stands on
+ * is the one it is, or the last one that precedes it, which is the row that owns
+ * whatever control was reached with Tab. From there the step lands on the
+ * neighbour, and `null` at either end of the panel means the key is left to the
+ * browser and focus stays where it is.
+ */
+export function pickerEntryTarget(
+  entries: readonly HTMLElement[],
+  focused: Element | null,
+  step: 1 | -1
+): HTMLElement | null {
+  if (!focused || entries.length === 0) return null
+  let owner = -1
+  for (const [index, entry] of entries.entries()) {
+    if (
+      entry === focused ||
+      (entry.compareDocumentPosition(focused) & DOCUMENT_POSITION_FOLLOWING) !== 0
+    ) {
+      owner = index
+    }
+  }
+  if (owner === -1) return null
+  return entries[owner + step] ?? null
+}
 
 export const PICKER_OVERSCAN = 8
 

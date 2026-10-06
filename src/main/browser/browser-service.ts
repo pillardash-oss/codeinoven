@@ -28,11 +28,11 @@ import {
 } from 'electron'
 import type { Database } from '../database/database'
 import { createHash } from 'node:crypto'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { mkdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
-import type { Project, Thread } from '../../lib/types'
+import type { PermissionLevel, Project, Thread } from '../../lib/types'
 import { isPreviewOriginUrl, originOf } from '../../lib/local-development-url'
 import {
   BUILT_IN_BROWSER_SEARCH_ENGINES,
@@ -152,6 +152,17 @@ import {
   RESTORE_SETTLE_TIMEOUT_MS,
   restoreNeedsFallbackLoad
 } from './browser-service/browser-navigation-outcome'
+import {
+  parsePeekProbeAnswer,
+  peekPointInFrame,
+  peekProbePoint,
+  peekProbeScript,
+  PEEK_ORIGIN_PROBE_TIMEOUT_MS,
+  PEEK_SNAPSHOT_MAX_WIDTH,
+  resolvePeekOrigin,
+  type BrowserPeekPoint,
+  type BrowserPeekRect
+} from './browser-service/browser-peek'
 import { BrowserTabStage } from './browser-service/browser-stage'
 import {
   listBrowserProfilesForPartition,
@@ -415,10 +426,19 @@ function replaceHandler(channel: string, listener: Parameters<typeof ipcMain.han
  * A browser tab's assistant conversation answers about the page on screen, so its
  * browser capability is attached to that tab. Only the reading operations are
  * allowed there: they observe the page, while everything else in the capability
- * changes it, and a page the user is reading must never be moved, clicked
- * through or resized by an answer to their question.
+ * changes it. File upload is the one reviewed exception: Auto Review uses a
+ * native file chooser or an exact-file confirmation, while Full Access may name
+ * the files directly. Navigation, clicks and resizing remain agent-page only.
  */
-const ATTACHED_PAGE_OPERATIONS = new Set(['snapshot', 'screenshot', 'console'])
+const ATTACHED_PAGE_READ_OPERATIONS = new Set(['snapshot', 'screenshot', 'console'])
+const ATTACHED_PAGE_MUTATION_OPERATIONS = new Set([
+  'click',
+  'type',
+  'navigate',
+  'reload',
+  'viewport',
+  'upload'
+])
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -610,6 +630,7 @@ export class BrowserService {
   private readonly tabHistory = new BrowserTabHistoryStore()
   /** Stacks of tabs closed this session, held only until the tab is reopened. */
   private readonly closedTabHistory = new BrowserClosedTabHistory()
+  private peekTabId: string | null = null
   private consoleSequence = 0
   /**
    * The popup windows pages have opened, hosted by the app rather than by the
@@ -801,6 +822,7 @@ export class BrowserService {
    * to be restored twice.
    */
   private captureTabHistory(tabId: string, tab: BrowserTab): void {
+    if (tabId === this.peekTabId) return
     const record = this.readTabHistory(tabId, tab)
     if (!record) return
     this.closedTabHistory.forget(tabId)
@@ -998,10 +1020,17 @@ export class BrowserService {
       // Leaving a tab right after an agent revealed it is the signal that the
       // agent's reveal was not welcome; it stops being counted after a while.
       this.noteDepartedReveal(tabId)
+      // A peek is the one tab whose hide is never a hand-off between two surfaces:
+      // it is being destroyed or promoted into a tab of its own, and either way its
+      // page has to be off screen before the flight that carries it away starts,
+      // because a native view is painted over the DOM that flight happens in. The
+      // grace period below would leave the page sitting over that flight for its
+      // length.
+      if (tabId === this.peekTabId) this.parkTab(tabId)
       // Deferred by one tick, so a panel that unmounts because the same tab is
       // moving to another surface (the sidebar handing the tab to the full screen
       // browser) does not park a view that is about to be shown again.
-      this.schedulePark(tabId)
+      else this.schedulePark(tabId)
       // Missing tabs are silently ignored   the renderer may call hide
       // during teardown after the tab was already destroyed.
     })
@@ -1373,6 +1402,19 @@ export class BrowserService {
       // guards that repeatedly dropped the first prompt (blank first popup).
       return this.promptWindow.currentContext()
     })
+    replaceHandler('browser:expandPeek', (_event, rawTabId) => {
+      const tabId = validateTabId(rawTabId)
+      if (tabId !== this.peekTabId || !this.tabs.has(tabId))
+        throw new Error('Peek Window is no longer available')
+      this.peekTabId = null
+    })
+    replaceHandler('browser:peekSnapshot', async (_event, rawTabId) => {
+      // Taken while the peek is still on screen, because the surface animates the
+      // page away with it: without a picture the last thing the user sees of the
+      // page is the frame it was replaced by.
+      const captured = await this.captureThumbnail(validateTabId(rawTabId), PEEK_SNAPSHOT_MAX_WIDTH)
+      return captured?.dataUrl ?? null
+    })
     replaceHandler('browser:destroy', (_event, rawTabId, rawReason) => {
       this.destroy(validateTabId(rawTabId), validateTabDestroyReason(rawReason))
     })
@@ -1630,7 +1672,14 @@ export class BrowserService {
   async executeUtility(
     operation: string,
     input: Record<string, unknown>,
-    context: { projectId: string; threadId: string }
+    context: {
+      projectId: string
+      threadId: string
+      // Only the upload path consults this. Callers that can never upload (the
+      // design and video preview sessions) omit it, and the upload fallback then
+      // treats the missing level as review-required rather than full access.
+      permissionLevel?: PermissionLevel
+    }
   ): Promise<unknown> {
     const projectId = validateProjectId(context.projectId)
     const threadId = validateThreadId(context.threadId)
@@ -1682,13 +1731,30 @@ export class BrowserService {
     if (!attached && (tab.projectId !== projectId || tab.threadId !== threadId)) {
       throw new Error('The current browser tab belongs to a different project or thread')
     }
-    // The page the user is on is attached for reading only. Driving it (clicking,
-    // typing, navigating, reloading, resizing) would move the page the user is
-    // looking at out from under them, so those operations keep requiring a page
-    // the agent opened itself.
-    if (attached && !ATTACHED_PAGE_OPERATIONS.has(operation)) {
+    // The user's tab is read-only by default. Full Access follows the thread's
+    // permission tier; Auto Review asks the user to approve each page mutation.
+    // File upload has its own exact-file review and never submits a form.
+    if (attached && !ATTACHED_PAGE_READ_OPERATIONS.has(operation)) {
+      if (!ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation)) {
+        throw new Error(
+          `The page the user is on is attached for reading (${[...ATTACHED_PAGE_READ_OPERATIONS].join(', ')}), so "${operation}" is unavailable.`
+        )
+      }
+      if (
+        context.permissionLevel === 'auto_review' &&
+        operation !== 'upload' &&
+        !(await this.approveAttachedPageOperation(operation, input, tab))
+      ) {
+        return { ...this.utilityTabContext(tabId, tab), page: 'user', cancelled: true }
+      }
+    }
+    if (
+      attached &&
+      !ATTACHED_PAGE_READ_OPERATIONS.has(operation) &&
+      !ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation)
+    ) {
       throw new Error(
-        `The page the user is on is attached for reading (${[...ATTACHED_PAGE_OPERATIONS].join(', ')}), so "${operation}" needs a page of your own: call "open" first.`
+        `The page the user is on cannot run "${operation}". Open a page of your own first.`
       )
     }
     // An operation is a use: it revives a tab the agent owns that was evicted
@@ -1786,6 +1852,10 @@ export class BrowserService {
       })()`)
       return { ...utilityContext, result }
     }
+    if (operation === 'upload') {
+      const result = await this.uploadFiles(tabId, tab, input, context.permissionLevel)
+      return { ...utilityContext, result }
+    }
     if (operation === 'screenshot') {
       return { ...utilityContext, ...(await this.captureScreenshot(tabId, tab, input)) }
     }
@@ -1793,6 +1863,182 @@ export class BrowserService {
       return { ...utilityContext, entries: [...tab.consoleEntries] }
     }
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
+  }
+
+  /** Ask before an Auto Review turn mutates the page the user is viewing. */
+  private async approveAttachedPageOperation(
+    operation: string,
+    input: Record<string, unknown>,
+    tab: BrowserTab
+  ): Promise<boolean> {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
+    const pageUrl = contents.getURL()
+    const pageGeneration = tab.navigationGeneration
+    let action: string
+    if (operation === 'click') {
+      action = `Click the first element matching this selector:\n${this.requiredInputString(input, 'selector')}`
+    } else if (operation === 'type') {
+      action = `Replace the value of this element:\n${this.requiredInputString(input, 'selector')}\n\nWith this text:\n${this.requiredInputString(input, 'text', true)}`
+    } else if (operation === 'navigate') {
+      action = `Navigate the current tab to:\n${validateBrowserUrl(this.requiredInputString(input, 'url'))}`
+    } else if (operation === 'reload') {
+      action = 'Reload the current page.'
+    } else if (operation === 'viewport') {
+      action = `Change the page viewport to:\n${JSON.stringify(input)}`
+    } else {
+      throw new Error(`Auto Review does not support the browser action "${operation}"`)
+    }
+
+    const approval = await dialog.showMessageBox(this.window, {
+      type: 'warning',
+      title: 'Approve browser action',
+      message: `Allow the agent to act on ${safeOrigin(pageUrl)}?`,
+      detail: action,
+      buttons: ['Cancel', 'Allow'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    })
+    if (approval.response !== 1) return false
+    if (
+      contents.isDestroyed() ||
+      tab.navigationGeneration !== pageGeneration ||
+      contents.getURL() !== pageUrl
+    ) {
+      throw new Error(
+        'The page changed while the browser action was being approved; retry on the current page'
+      )
+    }
+    return true
+  }
+
+  /**
+   * Fill a page's file input through a narrow main-process action. Auto Review
+   * always asks the user to choose files in a native dialog; Full Access can use
+   * paths directly. The site never receives a file until this operation is
+   * called, and this operation never submits the surrounding form.
+   */
+  private async uploadFiles(
+    tabId: string,
+    tab: BrowserTab,
+    input: Record<string, unknown>,
+    permissionLevel: PermissionLevel | undefined
+  ): Promise<Record<string, unknown>> {
+    const contents = tab.view.webContents
+    if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
+
+    const rawSelector = input['selector']
+    if (
+      rawSelector !== undefined &&
+      (typeof rawSelector !== 'string' || rawSelector.length === 0 || rawSelector.length > 1024)
+    ) {
+      throw new TypeError('selector must be a non-empty CSS selector under 1024 characters')
+    }
+    const selector = typeof rawSelector === 'string' ? rawSelector : 'input[type="file"]'
+    const beforeUrl = contents.getURL()
+    const beforeGeneration = tab.navigationGeneration
+    const inputState: unknown = await contents.executeJavaScript(`(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      if (!(element instanceof HTMLInputElement) || element.type !== 'file') {
+        return { available: false };
+      }
+      return {
+        available: true,
+        multiple: element.multiple,
+        accept: element.accept,
+        disabled: element.disabled
+      };
+    })()`)
+    if (typeof inputState !== 'object' || inputState === null) {
+      throw new Error('The selected browser element is not a file input')
+    }
+    const inputRecord = inputState as Record<string, unknown>
+    if (inputRecord['available'] !== true || inputRecord['disabled'] === true) {
+      throw new Error('The selected browser element is not an enabled file input')
+    }
+    const multiple = inputRecord['multiple'] === true
+    const accept = typeof inputRecord['accept'] === 'string' ? inputRecord['accept'] : ''
+    const requestedPaths = this.uploadPathInputs(input)
+    const suppliedPaths = permissionLevel === 'full_access' ? requestedPaths : []
+    let paths: string[]
+    if (suppliedPaths.length > 0) {
+      paths = await Promise.all(suppliedPaths.map((path) => this.resolveUploadPath(path)))
+      if (!multiple && paths.length > 1) {
+        throw new Error('This file input accepts one file at a time')
+      }
+    } else {
+      const filters = fileChooserFilters(accept)
+      const choice = await dialog.showOpenDialog(this.window, {
+        title: `Choose files for upload to ${safeOrigin(beforeUrl)}`,
+        buttonLabel: 'Upload',
+        properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+        ...(filters.length > 0 ? { filters } : {})
+      })
+      if (choice.canceled || choice.filePaths.length === 0) {
+        return { uploaded: false, cancelled: true }
+      }
+      paths = await Promise.all(choice.filePaths.map((path) => this.resolveUploadPath(path)))
+    }
+    if (paths.length > 10) throw new Error('A browser upload can include at most 10 files')
+
+    if (
+      contents.isDestroyed() ||
+      tab.navigationGeneration !== beforeGeneration ||
+      contents.getURL() !== beforeUrl
+    ) {
+      throw new Error(
+        'The page changed while the file upload was being approved; retry on the current page'
+      )
+    }
+
+    const debuggerSession = contents.debugger
+    const attachedHere = !debuggerSession.isAttached()
+    try {
+      if (attachedHere) debuggerSession.attach('1.3')
+      const documentResult: unknown = await debuggerSession.sendCommand('DOM.getDocument', {
+        depth: 1,
+        pierce: true
+      })
+      const documentRecord = asObject(documentResult)
+      const root = asObject(documentRecord?.['root'])
+      const rootNodeId = root?.['nodeId']
+      if (typeof rootNodeId !== 'number') throw new Error('The page document is unavailable')
+      const queryResult: unknown = await debuggerSession.sendCommand('DOM.querySelector', {
+        nodeId: rootNodeId,
+        selector
+      })
+      const nodeId = asObject(queryResult)?.['nodeId']
+      if (typeof nodeId !== 'number' || nodeId === 0) {
+        throw new Error('The file input is no longer present on the page')
+      }
+      await debuggerSession.sendCommand('DOM.setFileInputFiles', { nodeId, files: paths })
+      return { uploaded: true, files: paths.map((path) => basename(path)), submitted: false }
+    } finally {
+      if (attachedHere && debuggerSession.isAttached()) debuggerSession.detach()
+    }
+  }
+
+  private uploadPathInputs(input: Record<string, unknown>): string[] {
+    const value = input['paths']
+    if (value === undefined) return []
+    if (
+      !Array.isArray(value) ||
+      value.length < 1 ||
+      value.length > 10 ||
+      value.some((path) => typeof path !== 'string' || path.length === 0 || path.length > 8192)
+    ) {
+      throw new TypeError('paths must contain between 1 and 10 absolute file paths')
+    }
+    return value as string[]
+  }
+
+  private async resolveUploadPath(path: string): Promise<string> {
+    if (!isAbsolute(path)) throw new TypeError('Every upload path must be absolute')
+    const resolved = await realpath(path)
+    const details = await stat(resolved)
+    if (!details.isFile()) throw new TypeError(`Upload path is not a file: ${basename(path)}`)
+    return resolved
   }
 
   /**
@@ -2665,6 +2911,11 @@ export class BrowserService {
     // a development build the menu is Electron's default one) and Cmd/Ctrl+W
     // from closing its window.
     view.webContents.on('before-input-event', (event, input) => {
+      if (this.peekTabId === tabId && input.type === 'keyDown' && input.key === 'Escape') {
+        event.preventDefault()
+        this.requestPanelShortcut(tabId, 'close-tab')
+        return
+      }
       // The switcher is claimed first: it is an app-level gesture that must work
       // from inside a page, and it must never be shadowed by a browser binding.
       if (this.consumeSwitcherKey(input)) {
@@ -3016,6 +3267,19 @@ export class BrowserService {
     owner: BrowserPageOwner,
     details: Electron.HandlerDetails
   ): Electron.WindowOpenHandlerResponse {
+    if (
+      details.disposition === 'new-window' &&
+      !details.features &&
+      !details.postBody &&
+      owner.projectId === GLOBAL_BROWSER_PROJECT_ID
+    ) {
+      try {
+        this.openPeekFromWindowRequest(owner, validateBrowserUrl(details.url))
+      } catch (error: unknown) {
+        Logger.error('Browser Peek rejected unsafe URL:', error)
+      }
+      return { action: 'deny' }
+    }
     if (details.disposition === 'new-window' && owner.projectId === GLOBAL_BROWSER_PROJECT_ID) {
       const popup = this.openPopupWindowFor(owner, details)
       if (popup) return popup
@@ -3545,6 +3809,7 @@ export class BrowserService {
     contents.setWindowOpenHandler((details) =>
       this.windowOpenResponse(popupPageOwner(record), details)
     )
+    this.installDevToolsOpenPolicy(contents, () => popupPageOwner(record))
   }
 
   /**
@@ -3570,6 +3835,21 @@ export class BrowserService {
   /** Install the landing policy for the windows a page opens. */
   private installWindowOpenPolicy(view: WebContentsView, owner: BrowserPageOwner): void {
     view.webContents.setWindowOpenHandler((details) => this.windowOpenResponse(owner, details))
+    this.installDevToolsOpenPolicy(view.webContents, () => owner)
+  }
+
+  /** DevTools link commands use their own event, independent of window.open. */
+  private installDevToolsOpenPolicy(contents: WebContents, owner: () => BrowserPageOwner): void {
+    contents.on('devtools-open-url', (_event, url) => {
+      if (contents.isDestroyed() || this.window.isDestroyed()) return
+      const source = owner()
+      if (!this.tabs.has(source.tabId)) return
+      try {
+        this.openNewTabFor(source, validateBrowserUrl(url))
+      } catch (error: unknown) {
+        Logger.error('Browser DevTools rejected a link:', error)
+      }
+    })
   }
 
   /**
@@ -4795,13 +5075,38 @@ export class BrowserService {
     if (this.window.isDestroyed()) return
     const tab = this.requireTab(tabId)
     const page = menuPageFor(tabId, tab)
+    const frame = this.frameForTab(tabId)
     const menu = Menu.buildFromTemplate(
       buildBrowserPageMenuItems(
         this.contextMenuContext(page.contents),
-        this.contextMenuActions(page)
+        this.contextMenuActions(page, frame, this.pagePointOf(x, y, frame))
       )
     )
     menu.popup({ window: this.window, x, y })
+  }
+
+  /**
+   * A page-menu point, translated from the window's space into the page's own.
+   *
+   * The channel behind the page menu is shared: the host's fallback for a click
+   * the native view did not take passes the click itself, and the reload button
+   * passes its own position under it. Only a point that lands inside the page
+   * says anything about where on the page the user is, so one that does not is
+   * reported as no point at all.
+   */
+  private pagePointOf(
+    x: number,
+    y: number,
+    frame: BrowserViewBounds | null
+  ): BrowserPeekPoint | null {
+    if (frame === null) return null
+    return peekPointInFrame({ x: Math.round(x - frame.x), y: Math.round(y - frame.y) }, frame)
+  }
+
+  /** The rectangle a tab's page is on screen at, or null while it is parked or
+   *  displayed off the app window. */
+  private frameForTab(tabId: string): BrowserViewBounds | null {
+    return this.activeTabId === tabId ? this.activeTabBounds : null
   }
 
   /**
@@ -4815,7 +5120,7 @@ export class BrowserService {
   private showTabContextMenu(tabId: string, params: Electron.ContextMenuParams): void {
     const tab = this.tabs.get(tabId)
     if (!tab || this.window.isDestroyed() || tab.view.webContents.isDestroyed()) return
-    const frame = this.activeTabId === tabId ? this.activeTabBounds : null
+    const frame = this.frameForTab(tabId)
     this.showPageContextMenu(menuPageFor(tabId, tab), params, frame)
   }
 
@@ -4848,7 +5153,7 @@ export class BrowserService {
       buildBrowserContextMenuItems(
         params,
         this.contextMenuContext(page.contents),
-        this.contextMenuActions(page),
+        this.contextMenuActions(page, frame, { x: params.x, y: params.y }),
         this.extensionMenuItems(page, params)
       )
     )
@@ -4878,7 +5183,18 @@ export class BrowserService {
    * same actions over both: what differs is only which page they act on and which
    * tab a page they open belongs to.
    */
-  private contextMenuActions(page: BrowserMenuPage): BrowserContextMenuActions {
+  /**
+   * The menu's actions for one page.
+   *
+   * `frame` and `point` are where the click that opened the menu landed, which
+   * only the page's own right-click and the host's fallback can supply: they are
+   * what a Peek opened from this menu grows out of.
+   */
+  private contextMenuActions(
+    page: BrowserMenuPage,
+    frame: BrowserViewBounds | null,
+    point: BrowserPeekPoint | null
+  ): BrowserContextMenuActions {
     const contents = page.contents
     const owner = page.owner
     const live = (): WebContents | null =>
@@ -4918,6 +5234,22 @@ export class BrowserService {
       inspectElement: (x, y) => live()?.inspectElement(x, y),
       selectAll: () => live()?.selectAll(),
       openLinkInNewTab: openInNewTab,
+      ...(owner.projectId === GLOBAL_BROWSER_PROJECT_ID
+        ? {
+            openPeekWindow: (url?: string): void => {
+              const current = live()
+              if (!current) return
+              let target: string
+              try {
+                target = validateBrowserUrl(url ?? current.getURL())
+              } catch (error: unknown) {
+                Logger.error('Browser Peek refused a link:', error)
+                return
+              }
+              this.openPeekFrom(owner, current, target, frame, point)
+            }
+          }
+        : {}),
       saveLinkAs: saveAs,
       openMediaInNewTab: openInNewTab,
       saveMediaAs: saveAs,
@@ -4944,8 +5276,15 @@ export class BrowserService {
    * that open an address in a new tab, so every new tab is parked, loaded and
    * announced the same way.
    */
-  private openNewTabFor(owner: BrowserPageOwner, url: string): void {
+  private openNewTabFor(
+    owner: BrowserPageOwner,
+    url: string,
+    peek = false,
+    origin: BrowserViewBounds | null = null
+  ): void {
+    if (peek && this.peekTabId) this.destroy(this.peekTabId, 'closed')
     const tabId = `browser:${crypto.randomUUID()}`
+    if (peek) this.peekTabId = tabId
     // A new sibling inherits the box it was opened from: a popup or a link
     // belongs beside the page that produced it, in the same jar.
     const tab = this.ensureTab(tabId, owner.projectId, owner.threadId, owner.boxId)
@@ -4956,9 +5295,115 @@ export class BrowserService {
       projectId: owner.projectId,
       threadId: owner.threadId,
       requestedTabId: tabId,
+      peek,
       reveal: true,
-      boxId: owner.boxId
+      boxId: owner.boxId,
+      origin
     })
+  }
+
+  /**
+   * Open an ephemeral peek page, growing out of the link it was asked for.
+   *
+   * The probe is what makes the opening flight start on the link rather than at a
+   * corner of the window, and it is bounded: the page is asked once, within
+   * `PEEK_ORIGIN_PROBE_TIMEOUT_MS`, and the tab is created afterwards with whatever
+   * answer came back. In practice that is a few milliseconds, because the question
+   * is a containment test in a frame that is already running; the budget is what a
+   * page that is busy, mid-navigation or without a document can cost, and it is
+   * spent before the surface exists rather than while it is on screen.
+   */
+  private openPeekFrom(
+    owner: BrowserPageOwner,
+    contents: WebContents,
+    url: string,
+    frame: BrowserViewBounds | null,
+    point: BrowserPeekPoint | null
+  ): void {
+    void this.peekOriginFor(contents, frame, point).then((origin) => {
+      try {
+        this.openNewTabFor(owner, url, true, origin)
+      } catch (error: unknown) {
+        Logger.error('Browser Peek refused a link:', error)
+      }
+    })
+  }
+
+  /**
+   * Open a peek for a page that asked for a window of its own.
+   *
+   * Chromium reports no point for this gesture, but the pointer is the click: a
+   * shift-click on a link is exactly this request, and the pointer is still on
+   * the link when it arrives.
+   */
+  private openPeekFromWindowRequest(owner: BrowserPageOwner, url: string): void {
+    const frame = this.frameForTab(owner.tabId)
+    const source = this.tabs.get(owner.tabId)
+    if (!frame || !source || source.view.webContents.isDestroyed()) {
+      this.openNewTabFor(owner, url, true)
+      return
+    }
+    const point = peekPointInFrame(this.pointerViewPoint(frame), frame)
+    this.openPeekFrom(owner, source.view.webContents, url, frame, point)
+  }
+
+  /** Where the pointer is, in a page view's own pixels. */
+  private pointerViewPoint(frame: BrowserViewBounds): BrowserPeekPoint {
+    const cursor = screen.getCursorScreenPoint()
+    const content = this.window.getContentBounds()
+    return {
+      x: Math.round(cursor.x - content.x - frame.x),
+      y: Math.round(cursor.y - content.y - frame.y)
+    }
+  }
+
+  /**
+   * The rectangle a peek's flight starts from: the link under `point`, or null
+   * when there is no point to speak of, because the page is not on screen, the
+   * click never landed on it, or the page answered nothing in time.
+   *
+   * `point` arrives in the page view's own pixels, which is what Electron reports
+   * for a right-click and what the pointer is read as, and the answer has to be in
+   * the window's, because that is where the renderer's panel and ghost are laid
+   * out. The frame is what converts one into the other.
+   */
+  private async peekOriginFor(
+    contents: WebContents,
+    frame: BrowserViewBounds | null,
+    point: BrowserPeekPoint | null
+  ): Promise<BrowserViewBounds | null> {
+    if (frame === null || point === null) return null
+    const link = await this.probeLinkRect(contents, point)
+    return resolvePeekOrigin({
+      link,
+      point: { x: frame.x + point.x, y: frame.y + point.y },
+      frame,
+      zoomFactor: contents.isDestroyed() ? 1 : contents.getZoomFactor()
+    })
+  }
+
+  /** Ask the page which link is under a point, bounded. */
+  private async probeLinkRect(
+    contents: WebContents,
+    point: BrowserPeekPoint
+  ): Promise<BrowserPeekRect | null> {
+    if (contents.isDestroyed()) return null
+    const script = peekProbeScript(peekProbePoint(point, contents.getZoomFactor()))
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const answer = await Promise.race([
+        contents.executeJavaScript(script) as Promise<unknown>,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), PEEK_ORIGIN_PROBE_TIMEOUT_MS)
+        })
+      ])
+      return parsePeekProbeAnswer(answer)
+    } catch {
+      // A page mid-navigation answers with an error rather than a rectangle.
+      return null
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
   }
 
   /**
@@ -5566,7 +6011,8 @@ export class BrowserService {
     if (reason === 'hibernated') {
       if (tab) this.captureTabHistory(tabId, tab)
     } else {
-      this.stashClosedTabHistory(tabId, tab)
+      if (tabId !== this.peekTabId) this.stashClosedTabHistory(tabId, tab)
+      else this.peekTabId = null
       this.tabHistory.forget(tabId)
     }
     if (!tab) return
@@ -5671,6 +6117,32 @@ export class BrowserService {
     }
     return value
   }
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
+}
+
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return 'the current page'
+  }
+}
+
+function fileChooserFilters(accept: string): Array<{ name: string; extensions: string[] }> {
+  const extensions = [
+    ...new Set(
+      accept
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.startsWith('.') && !item.includes('*'))
+        .map((item) => item.slice(1).toLowerCase())
+        .filter((item) => /^[a-z0-9.+_-]+$/u.test(item))
+    )
+  ]
+  return extensions.length > 0 ? [{ name: 'Accepted file types', extensions }] : []
 }
 
 /**

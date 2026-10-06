@@ -6,7 +6,9 @@ import type {
   UtilityDefinitionFor,
   McpUtilityConfig,
   UtilityKind,
-  PermissionLevel
+  PermissionLevel,
+  NativeMcpPublicationResult,
+  NativeMcpUtilityBinding
 } from '../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
@@ -42,7 +44,19 @@ import { VIDEO_CAPABILITY_SEARCH_QUERY, videoCapabilityDocs } from '../../lib/vi
 import { NO_EXPERTS, type EffectiveExperts } from '../../lib/experts'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { currentWorkRoots } from '../design/work-roots-state'
-import { resultWithImageParts } from '../../lib/image-payload'
+import { gatewayStructuredResult } from '../../lib/image-payload'
+import { acquireCuaSnapshotLease } from './cua-snapshot-lease'
+import {
+  cuaActionReference,
+  cuaRefusal,
+  cuaSnapshotView,
+  foreignSnapshotAdvice,
+  groundCuaAction,
+  isSupersededSnapshotRefusal,
+  reanchorCuaAction,
+  shapeCuaResult,
+  type CuaSnapshotView
+} from '../../lib/cua-driver'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { ProjectRepo } from '../database/repositories/project-repo'
@@ -78,6 +92,10 @@ import {
   routineAuthoringUtility
 } from '../../lib/routine-authoring'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
+import {
+  UtilityScopeFootprintService,
+  type UtilityScopeFootprintDeps
+} from './utility-scope-footprint'
 import {
   matchesUtilityKinds,
   normalizeCapability,
@@ -115,6 +133,7 @@ import {
   connectMcpServer,
   credentialEnvironment as resolveCredentialEnvironment
 } from './mcp-connection'
+import { notifyNativeMcpFailure } from './native-mcp-notice'
 
 const CUA_UTILITY_ID = 'cio:cua-driver'
 
@@ -140,6 +159,18 @@ export interface UtilityTurnRequest {
   resolveExecutingModelVisionCapable?: () => Promise<boolean>
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
+  /**
+   * Hand the harness's own MCP host the utilities this thread has activated, so
+   * it runs them instead of the app gateway (which is what lets a codemode
+   * script receive a tool's whole `CallToolResult`, structured payload
+   * included). Absent for every harness without an MCP host of its own, which
+   * keeps the gateway as the one transport there. Returns the server name each
+   * utility took, so activation can tell the model which namespace to reach for,
+   * and the utilities no server could be made for, so the user can be told.
+   */
+  publishNativeMcpServers?: (
+    utilities: readonly NativeMcpUtilityBinding[]
+  ) => Promise<NativeMcpPublicationResult>
   /**
    * Whether this turn belongs to a design session the user opened with
    * `@cio-design`. A session promotes the app-owned design capability to an
@@ -237,13 +268,49 @@ export interface UtilityTurnGateway {
    * whether the live gateway can serve the request or must be rebuilt.
    */
   managementEnabled: boolean
+  /**
+   * Record one call a script made to a server the harness's own MCP host runs.
+   *
+   * That call never passes the app gateway, so without this the audit log would
+   * show an activation and then nothing, as if the utility were never used.
+   */
+  recordNativeInvocation?(invocation: {
+    utilityId: string
+    server: string
+    tool: string
+    status: 'completed' | 'error'
+  }): Promise<void>
   cleanup(): Promise<void>
+}
+
+/**
+ * What the model is told when a harness's own MCP host runs the server.
+ *
+ * The gateway can still reach the same server, which is why this says so
+ * plainly, but a script is the path that receives a tool's whole
+ * `CallToolResult`: an image or a structured payload that the gateway's JSON
+ * hop flattens (a computer-use snapshot, for one) arrives intact.
+ */
+function nativeMcpHostHint(server: string): { namespace: string; note: string } {
+  return {
+    namespace: `mcp__${server}`,
+    note:
+      `This server also runs on your own MCP host as \`mcp__${server}\`: its tools are named ` +
+      `\`mcp__${server}__<tool>\`, they are not declared to you, and you call them from the body of a codemode script, ` +
+      'finding them by name or by intent with `searchTools`. Prefer that path whenever a tool returns an ' +
+      'image or a structured payload, because a script receives the complete result: a large result can also be ' +
+      'filtered there before it reaches you. The gateway operations in this payload remain a fallback for the same server.'
+  }
 }
 
 export type BrowserUtilityExecutor = (
   operation: string,
   input: Record<string, unknown>,
-  context: { projectId: string; threadId: string }
+  context: {
+    projectId: string
+    threadId: string
+    permissionLevel: PermissionLevel
+  }
 ) => Promise<unknown>
 
 /**
@@ -311,11 +378,35 @@ interface TurnState {
   eligible: Map<string, ResolvedUtility>
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
+  /** Server name each utility took on the harness's own MCP host this turn. */
+  nativeMcpServers: Map<string, string>
+  /**
+   * Connections being established right now, keyed like `clients`.
+   *
+   * The gateway serves concurrent calls, so two of them can reach the same
+   * utility before either has a client: a parallel tool call inside one turn, or
+   * a turn whose agent fires several operations at once. Without this, both
+   * spawn a server process and the slower one is overwritten in `clients` and
+   * never closed, leaving an orphan holding the same shared resource (the Cua
+   * daemon, an npm cache lock) that the surviving one needs.
+   */
+  connecting: Map<string, Promise<McpClient>>
   attributionSequence: number
   /** True once the agent has called the app utility-search tool this turn. */
   searched: boolean
   /** Session ids created for Cua utilities so cursor state is turn-scoped. */
   cuaSessionIds: Map<string, string>
+  /**
+   * The window snapshot the gateway handed the model, keyed `pid:window_id`.
+   *
+   * A Cua action addresses elements and pixels inside one snapshot, and the
+   * driver's registry keeps a single slot per window that the app's own
+   * computer-use preview refills at up to 15 frames a second. Keeping the view
+   * here is what lets an action name the snapshot its index truly belongs to,
+   * and re-anchor that reference onto a fresh one when the registry has moved
+   * on. See `src/lib/cua-driver.ts`.
+   */
+  cuaViews: Map<string, CuaSnapshotView>
   /** Utilities created through the explicit setup-only management capability. */
   managedUtilities: UtilityDefinition[]
   /** Lazily created read-only diagnostics provider for explicit @cio-utility turns. */
@@ -354,6 +445,9 @@ type GatewayBridgeHandler = (state: TurnState, input: Record<string, unknown>) =
 export class UtilityOrchestrationService {
   private readonly registry: UtilityRegistryService
   private readonly vault: SecretVault
+  /** Install folders for scoped utilities; resolved on first use. */
+  private scopeFootprint: UtilityScopeFootprintService | null = null
+  private scopeFootprintResolved = false
   private readonly turns = new Map<
     string,
     { state: TurnState; scriptPath: string; token: string }
@@ -363,6 +457,8 @@ export class UtilityOrchestrationService {
   private gatewayBaseUrl: string | null = null
   private gatewayStarting: Promise<string> | null = null
   private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
+  /** Routes answered with a structured payload beside their content parts. */
+  private readonly structuredRoutes: ReadonlySet<string>
   private cuaActivityListener: ((event: CuaOperationEvent) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   private browserExecutor: BrowserUtilityExecutor | null = null
@@ -386,6 +482,33 @@ export class UtilityOrchestrationService {
     this.registry = new UtilityRegistryService(storage)
     this.vault = new SecretVault(storage)
     this.bridgeHandlers = this.buildBridgeHandlers()
+    this.structuredRoutes = this.buildStructuredRoutes()
+  }
+
+  /**
+   * Install folders for scoped utilities, built on first use.
+   *
+   * A bundle the agent installs can be scoped to a project or a thread, and a
+   * scoped capability is installed as a real folder in that scope. The app-wide
+   * installer is built here from the database so this service needs nothing
+   * handed to it, and a session with no database (a disposable one) simply skips
+   * the disk step rather than failing the install.
+   */
+  private footprint(): UtilityScopeFootprintService | null {
+    if (this.scopeFootprintResolved) return this.scopeFootprint
+    this.scopeFootprintResolved = true
+    const database = this.database
+    if (!database) return null
+    const deps: UtilityScopeFootprintDeps = {
+      resolveProjectPath: async (projectId) =>
+        (await new ProjectRepo(database).getViaWorker(projectId))?.path ?? null,
+      listProjectPaths: async () =>
+        (await new ProjectRepo(database).listViaWorker())
+          .filter((project) => project.source !== 'ssh' && project.path)
+          .map((project) => ({ id: project.id, path: project.path }))
+    }
+    this.scopeFootprint = new UtilityScopeFootprintService(this.storage, deps)
+    return this.scopeFootprint
   }
 
   /** Derive the route → handler map from `GATEWAY_TOOLS`, failing fast if a
@@ -401,6 +524,19 @@ export class UtilityOrchestrationService {
       handlers.set(tool.route, handler)
     }
     return handlers
+  }
+
+  /**
+   * Routes whose result travels as a structured payload as well as text.
+   *
+   * Read from the catalog rather than listed here, so a tool that declares an
+   * `outputSchema` is answered in the shape that schema promises and no surface
+   * can drift: a script resolves these calls to fields, a model reads the text.
+   */
+  private buildStructuredRoutes(): ReadonlySet<string> {
+    return new Set(
+      GATEWAY_TOOLS.filter((tool) => tool.outputSchema !== undefined).map((tool) => tool.route)
+    )
   }
 
   private bridgeHandlerFor(name: string): GatewayBridgeHandler | null {
@@ -718,9 +854,12 @@ export class UtilityOrchestrationService {
       eligible: new Map(eligible.map((entry) => [entry.utility.id, entry])),
       activated: new Map(always.map((entry) => [entry.utility.id, entry])),
       clients: new Map(),
+      nativeMcpServers: new Map(),
+      connecting: new Map(),
       attributionSequence: 0,
       searched: false,
       cuaSessionIds: new Map(),
+      cuaViews: new Map(),
       managedUtilities: [],
       diagnostics: null,
       projectSearchTerms: null,
@@ -734,6 +873,10 @@ export class UtilityOrchestrationService {
     for (const entry of bankEntries) {
       if (state.eligible.has(entry.id)) state.bank.set(entry.id, entry)
     }
+    // Register the thread's activated MCP servers with the harness's own MCP
+    // host before the model runs: a script call then reaches them without a
+    // gateway round trip, while a utility nobody activated costs nothing.
+    await this.publishNativeMcpServers(state)
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
@@ -821,7 +964,20 @@ export class UtilityOrchestrationService {
         timeoutMs: gatewayHarnessTimeoutMs((await this.storage.getConfig()).questionTimeoutMs)
       },
       managementEnabled: request.allowManagement === true,
-      cleanup
+      cleanup,
+      /**
+       * One call a script made to a server pi's own MCP host runs. The gateway
+       * never sees that call, so this is the only place its record can be
+       * written, and the turn is what supplies the thread the line belongs to.
+       */
+      recordNativeInvocation: (invocation) =>
+        this.audit(state, 'utility.invoked', {
+          utilityId: invocation.utilityId,
+          operation: invocation.tool,
+          transport: 'native',
+          server: invocation.server,
+          success: invocation.status === 'completed'
+        })
     }
   }
 
@@ -959,6 +1115,14 @@ export class UtilityOrchestrationService {
     }
     const definitions = normalizeBundleDefinitions(input['bundle'])
     const outcomes = await this.registry.installMany(definitions, { consolidate: true })
+    // A capability scoped to a project or a thread is installed on disk as well
+    // as in the registry, so the install the user asked for exists outside app
+    // state. Best effort: the entry is already saved.
+    await this.footprint()
+      ?.reconcile(await this.registry.list())
+      .catch((error: unknown) =>
+        Logger.dev('Scoped utility install folder was not written:', error)
+      )
     state.managedUtilities.push(...outcomes.map((outcome) => outcome.utility))
     // Hot reload: make what this turn just installed reachable by the next search
     // or activation in the same turn, without waiting for a reload.
@@ -1175,7 +1339,14 @@ export class UtilityOrchestrationService {
         return
       }
       const result = await handler(state, input)
-      this.respond(response, 200, result)
+      // A tool that declares an output schema is answered with the payload both
+      // ways: content parts for a model, the same data for a script. Every other
+      // route keeps the exact body it has always returned.
+      this.respond(
+        response,
+        200,
+        this.structuredRoutes.has(request.url) ? gatewayStructuredResult(result) : result
+      )
     } catch (error) {
       this.respond(response, 400, {
         error: error instanceof Error ? error.message : 'Utility gateway request failed'
@@ -1425,6 +1596,10 @@ export class UtilityOrchestrationService {
       }
     }
     state.activated.set(utilityId, resolved)
+    // A harness-owned MCP host must learn about the server before the model's
+    // next script, or an activation in this turn would only take effect in the
+    // next one.
+    if (resolved.utility.kind === 'mcp') await this.publishNativeMcpServers(state)
     // First activation in this thread registers the utility in the durable
     // thread utilities bank so every later turn can invoke it by id directly.
     await this.registerThreadBankEntry(state, resolved.utility)
@@ -1517,6 +1692,14 @@ export class UtilityOrchestrationService {
       }
     }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
+      const nativeServer = state.nativeMcpServers.get(resolved.utility.id)
+      if (nativeServer) {
+        // The harness's own MCP host runs this server, so connecting the app's
+        // client too would spawn a second copy of the same process for nothing.
+        // The model reaches the tools from a script, where they are discoverable
+        // by name and by intent.
+        return { nativeHost: nativeMcpHostHint(nativeServer) }
+      }
       const client = await this.ensureMcpClient(state, resolved)
       return { tools: await client.listTools() }
     }
@@ -1550,24 +1733,61 @@ export class UtilityOrchestrationService {
    *  activation and straight-to-usage banked invocation. */
   private async ensureMcpClient(state: TurnState, resolved: ResolvedUtility): Promise<McpClient> {
     const utilityId = resolved.utility.id
-    if (resolved.utility.kind !== 'mcp' && resolved.utility.kind !== 'computer_use') {
-      throw new Error(`Utility kind "${resolved.utility.kind}" does not expose an MCP client`)
-    }
-    let client = state.clients.get(utilityId)
-    if (!client) {
-      if (this.isComputerUseUtility(resolved)) {
-        // The Cua daemon's authorization mode is a start-time, daemon-wide
-        // property: whichever client starts the daemon fixes it for every later
-        // run until the daemon stops. Claiming the tier here, before the client
-        // connects, is what keeps a full_access run from leaving an
-        // approval-free daemon behind and an auto_review run from silently
-        // downgrading a full_access one.
-        await this.cuaBridge.claimDaemonMode(state.request.permissionLevel, state.id)
+    const utility = mcpCapableUtility(resolved.utility)
+    const cached = state.clients.get(utilityId)
+    if (cached?.usable) {
+      if (this.isComputerUseUtility(resolved) && !state.cuaSessionIds.has(utilityId)) {
+        await this.prepareComputerUseSession(state, utilityId, cached)
       }
-      client = await this.mcpClient(state, resolved.utility)
-      state.clients.set(utilityId, client)
+      return cached
     }
-    if (this.isComputerUseUtility(resolved) && !state.cuaSessionIds.has(utilityId)) {
+    if (cached) {
+      // The connection stopped answering (a request timed out, the child died,
+      // the remote session was lost), so it is replaced instead of reused. A
+      // computer-use session is forgotten with it: that session lives inside the
+      // daemon the old connection was talking to, so the new connection starts
+      // its own rather than naming one that no longer exists.
+      state.clients.delete(utilityId)
+      state.cuaSessionIds.delete(utilityId)
+      await cached.close().catch(() => undefined)
+    }
+    const connecting =
+      state.connecting.get(utilityId) ?? this.connectMcpClient(state, resolved, utility, utilityId)
+    state.connecting.set(utilityId, connecting)
+    try {
+      const client = await connecting
+      state.clients.set(utilityId, client)
+      return client
+    } finally {
+      if (state.connecting.get(utilityId) === connecting) state.connecting.delete(utilityId)
+    }
+  }
+
+  /**
+   * Establish one utility's connection and leave it ready to use: claim the
+   * shared Cua daemon for a computer-use run before connecting, and start the
+   * turn's cursor session once it is up.
+   *
+   * Separate from `ensureMcpClient` so both the caller that starts a connection
+   * and any caller that joins the one already in flight run the same setup.
+   */
+  private async connectMcpClient(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    utility: UtilityDefinitionFor<'mcp'> | UtilityDefinitionFor<'computer_use'>,
+    utilityId: string
+  ): Promise<McpClient> {
+    if (this.isComputerUseUtility(resolved)) {
+      // The Cua daemon's authorization mode is a start-time, daemon-wide
+      // property: whichever client starts the daemon fixes it for every later
+      // run until the daemon stops. Claiming the tier here, before the client
+      // connects, is what keeps a full_access run from leaving an
+      // approval-free daemon behind and an auto_review run from silently
+      // downgrading a full_access one.
+      await this.cuaBridge.claimDaemonMode(state.request.permissionLevel, state.id)
+    }
+    const client = await this.mcpClient(state, utility)
+    if (this.isComputerUseUtility(resolved)) {
       await this.prepareComputerUseSession(state, utilityId, client)
     }
     return client
@@ -1664,7 +1884,8 @@ export class UtilityOrchestrationService {
       if (!executor) throw new Error('The in-app browser is unavailable')
       result = await executor(operation, operationInput, {
         projectId: state.request.projectId,
-        threadId: state.request.threadId
+        threadId: state.request.threadId,
+        permissionLevel: state.request.permissionLevel
       })
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
       // One capability, four operation groups with different owners: `preview`
@@ -1712,11 +1933,22 @@ export class UtilityOrchestrationService {
     } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = await this.ensureMcpClient(state, resolved)
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
-      try {
-        result = await client.callTool(operation, routedInput)
-      } catch (error) {
-        await this.dropDeadComputerUseTransport(state, resolved, client, error)
-        throw error
+      if (this.isComputerUseUtility(resolved)) {
+        result = await this.invokeComputerUse(
+          state,
+          resolved,
+          client,
+          utilityId,
+          operation,
+          routedInput
+        )
+      } else {
+        try {
+          result = await client.callTool(operation, routedInput)
+        } catch (error) {
+          await this.dropUnusableTransport(state, resolved, client, error)
+          throw error
+        }
       }
       if (this.isComputerUseUtility(resolved)) {
         this.cuaActivityListener?.({
@@ -1757,14 +1989,24 @@ export class UtilityOrchestrationService {
     } else {
       throw new Error(`Utility kind "${resolved.utility.kind}" does not expose runtime operations`)
     }
-    await this.audit(state, 'utility.invoked', { utilityId, operation })
+    await this.audit(state, 'utility.invoked', { utilityId, operation, transport: 'gateway' })
+    // A computer-use snapshot reaches the model as its structured payload plus
+    // the screenshot as an image part. The payload is where the element handles
+    // and the geometry live that the driver asks a later action to name, and the
+    // tree in it is the same tree the driver's markdown repeats, so the markdown
+    // is what would be paid for twice.
+    if (this.isComputerUseUtility(resolved)) {
+      const snapshot = shapeCuaResult(result)
+      if (snapshot) return snapshot
+    }
     // A picture that travels inline as base64 is billed as text, at roughly one
     // token per character; the same bytes delivered as an image content part are
     // billed on the pixels they cover, which measured about 22x cheaper on a real
-    // screenshot (40,788 tokens against 1,844 at 1568px). Both bridges forward a
-    // `content` array verbatim, so an image-bearing result is handed back in that
-    // shape and everything else keeps its existing form.
-    return resultWithImageParts(result) ?? result
+    // screenshot (40,788 tokens against 1,844 at 1568px). The route exit shapes
+    // the result into content parts plus a structured payload, so nothing is
+    // converted here: a raw result stays raw, and the computer-use snapshot keeps
+    // the shape it was given above.
+    return result
   }
 
   /**
@@ -1793,15 +2035,15 @@ export class UtilityOrchestrationService {
   }
 
   /**
-   * Drop a Cua client whose daemon connection died mid-turn.
+   * Forget a connection that cannot answer any more, so the next call reconnects.
    *
-   * The `cua-driver mcp` server owns one connection to the shared Cua daemon and
-   * never re-establishes it, so a daemon that dies while a run is in flight (a
-   * crash, a driver update, a quit from the menu bar) leaves every remaining
-   * computer-use call of that turn failing against a connection that can never
-   * work again   measured against cua-driver 0.17.0: the connected server keeps
-   * answering `daemon transport error ... cua-driver.sock: No such file or
-   * directory` while a freshly spawned one starts a new daemon and works.
+   * Two failures land here. The Cua daemon can die under a live run (a crash, a
+   * driver update, another run restarting it in its own mode), and the `cua-driver
+   * mcp` server owns one connection to it and never re-establishes it: the
+   * connected server keeps answering `daemon transport error ... cua-driver.sock:
+   * No such file or directory` while a freshly spawned one starts a new daemon and
+   * works. Any other MCP server can simply stop answering, which the client reports
+   * as a request that ran out of budget and a connection it retired on the way out.
    *
    * Closing the client and forgetting its session is what lets the next call
    * reconnect: reconnecting re-claims the daemon, which starts a fresh one on
@@ -1815,22 +2057,22 @@ export class UtilityOrchestrationService {
    * still the cached one: the gateway serves concurrent requests, so another call
    * may already have replaced it with a fresh connection that must survive.
    */
-  private async dropDeadComputerUseTransport(
+  private async dropUnusableTransport(
     state: TurnState,
     resolved: ResolvedUtility,
     client: McpClient,
     error: unknown
   ): Promise<void> {
-    if (!this.isComputerUseUtility(resolved)) return
     const message = error instanceof Error ? error.message : String(error)
-    if (!isCuaDaemonTransportFailure(message)) return
+    const daemonLost = this.isComputerUseUtility(resolved) && isCuaDaemonTransportFailure(message)
+    if (client.usable && !daemonLost) return
     const utilityId = resolved.utility.id
     if (state.clients.get(utilityId) === client) {
       state.clients.delete(utilityId)
-      state.cuaSessionIds.delete(utilityId)
+      if (this.isComputerUseUtility(resolved)) state.cuaSessionIds.delete(utilityId)
     }
     await client.close().catch(() => undefined)
-    Logger.dev('Cua daemon connection was lost; the next computer-use call reconnects')
+    Logger.dev('MCP connection retired; the next call reconnects', { utilityId, daemonLost })
   }
 
   /** Establish a visible, never-idle-hidden cursor for one Cua turn. */
@@ -1895,6 +2137,259 @@ export class UtilityOrchestrationService {
   ): Record<string, unknown> {
     const sessionId = state.cuaSessionIds.get(utilityId)
     return sessionId ? { ...input, session: sessionId } : input
+  }
+
+  /** The remembered snapshot of the window one call names. */
+  private cuaViewFor(state: TurnState, input: Record<string, unknown>): CuaSnapshotView | null {
+    const pid = typeof input['pid'] === 'number' ? input['pid'] : null
+    const windowId = typeof input['window_id'] === 'number' ? input['window_id'] : null
+    if (pid === null) return null
+    if (windowId !== null) return state.cuaViews.get(cuaViewKey(pid, windowId)) ?? null
+    // A pid with exactly one remembered window answers for it; a pid with
+    // several would be a guess about which window the address meant.
+    const views = [...state.cuaViews.values()].filter((view) => view.pid === pid)
+    return views.length === 1 ? views[0] : null
+  }
+
+  /** The window one call addresses, from the call itself or, when it names only
+   *  a pid, from the single window remembered for that pid. */
+  private cuaActionWindow(
+    state: TurnState,
+    input: Record<string, unknown>
+  ): { pid: number; windowId: number } | null {
+    const pid = typeof input['pid'] === 'number' ? input['pid'] : null
+    const windowId = typeof input['window_id'] === 'number' ? input['window_id'] : null
+    if (pid !== null && windowId !== null) return { pid, windowId }
+    if (pid === null) return null
+    const views = [...state.cuaViews.values()].filter((view) => view.pid === pid)
+    return views.length === 1 ? { pid, windowId: views[0].windowId } : null
+  }
+
+  /**
+   * One computer-use operation, with the snapshot it addresses owned here.
+   *
+   * The driver refuses every element and pixel action whose snapshot has been
+   * replaced, and a window's snapshot is replaced by the next snapshot of that
+   * window from any client. The app is itself such a client: the computer-use
+   * preview photographs the window being driven at up to 15 frames a second, so
+   * a reference the model read on one call is normally superseded by the time it
+   * acts on the next one.
+   *
+   * The gateway therefore names the snapshot the model's address truly belongs
+   * to, and when the driver answers that the reference is stale it takes one
+   * fresh snapshot, re-anchors the same address onto it and tries once more.
+   * Nothing is guessed: an element is re-anchored only when its identity is
+   * provable, a pixel address only when both images state their size, and a
+   * reference into a snapshot the app never handed out is answered with what to
+   * do instead of with an action.
+   */
+  private async invokeComputerUse(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    client: McpClient,
+    utilityId: string,
+    operation: string,
+    input: Record<string, unknown>
+  ): Promise<unknown> {
+    const view = this.cuaViewFor(state, input)
+    const grounding = groundCuaAction(operation, input, view)
+    const grounded = grounding.kind === 'grounded' ? grounding.input : input
+    const reference = cuaActionReference(operation, input)
+    const window = this.cuaActionWindow(state, input)
+    if (reference?.session === 'implicit') {
+      // This tool cannot read a snapshot taken under the turn's session label,
+      // so its pixels are re-read from a snapshot of the same window taken on
+      // the connection's own session, and the model's coordinates are moved
+      // into that image before the call. One attempt, then whatever the driver
+      // answers is the answer.
+      const release = window ? await acquireCuaSnapshotLease(window.pid, window.windowId) : null
+      try {
+        const fresh = await this.refreshComputerUseView(
+          state,
+          client,
+          utilityId,
+          input,
+          'pixels',
+          'implicit'
+        )
+        const mapped = fresh ? reanchorCuaAction(operation, grounded, view, fresh) : null
+        const anchor = mapped && 'input' in mapped ? mapped.input : grounded
+        return await this.callComputerUse(state, resolved, client, operation, anchor)
+      } finally {
+        release?.()
+      }
+    }
+    const snapshotting = operation === 'get_window_state'
+    const result = snapshotting
+      ? await this.snapshotUnderLease(state, resolved, client, operation, grounded, window)
+      : await this.callComputerUse(state, resolved, client, operation, grounded)
+    const snapshot = cuaSnapshotView(result)
+    if (snapshot) {
+      // The snapshot the model asked for is the mapping its next element or
+      // pixel address refers to. A snapshot the gateway takes on its own behalf
+      // deliberately never lands here: the model's indices were read from a tree
+      // this one may not match row for row.
+      state.cuaViews.set(cuaViewKey(snapshot.pid, snapshot.windowId), snapshot)
+      return result
+    }
+    if (!isSupersededSnapshotRefusal(result)) return result
+    const refusal = cuaRefusal(result)
+    if (grounding.kind === 'ungrounded' && grounding.reason === 'foreign-snapshot') {
+      if (!reference) return result
+      return refusalResult(foreignSnapshotAdvice(reference, view))
+    }
+    const refreshed = await this.reanchorComputerUse(
+      state,
+      resolved,
+      client,
+      utilityId,
+      operation,
+      grounded,
+      view,
+      window,
+      reference?.pixels ? 'pixels' : 'elements',
+      reference?.session ?? 'labelled'
+    )
+    if (!refreshed) return result
+    if ('refusal' in refreshed) {
+      Logger.dev('Cua action could not be re-anchored', {
+        utilityId,
+        operation,
+        code: refusal?.code,
+        reason: refreshed.refusal
+      })
+      return refusalResult(refreshed.refusal)
+    }
+    Logger.dev('Cua action re-anchored on a fresh snapshot', {
+      utilityId,
+      operation,
+      code: refusal?.code,
+      snapshotId: refreshed.snapshotId
+    })
+    return refreshed.result
+  }
+
+  /**
+   * One fresh snapshot, the address moved onto it, and the action tried once
+   * more, all under a lease on the window's snapshot slot.
+   *
+   * Without that lease the retry would race the rest of this app: a preview
+   * frame, or another thread's gateway snapshot, arriving between the snapshot
+   * and the action would take the slot with it, which is the very failure the
+   * retry exists to repair.
+   */
+  private async reanchorComputerUse(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    client: McpClient,
+    utilityId: string,
+    operation: string,
+    input: Record<string, unknown>,
+    view: CuaSnapshotView | null,
+    window: { pid: number; windowId: number } | null,
+    want: 'elements' | 'pixels',
+    session: 'labelled' | 'implicit'
+  ): Promise<{ result: unknown; snapshotId: string } | { refusal: string } | null> {
+    const release = window ? await acquireCuaSnapshotLease(window.pid, window.windowId) : null
+    try {
+      const refreshed = await this.refreshComputerUseView(
+        state,
+        client,
+        utilityId,
+        input,
+        want,
+        session
+      )
+      if (!refreshed) return null
+      const reanchored = reanchorCuaAction(operation, input, view, refreshed)
+      if ('refusal' in reanchored) return { refusal: reanchored.refusal }
+      const result = await this.callComputerUse(
+        state,
+        resolved,
+        client,
+        operation,
+        reanchored.input
+      )
+      return { result, snapshotId: refreshed.snapshotId }
+    } finally {
+      release?.()
+    }
+  }
+
+  /** One driver call, retiring a connection that cannot answer any more. */
+  private async callComputerUse(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    client: McpClient,
+    operation: string,
+    input: Record<string, unknown>
+  ): Promise<unknown> {
+    try {
+      return await client.callTool(operation, input)
+    } catch (error) {
+      await this.dropUnusableTransport(state, resolved, client, error)
+      throw error
+    }
+  }
+
+  /**
+   * A snapshot the model asked for, taken under the window's lease.
+   *
+   * Another turn's gateway holds the same window while it re-anchors an action
+   * it is about to perform, and this call would take that snapshot's place. The
+   * lease is milliseconds long in practice, so waiting for it costs a snapshot
+   * nothing and is the difference between the other turn's action landing and it
+   * being refused.
+   */
+  private async snapshotUnderLease(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    client: McpClient,
+    operation: string,
+    input: Record<string, unknown>,
+    window: { pid: number; windowId: number } | null
+  ): Promise<unknown> {
+    const release = window ? await acquireCuaSnapshotLease(window.pid, window.windowId) : null
+    try {
+      return await this.callComputerUse(state, resolved, client, operation, input)
+    } finally {
+      release?.()
+    }
+  }
+
+  /**
+   * One snapshot of the window an action addresses, taken for the gateway's own
+   * re-anchoring. An element address needs the tree and nothing else, and the
+   * driver returns the handles with it; a pixel address needs the screenshot and
+   * no accessibility walk at all. The walk gets a 5 second budget because
+   * re-anchoring a large app's element against a tree that was truncated on
+   * arrival would refuse an action the driver could otherwise have performed.
+   */
+  private async refreshComputerUseView(
+    state: TurnState,
+    client: McpClient,
+    utilityId: string,
+    input: Record<string, unknown>,
+    want: 'elements' | 'pixels',
+    session: 'labelled' | 'implicit'
+  ): Promise<CuaSnapshotView | null> {
+    const pid = typeof input['pid'] === 'number' ? input['pid'] : null
+    const windowId = typeof input['window_id'] === 'number' ? input['window_id'] : null
+    if (pid === null || windowId === null) return null
+    const request = {
+      pid,
+      window_id: windowId,
+      include_screenshot: want === 'pixels',
+      include_accessibility_tree: want === 'elements',
+      ...(want === 'elements' ? { timeout_ms: 5000 } : {})
+    }
+    const routed =
+      session === 'labelled' ? this.routeComputerUseInput(state, utilityId, request) : request
+    const result = await client.callTool('get_window_state', routed).catch((error: unknown) => {
+      Logger.dev('Cua snapshot refresh failed:', error)
+      return null
+    })
+    return cuaSnapshotView(result)
   }
 
   private async endComputerUseSessions(state: TurnState): Promise<void> {
@@ -2001,6 +2496,74 @@ export class UtilityOrchestrationService {
     )
   }
 
+  /**
+   * The MCP utilities a harness-owned MCP host should run for this thread: the
+   * ones this thread already activated (its durable bank), plus the one
+   * activated earlier in this turn. Everything else waits for the app gateway
+   * and its activation step, so a session that never reaches an MCP server never
+   * pays for one.
+   *
+   * Computer use is deliberately absent. Its snapshot pairing, grounding and
+   * per-window lease live on the gateway path, and moving the server without
+   * moving that logic would undo the fix that made it work.
+   */
+  private nativeMcpUtilities(state: TurnState): ResolvedUtility[] {
+    const native: ResolvedUtility[] = []
+    for (const resolved of state.eligible.values()) {
+      if (resolved.utility.kind !== 'mcp') continue
+      if (this.isComputerUseUtility(resolved)) continue
+      if (!state.bank.has(resolved.utility.id) && !state.activated.has(resolved.utility.id)) {
+        continue
+      }
+      native.push(resolved)
+    }
+    return native
+  }
+
+  /**
+   * Publish that set to the harness's own MCP host, with every credential
+   * resolved here, where the vault lives.
+   *
+   * Publication is an optimization over the gateway and never a reason to fail a
+   * turn: a harness that refuses the document, or a server whose config the
+   * harness rejects, leaves the gateway as the path to that utility.
+   */
+  private async publishNativeMcpServers(state: TurnState): Promise<void> {
+    const publish = state.request.publishNativeMcpServers
+    if (!publish) return
+    const bindings: NativeMcpUtilityBinding[] = []
+    for (const resolved of this.nativeMcpUtilities(state)) {
+      if (resolved.utility.kind !== 'mcp') continue
+      bindings.push({
+        utility: resolved.utility,
+        environment: await this.credentialEnvironment(resolved.utility)
+      })
+    }
+    try {
+      const published = await publish(bindings)
+      state.nativeMcpServers.clear()
+      for (const publication of published.servers) {
+        state.nativeMcpServers.set(publication.utilityId, publication.server)
+      }
+      // A utility the adapter could not turn into a server keeps working through
+      // the gateway, so nothing is broken; the user still hears it, because a
+      // silently skipped server is a capability they enabled and did not get.
+      for (const failure of published.failures) {
+        notifyNativeMcpFailure(
+          {
+            sessionId: state.request.sessionId,
+            utilityId: failure.utilityId,
+            utilityName: failure.utilityName,
+            reason: failure.reason
+          },
+          { projectId: state.request.projectId, threadId: state.request.threadId }
+        )
+      }
+    } catch (error) {
+      Logger.dev('Native MCP server publication failed:', error)
+    }
+  }
+
   private async audit(
     state: TurnState,
     action: string,
@@ -2024,6 +2587,38 @@ export class UtilityOrchestrationService {
     response.writeHead(status, { 'Content-Type': 'application/json' })
     response.end(JSON.stringify(body))
   }
+}
+
+/**
+ * The key one window's remembered snapshot is filed under.
+ *
+ * A window is the driver's own scope for a snapshot: it refuses a `window_id`
+ * that no longer exists, and a snapshot of one window never answers for
+ * another, so the pid completes the key rather than defining it.
+ */
+function cuaViewKey(pid: number, windowId: number): string {
+  return `${pid}:${windowId}`
+}
+
+/** A gateway-authored refusal, in the same shape the driver refuses in. */
+function refusalResult(message: string): Record<string, unknown> {
+  return { content: [{ type: 'text', text: message }], isError: true }
+}
+
+/**
+ * The utility a connection can be opened for, or the reason it cannot be.
+ *
+ * The two callers of `ensureMcpClient` both need this narrowing before they can
+ * reach the connection path, so it lives here rather than being restated at each
+ * of them.
+ */
+function mcpCapableUtility(
+  utility: UtilityDefinition
+): UtilityDefinitionFor<'mcp'> | UtilityDefinitionFor<'computer_use'> {
+  if (utility.kind !== 'mcp' && utility.kind !== 'computer_use') {
+    throw new Error(`Utility kind "${utility.kind}" does not expose an MCP client`)
+  }
+  return utility
 }
 
 /**

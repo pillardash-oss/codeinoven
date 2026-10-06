@@ -112,3 +112,11 @@ export async function testDraftConnection(
     secrets.clear()
   }
 }
+
+export async function inspectOvenConnectionWithHarnesses(
+  ssh: OvenSsh,
+  id: string
+): Promise<OvenConnectionStatus> {
+  const base = await inspectOvenConnection(ssh, id)
+  return base
+}

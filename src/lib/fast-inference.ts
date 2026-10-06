@@ -93,8 +93,14 @@ export function normalizeFastInference(
   harnessId: string,
   providerId: string,
   modelId: string,
-  modelFastSupported?: boolean
+  modelFastSupported?: boolean,
+  modelUltrafastSupported = false
 ): ThreadSettings {
+  if (settings.inferenceMode === 'ultrafast') {
+    return harnessId === 'codex' && providerId === 'openai' && modelUltrafastSupported
+      ? settings
+      : { ...settings, inferenceMode: 'normal' }
+  }
   if (settings.inferenceMode !== 'fast') return settings
   if (supportsFastInference(harnessId, providerId, modelFastSupported)) return settings
   return { ...settings, inferenceMode: 'normal' }

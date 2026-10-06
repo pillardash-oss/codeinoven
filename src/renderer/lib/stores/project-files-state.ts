@@ -42,6 +42,7 @@ export interface ProjectFileTab {
 }
 
 export interface ProjectFilesState {
+  projectId?: string
   entriesByDirectory: Record<string, ProjectFileEntry[]>
   loadingDirectories: Record<string, boolean>
   directoryErrors: Record<string, string>
@@ -68,6 +69,8 @@ export interface ProjectFilesState {
    *  on: a chat's `chats-cwd/<threadId>` or an assistant task's
    *  `assistant-cwd/<routineId ?? threadId>`; `null` for real projects and
    *  threadless views. */
+  ovenId?: string
+  ovenThreadId?: string
   mountThreadId: string | null
   /** Whether the "Last turn" filter is active in the file tree. Lives here
    *  (per project) instead of local component state so panel remounts from
@@ -95,6 +98,7 @@ export interface ProjectFileClipboard {
 export function createProjectFilesState(projectId: string): ProjectFilesState {
   const explorer = fileExplorerStore.project(projectId)
   return {
+    projectId,
     entriesByDirectory: {},
     loadingDirectories: {},
     directoryErrors: {},

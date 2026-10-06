@@ -13,17 +13,18 @@ export function syncOvenAccount(
   service: OvenService,
   registry: HarnessAccountRegistry,
   ovenId: string,
-  account: HarnessAccount
+  account: HarnessAccount,
+  synchronizeConfiguration = true
 ): Promise<Record<string, string>> {
   let pending = synchronizing.get(service)
   if (!pending) {
     pending = new Map()
     synchronizing.set(service, pending)
   }
-  const key = `${ovenId}:${account.id}`
+  const key = `${ovenId}:${account.id}:${synchronizeConfiguration ? 'config' : 'account'}`
   const existing = pending.get(key)
   if (existing) return existing
-  const task = copyOvenAccount(service, registry, ovenId, account).finally(() =>
+  const task = copyOvenAccount(service, registry, ovenId, account, synchronizeConfiguration).finally(() =>
     pending.delete(key)
   )
   pending.set(key, task)
@@ -35,7 +36,8 @@ async function copyOvenAccount(
   service: OvenService,
   registry: HarnessAccountRegistry,
   ovenId: string,
-  account: HarnessAccount
+  account: HarnessAccount,
+  synchronizeConfiguration: boolean
 ): Promise<Record<string, string>> {
   const probe = await service.probe(ovenId)
   const root = `${probe.home}/.config/pillardash/codeinoven-oven/accounts/${account.id}`
@@ -83,6 +85,16 @@ async function copyOvenAccount(
       break
     default:
       return {}
+  }
+  if (!synchronizeConfiguration) {
+    const credentials = new Set([
+      'auth.json',
+      '.credentials.json',
+      'muse/auth.json',
+      'opencode/auth.json',
+      'settings/providers.json'
+    ])
+    names = names.filter((name) => credentials.has(name))
   }
   await service.workspace(ovenId, { operation: 'ensure', root })
   let synchronized: Record<string, string> = {}

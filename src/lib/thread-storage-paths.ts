@@ -7,6 +7,7 @@ import {
   browserThreadWorkspaceDirectory,
   chatThreadWorkspaceDirectory
 } from './project-artifacts'
+import { CONFIG_UTILITIES_DIRECTORY, THREAD_UTILITIES_DIRECTORY } from './utility-scope-paths'
 import {
   ASSISTANT_SPACE_ID,
   GLOBAL_BROWSER_PROJECT_ID,
@@ -32,6 +33,10 @@ import {
  *   is the tab's own id, so one tab owns one directory;
  * - anything else that is not local (a remote project) keeps the generic
  *   app-storage area.
+ *
+ * Thread-scoped utility installs sit outside all of that, in
+ * `utilities/threads/<threadId>` under the app config root: they belong to the
+ * conversation, not to the folder it happens to run in.
  */
 
 /** The project a thread belongs to, as far as its storage paths care. */
@@ -102,6 +107,15 @@ export function threadAttachmentDirectory(
 }
 
 /**
+ * Absolute directory holding every utility installed for one thread: a
+ * thread-scoped skill or MCP server is installed here and nowhere else, so the
+ * install is private to that conversation and goes when the thread goes.
+ */
+export function threadUtilitiesDirectory(threadId: string): string {
+  return join(getConfigRoot(), CONFIG_UTILITIES_DIRECTORY, THREAD_UTILITIES_DIRECTORY, threadId)
+}
+
+/**
  * Every directory this thread could have written to, app-owned config-root
  * data only (never a location inside a local project's own working tree, which
  * belongs to the user, not app scratch space). Callers should remove these with
@@ -132,6 +146,10 @@ export function threadOwnedDirectories(
     dirs.push(threadAttachmentDirectory(null, { projectId, threadId, routineId }))
   }
   dirs.push(
+    // Thread-scoped utility installs: a skill or MCP server installed for this
+    // conversation only, which the registry cannot resolve for any thread once
+    // this one is gone.
+    threadUtilitiesDirectory(threadId),
     // Legacy chat-scope attachments/exports root, superseded by the workspace
     // above. Kept so a chat that predates the move is still cleaned up in full.
     join(getConfigRoot(), 'chats', threadId),

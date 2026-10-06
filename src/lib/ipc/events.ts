@@ -117,11 +117,14 @@ export const IPC_EVENT_CONTRACT = {
    *  it shows that toast (see src/renderer/lib/notification-sound.ts). */
   'notification:playSound': [] as unknown as [kind: NotificationSoundKind],
   'notification:show': [] as unknown as [payload: AgentNotificationPayload],
-  /** Transient in-app toast (error/info, optional navigation action). */
+  /** Transient in-app toast (error/info, optional navigation action). An error
+   *  toast keeps `details` behind its Copy action and is also filed in the App
+   *  Errors panel. */
   'app:toast': [] as unknown as [
     payload: {
       message: string
       type: 'error' | 'info'
+      details?: string
       projectId?: string
       threadId?: string
       action?: { label: string; projectId: string; threadId: string }
@@ -364,5 +367,22 @@ export const IPC_EVENT_CONTRACT = {
         }
       | { loginId: string; kind: 'complete'; providerId: string }
       | { loginId: string; kind: 'failed'; error: string }
+  ],
+  /**
+   * One live stage of a manual CIO Cleanup run. Only a run the user started
+   * reports here: the daily sweep is silent, so a background pass can never
+   * open a dockable panel the user did not ask for.
+   */
+  'cioCleanup:progress': [] as unknown as [
+    progress: import('../types/cio-cleanup').CioCleanupProgress
+  ],
+  /**
+   * CIO Cleanup state moved (a run started or finished, the retention setting
+   * changed, or the user excluded or included a path). Surfaces re-read their
+   * own view of the state rather than inferring it from a progress event, so a
+   * scheduled run that shows no panel still updates the settings page.
+   */
+  'cioCleanup:stateChanged': [] as unknown as [
+    state: import('../types/cio-cleanup').CioCleanupState
   ]
 }

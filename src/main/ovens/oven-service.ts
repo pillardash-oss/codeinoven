@@ -9,14 +9,23 @@ import {
   type OvenRunEvent,
   type StartOvenRunInput
 } from '../../lib/ovens'
-import type { OvenWorkspaceRequest, OvenWorkspaceResult } from '../../lib/ovens'
+import {
+  type OvenRootPeers,
+  type OvenWorkspaceRequest,
+  type OvenWorkspaceResult
+} from '../../lib/ovens'
+import { mirrorLocalGitIdentity, OVEN_GIT_NETWORK_CHANNELS } from './oven-local-git-identity'
+import { syncLocalGitHostTrust } from './oven-local-git-trust'
+import { OVEN_HARNESS_PATH } from './oven-harness-paths'
 import { OvenSsh, sshQuote } from './oven-ssh'
 import type { OvenRegistry } from './oven-registry'
+import { beginOvenHarnessRun } from './oven-operation-lock'
 
 const REMOTE_ROOT = '"$HOME/.config/pillardash/codeinoven-oven"'
 const SERVICE = `${REMOTE_ROOT}/service.mjs`
 // The login shell supplies version-manager PATH. Only a verified Node runtime is used.
 const NODE_CHECK =
+  `${OVEN_HARNESS_PATH} ` +
   'set -eu; command -v node >/dev/null 2>&1 || { printf "Node.js is required on this Oven\\n" >&2; exit 1; }; node -e \'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)\''
 
 export class OvenService {
@@ -36,8 +45,17 @@ export class OvenService {
     return this.parseProbe(output)
   }
 
-  async probe(id: string): Promise<OvenProbe> {
-    return this.parseProbe(await this.request(id, { method: 'probe' }))
+  /**
+   * Read an oven's live state.
+   *
+   * `refresh` asks the oven-side service to re-scan harness versions instead of
+   * answering from its own short-lived cache. Only harness management wants
+   * that, so ordinary connection probes stay cheap.
+   */
+  async probe(id: string, refresh = false): Promise<OvenProbe> {
+    return this.parseProbe(
+      await this.request(id, refresh ? { method: 'probe', refresh: true } : { method: 'probe' })
+    )
   }
 
   async runs(id: string): Promise<OvenRun[]> {
@@ -45,7 +63,12 @@ export class OvenService {
   }
 
   async start(id: string, input: StartOvenRunInput): Promise<OvenRun> {
-    return this.decode<OvenRun>(await this.request(id, { method: 'start', input }))
+    const release = beginOvenHarnessRun(id, input.command)
+    try {
+      return this.decode<OvenRun>(await this.request(id, { method: 'start', input }))
+    } finally {
+      release()
+    }
   }
 
   async events(
@@ -64,8 +87,79 @@ export class OvenService {
     this.decode(await this.request(id, { method: 'stop', runId }))
   }
 
-  async workspace(id: string, input: OvenWorkspaceRequest): Promise<OvenWorkspaceResult> {
+  /**
+   * Filesystem and Git work inside one checkout on the Oven.
+   *
+   * A clone first mirrors the identity this machine already authenticates with
+   * and shares the host keys this machine already trusts, so the Oven clones as
+   * the user without a manual key setup.
+   */
+  async workspace(
+    id: string,
+    input: OvenWorkspaceRequest,
+    localRepository?: string
+  ): Promise<OvenWorkspaceResult> {
+    if (input.operation === 'clone') {
+      await syncLocalGitHostTrust(this.ssh, id)
+      const mirror = await mirrorLocalGitIdentity(this.ssh, id, localRepository)
+      const output = await this.ssh.execute(
+        id,
+        `${NODE_CHECK}; node ${SERVICE} workspace`,
+        `${JSON.stringify({ ...input, ...(mirror ? { localIdentityFile: mirror.file } : {}) })}\n`,
+        150_000,
+        undefined,
+        true
+      )
+      return this.decode<OvenWorkspaceResult>(output)
+    }
     return this.decode(await this.request(id, { method: 'workspace', input }))
+  }
+
+  /**
+   * One desktop handler executing against an Oven checkout.
+   *
+   * Network Git channels mirror the local identity and its host trust first;
+   * every other channel runs with the checkout as it stands.
+   */
+  async rootOperation(
+    id: string,
+    root: string,
+    projectId: string,
+    channel: string,
+    args: unknown[],
+    localRepository?: string,
+    peers?: OvenRootPeers
+  ): Promise<unknown> {
+    const network = OVEN_GIT_NETWORK_CHANNELS.has(channel)
+    let localIdentityFile: string | undefined
+    if (network) {
+      await syncLocalGitHostTrust(this.ssh, id)
+      localIdentityFile = (await mirrorLocalGitIdentity(this.ssh, id, localRepository))?.file
+    }
+    const input = {
+      root,
+      projectId,
+      channel,
+      ...(localIdentityFile ? { localIdentityFile } : {}),
+      ...(peers ? { peers } : {}),
+      arguments: args.map((value) => ({
+        present: value !== undefined,
+        ...(value !== undefined ? { value } : {})
+      }))
+    }
+    const data = JSON.stringify(input)
+    if (Buffer.byteLength(data) > 8 * 1024 * 1024)
+      throw new Error('The Oven operation exceeds 8 MiB.')
+    const output = await this.ssh.execute(
+      id,
+      `${NODE_CHECK}; node ${SERVICE} root-operation`,
+      `${data}\n`,
+      150_000,
+      undefined,
+      network,
+      8 * 1024 * 1024
+    )
+    return this.decode<unknown>(output)
   }
 
   async putFile(id: string, root: string, path: string, data: Buffer, mode = 0o600): Promise<void> {

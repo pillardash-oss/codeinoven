@@ -485,10 +485,18 @@ export type BrowserFindStopAction = 'clearSelection' | 'keepSelection' | 'activa
 
 /** Ownership metadata for a browser tab requested by the main process. */
 export interface BrowserOpenRequestContext {
+  /** Ephemeral native page, adopted into the saved tab list only on expansion. */
+  peek?: boolean
   projectId: string
   threadId: string
   requestedTabId?: string
   reveal: boolean
+  /**
+   * The rectangle on screen a peek's opening flight starts from, in the window's
+   * own pixels: the link the user clicked, or a box around the click when the
+   * page named no link. Absent for a tab, which has no source to grow out of.
+   */
+  origin?: BrowserViewBounds | null
   /**
    * The box the created or revealed tab runs in, or null/absent for the
    * context's own jar. Main resolves it from the owning tab, so the renderer's

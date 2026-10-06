@@ -27,7 +27,9 @@ import {
 import { APP_NAME } from '$shared/brand'
 import { INBOX_PROJECT_ID, type Project, type Thread } from '$shared/types'
 import type { ActionDefinition, ActionSource } from '$lib/actions'
+import { viewShowsScopedSidebar } from '$lib/content-view-projects'
 import type { MainView, SettingsSection } from '$lib/stores/renderer-recovery'
+import { workspaceTourViewFor, VIEW_TOURS } from '$lib/components/onboarding/onboarding-tour-steps'
 
 export function actionId(value: string): ActionDefinition['id'] {
   return value as ActionDefinition['id']
@@ -180,12 +182,28 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
   // The scoped threads view is the docked scope sidebar: the shell reports it
   // either as its own `projects-scope` view or as `projects` with a live sidebar
   // context, so the new-thread action follows the docked scope in both cases.
-  const scopedThreadsActive =
-    (activeView === 'projects' || activeView === 'projects-scope') && Boolean(sidebarContext)
+  const scopedThreadsActive = viewShowsScopedSidebar(activeView, sidebarContext !== null)
   const hasLocalProjects = projectRecords.some(
     (project) => !project.hidden && project.source === 'local' && project.path
   )
+  // Every view that owns an empty state also owns a tour of itself, and this is
+  // the one entry point every view has: a view's empty state offers it too, but
+  // Chats has no action list of its own to offer it from.
+  const tourView = workspaceTourViewFor(activeView)
   const actions: ActionDefinition[] = [
+    ...(tourView
+      ? [
+          {
+            id: 'app:tour-view',
+            title: `Learn what the ${VIEW_TOURS[tourView].name} view can do`,
+            description: 'Walk through this view with pointers, one step at a time',
+            category: 'navigation',
+            source: applicationSource,
+            icon: GraduationCap,
+            keywords: ['tour', 'onboarding', 'walkthrough', 'guide', 'help', 'tips']
+          } satisfies ActionDefinition
+        ]
+      : []),
     {
       id: 'app:new-project',
       title: 'Create new project',

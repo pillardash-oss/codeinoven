@@ -1,5 +1,6 @@
 import { existsSync } from 'fs'
 import {
+  DEFAULT_SCOPE_BUCKET_ID,
   isManagedScopeRoot,
   type ManagedWorktreeDescriptor,
   type Project,
@@ -29,7 +30,17 @@ export interface ManagedWorktreeInspector {
 
 export type ScopeResolution =
   | { ok: true; root: string; rootDescriptor: ScopeRootDescriptor }
-  | { ok: false; health: ScopeWorktreeHealth }
+  | {
+      ok: false
+      health: ScopeWorktreeHealth
+      /**
+       * True when the board carries no such scope. That target is removed
+       * rather than unhealthy: there is no checkout to verify and no Repair
+       * action to run. Thread compatibility roots follow its threads to the
+       * Default scope, while Git callers still refuse it.
+       */
+      scopeRemoved: boolean
+    }
 
 /** Thrown instead of falling back when a managed scope root is unhealthy. */
 export class ScopeRootUnavailableError extends Error {
@@ -51,7 +62,9 @@ interface ScopeBoardLookup {
  * The single authority for converting a `{ projectId, scopeBucketId }` target
  * into a filesystem root. Project-rooted scopes resolve to the registered
  * project directory; managed scopes resolve only when Git confirms their
- * expected registration. Unhealthy managed scopes never fall back.
+ * expected registration. Unhealthy managed scopes never fall back, and a scope
+ * that is no longer on the board resolves through the Default scope so the
+ * threads it still owns stay usable (`scopeRootProvider`).
  */
 export class ScopeRootResolver {
   constructor(
@@ -64,8 +77,11 @@ export class ScopeRootResolver {
     const board = this.scopes.getBoard(target.projectId)
     const bucket = board.buckets.find((candidate) => candidate.id === target.scopeBucketId)
     if (!bucket) {
+      // Resolution itself stays fail-closed: only the thread adapter
+      // (`scopeRootProvider`) follows a removed scope to the Default scope.
       return {
         ok: false,
+        scopeRemoved: true,
         health: {
           category: 'unregistered',
           detail: `Unknown scope ${target.scopeBucketId} in project ${target.projectId}`
@@ -78,6 +94,7 @@ export class ScopeRootResolver {
       if (!project || project.source !== 'local' || !project.path) {
         return {
           ok: false,
+          scopeRemoved: false,
           health: {
             category: 'repository-unavailable',
             detail: `Project ${target.projectId} has no local directory`
@@ -104,6 +121,7 @@ export class ScopeRootResolver {
     const expectedPath = getScopeRootPath(projectId, descriptor.directoryName)
     const fail = (health: ScopeWorktreeHealth): ScopeResolution => ({
       ok: false,
+      scopeRemoved: false,
       health: { ...health, expectedPath }
     })
 
@@ -183,8 +201,11 @@ export class ScopeRootResolver {
 }
 
 /**
- * Adapter exposing the resolver as a `ThreadScopeRootProvider`. Unhealthy
- * managed scopes throw; only targets without a scope return null.
+ * Adapter exposing the resolver as a `ThreadScopeRootProvider`. A managed scope
+ * that is still on the board but unhealthy throws; a scope that is no longer on
+ * the board resolves through the project-rooted Default scope, which is exactly
+ * where the board read reassigns the threads it still owned. Only targets
+ * without a scope return null.
  */
 export function scopeRootProvider(
   resolver: ScopeRootResolver
@@ -193,8 +214,15 @@ export function scopeRootProvider(
     async resolveCompatibilityRoot(projectId: string, scopeBucketId?: string) {
       if (!scopeBucketId) return null
       const resolution = await resolver.resolve({ projectId, scopeBucketId })
-      if (!resolution.ok) throw new ScopeRootUnavailableError(resolution.health)
-      return resolution.root
+      if (resolution.ok) return resolution.root
+      if (resolution.scopeRemoved) {
+        const fallback = await resolver.resolve({
+          projectId,
+          scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
+        })
+        if (fallback.ok) return fallback.root
+      }
+      throw new ScopeRootUnavailableError(resolution.health)
     }
   }
 }

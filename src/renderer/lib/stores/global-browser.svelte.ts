@@ -15,11 +15,17 @@
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import {
+  peekLandingFor,
+  peekPageOnScreen as peekPageOnScreenState,
+  type BrowserPeekPhase
+} from '$lib/components/browser/browser-peek-transition'
 import type {
   BrowserExtensionSidePanel,
   BrowserOpenRequestContext,
   BrowserPageState,
-  BrowserPopupWindow
+  BrowserPopupWindow,
+  BrowserViewBounds
 } from '$shared/ipc-contract'
 import {
   isStorableBrowserFavicon,
@@ -102,6 +108,168 @@ function withDefaultBox(boxes: GlobalBrowserBox[]): GlobalBrowserBox[] {
 
 export class GlobalBrowserState {
   tabs: GlobalBrowserTab[] = $state([])
+  peekTab: GlobalBrowserTab | null = $state(null)
+  /**
+   * How far the current Peek Window has got, or null when there is none.
+   *
+   * The peek is the one browser surface that animates, so its life is a state
+   * machine rather than a mount: the surface draws the phase it is given and tells
+   * the store when the flight lands (`peekFlightLanded`), which is what keeps the
+   * tab alive long enough to be seen leaving.
+   */
+  peekPhase: BrowserPeekPhase | null = $state(null)
+  /**
+   * The rectangle on screen the current peek's opening flight starts from.
+   *
+   * Main works it out, because the click that opens a peek lands in a native page
+   * and never reaches the renderer: it is the link the user pressed, or a box
+   * around the click when the page named no link. Null when nothing named one, and
+   * the surface falls back to a box of its own.
+   */
+  peekOrigin: BrowserViewBounds | null = $state(null)
+  /**
+   * Whether the current peek's page has reported a document at all.
+   *
+   * Main starts the load before the surface exists, so the first state a peek
+   * reads can already be "not loading". A gate that only read that would uncover
+   * an empty native view on the first frame, which is exactly the flash the
+   * loading state is there to prevent. A page that answers from cache reports only
+   * its commit, so a committed address counts as a document too.
+   */
+  private peekDocumentSeen = $state(false)
+  /**
+   * Whether the current peek has finished its opening flight.
+   *
+   * This is what says its page may be uncovered, and it is not the same question as
+   * the phase: a close or an expansion the user asks for while the peek is still
+   * growing has to be able to leave, and it leaves with a page that was never on
+   * screen at all. Only a landing turns this on, so a flight that never got there
+   * cannot picture or uncover a page that never arrived.
+   */
+  private peekLanded = $state(false)
+
+  /**
+   * Whether the peek's page is on screen, or would be if nothing was holding it.
+   *
+   * The surface reads it for two decisions: whether the loading state is what the
+   * user sees (it is, until this is true), and whether the page is worth picturing
+   * on the way out (`peekPictureFor` in the surface), since a view that was never
+   * uncovered captures as a blank rectangle. `peekPageOnScreen` in the transition
+   * module is the rule it answers with.
+   */
+  get peekPageOnScreen(): boolean {
+    const tab = this.peekTab
+    return peekPageOnScreenState({
+      landed: this.peekLanded,
+      documentSeen: this.peekDocumentSeen,
+      loading: tab ? this.runtimeFor(tab.id).loading : false
+    })
+  }
+
+  /**
+   * Ask the current Peek Window to close.
+   *
+   * This only asks. The surface plays the flight first, shrinking the page back
+   * into the link it came from, and the drop happens on `peekFlightLanded`: a
+   * closed peek that vanished on the click would lose the one thing the flight is
+   * for, which is showing the user where the page went.
+   */
+  closePeek(): void {
+    if (!this.peekTab) return
+    if (this.peekPhase === 'closing' || this.peekPhase === 'expanding') return
+    this.peekPhase = 'closing'
+  }
+
+  /**
+   * Close the current Peek Window now, with no flight.
+   *
+   * For the one case that has nothing left to animate: the surface that draws the
+   * peek is being torn down, so a flight would be run by a component that is
+   * already gone and the tab would outlive the surface that owned it.
+   */
+  dropPeek(): void {
+    const tab = this.peekTab
+    if (!tab) return
+    this.destroyPeekTab(tab)
+  }
+
+  async expandPeek(): Promise<void> {
+    const tab = this.peekTab
+    if (!tab) return
+    if (this.peekPhase === 'closing' || this.peekPhase === 'expanding') return
+    try {
+      await invoke('browser:expandPeek', tab.id)
+    } catch (error: unknown) {
+      reportError(error, 'Peek Window could not be expanded.')
+      return
+    }
+    // The peek can be gone by the time main answers. A close the user asked for
+    // while that call was in flight has already destroyed the tab, so there is
+    // nothing left to promote and nowhere for a flight to land.
+    if (this.peekTab?.id !== tab.id) return
+    // The tab joins the list before the flight starts, because the flight lands on
+    // the row it is about to become and a row exists only once the strip knows
+    // about the tab. Activation waits for the landing: until then the strip is
+    // behind the surface, drawing a row nobody can see.
+    this.enforceTabCap()
+    this.tabs = [...this.tabs, tab]
+    this.peekPhase = 'expanding'
+  }
+
+  /**
+   * The surface's flight is over, so the peek takes the step its phase asked for.
+   *
+   * This is the other half of `closePeek` and `expandPeek`. Neither of them can
+   * finish on its own, because neither can finish before the surface has shown the
+   * user what happened: a close drops the tab here, an expansion promotes it into
+   * the strip, and an opening simply parks the peek where it landed.
+   */
+  peekFlightLanded(): void {
+    const tab = this.peekTab
+    if (!tab) return
+    const landing = peekLandingFor(this.peekPhase ?? 'open')
+    if (landing === 'open') {
+      this.peekPhase = 'open'
+      // The page may be uncovered from here on, which is also the only state in
+      // which it can be pictured on the way back out.
+      this.peekLanded = true
+      return
+    }
+    if (landing === 'close') {
+      this.destroyPeekTab(tab)
+      return
+    }
+    if (landing !== 'expand') return
+    this.forgetPeek()
+    this.activate(tab.id)
+    this.persist()
+  }
+
+  /** Drop a peek's tab for good: it is over, and its runtime describes a page
+   *  nothing will ever show again. */
+  private destroyPeekTab(tab: GlobalBrowserTab): void {
+    this.forgetPeek()
+    this.runtime.delete(tab.id)
+    void invoke('browser:destroy', tab.id, 'closed').catch((error: unknown) =>
+      reportError(error, 'Peek Window could not be closed.')
+    )
+  }
+
+  /** Give up a peek with no flight and no IPC: main has already taken its tab
+   *  away (a new peek is replacing it), so only the renderer's side is left. */
+  private discardPeek(): void {
+    if (!this.peekTab) return
+    this.runtime.delete(this.peekTab.id)
+    this.forgetPeek()
+  }
+
+  private forgetPeek(): void {
+    this.peekTab = null
+    this.peekPhase = null
+    this.peekOrigin = null
+    this.peekDocumentSeen = false
+    this.peekLanded = false
+  }
   /**
    * Tabs closed this session, most recently closed last.
    *
@@ -641,7 +809,10 @@ export class GlobalBrowserState {
 
   /** One tab by id, or null once it has been closed. */
   tabById(tabId: string): GlobalBrowserTab | null {
-    return this.tabs.find((tab) => tab.id === tabId) ?? null
+    return (
+      this.tabs.find((tab) => tab.id === tabId) ??
+      (this.peekTab?.id === tabId ? this.peekTab : null)
+    )
   }
 
   // ─── The active tab ───────────────────────────────────────────────────────
@@ -1134,35 +1305,42 @@ export class GlobalBrowserState {
       this.persist()
       return
     }
-    this.enforceTabCap()
+    if (!context.peek) this.enforceTabCap()
     const now = Date.now()
-    this.tabs = [
-      ...this.tabs,
-      {
-        id: tabId,
-        title: browserTabTitleForUrl(url),
-        customTitle: null,
-        url,
-        favicon: null,
-        // A popup belongs beside the page that opened it.
-        groupId: this.activeTab?.groupId ?? null,
-        // Main creates the tab in the opener's jar and hands back the box it
-        // used, so the row and the session agree from the first show. Main is the
-        // only side that knows the true owner when a background tab opens the
-        // popup, so its answer is trusted over the active tab's box.
-        boxId: context.boxId ?? null,
-        createdAt: now,
-        lastUsedAt: now,
-        hibernated: false,
-        pinned: false,
-        pinnedAt: null,
-        assistantThreadId: null,
-        color: null,
-        iconType: null,
-        customSvg: null,
-        imagePath: null
-      }
-    ]
+    const newTab: GlobalBrowserTab = {
+      id: tabId,
+      title: browserTabTitleForUrl(url),
+      customTitle: null,
+      url,
+      favicon: null,
+      // A popup belongs beside the page that opened it.
+      groupId: this.activeTab?.groupId ?? null,
+      // Main creates the tab in the opener's jar and hands back the box it
+      // used, so the row and the session agree from the first show. Main is the
+      // only side that knows the true owner when a background tab opens the
+      // popup, so its answer is trusted over the active tab's box.
+      boxId: context.boxId ?? null,
+      createdAt: now,
+      lastUsedAt: now,
+      hibernated: false,
+      pinned: false,
+      pinnedAt: null,
+      assistantThreadId: null,
+      color: null,
+      iconType: null,
+      customSvg: null,
+      imagePath: null
+    }
+    if (context.peek) {
+      this.discardPeek()
+      this.peekTab = newTab
+      this.peekOrigin = context.origin ?? null
+      this.peekDocumentSeen = false
+      this.peekLanded = false
+      this.peekPhase = 'opening'
+      return
+    }
+    this.tabs = [...this.tabs, newTab]
     if (context.reveal) this.activate(tabId)
     this.persist()
   }
@@ -1762,7 +1940,7 @@ export class GlobalBrowserState {
   /** Apply a live page snapshot: the navigation identity onto the tab, and the
    *  loading/audio/capture state onto the map the strip and header read. */
   applyPageState(state: BrowserPageState): void {
-    const tab = this.tabs.find((candidate) => candidate.id === state.tabId)
+    const tab = this.tabById(state.tabId)
     if (!tab) return
     let changed = false
     // A document with no committed address yet (a fresh tab, an about:blank
@@ -1797,7 +1975,12 @@ export class GlobalBrowserState {
     // Loading a page is a use of the tab, which is what keeps a tab the user is
     // actively navigating from being hibernated mid-load.
     if (state.loading) tab.lastUsedAt = Date.now()
-    if (changed) this.persist()
+    // A peek's gate reads the document, not just the load flag: see
+    // `peekDocumentSeen` for why one is not enough without the other.
+    if (state.tabId === this.peekTab?.id && (state.loading || state.url !== '')) {
+      this.peekDocumentSeen = true
+    }
+    if (changed && tab !== this.peekTab) this.persist()
     const current = this.runtime.get(state.tabId)
     if (
       current &&

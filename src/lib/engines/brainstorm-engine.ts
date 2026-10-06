@@ -179,6 +179,48 @@ export class BrainstormEngine {
     )
   }
 
+  /** Resolve the finalized audit contract on the database worker. */
+  async getFinalizedViaWorker(
+    projectId: string,
+    threadId: string
+  ): Promise<BrainstormDocument | null> {
+    this.assertId('project', projectId)
+    this.assertId('thread', threadId)
+    const result = await this.db.queryViaWorker(
+      `SELECT v.data FROM brainstorm_workflow w
+       JOIN brainstorm_versions v ON v.brainstorm_id=w.active_brainstorm_id
+         AND v.version=w.finalized_brainstorm_version
+         AND v.project_id=w.project_id AND v.thread_id=w.thread_id
+       WHERE w.project_id=? AND w.thread_id=?`,
+      [projectId, threadId],
+      1
+    )
+    if (!result.ok) throw new Error(result.error ?? 'Could not read the finalized Brainstorm')
+    const data = result.rows[0]?.data
+    if (typeof data !== 'string') return null
+    const document = JSON.parse(data) as BrainstormDocument
+    return document.status === 'finalized' ? document : null
+  }
+
+  async getVersionViaWorker(
+    projectId: string,
+    threadId: string,
+    brainstormId: string,
+    version: number
+  ): Promise<BrainstormDocument | null> {
+    this.assertScope(projectId, threadId)
+    this.assertId('brainstorm', brainstormId)
+    this.assertVersion(version)
+    const result = await this.db.queryViaWorker(
+      'SELECT data FROM brainstorm_versions WHERE project_id=? AND thread_id=? AND brainstorm_id=? AND version=?',
+      [projectId, threadId, brainstormId, version],
+      1
+    )
+    if (!result.ok) throw new Error(result.error ?? 'Could not read the Brainstorm version')
+    const data = result.rows[0]?.data
+    return typeof data === 'string' ? (JSON.parse(data) as BrainstormDocument) : null
+  }
+
   getVersion(
     projectId: string,
     threadId: string,

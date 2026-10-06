@@ -1,11 +1,9 @@
 import {
   DEFAULT_SCOPE_BUCKET_ID,
-  isManagedScopeRoot,
   type GitBranchInfo,
   type GitSyncPeer,
   type GitSyncPeerOption,
   type GitSyncPeerTarget,
-  type ScopeBoard,
   type ScopeBucket
 } from '../../lib/types'
 import { worktreePathKey } from './git/git-service-status'
@@ -32,14 +30,29 @@ export function syncPeerGit(git: {
 
 export interface SyncPeerServiceDeps {
   /** Scope board lookup, so every managed checkout is offered under its own name. */
-  scopes: { getBoard(projectId: string): ScopeBoard }
+  scopes: { getBoard(projectId: string): { buckets: SyncPeerScopeBucket[] } }
+  allowMissingProjectRoot?: boolean
   /**
    * Resolve one scope's checkout, failing closed with its health. The scope root
    * resolver is the only authority for that, so it is injected rather than
    * re-derived here.
    */
-  resolveRoot: (projectId: string, scopeBucketId: string) => Promise<ScopeResolution>
+  resolveRoot: (
+    projectId: string,
+    scopeBucketId: string
+  ) => Promise<{ ok: true; root: string } | Extract<ScopeResolution, { ok: false }>>
   git: SyncPeerGit
+}
+
+/**
+ * One scope bucket as the remote board reports it.
+ *
+ * The Oven has no local worktree registry or health to read, so the board is
+ * reduced to identity and shape: which scopes exist and whether each one owns
+ * its own checkout.
+ */
+export type SyncPeerScopeBucket = Pick<ScopeBucket, 'id' | 'name' | 'archivedAt'> & {
+  root: { kind: 'project' | 'worktree' }
 }
 
 /** One end of a sync, resolved into everything the git core and the UI need. */
@@ -73,7 +86,7 @@ export class SyncPeerService {
   }): Promise<GitSyncPeerOption[]> {
     const { projectId, runningPath } = input
     const [rootPath, branches] = await Promise.all([
-      this.projectRoot(projectId),
+      this.projectRootOption(projectId),
       this.deps.git.listBranches(runningPath).catch((): GitBranchInfo[] => [])
     ])
     const branchByCheckout = branchByCheckoutPath(branches, worktreePathKey(runningPath))
@@ -82,16 +95,19 @@ export class SyncPeerService {
     const rootOption: GitSyncPeerOption = {
       peer: { kind: 'root' },
       label: 'Project root',
-      branch: branchByCheckout.get(worktreePathKey(rootPath)) ?? null,
+      branch: rootPath === null ? null : (branchByCheckout.get(worktreePathKey(rootPath)) ?? null),
       checkout: true,
-      self: worktreePathKey(rootPath) === runningKey,
-      path: rootPath
+      self: rootPath !== null && worktreePathKey(rootPath) === runningKey,
+      path: rootPath,
+      ...(rootPath === null
+        ? { unavailable: 'Open the Default scope on this Oven to prepare its checkout.' }
+        : {})
     }
 
     const worktreeOptions: GitSyncPeerOption[] = []
     for (const bucket of this.deps.scopes.getBoard(projectId).buckets) {
       if (bucket.id === DEFAULT_SCOPE_BUCKET_ID) continue
-      if (!isManagedScopeRoot(bucket.root)) continue
+      if (bucket.root.kind !== 'worktree') continue
       if (bucket.archivedAt !== undefined) continue
       worktreeOptions.push(
         await this.worktreeOption(projectId, bucket, branchByCheckout, runningKey)
@@ -125,7 +141,7 @@ export class SyncPeerService {
 
     const checkout =
       peer.kind === 'root'
-        ? { scopeBucketId: DEFAULT_SCOPE_BUCKET_ID, path: await this.projectRoot(projectId) }
+        ? { scopeBucketId: DEFAULT_SCOPE_BUCKET_ID, path: await this.projectRootOption(projectId) }
         : {
             scopeBucketId: peer.scopeBucketId,
             path: await this.requireRoot(projectId, peer.scopeBucketId)
@@ -134,6 +150,10 @@ export class SyncPeerService {
       checkout.scopeBucketId === DEFAULT_SCOPE_BUCKET_ID
         ? null
         : this.bucket(projectId, checkout.scopeBucketId)
+    if (checkout.path === null)
+      throw new Error(
+        'The Default scope has no checkout on this Oven yet. Open it once, then sync again.'
+      )
     const path = checkout.path
     const branch = await this.deps.git.statusBranch(path).catch(() => null)
     return {
@@ -152,7 +172,7 @@ export class SyncPeerService {
   /** One managed scope as a peer, or the reason it cannot be used right now. */
   private async worktreeOption(
     projectId: string,
-    bucket: ScopeBucket,
+    bucket: SyncPeerScopeBucket,
     branchByCheckout: Map<string, string>,
     runningKey: string
   ): Promise<GitSyncPeerOption> {
@@ -185,6 +205,20 @@ export class SyncPeerService {
     return await this.requireRoot(projectId, DEFAULT_SCOPE_BUCKET_ID)
   }
 
+  /**
+   * The root checkout, or null when this end has no root to offer.
+   *
+   * Only remote boards opt into the null answer (`allowMissingProjectRoot`): on
+   * a desktop a missing project root is a real failure the caller must see.
+   */
+  private async projectRootOption(projectId: string): Promise<string | null> {
+    if (!this.deps.allowMissingProjectRoot) return await this.projectRoot(projectId)
+    return await this.projectRoot(projectId).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+  }
+
   /** A scope's checkout, or the reason it cannot be resolved right now. */
   private async requireRoot(projectId: string, scopeBucketId: string): Promise<string> {
     const resolution = await this.deps.resolveRoot(projectId, scopeBucketId)
@@ -192,7 +226,7 @@ export class SyncPeerService {
     return resolution.root
   }
 
-  private bucket(projectId: string, scopeBucketId: string): ScopeBucket | null {
+  private bucket(projectId: string, scopeBucketId: string): SyncPeerScopeBucket | null {
     return (
       this.deps.scopes
         .getBoard(projectId)
@@ -202,7 +236,7 @@ export class SyncPeerService {
 }
 
 /** Sentence name of a checkout peer, for errors and result toasts. */
-function sentenceLabel(bucket: ScopeBucket | null): string {
+function sentenceLabel(bucket: Pick<ScopeBucket, 'name'> | null): string {
   return bucket ? `the scope “${bucket.name}”` : 'the project root'
 }
 

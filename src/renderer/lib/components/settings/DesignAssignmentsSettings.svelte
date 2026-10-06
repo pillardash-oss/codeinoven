@@ -173,6 +173,18 @@
     )
   }
 
+  async function selectRuntime(
+    assignment: DesignAssignment,
+    runtime: import('$shared/types').ModelRuntimeSettings
+  ): Promise<void> {
+    const selection = assignment.selection
+    if (!isUsableDesignSelection(selection)) return
+    await persist(
+      replace(assignment, { selection: { ...selection, ...runtime } }),
+      'The design assignment thinking level could not be saved.'
+    )
+  }
+
   /**
    * Change which craft one assignment covers.
    *
@@ -480,7 +492,9 @@
                         onSelect={(providerId, modelId, harnessId, accountId) =>
                           void selectModel(assignment, providerId, modelId, harnessId, accountId)}
                         thinkingLevel={assignment.selection?.thinkingLevel}
+                        runtimeSettings={assignment.selection}
                         onSelectThinking={(level) => void selectThinking(assignment, level)}
+                        onSelectRuntime={(runtime) => void selectRuntime(assignment, runtime)}
                         onToggleFavorite={(providerId, modelId, harnessId) =>
                           rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                         onReorderFavorite={(draggedKey, targetKey, position) =>
@@ -618,6 +632,10 @@
                   draftSelection = { harnessId, providerId, modelId, accountId }
                 }}
                 thinkingLevel={draftSelection?.thinkingLevel}
+                runtimeSettings={draftSelection ?? undefined}
+                onSelectRuntime={(runtime) => {
+                  if (draftSelection) draftSelection = { ...draftSelection, ...runtime }
+                }}
                 onSelectThinking={(level) => {
                   draftSelection = draftSelection
                     ? { ...draftSelection, thinkingLevel: level }

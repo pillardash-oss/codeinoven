@@ -339,6 +339,14 @@ export class SkillUpdateService {
       },
       ...(description ? { description } : {})
     })
+    // A project- or thread-scoped managed copy also has a file on disk, so the
+    // install is refreshed to hold the text the next turn will read. Best
+    // effort: the registry entry the turn actually reads is already updated.
+    await this.deps.install.footprint
+      ?.reconcile(await registry.list())
+      .catch((error: unknown) =>
+        Logger.dev('Updated skill install folder was not refreshed:', error)
+      )
     return { result: { ...identity(record), outcome: 'updated' }, unreachable: false }
   }
 

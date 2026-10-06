@@ -7,7 +7,13 @@ import type {
   OvenWorkspaceRequest,
   OvenWorkspaceResult,
   OvenTransferInput,
-  OvenTransferReview
+  OvenTransferReview,
+  OvenSetupPreflightResult,
+  OvenSetupProgressEvent,
+  OvenSetupOperation,
+  OvenHarnessInventoryItem,
+  OvenTimezoneSyncResult,
+  StartOvenSetupInput
 } from '../ovens'
 import type { OvenConnectionStatus } from '../ovens'
 import type { Contract } from './contract-helpers'
@@ -17,6 +23,16 @@ export const invokeOvenContract = {
   'oven:testConnection': {} as Contract<[input: SaveOvenInput], OvenConnectionStatus>,
   'oven:connectionHealth': {} as Contract<[id: string], OvenConnectionStatus>,
   'oven:validateIdentity': {} as Contract<[path: string], string>,
+  'oven:rootOperation': {} as Contract<
+    [
+      projectId: string,
+      threadId: string,
+      channel: string,
+      args: unknown[],
+      expectedOvenId?: string
+    ],
+    unknown
+  >,
   'oven:state': {} as Contract<[], OvenState>,
   'oven:save': {} as Contract<[input: SaveOvenInput], Oven>,
   'oven:remove': {} as Contract<[id: string], OvenState>,
@@ -32,5 +48,21 @@ export const invokeOvenContract = {
   'oven:selectThread': {} as Contract<
     [projectId: string, threadId: string, id: string, root?: string],
     Thread
+  >,
+  'oven:setup:preflight': {} as Contract<[id: string], OvenSetupPreflightResult>,
+  'oven:setup:start': {} as Contract<[id: string, input: StartOvenSetupInput], OvenSetupOperation>,
+  'oven:setup:status': {} as Contract<[id: string], OvenSetupOperation | null>,
+  'oven:setup:progress': {} as Contract<
+    [id: string, after?: number],
+    { events: OvenSetupProgressEvent[]; hasMore: boolean }
+  >,
+  'oven:setup:cancel': {} as Contract<[id: string], OvenSetupOperation>,
+  'oven:setup:retry': {} as Contract<[id: string], OvenSetupOperation>,
+  'oven:harness:inventory': {} as Contract<[id: string], OvenHarnessInventoryItem[]>,
+  'oven:timezone:sync': {} as Contract<[id: string], OvenTimezoneSyncResult>,
+  'oven:harness:update': {} as Contract<[id: string, harnessId: string], OvenHarnessInventoryItem>,
+  'oven:harness:uninstall': {} as Contract<
+    [id: string, harnessId: string],
+    OvenHarnessInventoryItem
   >
 }

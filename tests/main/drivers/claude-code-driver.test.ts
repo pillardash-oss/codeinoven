@@ -94,8 +94,9 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         harnessId: 'claude-code',
         providerId: 'anthropic',
         modelId: 'sonnet',
+        contextWindow: 1_000_000,
         thinkingLevel: 'medium',
-        permissionLevel: 'auto_review',
+        permissionLevel: 'auto_review'
       }
     })
     expect(spawnMock).toHaveBeenCalledWith(
@@ -112,7 +113,7 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         '--include-partial-messages',
         '--forward-subagent-text',
         '--model',
-        'sonnet',
+        'sonnet[1m]',
         '--tools',
         'AskUserQuestion,Read',
         '--permission-mode',
@@ -120,6 +121,7 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
       ]),
       expect.objectContaining({
         env: expect.objectContaining({
+          CLAUDE_CODE_DISABLE_1M_CONTEXT: '0',
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
           CLAUDE_CODE_ENABLE_TODO_TOOLS: '1'
         })
@@ -162,17 +164,20 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
       text: 'Continue',
       attachments: [],
       settings: {
+        contextWindow: 200_000,
         harnessId: 'claude-code',
         providerId: 'anthropic',
         modelId: 'sonnet',
         thinkingLevel: 'medium',
-        permissionLevel: 'auto_review',
+        permissionLevel: 'auto_review'
       }
     })
     expect(spawnMock).toHaveBeenLastCalledWith(
       'claude',
       expect.arrayContaining(['--resume', 'native-1', '--permission-mode', 'manual']),
-      expect.any(Object)
+      expect.objectContaining({
+        env: expect.objectContaining({ CLAUDE_CODE_DISABLE_1M_CONTEXT: '1' })
+      })
     )
     next.emit('exit', 0, null)
   })
@@ -191,7 +196,7 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
       providerId: 'anthropic',
       modelId: 'haiku',
       thinkingLevel: 'minimal',
-      permissionLevel: 'auto_review',
+      permissionLevel: 'auto_review'
     } as const
 
     await driver.sendPrompt('/project', {
@@ -230,7 +235,7 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         providerId: 'anthropic',
         modelId: '',
         thinkingLevel: 'low',
-        permissionLevel: 'auto_review',
+        permissionLevel: 'auto_review'
       }
     })
     child.stdout.emit(
@@ -427,7 +432,7 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         providerId: 'anthropic',
         modelId: '',
         thinkingLevel: 'low',
-        permissionLevel: 'auto_review',
+        permissionLevel: 'auto_review'
       }
     })
     expect(child.stdin.write).toHaveBeenCalledWith(
@@ -469,7 +474,7 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         providerId: 'anthropic',
         modelId: '',
         thinkingLevel: 'low',
-        permissionLevel: 'auto_review',
+        permissionLevel: 'auto_review'
       }
     })
     child.stdout.emit(
@@ -520,7 +525,7 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         providerId: 'anthropic',
         modelId: '',
         thinkingLevel: 'low',
-        permissionLevel: 'auto_review',
+        permissionLevel: 'auto_review'
       }
     })
     child.stdout.emit(
@@ -578,7 +583,7 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         providerId: 'anthropic',
         modelId: '',
         thinkingLevel: 'low',
-        permissionLevel: 'auto_review',
+        permissionLevel: 'auto_review'
       }
     })
     child.stdout.emit(
@@ -643,7 +648,7 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         providerId: 'anthropic',
         modelId: '',
         thinkingLevel: 'low',
-        permissionLevel: 'auto_review',
+        permissionLevel: 'auto_review'
       }
     })
     child.stdout.emit(

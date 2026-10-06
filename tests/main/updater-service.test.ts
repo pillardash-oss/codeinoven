@@ -8,8 +8,10 @@ import {
   DEFAULT_BACKGROUND_WAKE_LEAD_MS,
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_BROWSER_HISTORY_LIMIT,
+  DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS
 } from '../../src/lib/types/settings'
+import { DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES } from '../../src/lib/types/cio-cleanup'
 import {
   UpdaterService,
   type SessionActivitySource
@@ -80,6 +82,7 @@ function defaultConfig(): AppConfig {
     agentDefaults: { syncFromThreadChanges: false },
     auxiliaryAgents: {},
     design: { assignments: [] },
+    modelProfiles: [],
     workRoots: { design: '.cio/designs', video: '.cio/videos' },
     mediaGeneration: { providerId: null },
     rankingJudge: { kind: 'automatic' },
@@ -105,6 +108,8 @@ function defaultConfig(): AppConfig {
     maxBackgroundWakeHoldMs: DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
     browserSearchEngine: 'duckduckgo',
     browserCustomSearchEngines: [],
+    cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
+    cioCleanupExcludedCategories: [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES],
     sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
   }
 }

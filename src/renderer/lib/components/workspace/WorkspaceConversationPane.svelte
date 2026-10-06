@@ -45,6 +45,8 @@
     updateConfig?: (patch: AppConfigPatch) => Promise<void>
     /** Remounts the empty-state chats composer to restore a failed first send. */
     restoreKey: number
+    /** Whether the view's own sidebar currently holds anything to show. */
+    sidebarHasContent: boolean
     onNavigate: (view: MainView) => void
     onForked: (thread: Thread) => void
     onContinueInProject: (forked: Thread) => void
@@ -67,6 +69,7 @@
     config,
     updateConfig,
     restoreKey,
+    sidebarHasContent,
     onNavigate,
     onForked,
     onContinueInProject,
@@ -375,16 +378,21 @@
       </div>
     </div>
   {:else if mode === 'assistant'}
-    <!-- Assistant empty state   routines and tasks are created from the header -->
-    <div class="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-      <p class="text-sm font-semibold text-foreground">No task selected</p>
-      <p class="max-w-sm text-[0.8125rem] text-muted">
-        Create a routine or a task from the header, then give the agent its how-to.
-      </p>
-    </div>
-  {:else}
+    <!-- Assistant empty state   routines and tasks start here, exactly the way a
+         project does in the Projects view. -->
     <WelcomeStart
-      variant="projects"
+      variant="assistant"
+      onNewRoutine={() => workspaceState.requestAssistantRoutine()}
+      onNewTask={() => workspaceState.requestAssistantTask()}
+      onOpenSettings={() => onNavigate('settings')}
+      onShowTour={() => workspaceState.requestViewTour('assistant')}
+    />
+  {:else}
+    <!-- Projects and Threads empty states   their own copy and their own tour,
+         and the sidebar toggle only while that sidebar has content. -->
+    <WelcomeStart
+      variant={mode === 'threads' ? 'threads' : 'projects'}
+      {sidebarHasContent}
       onNewChat={() => onNavigate('chats')}
       onToggleSidebar={() => sidebarState.toggle()}
       onAddProject={() => {
@@ -396,7 +404,7 @@
         onRequestAddProject('git-clone')
       }}
       onOpenSettings={() => onNavigate('settings')}
-      onShowTour={() => workspaceState.requestOnboarding()}
+      onShowTour={() => workspaceState.requestViewTour(mode === 'threads' ? 'threads' : 'projects')}
     />
   {/if}
 </div>

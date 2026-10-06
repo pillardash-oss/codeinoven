@@ -1,14 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Server, FolderOpen, Monitor } from '@lucide/svelte'
+  import { Server, Monitor } from '@lucide/svelte'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { Thread, ThreadSettings } from '$shared/types'
-  import type { OvenState } from '$shared/ovens'
-  import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import type { OvenProbe, OvenState } from '$shared/ovens'
+  import { LOCAL_OVEN_ID, ovenHarnessIdForCommand } from '$shared/ovens'
   import PickerMenuShell from '../shared/PickerMenuShell.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { isTypeableKey } from '../shared/model-picker-helpers'
-  import OvenWorkspace from './OvenWorkspace.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
 
@@ -20,8 +20,8 @@
   }
   let { thread, settings, busy, onSettingsChange }: Props = $props()
   let ovens = $state.raw<OvenState | null>(null)
+  let probes = $state<Record<string, OvenProbe>>({})
   let editor = $state(false)
-  let workspace = $state(false)
   let selected = $state(LOCAL_OVEN_ID)
   let root = $state('')
   let saving = $state(false)
@@ -79,8 +79,21 @@
     try {
       ovens = await invoke('oven:state')
       editor = true
+      void loadHarnessBadges(ovens.ovens)
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'Could not load Ovens.'
+    }
+  }
+
+  async function loadHarnessBadges(entries: OvenState['ovens']): Promise<void> {
+    for (const oven of entries) {
+      if (oven.kind !== 'ssh' || probes[oven.id]) continue
+      try {
+        probes = { ...probes, [oven.id]: await invoke('oven:probe', oven.id) }
+      } catch {
+        // A disconnected oven simply has no current inventory badge.
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 80))
     }
   }
 
@@ -133,14 +146,6 @@
         (settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID ? 'Oven unavailable' : 'Local')}</span
     >
   </button>
-  {#if settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID}
-    <button
-      type="button"
-      class="flex items-center gap-1.5 rounded-md px-2 py-1 hover:bg-elevated"
-      title="Open the workspace on this Oven"
-      onclick={() => (workspace = true)}><FolderOpen size={12} /> Workspace</button
-    >
-  {/if}
   {#if error && !editor}<span class="text-danger" role="alert">{error}</span>{/if}
 
   {#if editor}
@@ -200,6 +205,39 @@
             <span class="shrink-0 text-[0.625rem] text-dimmed"
               >{oven.id === LOCAL_OVEN_ID ? 'Local' : 'SSH'}</span
             >
+            {#if oven.kind === 'ssh' && probes[oven.id]}
+              {@const inventory = probes[oven.id].inventory?.filter(
+                (item) => item.health !== 'missing'
+              )}
+              <span class="flex shrink-0 items-center gap-1" aria-label="Installed harnesses">
+                {#if inventory?.length}
+                  {#each inventory.slice(0, 4) as item (item.harnessId)}
+                    <span
+                      class="flex items-center rounded bg-elevated p-0.5"
+                      title={item.installedVersion
+                        ? `${item.command} ${item.installedVersion}`
+                        : item.command}
+                    >
+                      <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
+                    </span>
+                  {/each}
+                {:else if probes[oven.id].harnesses.some((entry) => entry.path)}
+                  {#each probes[oven.id].harnesses
+                    .filter((entry) => entry.path)
+                    .slice(0, 4) as entry (entry.command)}
+                    <span class="flex items-center rounded bg-elevated p-0.5" title={entry.command}>
+                      <AgentIcon
+                        agentId={ovenHarnessIdForCommand(entry.command) ?? entry.command}
+                        label={entry.command}
+                        size={14}
+                      />
+                    </span>
+                  {/each}
+                {:else}
+                  <span class="text-[0.625rem] text-dimmed">No harnesses</span>
+                {/if}
+              </span>
+            {/if}
           </button>
         {/each}
         {#if !visibleOvens.length}<p class="px-2.5 py-2 text-xs text-dimmed">
@@ -210,20 +248,3 @@
     </div>
   {/if}
 </div>
-
-{#if workspace && settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID}
-  <OvenWorkspace
-    open={workspace}
-    ovenId={settings.ovenId}
-    root={settings.ovenPath ?? ''}
-    {thread}
-    {ovens}
-    onUseRoot={async (path) => {
-      selected = settings.ovenId ?? LOCAL_OVEN_ID
-      root = path
-      await select()
-      if (error) throw new Error(error)
-    }}
-    onClose={() => (workspace = false)}
-  />
-{/if}

@@ -35,8 +35,12 @@
     onDelete: (entry: ProjectFileEntry) => void
     onInfo: (entry: ProjectFileEntry) => void
     onReveal: (entry: ProjectFileEntry) => void
+    /** False when the local file manager cannot show this tree's entries. */
+    canReveal: boolean
     onOpenInBrowser: (entry: ProjectFileEntry) => void
     onOpenInTerminal: (entry: ProjectFileEntry) => void
+    cioCleanupExcluded: boolean
+    onToggleCioCleanupExclusion: (entry: ProjectFileEntry) => void
     onRowClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowDoubleClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowContextMenu: (entry: ProjectFileEntry) => void
@@ -66,8 +70,11 @@
     onDelete,
     onInfo,
     onReveal,
+    canReveal,
     onOpenInBrowser,
     onOpenInTerminal,
+    cioCleanupExcluded,
+    onToggleCioCleanupExclusion,
     onRowClick,
     onRowDoubleClick,
     onRowContextMenu,
@@ -146,8 +153,11 @@
     onDelete={() => onDelete(entry)}
     onInfo={() => onInfo(entry)}
     onReveal={() => onReveal(entry)}
+    {canReveal}
     onOpenInBrowser={() => onOpenInBrowser(entry)}
     onOpenInTerminal={() => onOpenInTerminal(entry)}
+    {cioCleanupExcluded}
+    onToggleCioCleanupExclusion={() => onToggleCioCleanupExclusion(entry)}
   >
     {#if inlineEdit?.kind === 'rename' && inlineEdit.entry.path === entry.path}
       <div

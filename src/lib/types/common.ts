@@ -30,13 +30,18 @@ export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'm
  * model id, for codex a `service_tier = "fast"` config override. Only models
  * the harness catalog marks fast-capable expose the choice. Defaults to `normal`.
  */
-export type InferenceMode = 'normal' | 'fast'
+export type InferenceMode = 'normal' | 'fast' | 'ultrafast'
 
 /** How tool-call permissions are handled for a thread. */
 export type PermissionLevel = 'auto_review' | 'full_access'
 
 /** Harness/provider/model identity used for a secondary agent role. */
-export interface AgentModelSelection {
+export interface ModelRuntimeSettings {
+  inferenceMode?: InferenceMode
+  contextWindow?: number
+}
+
+export interface AgentModelSelection extends ModelRuntimeSettings {
   harnessId: string
   providerId: string
   modelId: string

@@ -18,7 +18,9 @@ export function buildCoordinatorSnapshotJson(plan: AssignmentPlan, allThreads: T
             harnessId: thread.settings.harnessId,
             providerId: thread.settings.providerId,
             modelId: thread.settings.modelId,
-            thinkingLevel: thread.settings.thinkingLevel
+            thinkingLevel: thread.settings.thinkingLevel,
+            inferenceMode: thread.settings.inferenceMode,
+            contextWindow: thread.settings.contextWindow
           }
         : null
     }))

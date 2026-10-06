@@ -1,3 +1,4 @@
+import { ovenRootKey } from '$lib/oven-root-target'
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -420,7 +421,7 @@ export class GitState {
   /** Switch the panel to a project, dropping any leftover state from the
    *  previous one so stale data is never shown. */
   activate(projectId: string, scopeBucketId?: string): void {
-    const nextScopeBucketId = scopeBucketId ?? null
+    const nextScopeBucketId = ovenRootKey(projectId) ?? scopeBucketId ?? null
     if (this.activeProjectId === projectId && this.activeScopeBucketId === nextScopeBucketId) return
     this.activationGeneration += 1
     this.activeProjectId = projectId
@@ -491,7 +492,7 @@ export class GitState {
     if (!project || project.id === INBOX_PROJECT_ID) return
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
-    const scopeBucketId = thread?.scopeBucketId ?? null
+    const scopeBucketId = ovenRootKey(project.id) ?? thread?.scopeBucketId ?? null
     // A scope target is what Git cares about, not a thread. Switching between
     // two threads of the same project and scope changes nothing here, so this
     // returns before touching status: no read, no blank panel, no worktree

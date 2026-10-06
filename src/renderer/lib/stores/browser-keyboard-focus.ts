@@ -36,7 +36,8 @@ class BrowserKeyboardFocus {
   private readonly claims: Record<BrowserSurface, string | null> = {
     sidebar: null,
     fullscreen: null,
-    workspace: null
+    workspace: null,
+    peek: null
   }
   /** The tab main was last told about, so a repeated claim is not re-sent. */
   private published: string | null = null
@@ -54,7 +55,8 @@ class BrowserKeyboardFocus {
   }
 
   private publish(): void {
-    const effective = this.claims.workspace ?? this.claims.fullscreen ?? this.claims.sidebar
+    const effective =
+      this.claims.peek ?? this.claims.workspace ?? this.claims.fullscreen ?? this.claims.sidebar
     if (this.published === effective) return
     this.published = effective
     // A failure is silent: the feature handlers are not registered until after

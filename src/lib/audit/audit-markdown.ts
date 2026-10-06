@@ -72,6 +72,9 @@ export function exportAuditReportMarkdown(
             : [])
         ]
       : []),
+    ...(report.brainstormId !== undefined && report.brainstormVersion !== undefined
+      ? [`Brainstorm: ${report.brainstormId} v${report.brainstormVersion}`]
+      : []),
     ...(report.specId !== undefined && report.specVersion !== undefined
       ? [`Specification: ${report.specId} v${report.specVersion}`]
       : report.independent === true

@@ -1,61 +1,66 @@
 <script lang="ts">
-  import { tick } from 'svelte'
-  import type { Component } from 'svelte'
-  import type { Attachment } from 'svelte/attachments'
-  import { AppWindow, Check, Clock, Pin, StickyNote } from '@lucide/svelte'
-  import { Portal } from 'bits-ui'
-  import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
-  import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
-  import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
-  import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
-  import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
-  import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
-  import {
-    calculateThreadHoverPopoverPosition,
-    resolveThreadHoverPopoverSize,
-    threadHoverPopoverStyle,
-    THREAD_HOVER_POPOVER_SURFACE_CLASS
-  } from '$lib/components/shared/thread-hover-popover-layout'
-  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
-  import { scopeState } from '$lib/stores/scope.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
-  import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
-  import { threadMessages } from '$lib/stores/thread-messages.svelte'
-  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-  import { effectiveThreadTitle } from '$lib/stores/draft-label'
-  import { agentRuns } from '$lib/stores/agent-runs.svelte'
-  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import { reportError } from '$lib/stores/app-errors.svelte'
-  import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
-  import { pickColorForSeed } from '$lib/project-colors'
-  import { longPress } from '$lib/long-press.svelte'
-  import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
-  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
-  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
-  import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
   import {
     AUTHORED_WORK_ICON_BY_KIND,
     AUTHORED_WORK_NAME_BY_KIND
   } from '$lib/authored-work-presentation'
-  import type { AuthoredWorkKind } from '$shared/ipc-contract'
-  import { threadScopeBucket } from '$lib/threads/thread-scope'
-  import { pipState } from '$lib/stores/pip.svelte'
+  import { feature } from '$lib/feature-registry'
+  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
+  import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import { formatCompactAge } from '$shared/date-time-format'
+  import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
+  import {
+    calculateThreadHoverPopoverPosition,
+    resolveThreadHoverPopoverSize,
+    THREAD_HOVER_POPOVER_SURFACE_CLASS,
+    threadHoverPopoverStyle
+  } from '$lib/components/shared/thread-hover-popover-layout'
+  import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
+  import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
+  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import Modal from '$lib/components/ui/Modal.svelte'
+  import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { longPress } from '$lib/long-press.svelte'
+  import { pickColorForSeed } from '$lib/project-colors'
+  import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { speechController } from '$lib/speech/speech-controller.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { effectiveThreadTitle } from '$lib/stores/draft-label'
+  import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+  import { pipState } from '$lib/stores/pip.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
+  import { ovens } from '$lib/stores/ovens.svelte'
+  import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { isThreadLiveWorking } from '$lib/thread-status-badge'
+  import { threadScopeBucket } from '$lib/threads/thread-scope'
+  import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import type { AuthoredWorkKind } from '$shared/ipc-contract'
+  import { threadStatusPolicy } from '$shared/thread-status-policy'
+  import type { Thread } from '$shared/types'
   import {
     coordinatorHasActiveDelegates,
     coordinatorHasUnreadWorkers,
     DEFAULT_SCOPE_BUCKET_ID,
-    isThreadBusy,
-    isOrchestrationChildThread
+    isOrchestrationChildThread,
+    isThreadBusy
   } from '$shared/types'
-  import type { Thread } from '$shared/types'
-  import { threadStatusPolicy } from '$shared/thread-status-policy'
+  import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import { AppWindow, Check, Clock, GitBranch, Pin, Server } from '@lucide/svelte'
+  import { Portal } from 'bits-ui'
+  import type { Component } from 'svelte'
+  import { tick } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
 
   interface Props {
     thread: Thread
@@ -316,6 +321,7 @@
     | 'approval'
     | 'error'
     | 'scheduled'
+    | 'queued'
 
   /** Threads with any unsent composer content read as "todo" (filled gray dot).
    *  Live dictation counts too: from the first mic press through transcription
@@ -326,9 +332,12 @@
       speechController.isCapturingThread(thread.id)
   )
 
-  /** A thread with an unsent message scheduled behind other thread(s)   its
-   *  agent has not started yet. Reads as pending/draft state, but gets a timer
-   *  badge in the working colour instead of the plain draft dot. */
+  /** Queued messages get a clock instead of the draft dot, including during live work. */
+  let hasQueuedMessage = $derived(
+    rendererRecovery.queuedMessageCount(thread.projectId, thread.id) > 0
+  )
+
+  /** A message scheduled behind other threads also gets the working-colour clock. */
   let hasStartAfterPending = $derived(
     rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
   )
@@ -447,6 +456,8 @@
 
   let threadState = $derived.by((): ThreadState => {
     if (thread.status === 'failed') return 'error'
+    if (hasQueuedMessage && thread.status !== 'awaiting_approval' && thread.status !== 'spec')
+      return 'queued'
     if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
@@ -497,6 +508,25 @@
 
   let scopeBucket = $derived(threadScopeBucket(thread))
 
+  /** Whether the thread runs on an Oven rather than this computer. */
+  let isRemote = $derived(
+    Boolean(thread.settings?.ovenId && thread.settings.ovenId !== LOCAL_OVEN_ID)
+  )
+
+  /** Oven the thread runs on, resolved for its mark. Its name lives on the
+   *  hover card, so a row only carries the box icon. */
+  let oven = $derived(isRemote ? ovens.identity(thread.settings?.ovenId) : null)
+
+  /** Git branch the thread's checkout is on, when main resolved one. */
+  let branch = $derived(thread.branch?.trim() || null)
+
+  /** The branch as the row shows it: four characters, full name on the popover. */
+  let branchLabel = $derived(branch ? threadBranchRowLabel(branch) : null)
+
+  $effect(() => {
+    if (isRemote) void ovens.ensure()
+  })
+
   /** The authored-work session this thread is in, or null when it is in none.
    *  Drawn from the persisted thread field: main writes it the moment the thread
    *  enters a session and pushes the row over `thread:updated`, so no scan and no
@@ -505,11 +535,15 @@
 
   let hasNote = $derived(threadNotesState.has(thread.id))
 
-  /** Whether the bottom line (scope/harness/time) is shown. A thread in an
-   *  authored-work session always shows it, because the marker for that session rides
-   *  the bottom line beside the computer-use/recording indicator. */
+  /** Whether the bottom line (harnesses, scope, branch, time) is shown. A remote
+   *  thread always shows it: the Oven and the branch belong on every row of it. */
   let showBottomRow = $derived(
-    authoredWorkKind !== null || scopeBucket !== null || harnessIds.length > 1 || hasNote
+    authoredWorkKind !== null ||
+      scopeBucket !== null ||
+      harnessIds.length > 1 ||
+      hasNote ||
+      isRemote ||
+      branch !== null
   )
 
   let scopeColor = $derived(
@@ -529,6 +563,8 @@
   /** Tooltip for the state badge: the only place a collapsed row can explain
    *  itself, since the badge is a bare dot or spinner. */
   let badgeTitle = $derived.by((): string => {
+    if (threadState === 'queued')
+      return isWorking ? 'Working · Queued' : isRetryPaused ? 'Waiting to retry · Queued' : 'Queued'
     if (isForeignRun) return 'Running in another instance'
     if (isRetryPaused || isWorking) return stageLabel
     if (thread.status === 'spec') return 'Spec ready'
@@ -565,6 +601,7 @@
           return isForeignRun
             ? { variant: 'icon', icon: AppWindow, tone: 'working' }
             : { variant: 'spinner', stage: 'working' }
+        case 'queued':
         case 'scheduled':
           return { variant: 'icon', stage: 'working', icon: Clock }
         case 'working-paused':
@@ -586,25 +623,6 @@
       }
     }
   )
-
-  // ─── Relative time ───────────────────────────────────────────────────────
-
-  function relativeTime(ts: number): string {
-    const diff = Date.now() - ts
-    const minutes = Math.floor(diff / 60_000)
-    if (minutes < 1) return 'Now'
-    if (minutes < 60) return `${minutes}m`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h`
-    const days = Math.floor(hours / 24)
-    if (days < 7) return `${days}d`
-    const weeks = Math.floor(days / 7)
-    if (weeks < 5) return `${weeks}w`
-    const months = Math.floor(days / 30)
-    if (months < 12) return `${months}mo`
-    const years = Math.floor(days / 365)
-    return `${years}y`
-  }
 
   // ─── Hover interactions ──────────────────────────────────────────────────
 
@@ -746,7 +764,7 @@
           </span>
         {:else}
           <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
-            {relativeTime(thread.lastActivity)}
+            {formatCompactAge(thread.lastActivity)}
           </span>
         {/if}
       {:else if currentModelProviderName}
@@ -799,10 +817,36 @@
           </span>
         {/if}
 
-        <span class="flex min-w-0 items-center justify-end gap-1">
+        <span class="flex min-w-0 items-center justify-end gap-1 overflow-hidden">
+          {#if isRemote}
+            <span
+              class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
+              title={`Oven: ${oven?.name ?? 'unknown'}`}
+              aria-label={`Oven: ${oven?.name ?? 'unknown'}`}
+            >
+              {#if oven?.iconUrl}
+                <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
+              {:else}
+                <Server size={11} class="shrink-0" />
+              {/if}
+            </span>
+          {/if}
+          {#if branch}
+            <span
+              class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
+              title={`Branch: ${branch}`}
+            >
+              <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+              <span>{branchLabel}</span>
+            </span>
+          {/if}
           {#if hasNote}
-            <span class="flex shrink-0 items-center text-warning" title="Note attached">
-              <StickyNote size={11} />
+            {@const ThreadNoteIcon = feature('thread-note').icon}
+            <span
+              class="flex shrink-0 items-center text-warning"
+              title={`${feature('thread-note').name} attached`}
+            >
+              <ThreadNoteIcon size={11} />
             </span>
           {/if}
           {@render authoredWorkMarker(authoredWorkKind)}
@@ -810,7 +854,7 @@
             <ThreadIndicatorSlot {indicator} />
           {:else}
             <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
-              {relativeTime(thread.lastActivity)}
+              {formatCompactAge(thread.lastActivity)}
             </span>
           {/if}
         </span>
@@ -976,7 +1020,7 @@
               : 'opacity-100'}"
             aria-hidden={hovered}
           >
-            {relativeTime(thread.lastActivity)}
+            {formatCompactAge(thread.lastActivity)}
           </span>
         {/if}
       {:else}
@@ -1043,10 +1087,36 @@
           </span>
         {/if}
 
-        <span class="col-start-3 flex min-w-0 items-center justify-end gap-1">
+        <span class="col-start-3 flex min-w-0 items-center justify-end gap-1 overflow-hidden">
+          {#if isRemote}
+            <span
+              class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
+              title={`Oven: ${oven?.name ?? 'unknown'}`}
+              aria-label={`Oven: ${oven?.name ?? 'unknown'}`}
+            >
+              {#if oven?.iconUrl}
+                <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
+              {:else}
+                <Server size={11} class="shrink-0" />
+              {/if}
+            </span>
+          {/if}
+          {#if branch}
+            <span
+              class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
+              title={`Branch: ${branch}`}
+            >
+              <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+              <span>{branchLabel}</span>
+            </span>
+          {/if}
           {#if hasNote}
-            <span class="flex shrink-0 items-center text-warning" title="Note attached">
-              <StickyNote size={11} />
+            {@const ThreadNoteIcon = feature('thread-note').icon}
+            <span
+              class="flex shrink-0 items-center text-warning"
+              title={`${feature('thread-note').name} attached`}
+            >
+              <ThreadNoteIcon size={11} />
             </span>
           {/if}
           {@render authoredWorkMarker(authoredWorkKind)}
@@ -1059,7 +1129,7 @@
                 : 'opacity-100'}"
               aria-hidden={hovered}
             >
-              {relativeTime(thread.lastActivity)}
+              {formatCompactAge(thread.lastActivity)}
             </span>
           {/if}
         </span>
@@ -1103,7 +1173,11 @@
           {isWorking}
           {isRetryPaused}
           {stageLabel}
-          {threadState}
+          threadState={threadState === 'queued'
+            ? hasStartAfterPending
+              ? 'scheduled'
+              : 'working'
+            : threadState}
           {isForeignRun}
         />
       </div>

@@ -1,8 +1,9 @@
-import { readFile, readdir, rm, writeFile, lstat, realpath } from 'node:fs/promises'
+import { cp, readFile, readdir, rm, writeFile, lstat, mkdir, realpath } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, sep } from 'node:path'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
+import { ALL_HARNESSES_BINDING_ID } from '../../lib/types'
 import { skillSearchKeywords } from '../../lib/skill-search-keywords'
 import type {
   AgentCapabilityCatalog,
@@ -10,7 +11,8 @@ import type {
   AgentCapabilityOrigin,
   AgentCapabilitySource,
   NativeMcpContent,
-  NativeSkillContent
+  NativeSkillContent,
+  SkillRelocationRequest
 } from '../../lib/types'
 
 interface McpServer {
@@ -429,6 +431,97 @@ export class CapabilityDiscoveryService {
       return true
     } catch {
       return false
+    }
+  }
+
+  /**
+   * Skill folders a relocation may write to: the shared `agents/skills` layer
+   * every harness reads for `*`, or one folder per named harness. A harness
+   * without a folder of its own (Pi reads the shared layer) falls back to
+   * shared, and an unknown harness contributes no destination.
+   */
+  private skillDestinationDirs(
+    harnessIds: readonly string[],
+    projectPath: string | undefined
+  ): string[] {
+    const shared = projectPath
+      ? join(projectPath, SHARED_PROJECT_SKILL_DIR)
+      : join(homedir(), SHARED_GLOBAL_SKILL_DIR)
+    const ids = harnessIds.map((id) => id.trim()).filter(Boolean)
+    if (ids.length === 0 || ids.includes(ALL_HARNESSES_BINDING_ID)) return [shared]
+    const dirs = new Set<string>()
+    for (const id of ids) {
+      const spec = HARNESS_SPECS[id]
+      if (!spec) continue
+      const relative = projectPath ? spec.projectSkillDirs : spec.globalSkillDirs
+      if (relative.length === 0) {
+        dirs.add(shared)
+        continue
+      }
+      for (const dir of relative) {
+        dirs.add(projectPath ? join(projectPath, dir) : join(homedir(), dir))
+      }
+    }
+    return [...dirs]
+  }
+
+  /**
+   * Move one native skill to the layer the editor chose, writing the edited
+   * `SKILL.md` into every destination.
+   *
+   * A move is exactly one copy per chosen destination: a folder of the same
+   * name already there is replaced (the user picked where this skill belongs),
+   * and the old folder is removed once every destination holds the skill. `*`
+   * is the shared layer every harness reads; naming harnesses writes into those
+   * harnesses' own skill folders instead. The caller resolves `projectPath`,
+   * because only the IPC layer knows how a project id maps to a folder; an
+   * undefined path means a home-level skill.
+   */
+  async relocateSkill(
+    source: AgentCapabilitySource,
+    request: SkillRelocationRequest,
+    projectPath?: string
+  ): Promise<NativeSkillContent | null> {
+    if (source.kind !== 'skill') return null
+    const instructions = request.instructions.trim()
+    if (!instructions) return null
+    if (request.projectId && !projectPath) return null
+    const sourcePath = source.path
+    const folder = basename(sourcePath)
+    if (!folder || folder === '.' || folder === '..') return null
+    const destinations = this.skillDestinationDirs(request.harnessIds, projectPath)
+    if (destinations.length === 0) return null
+    const realSource = await realpath(sourcePath).catch(() => null)
+    if (!realSource) return null
+    try {
+      const written: string[] = []
+      for (const destination of destinations) {
+        const target = join(destination, folder)
+        const existing = await realpath(target).catch(() => null)
+        // A destination that already resolves to the source is not replaced:
+        // the copy would overwrite the folder it is reading from.
+        if (existing !== null && existing !== realSource) {
+          await rm(target, { recursive: true, force: true })
+        }
+        if (existing !== realSource) {
+          await mkdir(destination, { recursive: true })
+          await cp(sourcePath, target, { recursive: true, force: true, dereference: true })
+        }
+        await writeFile(join(target, 'SKILL.md'), instructions, 'utf8')
+        written.push(target)
+      }
+      // The old folder goes only when no destination is that same folder. A
+      // source symlink into a destination is left in place and simply written
+      // through, so a shared folder other harnesses link to is never orphaned.
+      if (!written.some((target) => target === sourcePath)) {
+        await rm(sourcePath, { recursive: true, force: true })
+      }
+      const markdown = await readTextFile(join(written[0] ?? sourcePath, 'SKILL.md'))
+      if (!markdown) return null
+      const { name, description } = parseSkillFrontmatter(markdown, folder)
+      return { name, description, instructions: markdown, path: written[0] ?? sourcePath }
+    } catch {
+      return null
     }
   }
 

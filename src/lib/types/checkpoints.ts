@@ -65,6 +65,9 @@ export interface TurnCheckpointSummary {
 }
 
 export interface TurnCheckpointFileDiff {
+  /** One-based source positions of the returned text windows. */
+  beforeStartLine?: number
+  afterStartLine?: number
   path: string
   kind: TurnCheckpointChangeSummary['kind']
   binary: boolean

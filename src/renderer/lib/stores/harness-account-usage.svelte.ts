@@ -35,6 +35,8 @@ const PERSIST_DEBOUNCE_MS = 800
 export interface AccountUsageSnapshot {
   /** Latest telemetry, or `null` when the harness reported no quota at all. */
   usage: AgentAccountUsage | null
+  /** Harness returned quota but says its native account session is expired. */
+  reauthenticationRequired?: boolean
   /** Epoch ms of the last completed probe; `0` means "never probed". */
   fetchedAt: number
   /** Set when the probe itself failed, as opposed to reporting nothing. */
@@ -138,7 +140,13 @@ function parseSnapshot(value: unknown): AccountUsageSnapshot | null {
     }
   }
   const error = pickString(value, 'error')
-  return { usage, fetchedAt, ...(error ? { error } : {}) }
+  const reauthenticationRequired = pickBoolean(value, 'reauthenticationRequired')
+  return {
+    usage,
+    fetchedAt,
+    ...(error ? { error } : {}),
+    ...(reauthenticationRequired ? { reauthenticationRequired: true } : {})
+  }
 }
 
 function readStoredSnapshots(): Record<string, AccountUsageSnapshot> {
@@ -268,6 +276,7 @@ class HarnessAccountUsageCache {
     const snapshot = this.snapshots.get(accountId)
     if (!snapshot) return true
     if (snapshot.fetchedAt === 0) return true
+    if (snapshot.reauthenticationRequired) return false
     if (force) return true
     return Date.now() - snapshot.fetchedAt > ACCOUNT_USAGE_FRESH_MS
   }
@@ -302,14 +311,18 @@ class HarnessAccountUsageCache {
         // Strict id match: a drifted resolution must never attribute another
         // account's quota to this row.
         results.find((entry) => entry.accountId === account.id) ?? null
-      this.commit(account.id, { usage, fetchedAt: Date.now() })
+      this.commit(account.id, {
+        usage,
+        fetchedAt: Date.now(),
+        ...(usage?.reauthenticationRequired ? { reauthenticationRequired: true } : {})
+      })
     } catch (error) {
       const previous = this.snapshots.get(account.id)
       this.commit(account.id, {
         usage: previous?.usage ?? null,
-        // Keep a previous timestamp so a transient failure does not reset the
-        // freshness window; a never-probed account stays due for a retry.
-        fetchedAt: previous?.fetchedAt ?? 0,
+        // Keep a previous timestamp so transient failures respect the refresh
+        // window; a first failure gets the same short window before retry.
+        fetchedAt: previous?.fetchedAt ?? Date.now(),
         error: error instanceof Error ? error.message : 'Usage could not be read.'
       })
     } finally {

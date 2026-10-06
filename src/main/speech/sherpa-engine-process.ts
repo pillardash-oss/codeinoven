@@ -1,8 +1,23 @@
+/**
+ * The sherpa-onnx speech engine, hosted in an Electron `utilityProcess` of its
+ * own (see `sherpa-backend.ts`, which forks this entry through the
+ * electron-vite `?modulePath` import).
+ *
+ * Why a process and not a worker thread: this module loads `sherpa-onnx-node`,
+ * and only the OS can contain that addon when it misbehaves. A native abort
+ * inside a worker thread takes the whole Electron main process with it (one
+ * did, on 2026-10-05: `Napi::Error` thrown from an async completion during
+ * worker environment teardown, `std::terminate`, SIGABRT). In a utility process
+ * the same abort kills this engine alone, and the backend reports it to the
+ * user as a toast.
+ *
+ * The port contract is unchanged from the worker-thread era: one request per
+ * `{ id, kind }` message, one `{ id, ok }` response per request.
+ */
 import { createRequire } from 'node:module'
 import { open, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
-import { parentPort } from 'node:worker_threads'
 import type { SpeechWorkerRequest, SpeechWorkerResponse } from './speech-worker-protocol'
 import { resolveFfmpegPath } from './ffmpeg-path'
 import {
@@ -66,10 +81,24 @@ interface SherpaModule {
 
 type SherpaAsrFamily = 'whisper' | 'parakeet'
 
-/** Per-directory model caches; the worker thread is disposed wholesale on evict, so these never outlive the models they hold. */
+/** Per-directory model caches; the engine process is disposed wholesale on evict, so these never outlive the models they hold. */
 const MAX_CACHED_MODELS = 3
 
-const port = parentPort
+/**
+ * The subset of Electron's `ParentPort` this engine uses.
+ *
+ * Typed structurally rather than through `Electron.ParentPort`: this entry only
+ * ever runs inside a forked utility process, and the Electron globals are not
+ * part of the program this file is checked in.
+ */
+interface EnginePort {
+  postMessage: (message: unknown) => void
+  on: (event: 'message', listener: (message: { data: unknown }) => void) => unknown
+}
+
+// Optional because the port only exists in a forked utility process; the
+// annotation keeps the guard below honest for any other loader.
+const port = (process as NodeJS.Process & { parentPort?: EnginePort }).parentPort
 const nodeRequire = createRequire(import.meta.url)
 let loadedModule: SherpaModule | null = null
 
@@ -354,37 +383,71 @@ function mergeSamples(parts: readonly Float32Array[]): Float32Array {
   return merged
 }
 
+/**
+ * Native requests currently running in this process.
+ *
+ * They matter only on the way out: leaving while one is still in flight is
+ * what lets the addon complete against a torn-down environment, so a shutdown
+ * request is answered immediately and the exit waits for the set to drain.
+ */
+const inFlight = new Set<Promise<void>>()
+let stopping = false
+
+function exitWhenDrained(): void {
+  if (!stopping || inFlight.size > 0) return
+  // Waiting for the native call to settle before this runs is the whole point:
+  // an exit with one still outstanding is what lets the addon complete against
+  // a torn-down environment.
+  process.exit(0)
+}
+
+/** Every request kind except the one that ends the process. */
+type EngineWorkRequest = Exclude<SpeechWorkerRequest, { kind: 'shutdown' }>
+
+async function handle(request: EngineWorkRequest): Promise<void> {
+  try {
+    if (request.kind === 'warmup') {
+      await warmup(request)
+      emit({ id: request.id, ok: true, kind: 'warmup' })
+      return
+    }
+    if (request.kind === 'transcribe') {
+      emit({ id: request.id, ok: true, kind: 'transcribe', text: await transcribe(request) })
+      return
+    }
+    if (request.kind === 'cleanup') {
+      emit({ id: request.id, ok: true, kind: 'cleanup', text: await cleanup(request) })
+      return
+    }
+    await synthesize(request)
+    emit({ id: request.id, ok: true, kind: 'synthesize' })
+  } catch (cause) {
+    emit({
+      id: request.id,
+      ok: false,
+      error: cause instanceof Error ? cause.message : String(cause)
+    })
+  }
+}
+
 if (port) {
-  port.on('message', (request: SpeechWorkerRequest) => {
-    void (async () => {
-      try {
-        if (request.kind === 'shutdown') {
-          emit({ id: request.id, ok: true, kind: 'shutdown' })
-          port.close()
-          return
-        }
-        if (request.kind === 'warmup') {
-          await warmup(request)
-          emit({ id: request.id, ok: true, kind: 'warmup' })
-          return
-        }
-        if (request.kind === 'transcribe') {
-          emit({ id: request.id, ok: true, kind: 'transcribe', text: await transcribe(request) })
-          return
-        }
-        if (request.kind === 'cleanup') {
-          emit({ id: request.id, ok: true, kind: 'cleanup', text: await cleanup(request) })
-          return
-        }
-        await synthesize(request)
-        emit({ id: request.id, ok: true, kind: 'synthesize' })
-      } catch (cause) {
-        emit({
-          id: request.id,
-          ok: false,
-          error: cause instanceof Error ? cause.message : String(cause)
-        })
-      }
-    })()
+  port.on('message', (event) => {
+    const request = event.data as SpeechWorkerRequest | undefined
+    if (!request || typeof request !== 'object') return
+    if (request.kind === 'shutdown') {
+      emit({ id: request.id, ok: true, kind: 'shutdown' })
+      stopping = true
+      exitWhenDrained()
+      return
+    }
+    // Work that arrives after the shutdown request belongs to a caller that no
+    // longer exists; running it would only hold the exit open.
+    if (stopping) return
+    const work = handle(request)
+    inFlight.add(work)
+    void work.finally(() => {
+      inFlight.delete(work)
+      exitWhenDrained()
+    })
   })
 }

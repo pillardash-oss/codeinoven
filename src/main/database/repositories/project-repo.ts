@@ -119,6 +119,23 @@ export class ProjectRepo {
   }
 
   /**
+   * Every registered project, read on the database worker.
+   *
+   * For a background service that must not touch SQLite on the main thread
+   * (see `docs/APP-BIBLE.md`): the same rows as `list()`, read where a page
+   * fault or a WAL wait cannot stall a frame.
+   */
+  async listViaWorker(): Promise<Project[]> {
+    const result = await this.db.queryViaWorker(
+      'SELECT * FROM projects ORDER BY sort_order ASC, updated_at DESC',
+      [],
+      0
+    )
+    if (!result.ok) return []
+    return (result.rows as unknown as ProjectRow[]).map(rowToProject)
+  }
+
+  /**
    * Every registered project id, read on the database worker.
    *
    * For a caller that compares the rows against what is on disk and must not

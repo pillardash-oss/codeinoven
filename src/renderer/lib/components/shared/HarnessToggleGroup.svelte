@@ -14,13 +14,29 @@
     onToggle: (id: string) => void
     disabled?: boolean
     label?: string
+    /** Optional bulk selection action. */
+    onToggleAll?: () => void
   }
 
-  let { options, value, onToggle, disabled = false, label }: Props = $props()
+  let { options, value, onToggle, disabled = false, label, onToggleAll }: Props = $props()
+  const allSelected = $derived(
+    options.length > 0 && options.every((option) => value.includes(option.id))
+  )
 </script>
 
 {#if label}<span class="text-xs font-medium">{label}</span>{/if}
 <div class="flex min-h-9 flex-wrap gap-1.5" role="group" aria-label={label ?? 'Select harnesses'}>
+  {#if onToggleAll}
+    <button
+      type="button"
+      class="flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {allSelected
+        ? 'border-primary bg-primary text-on-primary'
+        : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+      {disabled}
+      aria-pressed={allSelected}
+      onclick={onToggleAll}>All</button
+    >
+  {/if}
   {#each options as option (option.id)}
     <button
       type="button"

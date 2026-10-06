@@ -1,9 +1,20 @@
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { lstat, mkdir, open, opendir, readlink, realpath, symlink } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import {
+  link,
+  unlink,
+  lstat,
+  mkdir,
+  open,
+  opendir,
+  readlink,
+  realpath,
+  symlink
+} from 'node:fs/promises'
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import type {
   OvenFile,
+  OvenRootTarget,
   OvenTransferInput,
   OvenTransferReview,
   OvenWorkspaceRequest,
@@ -15,6 +26,17 @@ import type { OvenService } from './oven-service'
 interface Review {
   summary: OvenTransferReview
   manifest: OvenFile[]
+}
+
+/** Guard rails on a tree copy, so one selection can never exhaust the Oven. */
+const MAX_SELECTION = 256
+const MAX_COPY_ENTRIES = 20_000
+const MAX_COPY_BYTES = 20 * 1024 ** 3
+
+/** Missing paths are answers here (`does this name exist?`), not failures. */
+function isMissing(error: unknown): boolean {
+  if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return true
+  return error instanceof Error && error.message.includes('ENOENT')
 }
 
 /** Explicit, non-overwriting transfers. At most one file chunk is in memory. */
@@ -39,7 +61,9 @@ export class OvenTransfers {
     const distance = relative(root, path)
     if (isAbsolute(input.path) || distance === '..' || distance.startsWith(`..${sep}`))
       throw new Error('Path leaves the workspace.')
-    let ancestor = ['write', 'mkdir', 'symlink'].includes(input.operation) ? dirname(path) : path
+    let ancestor = ['write', 'mkdir', 'symlink', 'publishFile'].includes(input.operation)
+      ? dirname(path)
+      : path
     // lstat is allowed on a link without following it; transfers preserve relative links.
     if (input.operation === 'stat' && path !== root) ancestor = dirname(path)
     while (ancestor !== root) {
@@ -81,8 +105,17 @@ export class OvenTransfers {
       return { root, files, ...(entries.length === 128 ? { after: entries.at(-1) } : {}) }
     }
     if (input.operation === 'mkdir') {
-      await mkdir(path, { recursive: true })
+      await mkdir(path, { recursive: input.exclusive !== true })
       return { root }
+    }
+    if (input.operation === 'publishFile') {
+      const staged = resolve(root, input.staged)
+      const distance = relative(root, staged)
+      if (distance === '..' || distance.startsWith(`..${sep}`) || !(await lstat(staged)).isFile())
+        throw new Error('Invalid staged file.')
+      await link(staged, path)
+      await unlink(staged)
+      return { root, file: await info(path) }
     }
     if (input.operation === 'symlink') {
       if (
@@ -122,6 +155,153 @@ export class OvenTransfers {
     } finally {
       await file.close()
     }
+  }
+
+  /**
+   * Copy selected entries between two roots this app can already read.
+   *
+   * The transport is the same bounded read/write/stage/publish path whole
+   * checkouts use, so a copy never streams through this machine's memory, a
+   * partial file is never visible in the destination, and both roots may be on
+   * the same Oven, two different Ovens, or an Oven and this computer.
+   */
+  async copySelection(
+    source: OvenRootTarget,
+    target: OvenRootTarget,
+    paths: string[],
+    directory: string
+  ): Promise<OvenFile[]> {
+    if (this.active) throw new Error('Another file transfer is already running.')
+    if (paths.length === 0 || paths.length > MAX_SELECTION)
+      throw new Error(`Choose between 1 and ${MAX_SELECTION} entries to copy.`)
+    this.active = true
+    try {
+      const results: OvenFile[] = []
+      const budget = { entries: 0, bytes: 0 }
+      for (const path of paths) {
+        const destination = await this.availableName(target, directory, path)
+        await this.copyEntry(source, target, path, destination, budget)
+        const entry = (
+          await this.workspace(target.ovenId, {
+            operation: 'stat',
+            root: target.root,
+            path: destination
+          })
+        ).file
+        if (entry) results.push(entry)
+      }
+      return results
+    } finally {
+      this.active = false
+    }
+  }
+
+  /** One entry, recursively, inside the transfer budgets. */
+  private async copyEntry(
+    source: OvenRootTarget,
+    target: OvenRootTarget,
+    from: string,
+    to: string,
+    budget: { entries: number; bytes: number }
+  ): Promise<void> {
+    budget.entries += 1
+    if (budget.entries > MAX_COPY_ENTRIES) throw new Error('The copy exceeds 20,000 entries.')
+    const entry = (
+      await this.workspace(source.ovenId, { operation: 'stat', root: source.root, path: from })
+    ).file
+    if (!entry || entry.kind === 'symlink')
+      throw new Error('Copying symbolic links is not supported in the file tree.')
+    if (entry.kind === 'directory') {
+      await this.workspace(target.ovenId, {
+        operation: 'mkdir',
+        root: target.root,
+        path: to,
+        exclusive: true
+      })
+      let after: string | undefined
+      do {
+        const page = await this.workspace(source.ovenId, {
+          operation: 'list',
+          root: source.root,
+          path: from,
+          after
+        })
+        for (const child of page.files ?? [])
+          await this.copyEntry(source, target, child.path, `${to}/${basename(child.path)}`, budget)
+        after = page.after
+      } while (after)
+      return
+    }
+    budget.bytes += entry.size
+    if (budget.bytes > MAX_COPY_BYTES) throw new Error('The copy exceeds 20 GiB.')
+    await this.copyFile(source, target, from, to, entry)
+  }
+
+  /** One file, staged beside its destination and published only when complete. */
+  private async copyFile(
+    source: OvenRootTarget,
+    target: OvenRootTarget,
+    from: string,
+    to: string,
+    entry: OvenFile
+  ): Promise<void> {
+    const staged = `${to}.${randomUUID()}.next`
+    let offset = 0
+    for (;;) {
+      const chunk = await this.workspace(source.ovenId, {
+        operation: 'read',
+        root: source.root,
+        path: from,
+        offset
+      })
+      const bytes = Buffer.from(chunk.data ?? '', 'base64')
+      await this.workspace(target.ovenId, {
+        operation: 'write',
+        root: target.root,
+        path: staged,
+        offset,
+        data: bytes.toString('base64'),
+        exclusive: offset === 0,
+        mode: entry.mode
+      })
+      offset += bytes.length
+      if (bytes.length === 0 || offset >= (chunk.size ?? 0)) break
+    }
+    const fresh = (
+      await this.workspace(source.ovenId, { operation: 'stat', root: source.root, path: from })
+    ).file
+    if (fresh?.size !== entry.size || fresh.modifiedAt !== entry.modifiedAt)
+      throw new Error('A source file changed while being copied. Retry the copy.')
+    await this.workspace(target.ovenId, {
+      operation: 'publishFile',
+      root: target.root,
+      path: to,
+      staged
+    })
+  }
+
+  /** A free name in the destination directory, so a copy never overwrites. */
+  private async availableName(
+    target: OvenRootTarget,
+    directory: string,
+    path: string
+  ): Promise<string> {
+    const original = basename(path)
+    if (!original || original === '.' || original === '..') throw new Error('Invalid copy source.')
+    let name = original
+    for (let index = 2; await this.exists(target, directory, name); index++)
+      name = `${original} (${index})`
+    return directory ? `${directory}/${name}` : name
+  }
+
+  private async exists(target: OvenRootTarget, directory: string, name: string): Promise<boolean> {
+    const path = directory ? `${directory}/${name}` : name
+    return await this.workspace(target.ovenId, { operation: 'stat', root: target.root, path })
+      .then(() => true)
+      .catch((error: unknown) => {
+        if (isMissing(error)) return false
+        throw error
+      })
   }
 
   async review(input: OvenTransferInput): Promise<OvenTransferReview> {

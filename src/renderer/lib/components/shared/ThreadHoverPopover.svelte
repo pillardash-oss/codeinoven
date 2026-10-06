@@ -1,14 +1,19 @@
 <script lang="ts">
-  import { AppWindow, Clock, StickyNote } from '@lucide/svelte'
+  import { AppWindow, Clock, GitBranch } from '@lucide/svelte'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { remoteOriginLabel } from '$lib/project-location'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
+  import { ovens } from '$lib/stores/ovens.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { threadScopeBucket } from '$lib/threads/thread-scope'
   import { formatDateTime } from '$shared/date-time-format'
+  import { LOCAL_OVEN_ID } from '$shared/ovens'
   import type { Thread } from '$shared/types'
 
   interface Props {
@@ -65,6 +70,29 @@
 
   let scopeBucket = $derived(threadScopeBucket(thread))
 
+  /** Oven the thread runs on, or null when it runs on this computer. */
+  let oven = $derived(
+    thread.settings?.ovenId && thread.settings.ovenId !== LOCAL_OVEN_ID
+      ? ovens.identity(thread.settings.ovenId)
+      : null
+  )
+
+  /** Git branch the thread's checkout is on, when main resolved one. */
+  let branch = $derived(thread.branch?.trim() || null)
+
+  /** Every harness this thread's session used, newest first. The row truncates
+   *  this list; the card is where the whole set is readable. */
+  let harnessIds = $derived.by((): string[] => {
+    const ids = Array.from(new Set(thread.usedHarnessIds ?? []))
+    if (thread.settings?.harnessId && !ids.includes(thread.settings.harnessId))
+      return [...ids, thread.settings.harnessId]
+    return ids
+  })
+
+  function harnessLabel(harnessId: string): string {
+    return getAgentIcon(harnessId)?.name ?? harnessId
+  }
+
   let scopeColor = $derived(
     scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''
   )
@@ -80,6 +108,10 @@
     if (project?.source === 'local' && project.path) {
       void projectRemotes.ensure(project.id, project.path)
     }
+  })
+
+  $effect(() => {
+    if (thread.settings?.ovenId && thread.settings.ovenId !== LOCAL_OVEN_ID) void ovens.ensure()
   })
 </script>
 
@@ -104,6 +136,55 @@
           />
         {/if}
         <span class="min-w-0 break-words">{scopeBucket.name}</span>
+      </dd>
+    </div>
+  {/if}
+  {#if oven}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Oven</dt>
+      <dd class="flex min-w-0 items-center gap-1 text-muted">
+        {#if oven.iconUrl}
+          <img
+            src={oven.iconUrl}
+            alt=""
+            class="h-3 w-3 shrink-0 object-contain"
+            draggable="false"
+          />
+        {/if}
+        <span class="min-w-0 break-words">{oven.name}</span>
+      </dd>
+    </div>
+  {/if}
+  {#if branch}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Branch</dt>
+      <dd class="flex min-w-0 items-center gap-1 text-muted">
+        <GitBranch size={11} class="shrink-0" aria-hidden="true" />
+        <span class="min-w-0 break-words font-mono">{branch}</span>
+      </dd>
+    </div>
+  {/if}
+  {#if oven && thread.settings?.ovenPath}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Checkout</dt>
+      <dd
+        class="min-w-0 break-all font-mono text-[0.625rem] text-muted"
+        title={thread.settings.ovenPath}
+      >
+        {thread.settings.ovenPath}
+      </dd>
+    </div>
+  {/if}
+  {#if harnessIds.length > 0}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Harnesses</dt>
+      <dd class="flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-muted">
+        {#each harnessIds as harnessId (harnessId)}
+          <span class="flex min-w-0 items-center gap-1">
+            <AgentIcon agentId={harnessId} label={harnessLabel(harnessId)} size={14} />
+            <span class="truncate">{harnessLabel(harnessId)}</span>
+          </span>
+        {/each}
       </dd>
     </div>
   {/if}
@@ -193,11 +274,12 @@
     </div>
   {/if}
   {#if threadNotesState.has(thread.id)}
+    {@const ThreadNoteIcon = feature('thread-note').icon}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Note</dt>
       <dd class="flex items-center gap-1 text-warning" title="This thread has a user note">
-        <StickyNote size={12} />
-        Note available
+        <ThreadNoteIcon size={12} />
+        {feature('thread-note').name} available
       </dd>
     </div>
   {/if}

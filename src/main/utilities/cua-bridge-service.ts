@@ -92,6 +92,20 @@ interface CuaDaemonMode {
   source: string
 }
 
+/**
+ * One `cua-driver status` read: the mode the daemon enforces and the process
+ * that owns it.
+ *
+ * The pid is what makes "the daemon I started" a fact instead of an assumption.
+ * Several actors share this daemon (each turn's claim, each computer-use
+ * preview, the transient permission probe), so a caller that started one
+ * without taking a claim may only stop that same process.
+ */
+interface CuaDaemonReport {
+  mode: CuaDaemonMode | null
+  pid: number | null
+}
+
 interface CuaDaemonClaim {
   mode: CuaDaemonPermissionMode
   /** The binary that owns the daemon, recorded so a release never rediscovers it. */
@@ -518,6 +532,20 @@ export class CuaBridgeService {
     }
   }
 
+  /**
+   * The driver's macOS permission status, read from the daemon that holds the
+   * TCC grants.
+   *
+   * Only a running daemon's own identity can answer this: with none running the
+   * driver reports `daemon_running: false`, so this is 'unknown'. A probe may
+   * therefore start a daemon of its own to answer, and the whole safety of that
+   * lives in the teardown   see `stopUnownedDaemon`. What it must never do is
+   * stop a daemon another actor is using: every turn start, every computer-use
+   * preview and this read itself can otherwise land on the same daemon, and
+   * stopping one under a live run leaves that run's MCP server proxying to a dead
+   * socket, which is a turn of computer-use calls timing out on a driver that
+   * answers in milliseconds.
+   */
   private async permissionStatus(
     binaryPath: string,
     platform: CuaBridgeStatus['platform']
@@ -527,15 +555,32 @@ export class CuaBridgeService {
     if (running) return this.readPermissionStatus(binaryPath)
     const cached = permissionCache
     if (cached && Date.now() - cached.at < PERMISSION_CACHE_TTL_MS) return cached.status
-    const started = await this.startDaemonTransiently(binaryPath)
-    if (!started) return 'unknown'
+    const probe = await this.startDaemonTransiently(binaryPath)
+    if (!probe) return 'unknown'
     try {
       const status = await this.readPermissionStatus(binaryPath)
       permissionCache = { status, at: Date.now() }
       return status
     } finally {
-      await this.stopDaemon(binaryPath)
+      await this.stopUnownedDaemon(binaryPath, probe)
     }
+  }
+
+  /**
+   * Stop a daemon a transient probe started, and only that one.
+   *
+   * Two things make a probe's daemon someone else's. A claim means a run now
+   * depends on it and owns its lifetime, and every path that runs a driver
+   * process claims before it spawns one, so a claim is present from the moment
+   * another client could have joined it. A different pid means the daemon was
+   * replaced (a claim restarting it in the mode that run needs, or the driver's
+   * own relaunch), so this probe no longer owns what is running either way.
+   */
+  private async stopUnownedDaemon(binaryPath: string, probe: CuaDaemonReport): Promise<void> {
+    if (this.daemonClaims.size > 0) return
+    const live = await this.readDaemonReport(binaryPath)
+    if (!live || live.pid === null || live.pid !== probe.pid) return
+    await this.stopDaemon(binaryPath)
   }
 
   private async readPermissionStatus(binaryPath: string): Promise<CuaPermissionStatus> {
@@ -561,7 +606,11 @@ export class CuaBridgeService {
     }
   }
 
-  private async startDaemonTransiently(binaryPath: string): Promise<boolean> {
+  /**
+   * Start a daemon for a read that must not outlive it, and answer which process
+   * it started so the caller can stop exactly that one.
+   */
+  private async startDaemonTransiently(binaryPath: string): Promise<CuaDaemonReport | null> {
     const appRoot = appBundleRoot(binaryPath)
     const args = appRoot
       ? ['-n', '-g', appRoot, '--args', 'serve']
@@ -569,14 +618,15 @@ export class CuaBridgeService {
     try {
       await execFileAsync('open', args, { timeout: 8_000, maxBuffer: 128_000 })
     } catch {
-      return false
+      return null
     }
     const deadline = Date.now() + DAEMON_START_TIMEOUT_MS
     while (Date.now() < deadline) {
-      if (await this.daemonRunning(binaryPath)) return true
+      const report = await this.readDaemonReport(binaryPath)
+      if (report) return report
       await sleep(DAEMON_WAIT_STEP_MS)
     }
-    return false
+    return null
   }
 
   private async stopDaemon(binaryPath: string): Promise<void> {
@@ -596,12 +646,20 @@ export class CuaBridgeService {
    * shared daemon will actually enforce.
    */
   private async readDaemonMode(binaryPath: string): Promise<CuaDaemonMode | null> {
+    return (await this.readDaemonReport(binaryPath))?.mode ?? null
+  }
+
+  /**
+   * One `cua-driver status` read, parsed once for both facts it carries: which
+   * mode the daemon enforces, and which process is enforcing it.
+   */
+  private async readDaemonReport(binaryPath: string): Promise<CuaDaemonReport | null> {
     try {
       const { stdout, stderr } = await execFileAsync(binaryPath, ['status'], {
         timeout: 8_000,
         maxBuffer: 256_000
       })
-      return parseDaemonMode(`${stdout}\n${stderr}`)
+      return parseDaemonReport(`${stdout}\n${stderr}`)
     } catch {
       return null
     }
@@ -1193,6 +1251,17 @@ function modeArgs(mode: CuaDaemonPermissionMode): string[] {
 }
 
 /**
+ * Parse a `cua-driver status` report into the two facts this service decides on.
+ *
+ * Exported for the same reason `isCuaDaemonTransportFailure` is: the reading it
+ * performs is what keeps two runs from disagreeing about who owns the shared
+ * daemon, so it is verified directly rather than only through a live driver.
+ */
+export function parseDaemonReport(output: string): CuaDaemonReport {
+  return { mode: parseDaemonMode(output), pid: parseDaemonPid(output) }
+}
+
+/**
  * Parse `permission mode: <mode> (<source>)` out of a `cua-driver status`
  * report. Null when the report carries no mode, which is also what a stopped
  * daemon's error output looks like.
@@ -1202,6 +1271,16 @@ function parseDaemonMode(output: string): CuaDaemonMode | null {
   const mode = match?.[1]
   if (mode !== 'standard' && mode !== 'bounded' && mode !== 'unrestricted') return null
   return { mode, source: match?.[2]?.trim() || 'unreported' }
+}
+
+/**
+ * Parse `pid: <n>` out of a `cua-driver status` report, or null when the report
+ * names no process (a stopped daemon's output is exactly this case).
+ */
+function parseDaemonPid(output: string): number | null {
+  const match = /^\s*pid:\s*(\d+)\s*$/mu.exec(output)
+  const pid = match ? Number(match[1]) : Number.NaN
+  return Number.isInteger(pid) && pid > 0 ? pid : null
 }
 
 function appBundleRoot(binaryPath: string): string | null {

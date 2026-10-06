@@ -1,3 +1,4 @@
+import { registerOvenRootIpc } from './oven-root-ipc'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { OvenRegistry } from './oven-registry'
 import { OvenService } from './oven-service'
@@ -5,6 +6,8 @@ import { inspectOvenConnection, testDraftConnection, localOvenConnection } from 
 import { ovenId, validateSaveOven, validateIdentityPath } from './oven-validation'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { SecretVault } from '../storage/secret-vault'
+import type { ProjectManager } from '../../lib/engines/project-manager'
+import type { ProjectFilesService } from '../editor/project-files-service'
 import { app } from 'electron'
 import { OvenTransfers } from './oven-transfers'
 import { OvenPreview } from './oven-preview'
@@ -12,17 +15,56 @@ import type { OvenTransferInput, OvenWorkspaceRequest } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import { LOCAL_OVEN_ID } from '../../lib/ovens'
 import { isThreadBusyStatus } from '../../lib/thread-status-policy'
+import { OvenSetupService } from './oven-setup-service'
+import { OvenHarnessService } from './oven-harness-service'
+import { createOvenSetupPorts } from './oven-setup-ports'
+import { deviceTimezone, syncOvenTimezone } from './oven-timezone'
+import { HarnessAccountRegistry } from '../providers/harness-account-registry'
+import { validateOvenHarnessId, validateStartOvenSetup } from './oven-validation'
+import { Logger } from '../system/logger'
 
 export function registerOvenIpc(
   storage: StorageEngine,
   vault: SecretVault,
   threads: ThreadManager,
-  resolveImagePath: (value: unknown) => Promise<string>
+  resolveImagePath: (value: unknown) => Promise<string>,
+  projects: ProjectManager,
+  projectFiles: ProjectFilesService,
+  scopeNames: (projectId: string) => Record<string, string>
 ): OvenService {
   const registry = new OvenRegistry(storage, vault)
   const service = new OvenService(registry)
   const transfers = new OvenTransfers(service)
   const previews = new OvenPreview(service)
+  registerOvenRootIpc({
+    service,
+    threads,
+    projects,
+    projectFiles,
+    transfers,
+    previews,
+    scopeNames,
+    authorizePath: resolveImagePath
+  })
+
+  const setupRuntime = createOvenSetupPorts({
+    service,
+    accounts: new HarnessAccountRegistry(storage),
+    vault
+  })
+  const setupService = new OvenSetupService(storage, setupRuntime)
+  const harnessService = new OvenHarnessService(service, storage)
+  harnessService.startAutoUpdates()
+  app.once('before-quit', () => harnessService.stopAutoUpdates())
+  /**
+   * Local is a healthy harness host but has no oven service to configure, so a
+   * full setup request for it is a caller mistake rather than a user error.
+   */
+  const requireRemoteOven = (value: unknown): string => {
+    const id = ovenId(value)
+    if (id === LOCAL_OVEN_ID) throw new Error('The Local oven does not run oven setup.')
+    return id
+  }
   ipcMain.handle('oven:testConnection', (_event, raw: unknown) =>
     testDraftConnection(registry, validateSaveOven(raw))
   )
@@ -46,7 +88,17 @@ export function registerOvenIpc(
   ipcMain.handle('oven:remove', (_event, raw: unknown) => registry.remove(ovenId(raw)))
   ipcMain.handle('oven:setDefault', (_event, raw: unknown) => registry.setDefault(ovenId(raw)))
   ipcMain.handle('oven:install', (_event, raw: unknown) => service.install(ovenId(raw)))
-  ipcMain.handle('oven:probe', (_event, raw: unknown) => service.probe(ovenId(raw)))
+  ipcMain.handle('oven:probe', async (_event, raw: unknown) => {
+    const id = ovenId(raw)
+    try {
+      return await service.probe(id)
+    } catch (error) {
+      // Deliver probe failures to the UI without Electron logging a rejected handler.
+      return {
+        ovenProbeError: error instanceof Error ? error.message : 'Could not probe this Oven.'
+      }
+    }
+  })
   ipcMain.handle('oven:runs', (_event, raw: unknown) => service.runs(ovenId(raw)))
   ipcMain.handle('oven:workspace', (_event, raw: unknown, input: unknown) => {
     if (!input || typeof input !== 'object' || JSON.stringify(input).length > 512 * 1024)
@@ -118,6 +170,64 @@ export function registerOvenIpc(
               : undefined
       })
     }
+  )
+  ipcMain.handle('oven:setup:preflight', (_event, rawId: unknown) =>
+    setupService.preflight(requireRemoteOven(rawId))
+  )
+  ipcMain.handle('oven:setup:start', async (_event, rawId: unknown, rawInput: unknown) => {
+    const id = requireRemoteOven(rawId)
+    const configuration = await validateStartOvenSetup(rawInput, vault)
+    return setupService.startSetup(id, configuration)
+  })
+  ipcMain.handle('oven:setup:status', (_event, rawId: unknown) =>
+    setupService.getOperationForOven(requireRemoteOven(rawId))
+  )
+  ipcMain.handle('oven:setup:progress', (_event, rawId: unknown, after: unknown) =>
+    setupService.progress(
+      requireRemoteOven(rawId),
+      typeof after === 'number' && Number.isSafeInteger(after) && after >= 0 ? after : 0
+    )
+  )
+  ipcMain.handle('oven:setup:cancel', (_event, rawId: unknown) =>
+    setupService.cancelSetup(requireRemoteOven(rawId))
+  )
+  ipcMain.handle('oven:setup:retry', (_event, rawId: unknown) =>
+    setupService.retrySetup(requireRemoteOven(rawId))
+  )
+  ipcMain.handle('oven:setup:gitVerify', async (_event, rawId: unknown) => {
+    const id = requireRemoteOven(rawId)
+    const report = await setupRuntime.preflight(id)
+    return setupRuntime.gitIdentity.verify(id, report)
+  })
+  ipcMain.handle('oven:harness:inventory', (_event, rawId: unknown) =>
+    harnessService.getInventory(ovenId(rawId))
+  )
+  ipcMain.handle('oven:timezone:sync', async (_event, rawId: unknown) => {
+    const id = requireRemoteOven(rawId)
+    const zone = deviceTimezone()
+    if (!zone)
+      throw new Error('This computer does not report a time zone, so there is nothing to match.')
+    // The clock change needs the Oven's own platform, privilege, and current zone:
+    // the same read-only preflight the setup flow runs answers all three.
+    const { report } = await setupService.preflight(id)
+    Logger.info('Oven timezone sync started', { ovenId: id, zone })
+    const result = await syncOvenTimezone(service.ssh, id, zone, {
+      platform: report.platform,
+      privilege: report.privilege,
+      timezone: report.timezone
+    })
+    Logger.info('Oven timezone sync finished', {
+      ovenId: id,
+      status: result.status,
+      zone: result.zone
+    })
+    return result
+  })
+  ipcMain.handle('oven:harness:update', (_event, rawId: unknown, rawHarnessId: unknown) =>
+    harnessService.updateHarness(ovenId(rawId), validateOvenHarnessId(rawHarnessId))
+  )
+  ipcMain.handle('oven:harness:uninstall', (_event, rawId: unknown, rawHarnessId: unknown) =>
+    harnessService.uninstallHarness(ovenId(rawId), validateOvenHarnessId(rawHarnessId))
   )
   return service
 }

@@ -9,8 +9,12 @@ import type {
   ThreadSettings,
   ProviderCatalog,
   HarnessCommand,
+  NativeMcpPublicationResult,
+  NativeMcpServerFailure,
+  NativeUtilityInvocation,
   PermissionReply,
   ResolvedUtility,
+  NativeMcpUtilityBinding,
   UtilityKind
 } from '../../lib/types'
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
@@ -696,6 +700,20 @@ export interface HarnessDriver {
   ): Promise<void>
 
   /**
+   * Publish the MCP utilities this thread has activated to a harness that runs
+   * MCP servers itself (pi's own MCP host). Absent for every harness that only
+   * reaches MCP servers through the app gateway, which is what keeps the gateway
+   * the one transport there. Answers with the server name each utility took, so
+   * the gateway can tell the model which namespace to call from a script, plus
+   * the utilities the harness would not run, so the user can be told.
+   */
+  publishUtilityMcpServers?(
+    projectPath: string,
+    sessionId: string,
+    utilities: readonly NativeMcpUtilityBinding[]
+  ): Promise<NativeMcpPublicationResult>
+
+  /**
    * Publish the owning thread's plan and progress for checkpoint rebuilds.
    * Drivers that own their own checkpoint step (Pi) keep the snapshot in a
    * session-keyed file; every other harness ignores the call. `null` clears it,
@@ -735,6 +753,7 @@ export interface HarnessDriver {
     bankedResets?: AgentBankedResets
     contextWindow?: number
     contextUsed?: number
+    reauthenticationRequired?: boolean
   } | null>
 
   /**
@@ -808,6 +827,20 @@ export interface HarnessDriver {
 
   /** Register the callback that receives streaming AgentEvents. */
   onEvent(callback: AgentEventCallback): void
+
+  /**
+   * Register the callback that receives one call a script made to a server the
+   * harness's own MCP host runs (pi's `mcp__<server>__<tool>`). A harness with
+   * no MCP host of its own never calls it.
+   */
+  onNativeUtilityCall?(callback: (invocation: NativeUtilityInvocation) => void): void
+
+  /**
+   * Register the callback that receives a server the harness's own MCP host
+   * would not run, so the app can tell the user instead of leaving it on the
+   * harness's stderr.
+   */
+  onNativeMcpFailure?(callback: (failure: NativeMcpServerFailure) => void): void
 
   /** Mark owned subprocesses as intentionally stopping before the process registry kills them. */
   prepareForProcessCleanup?(): void

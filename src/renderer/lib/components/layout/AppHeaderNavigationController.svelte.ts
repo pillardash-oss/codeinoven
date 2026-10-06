@@ -1,4 +1,5 @@
 import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
+import { viewShowsScopedSidebar } from '$lib/content-view-projects'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
 import { invoke } from '$lib/ipc.svelte'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -220,13 +221,12 @@ export class AppHeaderNavigationController {
   }
 
   async toggleScopedThreads(): Promise<void> {
-    const activeView = this.getActiveView()
-    if (
-      activeView === 'projects-scope' ||
-      (activeView === 'projects' && scopeState.sidebarContext)
-    ) {
-      // Off: land on the plain projects view   navigate() closes the sidebar.
-      await this.navigateToView('projects')
+    if (scopeState.sidebarContext && viewShowsScopedSidebar(this.getActiveView(), true)) {
+      // Scoped is a view of its own, so its rail item toggles the sidebar the
+      // view is made of instead of dropping the user back on the plain projects
+      // view (which is what "Scoped is only Projects with a property" looked
+      // like). Leaving Scoped happens by selecting another rail item.
+      sidebarState.toggle()
       return
     }
     await this.openProjectWithScopeState()
@@ -293,10 +293,7 @@ export class AppHeaderNavigationController {
   activeHeaderViewOption = $derived.by((): HeaderViewOptionId => {
     const activeView = this.getActiveView()
     if (activeView === 'scope') return 'scope-board'
-    if (
-      activeView === 'projects-scope' ||
-      (activeView === 'projects' && scopeState.sidebarContext)
-    ) {
+    if (viewShowsScopedSidebar(activeView, scopeState.sidebarContext !== null)) {
       return 'scoped-threads'
     }
     if (activeView === 'threads') return 'threads'
@@ -382,36 +379,163 @@ export class AppHeaderNavigationController {
   })
 
   /** Cmd/Ctrl+3   Projects view with the scope sidebar active for the current
-   *  thread (or project). Idempotent: never turns scope state off. */
+   *  thread (or project). Idempotent: never turns scope state off, and a
+   *  collapsed sidebar comes back.
+   *
+   *  Entering docks on the same tick the view switches: the rail marks Scoped
+   *  and the sidebar flips to its scoped pane in one flush, while the board and
+   *  the complete thread list hydrate behind them. The view never paints the
+   *  plain projects state on the way in   routing through it first is what made
+   *  the rail slide Project then Scoped, and the sidebar show the projects tree
+   *  until the dock resolved. */
   async openProjectWithScopeState(): Promise<void> {
     const activeView = this.getActiveView()
-    if (activeView !== 'projects' && activeView !== 'projects-scope') {
-      await this.navigateToView('projects')
-      // Coming back from another view   restore a stashed scope context first.
+    if (scopeState.sidebarContext && viewShowsScopedSidebar(activeView, true)) {
+      // Already on Scoped: the view's docked sidebar is its character, so this
+      // makes sure it is up rather than toggling the view off. A collapsed
+      // sidebar comes back; a live one is left where it is.
+      if (sidebarState.collapsed) sidebarState.redock()
+      return
+    }
+    if (activeView !== 'projects') {
+      // Warm the family's thread messages, exactly as a plain projects
+      // navigation would, and keep the chats bookkeeping that navigation owns.
+      this.preloadNavigationThreads('projects')
+      if (activeView === 'chats') {
+        const selected = workspaceState.selectedThread
+        scopeState.stashedChatThreadId =
+          selected && contentThreadFamily(selected) === 'chats' ? selected.id : null
+      }
+      // A scope the user stashed on the way out comes back exactly as it was.
       if (scopeState.stashedSidebarContext) {
         scopeState.restoreStashedSidebarContext()
+        this.navigate('projects-scope')
+        sidebarState.redock()
         if (scopeState.stashedProjectThreadId) {
           void this.restoreThread(scopeState.stashedProjectThreadId)
         }
         return
       }
+      // A scope still docked (Settings and the browser never undock it) is
+      // already the destination: just return to the view that shows it.
+      if (scopeState.sidebarContext) {
+        this.navigate('projects-scope')
+        sidebarState.redock()
+        return
+      }
+      // Nothing to dock anywhere (a fresh app with no project thread): land on
+      // the plain projects view instead of a scoped view with no scope to show.
+      if (!this.scopedProjectId()) {
+        await this.navigateToView('projects')
+        return
+      }
     }
-    if (scopeState.sidebarContext) return
+    if (scopeState.sidebarContext) {
+      // A scope is already docked (the view was left without undocking it):
+      // the scoped view only has to be shown again.
+      this.navigate('projects-scope')
+      sidebarState.redock()
+      return
+    }
 
-    const project = workspaceState.activeProject
-    if (!project) return
+    // Mark Scoped and dock its sidebar on the same tick. Neither the rail nor
+    // the sidebar ever paints the plain projects state on the way in: the rail
+    // moves once and the sidebar flips to its scoped pane in the same flush,
+    // while the board and the complete thread list hydrate behind it. A
+    // remembered thread whose project no longer exists resolves to nothing, and
+    // the plain projects view is then the honest landing.
+    this.navigate('projects-scope')
+    if (!this.dockScopedSidebar()) {
+      this.navigate('projects')
+      return
+    }
+    sidebarState.redock()
+  }
 
+  /**
+   * Warm the Scoped view before the pointer lands, so the click that follows
+   * only has to flip visibility: the docked project's board and its complete
+   * thread list, plus the project family's thread messages.
+   *
+   * Loading only. Nothing visible changes until the user selects the view: the
+   * board is cached for lookup rather than activated, so hovering the rail item
+   * never repaints the board or moves the active project behind the current
+   * view.
+   */
+  preloadScopedThreads(): void {
+    this.preloadNavigationThreads('projects')
+    const projectId = this.scopedProjectId()
+    if (!projectId) return
+    // The hidden containers (Chats, Assistant, the browser) are not projects the
+    // scope sidebar can dock; `projectRecords` already lists the visible ones.
+    if (!scopeState.projectRecords.some((project) => project.id === projectId)) return
+    void scopeState.cacheBoardForLookup(projectId)
+    void scopeState.ensureProjectThreadsLoaded(projectId)
+  }
+
+  /**
+   * The project the scoped view docks for the shell's current state: the open
+   * project thread's own project, else the project family's remembered (then
+   * most recently visited) thread, which is what landing on the scoped view
+   * reconciles to when another family's thread   a chat, say   is open. Null
+   * when the app holds no project thread at all.
+   */
+  private scopedProjectId(): string | null {
+    const selected = workspaceState.selectedThread
+    if (selected && contentThreadFamily(selected) === 'projects') return selected.projectId
+    const remembered = workspaceState.contentViewThreadRef('projects')
+    if (remembered) return remembered.projectId
+    return recentThreadOfFamily('projects')?.projectId ?? null
+  }
+
+  /**
+   * Dock the scope sidebar for the open thread (or the active project) on the
+   * tick the scoped view is entered, so the sidebar shows that scope with the
+   * rail and never paints the plain projects tree first. Returns false when the
+   * app has no project to dock.
+   */
+  private dockScopedSidebar(): boolean {
     const thread = workspaceState.selectedThread
-    const targetProjectId = thread?.projectId ?? project.id
+    const projectThread = thread && contentThreadFamily(thread) === 'projects' ? thread : null
+    const targetProjectId =
+      projectThread?.projectId ?? workspaceState.activeProject?.id ?? this.scopedProjectId()
+    // The hidden containers (Chats, Assistant, the browser) are not projects the
+    // scope sidebar can dock; `projectRecords` already lists the visible ones.
+    if (!targetProjectId) return false
+    if (!scopeState.projectRecords.some((project) => project.id === targetProjectId)) return false
 
-    const allThreads: Thread[] = await invoke('thread:listAll')
-    scopeState.setThreads(allThreads)
-    await scopeState.activateProject(targetProjectId)
-
-    if (thread) {
-      scopeState.showSidebarForThread(thread)
+    if (projectThread) {
+      scopeState.showSidebarForThread(projectThread)
     } else {
       scopeState.showSidebarForProject(targetProjectId)
+    }
+    void this.settleScopedSidebar(targetProjectId, projectThread !== null)
+    return true
+  }
+
+  /**
+   * Fill in the docked scope behind the sidebar that is already on screen: the
+   * board (and the bucket it settles on), the project's complete thread list,
+   * and the global list the scope counters read. Runs in the background   the
+   * sidebar shows the bounded first-paint slice until the full list lands.
+   */
+  private async settleScopedSidebar(projectId: string, threadDocked: boolean): Promise<void> {
+    await scopeState.activateProject(projectId)
+    if (!threadDocked) {
+      // showSidebarForProject picked the remembered bucket, or the default when
+      // the board was not cached yet. The freshly loaded board may order a
+      // different bucket first, and the awaited dock used to follow it.
+      const context = scopeState.sidebarContext
+      if (context && context.projectId === projectId) {
+        const expected = scopeState.lastBucketForProject(projectId)
+        if (expected !== context.bucketId) scopeState.setSidebarBucket(expected)
+      }
+    }
+    try {
+      const allThreads: Thread[] = await invoke('thread:listAll')
+      scopeState.setThreads(allThreads)
+    } catch {
+      // The bounded slice already covers the docked scope; the next entry retries.
     }
   }
 }

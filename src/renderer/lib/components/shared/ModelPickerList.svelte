@@ -5,7 +5,6 @@
     Check,
     ChevronRight,
     GripVertical,
-    ListFilter,
     Plug,
     RefreshCw,
     Search,
@@ -17,7 +16,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { peakHoursBadgeFor } from '$shared/peak-hours'
   import type { ProviderCatalog } from '$shared/types'
-  import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
+  import ModelPickerSidePanel from './ModelPickerSidePanel.svelte'
   import ModelPickerVendorIcons from './ModelPickerVendorIcons.svelte'
   import {
     buildPickerLayout,
@@ -30,20 +29,37 @@
     modelHaystack,
     passesVisionFilter,
     pickerIndexForSelectedModel,
-    pickerModelKeysOf,
     PICKER_ROW_HEIGHT,
     resolveModel,
     searchWords,
     visiblePickerItems,
     type ModelEntry,
+    type ModelPickerProfilesGroup,
+    type PickerHarnessFilterControls,
     type PickerListItem
   } from './model-picker-helpers'
 
   interface Props {
     displayProviders: ProviderCatalog[]
     cachedProviders: ProviderCatalog[]
+    /**
+     * Profiles the side panel lists, built by the model picker from its own props.
+     *
+     * The list only draws the panel; it does not own the profiles, so a picker that
+     * cannot apply one passes `null` and the panel falls back to the harness filter
+     * it already owns.
+     */
+    profiles?: ModelPickerProfilesGroup | null
     /** Restricts the list to one harness. Unset shows every harness as today. */
     harnessFilter?: string | null
+    /**
+     * Harnesses the current execution target does not have installed (a remote
+     * Oven without them). Their chips and model rows are disabled, because a
+     * model can only run where its harness exists.
+     */
+    unavailableHarnessIds?: ReadonlySet<string> | null
+    /** Why those harnesses are unavailable, shown as the chip's and row's title. */
+    unavailableHarnessReason?: string | null
     favoriteModels: string[]
     recentModels: string[]
     visionOnly: boolean
@@ -70,7 +86,10 @@
   let {
     displayProviders,
     cachedProviders,
+    profiles = null,
     harnessFilter = null,
+    unavailableHarnessIds = null,
+    unavailableHarnessReason = null,
     favoriteModels,
     recentModels,
     visionOnly,
@@ -97,10 +116,17 @@
   let search = $state('')
   let searchInput: HTMLInputElement | undefined
   let modelList: HTMLDivElement | undefined
+  /**
+   * The side panel, so the picker can open it directly.
+   *
+   * The `/profile` slash action asks for the profiles surface rather than the model
+   * list, and this list is what renders that surface; the picker reaches it through
+   * here instead of reaching around the list into the panel.
+   */
+  let profilesPanel: ModelPickerSidePanel | undefined = $state(undefined)
   const collapsedGroups = new SvelteSet<string>()
   const selectedHarnesses = new SvelteSet<string>()
   let showAllHarnesses = $state(true)
-  let harnessFilterOpen = $state(false)
   let pickerListScrollTop = $state(0)
   let pickerViewport = $state(240)
   /** True right after an arrow-key press, until the mouse physically moves.
@@ -227,7 +253,16 @@
           .map((entryHarnessId) => [entryHarnessId, harnessName(entryHarnessId)])
       )
     )
-      .map(([id, name]) => ({ id, name }))
+      .map(([id, name]) => ({
+        id,
+        name,
+        ...(isUnavailableHarness(id)
+          ? {
+              unavailable: true,
+              ...(unavailableHarnessReason ? { reason: unavailableHarnessReason } : {})
+            }
+          : {})
+      }))
       .sort((left, right) => harnessOrder(left.id) - harnessOrder(right.id))
   )
   const effectiveHarnessCount = $derived(showAllHarnesses ? 0 : selectedHarnesses.size || 0)
@@ -238,6 +273,26 @@
         ? '1 harness'
         : `${effectiveHarnessCount} harnesses`
       : 'All harnesses'
+  )
+  /**
+   * The harness filter as the side panel draws it, or null when the catalog holds
+   * a single harness and there is nothing to narrow.
+   *
+   * Rebuilt on every change rather than stored: the selection stays in this
+   * component's reactive set, and the panel receives it as one object so the row at
+   * the top of the picker and the chips inside the panel can never disagree.
+   */
+  const harnessFilterControls = $derived<PickerHarnessFilterControls | null>(
+    harnessOptions.length > 1
+      ? {
+          options: harnessOptions,
+          label: harnessFilterLabel,
+          active: harnessFilterActive,
+          selected: selectedHarnesses,
+          onToggle: toggleHarness,
+          onClear: clearHarnessFilter
+        }
+      : null
   )
   const pickerLayout = $derived(
     buildPickerLayout({
@@ -250,8 +305,13 @@
       canReorderFavorites: Boolean(onReorderFavorite)
     })
   )
-  /** Flat, ordered keys of every model row, for keyboard navigation. */
-  const pickerModelKeys = $derived(pickerModelKeysOf(pickerLayout.items))
+  /** Flat, ordered keys of every selectable model row, for keyboard navigation. */
+  const pickerModelKeys = $derived(
+    pickerLayout.items
+      .filter((item): item is Extract<PickerListItem, { kind: 'model' }> => item.kind === 'model')
+      .filter((item) => !isUnavailableHarness(item.entry.provider.harnessId))
+      .map((item) => item.key)
+  )
   const pickerVisibleItems = $derived(
     visiblePickerItems(pickerLayout, pickerListScrollTop, pickerViewport)
   )
@@ -267,11 +327,19 @@
     return !harnessFilter || candidateHarnessId === harnessFilter
   }
 
-  function isHarnessSelected(candidateHarnessId: string): boolean {
-    return !showAllHarnesses && selectedHarnesses.has(candidateHarnessId)
+  /** True when the current target cannot run this harness's models. */
+  function isUnavailableHarness(candidateHarnessId: string): boolean {
+    return unavailableHarnessIds?.has(candidateHarnessId) === true
+  }
+
+  function unavailableHarnessTitle(candidateHarnessId: string): string {
+    return unavailableHarnessReason ?? `${harnessName(candidateHarnessId)} is not available here`
   }
 
   function toggleHarness(nextHarnessId: string): void {
+    // A harness the target does not have cannot narrow the list to anything
+    // runnable, so the chip is inert rather than offering a dead filter.
+    if (isUnavailableHarness(nextHarnessId)) return
     if (showAllHarnesses) showAllHarnesses = false
     if (selectedHarnesses.has(nextHarnessId)) {
       if (selectedHarnesses.size > 1) selectedHarnesses.delete(nextHarnessId)
@@ -357,10 +425,14 @@
     }
   }
 
+  /** Open the side panel, for a caller that asked for profiles directly. */
+  export function openProfilesPanel(): void {
+    profilesPanel?.openPanel()
+  }
+
   /** Reset the list surface when the popover opens or closes. */
   export function resetPicker(): void {
     search = ''
-    harnessFilterOpen = false
     pickerListScrollTop = 0
     keyboardNavActive = false
   }
@@ -489,67 +561,7 @@
   {/if}
 </div>
 
-{#if harnessOptions.length > 1}
-  <div class="border-b px-2.5 py-1.5">
-    <div class="flex items-center gap-1.5">
-      <button
-        type="button"
-        class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        aria-expanded={harnessFilterOpen}
-        aria-haspopup="true"
-        title={harnessFilterOpen ? 'Hide harness filter options' : 'Filter models by harness'}
-        onclick={() => (harnessFilterOpen = !harnessFilterOpen)}
-      >
-        <ListFilter size={11} class="shrink-0 text-dimmed" />
-        <span class="truncate">{harnessFilterLabel}</span>
-        {#if harnessFilterActive}
-          <span class="ml-auto shrink-0 text-[0.5625rem] text-primary">Filtered</span>
-        {/if}
-      </button>
-      {#if harnessFilterActive}
-        <button
-          type="button"
-          class="shrink-0 rounded-lg p-1 text-dimmed transition-colors hover:text-foreground"
-          title="Clear harness filter"
-          aria-label="Clear harness filter"
-          onclick={clearHarnessFilter}
-        >
-          <X size={11} />
-        </button>
-      {/if}
-    </div>
-    {#if harnessFilterOpen}
-      <div class="mt-1.5 flex flex-wrap gap-1" role="group" aria-label="Filter models by harness">
-        <button
-          type="button"
-          class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
-            ? 'border-primary bg-primary text-on-primary'
-            : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-          aria-pressed={!harnessFilterActive}
-          onclick={clearHarnessFilter}
-        >
-          <ListFilter size={11} class="shrink-0" />
-          All
-        </button>
-        {#each harnessOptions as option (option.id)}
-          <button
-            type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {isHarnessSelected(
-              option.id
-            )
-              ? 'border-primary bg-primary text-on-primary'
-              : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-            aria-pressed={isHarnessSelected(option.id)}
-            onclick={() => toggleHarness(option.id)}
-          >
-            <ModelPickerHarnessIcon harnessId={option.id} />
-            <span class="truncate">{option.name}</span>
-          </button>
-        {/each}
-      </div>
-    {/if}
-  </div>
-{/if}
+<ModelPickerSidePanel bind:this={profilesPanel} filter={harnessFilterControls} {profiles} />
 
 <div
   id={listId}
@@ -751,14 +763,20 @@
 {#snippet modelRow(entry: ModelEntry, rowKey: string, recentKey?: string)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   {@const peak = peakHoursBadgeFor(entry.model.id, entry.provider.id)}
+  {@const unavailable = isUnavailableHarness(entry.provider.harnessId)}
   <button
-    class={`model-row-btn group/row ml-4 flex w-[calc(100%-1rem)] flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
-    title={`Use ${entry.model.name}`}
+    class={`model-row-btn group/row ml-4 flex w-[calc(100%-1rem)] flex-col rounded-lg px-2 py-1.5 text-left transition-colors ${unavailable ? 'cursor-not-allowed opacity-50' : 'hover:bg-elevated focus:bg-elevated focus:outline-none'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
+    title={unavailable
+      ? unavailableHarnessTitle(entry.provider.harnessId)
+      : `Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
-    onclick={() => onChoose(entry)}
+    disabled={unavailable}
+    onclick={() => {
+      if (!unavailable) onChoose(entry)
+    }}
     onkeydown={(event: KeyboardEvent) => {
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (keymapState.matches('palette-model-nav', event)) {
         event.preventDefault()
         const currentIndex = pickerModelKeys.indexOf(rowKey)
         if (currentIndex === -1) return
@@ -787,7 +805,7 @@
       }
       if (keymapState.matches('palette-model-select', event)) {
         event.preventDefault()
-        onChoose(entry)
+        if (!unavailable) onChoose(entry)
         return
       }
       // Editing intent: left/right moves the caret and characters/backspace edit

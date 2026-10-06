@@ -3,6 +3,7 @@ import type { AgentEvent, Thread } from '../../lib/types'
 import type { NotificationService } from '../notifications/notification-service'
 import type { PowerWakeService } from '../system/power-wake-service'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import { broadcastAppToast } from '../ipc/app-toast'
 import { instanceRegistry } from '../system/instance-registry'
 
 type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }>
@@ -126,14 +127,7 @@ export function broadcastThreadOperationError(
   projectId: string,
   threadId: string
 ): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    sendToRenderer(win.webContents, 'app:toast', {
-      message,
-      type: 'error',
-      projectId,
-      threadId
-    })
-  }
+  broadcastAppToast({ message, type: 'error', projectId, threadId })
 }
 
 /** Keep note-presence indicators synchronized across renderer windows. */

@@ -11,15 +11,16 @@ import {
   MonitorUp,
   Palette,
   Plug,
-  Puzzle,
   Router,
   Server,
   Search,
   SlidersHorizontal,
   Sparkles,
   UsersRound,
-  Volume2
+  Volume2,
+  type LucideIcon
 } from '@lucide/svelte'
+import { feature } from '$lib/feature-registry'
 import type { SettingsSection } from './stores/renderer-recovery'
 import type { HarnessesTab } from './stores/settings-ui.svelte'
 
@@ -37,7 +38,7 @@ export interface SettingsSearchEntry {
   title: string
   description: string
   keywords: readonly string[]
-  icon: typeof SlidersHorizontal
+  icon: LucideIcon
   /**
    * DOM id suffix of the block to reveal on the section page
    * (rendered as `settings-block-<blockId>`). Absent = the whole page.
@@ -188,7 +189,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Utilities',
     description: 'Installed utilities and the skills marketplace.',
     keywords: ['skills', 'marketplace', 'plugins'],
-    icon: Puzzle
+    icon: feature('utilities').icon
   },
   {
     id: 'gateways',
@@ -310,6 +311,36 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Threads',
     description: 'Thread limits, slash command behavior, and question timeout.',
     keywords: ['limit', 'slash commands', 'timeout'],
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'general-cio-cleanup',
+    section: 'general',
+    blockId: 'general-cio-cleanup',
+    title: 'CIO Cleanup',
+    description:
+      'Daily removal of stale scratch content from every workspace .cio folder, with the folders you exclude kept whole.',
+    keywords: [
+      'cleanup',
+      'scratch',
+      'retention',
+      'exclusions',
+      'stale',
+      'cio',
+      'folders',
+      'designs',
+      'videos',
+      'utilities'
+    ],
+    icon: SlidersHorizontal
+  },
+  {
+    id: 'general-cio-cleanup-retention',
+    section: 'general',
+    blockId: 'general-cio-cleanup',
+    title: 'CIO Cleanup retention',
+    description: 'How many days scratch content is kept before CIO Cleanup removes it.',
+    keywords: ['cleanup', 'scratch', 'retention', 'days', 'stale'],
     icon: SlidersHorizontal
   },
   {

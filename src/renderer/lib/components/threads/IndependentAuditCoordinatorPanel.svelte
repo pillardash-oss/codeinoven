@@ -109,6 +109,10 @@
   function chooseThinking(level: ThinkingLevel): void {
     onModelChange({ ...auditorSettings, thinkingLevel: level })
   }
+
+  function chooseRuntime(runtime: import('$shared/types').ModelRuntimeSettings): void {
+    onModelChange({ ...auditorSettings, ...runtime })
+  }
 </script>
 
 <!--
@@ -224,7 +228,9 @@
           variant="action"
           onSelect={chooseModel}
           thinkingLevel={auditorSettings.thinkingLevel}
+          runtimeSettings={auditorSettings}
           onSelectThinking={chooseThinking}
+          onSelectRuntime={chooseRuntime}
           {onToggleFavorite}
           {onReorderFavorite}
         />

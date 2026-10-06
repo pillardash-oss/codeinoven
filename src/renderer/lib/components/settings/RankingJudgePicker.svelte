@@ -148,6 +148,14 @@
     await commit({ ...current, thinkingLevel: level })
   }
 
+  async function selectRuntime(
+    runtime: import('$shared/types').ModelRuntimeSettings
+  ): Promise<void> {
+    const current = preference
+    if (current.kind !== 'model') return
+    await commit({ ...current, ...runtime })
+  }
+
   onMount(() => {
     const load = async (): Promise<void> => {
       loading = true
@@ -250,7 +258,9 @@
               onSelect={(providerId, modelId, harnessId, accountId) =>
                 void selectModel(providerId, modelId, harnessId, accountId)}
               thinkingLevel={modelTarget?.thinkingLevel}
+              runtimeSettings={modelTarget}
               onSelectThinking={(level) => void selectThinking(level)}
+              onSelectRuntime={(runtime) => void selectRuntime(runtime)}
               onToggleFavorite={(providerId, modelId, harnessId) =>
                 rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
               onReorderFavorite={(draggedKey, targetKey, position) =>

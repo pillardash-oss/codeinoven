@@ -1,6 +1,7 @@
 import type { Database } from '../database'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import {
+  ASSISTANT_SPACE_ID,
   GLOBAL_BROWSER_PROJECT_ID,
   sanitizeThreadSettings,
   type AgentRateLimitWindow,
@@ -799,6 +800,63 @@ export class ThreadRepo {
   /** Initial workspace rows omit optional usage metadata so first paint stays bounded. */
   listAllForHydrationViaWorker(options: ThreadListOptions = {}): Promise<Thread[]> {
     return this.listAllViaWorker(options, false)
+  }
+
+  /**
+   * Titles of the given threads, read on the database worker.
+   *
+   * For a background service that labels a workspace without hydrating whole
+   * thread rows, and must not read SQLite on the main thread (see
+   * `docs/APP-BIBLE.md`). Ids with no row are simply absent from the map.
+   */
+  async listTitlesViaWorker(ids: readonly string[]): Promise<Map<string, string>> {
+    const titles = new Map<string, string>()
+    const unique = [...new Set(ids)].filter((id) => id.length > 0)
+    if (unique.length === 0) return titles
+    const placeholders = unique.map(() => '?').join(',')
+    const result = await this.db.queryViaWorker(
+      `SELECT id, title FROM threads WHERE id IN (${placeholders})`,
+      unique,
+      0
+    )
+    if (!result.ok) return titles
+    for (const row of result.rows) {
+      if (typeof row['id'] === 'string' && typeof row['title'] === 'string') {
+        titles.set(row['id'], row['title'])
+      }
+    }
+    return titles
+  }
+
+  /**
+   * Assistant task ids grouped by the routine they belong to, read on the
+   * database worker. Every task of a routine mounts that routine's single
+   * workspace directory, so a caller that owns the directory needs their ids to
+   * recognise the same folder under each task's own identity. Routine ids with
+   * no task are simply absent from the map.
+   */
+  async listAssistantTaskIdsByRoutineViaWorker(
+    routineIds: readonly string[]
+  ): Promise<Map<string, string[]>> {
+    const grouped = new Map<string, string[]>()
+    const unique = [...new Set(routineIds)].filter((id) => id.length > 0)
+    if (unique.length === 0) return grouped
+    const placeholders = unique.map(() => '?').join(',')
+    const result = await this.db.queryViaWorker(
+      `SELECT id, routine_id FROM threads WHERE project_id = ? AND routine_id IN (${placeholders})`,
+      [ASSISTANT_SPACE_ID, ...unique],
+      0
+    )
+    if (!result.ok) return grouped
+    for (const row of result.rows) {
+      const id = row['id']
+      const routineId = row['routine_id']
+      if (typeof id !== 'string' || typeof routineId !== 'string') continue
+      const tasks = grouped.get(routineId)
+      if (tasks) tasks.push(id)
+      else grouped.set(routineId, [id])
+    }
+    return grouped
   }
 
   /**

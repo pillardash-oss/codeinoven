@@ -139,6 +139,11 @@
             fullWidth
             disabled={working}
             onSelect={chooseComposeModel}
+            runtimeSettings={prComposeAgentSettings.selection ?? undefined}
+            onSelectRuntime={(runtime) => {
+              const current = prComposeAgentSettings.selection
+              if (current) prComposeAgentSettings.selectModel({ ...current, ...runtime })
+            }}
             thinkingLevel={prComposeAgentSettings.selection?.thinkingLevel ?? null}
             onSelectThinking={chooseComposeThinking}
             onToggleFavorite={(providerId, modelId, harnessId) =>

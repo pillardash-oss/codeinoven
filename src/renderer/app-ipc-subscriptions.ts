@@ -15,6 +15,7 @@ import { pipState } from '$lib/stores/pip.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
+import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { skillUpdateState } from '$lib/stores/skill-updates.svelte'
 import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
@@ -247,6 +248,9 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // Listen from app start (not from the first local job): an agent-run
   // worktree has no renderer-owned job until its first progress event.
   scopeJobs.listen()
+  // Same reason: the settings page and the file tree's exclusion menu read this
+  // store's state, and neither of them owns the subscription that fills it.
+  cioCleanupStore.listen()
   const unsubscribeCloseShortcut = subscribeGuarded('window:closeShortcut', () => {
     deps.handleCloseShortcut()
   })

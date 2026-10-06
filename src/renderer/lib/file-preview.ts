@@ -1,3 +1,4 @@
+import { ovenRootThread } from '$lib/oven-root-target'
 import { toPosixPath } from '$shared/paths'
 
 const SCHEME = 'appfile'
@@ -16,6 +17,7 @@ export function projectFilePreviewUrl(
   mountThreadId?: string,
   version?: number
 ): string {
+  mountThreadId ??= ovenRootThread(projectId)?.id
   const encoded = toPosixPath(relativePath).split('/').map(encodeURIComponent).join('/')
   const base = mountThreadId
     ? `${SCHEME}://thread/${projectId}/${mountThreadId}/${encoded}`

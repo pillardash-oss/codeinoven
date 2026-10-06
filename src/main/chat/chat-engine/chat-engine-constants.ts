@@ -92,6 +92,13 @@ export const INCOMPLETE_TURN_MESSAGE =
 export const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
 
+/**
+ * Checkpoint note for a turn whose finalization a newer turn superseded. The
+ * transcript is already durable; the live turn owns everything after it.
+ */
+export const SUPERSEDED_TURN_MESSAGE =
+  'A newer turn took over the thread before this turn could be finalized.'
+
 export const SPEC_CONTRACT_COMPLETE_MARKER = 'SPEC CONTRACT COMPLETE'
 
 export const SPEC_CONTRACT_BLOCKED_MARKER = 'SPEC CONTRACT BLOCKED'

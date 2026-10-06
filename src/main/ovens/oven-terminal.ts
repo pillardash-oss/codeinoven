@@ -1,5 +1,8 @@
 import { mkdir } from 'node:fs/promises'
 import type { Database } from '../database/database'
+import { ProjectRepo } from '../database/repositories/project-repo'
+import { resolveOvenThreadRoot } from './oven-thread-root'
+import { OVEN_HARNESS_PATH } from './oven-harness-paths'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { SecretVault } from '../storage/secret-vault'
@@ -17,6 +20,7 @@ export function ovenTerminalLaunch(
   database: Database
 ): PtyRemoteLaunchHook {
   const threads = new ThreadRepo(database)
+  const projects = new ProjectRepo(database)
   const service = new OvenService(new OvenRegistry(storage, vault))
   const accounts = new HarnessAccountRegistry(storage)
   return async (projectId, threadId, directory, script, variables) => {
@@ -26,26 +30,28 @@ export function ovenTerminalLaunch(
     const settings = thread.settings
     if (!settings?.ovenId || settings.ovenId === 'local') return null
     const ovenId = settings.ovenId
-    const probe = await service.probe(ovenId)
-    const ensured = await service.workspace(ovenId, {
-      operation: 'ensure',
-      root:
-        settings.ovenPath ||
-        `${probe.home}/.config/pillardash/codeinoven-oven/workspaces/${threadId}`
-    })
-    let root = ensured.root
+    let root = settings.ovenPath ?? ''
+    if (script !== undefined || directory)
+      root = (
+        await resolveOvenThreadRoot(service, thread, {
+          getProject: (id) => projects.getViaWorker(id)
+        })
+      ).root
     if (directory) {
       const checked = await service.workspace(ovenId, { operation: 'stat', root, path: directory })
       if (checked.file?.kind !== 'directory')
         throw new Error('Choose a directory inside the Oven workspace.')
       root = checked.file.path ? `${root}/${checked.file.path}` : root
     }
-    const account = await accounts.resolveForProvider(
-      settings.harnessId,
-      settings.providerId,
-      settings.accountId
-    )
-    const environment = await syncOvenAccount(service, accounts, ovenId, account)
+    let environment: Record<string, string> = {}
+    if (script !== undefined) {
+      const account = await accounts.resolveForProvider(
+        settings.harnessId,
+        settings.providerId,
+        settings.accountId
+      )
+      environment = await syncOvenAccount(service, accounts, ovenId, account)
+    }
     if (variables) {
       if (Object.keys(variables).length > 100) throw new Error('An action has too many variables.')
       for (const [name, value] of Object.entries(variables)) {
@@ -68,8 +74,8 @@ export function ovenTerminalLaunch(
       .map(([name, value]) => `${name}=${sshQuote(value)}`)
       .join(' ')
     const shell = '"${SHELL:-/bin/sh}"'
-    const command = `cd ${sshQuote(root)} && exec env ${assignments} ${shell} ${script === undefined ? '-l' : `-lc ${sshQuote(script)}`}`
-    const launch = await service.ssh.prepare(ovenId, command, script === undefined)
+    const command = `${OVEN_HARNESS_PATH} cd ${root ? sshQuote(root) : '"$HOME"'} && exec env ${assignments} ${shell} ${script === undefined ? '-l' : `-lc ${sshQuote(script)}`}`
+    const launch = await service.ssh.prepare(ovenId, command, script === undefined, undefined, true)
     try {
       const localCwd = storage.resolve('ovens/terminals')
       await mkdir(localCwd, { recursive: true, mode: 0o700 })
@@ -83,7 +89,7 @@ export function ovenTerminalLaunch(
           )
         ),
         localCwd,
-        remoteCwd: root,
+        remoteCwd: root || '~',
         dispose: launch.dispose
       }
     } catch (error) {

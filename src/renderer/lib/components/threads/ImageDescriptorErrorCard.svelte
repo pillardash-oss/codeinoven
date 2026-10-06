@@ -96,6 +96,12 @@
     override = { ...base, thinkingLevel: level }
   }
 
+  function chooseRuntime(runtime: import('$shared/types').ModelRuntimeSettings): void {
+    const base = override ?? request.selection
+    if (!base) return
+    override = { ...base, ...runtime }
+  }
+
   async function retry(): Promise<void> {
     const selection = visionSelection
     if (working || !selection) return
@@ -229,7 +235,9 @@
               override = { harnessId, providerId, modelId, accountId }
             }}
             thinkingLevel={visionSelection?.thinkingLevel}
+            runtimeSettings={visionSelection ?? undefined}
             onSelectThinking={chooseThinking}
+            onSelectRuntime={chooseRuntime}
             {onToggleFavorite}
             {onReorderFavorite}
           />

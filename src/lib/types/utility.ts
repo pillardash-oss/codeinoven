@@ -342,6 +342,13 @@ export interface InstalledSkillLocation {
   path: string
   /** Activation of a registry-managed copy. */
   activation?: UtilityActivation
+  /**
+   * Marketplace source the copy was installed from (`owner/repo`, or a domain
+   * for a well-known index). Absent for hand-placed copies, which no install
+   * record knows, so the catalog can attribute an installed skill to the
+   * vendor that published it.
+   */
+  source?: string
 }
 
 /**
@@ -449,6 +456,19 @@ export interface NativeSkillContent {
   path: string
 }
 
+/** Where a native skill should live after an editor changes its availability. */
+export interface SkillRelocationRequest {
+  /**
+   * Harnesses the skill should be available to. `*` means the shared layer
+   * every harness reads; any other set names harness skill folders.
+   */
+  harnessIds: string[]
+  /** Full `SKILL.md` written into every destination after the move. */
+  instructions: string
+  /** Project whose skill folders the move stays inside; omitted for home-level skills. */
+  projectId?: string
+}
+
 /** Full editable representation of a harness-native MCP server. */
 export interface NativeMcpContent {
   name: string
@@ -487,4 +507,77 @@ export interface UtilityResolutionContext {
 export interface ResolvedUtility {
   utility: UtilityDefinition
   binding: HarnessUtilityBinding
+}
+
+/**
+ * One MCP utility handed to a harness that runs MCP servers itself.
+ *
+ * Pi owns an MCP host, so a utility it can run is described to pi instead of
+ * being proxied by the app gateway. The credential values travel with the
+ * utility because they are read by a process that was spawned before the
+ * utility was activated and therefore cannot inherit them from the app's own
+ * launch environment.
+ */
+export interface NativeMcpUtilityBinding {
+  utility: UtilityDefinitionFor<'mcp'>
+  /** Credential values resolved for this turn, keyed by the variable the server reads. */
+  environment: Record<string, string>
+}
+
+/** What a harness that runs MCP servers itself published for one utility. */
+export interface NativeMcpServerPublication {
+  utilityId: string
+  /**
+   * Server name the harness registered. Pi exposes its tools as
+   * `mcp__<name>__<tool>` and announces the server as `mcp__<name>`.
+   */
+  server: string
+}
+
+/** One utility the app could not turn into a server on the harness's own host. */
+export interface NativeMcpRegistrationFailure {
+  utilityId: string
+  utilityName: string
+  reason: string
+}
+
+/** What publishing the app's MCP servers to a harness's own MCP host produced. */
+export interface NativeMcpPublicationResult {
+  servers: NativeMcpServerPublication[]
+  /** Utilities that stayed on the app gateway because no server could be made. */
+  failures: NativeMcpRegistrationFailure[]
+}
+
+/**
+ * One call a script made to a server the harness's own MCP host runs.
+ *
+ * The gateway's `cio_util_use` audits itself, so a call that skipped it (a
+ * codemode script reaching `mcp__<server>__<tool>` directly) would otherwise
+ * leave no record of which utility was used.
+ */
+export interface NativeUtilityInvocation {
+  sessionId: string
+  utilityId: string
+  utilityName: string
+  /** Server name the harness registered, as its tool prefix carries it. */
+  server: string
+  /** The MCP tool name without its `mcp__<server>__` prefix. */
+  tool: string
+  status: 'completed' | 'error'
+}
+
+/**
+ * A utility server the harness's own MCP host would not run.
+ *
+ * The app gateway stays a path to that utility, so this is a report and not a
+ * failure of the turn; the user should still hear it, because a silently
+ * skipped server is a capability they enabled and did not get.
+ */
+export interface NativeMcpServerFailure {
+  sessionId: string
+  /** Server name the app claimed, absent when the config never earned one. */
+  server?: string
+  utilityId?: string
+  utilityName?: string
+  reason: string
 }

@@ -169,7 +169,7 @@ export class UtilityRegistryService {
         kind: 'computer_use',
         name: 'cio:browser',
         description:
-          'Runs project- and thread-scoped browsers for localhost and web application testing, including navigation, DOM snapshots, clicks, typing, screenshots, and browser console diagnostics.',
+          'Runs project- and thread-scoped browsers for localhost and web application testing, including navigation, DOM snapshots, clicks, typing, reviewed file uploads, screenshots, and browser console diagnostics.',
         enabled: true,
         activation: 'on_demand',
         scope: { level: 'global' },
@@ -588,6 +588,32 @@ export class UtilityRegistryService {
       }
       registry.utilities.splice(index, 1)
       return true
+    })
+  }
+
+  /**
+   * Remove every capability scoped to one thread, returning what was removed so
+   * the caller can reap its credentials.
+   *
+   * A thread-scoped capability resolves for that conversation and no other, so
+   * once the thread is gone the entry can never be reached again. Deleting the
+   * thread therefore deletes it here too, instead of leaving an entry in the
+   * Utilities list that names a thread nobody can open.
+   */
+  async deleteThreadScoped(threadId: string): Promise<UtilityDefinition[]> {
+    assertId(threadId, 'Thread ID')
+    await this.ensureAppDefaultsSeeded()
+    return this.mutate(async (registry) => {
+      const removed = registry.utilities.filter(
+        (utility) =>
+          !utility.appOwned &&
+          utility.scope.level === 'thread' &&
+          utility.scope.threadId === threadId
+      )
+      if (removed.length === 0) return []
+      const removedIds = new Set(removed.map((utility) => utility.id))
+      registry.utilities = registry.utilities.filter((utility) => !removedIds.has(utility.id))
+      return structuredClone(removed)
     })
   }
 

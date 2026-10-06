@@ -577,6 +577,16 @@ export const invokeGitContract = {
     import('../types').CloudDeploymentContainer[] | { accessError: string }
   >,
   /**
+   * Which OTHER projects already monitor a provider kind's containers, resolved
+   * from their per-project container mappings. The picker lists every container
+   * on the account, so this is what lets it show that a container belongs to
+   * another project instead of letting a project claim it silently.
+   */
+  'cloudDeploy:containerOwners': {} as Contract<
+    [projectId: string, providerKind: import('../types').CloudDeploymentProviderKind],
+    import('../types').CloudDeploymentContainerOwner[]
+  >,
+  /**
    * Latest snapshot for one configured container, or null when the provider
    * cannot resolve it.
    */

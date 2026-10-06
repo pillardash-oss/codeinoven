@@ -1,5 +1,21 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte'
+  import GitHubSignInBrowserDock from '$lib/components/git/GitHubSignInBrowserDock.svelte'
+  import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
+  import { feature } from '$lib/feature-registry'
+  import { subscribe } from '$lib/ipc.svelte'
+  import { motionDuration } from '$lib/motion'
+  import { publicAssetUrl } from '$lib/static-assets'
+  import { loadBrowser } from '$lib/stores/browser-access.svelte'
+  import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
+  import { storeExtensionOffer } from '$lib/stores/browser-extension-store-offer'
+  import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
+  import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
+  import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
+  import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
   import {
     AppWindow,
     Bookmark,
@@ -7,36 +23,21 @@
     Clock,
     Download,
     MessagesCircle,
-    Puzzle,
-    StickyNote
+    Puzzle
   } from '@lucide/svelte'
-  import { subscribe } from '$lib/ipc.svelte'
-  import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
-  import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
-  import GitHubSignInBrowserDock from '$lib/components/git/GitHubSignInBrowserDock.svelte'
-  import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
-  import { globalBrowser } from '$lib/stores/global-browser.svelte'
-  import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
-  import { loadBrowser } from '$lib/stores/browser-access.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
-  import { storeExtensionOffer } from '$lib/stores/browser-extension-store-offer'
-  import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
-  import { motionDuration } from '$lib/motion'
-  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
-  import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
+  import { onDestroy, onMount } from 'svelte'
   import {
     browserAppearanceAccent,
     browserAppearanceIconUrl,
     browserAppearanceIsCustomised
   } from './browser-group-appearance'
-  import BrowserTabSearchButton from './BrowserTabSearchButton.svelte'
+  import BrowserAddressSpotlight from './BrowserAddressSpotlight.svelte'
+  import BrowserContextSidebar from './BrowserContextSidebar.svelte'
   import BrowserNewTabButton from './BrowserNewTabButton.svelte'
+  import BrowserPeekWindow from './BrowserPeekWindow.svelte'
+  import BrowserTabSearchButton from './BrowserTabSearchButton.svelte'
   import BrowserTabsSidebar from './BrowserTabsSidebar.svelte'
   import BrowserWorkspace from './BrowserWorkspace.svelte'
-  import BrowserContextSidebar from './BrowserContextSidebar.svelte'
-  import BrowserAddressSpotlight from './BrowserAddressSpotlight.svelte'
-  import { publicAssetUrl } from '$lib/static-assets'
 
   /**
    * The global browser view: the top-level workspace the app's Browser entry
@@ -211,8 +212,10 @@
       ? [
           {
             id: 'note',
-            label: hasNote ? 'Note available' : 'Add note',
-            icon: StickyNote,
+            label: hasNote
+              ? `${feature('tab-note').name} available`
+              : `Add a ${feature('tab-note').name.toLowerCase()}`,
+            icon: feature('tab-note').icon,
             active: globalBrowser.noteSidebarShown,
             tone: hasNote ? 'warning' : undefined,
             onSelect: () => globalBrowser.toggleContextSidebar()
@@ -368,11 +371,12 @@
           <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">
             CIO Global Browser
           </h1>
-          <p class="mt-1 text-[0.8125rem] text-muted">
+          <p class="max-w-md mt-1 text-[0.8125rem] text-muted">
             This is not by no means a complete browser, but it is good enough to browse the web
-            while you work. It is an attempt to reduce cognitive overload from context switching.
-            Try it out gradually and see if it can replace your dev browser. This is chromium after
-            all.
+            while you work. <br />
+            It is an attempt to reduce cognitive overload from context switching. <br />
+            Try it out gradually and see if it can replace your dev browser. <br />
+            This is chromium after all.
           </p>
 
           <div class="mt-4 flex w-full max-w-sm flex-col gap-1"></div>
@@ -431,6 +435,8 @@
     onClose={() => globalBrowser.closeAddressSpotlight()}
   />
 {/if}
+
+<BrowserPeekWindow />
 
 <style>
   .context-rail {

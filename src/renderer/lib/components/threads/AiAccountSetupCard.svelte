@@ -75,6 +75,10 @@
   function chooseThinking(level: ThinkingLevel): void {
     onModelChange({ ...settings, thinkingLevel: level })
   }
+
+  function chooseRuntime(runtime: import('$shared/types').ModelRuntimeSettings): void {
+    onModelChange({ ...settings, ...runtime })
+  }
 </script>
 
 <div
@@ -148,7 +152,9 @@
                 label="Choose a model"
                 onSelect={chooseModel}
                 thinkingLevel={settings.thinkingLevel}
+                runtimeSettings={settings}
                 onSelectThinking={chooseThinking}
+                onSelectRuntime={chooseRuntime}
                 {onToggleFavorite}
                 {onReorderFavorite}
               />

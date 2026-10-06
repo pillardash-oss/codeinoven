@@ -407,7 +407,10 @@ authority for a repository root.
 - `ScopeRootResolver` in `src/main/workspaces/scope-root-resolver.ts` is the only
   authority converting a `{ projectId, scopeBucketId }` target into a filesystem
   root. Unhealthy managed scopes fail closed with a typed health category and
-  never fall back to the project directory.
+  never fall back to the project directory. A scope id that is no longer on the
+  board is removed rather than unhealthy: the board read reassigns the threads
+  that still point at it to the project-rooted Default scope, so no thread is
+  ever stranded behind a record that no longer exists.
 - `Thread.workingDirectory` is compatibility data, not authority. Creation,
   movement, forks, and worker generation re-derive roots from the scope at
   execution time.

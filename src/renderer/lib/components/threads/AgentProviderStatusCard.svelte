@@ -250,6 +250,11 @@
     onModelChange({ ...settings, thinkingLevel: level })
   }
 
+  function chooseRuntime(runtime: import('$shared/types').ModelRuntimeSettings): void {
+    if (!settings || !onModelChange) return
+    onModelChange({ ...settings, ...runtime })
+  }
+
   /**
    * The sign-in completion step. The account's own credential home is read back
    * before the card clears and the thread retries, so a login that never
@@ -452,7 +457,9 @@
             variant="action"
             onSelect={chooseModel}
             thinkingLevel={settings.thinkingLevel}
+            runtimeSettings={settings}
             onSelectThinking={chooseThinking}
+            onSelectRuntime={chooseRuntime}
             {onToggleFavorite}
             {onReorderFavorite}
           />

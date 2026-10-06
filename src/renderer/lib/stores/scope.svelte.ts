@@ -594,6 +594,13 @@ class ScopeState {
     this.threads.updateThread(updated)
   }
 
+  /** Fold a list of thread snapshots into the scope store in one pass. See
+   *  {@link ScopeThreads.mergeThreads} for why a page must not be folded row by
+   *  row. */
+  mergeThreads(threads: readonly Thread[]): void {
+    this.threads.mergeThreads(threads)
+  }
+
   removeThread(threadId: string): void {
     this.threads.removeThread(threadId)
   }
