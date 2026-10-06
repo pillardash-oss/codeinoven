@@ -540,10 +540,15 @@
         : 'text-foreground'
   )
 
-  /** Row padding and line rhythm. The three-line row breathes more than the
-   *  dense one/two-line rows so each line reads on its own. */
+  /** Row padding and line rhythm. The detailed row keeps its own lines tight
+   *  and spends its space between rows instead, so consecutive entries read as
+   *  separate cards rather than one tall block. */
   let rowLayoutClass = $derived(
-    detailed ? 'gap-1.5 px-2.5 py-2' : compact ? 'gap-1 px-2 py-1' : 'gap-1 px-2 py-1.5'
+    detailed
+      ? 'gap-1 px-2.5 py-1.5 mb-2'
+      : compact
+        ? 'gap-1 px-2 py-1 mb-1'
+        : 'gap-1 px-2 py-1.5 mb-1'
   )
 
   /** Human-readable stage label, only meaningful when isWorking is true. */
@@ -600,6 +605,27 @@
       hasTemporaryChat ||
       isRemote ||
       branch !== null
+  )
+
+  /** The detailed row's own project line, shown only when it has an icon or a
+   *  name to carry. A project's own thread list hides the name and passes no
+   *  icon, so that list skips the line and its rows stay two lines tall. */
+  let showProjectLine = $derived(
+    Boolean(projectIconUrl || projectIconGlyph || (projectName && !hideProjectName))
+  )
+
+  /** Whether the detailed row has anything for its footer line besides the
+   *  last-edited time. With nothing else to show, the time rides on the primary
+   *  line and the row stays a single line. */
+  let hasRowExtras = $derived(
+    harnessIds.length > 0 ||
+      (scopeBucket !== null && !hideScope) ||
+      branch !== null ||
+      isRemote ||
+      hasNote ||
+      hasTemporaryChat ||
+      authoredWorkKind !== null ||
+      indicator !== null
   )
 
   let scopeColor = $derived(
@@ -1020,7 +1046,7 @@
       : 'opacity-0'}"
   ></div>
   <button
-    class="relative mb-1 flex w-full flex-col text-left transition-colors {rowLayoutClass} {selected
+    class="relative flex w-full flex-col text-left transition-colors {rowLayoutClass} {selected
       ? 'bg-selected'
       : isBusyIndicator
         ? isRetryPaused
@@ -1193,45 +1219,29 @@
         </span>
       {/if}
     {:else}
-      <!-- Meta line: which project it belongs to, where it runs, and the branch -->
-      <span class="flex w-full min-w-0 items-center gap-2 text-[0.625rem] text-dimmed">
-        {#if projectIconUrl}
-          <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
-        {:else if projectIconGlyph}
-          {@const ContainerIcon = projectIconGlyph}
-          <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
-            <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
-          </span>
-        {/if}
-        {#if projectName && !hideProjectName}
-          <span class="min-w-0 truncate text-[0.6875rem] font-medium text-muted" title={projectName}
-            >{projectName}</span
-          >
-        {/if}
-        <span class="min-w-0 flex-1"></span>
-        <span
-          class="flex shrink-0 items-center"
-          title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
-        >
-          {#if isRemote}
-            {#if oven?.iconUrl}
-              <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
-            {:else}
-              <Server size={11} class="shrink-0" />
-            {/if}
-          {:else}
-            <Monitor size={11} class="shrink-0" />
+      {#if showProjectLine}
+        <!-- Project line: which project the thread belongs to. A project's own
+             thread list skips it, since the folder above already names it. -->
+        <span class="flex w-full min-w-0 items-center gap-1.5">
+          {#if projectIconUrl}
+            <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+          {:else if projectIconGlyph}
+            {@const ContainerIcon = projectIconGlyph}
+            <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
+              <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
+            </span>
+          {/if}
+          {#if projectName && !hideProjectName}
+            <span
+              class="min-w-0 truncate text-[0.6875rem] font-medium text-muted"
+              title={projectName}>{projectName}</span
+            >
           {/if}
         </span>
-        {#if branch}
-          <span class="flex min-w-0 items-center gap-1" title={`Branch: ${branch}`}>
-            <GitBranch size={10} class="shrink-0" aria-hidden="true" />
-            <span class="truncate">{branchLabel}</span>
-          </span>
-        {/if}
-      </span>
+      {/if}
 
-      <!-- Primary line: status, title, current provider -->
+      <!-- Primary line: status, title, current provider, and the time when there
+           is no footer line to carry it -->
       <span class="flex w-full min-w-0 items-center gap-2">
         {@render threadStatusSlot(true)}
         <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">{displayTitle}</span>
@@ -1250,55 +1260,89 @@
             />
           </span>
         {/if}
+        {#if !hasRowExtras}
+          <span
+            class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-dimmed transition-opacity duration-150 {hovered
+              ? 'opacity-0'
+              : 'opacity-100'}"
+            aria-hidden={hovered}
+            title={`Edited ${formatDateTime(thread.lastActivity)}`}
+            >{formatCompactAge(thread.lastActivity)}</span
+          >
+        {/if}
         {#if selected}
           <Check size={13} class="shrink-0 text-primary" />
         {/if}
       </span>
 
-      <!-- Footer line: harnesses (left), scope (centered), the row's markers and
-           its last-edited time (right) -->
-      <span
-        class="grid w-full min-w-0 items-center gap-3 {harnessIds.length > 0
-          ? 'grid-cols-[minmax(3.2rem,1fr)_auto_minmax(0,1fr)]'
-          : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'}"
-      >
-        {#if harnessIds.length > 0}
-          <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
-            {#each harnessIds.slice(0, MAX_HARNESS_ICONS) as harnessId (harnessId)}
-              <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
-            {/each}
-            {#if harnessIds.length > MAX_HARNESS_ICONS}
-              <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
-                >+{harnessIds.length - MAX_HARNESS_ICONS}</span
-              >
-            {/if}
-          </span>
-        {/if}
-        {#if !hideScope}
-          {@render scopeChip('col-start-2 max-w-[8rem] pb-0.5')}
-        {/if}
-        <span class="col-start-3 flex min-w-0 items-center justify-end gap-2 overflow-hidden">
-          {#if hasNote}
-            {@const ThreadNoteIcon = feature('thread-note').icon}
-            <span
-              class="flex shrink-0 items-center text-warning"
-              title={`${feature('thread-note').name} attached`}
-            >
-              <ThreadNoteIcon size={11} />
+      {#if hasRowExtras}
+        <!-- Footer line: harnesses (left), scope (centered), then where it runs,
+             the branch, the row's markers and its last-edited time (right) -->
+        <span
+          class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3"
+        >
+          {#if harnessIds.length > 0}
+            <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
+              {#each harnessIds.slice(0, MAX_HARNESS_ICONS) as harnessId (harnessId)}
+                <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+              {/each}
+              {#if harnessIds.length > MAX_HARNESS_ICONS}
+                <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
+                  >+{harnessIds.length - MAX_HARNESS_ICONS}</span
+                >
+              {/if}
             </span>
           {/if}
-          {@render temporaryChatMarker()}
-          {@render authoredWorkMarker(authoredWorkKind)}
-          {#if indicator}
-            <ThreadIndicatorSlot {indicator} />
+          {#if !hideScope}
+            {@render scopeChip('col-start-2 max-w-[8rem]')}
           {/if}
-          <span
-            class="whitespace-nowrap tabular-nums text-dimmed"
-            title={`Edited ${formatDateTime(thread.lastActivity)}`}
-            >{formatCompactAge(thread.lastActivity)}</span
-          >
+          <span class="col-start-3 flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
+            <span
+              class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
+              title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
+              aria-label={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
+            >
+              {#if isRemote}
+                {#if oven?.iconUrl}
+                  <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
+                {:else}
+                  <Server size={11} class="shrink-0" />
+                {/if}
+              {:else}
+                <Monitor size={10} class="shrink-0" aria-hidden="true" />
+              {/if}
+            </span>
+            {#if branch}
+              <span
+                class="flex min-w-0 items-center gap-0.5 text-[0.625rem] text-muted"
+                title={`Branch: ${branch}`}
+              >
+                <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+                <span class="truncate">{branchLabel}</span>
+              </span>
+            {/if}
+            {#if hasNote}
+              {@const ThreadNoteIcon = feature('thread-note').icon}
+              <span
+                class="flex shrink-0 items-center text-warning"
+                title={`${feature('thread-note').name} attached`}
+              >
+                <ThreadNoteIcon size={11} />
+              </span>
+            {/if}
+            {@render temporaryChatMarker()}
+            {@render authoredWorkMarker(authoredWorkKind)}
+            {#if indicator}
+              <ThreadIndicatorSlot {indicator} />
+            {/if}
+            <span
+              class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-dimmed"
+              title={`Edited ${formatDateTime(thread.lastActivity)}`}
+              >{formatCompactAge(thread.lastActivity)}</span
+            >
+          </span>
         </span>
-      </span>
+      {/if}
     {/if}
 
     <!-- Ellipsis   far right, vertically centered across the whole row, shown on hover -->
