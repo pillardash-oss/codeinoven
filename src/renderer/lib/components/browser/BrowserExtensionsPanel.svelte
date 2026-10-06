@@ -37,6 +37,7 @@
   import {
     DEFAULT_BOX_ID,
     DEFAULT_BOX_NAME,
+    boxIdForJar,
     defaultBrowserBox,
     extensionJarForBox,
     jarIdForBox
@@ -278,13 +279,28 @@
    *  box. A jar the extension names but that no longer exists is kept out of this
    *  list, which is why updating the boxes replaces the whole list rather than
    *  merging into it. */
-  function jarChoices(): { id: string; name: string }[] {
-    return [
+  function jarChoices(): {
+    id: string
+    name: string
+    accent: string
+    iconUrl: string | null
+  }[] {
+    const choices: { id: string; name: string }[] = [
       { id: '', name: globalBrowser.boxById(DEFAULT_BOX_ID)?.name ?? DEFAULT_BOX_NAME },
       ...globalBrowser.boxes
         .filter((box) => box.id !== DEFAULT_BOX_ID)
         .map((box) => ({ id: box.id, name: box.name }))
     ]
+    // The mark and accent each row wears are the box's own, resolved the way the
+    // boxes panel resolves them, so a list of boxes never reads as bare names.
+    return choices.map((choice) => {
+      const box = globalBrowser.boxById(boxIdForJar(choice.id))
+      return {
+        ...choice,
+        accent: box ? browserAppearanceAccent(box) : '',
+        iconUrl: box ? browserAppearanceIconUrl(box, globalBrowser.boxIconUrl(box.id)) : null
+      }
+    })
   }
 
   /** Whether an extension is loaded into one jar. */
@@ -673,7 +689,23 @@
                 <div class="space-y-0.5 rounded-lg border p-1">
                   {#each jarChoices() as jar (jar.id)}
                     <div class="flex items-center justify-between gap-3 px-2 py-1">
-                      <p class="truncate text-[0.6875rem] text-foreground">{jar.name}</p>
+                      <span class="flex min-w-0 items-center gap-2">
+                        {#if jar.iconUrl}
+                          <img
+                            src={jar.iconUrl}
+                            alt=""
+                            class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+                          />
+                        {:else}
+                          <span
+                            class="h-2 w-2 shrink-0 rounded-full"
+                            style:background-color={jar.accent}
+                          ></span>
+                        {/if}
+                        <span class="truncate text-[0.6875rem]" style="color: {jar.accent}">
+                          {jar.name}
+                        </span>
+                      </span>
                       <Switch
                         checked={runsInBox(extension, jar.id)}
                         disabled={updating}

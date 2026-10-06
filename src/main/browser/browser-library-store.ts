@@ -103,7 +103,7 @@ export function createBrowserBookmarkStore(): BrowserLibraryFile<BrowserBookmark
     relativePath: BROWSER_BOOKMARKS_STATE_RELATIVE_PATH,
     parse: parseBrowserBookmarksSnapshot,
     payload: browserBookmarksSnapshotPayload,
-    empty: { bookmarks: [] },
+    empty: { bookmarks: [], groups: [] },
     label: 'Browser bookmarks'
   })
 }

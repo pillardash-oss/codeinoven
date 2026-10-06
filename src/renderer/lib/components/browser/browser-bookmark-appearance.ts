@@ -1,6 +1,10 @@
 import { getProjectIcon } from '$lib/project-icons'
-import { browserAppearanceHasIcon } from './browser-group-appearance'
-import type { BrowserBookmark } from '$shared/browser/browser-library'
+import {
+  browserAppearanceAccent,
+  browserAppearanceHasIcon,
+  browserAppearanceIconUrl
+} from './browser-group-appearance'
+import type { BrowserBookmark, BrowserBookmarkGroup } from '$shared/browser/browser-library'
 
 /**
  * The icon the user gave a saved page, or null while it wears the page's own
@@ -30,4 +34,27 @@ export function browserBookmarkIconUrl(
     },
     storedImageUrl ?? undefined
   )
+}
+
+/**
+ * A saved-page group's accent: its own hex colour, or a deterministic one so a
+ * colourless group still has a stable identity. Delegates to the shared browser
+ * resolver so a bookmark group, a tab group and a box can never drift into
+ * different palettes.
+ */
+export function browserBookmarkGroupAccent(group: BrowserBookmarkGroup): string {
+  return browserAppearanceAccent(group)
+}
+
+/**
+ * A saved-page group's icon as an image data URL, or null while it wears only a
+ * colour. Drawn by the very resolver projects, routines, tab groups and boxes
+ * use, so a picked image, a pasted SVG and a library icon all render through one
+ * code path.
+ */
+export function browserBookmarkGroupIconUrl(
+  group: BrowserBookmarkGroup,
+  storedImageUrl: string | null
+): string | null {
+  return browserAppearanceIconUrl(group, storedImageUrl)
 }
