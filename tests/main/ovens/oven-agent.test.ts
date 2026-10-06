@@ -236,7 +236,11 @@ describe('oven agent runtime programs', () => {
       encoding: 'utf8',
       env: {
         ...process.env,
+        // The program reads the identity from `os.homedir()`, which resolves
+        // USERPROFILE on Windows and HOME elsewhere, so pin both to the
+        // scratch home instead of the runner's real profile.
         HOME: home,
+        USERPROFILE: home,
         CIO_AGENT_IDENTITY: '1',
         CIO_AGENT_PROTOCOL: '1',
         CIO_AGENT_REVISION: REVISION,
