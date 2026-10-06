@@ -34,20 +34,49 @@ interface InstanceEntry {
   pid: number
   startedAt: number
   lastHeartbeat: number
+  /**
+   * Stable identity of the app this process belongs to, so an explicit choice
+   * of main instance survives that process restarting. Two launches of the same
+   * app share it; a packaged app and a development launch do not.
+   */
+  instanceKey?: string
   /** Latest durable-state invalidation emitted by this process. */
   checkpointEvent?: CrossInstanceCheckpointEvent
 }
 
 /**
- * An explicit, user-requested ownership transfer. The election picks the
- * longest-running live process, but a user who opened a fresh instance after a
- * crash (or to escape a stale window) can ask the schedule to move there. The
- * override names the new owner; the election resumes the moment that pid is no
- * longer live, so a transfer to a process that later dies cannot strand work.
+ * The durable designation of the instance that owns shared scheduled work.
+ *
+ * `instanceKey` names the app the user chose, so the choice is remembered when
+ * that process restarts: a later launch of the same app reclaims the schedule
+ * instead of losing it to whichever process happens to have started first.
+ * `pid` only disambiguates between several live launches of that same app; it
+ * is not what makes the choice durable. A record written before this field
+ * existed carries no key, and is honoured as a plain live-pid preference so an
+ * upgrade never ignores an existing transfer.
  */
 interface OwnerOverride {
   pid: number
+  instanceKey?: string
   assignedAt: number
+}
+
+/**
+ * Stable identity of this installation, used to make an explicit main-instance
+ * choice outlive the process that made it. The executable path is the same
+ * across restarts and upgrades of one app and differs between a packaged app
+ * and a development launch, so the choice is remembered by the app rather than
+ * by a process id that a restart would invalidate.
+ */
+function instanceIdentityKey(): string {
+  return process.execPath || 'unknown'
+}
+
+/** The live entry that has been running longest; ties broken by lowest pid. */
+function oldestEntry(entries: InstanceEntry[]): InstanceEntry | undefined {
+  return [...entries].sort(
+    (left, right) => left.startedAt - right.startedAt || left.pid - right.pid
+  )[0]
 }
 
 /**
@@ -80,7 +109,12 @@ export class InstanceRegistry {
   constructor() {
     this.dir = join(getConfigRoot(), 'instances')
     this.ownerFilePath = join(this.dir, 'owner.json')
-    this.selfEntry = { pid: process.pid, startedAt: Date.now(), lastHeartbeat: Date.now() }
+    this.selfEntry = {
+      pid: process.pid,
+      startedAt: Date.now(),
+      lastHeartbeat: Date.now(),
+      instanceKey: instanceIdentityKey()
+    }
   }
 
   /** Register this process and start heartbeating so others can see it. */
@@ -178,14 +212,17 @@ export class InstanceRegistry {
   }
 
   /**
-   * Elect the longest-running live process as the incumbent owner of work that
-   * must happen exactly once for the whole config root, whoever started it   a
-   * scheduled auto-resume today.
+   * Whether this process owns the work that must happen exactly once for the
+   * whole config root   a scheduled auto-resume today.
    *
-   * The election is deterministic: every instance reads the same live entries
-   * and sorts them the same way, so two windows never both claim the slot. It
-   * fails open, so an unreadable registry (or a process whose own entry could
-   * not be written) can never silently stop that work.
+   * Ownership is explicit and durable first: a designated main instance owns the
+   * schedule whenever it is running, even if another process started earlier, and
+   * it reclaims the schedule after it restarts. Only when no designated instance
+   * is live does the deterministic election apply, so scheduled work is never
+   * stranded. The election is computed the same way by every instance, so two
+   * windows never both claim the slot. It fails open, so an unreadable registry
+   * (or a process whose own entry could not be written) can never silently stop
+   * that work.
    */
   isIncumbentInstance(): boolean {
     try {
@@ -217,20 +254,30 @@ export class InstanceRegistry {
   }
 
   /**
-   * Hand ownership of shared scheduled work to a live process, overriding the
-   * longest-running election. The user asks for this when the elected owner is
-   * a stale window, or a crashed process still in the registry, and they want
-   * the schedule to move to the instance they are actually working in.
+   * Make a live process the explicit main instance that owns shared scheduled
+   * work. The user asks for this when the elected owner is a stale window, or a
+   * crashed process still in the registry, and they want the schedule to run in
+   * the instance they are actually working in.
    *
-   * The override is honoured only while its target is live and registered, so a
-   * transfer to a process that later dies falls back to the election instead of
-   * stranding scheduling on a dead pid.
+   * The choice is durable: it records the target's app identity, not only its
+   * pid, so a later launch of the same app reclaims the schedule after a
+   * restart. It is honoured whenever the designated app is running; while it is
+   * not, the election resumes instead, so sharing the schedule is never stranded
+   * on a dead process.
    */
   transferOwnership(pid: number = this.selfEntry.pid): boolean {
     if (!Number.isInteger(pid) || pid <= 0) return false
     try {
       mkdirSync(this.dir, { recursive: true })
-      const payload: OwnerOverride = { pid, assignedAt: Date.now() }
+      const instanceKey =
+        pid === this.selfEntry.pid
+          ? this.selfEntry.instanceKey
+          : this.liveEntries().find((entry) => entry.pid === pid)?.instanceKey
+      const payload: OwnerOverride = {
+        pid,
+        ...(instanceKey ? { instanceKey } : {}),
+        assignedAt: Date.now()
+      }
       writeFileSync(this.ownerFilePath, JSON.stringify(payload), 'utf8')
       this.maybeNotifyOwnershipChanged()
       return true
@@ -346,22 +393,35 @@ export class InstanceRegistry {
   }
 
   /**
-   * The process that owns scheduled work: an explicit transfer whose target is
-   * still live and registered wins, otherwise the longest-running election.
-   * Every instance reads the same override and the same live entries, so they
-   * cannot disagree about who owns the schedule.
+   * The process that owns scheduled work: the designated main instance when it
+   * is running, otherwise the longest-running election. Every instance reads the
+   * same designation and the same live entries, so they cannot disagree about
+   * who owns the schedule.
    */
   private effectiveOwnerPid(): number | null {
-    const override = this.readOwnerOverride()
-    if (override) {
-      if (this.isLiveRegistered(override.pid)) return override.pid
-      // The transfer target is gone; drop the override so the election resumes.
-      this.removeStaleOwnerOverride()
-    }
     const entries = this.liveEntries()
-    if (entries.length === 0) return null
-    entries.sort((left, right) => left.startedAt - right.startedAt || left.pid - right.pid)
-    return entries[0]?.pid ?? null
+    const designation = this.readOwnerOverride()
+    if (designation) {
+      if (designation.instanceKey) {
+        const group = entries.filter((entry) => entry.instanceKey === designation.instanceKey)
+        if (group.length > 0) {
+          // The chosen app is running: its preferred process wins, else the
+          // longest-running of its launches, so a restart still reclaims it.
+          const preferred = group.find((entry) => entry.pid === designation.pid)
+          return (preferred ?? oldestEntry(group))?.pid ?? null
+        }
+        // The chosen app is not running. Keep the durable choice so it reclaims
+        // the schedule when it returns, and elect another instance meanwhile
+        // so scheduled work is never stranded.
+      } else if (this.isLiveRegistered(designation.pid)) {
+        // A designation written before the durable key existed: honour its pid
+        // while it lives, exactly as it did then.
+        return designation.pid
+      } else {
+        this.removeStaleOwnerOverride()
+      }
+    }
+    return oldestEntry(entries)?.pid ?? null
   }
 
   private isLiveRegistered(pid: number): boolean {
@@ -382,7 +442,13 @@ export class InstanceRegistry {
       const raw = readFileSync(this.ownerFilePath, 'utf8')
       const value = JSON.parse(raw) as Partial<OwnerOverride>
       if (typeof value.pid !== 'number' || typeof value.assignedAt !== 'number') return null
-      return { pid: value.pid, assignedAt: value.assignedAt }
+      return {
+        pid: value.pid,
+        ...(typeof value.instanceKey === 'string' && value.instanceKey
+          ? { instanceKey: value.instanceKey }
+          : {}),
+        assignedAt: value.assignedAt
+      }
     } catch {
       return null
     }

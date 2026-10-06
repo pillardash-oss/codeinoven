@@ -149,6 +149,15 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **The main instance is now an explicit, remembered choice.** Picking **Make this the main
+  instance** in a secondary window used to be honored only while that exact process lived:
+  once it restarted, ownership fell back to the longest-running live process, so a leftover
+  or development launch could take the schedule without the user asking. The transfer now
+  records the chosen app's stable identity (its executable path) alongside the pid, so a
+  later launch of that same app reclaims the schedule across restarts. While the chosen app
+  is not running the election still applies, so scheduled work is never stranded, and the
+  designated app takes the schedule back when it returns.
+
 - **A waiting update is now something you can act on.** The rail's update control used to
   go dead the moment a downloaded update hit the install gate, showing "Update waiting for
   N active threads to finish" with no way to respond, so a thread the app still believed

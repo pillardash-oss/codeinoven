@@ -180,10 +180,13 @@ the app's clock for Assistant View.
   contract into its system prompt exactly as it does for the task. The tick also
   runs with no window at all in background mode (see **Background mode**), so "the
   app is open" now means "the backend is running", not "a window is visible".
-- **Firing happens exactly once, on the elected owner.** Every scheduler tick is
+- **Firing happens exactly once, on the main instance.** Every scheduler tick is
   gated on `instanceRegistry.isIncumbentInstance()`, so a second CodeInOven
   process on the same config root schedules nothing and can never double-fire a
-  slot.
+  slot. The main instance is the one the user designated (see **Background
+  mode**), or, with no live designation, the longest-running live process.
+  Build type never decides it: a packaged app and a development launch are equal
+  candidates until one is designated.
 - **A run is named for what it runs.** The run's visible prompt is built by
   `routineRunPrompt` (`src/lib/routine-run.ts`). A user's own task is named by
   its title, but a routine's Getting started thread is its authoring host, not
@@ -249,23 +252,30 @@ Cmd+Q so a routine still fires on time. It is on by default
   SQLite, the 30s tick, the menu bar icon, and window-bound services are torn
   down before the renderer dies (`BackgroundLifecycleService.park`). A login
   launch in background mode boots with no splash and no window at all.
-- **One backend, one owner.** Every process attaches to the same config root, and
-  the longest-running live process owns the scheduled work
+- **One backend, one main instance.** Every process attaches to the same config
+  root, and exactly one of them owns the scheduled work
   (`instanceRegistry.isIncumbentInstance()`); the routine, retry, and heartbeat
-  schedulers are all gated on it. A secondary instance keeps a fully usable
-  window, shows a standing **Running in another instance** status bar at the
-  bottom of the app, and quits on close rather than parking.
-- **Ownership can be transferred.** The secondary's bottom bar offers **Make this
-  the main instance**, which writes an owner override
-  (`instances/owner.json`) naming this pid (`instanceRegistry.transferOwnership`).
-  The previous owner steps down through the same ownership notification: it
-  destroys its menu bar icon, its schedulers stop firing, and its own bar now
-  reads **Running in another instance**. The new owner creates the icon and runs
-  the missed-slot catch-up. This is the escape hatch when the elected owner is a
-  stale window, or a crashed process still in the registry, and the user wants
-  the schedule in the instance they are actually working in. The override is
-  honoured only while its target is live; when that process dies the election
-  resumes on the next heartbeat, so a transfer can never strand scheduling.
+  schedulers are all gated on it. The main instance is an explicit, durable
+  choice: **Make this the main instance** designates an app, and that app owns
+  the schedule whenever it is running, even if another process started earlier,
+  and reclaims it after it restarts. With no designated app running, the
+  longest-running live process is elected instead, so scheduling is never
+  stranded. A secondary instance keeps a fully usable window, shows a standing
+  **Running in another instance** status bar at the bottom of the app, and quits
+  on close rather than parking.
+- **Ownership can be transferred, and the choice is remembered.** The
+  secondary's bottom bar offers **Make this the main instance**, which writes the
+  designation to `instances/owner.json` (`instanceRegistry.transferOwnership`).
+  The record names the chosen app's stable identity (`instanceKey`, its
+  executable path) alongside the pid, so a later launch of that same app reclaims
+  the schedule without the user repeating the choice; the pid only picks between
+  simultaneous launches of that app. The previous owner steps down through the
+  same ownership notification: it destroys its menu bar icon, its schedulers stop
+  firing, and its own bar now reads **Running in another instance**. The new
+  owner creates the icon and runs the missed-slot catch-up. While the designated
+  app is not running, the election resumes on the next heartbeat, so a transfer
+  can never strand scheduling; when the designated app returns it takes the
+  schedule back.
 - **A probe launch stays out.** Setting `CODEINOVEN_NO_BACKGROUND` on an
   unpackaged launch (normally alongside a scratch `CODEINOVEN_CONFIG_ROOT`)
   skips background registration entirely: no menu bar icon, no login item, no
