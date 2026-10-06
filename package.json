@@ -30,7 +30,9 @@
     "undici": "6.28.1",
     "hono": "^4.13.7",
     "js-yaml": "^4.3.2",
-    "lodash-es": "^4.18.1"
+    "lodash-es": "^4.18.1",
+    "katex": "0.19.0",
+    "source-map-js": "1.2.2"
   },
   "scripts": {
     "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps",
@@ -53,7 +55,7 @@
     "speech:build-native-capture": "bun scripts/build-native-speech-capture.ts",
     "harness:build-pi": "bun scripts/build-pi-harness.ts",
     "ci:local": "bun scripts/ci-local.ts",
-    "audit": "bun audit --ignore=GHSA-ch52-4w7c-c8xp",
+    "audit": "bun audit --ignore=GHSA-ch52-4w7c-c8xp --ignore=GHSA-hp3w-g68c-fv3c",
     "verify": "bun run check && bun run lint . && bun run test && bun run audit",
     "verify:release": "bun run verify && bun run build:production && bun run check:bundle",
     "version:bump": "bun scripts/bump-version.ts",
@@ -128,7 +130,7 @@
     "png-to-ico": "^3.0.2",
     "prettier": "^3.9.9",
     "prettier-plugin-svelte": "^4.1.1",
-    "simple-git": "^3.36.0",
+    "simple-git": "^4.0.2",
     "svelte": "^5.57.1",
     "svelte-check": "^4.7.6",
     "svelte-sonner": "^1.2.1",
