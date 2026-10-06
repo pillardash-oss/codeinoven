@@ -11,7 +11,7 @@ import type {
   PendingAgentQuestionRequest
 } from '../../lib/types'
 import { LOCAL_OVEN_ID } from '../../lib/ovens'
-import type { OvenAppearance } from '../../lib/ovens'
+import type { OvenAppearance, OvenFile } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import type { ProjectManager } from '../../lib/engines/project-manager'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -66,6 +66,13 @@ interface Live {
   pending: Map<string, { input: Record<string, unknown>; request: PermissionRequest }>
   questions: Map<string, PendingAgentQuestionRequest>
   closedInput: boolean
+  /**
+   * Milliseconds added to a timestamp the harness stamped with the clock of
+   * the host it runs on, measured once per run by `alignHarnessClock`.
+   */
+  clockOffset?: number
+  /** Latest timestamp the run has placed on this machine's clock. */
+  clockCursor?: number
 }
 
 /** Remote turns bypass desktop repository work. Only transcript metadata stays here. */
@@ -159,26 +166,56 @@ export class OvenChat {
   ): Promise<AgentMessage> {
     if (this.starting.has(thread.id)) throw new Error('A turn is already starting on this Oven.')
     this.starting.add(thread.id)
+    let sessionId: string | undefined
     try {
       await this.assertNotRunning(thread)
       const ovenId = settings.ovenId!
       const ovenLabel = await this.nameFor(ovenId)
       const ovenAppearance = await this.appearanceFor(ovenId)
-      const { root } = await resolveOvenThreadRoot(
-        this.service,
-        { ...thread, settings },
-        this.projects
-      )
-      await this.threads.updateSettings(thread.projectId, thread.id, {
-        ...settings,
-        ovenPath: root
-      })
-      await this.threads.setStatus(thread.projectId, thread.id, 'executing')
+      const startedAt = Date.now()
       const account = await this.accounts.resolveForProvider(
         settings.harnessId,
         settings.providerId,
         settings.accountId
       )
+      sessionId = thread.sessionId?.startsWith('oven-') ? thread.sessionId : `oven-${randomUUID()}`
+      const turnSessionId = sessionId
+      // Bind the session before preparation: the renderer routes the notes below
+      // to this thread through it, so the working trace can say what the Oven is
+      // doing while the checkout is still being prepared.
+      await this.threads.setSessionId(
+        thread.projectId,
+        thread.id,
+        turnSessionId,
+        settings.harnessId,
+        account.id
+      )
+      await this.threads.setStatus(thread.projectId, thread.id, 'executing')
+      this.publishNote(turnSessionId, startedAt, `Preparing the project on ${ovenLabel}…`)
+      const prepared = await resolveOvenThreadRoot(
+        this.service,
+        { ...thread, settings },
+        this.projects,
+        (step) =>
+          this.publishNote(
+            turnSessionId,
+            startedAt,
+            step === 'clone'
+              ? `Cloning the repository onto ${ovenLabel}…`
+              : `Opening the checkout on ${ovenLabel}…`
+          )
+      )
+      const { root, dataRoot, sessionsRoot } = prepared
+      if (prepared.branch && prepared.branch !== thread.branch)
+        await this.threads.setBranch(thread.projectId, thread.id, prepared.branch)
+      await this.threads.updateSettings(thread.projectId, thread.id, {
+        ...settings,
+        ovenPath: root
+      })
+      if (settings.harnessId === 'pi') {
+        await this.service.workspace(ovenId, { operation: 'ensure', root: sessionsRoot })
+        await this.adoptLegacyPiSessions(ovenId, dataRoot, root)
+      }
       const environment = await syncOvenAccount(this.service, this.accounts, ovenId, account)
       if (settings.harnessId === 'cline') environment.CLINE_SESSION_BACKEND_MODE = 'local'
       const previous = await this.storage.read<Binding>(this.path(thread))
@@ -213,9 +250,6 @@ export class OvenChat {
           ? (previous.session.nativeSessionId ??
             (settings.harnessId === 'pi' ? previous.session.id : undefined))
           : undefined
-      const sessionId = thread.sessionId?.startsWith('oven-')
-        ? thread.sessionId
-        : `oven-${randomUUID()}`
       const runId = randomUUID()
       const session: PersistentCliSession = {
         id: sessionId,
@@ -249,7 +283,7 @@ export class OvenChat {
       ]
         .filter(Boolean)
         .join('\n\n')
-      const invocation = this.command(settings, session, prompt, paths, account)
+      const invocation = this.command(settings, session, prompt, paths, account, sessionsRoot)
       const binding: Binding = {
         projectId: thread.projectId,
         threadId: thread.id,
@@ -286,9 +320,14 @@ export class OvenChat {
       this.schedule(live, 0)
       return user
     } catch (error) {
-      await this.threads.setStatus(thread.projectId, thread.id, 'failed', {
-        error: error instanceof Error ? error.message : 'Could not start the Oven turn.'
-      })
+      const message = error instanceof Error ? error.message : 'Could not start the Oven turn.'
+      // A turn that never started must still clear its working state, or the
+      // trace keeps a spinner for a run that does not exist.
+      if (sessionId) {
+        this.publish({ type: 'session.error', sessionId, error: message })
+        this.publish({ type: 'session.idle', sessionId })
+      }
+      await this.threads.setStatus(thread.projectId, thread.id, 'failed', { error: message })
       throw error
     } finally {
       this.starting.delete(thread.id)
@@ -321,7 +360,8 @@ export class OvenChat {
     session: PersistentCliSession,
     prompt: string,
     paths: string[],
-    account: HarnessAccount
+    account: HarnessAccount,
+    sessionsRoot: string
   ): { command: string; args: string[]; input?: string; closeInput?: boolean } {
     const model = settings.modelId
     const full = settings.permissionLevel === 'full_access'
@@ -378,7 +418,7 @@ export class OvenChat {
             'json',
             '--print',
             '--session',
-            `${settings.ovenPath || session.projectPathHash}/.cio-pi-${session.id}.jsonl`,
+            `${sessionsRoot}/${session.id}.jsonl`,
             ...(settings.providerId ? ['--provider', settings.providerId] : []),
             ...(model ? ['--model', model] : []),
             '--thinking',
@@ -437,6 +477,65 @@ export class OvenChat {
       default:
         throw new Error(
           `The Oven cannot run ${account.harnessId}. Choose an installed CLI harness.`
+        )
+    }
+  }
+
+  /**
+   * One preparation note for a running turn.
+   *
+   * Statuses with the same session id replace each other, so the note is what
+   * the working trace shows until the harness itself starts streaming.
+   */
+  private publishNote(sessionId: string, startedAt: number, note: string): void {
+    this.publish({
+      type: 'session.status',
+      sessionId,
+      status: { state: 'working', startedAt, note }
+    })
+  }
+
+  /**
+   * Adopt pi session transcripts older releases wrote into the checkout root.
+   *
+   * `--session <checkout>/.cio-pi-<id>.jsonl` used to place an app-owned
+   * transcript inside the user's repository. The file is moved (never deleted)
+   * into the Oven's session directory so the session it names keeps resuming
+   * and the checkout stops showing app state as untracked files. A move that
+   * cannot complete leaves the legacy file exactly where it was.
+   */
+  private async adoptLegacyPiSessions(
+    ovenId: string,
+    dataRoot: string,
+    root: string
+  ): Promise<void> {
+    const prefix = root === dataRoot ? '' : `${dataRoot}/`
+    if (prefix && !root.startsWith(prefix)) return
+    const relativeRoot = prefix ? root.slice(prefix.length) : ''
+    let files: OvenFile[]
+    try {
+      files =
+        (await this.service.workspace(ovenId, { operation: 'list', root, path: '.' })).files ?? []
+    } catch {
+      return
+    }
+    for (const file of files) {
+      const match = /^\.cio-pi-(.+)\.jsonl$/u.exec(file.path)
+      if (!match || file.kind !== 'file') continue
+      const path = relativeRoot ? `${relativeRoot}/${file.path}` : file.path
+      await this.service
+        .workspace(ovenId, {
+          operation: 'move',
+          root: dataRoot,
+          path,
+          to: `sessions/${match[1]}.jsonl`
+        })
+        .catch((error: unknown) =>
+          Logger.dev('A legacy Oven pi session was left in the checkout', {
+            ovenId,
+            path,
+            error: error instanceof Error ? error.message : String(error)
+          })
         )
     }
   }
@@ -627,7 +726,8 @@ export class OvenChat {
     }
     if (!mapped) return
     if (mapped.nativeSessionId) binding.session.nativeSessionId = mapped.nativeSessionId
-    if (mapped.messages)
+    if (mapped.messages) {
+      this.alignHarnessClock(live, mapped.messages)
       for (const message of mapped.messages) {
         message.ovenId ??= binding.ovenId
         message.ovenLabel ??= binding.ovenLabel
@@ -635,13 +735,13 @@ export class OvenChat {
         message.accountId ??= binding.settings.accountId
         message.thinkingLevel ??= binding.settings.thinkingLevel
       }
-    if (mapped.messages)
       mergeSessionMessages(
         binding.session,
         mapped.messages,
         binding.settings,
         binding.settings.harnessId
       )
+    }
     for (const event of mapped.events ?? []) {
       foldEventIntoMessages(binding.session.messages, event)
       if (event.type === 'permission.asked') {
@@ -675,6 +775,49 @@ export class OvenChat {
     ) {
       live.closedInput = true
       await this.service.write(binding.ovenId, binding.runId, '', true)
+    }
+  }
+
+  /**
+   * Land harness timestamps on this machine's clock.
+   *
+   * A harness stamps its records with the clock of the host it runs on, and an
+   * Oven is a different host: a virtual machine that resumes from suspend keeps
+   * a clock that is hours behind. Adopted verbatim, a record stamped that way
+   * sorts before the prompt that triggered it and reports a duration as long as
+   * the skew.
+   *
+   * The window of trustworthy timestamps runs from the local moment the run
+   * started, never earlier than the last message the desktop already held, up to
+   * the moment the record arrived: nothing the run produces can predate the
+   * prompt that triggered it or postdate our receiving it. A timestamp inside
+   * the window is a locally stamped record, or a clock that caught up mid-turn,
+   * and is left alone.
+   *
+   * The first timestamp outside the window fixes one offset for the whole run,
+   * so the spacing the harness reported between its own records survives the
+   * shift. That offset lands the record one millisecond after everything the
+   * run has placed so far, which holds the run's own order together even if its
+   * clock freezes or rewinds mid-turn.
+   */
+  private alignHarnessClock(live: Live, messages: AgentMessage[]): void {
+    const binding = live.binding
+    const previous = binding.before.at(-1)?.createdAt ?? 0
+    const startedAt = Math.max(binding.createdAt, previous + 1)
+    const received = Date.now()
+    const align = (at: number): number => {
+      let aligned = at
+      if (at < startedAt || at > received) {
+        const anchor = Math.max(startedAt, (live.clockCursor ?? 0) + 1)
+        live.clockOffset ??= anchor - at
+        aligned = at + live.clockOffset
+      }
+      live.clockCursor = Math.max(live.clockCursor ?? 0, aligned)
+      return aligned
+    }
+    for (const message of messages) {
+      message.createdAt = align(message.createdAt)
+      if (message.completedAt !== undefined) message.completedAt = align(message.completedAt)
     }
   }
 
