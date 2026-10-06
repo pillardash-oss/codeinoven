@@ -1,58 +1,59 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
-  import type { Attachment } from 'svelte/attachments'
-  import {
-    Loader2,
-    Plus,
-    CheckCircle2,
-    AlertCircle,
-    Boxes,
-    Circle,
-    Clock,
-    Cpu,
-    MemoryStick,
-    HardDrive,
-    Monitor,
-    Pencil,
-    Plug,
-    RefreshCw,
-    Star,
-    Terminal,
-    Trash2
-  } from '@lucide/svelte'
-  import { toast } from 'svelte-sonner'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { randomOvenAppearance } from '$lib/oven-appearance'
+  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { flashElement } from '$lib/reveal-flash'
+  import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
+  import { ovens } from '$lib/stores/ovens.svelte'
+  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import { formatDateTime } from '$shared/date-time-format'
+  import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
   import {
     LOCAL_OVEN_ID,
     ovenHarnessIdForCommand,
     parseOvenAddress,
     type Oven,
-    type OvenIcon,
-    type OvenState,
-    type OvenProbe,
-    type OvenHarnessInventoryItem,
     type OvenConnectionStatus,
+    type OvenHarnessInventoryItem,
+    type OvenIcon,
+    type OvenProbe,
+    type OvenState,
     type SaveOvenInput
   } from '$shared/ovens'
-  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import type { CustomIcon } from '$shared/types'
+  import {
+    AlertCircle,
+    Boxes,
+    Cable,
+    CheckCircle2,
+    Circle,
+    Clock,
+    Cpu,
+    HardDrive,
+    Loader2,
+    MemoryStick,
+    Monitor,
+    Pencil,
+    Plug,
+    Plus,
+    RefreshCw,
+    Star,
+    Terminal,
+    Trash2
+  } from '@lucide/svelte'
+  import { onDestroy, onMount } from 'svelte'
+  import { toast } from 'svelte-sonner'
+  import type { Attachment } from 'svelte/attachments'
+  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
-  import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
   import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../shared/SettingsEntry.svelte'
-  import ThreadDropdown from '../shared/ThreadDropdown.svelte'
+  import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
   import type { MenuItem } from '../shared/ThreadDropdown.svelte'
-  import Modal from '../ui/Modal.svelte'
+  import ThreadDropdown from '../shared/ThreadDropdown.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
-  import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
-  import { ovens } from '$lib/stores/ovens.svelte'
-  import { getIconSvgDataUrl } from '$lib/project-svg-icons'
-  import { randomOvenAppearance } from '$lib/oven-appearance'
-  import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
-  import type { CustomIcon } from '$shared/types'
-  import { formatDateTime } from '$shared/date-time-format'
-  import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
-  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
-  import { flashElement } from '$lib/reveal-flash'
+  import Modal from '../ui/Modal.svelte'
 
   const fieldClass = 'w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground'
 
@@ -806,14 +807,6 @@
             </div>
             {#if !folded[oven.id]}
               <div class="mt-3 space-y-3 border-t border-border pt-3">
-                <p class="mt-0.5 truncate text-xs text-muted">
-                  {oven.kind === 'local'
-                    ? 'This computer'
-                    : `${oven.connection?.user ? `${oven.connection.user}@` : ''}${oven.connection?.host}:${oven.connection?.port} · SSH`}
-                </p>
-                {#if oven.kind === 'ssh'}
-                  <p class="mt-0.5 text-xs text-dimmed">Added {formatDateTime(oven.createdAt)}</p>
-                {/if}
                 {#if health[oven.id]?.specs}
                   {@const specs = health[oven.id].specs!}
                   {@const usedPercent =
@@ -882,7 +875,7 @@
                 {#if probe || health[oven.id]?.specs}
                   {@const nodeVersion =
                     probe?.nodeVersion ?? health[oven.id]?.specs?.nodeVersion ?? null}
-                  <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-2">
+                  <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-3">
                     <div class="space-y-1.5">
                       <dt class="flex items-center gap-1.5 text-xs text-dimmed">
                         <Terminal size={14} />Service runtime
@@ -973,6 +966,26 @@
                           >
                         {/if}
                       </dd>
+                    </div>
+                    <div>
+                      <div class="space-y-1.5">
+                        <dt class="flex items-center gap-1.5 text-xs text-dimmed">
+                          <Cable size={14} />Connection Info
+                        </dt>
+                        <dd class="flex flex-col gap-1.5">
+                          <p class="mt-0.5 truncate text-xs text-muted">
+                            {#if oven.kind === 'local'}
+                              This computer
+                            {:else}
+                              {oven.connection?.user ? `${oven.connection.user}@` : ''}{oven
+                                .connection?.host}:{oven.connection?.port}
+                            {/if}
+                          </p>
+                          <p class="mt-0.5 truncate text-xs text-muted">
+                            Added {formatDateTime(oven.createdAt)}
+                          </p>
+                        </dd>
+                      </div>
                     </div>
                   </dl>
                 {/if}
