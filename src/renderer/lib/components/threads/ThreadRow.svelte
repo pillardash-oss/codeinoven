@@ -56,7 +56,16 @@
     isThreadBusy
   } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
-  import { AppWindow, Check, Clock, GitBranch, Monitor, Pin, Server } from '@lucide/svelte'
+  import {
+    AppWindow,
+    Check,
+    Clock,
+    GitBranch,
+    MessageCircleDashed,
+    Monitor,
+    Pin,
+    Server
+  } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
   import { tick } from 'svelte'
@@ -65,8 +74,15 @@
   interface Props {
     thread: Thread
     selected?: boolean
-    /** Compact rendering for the pinned section. */
+    /** Dense one/two-line rendering: the pinned section, scope slices, the
+     *  board, and every other compact surface. */
     compact?: boolean
+    /** Three-line rendering: the sidebar's Threads list and a project's own
+     *  thread list. Every other view keeps the one/two-line row. */
+    detailed?: boolean
+    /** Hide the project name   the surrounding list already names the project
+     *  (a project's own thread list sits under its folder). */
+    hideProjectName?: boolean
     /** Presentation-only row for searchable thread pickers. */
     picker?: boolean
     /** Project icon URL to show before the status indicator. */
@@ -93,6 +109,8 @@
     thread,
     selected = false,
     compact = false,
+    detailed = false,
+    hideProjectName = false,
     picker = false,
     projectIconUrl = null,
     projectIconGlyph = null,
@@ -120,6 +138,16 @@
     scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
   )
   let projectName = $derived(project?.name ?? null)
+
+  /** Live temporary (side) chats hanging off this thread. A side chat is
+   *  conversation started off this thread, so the row marks it wherever the row
+   *  is shown. The mark is a fact about the thread, never a control: clicking
+   *  the row already opens the thread the side chat hangs off. */
+  let temporaryChats = $derived(contextSidebarState.temporaryChatsFor(thread.projectId, thread.id))
+  let hasTemporaryChat = $derived(temporaryChats.length > 0)
+  let temporaryChatLabel = $derived(
+    temporaryChats.length > 1 ? `${temporaryChats.length} temporary chats` : 'Temporary chat'
+  )
 
   /** How long the "todo" dot is held after a draft is cleared on send, so the
    *  badge does not flash to the thread's stale status before the harness
@@ -503,7 +531,7 @@
     return 'read'
   })
 
-  /** Title colour, shared by the compact and three-line row layouts. */
+  /** Title colour, shared by every row layout. */
   let titleClass = $derived(
     threadState === 'approval'
       ? 'font-medium text-warning'
@@ -512,58 +540,11 @@
         : 'text-foreground'
   )
 
-  /** Short textual state for the full row's footer, so a row's condition is
-   *  readable without decoding the dot. `null` for the plain read state. */
-  let stateLabel = $derived.by((): string | null => {
-    switch (threadState) {
-      case 'working':
-        return isRetryPaused ? 'Retrying' : delegatedWorkActive ? 'Coordinating' : 'Working'
-      case 'working-paused':
-        return 'Retrying'
-      case 'queued':
-        return 'Queued'
-      case 'scheduled':
-        return 'Scheduled'
-      case 'spec':
-        return 'Spec ready'
-      case 'approval':
-        return 'Attention'
-      case 'error':
-        return 'Failed'
-      case 'unread':
-        return 'Unread'
-      case 'temporary-unread':
-        return 'Side chat'
-      case 'todo':
-        return 'Draft'
-      case 'completed':
-        return 'Done'
-      default:
-        return null
-    }
-  })
-
-  /** Colour token for the footer state text, matching the status badge tone. */
-  let stateToneClass = $derived.by((): string => {
-    switch (threadState) {
-      case 'approval':
-        return 'text-warning'
-      case 'error':
-        return 'text-danger'
-      case 'unread':
-      case 'temporary-unread':
-        return 'text-foreground'
-      case 'working':
-      case 'working-paused':
-      case 'queued':
-      case 'scheduled':
-        return 'text-thread-working'
-      case 'spec':
-        return 'text-thread-spec'
-      default:
-        return 'text-dimmed'
-    }
-  })
+  /** Row padding and line rhythm. The three-line row breathes more than the
+   *  dense one/two-line rows so each line reads on its own. */
+  let rowLayoutClass = $derived(
+    detailed ? 'gap-1.5 px-2.5 py-2' : compact ? 'gap-1 px-2 py-1' : 'gap-1 px-2 py-1.5'
+  )
 
   /** Human-readable stage label, only meaningful when isWorking is true. */
   let stageLabel = $derived.by((): string => {
@@ -609,12 +590,14 @@
   let hasNote = $derived(threadNotesState.has(thread.id))
 
   /** Whether the bottom line (harnesses, scope, branch, time) is shown. A remote
-   *  thread always shows it: the Oven and the branch belong on every row of it. */
+   *  thread always shows it: the Oven and the branch belong on every row of it,
+   *  and a temporary chat's mark lives on that line. */
   let showBottomRow = $derived(
     authoredWorkKind !== null ||
       scopeBucket !== null ||
       harnessIds.length > 1 ||
       hasNote ||
+      hasTemporaryChat ||
       isRemote ||
       branch !== null
   )
@@ -774,6 +757,44 @@
   {/if}
 {/snippet}
 
+{#snippet temporaryChatMarker()}
+  {#if hasTemporaryChat}
+    <!-- The context sidebar's temporary-chat tab mark, carried onto the row so a
+         side chat is visible from the list that spawned it. -->
+    <span
+      class="flex shrink-0 items-center text-info"
+      role="img"
+      aria-label={temporaryChatLabel}
+      title={temporaryChatLabel}
+    >
+      <MessageCircleDashed size={11} strokeWidth={2} aria-hidden="true" />
+    </span>
+  {/if}
+{/snippet}
+
+{#snippet scopeChip(classes: string)}
+  {#if scopeBucket}
+    <span
+      class="relative flex min-w-0 items-center gap-1 border-b px-1 text-[0.5625rem] text-muted {classes}"
+      title={scopeBucket.name}
+      style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
+    >
+      {#if scopeIconUrl}
+        <img
+          src={scopeIconUrl}
+          alt=""
+          class="h-2 w-2 shrink-0 object-contain opacity-50 grayscale"
+          draggable="false"
+        />
+      {/if}
+      {#if scopeBucket.pinned}
+        <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
+      {/if}
+      <span class="truncate">{scopeBucket.name}</span>
+    </span>
+  {/if}
+{/snippet}
+
 {#snippet threadStatusSlot(centered: boolean)}
   <span class="relative h-4 w-4 shrink-0">
     <span
@@ -922,26 +943,7 @@
           </span>
         {/if}
 
-        {#if scopeBucket}
-          <span
-            class="relative flex min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[0.5625rem] text-muted"
-            title={scopeBucket.name}
-            style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
-          >
-            {#if scopeIconUrl}
-              <img
-                src={scopeIconUrl}
-                alt=""
-                class="h-2 w-2 shrink-0 object-contain opacity-50 grayscale"
-                draggable="false"
-              />
-            {/if}
-            {#if scopeBucket.pinned}
-              <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
-            {/if}
-            <span class="truncate">{scopeBucket.name}</span>
-          </span>
-        {/if}
+        {@render scopeChip('pb-1 pt-0.5')}
 
         <span class="flex min-w-0 items-center justify-end gap-1 overflow-hidden">
           {#if isRemote}
@@ -1018,9 +1020,7 @@
       : 'opacity-0'}"
   ></div>
   <button
-    class="relative mb-1 flex w-full flex-col text-left transition-colors {compact
-      ? 'gap-1 px-2 py-1'
-      : 'gap-1.5 px-2.5 py-2'} {selected
+    class="relative mb-1 flex w-full flex-col text-left transition-colors {rowLayoutClass} {selected
       ? 'bg-selected'
       : isBusyIndicator
         ? isRetryPaused
@@ -1045,7 +1045,9 @@
       aria-hidden="true"
       style="background: linear-gradient(to right, transparent, var(--color-border-strong), transparent);"
     ></span>
-    {#if compact}
+    {#if !detailed}
+      <!-- One/two-line row: every view except the Threads list and a project's
+           own thread list -->
       <span class="flex w-full min-w-0 items-center gap-2">
         <!-- Project icon -->
         {#if projectIconUrl}
@@ -1137,25 +1139,8 @@
             </span>
           {/if}
 
-          {#if scopeBucket && !hideScope}
-            <span
-              class="relative col-start-2 flex min-w-0 max-w-[7rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[0.5625rem] text-muted"
-              title={scopeBucket.name}
-              style="border-bottom-color: color-mix(in srgb, {scopeColor} 20%, var(--color-muted));"
-            >
-              {#if scopeIconUrl}
-                <img
-                  src={scopeIconUrl}
-                  alt=""
-                  class="h-2 w-2 shrink-0 object-contain opacity-45 grayscale"
-                  draggable="false"
-                />
-              {/if}
-              {#if scopeBucket.pinned}
-                <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
-              {/if}
-              <span class="truncate">{scopeBucket.name}</span>
-            </span>
+          {#if !hideScope}
+            {@render scopeChip('col-start-2 max-w-[7rem] pb-1 pt-0.5')}
           {/if}
 
           <span class="col-start-3 flex min-w-0 items-center justify-end gap-1 overflow-hidden">
@@ -1190,6 +1175,7 @@
                 <ThreadNoteIcon size={11} />
               </span>
             {/if}
+            {@render temporaryChatMarker()}
             {@render authoredWorkMarker(authoredWorkKind)}
             {#if indicator}
               <ThreadIndicatorSlot {indicator} />
@@ -1207,7 +1193,7 @@
         </span>
       {/if}
     {:else}
-      <!-- Meta line: project, last-edited time, where it runs, and the branch -->
+      <!-- Meta line: which project it belongs to, where it runs, and the branch -->
       <span class="flex w-full min-w-0 items-center gap-2 text-[0.625rem] text-dimmed">
         {#if projectIconUrl}
           <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
@@ -1217,17 +1203,12 @@
             <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
           </span>
         {/if}
-        {#if projectName}
+        {#if projectName && !hideProjectName}
           <span class="min-w-0 truncate text-[0.6875rem] font-medium text-muted" title={projectName}
             >{projectName}</span
           >
         {/if}
         <span class="min-w-0 flex-1"></span>
-        <span
-          class="shrink-0 whitespace-nowrap tabular-nums"
-          title={`Edited ${formatDateTime(thread.lastActivity)}`}
-          >{formatCompactAge(thread.lastActivity)}</span
-        >
         <span
           class="flex shrink-0 items-center"
           title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
@@ -1274,10 +1255,15 @@
         {/if}
       </span>
 
-      <!-- Footer line: harnesses, scope, then the row's indicators and state -->
-      <span class="flex w-full min-w-0 items-center gap-2 overflow-hidden">
+      <!-- Footer line: harnesses (left), scope (centered), the row's markers and
+           its last-edited time (right) -->
+      <span
+        class="grid w-full min-w-0 items-center gap-3 {harnessIds.length > 0
+          ? 'grid-cols-[minmax(3.2rem,1fr)_auto_minmax(0,1fr)]'
+          : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'}"
+      >
         {#if harnessIds.length > 0}
-          <span class="flex shrink-0 items-center gap-1">
+          <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
             {#each harnessIds.slice(0, MAX_HARNESS_ICONS) as harnessId (harnessId)}
               <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
             {/each}
@@ -1288,28 +1274,10 @@
             {/if}
           </span>
         {/if}
-        {#if scopeBucket && !hideScope}
-          <span
-            class="flex max-w-[8rem] min-w-0 items-center gap-1 overflow-hidden border-b px-1 pb-0.5 text-[0.5625rem] text-muted"
-            title={scopeBucket.name}
-            style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
-          >
-            {#if scopeIconUrl}
-              <img
-                src={scopeIconUrl}
-                alt=""
-                class="h-2 w-2 shrink-0 object-contain opacity-50 grayscale"
-                draggable="false"
-              />
-            {/if}
-            {#if scopeBucket.pinned}
-              <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
-            {/if}
-            <span class="truncate">{scopeBucket.name}</span>
-          </span>
+        {#if !hideScope}
+          {@render scopeChip('col-start-2 max-w-[8rem] pb-0.5')}
         {/if}
-        <span class="min-w-0 flex-1"></span>
-        <span class="flex shrink-0 items-center gap-2">
+        <span class="col-start-3 flex min-w-0 items-center justify-end gap-2 overflow-hidden">
           {#if hasNote}
             {@const ThreadNoteIcon = feature('thread-note').icon}
             <span
@@ -1319,15 +1287,16 @@
               <ThreadNoteIcon size={11} />
             </span>
           {/if}
+          {@render temporaryChatMarker()}
           {@render authoredWorkMarker(authoredWorkKind)}
           {#if indicator}
             <ThreadIndicatorSlot {indicator} />
           {/if}
-          {#if stateLabel}
-            <span class="whitespace-nowrap text-[0.5625rem] {stateToneClass}" title={badgeTitle}
-              >{stateLabel}</span
-            >
-          {/if}
+          <span
+            class="whitespace-nowrap tabular-nums text-dimmed"
+            title={`Edited ${formatDateTime(thread.lastActivity)}`}
+            >{formatCompactAge(thread.lastActivity)}</span
+          >
         </span>
       </span>
     {/if}

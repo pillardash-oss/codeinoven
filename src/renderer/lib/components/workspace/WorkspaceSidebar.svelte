@@ -813,6 +813,7 @@
                 {:else}
                   <ThreadRow
                     thread={entry.thread}
+                    detailed
                     projectIconUrl={getThreadIcon(entry.thread)}
                     selected={activeThreadId === entry.thread.id}
                     onOpen={onOpenThread}
@@ -1007,6 +1008,8 @@
                               {#each filteredThreads.slice(0, sidebar.getVisibleCount(project.id)) as thread (thread.id)}
                                 <ThreadRow
                                   {thread}
+                                  detailed
+                                  hideProjectName
                                   selected={activeThreadId === thread.id}
                                   onOpen={onOpenThread}
                                   {onRename}
@@ -1235,6 +1238,8 @@
                           {#each filteredThreads.slice(0, sidebar.getVisibleCount(project.id)) as thread (thread.id)}
                             <ThreadRow
                               {thread}
+                              detailed
+                              hideProjectName
                               selected={activeThreadId === thread.id}
                               onOpen={onOpenThread}
                               {onRename}

@@ -182,6 +182,12 @@ class ContextSidebarState {
     return this.tabContexts.temporaryChatTab(tabId)
   }
 
+  /** Live temporary (side) chats hanging off one thread, so a thread row can
+   *  mark that a side chat exists without owning the tab contexts. */
+  temporaryChatsFor(projectId: string, threadId: string): TemporaryChatContextTab[] {
+    return this.tabContexts.temporaryChatsFor(projectId, threadId)
+  }
+
   get activeTabId(): string | null {
     return this.sidebarActiveTabId
   }

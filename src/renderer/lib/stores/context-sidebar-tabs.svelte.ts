@@ -95,6 +95,14 @@ export class SidebarTabContexts {
     return null
   }
 
+  /** Temporary (side) chat tabs hanging off one thread, in open order. A
+   *  thread row reads this to mark that a side chat exists for its thread. */
+  temporaryChatsFor(projectId: string, threadId: string): TemporaryChatContextTab[] {
+    const tabs = this.contexts[contextKey(projectId, threadId)]?.tabs
+    if (!tabs) return []
+    return tabs.filter((tab): tab is TemporaryChatContextTab => tab.kind === 'temporary-chat')
+  }
+
   ensureContext(projectId: string, threadId: string): ThreadSidebarContext {
     const key = contextKey(projectId, threadId)
     const existing = this.contexts[key]
