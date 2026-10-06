@@ -328,6 +328,9 @@
               ? 'The machine runs the same service as this app.'
               : 'The machine runs a different service. Register it, then update the Oven service from its row.'}
           </p>
+          <p class="text-muted">
+            Edit the Oven afterwards if this computer reaches the machine under another name.
+          </p>
           {#if !preview.identityPresent}
             <p class="text-warning">
               No key was included. The Oven is saved against your SSH agent; edit it if it needs

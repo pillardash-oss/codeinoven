@@ -15,6 +15,7 @@ import {
   type OvenWorkspaceResult
 } from '../../lib/ovens'
 import { mirrorLocalGitIdentity, OVEN_GIT_NETWORK_CHANNELS } from './oven-local-git-identity'
+import { normalizeServiceBundle } from './oven-agent-script'
 import { syncLocalGitHostTrust } from './oven-local-git-trust'
 import { OVEN_HARNESS_PATH } from './oven-harness-paths'
 import { OvenSsh, sshQuote } from './oven-ssh'
@@ -37,7 +38,9 @@ export class OvenService {
   /** Installing touches only the authenticated user's CodeInOven service directory. */
   async install(id: string): Promise<OvenProbe> {
     const path = join(app.getAppPath(), 'out/main/oven-service.mjs')
-    const source = await readFile(path, 'utf8')
+    // Normalized the same way the standalone agent normalizes it, so both paths
+    // derive one revision for one bundle.
+    const source = normalizeServiceBundle(await readFile(path, 'utf8'))
     const revision = createHash('sha256').update(source).digest('hex')
     const staged = `${REMOTE_ROOT}/service.${randomUUID()}.next`
     const command = `${NODE_CHECK}; umask 077; mkdir -p ${REMOTE_ROOT}; trap 'rm -f ${staged}' EXIT; cat > ${staged}; test "$(sha256sum < ${staged} | cut -d ' ' -f 1)" = ${sshQuote(revision)}; mv ${staged} ${SERVICE}; CODEINOVEN_OVEN_REVISION=${sshQuote(revision)} node ${SERVICE} ensure`
