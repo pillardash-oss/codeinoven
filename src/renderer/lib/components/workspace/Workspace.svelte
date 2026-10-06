@@ -3076,50 +3076,55 @@
    *
    *  The 200-row window only ranks by activity, so on its own it hides a
    *  non-done thread that has gone quiet and every thread of a pinned scope,
-   *  even though the view ranks those above the done rows that did load. That
-   *  guarantee set (`thread:listAlwaysVisible`) rides along with the window, so
-   *  the view's own grouping is never missing its top rows. */
+   *  even though the view ranks those above the done rows that did load. Those
+   *  arrive through a second, side-loaded hydration query
+   *  (`thread:listAlwaysVisible`) that never gates the window, so the view keeps
+   *  its instant first-paint slice and the guarantee set joins it as it lands. */
   const THREADS_VIEW_HYDRATION_LIMIT = 200
+
+  /**
+   * Fold a hydrated page over `allThreads`. `thread:listRecent` carries
+   * harness-usage decoration, while the bounded first-paint slice
+   * (`thread:listRecentPerProject`) deliberately omits it. Adding only the ids
+   * the list had never seen left every first-paint row on its usage-less copy,
+   * so a thread that used several harnesses over its session only ever drew the
+   * fallback from `settings.harnessId`. Known rows must take the page's copy;
+   * unseen rows append after the list. A scratch index for this one pass, never
+   * read reactively.
+   */
+  function foldHydratedThreads(threads: Thread[]): void {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const incoming = new Map<string, Thread>()
+    for (const thread of threads) {
+      if (isOrchestrationChildThread(thread)) continue
+      incoming.set(thread.id, thread)
+    }
+    let changed = false
+    const refreshed = allThreads.map((existing) => {
+      const replacement = incoming.get(existing.id)
+      if (replacement === undefined) return existing
+      incoming.delete(existing.id)
+      if (replacement === existing) return existing
+      changed = true
+      return replacement
+    })
+    const additions = [...incoming.values()]
+    if (additions.length > 0) changed = true
+    if (changed) allThreads = additions.length > 0 ? [...refreshed, ...additions] : refreshed
+  }
+
   let threadsViewHydrating = false
   async function ensureThreadsViewFullyLoaded(): Promise<void> {
     if (threadsViewHydrating) return
     threadsViewHydrating = true
     try {
-      const [page, alwaysVisible] = await Promise.all([
-        invoke('thread:listRecent', {
-          limit: THREADS_VIEW_HYDRATION_LIMIT,
-          offset: 0
-        }),
-        invoke('thread:listAlwaysVisible')
-      ])
-      const uniquePage = uniqueThreadList([...page, ...alwaysVisible])
-      scopeState.mergeThreads(uniquePage)
-      // Fold the hydrated page back over the list. `thread:listRecent` carries
-      // harness-usage decoration, while the bounded first-paint slice
-      // (`thread:listRecentPerProject`) deliberately omits it. Adding only the
-      // ids the list had never seen left every first-paint row on its
-      // usage-less copy, so a thread that used several harnesses over its
-      // session only ever drew the fallback from `settings.harnessId`. Known
-      // rows must take the page's copy; unseen rows append after the list.
-      // A scratch index for this one pass, never read reactively.
-      // eslint-disable-next-line svelte/prefer-svelte-reactivity
-      const incoming = new Map<string, Thread>()
-      for (const thread of uniquePage) {
-        if (isOrchestrationChildThread(thread)) continue
-        incoming.set(thread.id, thread)
-      }
-      let changed = false
-      const refreshed = allThreads.map((existing) => {
-        const replacement = incoming.get(existing.id)
-        if (replacement === undefined) return existing
-        incoming.delete(existing.id)
-        if (replacement === existing) return existing
-        changed = true
-        return replacement
+      const page = await invoke('thread:listRecent', {
+        limit: THREADS_VIEW_HYDRATION_LIMIT,
+        offset: 0
       })
-      const additions = [...incoming.values()]
-      if (additions.length > 0) changed = true
-      if (changed) allThreads = additions.length > 0 ? [...refreshed, ...additions] : refreshed
+      const uniquePage = uniqueThreadList(page)
+      scopeState.mergeThreads(uniquePage)
+      foldHydratedThreads(uniquePage)
       historyOffset = Math.max(historyOffset, page.length)
       hasMoreHistory = page.length === THREADS_VIEW_HYDRATION_LIMIT
     } finally {
@@ -3127,8 +3132,30 @@
     }
   }
 
+  /**
+   * The Threads view's guarantee set, side-loaded beside the recency window:
+   * pinned rows, non-done rows, and every row of a pinned scope. It resolves on
+   * its own and folds in when it lands, so the window's own hydration and the
+   * first-paint slice are never made to wait on it.
+   */
+  let threadsViewGuaranteesHydrating = false
+  async function hydrateThreadsViewGuarantees(): Promise<void> {
+    if (threadsViewGuaranteesHydrating) return
+    threadsViewGuaranteesHydrating = true
+    try {
+      const alwaysVisible = await invoke('thread:listAlwaysVisible')
+      const unique = uniqueThreadList(alwaysVisible)
+      scopeState.mergeThreads(unique)
+      foldHydratedThreads(unique)
+    } finally {
+      threadsViewGuaranteesHydrating = false
+    }
+  }
+
   $effect(() => {
-    if (mode === 'threads' && active) void ensureThreadsViewFullyLoaded()
+    if (mode !== 'threads' || !active) return
+    void ensureThreadsViewFullyLoaded()
+    void hydrateThreadsViewGuarantees()
   })
 
   /** The chat a Chats view with nothing to restore should land on: the last chat

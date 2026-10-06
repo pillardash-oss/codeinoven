@@ -227,17 +227,22 @@ export class ScopeManager {
 
   /**
    * Every scope bucket across every project that gets its own thread bucket: a
-   * pinned scope or a managed worktree root. Read-only, no board healing, so a
-   * caller that only needs the ids (the Threads view's always-visible set) never
-   * persists or reassigns anything. A board that cannot be parsed is skipped
-   * rather than failing the whole read.
+   * pinned scope or a managed worktree root. Read on the database worker so the
+   * main thread never pays for the scan, and read-only (no board healing), so a
+   * caller that only needs the ids never persists or reassigns anything. A
+   * board that cannot be parsed is skipped rather than failing the whole read.
    */
-  scopedBucketIds(): Set<string> {
-    const rows = this.db.all<{ data: string }>('SELECT data FROM scope_boards')
+  async scopedBucketIds(): Promise<Set<string>> {
+    const result = await this.db.queryViaWorker('SELECT data FROM scope_boards', [], 0)
+    const rows: Record<string, unknown>[] = result.ok
+      ? result.rows
+      : this.db.all('SELECT data FROM scope_boards')
     const ids = new Set<string>()
     for (const row of rows) {
+      const data = row['data']
+      if (typeof data !== 'string') continue
       try {
-        for (const id of scopedBucketIdsFromBoard(this.parsePersisted(row.data))) ids.add(id)
+        for (const id of scopedBucketIdsFromBoard(this.parsePersisted(data))) ids.add(id)
       } catch {
         // A malformed board is reported on its own read; it must not hide the
         // other projects' pinned scopes here.

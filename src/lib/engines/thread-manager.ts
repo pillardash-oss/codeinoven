@@ -1488,7 +1488,8 @@ export class ThreadManager {
    * across all projects.
    */
   async listAlwaysVisibleThreads(): Promise<Thread[]> {
-    return this.threadRepo.listAlwaysVisibleViaWorker(this.scopeManager.scopedBucketIds())
+    const scopedBucketIds = await this.scopeManager.scopedBucketIds()
+    return this.threadRepo.listAlwaysVisibleViaWorker(scopedBucketIds)
   }
 
   /** Bounded first-paint list without optional harness-usage decoration. */
