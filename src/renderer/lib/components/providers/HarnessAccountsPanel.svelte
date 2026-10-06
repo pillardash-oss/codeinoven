@@ -40,39 +40,31 @@
   let disconnectTarget = $state<HarnessAccount | null>(null)
   let disconnecting = $state(false)
 
-  type AccountSortKey = 'harness' | 'provider' | 'label'
+  type AccountSortKey = 'account'
 
   /** Quota telemetry column. Not sortable, so the cell snippet identifies it by
    *  reference instead of a sort key. */
   const usageColumn: DataTableColumn<HarnessAccount, AccountSortKey> = {
     key: null,
     header: 'Usage',
-    width: 'w-[27rem]',
+    width: 'w-[44rem]',
     cellClass: 'align-middle'
   }
 
   const accountColumns: DataTableColumn<HarnessAccount, AccountSortKey>[] = [
     {
-      key: 'harness',
-      header: 'Harness',
-      width: 'w-36',
+      key: 'account',
+      header: 'Account',
+      width: 'w-56',
       cellClass: 'align-middle',
       sortValue: (account) =>
-        (harnessFor(account.harnessId)?.name ?? account.harnessId).toLocaleLowerCase('en-US')
-    },
-    {
-      key: 'provider',
-      header: 'Provider',
-      width: 'w-36',
-      cellClass: 'align-middle',
-      sortValue: (account) => providerLabel(account).toLocaleLowerCase('en-US')
-    },
-    {
-      key: 'label',
-      header: 'Label',
-      width: 'w-48',
-      cellClass: 'align-middle',
-      sortValue: (account) => account.label.toLocaleLowerCase('en-US')
+        [
+          harnessFor(account.harnessId)?.name ?? account.harnessId,
+          providerLabel(account),
+          account.label
+        ]
+          .join('\u0000')
+          .toLocaleLowerCase('en-US')
     },
     usageColumn,
     {
@@ -475,31 +467,33 @@
         column: DataTableColumn<HarnessAccount, AccountSortKey>
       )}
         {@const harness = harnessFor(account.harnessId)}
-        {#if column.key === 'harness'}
-          <div class="flex min-w-0 items-center gap-2">
+        {#if column.key === 'account'}
+          <div class="flex min-w-0 items-center gap-2.5">
             <AgentIcon
               agentId={account.harnessId}
               label={harness?.name ?? account.harnessId}
               size={20}
             />
-            <span class="truncate text-xs font-medium">{harness?.name ?? account.harnessId}</span>
-          </div>
-        {:else if column.key === 'provider'}
-          <span class="block truncate font-mono text-xs text-muted" title={providerLabel(account)}>
-            {providerLabel(account)}
-          </span>
-        {:else if column.key === 'label'}
-          <span class="flex min-w-0 items-center gap-1.5">
-            <span class="block truncate text-xs">{account.label}</span>
-            {#if account.isDefault}
-              <span
-                class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
-                title="Default account for this provider"
+            <div class="min-w-0 flex-1 space-y-0.5">
+              <div class="flex min-w-0 items-center gap-1.5">
+                <span class="truncate text-xs font-medium">{account.label}</span>
+                {#if account.isDefault}
+                  <span
+                    class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                    title="Default account for this provider"
+                  >
+                    Default
+                  </span>
+                {/if}
+              </div>
+              <p
+                class="truncate text-[0.625rem] text-muted"
+                title={`${harness?.name ?? account.harnessId} · ${providerLabel(account)}`}
               >
-                Default
-              </span>
-            {/if}
-          </span>
+                {harness?.name ?? account.harnessId} · {providerLabel(account)}
+              </p>
+            </div>
+          </div>
         {:else if column === usageColumn}
           <HarnessAccountUsageCell {account} />
         {:else}

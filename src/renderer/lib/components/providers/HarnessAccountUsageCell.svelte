@@ -91,73 +91,75 @@
   }
 </script>
 
-<div class="space-y-1.5">
-  {#if usage && hasQuota}
-    <UsageWindowList limits={usage.rateLimits} variant="table" />
-    {#if credits}
-      <p class="text-[0.625rem] text-dimmed">{credits}</p>
-    {/if}
-    {#if bankedResets}
-      <p class="flex items-center gap-1.5 text-[0.625rem] text-muted" title={bankedDetail}>
-        <BatteryCharging size={11} class="shrink-0 text-info" aria-hidden="true" />
-        <span class="truncate">{bankedResets}</span>
-      </p>
-    {/if}
-  {:else if failed || reauthenticationRequired}
-    <div class="space-y-1">
-      <p class="text-[0.625rem] text-dimmed">
-        {reauthenticationRequired ? 'Codex sign-in expired' : 'Usage unavailable'}
-      </p>
-      {#if reauthenticationRequired}
-        <button
-          type="button"
-          class="flex items-center gap-1 text-[0.625rem] font-medium text-primary hover:underline"
-          title={`Sign in again to ${account.label}`}
-          aria-label={`Sign in again to ${account.label}`}
-          onclick={() => void beginSignIn()}
-        >
-          <LogIn size={10} aria-hidden="true" />
-          Sign in again
-        </button>
-      {:else}
-        <button
-          type="button"
-          class="flex items-center gap-1 text-[0.625rem] font-medium text-primary hover:underline disabled:text-dimmed disabled:no-underline"
-          disabled={probing}
-          title={`Retry reading usage for ${account.label}`}
-          aria-label={`Retry reading usage for ${account.label}`}
-          onclick={() => harnessAccountUsageCache.schedule([account], { force: true })}
-        >
-          {#if probing}
-            <Loader2 size={10} class="animate-spin" aria-hidden="true" />
-            Retrying…
-          {:else}
-            <RefreshCw size={10} aria-hidden="true" />
-            Retry
-          {/if}
-        </button>
+<div class="flex min-w-0 items-start gap-4">
+  <div class="min-w-0 flex-1 space-y-1.5">
+    {#if usage && hasQuota}
+      <UsageWindowList limits={usage.rateLimits} variant="table" />
+      {#if credits}
+        <p class="text-[0.625rem] text-dimmed">{credits}</p>
       {/if}
-    </div>
-  {:else if usage}
-    <p class="text-xs text-dimmed">No limits to report</p>
-  {:else if snapshot && snapshot.fetchedAt > 0}
-    <p class="text-xs text-dimmed">No limits to report</p>
-  {:else}
-    <div class="space-y-1.5" aria-hidden="true">
-      <div class="h-2 w-28 animate-pulse rounded-full bg-overlay"></div>
-      <div class="h-1.5 w-40 animate-pulse rounded-full bg-overlay"></div>
-      <div class="h-2 w-20 animate-pulse rounded-full bg-overlay"></div>
-    </div>
-    <span class="sr-only">Checking usage for {account.label}</span>
-  {/if}
+      {#if bankedResets}
+        <p class="flex items-center gap-1.5 text-[0.625rem] text-muted" title={bankedDetail}>
+          <BatteryCharging size={11} class="shrink-0 text-info" aria-hidden="true" />
+          <span class="truncate">{bankedResets}</span>
+        </p>
+      {/if}
+    {:else if failed || reauthenticationRequired}
+      <div class="space-y-1">
+        <p class="text-[0.625rem] text-dimmed">
+          {reauthenticationRequired ? 'Codex sign-in expired' : 'Usage unavailable'}
+        </p>
+        {#if reauthenticationRequired}
+          <button
+            type="button"
+            class="flex items-center gap-1 text-[0.625rem] font-medium text-primary hover:underline"
+            title={`Sign in again to ${account.label}`}
+            aria-label={`Sign in again to ${account.label}`}
+            onclick={() => void beginSignIn()}
+          >
+            <LogIn size={10} aria-hidden="true" />
+            Sign in again
+          </button>
+        {:else}
+          <button
+            type="button"
+            class="flex items-center gap-1 text-[0.625rem] font-medium text-primary hover:underline disabled:text-dimmed disabled:no-underline"
+            disabled={probing}
+            title={`Retry reading usage for ${account.label}`}
+            aria-label={`Retry reading usage for ${account.label}`}
+            onclick={() => harnessAccountUsageCache.schedule([account], { force: true })}
+          >
+            {#if probing}
+              <Loader2 size={10} class="animate-spin" aria-hidden="true" />
+              Retrying…
+            {:else}
+              <RefreshCw size={10} aria-hidden="true" />
+              Retry
+            {/if}
+          </button>
+        {/if}
+      </div>
+    {:else if usage}
+      <p class="text-xs text-dimmed">No limits to report</p>
+    {:else if snapshot && snapshot.fetchedAt > 0}
+      <p class="text-xs text-dimmed">No limits to report</p>
+    {:else}
+      <div class="space-y-1.5" aria-hidden="true">
+        <div class="h-2 w-28 animate-pulse rounded-full bg-overlay"></div>
+        <div class="h-1.5 w-40 animate-pulse rounded-full bg-overlay"></div>
+        <div class="h-2 w-20 animate-pulse rounded-full bg-overlay"></div>
+      </div>
+      <span class="sr-only">Checking usage for {account.label}</span>
+    {/if}
+  </div>
 
   {#if probing && snapshot && !failed}
-    <p class="flex items-center gap-1 text-[0.625rem] text-dimmed">
+    <p class="flex shrink-0 items-center gap-1 whitespace-nowrap text-[0.625rem] text-dimmed">
       <Loader2 size={10} class="animate-spin" aria-hidden="true" />
       Checking…
     </p>
   {:else if !probing && snapshot && snapshot.fetchedAt > 0}
-    <p class="text-[0.5625rem] text-dimmed" title={checkedAtTitle}>
+    <p class="shrink-0 whitespace-nowrap text-[0.625rem] text-dimmed" title={checkedAtTitle}>
       Updated {relativeTime(snapshot.fetchedAt)}
     </p>
   {/if}
