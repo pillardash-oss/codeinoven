@@ -24,7 +24,7 @@ Options
   --port <port>        SSH port the app connects on [default: the sshd port, else 22]
   --identity           Provision a dedicated SSH key (default when asked)
   --no-identity        Register against your existing SSH identity instead
-  --data-root <path>   Where the service keeps its state  [default: ~/.config/pillardash/codeinoven-oven]
+  --data-root <path>   Where the service keeps its state  [default: ~/.config/pillardash/codeinoven/ovens]
   --force, -f          Replace a running service without asking
   --yes, -y            Accept every default without prompting
   --json               Machine-readable output for status, start, and stop

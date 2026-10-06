@@ -12,7 +12,9 @@ import {
   type SaveOvenInput
 } from '../../lib/ovens'
 import type { OvenRegistry } from './oven-registry'
-import { normalizeServiceBundle, serviceBundleRevision } from './oven-service-bundle'
+import { buildOvenAgentScript, normalizeServiceBundle } from './oven-agent-script'
+import { fingerprint } from './oven-agent-descriptor'
+import { serviceBundleRevision } from './oven-service-bundle'
 import { decodeOvenAgentDescriptor, descriptorHasIdentity } from './oven-agent-descriptor'
 import { Logger } from '../system/logger'
 

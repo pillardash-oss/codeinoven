@@ -18,11 +18,12 @@ import { mirrorLocalGitIdentity, OVEN_GIT_NETWORK_CHANNELS } from './oven-local-
 import { serviceBundleRevision } from './oven-service-bundle'
 import { syncLocalGitHostTrust } from './oven-local-git-trust'
 import { OVEN_HARNESS_PATH } from './oven-harness-paths'
+import { OVEN_DATA_DIRECTORY } from './remote/oven-root-paths'
 import { OvenSsh, sshQuote } from './oven-ssh'
 import type { OvenRegistry } from './oven-registry'
 import { beginOvenHarnessRun } from './oven-operation-lock'
 
-const REMOTE_ROOT = '"$HOME/.config/pillardash/codeinoven-oven"'
+const REMOTE_ROOT = `"$HOME/${OVEN_DATA_DIRECTORY}"`
 const SERVICE = `${REMOTE_ROOT}/service.mjs`
 // The login shell supplies version-manager PATH. Only a verified Node runtime is used.
 const NODE_CHECK =

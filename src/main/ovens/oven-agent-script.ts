@@ -7,6 +7,7 @@ import {
 import { planNodeInstall, type NodeInstallPlan } from './oven-setup-bootstrap'
 import type { OvenPackageManager } from '../../lib/ovens'
 import { normalizeServiceBundle } from './oven-service-bundle'
+import { OVEN_DATA_DIRECTORY } from './remote/oven-root-paths'
 
 // Re-exported so the agent installer, the pushed-install path, and the CLI keep
 // naming one normalization function.
@@ -153,7 +154,7 @@ PROTOCOL_VERSION=${shellQuote(String(input.protocolVersion))}
 BOOTSTRAP_NODE=${shellQuote(input.bootstrapNode ? '1' : '0')}
 IDENTITY_ENABLED=${shellQuote(input.identity ? '1' : '0')}
 MIN_NODE_VERSION=${OVEN_MINIMUM_NODE_VERSION}
-DATA_ROOT="\${CODEINOVEN_OVEN_DATA_ROOT:-$HOME/.config/pillardash/codeinoven-oven}"
+DATA_ROOT="\${CODEINOVEN_OVEN_DATA_ROOT:-$HOME/${OVEN_DATA_DIRECTORY}}"
 PORT="\${CODEINOVEN_AGENT_PORT:-22}"
 
 say() { printf '%s\\n' "$*"; }
@@ -283,7 +284,7 @@ $PROTOCOL_VERSION = ${powerShellQuote(String(input.protocolVersion))}
 $BOOTSTRAP_NODE = ${input.bootstrapNode ? '$true' : '$false'}
 $IDENTITY_ENABLED = ${input.identity ? '$true' : '$false'}
 $MIN_NODE_VERSION = ${OVEN_MINIMUM_NODE_VERSION}
-$DATA_ROOT = if ($env:CODEINOVEN_OVEN_DATA_ROOT) { $env:CODEINOVEN_OVEN_DATA_ROOT } else { Join-Path $env:USERPROFILE '.config\\pillardash\\codeinoven-oven' }
+$DATA_ROOT = if ($env:CODEINOVEN_OVEN_DATA_ROOT) { $env:CODEINOVEN_OVEN_DATA_ROOT } else { Join-Path $env:USERPROFILE '${OVEN_DATA_DIRECTORY}' }
 $PORT = if ($env:CODEINOVEN_AGENT_PORT) { $env:CODEINOVEN_AGENT_PORT } else { '22' }
 
 function Test-NodeOk {

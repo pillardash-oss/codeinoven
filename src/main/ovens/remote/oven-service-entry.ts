@@ -2,8 +2,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer, connect, type Socket } from 'node:net'
-import { mkdir, open, readFile, rename, unlink, chmod, readdir, statfs } from 'node:fs/promises'
-import { availableParallelism, hostname, homedir, totalmem } from 'node:os'
+import { mkdir, open, readFile, rename, unlink, chmod, readdir, statfs, rm } from 'node:fs/promises'
+import { availableParallelism, hostname, homedir, totalmem, tmpdir } from 'node:os'
 import { join, isAbsolute } from 'node:path'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
@@ -12,6 +12,7 @@ import type { OvenProbe, OvenRun, OvenRunEvent } from '../../../lib/ovens'
 import { ovenHarnessIdForCommand } from '../../../lib/ovens'
 import { listHarnesses } from '../../agents/harness-registry'
 import { OPENCODE_COMMAND_ALIASES } from '../../../lib/opencode-version'
+import { OVEN_DATA_DIRECTORY, OVEN_LEGACY_DATA_DIRECTORY } from './oven-root-paths'
 import { OVEN_NPM_PREFIX } from '../oven-harness-paths'
 import { ovenRootOperation } from './oven-root-operations'
 import { ovenWorkspace } from './oven-workspace'
@@ -50,8 +51,9 @@ const versionCache = new Map<
     checkedAt: number
   }
 >()
-const root =
-  process.env['CODEINOVEN_OVEN_DATA_ROOT'] ?? join(homedir(), '.config/pillardash/codeinoven-oven')
+const root = process.env['CODEINOVEN_OVEN_DATA_ROOT'] ?? join(homedir(), OVEN_DATA_DIRECTORY)
+/** Where earlier releases kept the same state, before it moved into the app namespace. */
+const legacyRoot = join(homedir(), OVEN_LEGACY_DATA_DIRECTORY)
 if (process.platform !== 'win32') {
   const npmPrefix = join(homedir(), OVEN_NPM_PREFIX)
   process.env['PATH'] = `${join(npmPrefix, 'bin')}:${process.env['PATH'] ?? ''}`
@@ -63,11 +65,26 @@ if (process.platform !== 'win32') {
  * POSIX binds a unix socket file under the data root. Windows cannot: the same
  * call creates a named pipe there, so the path is the pipe name itself and no
  * filesystem permission call below can apply to it.
+ *
+ * A unix socket path is capped by the platform (104 bytes on macOS, 108 on
+ * Linux). A data root nested deeply enough to exceed that still needs a
+ * reachable service, so the socket falls back to a short path keyed by the root
+ * instead of failing to bind.
  */
+const MAX_POSIX_SOCKET_PATH = 100
 const socketPath =
   process.platform === 'win32'
     ? `\\\\.\\pipe\\codeinoven-oven-${createHash('sha256').update(root).digest('hex').slice(0, 16)}`
-    : join(root, 'service.sock')
+    : posixSocketPath()
+
+function posixSocketPath(): string {
+  const preferred = join(root, 'service.sock')
+  if (Buffer.byteLength(preferred) <= MAX_POSIX_SOCKET_PATH) return preferred
+  return join(
+    tmpdir(),
+    `codeinoven-oven-${createHash('sha256').update(root).digest('hex').slice(0, 16)}.sock`
+  )
+}
 const lockPath = join(root, 'service.pid')
 const jobs = new Map<string, Job>()
 let shutDownServer: (() => void) | undefined
@@ -497,7 +514,38 @@ function receive(socket: Socket, handle: (data: string) => Promise<string>): voi
   })
 }
 
+/**
+ * Move a data root left by an earlier release into its current home.
+ *
+ * Only entries the new root does not already have are moved, so an interrupted
+ * migration can run again and an existing entry is never overwritten. The two
+ * runtime artifacts of a possibly still-running earlier daemon, `service.sock`
+ * and `service.pid`, are deliberately left behind: they belong to that daemon,
+ * which removes them itself when it stops.
+ */
+async function migrateLegacyRoot(): Promise<void> {
+  const entries = await readdir(legacyRoot).catch(() => [] as string[])
+  if (entries.length === 0) return
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  for (const entry of entries) {
+    if (entry === 'service.sock' || entry === 'service.pid') continue
+    const target = join(root, entry)
+    if (
+      await access(target).then(
+        () => true,
+        () => false
+      )
+    )
+      continue
+    await rename(join(legacyRoot, entry), target).catch(() => undefined)
+  }
+  const remaining = await readdir(legacyRoot).catch(() => [] as string[])
+  if (remaining.length === 0)
+    await rm(legacyRoot, { recursive: true, force: true }).catch(() => undefined)
+}
+
 async function daemon(): Promise<void> {
+  await migrateLegacyRoot()
   await mkdir(join(root, 'runs'), { recursive: true, mode: 0o700 })
   // An exclusive pid file prevents simultaneous ensure calls from replacing a live socket.
   let lock

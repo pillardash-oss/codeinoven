@@ -5,6 +5,7 @@ import { lstat, open } from 'node:fs/promises'
 import type { HarnessAccount } from '../../lib/types'
 import type { HarnessAccountRegistry } from '../providers/harness-account-registry'
 import type { OvenService } from './oven-service'
+import { ovenDataRoot } from './remote/oven-root-paths'
 
 const synchronizing = new WeakMap<OvenService, Map<string, Promise<Record<string, string>>>>()
 
@@ -24,9 +25,13 @@ export function syncOvenAccount(
   const key = `${ovenId}:${account.id}:${synchronizeConfiguration ? 'config' : 'account'}`
   const existing = pending.get(key)
   if (existing) return existing
-  const task = copyOvenAccount(service, registry, ovenId, account, synchronizeConfiguration).finally(() =>
-    pending.delete(key)
-  )
+  const task = copyOvenAccount(
+    service,
+    registry,
+    ovenId,
+    account,
+    synchronizeConfiguration
+  ).finally(() => pending.delete(key))
   pending.set(key, task)
   return task
 }
@@ -40,7 +45,7 @@ async function copyOvenAccount(
   synchronizeConfiguration: boolean
 ): Promise<Record<string, string>> {
   const probe = await service.probe(ovenId)
-  const root = `${probe.home}/.config/pillardash/codeinoven-oven/accounts/${account.id}`
+  const root = `${ovenDataRoot(probe.home)}/accounts/${account.id}`
   const local = registry.environment(account)
   const home = homedir()
   let source: string

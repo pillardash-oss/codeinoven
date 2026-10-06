@@ -38,7 +38,7 @@ npx cio-oven start --yes --no-identity
 | `--name <name>`                | Oven name shown in the app. Defaults to this machine's host name.                                      |
 | `--port <port>`                | SSH port the app connects on. Defaults to the port in this machine's `sshd_config`, else 22.           |
 | `--identity` / `--no-identity` | Provision a dedicated ed25519 key for this Oven, or register against the SSH identity you already use. |
-| `--data-root <path>`           | Where the service keeps its state. Defaults to `~/.config/pillardash/codeinoven-oven`.                 |
+| `--data-root <path>`           | Where the service keeps its state. Defaults to `~/.config/pillardash/codeinoven/ovens`.                |
 | `--force`, `-f`                | Replace a running service without asking. Refuses while runs are active.                               |
 | `--yes`, `-y`                  | Accept every default without prompting.                                                                |
 | `--json`                       | Machine-readable output for `status`, `start`, and `stop`.                                             |
@@ -48,8 +48,8 @@ npx cio-oven start --yes --no-identity
 ## What it does to the machine
 
 Everything it writes lives under one removable directory in the user's home,
-`~/.config/pillardash/codeinoven-oven`, exactly where CodeInOven keeps its own
-Oven state:
+`~/.config/pillardash/codeinoven/ovens`, inside the CodeInOven namespace rather
+than beside it, and exactly where CodeInOven keeps its own Oven state:
 
 - `service.mjs`, the Oven service bundle the app talks to, verified by SHA-256
   after it is written and replaced only when it verifies.
