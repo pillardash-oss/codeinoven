@@ -47,6 +47,16 @@ const PLAIN_WITH_LINE = new RegExp(
   `(?<![\\w./~])((?:[\\w./-]+\\/)[\\w./-]+\\.${FILE_EXT_PATTERN}):(${LINE_RANGES_SOURCE})(?=$|[\\s.,;:!?)"'*_])`,
   'giu'
 )
+// Prose often spells the same location in words instead of `:12-34`   the
+// agent-facing citation instruction only asks for "the line number", so
+// `src/a/b.ts line 40` and `src/a/b.ts lines 36 to 63` are as common as the
+// colon form. Both are one citation: the path plus the spoken location, and
+// the location words must sit immediately after the path so a sentence such as
+// "src/a/b.ts changed; line 3 moved" never attaches line 3 to the file.
+const PROSE_SPOKEN_LINE = new RegExp(
+  `(?<![\\w./~])((?:[\\w./-]+\\/)[\\w./-]+\\.${FILE_EXT_PATTERN})[ \\t]+lines?[ \\t]+(\\d+)(?:[ \\t]*(?:to|-|through)[ \\t]*(\\d+))?(?=$|[\\s.,;:!?)"'*_])`,
+  'giu'
+)
 const URL_PATTERN = /https?:\/\/[^\s<>"'`)\]}]+/gu
 const MARKDOWN_LINK_PATTERN = /(?<!!)\[([^\]]+)\]\((?:<([^>\n]+)>|([^) \t\n]+))\)/gu
 const MARKDOWN_WEB_LINK_PATTERN = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gu
@@ -293,6 +303,13 @@ export function parseAbsoluteFileCitationTarget(
   }
 }
 
+/** Normalize a spoken prose location into the `path:start-end` shape the
+ *  parser already understands: `src/a/b.ts`, `40` and `63` become
+ *  `src/a/b.ts:40-63`; a single-line location drops the range. */
+function spokenLineTarget(path: string, start: string, end?: string): string {
+  return end ? `${path}:${start}-${end}` : `${path}:${start}`
+}
+
 function citationHref(citation: ParsedFileCitation): string {
   const params = new URLSearchParams({ path: citation.path })
   if (citation.line) params.set('line', String(citation.line))
@@ -342,6 +359,12 @@ export function extractCitations(text: string): SourceCitation[] {
 
   for (const match of normalizedText.matchAll(PLAIN_WITH_LINE)) {
     const parsed = parseFileCitation(`${match[1] ?? ''}:${match[2] ?? ''}`)
+    if (!parsed) continue
+    add({ kind: 'file', ...parsed, raw: match[0] })
+  }
+
+  for (const match of normalizedText.matchAll(PROSE_SPOKEN_LINE)) {
+    const parsed = parseFileCitation(spokenLineTarget(match[1] ?? '', match[2] ?? '', match[3]))
     if (!parsed) continue
     add({ kind: 'file', ...parsed, raw: match[0] })
   }
@@ -461,7 +484,7 @@ function isInlineCodeLinkLabel(segments: string[], index: number): boolean {
 
 /** Linkify the parts of a line that sit outside inline code. */
 function linkifyProseSegment(segment: string, isClickable: (path: string) => boolean): string {
-  return segment.replace(
+  const withColonLocation = segment.replace(
     PLAIN_WITH_LINE,
     (match, path: string, ranges: string, offset: number, whole: string) => {
       // A markdown link label always ends with `](`, so a citation followed by
@@ -469,6 +492,23 @@ function linkifyProseSegment(segment: string, isClickable: (path: string) => boo
       // rewriting it would nest a link inside a link and break the label.
       if (/^[*_]{0,2}\]\(/u.test(whole.slice(offset + match.length))) return match
       const parsed = parseFileCitation(`${path}:${ranges}`)
+      if (!parsed || !isClickable(parsed.path)) return match
+      return `[\`${match}\`](${citationHref(parsed)})`
+    }
+  )
+  // Same citation, spelled `path line 40` / `path lines 36 to 63`.
+  return withColonLocation.replace(
+    PROSE_SPOKEN_LINE,
+    (
+      match,
+      path: string,
+      start: string,
+      end: string | undefined,
+      offset: number,
+      whole: string
+    ) => {
+      if (/^[*_]{0,2}\]\(/u.test(whole.slice(offset + match.length))) return match
+      const parsed = parseFileCitation(spokenLineTarget(path, start, end))
       if (!parsed || !isClickable(parsed.path)) return match
       return `[\`${match}\`](${citationHref(parsed)})`
     }
