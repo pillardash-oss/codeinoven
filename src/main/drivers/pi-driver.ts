@@ -2,7 +2,6 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
-import { tmpdir } from 'os'
 import { join } from 'path'
 import type {
   AgentEvent,
@@ -677,7 +676,8 @@ export class PiDriver extends PersistentCliDriver {
       cwd: projectPath,
       env: {
         ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
-        ...overlay.env
+        ...overlay.env,
+        ...(await this.workspaceTemporaryEnvironment(projectPath))
       }
     })
     const client = new PiRpcClient({
@@ -705,7 +705,10 @@ export class PiDriver extends PersistentCliDriver {
     if (!(await resolveHarnessRuntime('pi', cwd))) return []
     const invocation = await prepareHarnessInvocation('pi', ['--mode', 'rpc'], {
       cwd,
-      env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment })
+      env: {
+        ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+        ...(await this.workspaceTemporaryEnvironment(cwd))
+      }
     })
     const client = new PiRpcClient({
       invocation
@@ -1616,6 +1619,7 @@ export class PiDriver extends PersistentCliDriver {
           ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
           ...(this.cioProvidersExtensionEnvs.get(sessionId) ?? {}),
           ...runtimeEnv,
+          ...(await this.workspaceTemporaryEnvironment(projectPath)),
           // Session-scoped ownership marker so any daemon this Pi session spawns
           // that re-parents away from the process tree (e.g. the adb server) can
           // still be attributed back to this session by the agent process
@@ -3428,19 +3432,31 @@ export class PiDriver extends PersistentCliDriver {
     return live.sort()
   }
 
+  /** Node uses TEMP/TMP on Windows and TMPDIR on Unix. The runtime boundary
+   * translates TMPDIR for WSL and forwards it into the Linux process. Keep
+   * output files available across turns under the scope's working directory.
+   */
+  private async workspaceTemporaryEnvironment(
+    projectPath: string
+  ): Promise<{ TMPDIR: string; TEMP: string; TMP: string }> {
+    const directory = join(projectPath, '.cio', 'tmp', 'pi')
+    await mkdir(directory, { recursive: true })
+    return { TMPDIR: directory, TEMP: directory, TMP: directory }
+  }
+
   private async buildProviderOverlay(projectPath: string): Promise<ProviderOverlay> {
     const args: string[] = []
     const env: Record<string, string> = {}
     let directory: string | null = null
     const resolved = await this.resolveOverlayProviders()
     if (resolved) {
-      directory = await mkdtemp(join(tmpdir(), 'codeinoven-pi-providers-'))
+      const temporaryEnvironment = await this.workspaceTemporaryEnvironment(projectPath)
+      directory = await mkdtemp(join(temporaryEnvironment['TMPDIR'], 'providers-'))
       const extensionPath = join(directory, 'codeinoven-providers.ts')
       await writeFile(extensionPath, piCustomProvidersExtension(resolved.providers), 'utf8')
       args.push('--extension', extensionPath)
       Object.assign(env, resolved.env)
     }
-    void projectPath
     return {
       args,
       env,
