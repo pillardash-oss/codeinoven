@@ -371,12 +371,11 @@
           <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">
             CIO Global Browser
           </h1>
-          <p class="max-w-md mt-1 text-[0.8125rem] text-muted">
+          <p class="max-w-md mt-1 text-center text-[0.8125rem] text-muted">
             This is not by no means a complete browser, but it is good enough to browse the web
-            while you work. <br />
-            It is an attempt to reduce cognitive overload from context switching. <br />
-            Try it out gradually and see if it can replace your dev browser. <br />
-            This is chromium after all.
+            while you work. It is an attempt to reduce cognitive overload from context switching.
+            Try it out gradually and see if it can replace your dev browser. This is chromium after
+            all.
           </p>
 
           <div class="mt-4 flex w-full max-w-sm flex-col gap-1"></div>
