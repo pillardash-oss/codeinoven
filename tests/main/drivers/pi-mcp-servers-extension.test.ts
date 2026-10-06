@@ -3,7 +3,10 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { piCioCoreToolsExtension } from '../../../src/main/drivers/pi-cio-core-tools-extension'
-import { piMcpServersExtension } from '../../../src/main/drivers/pi-mcp-servers-extension'
+import {
+  PI_MCP_FAILURE_STATUS_KEY,
+  piMcpServersExtension
+} from '../../../src/main/drivers/pi-mcp-servers-extension'
 
 const roots: string[] = []
 
@@ -15,10 +18,18 @@ interface McpHookEvent {
   toolName?: string
 }
 
+interface StubUi {
+  setStatus: (key: string, text?: string) => void
+}
+
+interface StubContext {
+  ui: StubUi
+}
+
 interface StubExtensionApi {
   registerMcpServer: (name: string, config: Record<string, unknown>) => void
   unregisterMcpServer: (name: string) => void
-  on: (event: string, handler: (event: McpHookEvent) => void) => void
+  on: (event: string, handler: (event: McpHookEvent, ctx?: StubContext) => void) => void
   getAllTools: () => Array<{ name: string }>
   getActiveTools: () => string[]
   setActiveTools: (names: string[]) => void
@@ -27,7 +38,9 @@ interface StubExtensionApi {
   unregistrations: string[]
   /** What pi reports as the session's active tools. */
   activeTools: string[]
-  emit: (event: string, payload?: McpHookEvent) => void
+  /** Every status record the extension pushed through the app-owned channel. */
+  statusReports: Array<{ key: string; text: string }>
+  emit: (event: string, payload?: McpHookEvent, ctx?: StubContext) => void
 }
 
 /**
@@ -61,11 +74,12 @@ async function loadExtension(
   }).replace('__CIO_MCP_SERVERS_PATH__', JSON.stringify(documentPath).slice(1, -1))
   const extensionPath = join(root, 'mcp-servers.ts')
   await writeFile(extensionPath, source)
-  const handlers = new Map<string, Array<(event: McpHookEvent) => void>>()
+  const handlers = new Map<string, Array<(event: McpHookEvent, ctx?: StubContext) => void>>()
   const refusedOnce = new Set(options.refuseOnce ?? [])
   const api = {
     registrations: [] as StubExtensionApi['registrations'],
     unregistrations: [] as string[],
+    statusReports: [] as StubExtensionApi['statusReports'],
     activeTools: options.activeTools ?? [],
     registerMcpServer: (name: string, config: Record<string, unknown>) => {
       if (refusedOnce.has(name)) {
@@ -85,13 +99,13 @@ async function loadExtension(
     setActiveTools: (names: string[]) => {
       api.activeTools = names
     },
-    on: (event: string, handler: (event: McpHookEvent) => void) => {
+    on: (event: string, handler: (event: McpHookEvent, ctx?: StubContext) => void) => {
       const existing = handlers.get(event) ?? []
       existing.push(handler)
       handlers.set(event, existing)
     },
-    emit: (event: string, payload: McpHookEvent = {}) => {
-      for (const handler of handlers.get(event) ?? []) handler(payload)
+    emit: (event: string, payload: McpHookEvent = {}, ctx?: StubContext) => {
+      for (const handler of handlers.get(event) ?? []) handler(payload, ctx)
     }
   }
   if (options.withApi === false) {
@@ -308,4 +322,34 @@ describe('piCioCoreToolsExtension', () => {
     expect(composed.split(mcpServersPath)).toHaveLength(3)
     expect(composed).toContain('codeInOvenMcpServersExtension')
   })
+})
+
+it('tells the app about a registration pi refused', async () => {
+  const { api } = await loadExtension({
+    document: { version: 1, servers: [server('svelte_mcp', 'bunx')] },
+    refuseOnce: ['svelte_mcp']
+  })
+  const ctx: StubContext = {
+    ui: { setStatus: (key, text) => api.statusReports.push({ key, text: text ?? '' }) }
+  }
+
+  api.emit('session_start', {}, ctx)
+
+  expect(api.registrations).toEqual([])
+  expect(api.statusReports).toHaveLength(1)
+  expect(api.statusReports[0]?.key).toBe(PI_MCP_FAILURE_STATUS_KEY)
+  expect(JSON.parse(api.statusReports[0]?.text ?? '{}')).toEqual({
+    failures: [{ name: 'svelte_mcp', reason: 'refused: svelte_mcp' }]
+  })
+})
+
+it('registers nothing and reports nothing when the runtime has no status channel', async () => {
+  const { api } = await loadExtension({
+    document: { version: 1, servers: [server('svelte_mcp', 'bunx')] },
+    refuseOnce: ['svelte_mcp']
+  })
+
+  // A pi build without the UI channel must not throw out of the hook.
+  expect(() => api.emit('session_start', {}, undefined)).not.toThrow()
+  expect(api.statusReports).toEqual([])
 })

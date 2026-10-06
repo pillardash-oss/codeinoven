@@ -24,7 +24,7 @@
  */
 
 import type { McpExposure, McpServerConfig } from '@earendil-works/pi-coding-agent'
-import type { NativeMcpUtilityBinding } from '../../../lib/types'
+import type { NativeMcpRegistrationFailure, NativeMcpUtilityBinding } from '../../../lib/types'
 import { utilityKey } from './pi-values'
 
 /** File inside the session's core-tools directory holding the server document. */
@@ -89,7 +89,7 @@ export function piMcpServerToolPrefix(name: string): string {
 export interface PiMcpRegistrationResult {
   registrations: PiMcpServerRegistration[]
   /** Utilities the app could not turn into a pi server, with the reason. */
-  failures: Array<{ utilityId: string; utilityName: string; reason: string }>
+  failures: NativeMcpRegistrationFailure[]
 }
 
 /**
@@ -159,6 +159,94 @@ export function piMcpToolOwner(
       toolName.startsWith(`${piMcpServerToolPrefix(registration.name)}`)
     ) ?? null
   )
+}
+
+/**
+ * The server that owns one pi tool name, or null when none the app registered
+ * does.
+ *
+ * Matched by prefix against the known server names rather than by splitting on
+ * `__`, because a server name is free to contain a double underscore. When one
+ * server name is a prefix of another the longest one owns the tool, which is
+ * the only answer that names the server pi actually used.
+ */
+export function piMcpServerForTool(servers: Iterable<string>, toolName: string): string | null {
+  let owner: string | null = null
+  for (const server of servers) {
+    if (!toolName.startsWith(piMcpServerToolPrefix(server))) continue
+    if (owner === null || server.length > owner.length) owner = server
+  }
+  return owner
+}
+
+/** The utility a published server belongs to. */
+export interface PiNativeServerOwner {
+  utilityId: string
+  utilityName: string
+}
+
+/** One native MCP call resolved to the utility that owns the server behind it. */
+export interface PiNativeToolAttribution {
+  utilityId: string
+  utilityName: string
+  /** Server name as pi registered it. */
+  server: string
+  /** The MCP tool name without its `mcp__<server>__` prefix. */
+  tool: string
+}
+
+/**
+ * One refusal entry as the app-owned extension reports it.
+ *
+ * The extension sends this through pi's status channel, so the driver reads
+ * the same shape the extension wrote and no second parse exists to drift.
+ */
+export interface PiMcpFailureReport {
+  name: string
+  reason: string
+}
+
+/** Parse a status payload from the app-owned extension into its refusals. */
+export function parsePiMcpFailureReport(statusText: unknown): PiMcpFailureReport[] {
+  if (typeof statusText !== 'string' || statusText.length === 0) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(statusText)
+  } catch {
+    return []
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return []
+  const failures = (parsed as { failures?: unknown }).failures
+  if (!Array.isArray(failures)) return []
+  const reports: PiMcpFailureReport[] = []
+  for (const value of failures) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+    const entry = value as { name?: unknown; reason?: unknown }
+    if (typeof entry.name !== 'string' || entry.name.length === 0) continue
+    if (typeof entry.reason !== 'string' || entry.reason.length === 0) continue
+    reports.push({ name: entry.name, reason: entry.reason })
+  }
+  return reports
+}
+
+/**
+ * Resolve one pi tool name to the utility the app published for it, or null
+ * when the tool belongs to a server the app did not register (the user's own
+ * `mcp.json`, another extension, or a pin built-in).
+ */
+export function piMcpToolAttribution(
+  owners: ReadonlyMap<string, PiNativeServerOwner>,
+  toolName: string
+): PiNativeToolAttribution | null {
+  const server = piMcpServerForTool(owners.keys(), toolName)
+  const owner = server ? owners.get(server) : undefined
+  if (!server || !owner) return null
+  return {
+    utilityId: owner.utilityId,
+    utilityName: owner.utilityName,
+    server,
+    tool: toolName.slice(piMcpServerToolPrefix(server).length)
+  }
 }
 
 /** The config pi validates and connects for one utility. */

@@ -158,6 +158,7 @@ import { WorkflowOwnershipService } from '../system/workflow-ownership-service'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
+import { notifyNativeMcpFailure } from '../utilities/native-mcp-notice'
 import {
   AgentSecretService,
   type AgentSecretResolution,
@@ -1486,6 +1487,7 @@ export class ChatEngine {
     string,
     {
       driver: HarnessDriver
+      projectId: string
       projectPath: string
       runtime?: PreparedUtilityRuntime
       gateway: UtilityTurnGateway
@@ -1660,7 +1662,35 @@ export class ChatEngine {
     for (const driver of this.drivers.values()) {
       driver.setProcessObserver?.(this.agentProcesses)
       driver.onEvent((event) => this.handleDriverEvent(driver.id, event, driver))
+      this.wireNativeUtilityReporting(driver)
     }
+  }
+
+  /**
+   * Wire a harness's own MCP host back into the turn that owns the session.
+   *
+   * A call a script makes to an app-registered server never passes the gateway,
+   * so the audit line and the user notice have to come from the driver; the
+   * turn registered against that session is what supplies the thread the line
+   * belongs to.
+   */
+  private wireNativeUtilityReporting(driver: HarnessDriver): void {
+    driver.onNativeUtilityCall?.((invocation) => {
+      const turn = this.utilityTurns.get(invocation.sessionId)
+      if (!turn) return
+      void turn.gateway.recordNativeInvocation?.({
+        utilityId: invocation.utilityId,
+        server: invocation.server,
+        tool: invocation.tool,
+        status: invocation.status
+      })
+    })
+    driver.onNativeMcpFailure?.((failure) => {
+      const turn = this.utilityTurns.get(failure.sessionId)
+      notifyNativeMcpFailure(failure, {
+        ...(turn ? { projectId: turn.projectId, threadId: turn.threadId } : {})
+      })
+    })
   }
 
   private createAccountDriver(harnessId: string, environment: NodeJS.ProcessEnv): HarnessDriver {
@@ -1705,6 +1735,7 @@ export class ChatEngine {
     const driver = this.createAccountDriver(harnessId, this.accountRegistry.environment(account))
     driver.setProcessObserver?.(this.agentProcesses)
     driver.onEvent((event) => this.handleDriverEvent(driver.id, event, driver))
+    this.wireNativeUtilityReporting(driver)
     this.accountDrivers.set(account.id, driver)
     return driver
   }
@@ -3734,7 +3765,7 @@ export class ChatEngine {
           ? {
               publishNativeMcpServers: (utilities) =>
                 driver.publishUtilityMcpServers?.(projectPath, sessionId, utilities) ??
-                Promise.resolve([])
+                Promise.resolve({ servers: [], failures: [] })
             }
           : {}),
         resolveExecutingModelVisionCapable: () =>
@@ -3803,7 +3834,7 @@ export class ChatEngine {
         if (gateway.directEndpoint && publishUtilityEndpoint) {
           await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
         }
-        this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
+        this.utilityTurns.set(sessionId, { driver, projectId, projectPath, gateway, threadId })
         return [
           gateway.directInstructions,
           utilityContract,
@@ -3864,6 +3895,7 @@ export class ChatEngine {
       await applyRuntime(projectPath, runtime, sessionId)
       this.utilityTurns.set(sessionId, {
         driver,
+        projectId,
         projectPath,
         runtime,
         gateway,
@@ -4052,7 +4084,7 @@ export class ChatEngine {
           ? {
               publishNativeMcpServers: (utilities) =>
                 driver.publishUtilityMcpServers?.(projectPath, sessionId, utilities) ??
-                Promise.resolve([])
+                Promise.resolve({ servers: [], failures: [] })
             }
           : {}),
         resolveExecutingModelVisionCapable: () =>
@@ -4080,7 +4112,7 @@ export class ChatEngine {
       if (gateway.directEndpoint) {
         await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
       }
-      this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
+      this.utilityTurns.set(sessionId, { driver, projectId, projectPath, gateway, threadId })
       // Rebuilding the turn purged this thread's secret files, and a steered turn
       // keeps running, so put them back for the rest of the turn's tool calls.
       await this.agentSecrets

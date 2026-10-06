@@ -7,7 +7,7 @@ import type {
   McpUtilityConfig,
   UtilityKind,
   PermissionLevel,
-  NativeMcpServerPublication,
+  NativeMcpPublicationResult,
   NativeMcpUtilityBinding
 } from '../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
@@ -133,6 +133,7 @@ import {
   connectMcpServer,
   credentialEnvironment as resolveCredentialEnvironment
 } from './mcp-connection'
+import { notifyNativeMcpFailure } from './native-mcp-notice'
 
 const CUA_UTILITY_ID = 'cio:cua-driver'
 
@@ -164,11 +165,12 @@ export interface UtilityTurnRequest {
    * script receive a tool's whole `CallToolResult`, structured payload
    * included). Absent for every harness without an MCP host of its own, which
    * keeps the gateway as the one transport there. Returns the server name each
-   * utility took, so activation can tell the model which namespace to reach for.
+   * utility took, so activation can tell the model which namespace to reach for,
+   * and the utilities no server could be made for, so the user can be told.
    */
   publishNativeMcpServers?: (
     utilities: readonly NativeMcpUtilityBinding[]
-  ) => Promise<readonly NativeMcpServerPublication[]>
+  ) => Promise<NativeMcpPublicationResult>
   /**
    * Whether this turn belongs to a design session the user opened with
    * `@cio-design`. A session promotes the app-owned design capability to an
@@ -266,6 +268,18 @@ export interface UtilityTurnGateway {
    * whether the live gateway can serve the request or must be rebuilt.
    */
   managementEnabled: boolean
+  /**
+   * Record one call a script made to a server the harness's own MCP host runs.
+   *
+   * That call never passes the app gateway, so without this the audit log would
+   * show an activation and then nothing, as if the utility were never used.
+   */
+  recordNativeInvocation?(invocation: {
+    utilityId: string
+    server: string
+    tool: string
+    status: 'completed' | 'error'
+  }): Promise<void>
   cleanup(): Promise<void>
 }
 
@@ -950,7 +964,20 @@ export class UtilityOrchestrationService {
         timeoutMs: gatewayHarnessTimeoutMs((await this.storage.getConfig()).questionTimeoutMs)
       },
       managementEnabled: request.allowManagement === true,
-      cleanup
+      cleanup,
+      /**
+       * One call a script made to a server pi's own MCP host runs. The gateway
+       * never sees that call, so this is the only place its record can be
+       * written, and the turn is what supplies the thread the line belongs to.
+       */
+      recordNativeInvocation: (invocation) =>
+        this.audit(state, 'utility.invoked', {
+          utilityId: invocation.utilityId,
+          operation: invocation.tool,
+          transport: 'native',
+          server: invocation.server,
+          success: invocation.status === 'completed'
+        })
     }
   }
 
@@ -1962,7 +1989,7 @@ export class UtilityOrchestrationService {
     } else {
       throw new Error(`Utility kind "${resolved.utility.kind}" does not expose runtime operations`)
     }
-    await this.audit(state, 'utility.invoked', { utilityId, operation })
+    await this.audit(state, 'utility.invoked', { utilityId, operation, transport: 'gateway' })
     // A computer-use snapshot reaches the model as its structured payload plus
     // the screenshot as an image part. The payload is where the element handles
     // and the geometry live that the driver asks a later action to name, and the
@@ -2513,10 +2540,24 @@ export class UtilityOrchestrationService {
       })
     }
     try {
-      const publications = await publish(bindings)
+      const published = await publish(bindings)
       state.nativeMcpServers.clear()
-      for (const publication of publications) {
+      for (const publication of published.servers) {
         state.nativeMcpServers.set(publication.utilityId, publication.server)
+      }
+      // A utility the adapter could not turn into a server keeps working through
+      // the gateway, so nothing is broken; the user still hears it, because a
+      // silently skipped server is a capability they enabled and did not get.
+      for (const failure of published.failures) {
+        notifyNativeMcpFailure(
+          {
+            sessionId: state.request.sessionId,
+            utilityId: failure.utilityId,
+            utilityName: failure.utilityName,
+            reason: failure.reason
+          },
+          { projectId: state.request.projectId, threadId: state.request.threadId }
+        )
       }
     } catch (error) {
       Logger.dev('Native MCP server publication failed:', error)

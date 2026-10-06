@@ -1,10 +1,17 @@
 import type { AgentMessage, AgentTokenUsage } from '../../../lib/types'
+import type { PiNativeToolAttribution } from './pi-mcp-registration'
 
 /** Shared stream-mapping context and per-turn state for the Pi record mapper. */
 
 export interface PiStreamContext {
   sessionId: string
   session: { messages: AgentMessage[] }
+  /**
+   * Resolves an `mcp__<server>__<tool>` name to the utility the app published
+   * for that server. Supplied by the driver, so a part for a script's native
+   * MCP call names the capability the user enabled instead of a bare tool name.
+   */
+  nativeToolOwner?: (toolName: string) => PiNativeToolAttribution | null
 }
 
 /** Turn-scoped state kept so parts of one assistant message can be correlated. */

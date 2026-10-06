@@ -533,3 +533,51 @@ export interface NativeMcpServerPublication {
    */
   server: string
 }
+
+/** One utility the app could not turn into a server on the harness's own host. */
+export interface NativeMcpRegistrationFailure {
+  utilityId: string
+  utilityName: string
+  reason: string
+}
+
+/** What publishing the app's MCP servers to a harness's own MCP host produced. */
+export interface NativeMcpPublicationResult {
+  servers: NativeMcpServerPublication[]
+  /** Utilities that stayed on the app gateway because no server could be made. */
+  failures: NativeMcpRegistrationFailure[]
+}
+
+/**
+ * One call a script made to a server the harness's own MCP host runs.
+ *
+ * The gateway's `cio_util_use` audits itself, so a call that skipped it (a
+ * codemode script reaching `mcp__<server>__<tool>` directly) would otherwise
+ * leave no record of which utility was used.
+ */
+export interface NativeUtilityInvocation {
+  sessionId: string
+  utilityId: string
+  utilityName: string
+  /** Server name the harness registered, as its tool prefix carries it. */
+  server: string
+  /** The MCP tool name without its `mcp__<server>__` prefix. */
+  tool: string
+  status: 'completed' | 'error'
+}
+
+/**
+ * A utility server the harness's own MCP host would not run.
+ *
+ * The app gateway stays a path to that utility, so this is a report and not a
+ * failure of the turn; the user should still hear it, because a silently
+ * skipped server is a capability they enabled and did not get.
+ */
+export interface NativeMcpServerFailure {
+  sessionId: string
+  /** Server name the app claimed, absent when the config never earned one. */
+  server?: string
+  utilityId?: string
+  utilityName?: string
+  reason: string
+}

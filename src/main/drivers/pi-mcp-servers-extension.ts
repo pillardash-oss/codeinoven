@@ -54,6 +54,15 @@ export interface PiMcpServersExtensionOptions {
   activationTools: readonly string[]
 }
 
+/**
+ * Status key the extension reports a refused registration under.
+ *
+ * The driver reads it on the same `extension_ui_request` channel the status and
+ * usage extensions use, so a server pi would not run becomes a notice in the
+ * app instead of a line on a stderr nobody reads.
+ */
+export const PI_MCP_FAILURE_STATUS_KEY = 'codeinoven-mcp'
+
 export function piMcpServersExtension(options: PiMcpServersExtensionOptions): string {
   const reconcileTools = JSON.stringify([
     'codemode',
@@ -78,6 +87,30 @@ const CIO_MCP_RECONCILE_TOOLS = ${reconcileTools}
 
 /** Pi's script runner. Registered inactive, so this extension activates it. */
 const CIO_MCP_SCRIPT_SURFACE = 'codemode'
+
+/** Status key the app reads a refused registration from. */
+const CIO_MCP_FAILURE_STATUS_KEY = '${PI_MCP_FAILURE_STATUS_KEY}'
+
+/**
+ * Report a server pi refused through the app-owned status channel, so the user
+ * hears about it while the session that tried to register it is still alive.
+ * The reason is pi's own; the stderr line stays as the fallback for a runtime
+ * whose status channel is unavailable.
+ */
+function reportCioMcpRegistrationFailure(ctx, name, error) {
+  try {
+    ctx?.ui?.setStatus(
+      CIO_MCP_FAILURE_STATUS_KEY,
+      JSON.stringify({
+        failures: [
+          { name: name, reason: error instanceof Error ? error.message : String(error) }
+        ]
+      })
+    )
+  } catch {
+    // A runtime without the status channel still has the stderr line.
+  }
+}
 
 interface CioMcpServerEntry {
   name: string
@@ -165,6 +198,7 @@ function ensureCioScriptSurface(pi: ExtensionAPI): void {
  */
 function reconcileCioMcpServers(
   pi: ExtensionAPI,
+  ctx,
   registered: CioMcpRegistered,
   revision: CioMcpRevision
 ): void {
@@ -199,6 +233,7 @@ function reconcileCioMcpServers(
       // the next reconcile: a corrected document then recovers without a restart.
       registered.delete(name)
       revision.value = ''
+      reportCioMcpRegistrationFailure(ctx, name, error)
       process.stderr.write(
         '[cio-mcp] server "' + name + '" could not be registered: ' +
           (error instanceof Error ? error.message : String(error)) +
@@ -211,19 +246,19 @@ function reconcileCioMcpServers(
 export default function codeInOvenMcpServersExtension(pi: ExtensionAPI): void {
   const registered: CioMcpRegistered = new Map()
   const revision: CioMcpRevision = { value: '' }
-  const reconcile = (): void => reconcileCioMcpServers(pi, registered, revision)
+  const reconcile = (ctx): void => reconcileCioMcpServers(pi, ctx, registered, revision)
 
-  pi.on('session_start', () => {
+  pi.on('session_start', (event, ctx) => {
     ensureCioScriptSurface(pi)
-    reconcile()
+    reconcile(ctx)
   })
-  pi.on('before_agent_start', () => {
+  pi.on('before_agent_start', (event, ctx) => {
     ensureCioScriptSurface(pi)
-    reconcile()
+    reconcile(ctx)
   })
-  pi.on('tool_call', (event) => {
+  pi.on('tool_call', (event, ctx) => {
     if (!CIO_MCP_RECONCILE_TOOLS.includes(event.toolName)) return
-    reconcile()
+    reconcile(ctx)
   })
   pi.on('session_shutdown', () => {
     for (const name of Array.from(registered.keys())) {

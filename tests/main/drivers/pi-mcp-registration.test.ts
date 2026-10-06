@@ -3,6 +3,9 @@ import type { UtilityDefinitionFor } from '../../../src/lib/types'
 import {
   PI_MCP_SERVERS_DOCUMENT_VERSION,
   buildPiMcpRegistrations,
+  parsePiMcpFailureReport,
+  piMcpServerForTool,
+  piMcpToolAttribution,
   piMcpServerName,
   piMcpServersDocument,
   piMcpToolOwner
@@ -355,5 +358,72 @@ describe('piMcpToolOwner', () => {
     ])
 
     expect(piMcpToolOwner(nested, 'mcp__docs__v2__search')?.utilityId).toBe('docs--v2')
+  })
+})
+
+/**
+ * The driver resolves a script's tool name against the server names it
+ * published, so the trace and the audit can name the utility behind the call.
+ * A server name is free to contain a double underscore, which is why this
+ * matches prefixes rather than splitting the tool name.
+ */
+describe('piMcpServerForTool', () => {
+  it('names the server that owns a tool', () => {
+    expect(piMcpServerForTool(['svelte_mcp', 'slack_mcp'], 'mcp__slack_mcp__post')).toBe(
+      'slack_mcp'
+    )
+  })
+
+  it('picks the longest match when one server name is a prefix of another', () => {
+    expect(piMcpServerForTool(['docs', 'docs_v2'], 'mcp__docs_v2__search')).toBe('docs_v2')
+  })
+
+  it('returns null for a tool no published server owns', () => {
+    expect(piMcpServerForTool(['svelte_mcp'], 'mcp__slack_mcp__post')).toBeNull()
+    expect(piMcpServerForTool(['svelte_mcp'], 'bash')).toBeNull()
+    expect(piMcpServerForTool([], 'mcp__svelte_mcp__tool')).toBeNull()
+  })
+})
+
+describe('piMcpToolAttribution', () => {
+  const owners = new Map([
+    ['svelte_mcp', { utilityId: 'svelte-mcp', utilityName: 'Svelte MCP' }],
+    ['docs_v2', { utilityId: 'docs--v2', utilityName: 'Docs v2' }]
+  ])
+
+  it('resolves a tool to its utility, server and bare tool name', () => {
+    expect(piMcpToolAttribution(owners, 'mcp__svelte_mcp__svelte_autofixer')).toEqual({
+      utilityId: 'svelte-mcp',
+      utilityName: 'Svelte MCP',
+      server: 'svelte_mcp',
+      tool: 'svelte_autofixer'
+    })
+  })
+
+  it('returns null for a server the app did not publish', () => {
+    expect(piMcpToolAttribution(owners, 'mcp__other__tool')).toBeNull()
+    expect(piMcpToolAttribution(owners, 'bash')).toBeNull()
+  })
+})
+
+describe('parsePiMcpFailureReport', () => {
+  it('reads the refusals the extension reported', () => {
+    expect(
+      parsePiMcpFailureReport(
+        JSON.stringify({ failures: [{ name: 'probe', reason: 'namespace taken' }] })
+      )
+    ).toEqual([{ name: 'probe', reason: 'namespace taken' }])
+  })
+
+  it('answers nothing for a payload it cannot trust', () => {
+    expect(parsePiMcpFailureReport(undefined)).toEqual([])
+    expect(parsePiMcpFailureReport('not json')).toEqual([])
+    expect(parsePiMcpFailureReport(JSON.stringify({ failures: 'nope' }))).toEqual([])
+    expect(
+      parsePiMcpFailureReport(JSON.stringify({ failures: [{ name: '', reason: 'x' }] }))
+    ).toEqual([])
+    expect(
+      parsePiMcpFailureReport(JSON.stringify({ failures: [{ name: 'x', reason: '' }] }))
+    ).toEqual([])
   })
 })
