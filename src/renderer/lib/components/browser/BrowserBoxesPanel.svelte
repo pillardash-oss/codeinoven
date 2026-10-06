@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ChevronDown, ChevronLeft, Plus } from '@lucide/svelte'
+  import { fly, slide } from 'svelte/transition'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { jarIdForBox, type GlobalBrowserBox } from '$lib/stores/global-browser-types'
   import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
@@ -57,7 +58,7 @@
 </script>
 
 {#if creating}
-  <div class="flex h-full min-h-0 flex-col">
+  <div class="flex h-full min-h-0 flex-col" in:fly={{ x: 18, duration: 150 }}>
     <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
       <button
         type="button"
@@ -147,7 +148,11 @@
           </div>
 
           {#if expanded}
-            <div id="box-settings-{box.id}" class="mb-1 rounded-lg border p-3">
+            <div
+              id="box-settings-{box.id}"
+              class="mb-1 rounded-lg border p-3"
+              transition:slide={{ duration: 150 }}
+            >
               <BrowserBoxEditor {box} onDeleted={() => (expandedBoxId = null)} />
             </div>
           {/if}
