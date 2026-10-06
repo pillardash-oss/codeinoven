@@ -962,7 +962,7 @@
 
     {#if showBottomRow}
       <span
-        class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5"
+        class="grid w-full min-w-0 grid-cols-[minmax(max-content,1fr)_auto_minmax(0,1fr)] items-center gap-1.5"
       >
         {#if harnessIds.length > 0}
           <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
@@ -1312,10 +1312,12 @@
       {#if hasRowExtras}
         <!-- Footer line: what the thread runs with on the left, the scope in
              the middle, then where it runs, its branch, its markers and its
-             last-edited time on the right. The middle column is a fixed track
-             (not a flex item), so the scope sits at the row's true centre. -->
+             last-edited time on the right. The harness track reserves its own
+             content width (`max-content`), so a wide scope chip can never
+             squeeze it down and clip an icon; the scope stays centred whenever
+             the two side tracks have room to stay equal. -->
         <span
-          class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 overflow-hidden"
+          class="grid w-full min-w-0 grid-cols-[minmax(max-content,1fr)_auto_minmax(0,1fr)] items-center gap-2 overflow-hidden"
         >
           {#if harnessIds.length > 0}
             <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
