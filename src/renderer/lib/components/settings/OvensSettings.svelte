@@ -50,6 +50,13 @@
   import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
 
   const fieldClass = 'w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground'
+
+  interface Props {
+    /** Open the app's own harness settings, where Local harnesses are managed. */
+    onOpenHarnessSettings: () => void
+  }
+
+  let { onOpenHarnessSettings }: Props = $props()
   let ovenState = $state.raw<OvenState | null>(null)
   let health = $state<Record<string, OvenConnectionStatus>>({})
   let folded = $state<Record<string, boolean>>({})
@@ -630,6 +637,14 @@
             <div class="flex items-center gap-2">
               {#if busy === oven.id}<Loader2 size={14} class="animate-spin text-muted" />{/if}
               {#if oven.id === LOCAL_OVEN_ID}
+                <button
+                  type="button"
+                  class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
+                  disabled={Boolean(busy)}
+                  onclick={onOpenHarnessSettings}
+                >
+                  <Terminal size={12} />Setup
+                </button>
                 {#if ovenState?.defaultOvenId !== oven.id}
                   <button
                     type="button"

@@ -1433,7 +1433,12 @@
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
     {:else if section === 'ovens'}
-      <OvensSettings />
+      <OvensSettings
+        onOpenHarnessSettings={() => {
+          settingsUiState.harnessesTab = 'harnesses'
+          onNavigateSection('harnesses')
+        }}
+      />
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
     {:else if section === 'about'}
