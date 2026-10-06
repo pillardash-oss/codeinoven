@@ -616,12 +616,12 @@
 
   /** Whether the detailed row has anything for its footer line besides the
    *  last-edited time. With nothing else to show, the time rides on the primary
-   *  line and the row stays a single line. */
+   *  line and the row stays a single line. When the project line is shown it
+   *  carries the Oven/branch marks instead, so they no longer count here. */
   let hasRowExtras = $derived(
     harnessIds.length > 0 ||
       (scopeBucket !== null && !hideScope) ||
-      branch !== null ||
-      isRemote ||
+      (!showProjectLine && (branch !== null || isRemote)) ||
       hasNote ||
       hasTemporaryChat ||
       authoredWorkKind !== null ||
@@ -1244,6 +1244,34 @@
               >{projectName}</span
             >
           {/if}
+          <!-- Where it runs and its branch ride on this line: the project line
+               has the room the footer does not. -->
+          <span class="ml-auto flex shrink-0 items-center justify-end gap-1.5">
+            <span
+              class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
+              title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
+              aria-label={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
+            >
+              {#if isRemote}
+                {#if oven?.iconUrl}
+                  <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
+                {:else}
+                  <Server size={11} class="shrink-0" />
+                {/if}
+              {:else}
+                <Monitor size={10} class="shrink-0" aria-hidden="true" />
+              {/if}
+            </span>
+            {#if branch}
+              <span
+                class="flex min-w-0 items-center gap-0.5 text-[0.625rem] text-muted"
+                title={`Branch: ${branch}`}
+              >
+                <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+                <span class="truncate">{branchLabel}</span>
+              </span>
+            {/if}
+          </span>
         </span>
       {/if}
 
@@ -1300,29 +1328,36 @@
             {@render scopeChip('min-w-0 max-w-[8rem]')}
           {/if}
           <span class="ml-auto flex shrink-0 items-center justify-end gap-1.5">
-            <span
-              class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
-              title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
-              aria-label={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
-            >
-              {#if isRemote}
-                {#if oven?.iconUrl}
-                  <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
-                {:else}
-                  <Server size={11} class="shrink-0" />
-                {/if}
-              {:else}
-                <Monitor size={10} class="shrink-0" aria-hidden="true" />
-              {/if}
-            </span>
-            {#if branch}
+            {#if !showProjectLine}
               <span
-                class="flex min-w-0 items-center gap-0.5 text-[0.625rem] text-muted"
-                title={`Branch: ${branch}`}
+                class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
+                title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
+                aria-label={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
               >
-                <GitBranch size={10} class="shrink-0" aria-hidden="true" />
-                <span class="truncate">{branchLabel}</span>
+                {#if isRemote}
+                  {#if oven?.iconUrl}
+                    <img
+                      src={oven.iconUrl}
+                      alt=""
+                      class="h-3 w-3 object-contain"
+                      draggable="false"
+                    />
+                  {:else}
+                    <Server size={11} class="shrink-0" />
+                  {/if}
+                {:else}
+                  <Monitor size={10} class="shrink-0" aria-hidden="true" />
+                {/if}
               </span>
+              {#if branch}
+                <span
+                  class="flex min-w-0 items-center gap-0.5 text-[0.625rem] text-muted"
+                  title={`Branch: ${branch}`}
+                >
+                  <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+                  <span class="truncate">{branchLabel}</span>
+                </span>
+              {/if}
             {/if}
             {#if hasNote}
               {@const ThreadNoteIcon = feature('thread-note').icon}

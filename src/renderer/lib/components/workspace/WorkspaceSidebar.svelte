@@ -767,6 +767,7 @@
             sectionKey="threads"
             label="Pinned Threads"
             threads={pinnedTimelineThreads}
+            detailed
             activeThreadId={activeThreadId ?? null}
             getRowIcon={(t) => getThreadIcon(t)}
             onOpen={onOpenThread}
@@ -866,6 +867,7 @@
           sectionKey="projects-threads"
           label="Pinned Threads"
           threads={pinnedThreads}
+          detailed
           activeThreadId={activeThreadId ?? null}
           getRowIcon={(t) => {
             const project = projects.find((p) => p.id === t.projectId)

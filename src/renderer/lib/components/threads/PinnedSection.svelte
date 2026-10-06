@@ -16,6 +16,12 @@
     activeThreadId: string | null
     /** Resolves the row icon for a thread (project icon, type icon, …). */
     getRowIcon?: (t: Thread) => string | null
+    /** Render the pinned rows in the detailed (project line, adaptive lines)
+     *  layout, so they match the regular rows of the view that hosts them. */
+    detailed?: boolean
+    /** Hide the project name on the detailed rows, matching a project's own
+     *  thread list, which is already named by the folder above it. */
+    hideProjectName?: boolean
     onOpen: (t: Thread) => void
     onRename: (t: Thread, newName: string) => Promise<void>
     onTogglePin: (t: Thread) => void
@@ -48,6 +54,8 @@
     threads,
     activeThreadId,
     getRowIcon = () => null,
+    detailed = false,
+    hideProjectName = false,
     onOpen,
     onRename,
     onTogglePin,
@@ -105,7 +113,8 @@
           {:else}
             <ThreadRow
               {thread}
-              compact
+              {detailed}
+              {hideProjectName}
               projectIconUrl={getRowIcon(thread)}
               selected={activeThreadId === thread.id}
               {onOpen}
