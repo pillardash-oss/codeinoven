@@ -62,6 +62,18 @@ class OvenIdentityStore {
     return this.ensure()
   }
 
+  /**
+   * Adopt a registry a caller already read.
+   *
+   * Every surface that names an Oven (thread rows, the hover card, the Oven
+   * picker) reads this store, so publishing the answer that Settings already
+   * fetched is what makes an icon or colour edit show up everywhere at once
+   * instead of waiting for the next app start.
+   */
+  adopt(state: OvenState): void {
+    this.#state = state
+  }
+
   identity(ovenId: string | undefined | null): OvenIdentity | null {
     if (!ovenId) return null
     if (ovenId === LOCAL_OVEN_ID)

@@ -3,7 +3,7 @@ import type { OvenRegistry } from './oven-registry'
 import { OvenSsh } from './oven-ssh'
 import { remoteShell } from './oven-remote-shell'
 import { connectionInspectCommand } from './oven-remote-command'
-import { arch, availableParallelism, hostname, platform, totalmem, homedir } from 'node:os'
+import { arch, availableParallelism, hostname, platform, totalmem, homedir, uptime } from 'node:os'
 import { statfs } from 'node:fs/promises'
 
 export async function localOvenConnection(): Promise<OvenConnectionStatus> {
@@ -20,7 +20,8 @@ export async function localOvenConnection(): Promise<OvenConnectionStatus> {
       memoryBytes: totalmem(),
       diskBytes: disk.blocks * disk.bsize,
       diskAvailableBytes: disk.bavail * disk.bsize,
-      nodeVersion: process.versions.node
+      nodeVersion: process.versions.node,
+      uptimeSeconds: Math.round(uptime())
     }
   }
 }
@@ -36,7 +37,7 @@ export async function inspectOvenConnection(
   try {
     const command = connectionInspectCommand(await remoteShell(ssh, id))
     const lines = (await ssh.execute(id, command, '', 20_000)).trim().split(/\r?\n/u)
-    if (lines.length !== 8) throw new Error('The Oven returned an unexpected system response.')
+    if (lines.length !== 9) throw new Error('The Oven returned an unexpected system response.')
     const number = (value: string): number => {
       const result = Number(value)
       if (!Number.isFinite(result) || result < 0)
@@ -55,7 +56,8 @@ export async function inspectOvenConnection(
         memoryBytes: number(lines[4]),
         diskBytes: number(lines[5]),
         diskAvailableBytes: number(lines[6]),
-        nodeVersion: lines[7] === 'not-installed' ? null : lines[7]
+        nodeVersion: lines[7] === 'not-installed' ? null : lines[7],
+        uptimeSeconds: number(lines[8])
       }
     }
   } catch (error) {

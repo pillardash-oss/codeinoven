@@ -42,6 +42,7 @@ export const invokeOvenContract = {
   'oven:save': {} as Contract<[input: SaveOvenInput], Oven>,
   'oven:remove': {} as Contract<[id: string], OvenState>,
   'oven:setDefault': {} as Contract<[id: string], OvenState>,
+  'oven:reorder': {} as Contract<[ids: string[]], OvenState>,
   'oven:install': {} as Contract<[id: string], OvenProbe>,
   'oven:probe': {} as Contract<[id: string], OvenProbe>,
   'oven:runs': {} as Contract<[id: string], OvenRun[]>,

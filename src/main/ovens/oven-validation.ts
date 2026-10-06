@@ -63,6 +63,15 @@ export function ovenId(value: unknown): string {
   return id
 }
 
+/** The SSH Ovens in the order the user dropped them; Local is never included. */
+export function ovenOrder(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 100)
+    throw new TypeError('An Oven order must be a list of at most 100 ids.')
+  const ids = value.map((id) => ovenId(id))
+  if (new Set(ids).size !== ids.length) throw new TypeError('An Oven order must not repeat an id.')
+  return ids
+}
+
 export function validateSaveOven(value: unknown): SaveOvenInput {
   if (typeof value !== 'object' || !value) throw new TypeError('Oven settings are required.')
   const input = value as Record<string, unknown>

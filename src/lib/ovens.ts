@@ -32,6 +32,12 @@ export interface Oven {
   hasPublicKey: boolean
   hasPassword?: boolean
   connectionStatus?: OvenConnectionStatus
+  /**
+   * Position among the SSH Ovens, ascending. Missing on an Oven written before
+   * ordering existed; the registry fills it from creation time on first read.
+   * Local never carries one: it is always the first row.
+   */
+  order?: number
   createdAt: number
   updatedAt: number
 }
@@ -72,6 +78,8 @@ export interface OvenConnectionStatus {
     diskBytes: number
     diskAvailableBytes: number
     nodeVersion: string | null
+    /** Seconds the Oven has been powered on, as the Oven reports it. */
+    uptimeSeconds: number
   }
 }
 

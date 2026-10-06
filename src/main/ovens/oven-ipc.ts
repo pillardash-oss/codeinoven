@@ -3,7 +3,7 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { OvenRegistry } from './oven-registry'
 import { OvenService } from './oven-service'
 import { inspectOvenConnection, testDraftConnection, localOvenConnection } from './oven-connection'
-import { ovenId, validateSaveOven, validateIdentityPath } from './oven-validation'
+import { ovenId, ovenOrder, validateSaveOven, validateIdentityPath } from './oven-validation'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { SecretVault } from '../storage/secret-vault'
 import type { ProjectManager } from '../../lib/engines/project-manager'
@@ -90,6 +90,7 @@ export function registerOvenIpc(
   })
   ipcMain.handle('oven:remove', (_event, raw: unknown) => registry.remove(ovenId(raw)))
   ipcMain.handle('oven:setDefault', (_event, raw: unknown) => registry.setDefault(ovenId(raw)))
+  ipcMain.handle('oven:reorder', (_event, raw: unknown) => registry.reorder(ovenOrder(raw)))
   ipcMain.handle('oven:install', (_event, raw: unknown) => service.install(ovenId(raw)))
   ipcMain.handle('oven:probe', async (_event, raw: unknown) => {
     const id = ovenId(raw)

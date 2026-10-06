@@ -14,7 +14,7 @@ import {
   rm,
   writeFile
 } from 'node:fs/promises'
-import { availableParallelism, hostname, homedir, totalmem, tmpdir } from 'node:os'
+import { availableParallelism, hostname, homedir, totalmem, tmpdir, uptime } from 'node:os'
 import { dirname, join, isAbsolute } from 'node:path'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
@@ -294,7 +294,8 @@ async function probe(refresh = false): Promise<OvenProbe> {
       memoryBytes: totalmem(),
       diskBytes: disk.blocks * disk.bsize,
       diskAvailableBytes: disk.bavail * disk.bsize,
-      nodeVersion: process.versions.node
+      nodeVersion: process.versions.node,
+      uptimeSeconds: Math.round(uptime())
     },
     harnesses,
     activeRuns: [...jobs.values()].filter((job) => job.run.status === 'running').length,

@@ -153,7 +153,8 @@ printf '%s\\n' "$(hostname)" "$(uname -s)" "$(uname -m)"
 getconf _NPROCESSORS_ONLN 2>/dev/null || printf '0\\n'
 if test -r /proc/meminfo; then awk '/^MemTotal:/ {printf "%.0f\\n", $2 * 1024; exit}' /proc/meminfo; else sysctl -n hw.memsize 2>/dev/null || printf '0\\n'; fi
 df -Pk "$HOME" | awk 'NR==2 {printf "%.0f\\n%.0f\\n", $2 * 1024, $4 * 1024}'
-command -v node >/dev/null 2>&1 && node --version || printf 'not-installed\\n'`
+command -v node >/dev/null 2>&1 && node --version || printf 'not-installed\\n'
+if test -r /proc/uptime; then awk '{printf "%.0f\\n", $1}' /proc/uptime; else b=$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \\([0-9]*\\).*/\\1/p'); if test -n "$b"; then now=$(date +%s); printf '%s\\n' "$((now - b))"; else printf '0\\n'; fi; fi`
   const script = [
     `$ErrorActionPreference = 'SilentlyContinue'`,
     `$ProgressPreference = 'SilentlyContinue'`,
@@ -167,6 +168,8 @@ command -v node >/dev/null 2>&1 && node --version || printf 'not-installed\\n'`
     `$lines.Add([string]([long]$drive.TotalSize))`,
     `$lines.Add([string]([long]$drive.AvailableFreeSpace))`,
     `if (Get-Command node -ErrorAction SilentlyContinue) { $lines.Add((& node --version)) } else { $lines.Add('not-installed') }`,
+    `$os = Get-CimInstance Win32_OperatingSystem`,
+    `if ($os) { $lines.Add([string][long]((Get-Date) - $os.LastBootUpTime).TotalSeconds) } else { $lines.Add('0') }`,
     `$lines -join "\`n"`
   ].join('\n')
   return windowsEncodedCommand(script)
