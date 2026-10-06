@@ -42,7 +42,9 @@
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
+  import { ovens } from '$lib/stores/ovens.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { randomOvenAppearance } from '$lib/oven-appearance'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg'
   import type { CustomIcon } from '$shared/types'
   import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
@@ -69,6 +71,13 @@
   let customSvg = $state<string | undefined>()
   let customIcons = $state<CustomIcon[]>([])
   let color = $state('#22c55e')
+  /**
+   * The appearance the editor treats as unchanged: the saved values when editing,
+   * or the random pair picked for a new Oven. Comparing against this is what
+   * decides whether the Reset control is offered.
+   */
+  let baselineIcon = $state<OvenIcon>('server')
+  let baselineColor = $state('#22c55e')
   let address = $state('ubuntu@')
   let authentication = $state<SaveOvenInput['connection']['authentication']>('agent')
   let identityFile = $state('')
@@ -87,8 +96,8 @@
   let timezoneBusy = $state('')
   const hasAppearance = $derived(
     Boolean(
-      color !== (editing?.color ?? '#22c55e') ||
-      icon !== (editing?.icon ?? 'server') ||
+      color !== baselineColor ||
+      icon !== baselineIcon ||
       customSvg !== editing?.customSvg ||
       pendingIcon ||
       clearImage
@@ -129,11 +138,7 @@
         label: 'Set as default',
         icon: Star,
         disabled: Boolean(busy),
-        onClick: () => {
-          void invoke('oven:setDefault', oven.id)
-            .then((next) => (ovenState = next))
-            .catch((failure: unknown) => (error = message(failure)))
-        }
+        onClick: () => void setDefaultOven(oven.id)
       })
     items.push({ label: 'Edit Oven', icon: Pencil, onClick: () => openEditor(oven) })
     if (oven.id !== LOCAL_OVEN_ID) {
@@ -153,6 +158,16 @@
       })
     }
     return items
+  }
+
+  /** Make an Oven the default, refreshing the list from the registry's answer. */
+  async function setDefaultOven(id: string): Promise<void> {
+    if (busy) return
+    try {
+      ovenState = await invoke('oven:setDefault', id)
+    } catch (failure) {
+      error = message(failure)
+    }
   }
 
   /** One installed harness's occasional actions, behind the badge it belongs to. */
@@ -209,6 +224,7 @@
       }
       void refreshSetupStatuses(ovenState)
       void refreshHealth(ovenState)
+      void ovens.ensureInventory(LOCAL_OVEN_ID)
     } catch (failure) {
       error = message(failure)
     }
@@ -292,12 +308,15 @@
     editing = oven ?? null
     connectionResult = null
     name = oven?.name ?? ''
-    icon = oven?.icon ?? 'server'
+    const appearance = oven ? { icon: oven.icon, color: oven.color } : randomOvenAppearance()
+    baselineIcon = appearance.icon
+    baselineColor = appearance.color
+    icon = appearance.icon
     customSvg = oven?.customSvg
     void invoke('icon-library:list')
       .then((icons) => (customIcons = icons))
       .catch((failure: unknown) => (modalError = message(failure)))
-    color = oven?.color ?? '#22c55e'
+    color = appearance.color
     const connection = oven?.connection
     const host = connection?.host.includes(':') ? `[${connection.host}]` : connection?.host
     address = connection
@@ -331,9 +350,9 @@
   }
 
   function resetAppearance(): void {
-    icon = editing?.icon ?? 'server'
+    icon = baselineIcon
     customSvg = editing?.customSvg
-    color = editing?.color ?? '#22c55e'
+    color = baselineColor
     pendingIcon = undefined
     clearImage = false
   }
@@ -610,7 +629,18 @@
             </div>
             <div class="flex items-center gap-2">
               {#if busy === oven.id}<Loader2 size={14} class="animate-spin text-muted" />{/if}
-              {#if oven.id !== LOCAL_OVEN_ID}
+              {#if oven.id === LOCAL_OVEN_ID}
+                {#if ovenState?.defaultOvenId !== oven.id}
+                  <button
+                    type="button"
+                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
+                    disabled={Boolean(busy)}
+                    onclick={() => void setDefaultOven(oven.id)}
+                  >
+                    <Star size={12} />Set as default
+                  </button>
+                {/if}
+              {:else}
                 <button
                   type="button"
                   class="rounded-lg border px-2.5 py-1.5 text-xs font-medium hover:bg-elevated disabled:opacity-50"
@@ -620,12 +650,12 @@
                     ovenSetupStore.completed[oven.id] || setupComplete[oven.id] || false
                   )}</button
                 >
+                <ThreadDropdown
+                  items={ovenMenuItems(oven)}
+                  title={`${oven.name} actions`}
+                  ariaLabel={`${oven.name} actions`}
+                />
               {/if}
-              <ThreadDropdown
-                items={ovenMenuItems(oven)}
-                title={`${oven.name} actions`}
-                ariaLabel={`${oven.name} actions`}
-              />
               <SettingsDisclosure
                 expanded={!folded[oven.id]}
                 title={`${folded[oven.id] ? 'Show' : 'Hide'} ${oven.name} details`}
@@ -718,7 +748,9 @@
                           ]
                             .filter(Boolean)
                             .join(' · ')
-                        : 'No service has answered from this Oven yet.'}
+                        : oven.kind === 'local'
+                          ? `${ovenPlatformName(health[oven.id]?.specs?.platform)} · this computer`
+                          : 'No service has answered from this Oven yet.'}
                     </dd>
                     {#if probe?.timezone}
                       <dd class="text-xs text-muted">Time zone: {probe.timezone}</dd>
@@ -729,7 +761,22 @@
                       <Boxes size={14} />Installed harnesses
                     </dt>
                     <dd class="flex flex-wrap items-center gap-1.5">
-                      {#if probe?.inventory?.length}
+                      {#if oven.kind === 'local'}
+                        {@const localItems = ovens.inventory(LOCAL_OVEN_ID) ?? []}
+                        {#each localItems.filter((item) => item.health === 'healthy') as item (item.harnessId)}
+                          <span
+                            class="flex items-center rounded-lg bg-elevated p-1"
+                            title={`${item.command}${
+                              item.installedVersion ? ` ${item.installedVersion}` : ''
+                            }`}
+                          >
+                            <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
+                          </span>
+                        {/each}
+                        {#if !localItems.some((item) => item.health === 'healthy')}
+                          <span class="text-xs text-muted">None found</span>
+                        {/if}
+                      {:else if probe?.inventory?.length}
                         {#each probe.inventory.filter((item) => item.health !== 'missing') as item (item.harnessId)}
                           <span
                             class="flex items-center gap-0.5 rounded-lg bg-elevated py-0.5 pr-0.5 pl-1.5"
