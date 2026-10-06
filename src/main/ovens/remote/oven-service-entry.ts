@@ -2,9 +2,20 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer, connect, type Socket } from 'node:net'
-import { mkdir, open, readFile, rename, unlink, chmod, readdir, statfs, rm } from 'node:fs/promises'
+import {
+  mkdir,
+  open,
+  readFile,
+  rename,
+  unlink,
+  chmod,
+  readdir,
+  statfs,
+  rm,
+  writeFile
+} from 'node:fs/promises'
 import { availableParallelism, hostname, homedir, totalmem, tmpdir } from 'node:os'
-import { join, isAbsolute } from 'node:path'
+import { dirname, join, isAbsolute } from 'node:path'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { once } from 'node:events'
@@ -544,6 +555,64 @@ async function migrateLegacyRoot(): Promise<void> {
     await rm(legacyRoot, { recursive: true, force: true }).catch(() => undefined)
 }
 
+/**
+ * Launch the daemon so it outlives whatever started it.
+ *
+ * POSIX can simply detach. Windows cannot: OpenSSH there ends the whole process
+ * tree when the session closes, so a detached child dies with it and the Oven
+ * goes offline the moment the user's shell exits. A process created by the WMI
+ * provider is owned by that provider rather than the session, which is what
+ * makes the service durable. It is launched through a command script so the
+ * daemon still receives the environment this call meant to give it.
+ */
+async function startDaemon(): Promise<void> {
+  if (process.platform !== 'win32') {
+    const child = spawn(process.execPath, [process.argv[1], 'daemon'], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env }
+    })
+    child.unref()
+    return
+  }
+  const revision = process.env['CODEINOVEN_OVEN_REVISION']
+  const launcher = join(root, 'service-start.cmd')
+  await writeFile(
+    launcher,
+    [
+      '@echo off',
+      `set "CODEINOVEN_OVEN_DATA_ROOT=${root}"`,
+      ...(revision ? [`set "CODEINOVEN_OVEN_REVISION=${revision}"`] : []),
+      `set "PATH=${dirname(process.execPath)};%PATH%"`,
+      `"${process.execPath}" "${process.argv[1]}" daemon`,
+      ''
+    ].join('\r\n'),
+    { mode: 0o600 }
+  )
+  // Encoded so no layer of shell quoting can mangle a path with a space in it.
+  const program = [
+    '$ErrorActionPreference = "Stop"',
+    `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'cmd.exe /c ""${launcher}""' }`,
+    'if ($r.ReturnValue -ne 0) { exit 1 }'
+  ].join('; ')
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      'powershell',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-EncodedCommand',
+        Buffer.from(program, 'utf16le').toString('base64')
+      ],
+      { stdio: 'ignore', windowsHide: true }
+    )
+    child.once('error', reject)
+    child.once('close', (code) =>
+      code === 0 ? resolve() : reject(new Error('The Oven service could not be launched.'))
+    )
+  })
+}
+
 async function daemon(): Promise<void> {
   await migrateLegacyRoot()
   await mkdir(join(root, 'runs'), { recursive: true, mode: 0o700 })
@@ -667,15 +736,7 @@ async function main(): Promise<void> {
       /* Start an absent service. */
     }
     // Same normalized remote environment as the Node client; no desktop ownership marker.
-    const child = spawn(process.execPath, [process.argv[1], 'daemon'], {
-      detached: true,
-      stdio: 'ignore',
-      // Detached on Windows means a new console; hide it so starting an Oven
-      // never flashes a window over the user's work.
-      windowsHide: true,
-      env: { ...process.env }
-    })
-    child.unref()
+    await startDaemon()
     for (let attempt = 0; attempt < 50; attempt++) {
       await new Promise<void>((resolve) => setTimeout(resolve, 100))
       try {
