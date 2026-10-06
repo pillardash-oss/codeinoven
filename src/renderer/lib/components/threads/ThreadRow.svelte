@@ -1051,9 +1051,7 @@
       : isBusyIndicator
         ? isRetryPaused
           ? 'bg-warning/5 hover:bg-elevated'
-          : isForeignRun
-            ? 'bg-thread-working/5 hover:bg-elevated'
-            : 'animate-pulse bg-thread-working/5 hover:bg-elevated'
+          : 'bg-thread-working/5 hover:bg-elevated'
         : 'hover:bg-elevated'}"
     title={displayTitle}
     aria-current={selected ? 'true' : undefined}
