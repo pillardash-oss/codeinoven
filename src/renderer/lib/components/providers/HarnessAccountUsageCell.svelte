@@ -91,8 +91,18 @@
   }
 </script>
 
-<div class="flex min-w-0 items-start gap-4">
-  <div class="min-w-0 flex-1 space-y-1.5">
+{#snippet noLimitsMessage()}
+  <p class="text-xs text-dimmed">
+    No limits to report
+    {#if snapshot && snapshot.fetchedAt > 0}
+      <span class="mx-1" aria-hidden="true">·</span>
+      <span title={checkedAtTitle}>Updated {relativeTime(snapshot.fetchedAt)}</span>
+    {/if}
+  </p>
+{/snippet}
+
+<div class="min-w-0">
+  <div class="min-w-0 space-y-1.5">
     {#if usage && hasQuota}
       <UsageWindowList limits={usage.rateLimits} variant="table" />
       {#if credits}
@@ -140,9 +150,9 @@
         {/if}
       </div>
     {:else if usage}
-      <p class="text-xs text-dimmed">No limits to report</p>
+      {@render noLimitsMessage()}
     {:else if snapshot && snapshot.fetchedAt > 0}
-      <p class="text-xs text-dimmed">No limits to report</p>
+      {@render noLimitsMessage()}
     {:else}
       <div class="space-y-1.5" aria-hidden="true">
         <div class="h-2 w-28 animate-pulse rounded-full bg-overlay"></div>
@@ -152,17 +162,6 @@
       <span class="sr-only">Checking usage for {account.label}</span>
     {/if}
   </div>
-
-  {#if probing && snapshot && !failed}
-    <p class="flex shrink-0 items-center gap-1 whitespace-nowrap text-[0.625rem] text-dimmed">
-      <Loader2 size={10} class="animate-spin" aria-hidden="true" />
-      Checking…
-    </p>
-  {:else if !probing && snapshot && snapshot.fetchedAt > 0}
-    <p class="shrink-0 whitespace-nowrap text-[0.625rem] text-dimmed" title={checkedAtTitle}>
-      Updated {relativeTime(snapshot.fetchedAt)}
-    </p>
-  {/if}
 </div>
 
 <Modal open={loginOpen} title={`Sign in to ${account.label}`} onClose={() => (loginOpen = false)}>

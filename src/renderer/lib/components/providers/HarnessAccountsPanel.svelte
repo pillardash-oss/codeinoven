@@ -17,6 +17,9 @@
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import type { HarnessAccount, ProviderConnectionInfo } from '$shared/types'
+  import { relativeTime } from '$lib/format/relative-time'
+  import { bankedResetSummary, creditsLabel } from '$lib/format/usage'
+  import { formatDateTimeWithWeekday } from '$shared/date-time-format'
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
   import HarnessAccountUsageCell from './HarnessAccountUsageCell.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -467,6 +470,13 @@
         column: DataTableColumn<HarnessAccount, AccountSortKey>
       )}
         {@const harness = harnessFor(account.harnessId)}
+        {@const usageSnapshot = harnessAccountUsageCache.snapshotFor(account.id)}
+        {@const accountUsage = usageSnapshot?.usage}
+        {@const hasReportedLimits =
+          !!accountUsage &&
+          (accountUsage.rateLimits.length > 0 ||
+            bankedResetSummary(accountUsage.bankedResets) !== undefined ||
+            creditsLabel(accountUsage) !== undefined)}
         {#if column.key === 'account'}
           <div class="flex min-w-0 items-center gap-2.5">
             <AgentIcon
@@ -492,6 +502,18 @@
               >
                 {harness?.name ?? account.harnessId} · {providerLabel(account)}
               </p>
+              {#if hasReportedLimits && usageSnapshot && usageSnapshot.fetchedAt > 0}
+                {#if harnessAccountUsageCache.isProbing(account.id) && !usageSnapshot.error}
+                  <p class="truncate text-[0.625rem] text-dimmed">Checking…</p>
+                {:else}
+                  <p
+                    class="truncate text-[0.625rem] text-dimmed"
+                    title={`Last checked ${formatDateTimeWithWeekday(usageSnapshot.fetchedAt)}${usageSnapshot.error ? ` · ${usageSnapshot.error}` : ''}`}
+                  >
+                    Updated {relativeTime(usageSnapshot.fetchedAt)}
+                  </p>
+                {/if}
+              {/if}
             </div>
           </div>
         {:else if column === usageColumn}
@@ -501,7 +523,7 @@
             {#if hasSiblingAccounts(account) && !account.isDefault}
               <button
                 type="button"
-                class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-accent"
+                class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-accent"
                 title={`Set ${account.label} as the default account for ${providerLabel(account)}`}
                 aria-label={`Set ${account.label} as the default account for ${providerLabel(account)}`}
                 onclick={() => void setDefault(account)}
