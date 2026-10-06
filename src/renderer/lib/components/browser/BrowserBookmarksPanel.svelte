@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
+  import { fly, slide } from 'svelte/transition'
   import {
     Bookmark,
     ChevronDown,
@@ -451,7 +452,7 @@
 
 <div class="flex h-full min-h-0 flex-col" data-drop-region="browser-bookmarks">
   {#if creating}
-    <div class="flex h-full min-h-0 flex-col">
+    <div class="flex h-full min-h-0 flex-col" in:fly={{ x: 18, duration: 150 }}>
       <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
         <button
           type="button"
@@ -590,7 +591,7 @@
               </button>
             </div>
             {#if expandedGroupId === group.id}
-              <div class="mb-1 rounded-lg border p-3">
+              <div class="mb-1 rounded-lg border p-3" transition:slide={{ duration: 150 }}>
                 <BrowserBookmarkGroupEditor
                   {group}
                   onSaved={() => (expandedGroupId = null)}
