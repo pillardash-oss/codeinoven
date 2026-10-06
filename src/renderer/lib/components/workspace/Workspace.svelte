@@ -3083,15 +3083,34 @@
         limit: THREADS_VIEW_HYDRATION_LIMIT,
         offset: 0
       })
-      const uniqueCurrentThreads = uniqueThreadList(allThreads)
-      const known = new Set(uniqueCurrentThreads.map((thread) => thread.id))
-      const additions = uniqueThreadList(page).filter(
-        (thread) => !known.has(thread.id) && !isOrchestrationChildThread(thread)
-      )
-      scopeState.mergeThreads(page)
-      if (additions.length > 0 || uniqueCurrentThreads.length !== allThreads.length) {
-        allThreads = [...uniqueCurrentThreads, ...additions]
+      const uniquePage = uniqueThreadList(page)
+      scopeState.mergeThreads(uniquePage)
+      // Fold the hydrated page back over the list. `thread:listRecent` carries
+      // harness-usage decoration, while the bounded first-paint slice
+      // (`thread:listRecentPerProject`) deliberately omits it. Adding only the
+      // ids the list had never seen left every first-paint row on its
+      // usage-less copy, so a thread that used several harnesses over its
+      // session only ever drew the fallback from `settings.harnessId`. Known
+      // rows must take the page's copy; unseen rows append after the list.
+      // A scratch index for this one pass, never read reactively.
+      // eslint-disable-next-line svelte/prefer-svelte-reactivity
+      const incoming = new Map<string, Thread>()
+      for (const thread of uniquePage) {
+        if (isOrchestrationChildThread(thread)) continue
+        incoming.set(thread.id, thread)
       }
+      let changed = false
+      const refreshed = allThreads.map((existing) => {
+        const replacement = incoming.get(existing.id)
+        if (replacement === undefined) return existing
+        incoming.delete(existing.id)
+        if (replacement === existing) return existing
+        changed = true
+        return replacement
+      })
+      const additions = [...incoming.values()]
+      if (additions.length > 0) changed = true
+      if (changed) allThreads = additions.length > 0 ? [...refreshed, ...additions] : refreshed
       historyOffset = Math.max(historyOffset, page.length)
       hasMoreHistory = page.length === THREADS_VIEW_HYDRATION_LIMIT
     } finally {

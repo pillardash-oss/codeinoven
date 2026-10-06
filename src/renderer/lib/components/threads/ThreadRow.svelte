@@ -545,7 +545,7 @@
    *  separate cards rather than one tall block. */
   let rowLayoutClass = $derived(
     detailed
-      ? 'gap-1 px-2.5 py-1.5 mb-2'
+      ? 'gap-1 px-2.5 py-1.5 mb-3'
       : compact
         ? 'gap-1 px-2 py-1 mb-1'
         : 'gap-1 px-2 py-1.5 mb-1'
@@ -961,9 +961,11 @@
     </span>
 
     {#if showBottomRow}
-      <span class="grid w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5">
+      <span
+        class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5"
+      >
         {#if harnessIds.length > 0}
-          <span class="flex min-w-0 items-center gap-1 overflow-hidden">
+          <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
             {#each harnessIds.slice(0, 3) as harnessId (harnessId)}
               <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
             {/each}
@@ -975,9 +977,9 @@
           </span>
         {/if}
 
-        {@render scopeChip('pb-1 pt-0.5')}
+        {@render scopeChip('col-start-2 pb-1 pt-0.5')}
 
-        <span class="flex min-w-0 items-center justify-end gap-1 overflow-hidden">
+        <span class="col-start-3 flex min-w-0 items-center justify-end gap-1 overflow-hidden">
           {#if isRemote}
             <span
               class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
@@ -1308,12 +1310,15 @@
       </span>
 
       {#if hasRowExtras}
-        <!-- Footer line: what the thread runs with (harnesses, scope) on the
-             left, then where it runs, its branch, its markers and its
-             last-edited time pushed to the right edge. -->
-        <span class="flex w-full min-w-0 items-center gap-1.5 overflow-hidden">
+        <!-- Footer line: what the thread runs with on the left, the scope in
+             the middle, then where it runs, its branch, its markers and its
+             last-edited time on the right. The middle column is a fixed track
+             (not a flex item), so the scope sits at the row's true centre. -->
+        <span
+          class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 overflow-hidden"
+        >
           {#if harnessIds.length > 0}
-            <span class="flex min-w-0 items-center gap-1 overflow-hidden">
+            <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
               {#each harnessIds.slice(0, MAX_HARNESS_ICONS) as harnessId (harnessId)}
                 <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
               {/each}
@@ -1325,9 +1330,9 @@
             </span>
           {/if}
           {#if !hideScope}
-            {@render scopeChip('min-w-0 max-w-[8rem]')}
+            {@render scopeChip('col-start-2 max-w-[8rem]')}
           {/if}
-          <span class="ml-auto flex shrink-0 items-center justify-end gap-1.5">
+          <span class="col-start-3 flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
             {#if !showProjectLine}
               <span
                 class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
