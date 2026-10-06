@@ -139,7 +139,9 @@
       {/if}
     </div>
   {:else if usage}
-    <p class="text-[0.625rem] text-dimmed">No quota reported</p>
+    <p class="text-xs text-dimmed">No limits to report</p>
+  {:else if snapshot && snapshot.fetchedAt > 0}
+    <p class="text-xs text-dimmed">No limits to report</p>
   {:else}
     <div class="space-y-1.5" aria-hidden="true">
       <div class="h-2 w-28 animate-pulse rounded-full bg-overlay"></div>

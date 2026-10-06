@@ -46,6 +46,8 @@
     getRowId: (row: Row) => string
     /** Accessible name for the table. */
     label: string
+    /** Optional classes applied to each body row. */
+    rowClass?: string
     /** Renders the content of one body cell for `row` in `column`. */
     cell: Snippet<[Row, DataTableColumn<Row, SortKey>]>
     /** Allow a third click on the active column to reset to the default order. */
@@ -61,6 +63,7 @@
     columns,
     getRowId,
     label,
+    rowClass = '',
     cell,
     clearable = false,
     initialSortKey = null,
@@ -180,7 +183,7 @@
                 {/if}
               </button>
             {:else}
-              <span class="{column.align === 'right' ? 'text-right' : ''}">{column.header}</span>
+              <span class={column.align === 'right' ? 'text-right' : ''}>{column.header}</span>
             {/if}
           </th>
         {/each}
@@ -188,10 +191,12 @@
     </thead>
     <tbody class="divide-y">
       {#each sortedRows as row (getRowId(row))}
-        <tr>
+        <tr class={rowClass}>
           {#each columns as column (column.header)}
             <td
-              class="px-4 py-3 {column.cellClass ?? ''} {column.align === 'right' ? 'text-right' : ''}"
+              class="px-4 py-3 {column.cellClass ?? ''} {column.align === 'right'
+                ? 'text-right'
+                : ''}"
             >
               {@render cell(row, column)}
             </td>

@@ -47,28 +47,41 @@
   const usageColumn: DataTableColumn<HarnessAccount, AccountSortKey> = {
     key: null,
     header: 'Usage',
-    width: 'w-72'
+    width: 'w-80',
+    cellClass: 'align-middle'
   }
 
   const accountColumns: DataTableColumn<HarnessAccount, AccountSortKey>[] = [
     {
       key: 'harness',
       header: 'Harness',
+      width: 'w-48',
+      cellClass: 'align-middle',
       sortValue: (account) =>
         (harnessFor(account.harnessId)?.name ?? account.harnessId).toLocaleLowerCase('en-US')
     },
     {
       key: 'provider',
       header: 'Provider',
+      width: 'w-44',
+      cellClass: 'align-middle',
       sortValue: (account) => providerLabel(account).toLocaleLowerCase('en-US')
     },
     {
       key: 'label',
       header: 'Label',
+      width: 'w-64',
+      cellClass: 'align-middle',
       sortValue: (account) => account.label.toLocaleLowerCase('en-US')
     },
     usageColumn,
-    { key: null, header: 'Actions', headerClass: 'sr-only' }
+    {
+      key: null,
+      header: 'Actions',
+      headerClass: 'sr-only',
+      width: 'w-28',
+      cellClass: 'align-middle'
+    }
   ]
 
   let filterHarnesses = $derived.by(() => {
@@ -455,6 +468,7 @@
       columns={accountColumns}
       getRowId={(account) => account.id}
       label="Harness accounts"
+      rowClass="transition-colors hover:bg-elevated/40"
       clearable
     >
       {#snippet cell(
