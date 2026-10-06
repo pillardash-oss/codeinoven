@@ -1,0 +1,51 @@
+{
+  "name": "cio-oven",
+  "version": "0.5.58",
+  "description": "Turn a machine into a CodeInOven Oven: start, inspect, and stop the durable Oven service from one command.",
+  "license": "MIT",
+  "author": {
+    "name": "Pillardash Solutions Limited",
+    "email": "hey@pillardash.com"
+  },
+  "homepage": "https://github.com/pillardash/codeinoven#readme",
+  "bugs": {
+    "url": "https://github.com/pillardash/codeinoven/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pillardash/codeinoven.git",
+    "directory": "packages/cio-oven"
+  },
+  "keywords": [
+    "codeinoven",
+    "oven",
+    "agent",
+    "remote",
+    "ssh"
+  ],
+  "type": "module",
+  "bin": {
+    "cio-oven": "bin/cio-oven.mjs"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "os": [
+    "linux",
+    "darwin",
+    "win32"
+  ],
+  "files": [
+    "bin/",
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "bun ../../scripts/build-oven-cli.ts",
+    "prepack": "bun ../../scripts/build-oven-cli.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,9 +1,24 @@
+import { createHash } from 'node:crypto'
 import {
   OVEN_AGENT_CODE_PREFIX,
   OVEN_AGENT_DESCRIPTOR_VERSION,
   type OvenAgentDescriptor,
   type OvenAgentIdentity
 } from '../../lib/ovens'
+
+/**
+ * SHA-256 fingerprint of an OpenSSH public key, in the form `ssh-keygen -lf`
+ * prints.
+ *
+ * Shared by the app and the published `cio-oven` CLI so the fingerprint a user
+ * compares against GitHub is computed the same way on both sides.
+ */
+export function fingerprint(publicKey: string): string {
+  const blob = publicKey.trim().split(/\s+/u)[1]
+  if (!blob) return 'unknown'
+  const digest = createHash('sha256').update(Buffer.from(blob, 'base64')).digest('base64')
+  return `SHA256:${digest.replace(/=+$/u, '')}`
+}
 
 /** A descriptor is tiny; anything larger is not one of ours. */
 const MAX_CODE_BYTES = 256 * 1024

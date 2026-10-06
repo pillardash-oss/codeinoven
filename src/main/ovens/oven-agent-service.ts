@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
@@ -13,7 +12,7 @@ import {
   type SaveOvenInput
 } from '../../lib/ovens'
 import type { OvenRegistry } from './oven-registry'
-import { buildOvenAgentScript, normalizeServiceBundle } from './oven-agent-script'
+import { normalizeServiceBundle, serviceBundleRevision } from './oven-service-bundle'
 import { decodeOvenAgentDescriptor, descriptorHasIdentity } from './oven-agent-descriptor'
 import { Logger } from '../system/logger'
 
@@ -132,19 +131,10 @@ export class OvenAgentService {
       const source = normalizeServiceBundle(
         await readFile(join(app.getAppPath(), 'out/main/oven-service.mjs'), 'utf8')
       )
-      return { source, revision: createHash('sha256').update(source).digest('hex') }
+      return { source, revision: serviceBundleRevision(source) }
     })()
     return this.bundle
   }
 }
 
-/** SHA-256 fingerprint of an OpenSSH public key, the form `ssh-keygen -lf` prints. */
-export function fingerprint(publicKey: string): string {
-  const blob = publicKey.trim().split(/\s+/u)[1]
-  if (!blob) return 'unknown'
-  const digest = createHash('sha256')
-    .update(Buffer.from(blob, 'base64'))
-    .digest('base64')
-    .replace(/=+$/u, '')
-  return `SHA256:${digest}`
-}
+export { fingerprint } from './oven-agent-descriptor'

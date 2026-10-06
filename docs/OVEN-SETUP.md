@@ -29,6 +29,26 @@ The app reaches the machine the same way it reaches any Oven: over SSH to the du
 
 **New Oven** is unchanged. Add a machine, test the connection, and install the service from this app. Both paths produce the same Oven.
 
+## Add a machine with one command
+
+The published `cio-oven` CLI prepares a machine from its own shell, without this app reaching it first. It writes the same service bundle, starts the same durable service, and prints the same registration code as the agent installer, so an Oven prepared either way registers identically.
+
+```sh
+npx cio-oven start
+```
+
+It asks for the Oven name, the SSH port this app should connect on, and whether to provision a dedicated key, then starts the service in the background and prints a code for **Settings → Ovens → Add via agent**. Every question has a flag, so it also runs unattended: `npx cio-oven start --yes`, or `npx cio-oven start --yes --port 2222 --no-identity`.
+
+```sh
+npx cio-oven status    # installed and running, with the service revision
+npx cio-oven stop      # stop the durable service
+npx cio-oven restart   # replace the running service with the current release
+```
+
+Everything it writes stays under the same app-managed directory this app uses, `~/.config/pillardash/codeinoven-oven`. A dedicated key is created at `~/.ssh/codeinoven-oven-agent` and authorized for the account; on a Windows administrator account the key is also authorized in the machine-wide `administrators_authorized_keys`, and the command prints the exact line to add when that file needs an elevated shell. Node.js 22 or later must already be installed, because the Oven service runs on it.
+
+The service survives the command exiting, the shell closing, and this app closing. It stops when the user runs `npx cio-oven stop`.
+
 ## The Oven clock
 
 Setup matches the Oven's clock to this computer's time zone as a prerequisite step. The zone is read before anything changes, set through the platform's own tool (`timedatectl` on Linux, `systemsetup` on macOS, PowerShell on Windows) and read back afterwards, so a change that did not take is reported instead of assumed. An Oven already on this computer's zone is skipped with that reason. An Oven with no supported way to change its zone, and a Windows Oven whose SSH session is not an administrator, skip the step with the reason rather than failing an otherwise complete setup.

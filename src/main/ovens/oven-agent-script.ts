@@ -6,6 +6,11 @@ import {
 } from '../../lib/ovens'
 import { planNodeInstall, type NodeInstallPlan } from './oven-setup-bootstrap'
 import type { OvenPackageManager } from '../../lib/ovens'
+import { normalizeServiceBundle } from './oven-service-bundle'
+
+// Re-exported so the agent installer, the pushed-install path, and the CLI keep
+// naming one normalization function.
+export { normalizeServiceBundle }
 
 /** The heredoc/here-string markers that fence the embedded service bundle. */
 const BUNDLE_MARKER = 'CODEINOVEN_OVEN_SERVICE_BUNDLE'
@@ -114,11 +119,6 @@ export function buildOvenAgentScript(input: OvenAgentScriptInput): OvenAgentScri
     identity: input.identity,
     bootstrapNode: input.bootstrapNode
   }
-}
-
-/** Normalize the bundle to exactly one trailing newline so hashes and bytes agree. */
-export function normalizeServiceBundle(source: string): string {
-  return `${source.replace(/\n+$/u, '')}\n`
 }
 
 function posixScript(input: OvenAgentScriptInput): string {

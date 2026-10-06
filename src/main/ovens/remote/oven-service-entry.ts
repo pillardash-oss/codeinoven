@@ -1,5 +1,6 @@
 /** Standalone Node service. No Electron, desktop paths, or app-owned process markers. */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createServer, connect, type Socket } from 'node:net'
 import { mkdir, open, readFile, rename, unlink, chmod, readdir, statfs } from 'node:fs/promises'
 import { availableParallelism, hostname, homedir, totalmem } from 'node:os'
@@ -56,7 +57,17 @@ if (process.platform !== 'win32') {
   process.env['PATH'] = `${join(npmPrefix, 'bin')}:${process.env['PATH'] ?? ''}`
   process.env['npm_config_prefix'] = npmPrefix
 }
-const socketPath = join(root, 'service.sock')
+/**
+ * Where clients reach the running service.
+ *
+ * POSIX binds a unix socket file under the data root. Windows cannot: the same
+ * call creates a named pipe there, so the path is the pipe name itself and no
+ * filesystem permission call below can apply to it.
+ */
+const socketPath =
+  process.platform === 'win32'
+    ? `\\\\.\\pipe\\codeinoven-oven-${createHash('sha256').update(root).digest('hex').slice(0, 16)}`
+    : join(root, 'service.sock')
 const lockPath = join(root, 'service.pid')
 const jobs = new Map<string, Job>()
 let shutDownServer: (() => void) | undefined
@@ -562,7 +573,8 @@ async function daemon(): Promise<void> {
   }
   server.listen(socketPath)
   await once(server, 'listening')
-  await chmod(socketPath, 0o600)
+  // A named pipe on Windows carries no file mode to restrict.
+  if (process.platform !== 'win32') await chmod(socketPath, 0o600)
 }
 
 function request(data: string): Promise<string> {
@@ -610,6 +622,9 @@ async function main(): Promise<void> {
     const child = spawn(process.execPath, [process.argv[1], 'daemon'], {
       detached: true,
       stdio: 'ignore',
+      // Detached on Windows means a new console; hide it so starting an Oven
+      // never flashes a window over the user's work.
+      windowsHide: true,
       env: { ...process.env }
     })
     child.unref()
