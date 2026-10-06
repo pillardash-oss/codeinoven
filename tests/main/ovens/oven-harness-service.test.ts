@@ -29,13 +29,20 @@ const probe: OvenProbe = {
 }
 
 function harnessService() {
-  const execute = vi.fn(async (_ovenId: string, _command: string, _input: string, _timeout?: number) => 'done')
+  const execute = vi.fn(
+    async (_ovenId: string, _command: string, _input: string, _timeout?: number) => 'done'
+  )
   const oven = {
     probe: vi.fn(async () => probe),
     runs: vi.fn(async () => []),
     ssh: { execute }
   } as unknown as OvenService
-  const storage = { read: vi.fn(async () => null) } as unknown as StorageEngine
+  const storage = {
+    read: vi.fn(async () => null),
+    // The service now keeps a persisted copy of each Oven's inventory, so a
+    // stub without a write sink no longer satisfies its storage dependency.
+    write: vi.fn(async () => undefined)
+  } as unknown as StorageEngine
   return { service: new OvenHarnessService(oven, storage), oven, execute }
 }
 
@@ -43,14 +50,18 @@ describe('oven harness service', () => {
   it('maps probe paths into installed and missing inventory rows', async () => {
     const { service } = harnessService()
     const inventory = await service.getInventory('oven-test')
-    expect(inventory.find((item) => item.command === 'codex')?.executablePath).toBe('/home/test/.npm/bin/codex')
+    expect(inventory.find((item) => item.command === 'codex')?.executablePath).toBe(
+      '/home/test/.npm/bin/codex'
+    )
     expect(inventory.find((item) => item.command === 'claude')?.health).toBe('missing')
   })
 
   it('waits for an active harness run before updating it', async () => {
     const { service, oven, execute } = harnessService()
     vi.mocked(oven.runs).mockResolvedValue([
-      { id: 'run-1', command: 'codex', status: 'running' } as Awaited<ReturnType<OvenService['runs']>>[number]
+      { id: 'run-1', command: 'codex', status: 'running' } as Awaited<
+        ReturnType<OvenService['runs']>
+      >[number]
     ])
     const update = service.updateHarness('oven-test', 'codex')
     await new Promise((resolve) => setTimeout(resolve, 30))

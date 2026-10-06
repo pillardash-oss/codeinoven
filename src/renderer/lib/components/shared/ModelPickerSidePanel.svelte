@@ -359,13 +359,16 @@
           <button
             type="button"
             data-picker-entry
-            class="flex h-6 items-center gap-1 rounded-md border px-2 text-[0.625rem] font-medium transition-colors {filter.selected.has(
-              option.id
-            )
-              ? 'border-primary bg-primary text-on-primary'
-              : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+            class="flex h-6 items-center gap-1 rounded-md border px-2 text-[0.625rem] font-medium transition-colors {option.unavailable
+              ? 'cursor-not-allowed border-border bg-elevated text-dimmed opacity-50'
+              : filter.selected.has(option.id)
+                ? 'border-primary bg-primary text-on-primary'
+                : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
             aria-pressed={filter.selected.has(option.id)}
-            title={`Show only ${option.name} models`}
+            disabled={option.unavailable === true}
+            title={option.unavailable
+              ? (option.reason ?? `${option.name} is not installed on this Oven`)
+              : `Show only ${option.name} models`}
             onclick={() => filter.onToggle(option.id)}
           >
             <ModelPickerHarnessIcon harnessId={option.id} />

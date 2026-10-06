@@ -3,7 +3,7 @@ import { promisify } from 'node:util'
 import { usesThreadWorkspaceMount } from '../../lib/types'
 import type { Project, Thread } from '../../lib/types'
 import type { OvenService } from './oven-service'
-import { ovenScopeRoot } from './remote/oven-root-paths'
+import { ovenDataRoot, ovenScopeRoot, ovenSessionsRoot } from './remote/oven-root-paths'
 
 const execute = promisify(execFile)
 
@@ -11,10 +11,19 @@ const execute = promisify(execFile)
 const GITHUB_ORIGIN =
   /^(?:git@github\.com:|https?:\/\/github\.com\/)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/iu
 
+/** One preparation step the `onProgress` callback can report. */
+export type OvenRootStep = 'checkout' | 'clone'
+
 /** One authoritative remote checkout for a thread, plus the project it came from. */
 export interface OvenThreadRoot {
   ovenId: string
   root: string
+  /** App-managed root on the Oven; every checkout and session file lives under it. */
+  dataRoot: string
+  /** Where these sessions' transcripts belong, outside the checkout. */
+  sessionsRoot: string
+  /** Current branch of the checkout, when it is a Git repository. */
+  branch?: string
   /** Local checkout the repository came from, when this project has one. */
   localRepository?: string
   /** GitHub SSH URL the Oven must clone, when the project has a GitHub origin. */
@@ -29,28 +38,44 @@ export interface OvenThreadRoot {
  * explicit `ovenPath` keeps it; otherwise the scope-owned directory is prepared
  * on the Oven, cloned from the project's GitHub origin when there is one, and
  * left exactly as it stands when it already exists.
+ *
+ * `onProgress` reports the step that is about to run, so the working trace can
+ * tell the user what the Oven is doing instead of showing a bare "working".
  */
 export async function resolveOvenThreadRoot(
   service: OvenService,
   thread: Thread,
-  projects: { getProject(id: string): Promise<Project | null> }
+  projects: { getProject(id: string): Promise<Project | null> },
+  onProgress?: (step: OvenRootStep) => void
 ): Promise<OvenThreadRoot> {
   const ovenId = thread.settings?.ovenId
   if (!ovenId || ovenId === 'local') throw new Error('This thread has no remote Oven.')
   const project = await projects.getProject(thread.projectId)
   const localRepository = project?.source === 'local' ? project.path : undefined
-  if (thread.settings?.ovenPath)
+  const probe = await service.probe(ovenId)
+  const dataRoot = ovenDataRoot(probe.home)
+  const sessionsRoot = ovenSessionsRoot(probe.home)
+
+  if (thread.settings?.ovenPath) {
+    const root = thread.settings.ovenPath
     return {
       ovenId,
-      root: thread.settings.ovenPath,
-      ...(localRepository ? { localRepository } : {})
+      root,
+      dataRoot,
+      sessionsRoot,
+      ...(localRepository ? { localRepository } : {}),
+      ...(await checkoutBranch(service, ovenId, root))
     }
-  const probe = await service.probe(ovenId)
+  }
+
   const scopeId = usesThreadWorkspaceMount(thread.projectId)
     ? thread.id
     : thread.scopeBucketId || 'default'
   const root = ovenScopeRoot(probe.home, thread.projectId, scopeId)
   const origin = localRepository ? await githubOrigin(localRepository) : null
+  if (!origin) onProgress?.('checkout')
+  else if (await checkoutExists(service, ovenId, root)) onProgress?.('checkout')
+  else onProgress?.('clone')
   const prepared = await service.workspace(
     ovenId,
     origin ? { operation: 'clone', root, url: origin } : { operation: 'ensure', root },
@@ -59,9 +84,39 @@ export async function resolveOvenThreadRoot(
   return {
     ovenId,
     root: prepared.root,
+    dataRoot,
+    sessionsRoot,
     ...(localRepository ? { localRepository } : {}),
-    ...(origin ? { origin } : {})
+    ...(origin ? { origin } : {}),
+    ...(await checkoutBranch(service, ovenId, prepared.root))
   }
+}
+
+/** Whether the scope checkout already exists, without creating anything on the Oven. */
+async function checkoutExists(
+  service: OvenService,
+  ovenId: string,
+  root: string
+): Promise<boolean> {
+  try {
+    await service.workspace(ovenId, { operation: 'stat', root, path: '.' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The checkout's current branch, or nothing when it is not a Git working tree. */
+async function checkoutBranch(
+  service: OvenService,
+  ovenId: string,
+  root: string
+): Promise<{ branch?: string }> {
+  const branch = await service
+    .workspace(ovenId, { operation: 'git', root, action: 'branch' })
+    .then((result) => result.text?.trim() ?? '')
+    .catch(() => '')
+  return branch && branch !== 'HEAD' ? { branch } : {}
 }
 
 /**

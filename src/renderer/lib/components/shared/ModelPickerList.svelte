@@ -29,7 +29,6 @@
     modelHaystack,
     passesVisionFilter,
     pickerIndexForSelectedModel,
-    pickerModelKeysOf,
     PICKER_ROW_HEIGHT,
     resolveModel,
     searchWords,
@@ -53,6 +52,14 @@
     profiles?: ModelPickerProfilesGroup | null
     /** Restricts the list to one harness. Unset shows every harness as today. */
     harnessFilter?: string | null
+    /**
+     * Harnesses the current execution target does not have installed (a remote
+     * Oven without them). Their chips and model rows are disabled, because a
+     * model can only run where its harness exists.
+     */
+    unavailableHarnessIds?: ReadonlySet<string> | null
+    /** Why those harnesses are unavailable, shown as the chip's and row's title. */
+    unavailableHarnessReason?: string | null
     favoriteModels: string[]
     recentModels: string[]
     visionOnly: boolean
@@ -81,6 +88,8 @@
     cachedProviders,
     profiles = null,
     harnessFilter = null,
+    unavailableHarnessIds = null,
+    unavailableHarnessReason = null,
     favoriteModels,
     recentModels,
     visionOnly,
@@ -244,7 +253,16 @@
           .map((entryHarnessId) => [entryHarnessId, harnessName(entryHarnessId)])
       )
     )
-      .map(([id, name]) => ({ id, name }))
+      .map(([id, name]) => ({
+        id,
+        name,
+        ...(isUnavailableHarness(id)
+          ? {
+              unavailable: true,
+              ...(unavailableHarnessReason ? { reason: unavailableHarnessReason } : {})
+            }
+          : {})
+      }))
       .sort((left, right) => harnessOrder(left.id) - harnessOrder(right.id))
   )
   const effectiveHarnessCount = $derived(showAllHarnesses ? 0 : selectedHarnesses.size || 0)
@@ -287,8 +305,13 @@
       canReorderFavorites: Boolean(onReorderFavorite)
     })
   )
-  /** Flat, ordered keys of every model row, for keyboard navigation. */
-  const pickerModelKeys = $derived(pickerModelKeysOf(pickerLayout.items))
+  /** Flat, ordered keys of every selectable model row, for keyboard navigation. */
+  const pickerModelKeys = $derived(
+    pickerLayout.items
+      .filter((item): item is Extract<PickerListItem, { kind: 'model' }> => item.kind === 'model')
+      .filter((item) => !isUnavailableHarness(item.entry.provider.harnessId))
+      .map((item) => item.key)
+  )
   const pickerVisibleItems = $derived(
     visiblePickerItems(pickerLayout, pickerListScrollTop, pickerViewport)
   )
@@ -304,7 +327,19 @@
     return !harnessFilter || candidateHarnessId === harnessFilter
   }
 
+  /** True when the current target cannot run this harness's models. */
+  function isUnavailableHarness(candidateHarnessId: string): boolean {
+    return unavailableHarnessIds?.has(candidateHarnessId) === true
+  }
+
+  function unavailableHarnessTitle(candidateHarnessId: string): string {
+    return unavailableHarnessReason ?? `${harnessName(candidateHarnessId)} is not available here`
+  }
+
   function toggleHarness(nextHarnessId: string): void {
+    // A harness the target does not have cannot narrow the list to anything
+    // runnable, so the chip is inert rather than offering a dead filter.
+    if (isUnavailableHarness(nextHarnessId)) return
     if (showAllHarnesses) showAllHarnesses = false
     if (selectedHarnesses.has(nextHarnessId)) {
       if (selectedHarnesses.size > 1) selectedHarnesses.delete(nextHarnessId)
@@ -728,12 +763,18 @@
 {#snippet modelRow(entry: ModelEntry, rowKey: string, recentKey?: string)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   {@const peak = peakHoursBadgeFor(entry.model.id, entry.provider.id)}
+  {@const unavailable = isUnavailableHarness(entry.provider.harnessId)}
   <button
-    class={`model-row-btn group/row ml-4 flex w-[calc(100%-1rem)] flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
-    title={`Use ${entry.model.name}`}
+    class={`model-row-btn group/row ml-4 flex w-[calc(100%-1rem)] flex-col rounded-lg px-2 py-1.5 text-left transition-colors ${unavailable ? 'cursor-not-allowed opacity-50' : 'hover:bg-elevated focus:bg-elevated focus:outline-none'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
+    title={unavailable
+      ? unavailableHarnessTitle(entry.provider.harnessId)
+      : `Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
-    onclick={() => onChoose(entry)}
+    disabled={unavailable}
+    onclick={() => {
+      if (!unavailable) onChoose(entry)
+    }}
     onkeydown={(event: KeyboardEvent) => {
       if (keymapState.matches('palette-model-nav', event)) {
         event.preventDefault()
@@ -764,7 +805,7 @@
       }
       if (keymapState.matches('palette-model-select', event)) {
         event.preventDefault()
-        onChoose(entry)
+        if (!unavailable) onChoose(entry)
         return
       }
       // Editing intent: left/right moves the caret and characters/backspace edit

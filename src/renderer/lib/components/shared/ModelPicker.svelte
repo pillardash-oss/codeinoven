@@ -101,6 +101,14 @@
     onApplyProfile?: (profile: ModelProfile) => void
     /** Restricts the picker to one harness. Unset shows every harness as today. */
     harnessFilter?: string | null
+    /**
+     * Harnesses the current execution target does not have installed (a remote
+     * Oven without them). Their chips and model rows are disabled, because a
+     * model can only run where its harness exists.
+     */
+    unavailableHarnessIds?: ReadonlySet<string> | null
+    /** Why those harnesses are unavailable, shown as the chip's and row's title. */
+    unavailableHarnessReason?: string | null
     side?: 'top' | 'bottom'
     disabled?: boolean
     variant?: 'compact' | 'field' | 'action'
@@ -163,6 +171,8 @@
     permissionLevel = 'auto_review',
     onApplyProfile,
     harnessFilter = null,
+    unavailableHarnessIds = null,
+    unavailableHarnessReason = null,
     side = 'top',
     disabled = false,
     variant = 'compact',
@@ -882,6 +892,8 @@
           {cachedProviders}
           profiles={profilesGroup}
           {harnessFilter}
+          {unavailableHarnessIds}
+          {unavailableHarnessReason}
           {favoriteModels}
           {recentModels}
           {visionOnly}

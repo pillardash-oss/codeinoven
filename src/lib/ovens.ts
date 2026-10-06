@@ -196,6 +196,13 @@ export type OvenWorkspaceRequest =
     }
   | { operation: 'mkdir'; root: string; path: string; exclusive?: boolean }
   | { operation: 'publishFile'; root: string; path: string; staged: string }
+  /**
+   * Rename one entry inside the root, creating the destination's parents.
+   *
+   * Used to adopt app-owned files out of a checkout (a pi session transcript)
+   * into the Oven's app data directory, which shares a root with the checkout.
+   */
+  | { operation: 'move'; root: string; path: string; to: string }
   | { operation: 'symlink'; root: string; path: string; target: string }
   | { operation: 'stat'; root: string; path: string }
   | {
@@ -206,7 +213,7 @@ export type OvenWorkspaceRequest =
       mode: number
       expectedData?: string
     }
-  | { operation: 'git'; root: string; action: 'status' | 'diff' | 'log' }
+  | { operation: 'git'; root: string; action: 'status' | 'diff' | 'log' | 'branch' }
   | {
       operation: 'clone'
       root: string

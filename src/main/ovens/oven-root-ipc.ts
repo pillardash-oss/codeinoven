@@ -31,6 +31,9 @@ export interface OvenRootDependencies {
 /** A renderer-issued scope key for a remote thread: `oven.<threadId>.<ovenId>`. */
 const OVEN_SCOPE_KEY = /^oven\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/u
 
+/** Routed Git channels after which the checkout's branch may have changed. */
+const BRANCH_CHANGING_CHANNELS = new Set(['git:checkout', 'git:createBranch', 'git:init'])
+
 function parseScopeKey(value: unknown): { threadId: string; ovenId: string } | null {
   if (typeof value !== 'string') return null
   const match = OVEN_SCOPE_KEY.exec(value)
@@ -271,6 +274,25 @@ export function registerOvenRootIpc(dependencies: OvenRootDependencies): void {
     return { currentScope: active?.scopeBucketId ?? 'default', checkouts: [...checkouts.values()] }
   }
 
+  /**
+   * Read the checkout's branch back after a routed Git call that can change it
+   * and persist it on the thread, so a row never shows a stale branch.
+   */
+  const syncThreadBranch = async (
+    projectId: string,
+    threadId: string,
+    target: OvenRootTarget
+  ): Promise<void> => {
+    const branch = await service
+      .workspace(target.ovenId, { operation: 'git', root: target.root, action: 'branch' })
+      .then((result) => result.text?.trim() ?? '')
+      .catch(() => '')
+    if (!branch || branch === 'HEAD') return
+    const thread = await threads.getThread(projectId, threadId)
+    if (!thread || thread.branch === branch) return
+    await threads.setBranch(projectId, threadId, branch)
+  }
+
   ipcMain.handle(
     'oven:rootOperation',
     async (
@@ -300,7 +322,7 @@ export function registerOvenRootIpc(dependencies: OvenRootDependencies): void {
         channel === 'git:syncPeers' || channel === 'git:syncWith'
           ? await peersFor(id, validateEntityId(threadId, 'Thread ID'), target.ovenId)
           : undefined
-      return service.rootOperation(
+      const result = await service.rootOperation(
         target.ovenId,
         target.root,
         id,
@@ -309,6 +331,11 @@ export function registerOvenRootIpc(dependencies: OvenRootDependencies): void {
         project?.path,
         peers
       )
+      // A routed Git call ran on the Oven, so a checkout that moved to another
+      // branch has to be reflected on the desktop thread the row reads.
+      if (BRANCH_CHANGING_CHANNELS.has(channel))
+        await syncThreadBranch(id, validateEntityId(threadId, 'Thread ID'), target)
+      return result
     }
   )
 }

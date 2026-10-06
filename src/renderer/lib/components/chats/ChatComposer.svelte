@@ -70,6 +70,7 @@
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { ovens } from '$lib/stores/ovens.svelte'
   import { filterActions, permissionLevelForAction } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconSvg } from '$lib/vendor-icons/registry'
@@ -359,6 +360,37 @@
       ? { ...baseSettings, permissionLevel: 'auto_review' as const }
       : baseSettings
   )
+
+  /** The remote Oven this composer targets, or null on this computer. */
+  let targetOvenId = $derived(resolved.ovenId ?? null)
+
+  /**
+   * Harnesses the target Oven does not have installed.
+   *
+   * Main keeps a persisted copy of every Oven's harness inventory, refreshed on
+   * each probe, so a harness the user installed on the Oven themselves is in
+   * this set only after it is actually absent. Null while unknown or local, and
+   * the picker then behaves exactly as it does for a local thread.
+   */
+  let unavailableHarnessIds = $derived.by((): ReadonlySet<string> | null => {
+    const ovenId = targetOvenId
+    if (!ovenId || ovenId === 'local') return null
+    return ovens.unavailableHarnesses(ovenId)
+  })
+
+  let unavailableHarnessReason = $derived.by((): string | null => {
+    const ovenId = targetOvenId
+    if (!ovenId || ovenId === 'local') return null
+    const identity = ovens.identity(ovenId)
+    return identity ? `Not installed on ${identity.name}` : 'Not installed on this Oven'
+  })
+
+  $effect(() => {
+    const ovenId = targetOvenId
+    if (!ovenId || ovenId === 'local') return
+    void ovens.ensure()
+    void ovens.ensureInventory(ovenId)
+  })
 
   // svelte-ignore state_referenced_locally
   let value = $state(restoredDraft(initialValue, initialProjectReferences, initialTaskReferences))
@@ -1972,6 +2004,8 @@
         {providers}
         {projectId}
         {harnessId}
+        {unavailableHarnessIds}
+        {unavailableHarnessReason}
         providerId={resolved.providerId}
         modelId={resolved.modelId}
         accountId={resolved.accountId}

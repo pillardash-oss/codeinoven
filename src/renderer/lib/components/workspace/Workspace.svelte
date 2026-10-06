@@ -28,6 +28,7 @@
   import { gitState } from '$lib/stores/git.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { ovens } from '$lib/stores/ovens.svelte'
   import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
@@ -992,6 +993,12 @@
     workspaceState.jumpToMessage?.(id)
   }
 
+  /** The Oven registry is read once so the rail can draw the Oven's own mark. */
+  $effect(() => {
+    const ovenId = selectedThread?.settings?.ovenId
+    if (ovenId && ovenId !== 'local') void ovens.ensure()
+  })
+
   /**
    * Dock contents, grouped: history, then workspace tools, then session tools.
    * Every entry is a toggle   the rail itself is always visible, only the
@@ -1044,17 +1051,24 @@
       : []
 
     const workspaceTools: ContextDockItem[] = []
-    if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local')
+    if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') {
+      // The Oven's tool stands for the Oven itself: its own mark and colour ride
+      // the rail, and its name is what the tooltip and the accessible name say.
+      const identity = ovens.identity(selectedThread.settings.ovenId)
       workspaceTools.push({
         id: 'oven',
-        label: 'Oven',
+        label: identity?.name ?? 'Oven',
         icon: SquareTerminal,
+        ...(identity && !identity.local
+          ? { appearance: { color: identity.color, iconUrl: identity.iconUrl } }
+          : {}),
         active: dockKindActive('oven'),
         onSelect: () =>
           toggleDockPanel('oven', () =>
             contextSidebarState.openOven(selectedThread.projectId, selectedThread.id)
           )
       })
+    }
 
     // Conversations surface their own app-owned workspace directory as the file
     // tree: a chat's artifact directory, or an assistant task's working

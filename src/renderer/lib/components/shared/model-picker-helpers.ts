@@ -21,6 +21,13 @@ export interface UnavailableFavorite {
 export interface PickerHarnessOption {
   id: string
   name: string
+  /**
+   * True when the current execution target (a remote Oven) does not have this
+   * harness installed, so its models cannot run there.
+   */
+  unavailable?: boolean
+  /** Why the harness is unavailable, used as the chip's and row's title. */
+  reason?: string
 }
 
 /**

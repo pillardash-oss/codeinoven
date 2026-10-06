@@ -23,6 +23,9 @@
      *  and its stop control are in that window, not this one, so the trace
      *  explains the missing stream instead of showing a bare spinner. */
     foreignRun?: boolean
+    /** What the app is doing before the harness streams, e.g. preparing or
+     *  cloning a remote checkout. Replaces the generic "Agent working…" line. */
+    note?: string | null
     /** When the agent started working, when known, so the duration can show. */
     startTime: number | undefined
     elapsed: number
@@ -44,6 +47,7 @@
   let {
     rehydrated,
     foreignRun = false,
+    note = null,
     startTime,
     elapsed,
     modelLabel,
@@ -54,7 +58,6 @@
     harnessId,
     harnessName,
     accountLabel,
-    accountId,
     ovenLabel,
     ovenIsLocal = false,
     ovenAppearance
@@ -89,7 +92,7 @@
   {:else}
     <span class="flex min-w-0 shrink items-center gap-2">
       <Loader2 size={11} class="shrink-0 animate-spin text-info" />
-      <span class="shrink-0 text-[0.625rem] text-info/80">Agent working…</span>
+      <span class="min-w-0 truncate text-[0.625rem] text-info/80">{note ?? 'Agent working…'}</span>
       {#if startTime}
         <span class="shrink-0 tabular-nums text-[0.625rem] text-info/80">
           · {formatDurationSeconds(elapsed)}

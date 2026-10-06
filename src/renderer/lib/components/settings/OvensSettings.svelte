@@ -15,6 +15,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import {
     LOCAL_OVEN_ID,
+    ovenHarnessIdForCommand,
     parseOvenAddress,
     type Oven,
     type OvenIcon,
@@ -23,6 +24,7 @@
     type OvenConnectionStatus,
     type SaveOvenInput
   } from '$shared/ovens'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import SecretVisibilityButton from '../shared/SecretVisibilityButton.svelte'
   import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
   import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
@@ -67,7 +69,9 @@
   let showPassphrase = $state(false)
   let publicKey = $state('')
   let pendingRemoval = $state<Oven | null>(null)
-  let pendingHarnessRemoval = $state<{ ovenId: string; harnessId: string; command: string } | null>(null)
+  let pendingHarnessRemoval = $state<{ ovenId: string; harnessId: string; command: string } | null>(
+    null
+  )
   let harnessBusy = $state('')
   const hasAppearance = $derived(
     Boolean(
@@ -109,7 +113,10 @@
       const batch = await Promise.all(
         remote.slice(offset, offset + 3).map(async (oven) => {
           const operation = await invoke('oven:setup:status', oven.id).catch(() => null)
-          return [oven.id, operation?.setupComplete === true || operation?.status === 'succeeded'] as const
+          return [
+            oven.id,
+            operation?.setupComplete === true || operation?.status === 'succeeded'
+          ] as const
         })
       )
       setupComplete = { ...setupComplete, ...Object.fromEntries(batch) }
@@ -357,7 +364,13 @@
       const item = await invoke('oven:harness:update', ovenId, harnessId)
       const probe = probes[ovenId]
       if (probe?.inventory)
-        probes = { ...probes, [ovenId]: { ...probe, inventory: probe.inventory.map((row) => row.harnessId === harnessId ? item : row) } }
+        probes = {
+          ...probes,
+          [ovenId]: {
+            ...probe,
+            inventory: probe.inventory.map((row) => (row.harnessId === harnessId ? item : row))
+          }
+        }
     } catch (failure) {
       error = message(failure)
     } finally {
@@ -374,7 +387,15 @@
       const item = await invoke('oven:harness:uninstall', pending.ovenId, pending.harnessId)
       const probe = probes[pending.ovenId]
       if (probe?.inventory)
-        probes = { ...probes, [pending.ovenId]: { ...probe, inventory: probe.inventory.map((row) => row.harnessId === pending.harnessId ? item : row) } }
+        probes = {
+          ...probes,
+          [pending.ovenId]: {
+            ...probe,
+            inventory: probe.inventory.map((row) =>
+              row.harnessId === pending.harnessId ? item : row
+            )
+          }
+        }
       pendingHarnessRemoval = null
     } catch (failure) {
       error = message(failure)
@@ -481,7 +502,10 @@
                   class="rounded-lg border px-2.5 py-1.5 text-xs hover:bg-elevated disabled:opacity-50"
                   disabled={Boolean(busy)}
                   onclick={() => void openOvenSetup(oven)}
-                >{ovenSetupActionLabel(ovenSetupStore.completed[oven.id] || setupComplete[oven.id] || false)}</button>
+                  >{ovenSetupActionLabel(
+                    ovenSetupStore.completed[oven.id] || setupComplete[oven.id] || false
+                  )}</button
+                >
                 <button
                   type="button"
                   class="rounded-lg px-2 py-1.5 text-xs text-muted hover:bg-elevated"
@@ -591,15 +615,59 @@
                     <span>Installed harnesses:</span>
                     {#if probe.inventory?.length}
                       {#each probe.inventory.filter((item) => item.health !== 'missing') as item (item.harnessId)}
-                        <span class="flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[0.625rem]" title={item.health === 'healthy' ? `${item.command} ${item.installedVersion ?? ''}` : `${item.command}: ${item.health}`}>
-                          <span>{item.command}{item.installedVersion ? ` ${item.installedVersion}` : ` · ${item.health}`}</span>
-                          <button type="button" class="rounded px-1 py-0.5 text-primary hover:bg-surface disabled:opacity-50" title={`Update ${item.command}`} aria-label={`Update ${item.command}`} disabled={Boolean(harnessBusy) || item.health !== 'healthy'} onclick={() => void updateHarness(oven.id, item.harnessId)}>{harnessBusy === `${oven.id}:${item.harnessId}` ? 'Working' : 'Update'}</button>
-                          <button type="button" class="rounded px-1 py-0.5 text-danger hover:bg-surface disabled:opacity-50" title={`Uninstall ${item.command}`} aria-label={`Uninstall ${item.command}`} disabled={Boolean(harnessBusy)} onclick={() => (pendingHarnessRemoval = { ovenId: oven.id, harnessId: item.harnessId, command: item.command })}>Remove</button>
+                        <span
+                          class="flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[0.625rem]"
+                          title={item.health === 'healthy'
+                            ? `${item.command} ${item.installedVersion ?? ''}`
+                            : `${item.command}: ${item.health}`}
+                        >
+                          <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
+                          <button
+                            type="button"
+                            class="rounded px-1 py-0.5 text-primary hover:bg-surface disabled:opacity-50"
+                            title={`Update ${item.command}`}
+                            aria-label={`Update ${item.command}`}
+                            disabled={Boolean(harnessBusy) || item.health !== 'healthy'}
+                            onclick={() => void updateHarness(oven.id, item.harnessId)}
+                            >{harnessBusy === `${oven.id}:${item.harnessId}`
+                              ? 'Working'
+                              : 'Update'}</button
+                          >
+                          <button
+                            type="button"
+                            class="rounded px-1 py-0.5 text-danger hover:bg-surface disabled:opacity-50"
+                            title={`Uninstall ${item.command}`}
+                            aria-label={`Uninstall ${item.command}`}
+                            disabled={Boolean(harnessBusy)}
+                            onclick={() =>
+                              (pendingHarnessRemoval = {
+                                ovenId: oven.id,
+                                harnessId: item.harnessId,
+                                command: item.command
+                              })}>Remove</button
+                          >
                         </span>
                       {/each}
-                      {#if !probe.inventory.some((item) => item.health !== 'missing')}<span>None found</span>{/if}
+                      {#if !probe.inventory.some((item) => item.health !== 'missing')}<span
+                          >None found</span
+                        >{/if}
                     {:else}
-                      <span>{probe.harnesses.filter((harness) => harness.path).map((harness) => harness.command).join(', ') || 'None found'}</span>
+                      {#if probe.harnesses.some((harness) => harness.path)}
+                        {#each probe.harnesses.filter((harness) => harness.path) as harness (harness.command)}
+                          <span
+                            class="flex items-center rounded bg-elevated p-1"
+                            title={harness.command}
+                          >
+                            <AgentIcon
+                              agentId={ovenHarnessIdForCommand(harness.command) ?? harness.command}
+                              label={harness.command}
+                              size={14}
+                            />
+                          </span>
+                        {/each}
+                      {:else}
+                        <span>None found</span>
+                      {/if}
                     {/if}
                   </div>
                 </div>
@@ -866,5 +934,8 @@
   onConfirm={uninstallHarness}
 >
   <p>Uninstall {pendingHarnessRemoval?.command} from this Oven?</p>
-  <p>The harness may remove its own configuration or credentials. CodeInOven checks that it is not running before uninstalling it.</p>
+  <p>
+    The harness may remove its own configuration or credentials. CodeInOven checks that it is not
+    running before uninstalling it.
+  </p>
 </ConfirmDialog>

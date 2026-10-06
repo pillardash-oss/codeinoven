@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Command } from 'bits-ui'
-  import { ArrowLeft, CornerDownLeft, FolderTree, X, Zap } from '@lucide/svelte'
+  import { ArrowLeft, CornerDownLeft, FolderTree, GitBranch, X, Zap } from '@lucide/svelte'
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import { filterActions } from '../../actions'
@@ -9,6 +9,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
+  import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -364,6 +365,27 @@
                 {#if action.description}
                   <span class="min-w-0 truncate text-[0.6875rem] text-dimmed">
                     {action.description}
+                  </span>
+                {/if}
+                {#if action.threadMeta?.oven}
+                  {@const oven = action.threadMeta.oven}
+                  <span
+                    class="flex shrink-0 items-center gap-1 text-[0.6875rem] text-dimmed"
+                    title={`Oven: ${oven.name}`}
+                  >
+                    {#if oven.iconUrl}
+                      <img src={oven.iconUrl} alt="" class="h-3 w-3 shrink-0 object-contain" />
+                    {/if}
+                    <span class="max-w-[9rem] truncate">{oven.name}</span>
+                  </span>
+                {/if}
+                {#if action.threadMeta?.branch}
+                  <span
+                    class="flex shrink-0 items-center gap-1 text-[0.6875rem] text-dimmed"
+                    title={`Branch: ${action.threadMeta.branch}`}
+                  >
+                    <GitBranch size={11} class="shrink-0" aria-hidden="true" />
+                    <span class="font-mono">{threadBranchRowLabel(action.threadMeta.branch)}</span>
                   </span>
                 {/if}
                 {#if action.threadMeta}

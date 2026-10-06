@@ -37,11 +37,13 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { ovens } from '$lib/stores/ovens.svelte'
   import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import { threadScopeBucket } from '$lib/threads/thread-scope'
+  import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type { AuthoredWorkKind } from '$shared/ipc-contract'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
@@ -53,7 +55,8 @@
     isOrchestrationChildThread,
     isThreadBusy
   } from '$shared/types'
-  import { AppWindow, Check, Clock, Pin } from '@lucide/svelte'
+  import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import { AppWindow, Check, Clock, GitBranch, Pin, Server } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
   import { tick } from 'svelte'
@@ -505,6 +508,25 @@
 
   let scopeBucket = $derived(threadScopeBucket(thread))
 
+  /** Whether the thread runs on an Oven rather than this computer. */
+  let isRemote = $derived(
+    Boolean(thread.settings?.ovenId && thread.settings.ovenId !== LOCAL_OVEN_ID)
+  )
+
+  /** Oven the thread runs on, resolved for its mark. Its name lives on the
+   *  hover card, so a row only carries the box icon. */
+  let oven = $derived(isRemote ? ovens.identity(thread.settings?.ovenId) : null)
+
+  /** Git branch the thread's checkout is on, when main resolved one. */
+  let branch = $derived(thread.branch?.trim() || null)
+
+  /** The branch as the row shows it: four characters, full name on the popover. */
+  let branchLabel = $derived(branch ? threadBranchRowLabel(branch) : null)
+
+  $effect(() => {
+    if (isRemote) void ovens.ensure()
+  })
+
   /** The authored-work session this thread is in, or null when it is in none.
    *  Drawn from the persisted thread field: main writes it the moment the thread
    *  enters a session and pushes the row over `thread:updated`, so no scan and no
@@ -513,11 +535,15 @@
 
   let hasNote = $derived(threadNotesState.has(thread.id))
 
-  /** Whether the bottom line (scope/harness/time) is shown. A thread in an
-   *  authored-work session always shows it, because the marker for that session rides
-   *  the bottom line beside the computer-use/recording indicator. */
+  /** Whether the bottom line (harnesses, scope, branch, time) is shown. A remote
+   *  thread always shows it: the Oven and the branch belong on every row of it. */
   let showBottomRow = $derived(
-    authoredWorkKind !== null || scopeBucket !== null || harnessIds.length > 1 || hasNote
+    authoredWorkKind !== null ||
+      scopeBucket !== null ||
+      harnessIds.length > 1 ||
+      hasNote ||
+      isRemote ||
+      branch !== null
   )
 
   let scopeColor = $derived(
@@ -791,7 +817,29 @@
           </span>
         {/if}
 
-        <span class="flex min-w-0 items-center justify-end gap-1">
+        <span class="flex min-w-0 items-center justify-end gap-1 overflow-hidden">
+          {#if isRemote}
+            <span
+              class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
+              title={`Oven: ${oven?.name ?? 'unknown'}`}
+              aria-label={`Oven: ${oven?.name ?? 'unknown'}`}
+            >
+              {#if oven?.iconUrl}
+                <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
+              {:else}
+                <Server size={11} class="shrink-0" />
+              {/if}
+            </span>
+          {/if}
+          {#if branch}
+            <span
+              class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
+              title={`Branch: ${branch}`}
+            >
+              <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+              <span>{branchLabel}</span>
+            </span>
+          {/if}
           {#if hasNote}
             {@const ThreadNoteIcon = feature('thread-note').icon}
             <span
@@ -1039,7 +1087,29 @@
           </span>
         {/if}
 
-        <span class="col-start-3 flex min-w-0 items-center justify-end gap-1">
+        <span class="col-start-3 flex min-w-0 items-center justify-end gap-1 overflow-hidden">
+          {#if isRemote}
+            <span
+              class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
+              title={`Oven: ${oven?.name ?? 'unknown'}`}
+              aria-label={`Oven: ${oven?.name ?? 'unknown'}`}
+            >
+              {#if oven?.iconUrl}
+                <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
+              {:else}
+                <Server size={11} class="shrink-0" />
+              {/if}
+            </span>
+          {/if}
+          {#if branch}
+            <span
+              class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
+              title={`Branch: ${branch}`}
+            >
+              <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+              <span>{branchLabel}</span>
+            </span>
+          {/if}
           {#if hasNote}
             {@const ThreadNoteIcon = feature('thread-note').icon}
             <span

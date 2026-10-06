@@ -315,7 +315,9 @@ export async function ovenWorkspace(raw: unknown): Promise<OvenWorkspaceResult> 
           ? ['diff', '--no-ext-diff', '--no-textconv', '--']
           : input.action === 'log'
             ? ['log', '-20', '--oneline']
-            : null
+            : input.action === 'branch'
+              ? ['rev-parse', '--abbrev-ref', 'HEAD']
+              : null
     if (!args) throw new Error('Unsupported Git operation.')
     return { root, text: await command('git', args, root) }
   }
@@ -373,6 +375,22 @@ export async function ovenWorkspace(raw: unknown): Promise<OvenWorkspaceResult> 
   }
   if (input.operation === 'mkdir') {
     await mkdir(path, { recursive: input.exclusive !== true, mode: 0o700 })
+    return { root }
+  }
+  if (input.operation === 'move') {
+    const destination = await workspacePath(root, input.to, true)
+    if (destination === path) throw new Error('The entry is already at that location.')
+    await mkdir(dirname(destination), { recursive: true, mode: 0o700 })
+    // Adopting a file never overwrites one the Oven already holds: the caller
+    // only moves an app-owned transcript when its destination is still empty.
+    if (
+      await lstat(destination).then(
+        () => true,
+        () => false
+      )
+    )
+      throw new Error('The destination already exists on the Oven.')
+    await rename(path, destination)
     return { root }
   }
   if (input.operation === 'symlink') {

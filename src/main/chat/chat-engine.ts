@@ -8717,7 +8717,31 @@ export class ChatEngine {
         .filter(Boolean)
         .join('\n\n')
       const bound = await this.threadManager.getThread(projectId, threadId)
-      return this.ovenChat.send(
+      // A remote turn returns before the local auto-title block below, which
+      // left every Oven thread titled "New Thread". Title it here: the same
+      // deterministic fallback applies immediately, and the model's own title
+      // follows when this machine can run the harness for one disposable turn.
+      const mirrorBeforePrompt = await this.threadManager.loadMessagePage(
+        projectId,
+        threadId,
+        undefined,
+        1
+      )
+      const shouldAutoTitle =
+        ovenThread.status === 'created' &&
+        ovenThread.titleSource !== 'manual' &&
+        !isAssistantSetupThread(ovenThread) &&
+        mirrorBeforePrompt.messages.length === 0
+      if (shouldAutoTitle) {
+        const fallback = deriveTitleFromText(text)
+        if (fallback) {
+          await this.threadManager.updateThread(projectId, threadId, {
+            title: fallback,
+            titleSource: 'auto'
+          })
+        }
+      }
+      const sent = await this.ovenChat.send(
         bound ?? ovenThread,
         settings,
         text,
@@ -8725,6 +8749,11 @@ export class ChatEngine {
         userMessageId,
         remoteContext
       )
+      if (shouldAutoTitle && settings.titleMode !== 'deterministic')
+        void createAutoTitleLauncher(true, () =>
+          this.autoTitleThread(projectId, threadId, settings.harnessId, settings, text, sent.id)
+        )()
+      return sent
     }
 
     // A continuation relay re-sends a request the user made earlier, and its

@@ -3549,6 +3549,11 @@
 
   /** Current activity label   shows agent status only in Engineering. */
   let loopAuditing = $derived(settings.loopMode === true && auditState === 'running')
+  /** What the app is doing before the harness streams (preparing a remote
+   *  checkout, cloning a repository), when main published such a note. */
+  let workingStatusNote = $derived(
+    providerStatus?.state === 'working' ? (providerStatus.note ?? null) : null
+  )
   let activityLabel = $derived.by((): string => {
     if (loopAuditing) return 'Auditing'
     if (activePlanningEntry === 'brainstorm') return 'Researching and discussing'
@@ -12421,6 +12426,7 @@
               parts={pendingLiveTurn ? pendingLiveTurnParts : settledTurnParts}
               open
               busy={Boolean(pendingLiveTurn)}
+              note={workingStatusNote}
               latest
               {active}
               olderPartsAvailable={streamHasOlder}

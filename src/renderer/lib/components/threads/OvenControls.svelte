@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { Server, Monitor } from '@lucide/svelte'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { Thread, ThreadSettings } from '$shared/types'
   import type { OvenProbe, OvenState } from '$shared/ovens'
-  import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import { LOCAL_OVEN_ID, ovenHarnessIdForCommand } from '$shared/ovens'
   import PickerMenuShell from '../shared/PickerMenuShell.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { isTypeableKey } from '../shared/model-picker-helpers'
@@ -205,17 +206,36 @@
               >{oven.id === LOCAL_OVEN_ID ? 'Local' : 'SSH'}</span
             >
             {#if oven.kind === 'ssh' && probes[oven.id]}
+              {@const inventory = probes[oven.id].inventory?.filter(
+                (item) => item.health !== 'missing'
+              )}
               <span class="flex shrink-0 items-center gap-1" aria-label="Installed harnesses">
-                {#each probes[oven.id].harnesses
-                  .filter((item) => item.path)
-                  .slice(0, 3) as harness (harness.command)}
-                  <span class="rounded bg-elevated px-1 py-0.5 text-[0.625rem] text-muted"
-                    >{harness.command}</span
-                  >
-                {/each}
-                {#if !probes[oven.id].harnesses.some((item) => item.path)}<span
-                    class="text-[0.625rem] text-dimmed">No harnesses</span
-                  >{/if}
+                {#if inventory?.length}
+                  {#each inventory.slice(0, 4) as item (item.harnessId)}
+                    <span
+                      class="flex items-center rounded bg-elevated p-0.5"
+                      title={item.installedVersion
+                        ? `${item.command} ${item.installedVersion}`
+                        : item.command}
+                    >
+                      <AgentIcon agentId={item.harnessId} label={item.command} size={14} />
+                    </span>
+                  {/each}
+                {:else if probes[oven.id].harnesses.some((entry) => entry.path)}
+                  {#each probes[oven.id].harnesses
+                    .filter((entry) => entry.path)
+                    .slice(0, 4) as entry (entry.command)}
+                    <span class="flex items-center rounded bg-elevated p-0.5" title={entry.command}>
+                      <AgentIcon
+                        agentId={ovenHarnessIdForCommand(entry.command) ?? entry.command}
+                        label={entry.command}
+                        size={14}
+                      />
+                    </span>
+                  {/each}
+                {:else}
+                  <span class="text-[0.625rem] text-dimmed">No harnesses</span>
+                {/if}
               </span>
             {/if}
           </button>

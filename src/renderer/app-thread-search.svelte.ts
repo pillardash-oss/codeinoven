@@ -4,10 +4,12 @@ import { MessagesSquare } from '@lucide/svelte'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import { invoke } from '$lib/ipc.svelte'
 import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+import { ovens } from '$lib/stores/ovens.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
 import { threadScopeBucket } from '$lib/threads/thread-scope'
 import { isOrchestrationChildThread, type Thread, type ThreadSearchResult } from '$shared/types'
+import { LOCAL_OVEN_ID } from '$shared/ovens'
 import { actionId } from './app-palette-actions'
 
 interface ThreadSearchTarget {
@@ -77,6 +79,9 @@ export class ThreadSearchPaletteController {
   openPalette(): void {
     this.reset()
     this.paletteOpen = true
+    // Rows carry the thread's Oven next to its scope, so the registry has to be
+    // read once before the first result can name one.
+    void ovens.ensure()
   }
 
   close(): void {
@@ -235,6 +240,12 @@ export class ThreadSearchPaletteController {
       // The thread's scope, so the row says which scope it belongs to   the same
       // signal the sidebar thread rows and the hover card already carry.
       const scope = threadScopeBucket(thread)
+      // Oven and branch, the two facts about where a thread actually runs.
+      const oven =
+        thread.settings?.ovenId && thread.settings.ovenId !== LOCAL_OVEN_ID
+          ? ovens.identity(thread.settings.ovenId)
+          : null
+      const branch = thread.branch?.trim() || null
       actions.push({
         id,
         title: thread.title,
@@ -257,9 +268,17 @@ export class ThreadSearchPaletteController {
           harnessIds,
           providerName,
           providerId,
-          modelId: thread.settings?.modelId ?? null
+          modelId: thread.settings?.modelId ?? null,
+          ...(oven ? { oven: { name: oven.name, iconUrl: oven.iconUrl } } : {}),
+          ...(branch ? { branch } : {})
         },
-        keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
+        keywords: [
+          project?.name ?? thread.projectId,
+          thread.title,
+          ...(oven ? [oven.name] : []),
+          ...(branch ? [branch] : []),
+          ...(snippet ? [snippet] : [])
+        ]
       })
     }
     return { actions: actions.slice(0, MAX_RESULTS), targets }

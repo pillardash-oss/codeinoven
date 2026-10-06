@@ -15,6 +15,21 @@ export function ovenDirKey(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 20)
 }
 
+/** The app-managed root every Oven-owned file lives under. */
+export function ovenDataRoot(home: string): string {
+  return `${home}/${OVEN_DATA_DIRECTORY}`
+}
+
+/**
+ * Where an Oven keeps persistent harness session transcripts.
+ *
+ * Kept out of every checkout: a session file is app state, not part of the
+ * user's repository, so it must never appear in their working tree.
+ */
+export function ovenSessionsRoot(home: string): string {
+  return `${ovenDataRoot(home)}/sessions`
+}
+
 /**
  * The checkout directory for one project scope on an Oven.
  *
@@ -22,7 +37,7 @@ export function ovenDirKey(value: string): string {
  * name can be any character GitHub allows without becoming a path traversal.
  */
 export function ovenScopeRoot(home: string, projectId: string, scopeId: string): string {
-  return `${home}/${OVEN_DATA_DIRECTORY}/scopes/${ovenDirKey(projectId)}/${ovenDirKey(scopeId)}`
+  return `${ovenDataRoot(home)}/scopes/${ovenDirKey(projectId)}/${ovenDirKey(scopeId)}`
 }
 
 /** Where remote file removals are parked so a mistake stays recoverable. */

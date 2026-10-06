@@ -21,6 +21,8 @@ const UPDATE_TIMEOUT_MS = 5 * 60_000
 /** Reuse one inventory per oven briefly so an expanded row does not re-probe. */
 const INVENTORY_TTL_MS = 30_000
 const UPDATE_METADATA_TTL_MS = 5 * 60_000
+/** Last known inventory per Oven, so an offline Oven still answers its model list. */
+const INVENTORY_STORE_PATH = 'ovens/harness-inventory.json'
 
 type InventoryHealth = OvenHarnessInventoryItem['health']
 
@@ -29,6 +31,14 @@ interface CachedInventory {
   checkedAt: number
   platform: string
 }
+
+/** The persisted copy of every Oven's last known harness inventory. */
+interface StoredInventories {
+  version: 1
+  ovens: Record<string, CachedInventory>
+}
+
+const EMPTY_INVENTORIES: StoredInventories = { version: 1, ovens: {} }
 
 /**
  * Harness inventory and single-harness management for remote Ovens.
@@ -45,6 +55,8 @@ interface CachedInventory {
 export class OvenHarnessService {
   private readonly inventories = new Map<string, CachedInventory>()
   private readonly locks = new Map<string, Promise<unknown>>()
+  private stored: StoredInventories | null = null
+  private storedLoading: Promise<StoredInventories> | null = null
   private readonly latestVersions = new Map<
     string,
     { checkedAt: number; result: Awaited<ReturnType<typeof latestHarnessVersion>> }
@@ -166,16 +178,75 @@ export class OvenHarnessService {
    * Inventory every hosted harness on one Oven.
    *
    * `refresh` forces a fresh oven-side version scan; without it a recent result
-   * is reused so expanding a row stays instant. An unreachable oven rejects
-   * rather than fabricating rows, because "unknown" is not "missing".
+   * is reused so expanding a row stays instant. The oven-side service scans the
+   * whole canonical harness list, so a harness the user installed themselves is
+   * picked up on the next ping instead of staying invisible.
+   *
+   * Every successful scan is persisted, and an unreachable Oven answers with
+   * that last known copy rather than nothing: the app keeps a local record of
+   * what each Oven had installed, which is what lets a remote thread's model
+   * picker and thread rows know the Oven's harnesses without a live probe.
    */
   async getInventory(ovenId: string, refresh = false): Promise<OvenHarnessInventoryItem[]> {
     const cached = this.inventories.get(ovenId)
     if (!refresh && cached && Date.now() - cached.checkedAt < INVENTORY_TTL_MS) return cached.items
-    const probe = await this.service.probe(ovenId, refresh)
-    const items = await this.mergeLatest(this.probeItems(probe))
-    this.inventories.set(ovenId, { items, checkedAt: Date.now(), platform: probe.platform })
-    return items
+    try {
+      const probe = await this.service.probe(ovenId, refresh)
+      const items = await this.mergeLatest(this.probeItems(probe))
+      const entry: CachedInventory = { items, checkedAt: Date.now(), platform: probe.platform }
+      this.inventories.set(ovenId, entry)
+      await this.persistInventory(ovenId, entry)
+      return items
+    } catch (error) {
+      // A refresh that fails must stay a failure: the caller forced it to
+      // verify a mutation that just ran, and a stale row would misreport it.
+      if (refresh) throw error
+      const stored = (await this.inventoryStore()).ovens[ovenId]
+      if (!stored) throw error
+      this.inventories.set(ovenId, stored)
+      Logger.dev('Using the last known Oven harness inventory', {
+        ovenId,
+        checkedAt: stored.checkedAt
+      })
+      return stored.items
+    }
+  }
+
+  /** The persisted inventory table, read once and then kept in memory. */
+  private inventoryStore(): Promise<StoredInventories> {
+    if (this.stored) return Promise.resolve(this.stored)
+    if (this.storedLoading) return this.storedLoading
+    const loading = this.storage
+      .read<StoredInventories>(INVENTORY_STORE_PATH)
+      .then((value): StoredInventories =>
+        value && value.version === 1 && value.ovens ? value : EMPTY_INVENTORIES
+      )
+      .catch((): StoredInventories => EMPTY_INVENTORIES)
+      .then((value) => {
+        this.stored = value
+        this.storedLoading = null
+        return value
+      })
+    this.storedLoading = loading
+    return loading
+  }
+
+  /**
+   * Persist one Oven's inventory after a successful scan.
+   *
+   * A failed write never fails the scan it belongs to: the in-memory copy is
+   * already correct, and the next scan retries the file.
+   */
+  private async persistInventory(ovenId: string, entry: CachedInventory): Promise<void> {
+    const store = await this.inventoryStore()
+    const next: StoredInventories = { version: 1, ovens: { ...store.ovens, [ovenId]: entry } }
+    this.stored = next
+    await this.storage.write(INVENTORY_STORE_PATH, next).catch((error: unknown) =>
+      Logger.dev('Oven harness inventory could not be persisted', {
+        ovenId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    )
   }
 
   /** Translate the oven probe into inventory rows, tolerating an older service. */

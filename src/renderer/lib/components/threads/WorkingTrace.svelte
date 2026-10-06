@@ -43,6 +43,9 @@
     /** True when this run belongs to another CodeInOven instance, which is where
      *  its live output and stop control are. */
     foreignRun?: boolean
+    /** What the app is doing before the harness streams, e.g. preparing a remote
+     *  checkout or cloning a repository. */
+    note?: string | null
     initialOpen?: boolean
     initialUserOpened?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
@@ -88,6 +91,7 @@
     done = false,
     rehydrated = false,
     foreignRun = false,
+    note = null,
     initialOpen = false,
     initialUserOpened = false,
     startTime,
@@ -469,6 +473,7 @@
         <WorkingTraceStatus
           {rehydrated}
           {foreignRun}
+          {note}
           startTime={effectiveStartTime}
           {elapsed}
           {modelLabel}
