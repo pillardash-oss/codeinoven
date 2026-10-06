@@ -80,6 +80,9 @@ import SidebarHarness from './stubs/SidebarHarness.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { WorkspaceSidebarController } from '$lib/components/workspace/WorkspaceSidebarController.svelte'
+import { WorkspaceProjectDialogs } from '$lib/components/workspace/WorkspaceProjectDialogs.svelte'
+import { ScopeActionsController } from '$lib/components/scope/ScopeActionsController.svelte'
+import { SvelteMap } from 'svelte/reactivity'
 import type { Project, Thread } from '$shared/types'
 
 function thread(id: string, projectId: string): Thread {
@@ -122,16 +125,17 @@ const timelineThreads = [...alphaThreads, ...betaThreads]
 
 function props(mode: 'projects' | 'chats' | 'threads') {
   const projects = [alpha, beta]
+  const projectIcons = new SvelteMap<string, string>()
   return {
     mode,
     active: true,
     scroller: null,
     projects,
     visibleProjects: projects,
-    projectIcons: new Map<string, string>(),
+    projectIcons,
     loading: false,
     activeThreadId: 'alpha-1',
-    threadsByProject: new Map([
+    threadsByProject: new SvelteMap([
       ['alpha', alphaThreads],
       ['beta', betaThreads]
     ]),
@@ -147,11 +151,13 @@ function props(mode: 'projects' | 'chats' | 'threads') {
     historyLoading: false,
     projectPageLoading: null,
     sidebar: new WorkspaceSidebarController(),
-    projectDialogs: {
-      askEditProject: vi.fn(),
-      askRemoveProject: vi.fn()
-    },
-    scopeActions: { error: null },
+    projectDialogs: new WorkspaceProjectDialogs({
+      getProjects: () => projects,
+      setProjects: vi.fn(),
+      getProjectIcons: () => projectIcons,
+      deleteProject: vi.fn(async () => {})
+    }),
+    scopeActions: new ScopeActionsController({ getProjectId: () => projects[0]?.id ?? null }),
     onSetProjects: vi.fn(),
     onOpenThread: vi.fn(),
     onRename: vi.fn(async () => {}),
@@ -159,6 +165,7 @@ function props(mode: 'projects' | 'chats' | 'threads') {
     onDelete: vi.fn(async () => {}),
     onFork: vi.fn(),
     onThreadMove: vi.fn(),
+    onThreadDrop: vi.fn(async (_projectId: string, _ordered: Thread[], _draggedId: string) => {}),
     onPinnedThreadMove: vi.fn(),
     onTimelinePinnedMove: vi.fn(),
     onProjectMove: vi.fn(),

@@ -1675,7 +1675,10 @@ export class BrowserService {
     context: {
       projectId: string
       threadId: string
-      permissionLevel: PermissionLevel
+      // Only the upload path consults this. Callers that can never upload (the
+      // design and video preview sessions) omit it, and the upload fallback then
+      // treats the missing level as review-required rather than full access.
+      permissionLevel?: PermissionLevel
     }
   ): Promise<unknown> {
     const projectId = validateProjectId(context.projectId)
@@ -1920,7 +1923,7 @@ export class BrowserService {
     tabId: string,
     tab: BrowserTab,
     input: Record<string, unknown>,
-    permissionLevel: PermissionLevel
+    permissionLevel: PermissionLevel | undefined
   ): Promise<Record<string, unknown>> {
     const contents = tab.view.webContents
     if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
