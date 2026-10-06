@@ -18,6 +18,7 @@ interface CodexQuestionOptionSchema {
   properties: {
     label: { type: 'string'; minLength: number }
     description: { type: 'string'; minLength: number }
+    instruction: { type: 'string'; minLength: number }
   }
   required: ['label', 'description']
 }
@@ -86,7 +87,8 @@ export const CODEX_QUESTION_TOOL: CodexQuestionToolSpec = {
                 additionalProperties: false,
                 properties: {
                   label: { type: 'string', minLength: 1 },
-                  description: { type: 'string', minLength: 1 }
+                  description: { type: 'string', minLength: 1 },
+                  instruction: { type: 'string', minLength: 1 }
                 },
                 required: ['label', 'description']
               }
@@ -123,7 +125,7 @@ export function codexQuestionTool(maxQuestions: number): CodexQuestionToolSpec {
   }
 }
 export const CODEX_QUESTION_INSTRUCTION =
-  'The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode.'
+  "The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode. When an option asks the user to run or paste something to produce the answer, put that exact text in the option's optional `instruction` field instead of the description, so the user can open and copy it from the answer card."
 
 export function utilityKey(value: string): string {
   return (

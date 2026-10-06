@@ -28,6 +28,7 @@ import {
 export const QUESTION_TOOL_INSTRUCTION = [
   'When you need clarification or must present multiple choices to the user, call the `question` tool instead of writing questions as plain text.',
   'Pass an ordered `questions` array; every question needs `question`, a short `header`, and `options` objects with `label` and `description`.',
+  "When an option asks the user to run or paste something to produce the answer, put that exact text in the option's optional `instruction` field instead of the description, so the user can open and copy it from the answer card; never bury a command, script, or multi-step procedure in a description.",
   'Put the recommended option first and suffix its label with `(Recommended)`. Set `multiple: true` only when the user may pick more than one option; custom answers are enabled by default.'
 ].join(' ')
 

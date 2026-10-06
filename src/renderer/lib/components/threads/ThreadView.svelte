@@ -10948,6 +10948,7 @@
           [
             `- ${option.label}`,
             option.description ? `  ${option.description}` : '',
+            option.instruction ? `  Instruction the user must follow: ${option.instruction}` : '',
             option.recommended ? '  (recommended by the agent)' : ''
           ]
             .filter(Boolean)

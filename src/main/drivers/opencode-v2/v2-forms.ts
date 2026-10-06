@@ -6,6 +6,7 @@ interface FormOption {
   value: string
   label: string
   description?: string
+  instruction?: string
 }
 
 /** The field shapes this mapper understands from `Form.Field`. */
@@ -23,11 +24,14 @@ function formOptions(value: unknown): FormOption[] {
     const optionValue = stringValue(record?.['value'])
     if (!optionValue) return []
     const description = stringValue(record?.['description'])
+    const instruction =
+      stringValue(record?.['instruction']) ?? stringValue(record?.['instructions'])
     return [
       {
         value: optionValue,
         label: stringValue(record?.['label']) ?? optionValue,
-        ...(description ? { description } : {})
+        ...(description ? { description } : {}),
+        ...(instruction ? { instruction } : {})
       }
     ]
   })
@@ -69,6 +73,7 @@ function toQuestionOption(option: FormOption): AgentQuestionOption {
   return {
     label: option.label,
     ...(option.description ? { description: option.description } : {}),
+    ...(option.instruction ? { instruction: option.instruction } : {}),
     ...(recommended ? { recommended: true } : {})
   }
 }
