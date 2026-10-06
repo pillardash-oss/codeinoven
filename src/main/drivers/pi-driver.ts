@@ -37,9 +37,7 @@ import type {
   GenerateTitleOptions,
   HarnessCapabilities,
   SendPromptOptions,
-  SteerPromptOptions,
-  UtilityRuntimeOverlay,
-  UtilityRuntimePreparationRequest
+  SteerPromptOptions
 } from './driver.interface'
 import { PermissionRequestGoneError, QuestionRequestGoneError } from './driver.interface'
 import type { HarnessCommand, PermissionReply, ThreadSettings } from '../../lib/types'
@@ -52,7 +50,6 @@ import {
   type PersistentCliSession,
   type TitleModelCandidate
 } from './persistent-cli-driver'
-import { piMcpExtension } from './pi-mcp-extension'
 import {
   PI_MCP_SERVERS_FILE_NAME,
   buildPiMcpRegistrations,
@@ -87,7 +84,6 @@ import {
   numberValue,
   record,
   stringValue,
-  utilityKey,
   withTimeout
 } from './pi/pi-values'
 import {
@@ -399,7 +395,6 @@ export class PiDriver extends PersistentCliDriver {
    * other path keeps its plain `message.completed`/finalization behavior.
    */
   private silentContinues = new Map<string, PiSilentContinueState>()
-  private nativeMcpConfigSupport: Promise<boolean> | null = null
   /** Latest provider rate-limit windows reported by the usage extension,
    *  per session, with the pi provider id the response came from. */
   private latestRateLimits = new Map<
@@ -700,29 +695,6 @@ export class PiDriver extends PersistentCliDriver {
       (entry): entry is Record<string, unknown> =>
         typeof entry === 'object' && entry !== null && !Array.isArray(entry)
     )
-  }
-
-  /** Whether the user's pi runtime exposes the `--mcp-config` adapter flag. */
-  private supportsNativeMcpConfig(): Promise<boolean> {
-    this.nativeMcpConfigSupport ??= this.probeNativeMcpConfig()
-    return this.nativeMcpConfigSupport
-  }
-
-  private async probeNativeMcpConfig(): Promise<boolean> {
-    let help: string
-    try {
-      help = (
-        await runHarnessCommand('pi', ['--help'], {
-          env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
-          timeoutMs: 10_000
-        })
-      ).stdout
-    } catch {
-      return false
-    }
-    // The flag is registered by the pi-mcp-adapter extension; absent the
-    // adapter, pi rejects `--mcp-config` as an unknown flag.
-    return /\bmcp-config\b/u.test(help) || /--mcp-config/u.test(help)
   }
 
   override async listCommands(projectPath?: string): Promise<HarnessCommand[]> {
@@ -1486,83 +1458,6 @@ export class PiDriver extends PersistentCliDriver {
       // Rebuild context is a fallback, never a reason to fail a turn.
       Logger.dev('Pi compaction context publish failed:', error)
     }
-  }
-
-  async prepareUtilityRuntime(
-    request: UtilityRuntimePreparationRequest
-  ): Promise<UtilityRuntimeOverlay> {
-    const mcpServers: Record<
-      string,
-      { command?: string; args?: string[]; env?: Record<string, string>; url?: string }
-    > = {}
-    const keys = new Set<string>()
-    for (const { utility, binding } of request.resolvedUtilities) {
-      if (utility.kind !== 'mcp') continue
-      const baseKey = utilityKey(binding.transportName ?? utility.name)
-      let key = baseKey
-      for (let suffix = 2; keys.has(key); suffix += 1) key = `${baseKey}-${suffix}`
-      keys.add(key)
-
-      const config = utility.config
-      if (config.transport === 'http' || config.transport === 'sse') {
-        if (!config.url) {
-          throw new TypeError(`Pi MCP utility "${utility.name}" requires a URL`)
-        }
-        mcpServers[key] = { url: config.url }
-        continue
-      }
-      if (!config.command) {
-        throw new TypeError(`Pi MCP utility "${utility.name}" requires a stdio command`)
-      }
-      mcpServers[key] = {
-        command: config.command,
-        args: [...(config.args ?? [])],
-        env: { ...(config.environment ?? {}) }
-      }
-    }
-
-    const args: string[] = []
-    const configFiles: NonNullable<UtilityRuntimeOverlay['configFiles']> = []
-    const env: Record<string, string> = {}
-
-    if (Object.keys(mcpServers).length > 0) {
-      const native = await this.supportsNativeMcpConfig()
-      if (native) {
-        // pi-mcp-adapter (an extension the user may install) registers the
-        // `--mcp-config` flag and reads a standard `{ mcpServers }` file. Using
-        // it avoids maintaining a bespoke in-extension MCP client.
-        args.push('--mcp-config', '{{config:pi-mcp}}')
-        configFiles.push({
-          id: 'pi-mcp',
-          relativePath: 'pi/mcp-config.json',
-          content: JSON.stringify({ mcpServers }, null, 2)
-        })
-      } else {
-        // The app-owned bridge extension can only host stdio servers, so remote
-        // http/sse utilities require the pi-mcp-adapter native path.
-        const remoteNames = Object.entries(mcpServers).filter(
-          ([, server]) => typeof server['url'] === 'string'
-        )
-        if (remoteNames.length > 0) {
-          throw new TypeError(
-            `Pi MCP utility "${remoteNames[0]?.[0]}" requires the pi-mcp-adapter extension. Install it with: pi install npm:pi-mcp-adapter`
-          )
-        }
-        const stdioServers = mcpServers as Record<
-          string,
-          { command: string; args: string[]; env: Record<string, string> }
-        >
-        args.push('--extension', '{{config:pi-mcp-extension}}')
-        configFiles.push({
-          id: 'pi-mcp-extension',
-          relativePath: 'pi/codeinoven-mcp-extension.ts',
-          content: piMcpExtension(stdioServers)
-        })
-      }
-    }
-
-    if (configFiles.length === 0) return {}
-    return { args, configFiles, env }
   }
 
   protected async buildTurnCommand(): Promise<CliTurnCommand> {
