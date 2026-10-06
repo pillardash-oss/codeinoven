@@ -706,6 +706,12 @@
     }
   )
 
+  /** A busy row's own pulse is the fallback animation for a state whose badge
+   *  cannot animate itself: a queued thread shows a static clock, so the row
+   *  pulses. When the badge already spins (the local working spinner) the pulse
+   *  adds nothing, and animating a whole row subtree is the expensive part. */
+  let rowPulses = $derived(badgeProps?.variant !== 'spinner')
+
   // ─── Hover interactions ──────────────────────────────────────────────────
 
   async function revealPopover(): Promise<void> {
@@ -1051,7 +1057,9 @@
       : isBusyIndicator
         ? isRetryPaused
           ? 'bg-warning/5 hover:bg-elevated'
-          : 'bg-thread-working/5 hover:bg-elevated'
+          : isForeignRun
+            ? 'bg-thread-working/5 hover:bg-elevated'
+            : `${rowPulses ? 'animate-pulse ' : ''}bg-thread-working/5 hover:bg-elevated`
         : 'hover:bg-elevated'}"
     title={displayTitle}
     aria-current={selected ? 'true' : undefined}
