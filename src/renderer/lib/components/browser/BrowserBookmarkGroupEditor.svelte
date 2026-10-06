@@ -1,6 +1,5 @@
 <script lang="ts">
   import { Check, Trash2 } from '@lucide/svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -10,40 +9,38 @@
     MAX_BROWSER_GROUP_NAME_LENGTH,
     type BrowserAppearance
   } from '$shared/browser/global-browser-tabs'
+  import type { BrowserBookmarkGroup } from '$shared/browser/browser-library'
   import { resolveAppearanceImagePath } from './browser-group-appearance'
   import type { CustomIcon } from '$shared/types'
 
-  interface Props {
-    /** The group being edited, or null to create a new one. */
-    groupId: string | null
-    /** Called with the new group's id right after it is created, so a caller that
-     *  opened the editor to file a bookmark can put it there. */
-    onCreated?: (groupId: string) => void
-    onClose: () => void
-  }
-
-  let { groupId, onCreated, onClose }: Props = $props()
-
   /**
-   * One saved-page group's editor.
+   * The saved-page group editor: the one form for making and changing a group,
+   * drawn without a shell of its own.
    *
-   * A group is an identity, not a page, so it is edited in a modal rather than the
-   * per-row fold the bookmarks themselves use: the fields are the group's own, and
-   * there is no row to keep in view while they are read. It carries the same
-   * appearance vocabulary a tab group, a box and a project do (a colour, a library
-   * icon, a pasted SVG, a picked image), so it draws from the one shared picker
-   * instead of growing a second one.
-   *
-   * Creating and editing are the same surface: with no group the draft starts
-   * empty, and with one it starts from the group as the user opened it. Deleting is
-   * the group's own destructive half, behind its confirmation, and it never deletes
-   * the bookmarks inside it.
+   * It is embedded twice, on the bookmarks panel's create page and folded open on
+   * a group's own row, so both surfaces edit the same fields through one source
+   * rather than two forms that drift apart. The panel owns the page, the chevron
+   * back and the fold; this component owns the draft, the Save, and the group's
+   * destructive half, behind its confirmation. It is the same shape the box editor
+   * wears, so making a group reads like making a box.
    */
 
-  // Read once at construction and never again: the modal is mounted fresh for each
-  // edit, so the draft it holds is the group as the user opened it.
+  interface Props {
+    /** The group this editor changes, or null when it is making a new one. */
+    group: BrowserBookmarkGroup | null
+    /** Called once the group was created or updated. */
+    onSaved?: (groupId: string) => void
+    /** Called once the group was deleted, so its row can go with it. */
+    onDeleted?: () => void
+  }
+
+  let { group, onSaved, onDeleted }: Props = $props()
+
+  // Read once at construction: the editor is mounted fresh for each group it opens
+  // on, so the draft below is the group as the user opened it and nothing the store
+  // does later can overwrite their edits.
   // svelte-ignore state_referenced_locally
-  const existing = groupId ? browserBookmarks.groupById(groupId) : null
+  const existing = group
 
   let customIcons = $state<CustomIcon[]>([])
 
@@ -57,6 +54,8 @@
   }
 
   let name = $state(existing?.name ?? '')
+  // The same appearance vocabulary as a tab group, a box and a project: a hex
+  // colour, a shared SVG icon key, a pasted SVG, and a picked image file.
   let color = $state<string | undefined>(existing?.color ?? undefined)
   let iconType = $state<string | undefined>(existing?.iconType ?? undefined)
   let customSvg = $state<string | undefined>(existing?.customSvg ?? undefined)
@@ -73,7 +72,7 @@
   const canSave = $derived(name.trim() !== '')
 
   async function uploadImage(): Promise<void> {
-    // The app-owned copy, not the picked path: this modal persists what it returns.
+    // The app-owned copy, not the picked path: this editor persists what it returns.
     const picked = await pickAppearanceImage()
     if (!picked) return
     customSvgSelected = false
@@ -89,7 +88,7 @@
   }
 
   /** Resolve which image path the group should end up with, using the shared rule
-   *  the tab group, tab and bookmark editors use so the surfaces cannot drift. */
+   *  the box, tab group and tab editors also use so they cannot drift. */
   function resolveImagePath(): string | null {
     if (!existing) return pendingIcon?.path ?? null
     return resolveAppearanceImagePath({
@@ -112,28 +111,55 @@
     }
     if (existing) {
       browserBookmarks.updateGroup(existing.id, { name, ...appearance })
-    } else {
-      const id = browserBookmarks.createGroup(name, appearance)
-      onCreated?.(id)
+      onSaved?.(existing.id)
+      return
     }
-    onClose()
+    const id = browserBookmarks.createGroup(name, appearance)
+    void browserBookmarks.ensureGroupIconLoaded(id)
+    onSaved?.(id)
   }
 
+  /** Remove the group. Its pages stay saved and become ungrouped, because losing a
+   *  fold must never lose a bookmark. */
   function deleteGroup(): void {
+    const target = existing
+    if (!target) {
+      confirmDelete = false
+      return
+    }
+    browserBookmarks.deleteGroup(target.id)
     confirmDelete = false
-    if (existing) browserBookmarks.deleteGroup(existing.id)
-    onClose()
+    onDeleted?.()
+  }
+
+  /** Enter in the name field saves, and Cmd/Ctrl+Enter saves from anywhere in the
+   *  editor. The two handlers never overlap, so one save can never fire twice. */
+  function onNameFieldKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' || event.metaKey || event.ctrlKey) return
+    event.preventDefault()
+    save()
+  }
+
+  function onEditorKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+    event.preventDefault()
+    save()
+  }
+
+  /** The create page's own field takes focus when it opens. An attachment rather
+   *  than an action, and a fold on an existing group never steals focus. */
+  function focusNameWhenCreating(node: HTMLInputElement): void {
+    if (existing) return
+    node.focus({ preventScroll: true })
   }
 </script>
 
-<Modal
-  open
-  title={existing ? 'Edit group' : 'New bookmark group'}
-  description="A group folds related bookmarks under a name, a colour and an icon."
-  {onClose}
-  size="md"
-  contentClass="space-y-4 overflow-y-auto p-6"
->
+<!--
+  The editor itself is not interactive; its fields and buttons are. The chord sits
+  on the container so Cmd/Ctrl+Enter saves from whichever field the user is in.
+-->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="space-y-4" onkeydown={onEditorKeydown}>
   <AppearancePicker
     {name}
     {color}
@@ -162,61 +188,45 @@
       placeholder="Reading list"
       maxlength={MAX_BROWSER_GROUP_NAME_LENGTH}
       bind:value={name}
-      onkeydown={(event: KeyboardEvent) => {
-        if (event.key === 'Enter') {
-          event.preventDefault()
-          save()
-        }
-      }}
+      onkeydown={onNameFieldKeydown}
+      {@attach focusNameWhenCreating}
     />
   </label>
 
-  {#snippet footer()}
-    <div class="flex w-full items-center gap-2">
-      {#if existing}
-        <button
-          type="button"
-          class="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
-          title="Delete this group. Its bookmarks stay saved."
-          onclick={() => (confirmDelete = true)}
-        >
-          <Trash2 size={14} />
-          Delete
-        </button>
-      {/if}
-      <div class="ml-auto flex items-center gap-2">
-        {#if hasAppearance}
-          <button
-            type="button"
-            class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
-            title="Reset appearance"
-            onclick={resetAppearance}
-          >
-            Reset
-          </button>
-        {/if}
-        <button
-          type="button"
-          class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-          title="Close without saving"
-          onclick={onClose}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-          disabled={!canSave}
-          title={existing ? 'Save this group' : 'Create this group'}
-          onclick={save}
-        >
-          <Check size={14} />
-          {existing ? 'Save' : 'Create'}
-        </button>
-      </div>
-    </div>
-  {/snippet}
-</Modal>
+  <div class="flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5">
+    {#if existing}
+      <button
+        type="button"
+        class="mr-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
+        title="Delete this group. Its bookmarks stay saved."
+        onclick={() => (confirmDelete = true)}
+      >
+        <Trash2 size={13} />
+        Delete
+      </button>
+    {/if}
+    {#if hasAppearance}
+      <button
+        type="button"
+        class="rounded-lg px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
+        title="Reset appearance"
+        onclick={resetAppearance}
+      >
+        Reset
+      </button>
+    {/if}
+    <button
+      type="button"
+      class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+      disabled={!canSave}
+      title={existing ? 'Save this group' : 'Create this group'}
+      onclick={save}
+    >
+      <Check size={13} />
+      {existing ? 'Save' : 'Create'}
+    </button>
+  </div>
+</div>
 
 {#if confirmDelete}
   <ConfirmDialog

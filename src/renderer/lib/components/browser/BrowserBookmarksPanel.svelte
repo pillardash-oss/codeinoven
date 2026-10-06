@@ -4,6 +4,7 @@
   import {
     Bookmark,
     ChevronDown,
+    ChevronLeft,
     ChevronUp,
     Ellipsis,
     FolderPlus,
@@ -85,11 +86,14 @@
   /** The folds the user collapsed. Expanded is the default, so only the closed
    *  ones are held. */
   const collapsedGroupIds = new SvelteSet<string>()
-  /** The group editor's subject: `undefined` closed, null "create one", otherwise
-   *  the group being edited. The three states can never be confused. */
-  let editingGroupId = $state<string | null | undefined>(undefined)
-  /** The bookmark whose menu opened the create-group editor, so the group it makes
-   *  can receive it once it exists. */
+  /** Whether the panel is showing the group list or the create page, the same
+   *  page shape the boxes panel uses for making a box. */
+  let creating = $state(false)
+  /** The group whose editor is folded open on its row, or null. One at a time, so
+   *  two drafts can never both claim the fold. */
+  let expandedGroupId = $state<string | null>(null)
+  /** The bookmark whose menu opened the create page, so the group it makes can
+   *  receive it once it exists. */
   let pendingGroupBookmarkId = $state<string | null>(null)
 
   const groups = $derived(browserBookmarks.groups)
@@ -146,6 +150,35 @@
   function toggleGroupCollapsed(id: string): void {
     if (collapsedGroupIds.has(id)) collapsedGroupIds.delete(id)
     else collapsedGroupIds.add(id)
+  }
+
+  /** Fold a group's editor open on its row, or close it when it is already the one
+   *  on screen. */
+  function toggleGroupEditor(id: string): void {
+    expandedGroupId = expandedGroupId === id ? null : id
+  }
+
+  /** Show the create page, for a fresh group the bookmark whose menu asked for one
+   *  joins once it exists. */
+  function openCreatePage(bookmarkId: string | null = null): void {
+    collapsedGroupIds.clear()
+    expandedGroupId = null
+    pendingGroupBookmarkId = bookmarkId
+    creating = true
+  }
+
+  function closeCreatePage(): void {
+    pendingGroupBookmarkId = null
+    creating = false
+  }
+
+  /** File the pending bookmark into the group that was just made, then return to
+   *  the list. A create page opened from the header has no bookmark to place. */
+  function onGroupCreated(groupId: string): void {
+    if (pendingGroupBookmarkId !== null) {
+      browserBookmarks.moveToGroup(pendingGroupBookmarkId, groupId)
+    }
+    closeCreatePage()
   }
 
   /** The bookmarks filed under one group, in list order. */
@@ -345,8 +378,8 @@
                   <DropdownMenu.Item
                     class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                     onSelect={() => {
-                      pendingGroupBookmarkId = bookmark.id
-                      editingGroupId = null
+                      expandedId = null
+                      openCreatePage(bookmark.id)
                     }}
                   >
                     <FolderPlus size={13} class="shrink-0 text-muted" />
@@ -417,179 +450,211 @@
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-col" data-drop-region="browser-bookmarks">
-  <div class="shrink-0 space-y-1.5 border-b border-border px-3 py-2">
-    <div class="flex items-center gap-1.5 rounded-lg bg-elevated px-2.5">
-      <Search size={13} class="shrink-0 text-dimmed" />
-      <input
-        type="text"
-        class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
-        placeholder="Search bookmarks"
-        aria-label="Search bookmarks"
-        spellcheck="false"
-        autocomplete="off"
-        bind:value={query}
-      />
-      {#if query !== ''}
+  {#if creating}
+    <div class="flex h-full min-h-0 flex-col">
+      <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
         <button
           type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-          aria-label="Clear the bookmark search"
-          title="Clear search"
-          onclick={() => (query = '')}
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Back to bookmarks"
+          aria-label="Back to bookmarks"
+          onclick={closeCreatePage}
         >
-          <X size={13} />
+          <ChevronLeft size={15} />
         </button>
-      {/if}
+        <p class="text-xs font-medium text-foreground">New group</p>
+      </div>
+      <div class="min-h-0 flex-1 overflow-y-auto p-3">
+        <p class="mb-3 text-[0.625rem] leading-relaxed text-dimmed">
+          A group folds related bookmarks under a name, a colour and an icon. Drop bookmarks onto
+          its header afterwards to file them.
+        </p>
+        <BrowserBookmarkGroupEditor group={null} onSaved={onGroupCreated} />
+      </div>
     </div>
-    <button
-      type="button"
-      class="flex w-full items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Create a group for bookmarks"
-      aria-label="Create a group for bookmarks"
-      onclick={() => {
-        pendingGroupBookmarkId = null
-        editingGroupId = null
-      }}
-    >
-      <FolderPlus size={13} />
-      New group
-    </button>
-  </div>
-
-  {#if browserBookmarks.bookmarks.length === 0 && groups.length === 0}
-    <EmptyState
-      icon={Bookmark}
-      title="No bookmarks yet"
-      description="Save a page from the star beside its address, and it appears here to return to at any time."
-    />
-  {:else if matching.length === 0 && trimmedQuery !== ''}
-    <EmptyState
-      icon={Search}
-      title="No matching bookmarks"
-      description="Nothing you saved matches that search."
-    />
   {:else}
-    <ul class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-      {#each visibleGroups as group (group.id)}
-        {@const groupIconUrl = browserBookmarkGroupIconUrl(
-          group,
-          browserBookmarks.iconUrl(group.id)
-        )}
-        {@const accent = browserBookmarkGroupAccent(group)}
-        {@const collapsed = collapsedGroupIds.has(group.id)}
-        <li class="mb-1">
-          <div
-            class="flex items-center gap-1 rounded-lg px-1.5 py-1 transition-colors {groupDropTargetId ===
-            group.id
-              ? 'ring-1 ring-info'
-              : ''}"
-            style="background-color: {accent}1a"
-            draggable
-            role="group"
-            aria-label={`${group.name}, drop a bookmark here to move it into this group`}
-            ondragstart={(event: DragEvent) => onGroupDragStart(event, group)}
-            ondragover={(event: DragEvent) => onGroupDragOver(event, group.id)}
-            ondragleave={() => {
-              if (groupDropTargetId === group.id) groupDropTargetId = null
-            }}
-            ondrop={(event: DragEvent) => onGroupDrop(event, group)}
-            ondragend={endDrag}
-            class:opacity-50={draggingGroupId === group.id}
+    <div class="shrink-0 space-y-1.5 border-b border-border px-3 py-2">
+      <div class="flex items-center gap-1.5 rounded-lg bg-elevated px-2.5">
+        <Search size={13} class="shrink-0 text-dimmed" />
+        <input
+          type="text"
+          class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
+          placeholder="Search bookmarks"
+          aria-label="Search bookmarks"
+          spellcheck="false"
+          autocomplete="off"
+          bind:value={query}
+        />
+        {#if query !== ''}
+          <button
+            type="button"
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+            aria-label="Clear the bookmark search"
+            title="Clear search"
+            onclick={() => (query = '')}
           >
-            <button
-              type="button"
-              class="flex min-w-0 flex-1 items-center gap-2 px-1 py-0.5 text-left"
-              title={collapsed ? `Expand ${group.name}` : `Collapse ${group.name}`}
-              aria-label={collapsed ? `Expand ${group.name}` : `Collapse ${group.name}`}
-              aria-expanded={!collapsed}
-              onclick={() => toggleGroupCollapsed(group.id)}
-            >
-              <ChevronDown size={12} class="shrink-0 text-muted {collapsed ? '-rotate-90' : ''}" />
-              {#if groupIconUrl}
-                <img
-                  src={groupIconUrl}
-                  alt=""
-                  class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
-                  draggable="false"
-                />
-              {:else}
-                <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {accent}"
-                ></span>
-              {/if}
-              <span class="truncate text-[0.6875rem] font-semibold" style="color: {accent}">
-                {group.name}
-              </span>
-              <span class="shrink-0 text-[0.625rem] text-dimmed">
-                {browserBookmarks.inGroup(group.id).length}
-              </span>
-            </button>
-            <button
-              type="button"
-              class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
-              title={`Edit ${group.name}`}
-              aria-label={`Edit ${group.name}`}
-              onclick={() => {
-                pendingGroupBookmarkId = null
-                editingGroupId = group.id
+            <X size={13} />
+          </button>
+        {/if}
+      </div>
+      <button
+        type="button"
+        class="flex w-full items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title="Create a group for bookmarks"
+        aria-label="Create a group for bookmarks"
+        onclick={() => openCreatePage()}
+      >
+        <FolderPlus size={13} />
+        New group
+      </button>
+    </div>
+
+    {#if browserBookmarks.bookmarks.length === 0 && groups.length === 0}
+      <EmptyState
+        icon={Bookmark}
+        title="No bookmarks yet"
+        description="Save a page from the star beside its address, and it appears here to return to at any time."
+      />
+    {:else if matching.length === 0 && trimmedQuery !== ''}
+      <EmptyState
+        icon={Search}
+        title="No matching bookmarks"
+        description="Nothing you saved matches that search."
+      />
+    {:else}
+      <ul class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
+        {#each visibleGroups as group (group.id)}
+          {@const groupIconUrl = browserBookmarkGroupIconUrl(
+            group,
+            browserBookmarks.iconUrl(group.id)
+          )}
+          {@const accent = browserBookmarkGroupAccent(group)}
+          {@const collapsed = collapsedGroupIds.has(group.id)}
+          <li class="mb-1">
+            <div
+              class="flex items-center gap-1 rounded-lg px-1.5 py-1 transition-colors {groupDropTargetId ===
+              group.id
+                ? 'ring-1 ring-info'
+                : ''}"
+              style="background-color: {accent}1a"
+              draggable
+              role="group"
+              aria-label={`${group.name}, drop a bookmark here to move it into this group`}
+              ondragstart={(event: DragEvent) => onGroupDragStart(event, group)}
+              ondragover={(event: DragEvent) => onGroupDragOver(event, group.id)}
+              ondragleave={() => {
+                if (groupDropTargetId === group.id) groupDropTargetId = null
               }}
+              ondrop={(event: DragEvent) => onGroupDrop(event, group)}
+              ondragend={endDrag}
+              class:opacity-50={draggingGroupId === group.id}
             >
-              <Pencil size={12} />
-            </button>
-          </div>
-          {#if !collapsed}
-            <ul class="mt-0.5 ml-2 space-y-0.5 border-l pl-1.5">
-              {#each groupBookmarks(group.id) as bookmark (bookmark.id)}
+              <button
+                type="button"
+                class="flex min-w-0 flex-1 items-center gap-2 px-1 py-0.5 text-left"
+                title={collapsed ? `Expand ${group.name}` : `Collapse ${group.name}`}
+                aria-label={collapsed ? `Expand ${group.name}` : `Collapse ${group.name}`}
+                aria-expanded={!collapsed}
+                onclick={() => toggleGroupCollapsed(group.id)}
+              >
+                <ChevronDown
+                  size={12}
+                  class="shrink-0 text-muted {collapsed ? '-rotate-90' : ''}"
+                />
+                {#if groupIconUrl}
+                  <img
+                    src={groupIconUrl}
+                    alt=""
+                    class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+                    draggable="false"
+                  />
+                {:else}
+                  <span class="h-2 w-2 shrink-0 rounded-full" style="background-color: {accent}"
+                  ></span>
+                {/if}
+                <span class="truncate text-[0.6875rem] font-semibold" style="color: {accent}">
+                  {group.name}
+                </span>
+                <span class="shrink-0 text-[0.625rem] text-dimmed">
+                  {browserBookmarks.inGroup(group.id).length}
+                </span>
+              </button>
+              <button
+                type="button"
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                title={`Edit ${group.name}`}
+                aria-label={`Edit ${group.name}`}
+                onclick={() => toggleGroupEditor(group.id)}
+              >
+                <Pencil size={12} />
+              </button>
+            </div>
+            {#if expandedGroupId === group.id}
+              <div class="mb-1 rounded-lg border p-3">
+                <BrowserBookmarkGroupEditor
+                  {group}
+                  onSaved={() => (expandedGroupId = null)}
+                  onDeleted={() => (expandedGroupId = null)}
+                />
+              </div>
+            {/if}
+            {#if !collapsed}
+              <ul class="mt-0.5 ml-2 space-y-0.5 border-l pl-1.5">
+                {#each groupBookmarks(group.id) as bookmark (bookmark.id)}
+                  {@render bookmarkRow(bookmark)}
+                {/each}
+                {#if groupBookmarks(group.id).length === 0}
+                  <li class="px-2 py-1.5 text-[0.6875rem] text-dimmed">
+                    {trimmedQuery === ''
+                      ? 'No bookmarks in this group'
+                      : 'No matches in this group'}
+                  </li>
+                {/if}
+              </ul>
+            {/if}
+          </li>
+        {/each}
+
+        {#if showUngrouped}
+          <li
+            ondragover={(event: DragEvent) => onGroupDragOver(event, 'ungrouped')}
+            ondragleave={() => {
+              if (groupDropTargetId === 'ungrouped') groupDropTargetId = null
+            }}
+            ondrop={(event: DragEvent) => onGroupDrop(event, null)}
+            ondragend={endDrag}
+          >
+            <p
+              class="flex items-center gap-1 px-2 pt-1 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide transition-colors {groupDropTargetId ===
+              'ungrouped'
+                ? 'text-info'
+                : 'text-dimmed'}"
+            >
+              Ungrouped
+            </p>
+            <ul class="ml-2 space-y-0.5 border-l pl-1.5">
+              {#each ungrouped as bookmark (bookmark.id)}
                 {@render bookmarkRow(bookmark)}
               {/each}
-              {#if groupBookmarks(group.id).length === 0}
-                <li class="px-2 py-1.5 text-[0.6875rem] text-dimmed">
-                  {trimmedQuery === '' ? 'No bookmarks in this group' : 'No matches in this group'}
-                </li>
-              {/if}
             </ul>
-          {/if}
-        </li>
-      {/each}
+          </li>
+        {/if}
 
-      {#if showUngrouped}
-        <li
-          ondragover={(event: DragEvent) => onGroupDragOver(event, 'ungrouped')}
-          ondragleave={() => {
-            if (groupDropTargetId === 'ungrouped') groupDropTargetId = null
-          }}
-          ondrop={(event: DragEvent) => onGroupDrop(event, null)}
-          ondragend={endDrag}
-        >
-          <p
-            class="flex items-center gap-1 px-2 pt-1 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide transition-colors {groupDropTargetId ===
-            'ungrouped'
-              ? 'text-info'
-              : 'text-dimmed'}"
-          >
-            Ungrouped
-          </p>
-          <ul class="ml-2 space-y-0.5 border-l pl-1.5">
-            {#each ungrouped as bookmark (bookmark.id)}
-              {@render bookmarkRow(bookmark)}
-            {/each}
-          </ul>
-        </li>
-      {/if}
-
-      {#if groups.length === 0}
-        {#each matching as bookmark (bookmark.id)}
-          {@render bookmarkRow(bookmark)}
-        {/each}
-      {/if}
-    </ul>
-    <p class="shrink-0 border-t border-border px-3 py-1.5 text-[0.625rem] text-dimmed">
-      {matching.length}
-      {matching.length === 1 ? 'saved page' : 'saved pages'}
-      {#if groups.length > 0}
-        · {groups.length}
-        {groups.length === 1 ? 'group' : 'groups'}
-      {/if}
-    </p>
+        {#if groups.length === 0}
+          {#each matching as bookmark (bookmark.id)}
+            {@render bookmarkRow(bookmark)}
+          {/each}
+        {/if}
+      </ul>
+      <p class="shrink-0 border-t border-border px-3 py-1.5 text-[0.625rem] text-dimmed">
+        {matching.length}
+        {matching.length === 1 ? 'saved page' : 'saved pages'}
+        {#if groups.length > 0}
+          · {groups.length}
+          {groups.length === 1 ? 'group' : 'groups'}
+        {/if}
+      </p>
+    {/if}
   {/if}
 </div>
 
@@ -603,21 +668,6 @@
     <Globe size={12} class="text-dimmed" />
   {/if}
 {/snippet}
-
-{#if editingGroupId !== undefined}
-  <BrowserBookmarkGroupEditor
-    groupId={editingGroupId}
-    onCreated={(groupId) => {
-      if (pendingGroupBookmarkId !== null) {
-        browserBookmarks.moveToGroup(pendingGroupBookmarkId, groupId)
-      }
-    }}
-    onClose={() => {
-      pendingGroupBookmarkId = null
-      editingGroupId = undefined
-    }}
-  />
-{/if}
 
 <ConfirmDialog
   open={removingId !== null}
