@@ -142,6 +142,15 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
   }
 }
 
+/**
+ * Every status whose scope slice is `done`: the statuses a bounded thread
+ * listing is allowed to leave out, because a Threads view always ranks them
+ * below the todo and middle buckets.
+ */
+export const DONE_THREAD_STATUSES: readonly ThreadStatus[] = THREAD_STATUSES.filter(
+  (status) => THREAD_STATUS_POLICY[status].scopeSlice === 'done'
+)
+
 export function threadStatusPolicy(status: ThreadStatus): ThreadStatusPolicy {
   return THREAD_STATUS_POLICY[status]
 }

@@ -134,6 +134,9 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
     }
     return [...preferred, ...rest]
   })
+  // The Threads view's guarantee set: pinned rows, non-done rows, and every row
+  // of a pinned-like scope, independent of the recency window.
+  ipcMain.handle('thread:listAlwaysVisible', () => threadManager.listAlwaysVisibleThreads())
   ipcMain.handle(
     'thread:loadMessages',
     async (_, projectId: unknown, threadId: unknown, before?: unknown, limit: unknown = 40) => {

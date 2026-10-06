@@ -3072,18 +3072,27 @@
    *  recent slice simply never included an old done thread would distort the
    *  order. Switching to Threads view hydrates the global recent list, bounded
    *  to 200 combined rows with last-activity as the source of truth; deeper
-   *  history stays available through the existing "Load older threads" pager. */
+   *  history stays available through the existing "Load older threads" pager.
+   *
+   *  The 200-row window only ranks by activity, so on its own it hides a
+   *  non-done thread that has gone quiet and every thread of a pinned scope,
+   *  even though the view ranks those above the done rows that did load. That
+   *  guarantee set (`thread:listAlwaysVisible`) rides along with the window, so
+   *  the view's own grouping is never missing its top rows. */
   const THREADS_VIEW_HYDRATION_LIMIT = 200
   let threadsViewHydrating = false
   async function ensureThreadsViewFullyLoaded(): Promise<void> {
     if (threadsViewHydrating) return
     threadsViewHydrating = true
     try {
-      const page = await invoke('thread:listRecent', {
-        limit: THREADS_VIEW_HYDRATION_LIMIT,
-        offset: 0
-      })
-      const uniquePage = uniqueThreadList(page)
+      const [page, alwaysVisible] = await Promise.all([
+        invoke('thread:listRecent', {
+          limit: THREADS_VIEW_HYDRATION_LIMIT,
+          offset: 0
+        }),
+        invoke('thread:listAlwaysVisible')
+      ])
+      const uniquePage = uniqueThreadList([...page, ...alwaysVisible])
       scopeState.mergeThreads(uniquePage)
       // Fold the hydrated page back over the list. `thread:listRecent` carries
       // harness-usage decoration, while the bounded first-paint slice
