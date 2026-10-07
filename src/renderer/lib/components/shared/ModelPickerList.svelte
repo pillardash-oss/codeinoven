@@ -299,7 +299,10 @@
         effectiveView.kind === 'favorites' || effectiveView.kind === 'all'
           ? unavailableFavoriteModels
           : [],
-      filteredProviders: isProfilesView ? [] : filteredProviders,
+      filteredProviders:
+        effectiveView.kind === 'all' || effectiveView.kind === 'harness'
+          ? filteredProviders
+          : [],
       collapsedGroups,
       search,
       canReorderFavorites: Boolean(onReorderFavorite)
