@@ -68,8 +68,24 @@ jobs:
       - name: Read promotion versions
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_BRANCH: ${{ github.base_ref }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "BASE_VERSION=$(git show "${BASE_SHA}:package.json" | jq -r .version)" >> "$GITHUB_ENV"
+          if [ "$BASE_BRANCH" = 'main' ]; then
+            # main's package.json can drift ahead of the last published stable
+            # (e.g. a promotion merge that has not been released yet), so compare
+            # against the last published stable release instead, exactly like
+            # release.yml and scripts/deploy-main.sh do.
+            base_version="$(gh release list --limit 1000 --json tagName,isPrerelease --jq '[.[] | select(.isPrerelease | not) | .tagName] | max_by(ltrimstr("v"))' | sed 's/^v//')"
+            if [ -z "$base_version" ]; then
+              echo "::error::Could not determine the last published stable release"
+              exit 1
+            fi
+            echo "Resolved last published stable release: v$base_version"
+          else
+            base_version="$(git show "${BASE_SHA}:package.json" | jq -r .version)"
+          fi
+          echo "BASE_VERSION=$base_version" >> "$GITHUB_ENV"
           echo "CURRENT_VERSION=$(jq -r .version package.json)" >> "$GITHUB_ENV"
 
       - name: Validate branch direction and version bump
