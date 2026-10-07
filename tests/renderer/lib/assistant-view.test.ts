@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   TASK_RUN_PREVIEW,
   UNGROUPED_MISSED_RUNS,
+  assistantSubjectName,
   connectionsFromPlan,
   extractHowToDraft,
   extractRoutinePlanDraft,
@@ -193,6 +194,32 @@ describe('assistant-view presentation helpers', () => {
     expect(routineSiblingRuns(runs, true, rendered, tasksById).map((run) => run.id)).toEqual([
       'hidden-seed-run'
     ])
+  })
+})
+
+describe('assistant subject naming', () => {
+  const task = { title: 'Slack digest', assistantGettingStarted: false }
+  const setup = { title: 'Getting started', assistantGettingStarted: true }
+
+  it('names a run for the task it ran', () => {
+    expect(assistantSubjectName(task, 'Morning routine', 'fallback')).toBe('Slack digest')
+  })
+
+  it('never reports the Getting started authoring host as a job name', () => {
+    // A run of the seed task is named for its routine, so a saved routine's
+    // runs never read as another getting-started pass.
+    expect(assistantSubjectName(setup, 'Morning routine', 'fallback')).toBe('Morning routine')
+  })
+
+  it('falls back to the routine when the task row is gone', () => {
+    expect(assistantSubjectName(undefined, 'Morning routine', 'Assistant run')).toBe(
+      'Morning routine'
+    )
+  })
+
+  it('uses the fallback only when neither task nor routine is known', () => {
+    expect(assistantSubjectName(undefined, null, 'Assistant run')).toBe('Assistant run')
+    expect(assistantSubjectName(setup, null, 'Assistant task')).toBe('Assistant task')
   })
 })
 

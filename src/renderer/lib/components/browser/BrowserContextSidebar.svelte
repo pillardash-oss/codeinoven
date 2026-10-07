@@ -255,7 +255,13 @@
       return
     }
     if (isPopupTab(tabId)) {
-      browserPopupWindows.dismissOrClose(tabId)
+      browserPopupWindows.close(tabId)
+      return
+    }
+    if (tabId === extensionSidePanelTab.id) {
+      if (activeExtensionPanel) {
+        browserExtensionSidePanels.close(activeExtensionPanel.extensionId)
+      }
       return
     }
     if (tabId === downloadsTab.id) {
@@ -340,9 +346,9 @@
   const assistantMenuItemClass =
     'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 
-  /** Dismiss visible popups from the rail without ending extension pages. */
-  function dismissPopups(): void {
-    browserPopupWindows.dismissAll()
+  /** Close every visible popup, ending extension action pages too. */
+  function closePopups(): void {
+    browserPopupWindows.closeAll()
   }
 </script>
 
@@ -486,7 +492,7 @@
     {tabMenu}
     onSelect={selectTool}
     onClose={closeTab}
-    onDismissPopups={dismissPopups}
+    onClosePopups={closePopups}
     {onWidthChange}
     onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
     onTerminalPlacementChange={() => {}}

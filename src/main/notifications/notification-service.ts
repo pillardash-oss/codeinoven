@@ -979,10 +979,19 @@ export class NotificationService {
     return 'project'
   }
 
-  /** Resolve the user-facing assistant task or routine title without holding
-   *  the main thread on synchronous SQLite reads. */
-  private async assistantCompletionName(thread: Thread): Promise<string> {
-    if (isAssistantSetupThread(thread)) return ''
+  /**
+   * Resolve the user-facing assistant task or routine title without holding the
+   * main thread on synchronous SQLite reads.
+   *
+   * A run names the task it runs; a task names itself; a routine's Getting
+   * started host is an authoring thread, not a job, so it names its routine
+   * instead of its fixed title. A completed authoring turn returns an empty
+   * string   it is not a finished run   but a failure or a parked card there
+   * still names its routine, because "Assistant hit an error" says nothing about
+   * what actually failed.
+   */
+  private async assistantSubjectName(thread: Thread, kind: AgentNotificationKind): Promise<string> {
+    if (isAssistantSetupThread(thread) && kind === 'completed') return ''
     try {
       if (isAssistantRunThread(thread) && thread.assistantTaskId) {
         const task = await this.threadRepo.getViaWorker(thread.assistantTaskId)
@@ -992,10 +1001,10 @@ export class NotificationService {
         const routineName = (await this.routineRepo.getViaWorker(thread.routineId))?.name.trim()
         if (routineName) return routineName
       }
-      return thread.title.trim()
+      return isAssistantSetupThread(thread) ? '' : thread.title.trim()
     } catch (error) {
       Logger.dev('Notification assistant task name resolution failed:', error)
-      return thread.title.trim()
+      return isAssistantSetupThread(thread) && kind === 'completed' ? '' : thread.title.trim()
     }
   }
 
@@ -1009,19 +1018,22 @@ export class NotificationService {
       threadStatusPolicy(thread.status).notificationKind ?? 'error'
     const isAssistant = source === 'assistant'
     const displayName = source === 'chat' ? 'Chat' : isAssistant ? 'Assistant' : projectName
-    // Name assistant completions after the task or routine the user recognizes.
-    const completionName =
-      isAssistant && kind === 'completed' ? await this.assistantCompletionName(thread) : ''
+    // Name every assistant notice after the task or routine the user
+    // recognizes, so a failure reads "Slack digest hit an error" instead of the
+    // generic "Assistant hit an error" that made the panel's assistants tab
+    // impossible to scan. A non-assistant notice keeps its project/chat name.
+    const assistantName = isAssistant ? await this.assistantSubjectName(thread, kind) : ''
+    const subjectName = assistantName || displayName
     const title =
       kind === 'completed'
-        ? completionName
-          ? completionName
+        ? assistantName
+          ? assistantName
           : `${displayName} Done`
         : kind === 'attention'
-          ? `${displayName} needs attention`
+          ? `${subjectName} needs attention`
           : kind === 'spec'
-            ? `${displayName} spec is ready`
-            : `${displayName} hit an error`
+            ? `${subjectName} spec is ready`
+            : `${subjectName} hit an error`
     // Error notifications carry the real failure: the engine records the
     // diagnostic text on the thread when it marks it `failed`, so the panel can
     // show what went wrong instead of a generic label. Only the first line is
@@ -1039,8 +1051,8 @@ export class NotificationService {
     // the project it "finished in" would read as a project thread.
     const body =
       kind === 'completed'
-        ? completionName
-          ? `${completionName} finished.`
+        ? assistantName
+          ? `${assistantName} finished.`
           : isAssistant
             ? `${thread.title} finished.`
             : `${thread.title} finished in ${projectName}.`
@@ -1054,7 +1066,7 @@ export class NotificationService {
               : `${thread.title} has a reviewable engineering artifact ready in ${projectName}.`
             : (errorBody ??
               (isAssistant
-                ? `${thread.title} stopped with an error.`
+                ? `${assistantName || thread.title} stopped with an error.`
                 : `${thread.title} stopped with an error in ${projectName}.`))
 
     return {

@@ -1921,7 +1921,12 @@
   let workspaceSidebarHasContent = $derived.by(() => {
     if (loading || workspaceState.specStudioOpen) return true
     if (mode === 'assistant') {
-      return assistantRoutineList.length > 0 || assistantTasks.length > 0
+      // A run is content too: a thread opened from a notification can be a run
+      // whose task sits beyond the bounded recent slice, and its row must still
+      // have a sidebar to appear in.
+      return (
+        assistantRoutineList.length > 0 || assistantTasks.length > 0 || assistantRuns.length > 0
+      )
     }
     if (mode === 'chats') {
       return pinnedInboxThreads.length > 0 || standaloneThreads.length > 0
@@ -2050,6 +2055,39 @@
   $effect(() => {
     const selected = workspaceState.selectedThread
     if (selected && !isOrchestrationChildThread(selected)) upsertThreadInList(selected)
+  })
+
+  /** Assistant runs whose parent task is being fetched, so one selection never
+   *  fires two reads for the same run. */
+  const pendingAssistantParentReads = new SvelteSet<string>()
+
+  // An assistant run renders nested under its task. Selecting one from a
+  // notification can land on a run whose task sits beyond the bounded recent
+  // hydration slice, so the parent is fetched and added before the row is drawn
+  //   without it the run has no row to nest under, the sidebar cannot reveal
+  // it, and the thread looks like it opened nowhere at all.
+  $effect(() => {
+    const thread = selectedThread
+    if (!thread || mode !== 'assistant') return
+    if (thread.projectId !== ASSISTANT_SPACE_ID) return
+    const parentId = thread.assistantTaskId
+    if (!parentId) return
+    if (allThreads.some((candidate) => candidate.id === parentId)) return
+    if (pendingAssistantParentReads.has(parentId)) return
+    pendingAssistantParentReads.add(parentId)
+    void (async () => {
+      try {
+        const parent = await invoke('thread:get', ASSISTANT_SPACE_ID, parentId)
+        if (parent) {
+          upsertThreadInList(parent)
+          scopeState.updateThread(parent)
+        }
+      } catch {
+        // A run whose task is gone still opens on its own; nothing to add.
+      } finally {
+        pendingAssistantParentReads.delete(parentId)
+      }
+    })()
   })
 
   // Full user-message history is prefetched by ThreadView shortly after mount
@@ -2658,6 +2696,13 @@
     // A mode switch settles the incoming list itself, once its own rows are
     // mounted: this run would measure the position of the list being replaced.
     if (sidebarModeSettlePending) return
+    // The assistant sidebar is a separate, lazily imported component: re-run the
+    // reveal once its scroller attaches, and once the sidebar had to appear for
+    // the very run this is revealing, so a row that mounted a tick late is still
+    // brought into view.
+    void sidebarScroller
+    void workspaceSidebarVisible
+    void mode
     // Track the sort source arrays so the effect re-runs whenever the sidebar
     // lists reorder (thread updates, project reorders) and re-reveals if needed.
     void allThreads

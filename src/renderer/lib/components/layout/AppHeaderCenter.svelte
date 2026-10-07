@@ -9,11 +9,14 @@
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { RoutineDefaultIcon, getRoutineIcon, routineAccentColor } from '$lib/routine-icons'
   import ProjectInfoDropdown from '$lib/components/shared/ProjectInfoDropdown.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { threadBusyForIndicator } from './app-header-thread-status'
   import {
+    ASSISTANT_SPACE_ID,
     coordinatorHasActiveDelegates,
     INBOX_PROJECT_ID,
     isThreadRetryPaused,
@@ -63,6 +66,26 @@
   let headerThreadTitle = $derived(
     workspaceState.selectedThread ? effectiveThreadTitle(workspaceState.selectedThread) : ''
   )
+
+  /**
+   * The routine an assistant thread belongs to, so the header can wear the same
+   * routine icon the sidebar row does. A run inherits its task's `routineId`, so
+   * this resolves for a task and each of its runs alike; a routine-less task has
+   * no routine and the header falls back to the routine default mark.
+   */
+  let headerAssistantRoutine = $derived(
+    workspaceState.selectedThread?.projectId === ASSISTANT_SPACE_ID
+      ? assistantRoutines.routineForTask(workspaceState.selectedThread)
+      : null
+  )
+  let headerAssistantIcon = $derived(
+    headerAssistantRoutine
+      ? getRoutineIcon(
+          headerAssistantRoutine,
+          assistantRoutines.iconUrls.get(headerAssistantRoutine.id) ?? null
+        )
+      : null
+  )
 </script>
 
 <div class="flex min-w-0 flex-1 items-center justify-center px-2">
@@ -89,7 +112,27 @@
     <div
       class="titlebar-no-drag relative flex min-w-0 max-w-[var(--app-header-center-max-width)] items-center gap-2"
     >
-      {#if !chatMode && thread.projectId !== INBOX_PROJECT_ID}
+      {#if thread.projectId === ASSISTANT_SPACE_ID}
+        <!-- An assistant thread wears its routine's icon, exactly as its sidebar
+             row does, so the header names the routine at a glance. A
+             routine-less task falls back to the routine default mark. -->
+        <span
+          class="pointer-events-none flex h-4 w-4 shrink-0 items-center justify-center"
+          title={headerAssistantRoutine?.name ?? 'Assistant'}
+        >
+          {#if headerAssistantIcon}
+            <img src={headerAssistantIcon} alt="" class="h-4 w-4 object-contain" />
+          {:else}
+            <RoutineDefaultIcon
+              size={14}
+              strokeWidth={1.8}
+              style="color: {headerAssistantRoutine
+                ? routineAccentColor(headerAssistantRoutine)
+                : 'var(--color-muted)'}"
+            />
+          {/if}
+        </span>
+      {:else if !chatMode && thread.projectId !== INBOX_PROJECT_ID}
         {@const headerProject =
           workspaceState.activeProject ??
           scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ??

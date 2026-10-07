@@ -1364,7 +1364,7 @@ export class GlobalBrowserState {
    * Open an address in the tab on screen, or start the browser with a first tab when
    * there is none.
    *
-   * This is what the address spotlight, a history row and a bookmark all do: unlike
+   * This is what the address spotlight and a history row do: unlike
    * {@link open}, which is how a link arriving from a thread finds the tab already
    * showing it, these are the user saying "take me there now", so the page on screen
    * is the one that moves.

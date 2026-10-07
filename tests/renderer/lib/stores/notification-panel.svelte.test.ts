@@ -5,7 +5,7 @@ const subscribe = vi.hoisted(() => vi.fn())
 
 vi.mock('$lib/ipc.svelte', () => ({ invoke, subscribe }))
 vi.mock('$lib/stores/assistant-routines.svelte', () => ({
-  assistantRoutines: { missedRuns: [], spaceColor: null }
+  assistantRoutines: { missedRuns: [], spaceColor: null, routines: [] }
 }))
 
 import { APP_SLUG } from '$shared/brand'
@@ -210,6 +210,57 @@ describe('restoring the durable inbox', () => {
     invoke.mockRejectedValue(new Error('no store'))
     await expect(panel.restoreFromStore()).resolves.toBeUndefined()
     expect(panel.totalCount).toBe(0)
+  })
+})
+
+describe('naming an assistant failure', () => {
+  it('names the routine a failed run of its Getting started host belongs to', async () => {
+    const { assistantRoutines } = await import('$lib/stores/assistant-routines.svelte')
+    assistantRoutines.routines = [{ id: 'routine-1', name: 'Slack digest' }] as never
+    const setupTask = thread({
+      id: 'task-setup',
+      projectId: ASSISTANT_SPACE_ID,
+      title: 'Getting started',
+      assistantGettingStarted: true,
+      routineId: 'routine-1',
+      status: 'completed'
+    })
+    const run = thread({
+      id: 'run-1',
+      projectId: ASSISTANT_SPACE_ID,
+      title: 'Run · 1 Jan',
+      assistantTaskId: 'task-setup',
+      routineId: 'routine-1',
+      status: 'failed',
+      updatedAt: 200
+    })
+
+    panel.hydrateFromThreads([setupTask, run], [])
+
+    // "Assistant hit an error" said nothing about what failed, and the run's own
+    // "Getting started" host title is an authoring thread, not a job.
+    expect(panel.assistantNotifications.map((n) => n.title)).toEqual(['Slack digest hit an error'])
+  })
+
+  it('names the task a failed run ran when it is not an authoring host', () => {
+    const task = thread({
+      id: 'task-1',
+      projectId: ASSISTANT_SPACE_ID,
+      title: 'Inbox triage',
+      status: 'completed'
+    })
+    const run = thread({
+      id: 'run-2',
+      projectId: ASSISTANT_SPACE_ID,
+      title: 'Run · 2 Jan',
+      assistantTaskId: 'task-1',
+      status: 'failed',
+      updatedAt: 300
+    })
+
+    panel.hydrateFromThreads([task, run], [])
+
+    expect(panel.assistantNotifications.map((n) => n.title)).toEqual(['Inbox triage hit an error'])
   })
 })
 

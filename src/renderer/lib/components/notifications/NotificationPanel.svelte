@@ -23,6 +23,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
   import {
+    assistantSubjectName,
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
@@ -34,7 +35,13 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
-  import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID, type BackgroundRun } from '$shared/types'
+  import {
+    ASSISTANT_SPACE_ID,
+    INBOX_PROJECT_ID,
+    type BackgroundRun,
+    type MissedRun,
+    type Thread
+  } from '$shared/types'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
@@ -148,32 +155,49 @@
   // Missed runs are surfaced per routine: one group per owning routine, plus a
   // single group for routine-less tasks. Both the groups and the panel's tab
   // chrome exist only once at least one run has actually been missed.
+  const routineNameById = $derived(
+    new Map(assistantRoutines.routines.map((routine) => [routine.id, routine.name]))
+  )
   let missedGroups = $derived(
-    groupMissedRunsByRoutine(
-      assistantRoutines.missedRuns,
-      new Map(assistantRoutines.routines.map((routine) => [routine.id, routine.name]))
-    )
+    groupMissedRunsByRoutine(assistantRoutines.missedRuns, routineNameById)
   )
 
   // Unattended runs get their own routine grouping: one group per owning
   // routine, plus a single group for routine-less tasks, mirroring missed runs.
   const backgroundGroups = $derived(
-    groupBackgroundRunsByRoutine(
-      assistantRoutines.recentBackgroundRuns,
-      new Map(assistantRoutines.routines.map((routine) => [routine.id, routine.name]))
-    )
+    groupBackgroundRunsByRoutine(assistantRoutines.recentBackgroundRuns, routineNameById)
   )
 
   /**
-   * A run's own row names the task it ran, resolved from the thread list. A task
-   * whose thread was deleted still has ledger evidence, so it falls back to the
-   * neutral label rather than disappearing.
+   * The task a run row reports for, resolved from the loaded thread list. A
+   * routine's Getting started host is not a job, and a deleted task has no row
+   * at all, so both resolve through the routine name instead (see
+   * `assistantSubjectName`).
+   */
+  function runTask(threadId: string): Thread | undefined {
+    return scopeState.allScopeThreads.find((thread) => thread.id === threadId)
+  }
+
+  function routineNameFor(routineId: string | undefined): string | null {
+    return routineId ? (routineNameById.get(routineId) ?? null) : null
+  }
+
+  function missedRunTitle(run: MissedRun): string {
+    return assistantSubjectName(
+      runTask(run.threadId),
+      routineNameFor(run.routineId),
+      'Assistant task'
+    )
+  }
+
+  /**
+   * A run's own row names the task it ran, never the routine's "Getting started"
+   * authoring host, resolved from the thread list. A task whose thread was
+   * deleted still has ledger evidence, so it falls back to the routine name and
+   * then the neutral label rather than disappearing.
    */
   function backgroundRunTitle(run: BackgroundRun): string {
-    return (
-      scopeState.allScopeThreads.find((thread) => thread.id === run.taskId)?.title ??
-      'Assistant run'
-    )
+    return assistantSubjectName(runTask(run.taskId), routineNameFor(run.routineId), 'Assistant run')
   }
 
   async function navigateToNotification(n: InAppNotification): Promise<void> {
@@ -646,7 +670,7 @@
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2">
                       <span class="truncate text-[0.6875rem] font-medium text-foreground"
-                        >{run.title}</span
+                        >{missedRunTitle(run)}</span
                       >
                       <span class="shrink-0 text-[0.625rem] text-dimmed"
                         >{formatTime(run.dueAt)}</span

@@ -370,16 +370,20 @@ default:
   Assistants tab exposes no sub-filter buttons; with nothing to show it renders
   only a neutral empty state. Each entry states why the fire was not run
   (`missedRunReasonText` in `assistant-view.ts`), so the copy never claims the
-  app was closed when the machine simply slept through the window;
+  app was closed when the machine simply slept through the window. An entry's
+  title names the task or routine through `assistantSubjectName`, so a run of a
+  routine's Getting started host reads as the routine, never as "Getting
+  started";
 - the **While you were away** section of the same Assistants tab, which lists the
   recent unattended runs straight from the ledger (outcome, why it ran, when it
   settled, any persisted failure, and how many gates it answered for you), with a
   per-entry **Dismiss** (`assistant:dismissBackgroundRun`) that removes the
   durable ledger entry, and a routine profile's **Run history** list in the
   how-to panel. A run whose thread was later deleted still shows, as
-  non-clickable evidence. Dismissing a run is the user acknowledging evidence
-  they no longer need: the row leaves every surface and does not return on the
-  next launch.
+  non-clickable evidence. These rows name the task or routine the same way, so
+  the section never falls back to the authoring host's fixed title. Dismissing a
+  run is the user acknowledging evidence they no longer need: the row leaves
+  every surface and does not return on the next launch.
 
 ## Auto-resolved gates (attention rail)
 
@@ -417,12 +421,20 @@ the panel routes it to the Assistants tab instead of Projects and the card names
 its own status (done, needs attention, spec ready, error).
 
 A completed run of a **routine** names the report rather than the space: the
-notification reads **Routine report ready** with the routine's own name beneath
-it (the body), so the entry says what is ready and whose it is instead of a bare
-**Assistant Done**. The routine name is resolved from the run's `routineId`
-(`RoutineRepo.getViaWorker`), read on the worker so naming a notification never
-holds the main thread. A routine-less task and the Getting started authoring
-thread keep the generic assistant copy.
+notification's title is the task or routine's own name, so the entry says what
+finished and whose it is instead of a bare **Assistant Done**. Every assistant
+notice resolves the same subject through `assistantSubjectName`
+(`src/main/notifications/notification-service.ts`): a run names the task it ran,
+a task names itself, and a routine's Getting started authoring host names its
+routine rather than its fixed title. The same rule is what turns a failure into
+**Slack digest hit an error** instead of the generic **Assistant hit an error**,
+and the renderer's thread-state hydration
+(`notification-panel.svelte.ts`) resolves the identical subject, so a failure
+surfaced on the next launch reads the same as the live one. The name is resolved
+from the run's `assistantTaskId`/`routineId` (`getViaWorker`), read on the worker
+so naming a notification never holds the main thread. A completed authoring turn
+keeps the generic assistant copy; a failure or parked card there names the
+routine, because "Assistant hit an error" says nothing about what failed.
 
 The assistant is a surface with its own accent colour, the colour stored on the
 hidden assistant space project (the payload's `projectColor`, `#ec4899` by
@@ -477,7 +489,10 @@ success green, mirroring how a chat response toast uses its own colour.
 
 The left sidebar shows only routines, their tasks, and each task's runs, with no
 title header and no composer. Everything the view offers lives on the app header,
-registered by the workspace through `viewActions`:
+registered by the workspace through `viewActions`. The header itself wears the
+selected thread's routine icon (`getRoutineIcon`, falling back to
+`RoutineDefaultIcon`), exactly as the sidebar row does, so an open assistant
+thread names its routine at a glance instead of showing no mark at all.
 
 - **Search** (`AssistantSearchControl.svelte`) filters routines, tasks, and runs.
   Runs get their own result section, since a run is a row on the sidebar too.
@@ -562,7 +577,16 @@ control nested inside a row's button. A task row also pulses while any of its
 runs is working (`runWorking`), because the run, not the task, is what is
 executing, and the routine row aggregates the same signal. Missed badges stay on
 the task (and its routine): a miss is a property of the schedule, not of one
-execution.
+execution. A run lifted to its routine's own level (`routineSiblingRuns`) names
+the task it ran on its own line (`contextLabel`), because it has no parent row
+above it to say which task it belongs to, and a row that is actually working
+reads **Running now** instead of a stale schedule time.
+
+Selecting a run from a notification follows the same focus-follow rule as every
+other thread: the workspace fetches and adds the run's parent task when it falls
+outside the bounded recent hydration slice, counts a run as sidebar content, and
+reveals and highlights the row even when the thread was not in the first loaded
+page, so a thread opened from a notification is never left unhighlighted.
 
 A task or run row's status indicator comes from the same canonical mapping every
 other thread surface reads, `statusBadgeForThread`

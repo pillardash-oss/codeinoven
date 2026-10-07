@@ -38,7 +38,7 @@
    * The saved pages, docked in the browser's right rail.
    *
    * A saved page is quick access the user keeps, so this panel is where it is
-   * shaped: a row opens the page in the tab on screen, and its own controls
+   * shaped: a row opens the page in a new tab, and its own controls
    * rename, re-address, re-icon, regroup, reorder and remove it. Editing is a fold
    * on the row rather than a dialog, the same shape the boxes and extensions tools
    * use, so the list stays in view while the fields are read; the editor is mounted
@@ -306,7 +306,7 @@
       title={bookmark.title}
       meta={browserLibraryHost(bookmark.url)}
       url={bookmark.url}
-      onOpen={() => globalBrowser.openInActiveTab(bookmark.url)}
+      onOpen={() => globalBrowser.createTab(bookmark.url)}
     >
       {#snippet icon()}
         {@render BookmarkIcon({ bookmark })}
