@@ -82,7 +82,14 @@ function canConnect(host: string, port: number): Promise<boolean> {
     }
     socket.setTimeout(CONNECT_TIMEOUT_MS)
     socket.once('connect', () => finish(true))
-    socket.once('timeout', () => finish(false))
+    // The idle timeout is a timer, and libuv runs timers before poll. A busy
+    // event loop that outlasts CONNECT_TIMEOUT_MS therefore reports the timeout
+    // ahead of a `connect` whose handshake the kernel already completed, and
+    // destroying the socket then makes an address that answers look dead. Give
+    // the verdict one loop turn so the pending `connect` or `error` in the poll
+    // phase is delivered first; only a socket still open after that is a real
+    // timeout.
+    socket.once('timeout', () => setImmediate(() => finish(false)))
     socket.once('error', () => finish(false))
   })
 }
