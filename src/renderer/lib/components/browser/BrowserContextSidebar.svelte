@@ -1,9 +1,8 @@
 <script lang="ts">
-  import { MessagesCircle, Pencil, X } from '@lucide/svelte'
-  import { ContextMenu } from 'bits-ui'
+  import { MessagesCircle } from '@lucide/svelte'
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
+  import { invoke } from '$lib/ipc.svelte'
   import {
     contextSidebarState,
     type BrowserAgentContextTab,
@@ -291,37 +290,78 @@
   /**
    * The assistant conversation's own actions.
    *
-   * A conversation is deleted by closing it, which is what the tab's close button
-   * and its context menu offer. Deleting a transcript is destructive, so the close
-   * is confirmed before the thread behind it is deleted; hiding the rail keeps the
-   * conversation, and that stays the dock's toggle.
+   * A conversation is deleted by closing it, which is what the tab's close
+   * button and its native context menu offer. Deleting a transcript is
+   * destructive, so the close is confirmed before the thread behind it is
+   * deleted; hiding the rail keeps the conversation, and that stays the dock's
+   * toggle. Renaming edits the strip title inline: Enter or blur saves,
+   * Escape cancels.
    */
-  let renaming = $state<BrowserAgentContextTab | null>(null)
+  let renamingTabId = $state<string | null>(null)
   let renameValue = $state('')
   let renameBusy = $state(false)
   let closing = $state<BrowserAgentContextTab | null>(null)
   let closeBusy = $state(false)
 
   function startRename(tab: BrowserAgentContextTab): void {
-    renaming = tab
+    renamingTabId = tab.id
     renameValue = tab.title
   }
 
-  async function confirmRename(): Promise<void> {
-    const tab = renaming
+  async function commitRename(): Promise<void> {
+    const tabId = renamingTabId
+    const tab = tabId !== null && agentTab?.id === tabId ? agentTab : null
     const title = renameValue.trim()
+    if (renameBusy) return
     if (!tab || title === '' || title === tab.title) {
-      renaming = null
+      renamingTabId = null
       return
     }
     renameBusy = true
     try {
       await browserAssistant.renameChat(tab.threadId, title)
-      renaming = null
+      renamingTabId = null
     } catch (error) {
       reportError(error, 'The conversation could not be renamed.')
     } finally {
       renameBusy = false
+    }
+  }
+
+  function cancelRename(): void {
+    if (renameBusy) return
+    renamingTabId = null
+  }
+
+  /** The agent tab's right-click menu, as an OS-native popup above the page. */
+  async function handleAgentTabContextMenu(tabId: string, event: MouseEvent): Promise<void> {
+    const tab = agentTab?.id === tabId ? agentTab : null
+    if (!tab) return
+    event.preventDefault()
+    event.stopPropagation()
+    const choice = await invoke(
+      'browser:agentTabMenu',
+      { title: tab.title, threadId: tab.threadId },
+      Math.max(0, Math.round(event.clientX)),
+      Math.max(0, Math.round(event.clientY))
+    ).catch(() => null)
+    if (!choice) return
+    const current = agentTab?.id === tabId ? agentTab : null
+    if (!current) return
+    switch (choice.action) {
+      case 'rename':
+        startRename(current)
+        return
+      case 'copyThreadId':
+        try {
+          await invoke('clipboard:writeText', current.threadId)
+        } catch (error) {
+          reportError(error, 'The thread ID could not be copied.')
+        }
+        return
+      case 'close':
+        closing = current
+        return
     }
   }
 
@@ -340,11 +380,6 @@
       closeBusy = false
     }
   }
-
-  /** The menu item shell, matching the shell every other context menu in the app
-   *  uses for a row of the same size. */
-  const assistantMenuItemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 
   /** Close every visible popup, ending extension action pages too. */
   function closePopups(): void {
@@ -440,47 +475,6 @@
   {/if}
 {/snippet}
 
-<!--
-  The strip tab's right-click menu, for the assistant conversation.
-
-  Renaming is the reason it exists: a conversation is a real chat, so its title is
-  the user's to set, and the title the model derives from the first question is
-  only a starting point. Closing is offered here too because a conversation is
-  deleted by closing it, and the menu is where the user expects to find that.
--->
-{#snippet tabMenu(tab: ContextSidebarTab)}
-  {#if tab.kind === 'browser-agent'}
-    <ContextMenu.Portal>
-      <ContextMenu.Content
-        avoidCollisions
-        collisionPadding={12}
-        updatePositionStrategy="always"
-        class="z-50 min-w-56 rounded-lg border border-border bg-surface p-1 shadow-lg"
-      >
-        <p
-          class="truncate px-2.5 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
-        >
-          {tab.title}
-        </p>
-        <ContextMenu.Item class={assistantMenuItemClass} onSelect={() => startRename(tab)}>
-          <Pencil size={13} class="shrink-0 text-muted" />
-          Rename
-        </ContextMenu.Item>
-        <ContextMenu.Separator class="my-1 h-px bg-border" />
-        <ContextMenu.Item
-          class={assistantMenuItemClass}
-          onSelect={() => {
-            closing = tab
-          }}
-        >
-          <X size={13} class="shrink-0 text-muted" />
-          Close conversation
-        </ContextMenu.Item>
-      </ContextMenu.Content>
-    </ContextMenu.Portal>
-  {/if}
-{/snippet}
-
 <div class="min-h-0 min-w-0 shrink-0" style:width="{contextSidebarState.width}px">
   <ContextSidebar
     {tabs}
@@ -489,58 +483,20 @@
     height={contextSidebarState.terminalHeight}
     placement="right"
     content={railContent}
-    {tabMenu}
     onSelect={selectTool}
     onClose={closeTab}
+    onTabContextMenu={(id, event) => void handleAgentTabContextMenu(id, event)}
+    renamingTabId={renamingTabId}
+    renameValue={renameValue}
+    onRenameValueChange={(value) => (renameValue = value)}
+    onRenameCommit={() => void commitRename()}
+    onRenameCancel={cancelRename}
     onClosePopups={closePopups}
     {onWidthChange}
     onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
     onTerminalPlacementChange={() => {}}
   />
 </div>
-
-<Modal open={renaming !== null} title="Rename Conversation" onClose={() => (renaming = null)}>
-  <form
-    id="browser-assistant-rename-form"
-    class="space-y-4"
-    onsubmit={(event: SubmitEvent) => {
-      event.preventDefault()
-      void confirmRename()
-    }}
-  >
-    <div>
-      <label class="mb-1 block text-xs font-medium text-muted" for="browser-assistant-rename-input">
-        Title
-      </label>
-      <input
-        id="browser-assistant-rename-input"
-        type="text"
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
-        bind:value={renameValue}
-      />
-    </div>
-  </form>
-
-  {#snippet footer()}
-    <button
-      type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      title="Cancel"
-      onclick={() => (renaming = null)}
-    >
-      Cancel
-    </button>
-    <button
-      type="submit"
-      form="browser-assistant-rename-form"
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      disabled={renameBusy || renameValue.trim() === ''}
-      title="Save the new title"
-    >
-      Save
-    </button>
-  {/snippet}
-</Modal>
 
 <ConfirmDialog
   open={closing !== null}

@@ -103,6 +103,7 @@ import {
 import { showBrowserBoxMenu } from './browser-service/browser-box-menu'
 import { showBrowserTabSelectionMenu } from './browser-service/browser-tab-selection-menu'
 import { showBrowserTabContextMenu } from './browser-service/browser-tab-context-menu'
+import { showBrowserAgentTabMenu } from './browser-service/browser-agent-tab-menu'
 import { BrowserTabHistoryStore } from './browser-tab-history-store'
 import { BrowserClosedTabHistory } from './browser-closed-tab-history'
 import { BrowserCaptureObserver } from './browser-service/browser-capture'
@@ -214,6 +215,7 @@ import {
   validateBrowserUrl,
   validateBrowserTabSelectionMenuInput,
   validateBrowserTabContextMenuInput,
+  validateBrowserAgentTabMenuInput,
   validateDownloadId,
   validateInspectorMarkers,
   validateInspectorReferenceId,
@@ -1409,6 +1411,12 @@ export class BrowserService {
       const x = validateSiteMenuPoint(rawX, 'x coordinate')
       const y = validateSiteMenuPoint(rawY, 'y coordinate')
       return showBrowserTabContextMenu(this.window, input, x, y)
+    })
+    replaceHandler('browser:agentTabMenu', (_event, rawInput, rawX, rawY) => {
+      const input = validateBrowserAgentTabMenuInput(rawInput)
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      return showBrowserAgentTabMenu(this.window, input, x, y)
     })
     replaceHandler('browser:resolvePermission', (_event, rawRequestId, rawDecision) => {
       const requestId = validatePermissionRequestId(rawRequestId)

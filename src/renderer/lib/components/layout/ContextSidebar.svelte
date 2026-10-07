@@ -62,7 +62,7 @@
     TriangleAlert,
     X
   } from '@lucide/svelte'
-  import { ContextMenu, DropdownMenu } from 'bits-ui'
+  import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
 
@@ -75,16 +75,20 @@
     content: Snippet
     onSelect: (id: string) => void
     onClose: (id: string) => void
-    /** A right-click menu for one strip tab, rendered by the rail that owns the
-     *  tabs: only that rail knows what its own tabs can do (a browser tab's
-     *  agent conversation can be renamed and closed; a terminal cannot). The
-     *  shell only decides where the menu is anchored, so every rail keeps one
-     *  strip implementation. */
-    tabMenu?: Snippet<[ContextSidebarTab]>
     onFullscreenTab?: (id: string) => void
-    /** Callback for drag-to-reorder; position is relative to the target tab.
-     *  Only tabbed kinds render a strip, so this only reorders those. */
+    /** Native right-click menu for one strip tab. The rail that owns the tabs
+     *  opens an OS popup here, above any native page view, so the shell never
+     *  draws a document menu of its own. */
     onTabContextMenu?: (id: string, event: MouseEvent) => void
+    /** The strip tab currently renamed inline, or null while none is. The rail
+     *  that owns the tabs holds this state; the shell only swaps the title for
+     *  an editor. */
+    renamingTabId?: string | null
+    /** The in-progress title while a strip tab is renamed inline. */
+    renameValue?: string
+    onRenameValueChange?: (value: string) => void
+    onRenameCommit?: () => void
+    onRenameCancel?: () => void
     onMoveTab?: (id: string, targetId: string, position: 'before' | 'after') => void
     onWidthChange: (width: number) => void
     onHeightChange: (height: number) => void
@@ -119,6 +123,11 @@
     onFullscreenTab,
     onMoveTab,
     onTabContextMenu,
+    renamingTabId = null,
+    renameValue = '',
+    onRenameValueChange,
+    onRenameCommit,
+    onRenameCancel,
     onWidthChange,
     onHeightChange,
     onTerminalPlacementChange,
@@ -126,7 +135,6 @@
     onNewTerminal,
     onNewBrowser,
     onClosePopups,
-    tabMenu,
     tabPresentation
   }: Props = $props()
 
@@ -362,6 +370,12 @@
     window.addEventListener('pointerup', onUp)
   }
 
+  /** Focus the inline rename input and select its text, so typing replaces it. */
+  function focusRenameInput(node: HTMLInputElement): void {
+    node.focus()
+    node.select()
+  }
+
   /**
    * The band's own width, and the two insets a panel has to leave clear for it.
    *
@@ -543,11 +557,35 @@
         {:else}
           {@render tabIcon(tab)}
         {/if}
-        <span
-          class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' && tab.preview
-            ? 'italic'
-            : ''}">{tab.title}</span
-        >
+        {#if renamingTabId === tab.id}
+          <input
+            use:focusRenameInput
+            value={renameValue ?? ''}
+            class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] font-medium text-foreground outline-none"
+            aria-label={`Rename ${tab.title}`}
+            oninput={(event) => onRenameValueChange?.(event.currentTarget.value)}
+            onkeydown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                onRenameCommit?.()
+              } else if (event.key === 'Escape') {
+                event.preventDefault()
+                onRenameCancel?.()
+              }
+            }}
+            onblur={() => onRenameCommit?.()}
+            onclick={(event) => event.stopPropagation()}
+            oncontextmenu={(event) => event.stopPropagation()}
+            onpointerdown={(event) => event.stopPropagation()}
+            ondragstart={(event) => event.preventDefault()}
+          />
+        {:else}
+          <span
+            class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' && tab.preview
+              ? 'italic'
+              : ''}">{tab.title}</span
+          >
+        {/if}
         {#if conversation}
           {#if conversationAttention.hasAttention(conversation.projectId, conversation.conversationId)}
             <StatusBadge kind="attention" animated title="Needs attention" />
@@ -591,19 +629,7 @@
   {/snippet}
 
   {#snippet stripRow(tab: ContextSidebarTab)}
-    {#if tabMenu}
-      <!-- The rail that owns this tab supplies its menu, so the right-click
-           behaviour of a tab belongs beside the tab's meaning. The trigger
-           carries no box of its own (`contents`), so the row keeps its layout. -->
-      <ContextMenu.Root>
-        <ContextMenu.Trigger class="contents">
-          {@render stripRowBody(tab)}
-        </ContextMenu.Trigger>
-        {@render tabMenu(tab)}
-      </ContextMenu.Root>
-    {:else}
-      {@render stripRowBody(tab)}
-    {/if}
+    {@render stripRowBody(tab)}
   {/snippet}
 
   {#if !headerless}

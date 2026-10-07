@@ -44,6 +44,7 @@ import {
 } from '../../../lib/browser/browser-box-menu'
 import type { BrowserTabSelectionMenuInput } from '../../../lib/browser/browser-tab-selection-menu'
 import type { BrowserTabContextMenuInput } from '../../../lib/browser/browser-tab-context-menu'
+import type { BrowserAgentTabMenuInput } from '../../../lib/browser/browser-agent-tab-menu'
 import type { BrowserViewport } from './browser-types'
 import type {
   BrowserOverlayAck,
@@ -869,6 +870,18 @@ export function validateBrowserTabContextMenuInput(value: unknown): BrowserTabCo
     threadScoped: record['threadScoped'] === true,
     groups,
     boxes
+  }
+}
+
+/** Validate renderer-provided data for the agent conversation tab menu. */
+export function validateBrowserAgentTabMenuInput(value: unknown): BrowserAgentTabMenuInput {
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('Browser agent tab menu input is invalid')
+  }
+  const record = value as Record<string, unknown>
+  return {
+    title: boundedBoxLabel(record['title']).slice(0, 512),
+    threadId: validateThreadId(record['threadId'])
   }
 }
 

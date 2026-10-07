@@ -39,6 +39,10 @@ import type {
   BrowserTabSelectionMenuInput
 } from '../browser/browser-tab-selection-menu'
 import type {
+  BrowserAgentTabMenuChoice,
+  BrowserAgentTabMenuInput
+} from '../browser/browser-agent-tab-menu'
+import type {
   BrowserOverlayAck,
   BrowserOverlaySnapshot,
   BrowserStripOverlayInteraction,
@@ -473,6 +477,11 @@ export const invokeBrowserContract = {
   'browser:tabContextMenu': {} as Contract<
     [input: BrowserTabContextMenuInput, x: number, y: number],
     BrowserTabContextMenuChoice | null
+  >,
+  /** Open the native menu for the global browser's agent conversation tab. */
+  'browser:agentTabMenu': {} as Contract<
+    [input: BrowserAgentTabMenuInput, x: number, y: number],
+    BrowserAgentTabMenuChoice | null
   >,
   'browser:resolvePermission': {} as Contract<
     [requestId: string, decision: BrowserPermissionDecision],
