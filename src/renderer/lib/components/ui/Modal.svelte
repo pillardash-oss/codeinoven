@@ -23,7 +23,7 @@
    * never differ between surfaces:
    *
    *   - the portal and the scrim
-   *   - the stacking layer (`z-60`), above the app's floating panels
+   *   - the stacking layer, with palettes able to rise above page surfaces
    *   - the panel shell: header, scrolling body, and a footer that never scrolls
    *   - initial focus: the first text field, else the primary action
    *   - Escape, the backdrop, and Cmd/Ctrl+W (`registerOverlayClose`), with
@@ -52,7 +52,7 @@
   ].join(',')
 
   /** The scrim is shared by every placement. A full screen panel covers it. */
-  const OVERLAY_CLASS = 'fixed inset-0 z-60 bg-overlay/70 backdrop-blur-[1px]'
+  const OVERLAY_CLASS = 'fixed inset-0 bg-overlay/70 backdrop-blur-[1px]'
 
   /**
    * How the fixed wrapper positions the panel. Padding lives here rather than on
@@ -173,6 +173,8 @@
      *  surface that hosts the view itself: the full screen browser must not
      *  suppress the very page it exists to display. */
     blocksBrowserView?: boolean
+    /** Render above browser page shells and Peek flight animations. */
+    abovePage?: boolean
     /** Claim the initial focus. Return true when you focused something. */
     claimInitialFocus?: (panel: HTMLElement) => boolean
     /** Runs as the panel closes, before focus is restored. Call
@@ -206,11 +208,13 @@
     onEscapeKeydown,
     scrim = true,
     blocksBrowserView = true,
+    abovePage = false,
     claimInitialFocus,
     onCloseAutoFocus,
     panelEl = $bindable(null)
   }: Props = $props()
 
+  const stackingClass = $derived(abovePage ? 'z-80' : 'z-60')
   let alignment = $derived(ALIGNMENTS[placement])
   let layout = $derived(panelLayout(placement, fill))
   let widthClass = $derived(
@@ -271,10 +275,10 @@
 <Dialog.Root {open} onOpenChange={(next) => !next && onClose()}>
   <Dialog.Portal>
     {#if scrim}
-      <Dialog.Overlay class={OVERLAY_CLASS} />
+      <Dialog.Overlay class="{OVERLAY_CLASS} {stackingClass}" />
     {/if}
     <div
-      class="pointer-events-none fixed z-60 flex {bounds ? '' : 'inset-0'} {alignment}"
+      class="pointer-events-none fixed {stackingClass} flex {bounds ? '' : 'inset-0'} {alignment}"
       style={bounds
         ? `left: ${bounds.x}px; top: ${bounds.y}px; width: ${bounds.width}px; height: ${bounds.height}px;`
         : undefined}

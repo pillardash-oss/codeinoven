@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
+  import { on } from 'svelte/events'
   import { SvelteMap } from 'svelte/reactivity'
   import { getProjectIcon } from '$lib/project-icons'
   import { contentFamilyIcon } from '$lib/content-view-icons'
@@ -95,6 +96,7 @@
   function focusHighlightedEntry(key: string | null): void {
     if (key === null) return
     void tick().then(() => {
+      if (!open || highlightedKey !== key) return
       const index = entries.findIndex((entry) => threadSwitcherEntryKey(entry) === key)
       if (index < 0) return
       contentElement?.querySelector<HTMLElement>(`[data-entry-index="${index}"]`)?.focus()
@@ -190,11 +192,17 @@
    * page exactly as it does from the app's own chrome. From here on the real
    * Control release reaches the DOM and commits the highlight like any other.
    */
-  onMount(() =>
-    subscribe('browser:switcherKey', ({ backward }) => {
+  onMount(() => {
+    const unsubscribe = subscribe('browser:switcherKey', ({ backward }) => {
       cycle(backward ? -1 : 1)
     })
-  )
+    // Claim the chord before dialog focus scopes interpret Tab as focus traversal.
+    const removeKeydown = on(window, 'keydown', handleWindowKeydown, { capture: true })
+    return () => {
+      unsubscribe()
+      removeKeydown()
+    }
+  })
 
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (keymapState.matches('thread-switcher', event)) {
@@ -226,7 +234,6 @@
 </script>
 
 <svelte:window
-  onkeydown={handleWindowKeydown}
   onkeyup={handleWindowKeyup}
   onpointermove={handleWindowPointerMove}
   onblur={handleWindowBlur}
@@ -237,6 +244,7 @@
   title="Switch to"
   onClose={cancel}
   placement="palette"
+  abovePage
   panelWidth="max-w-lg"
   chrome={false}
   bind:panelEl={contentElement}
