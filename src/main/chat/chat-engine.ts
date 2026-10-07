@@ -7198,7 +7198,9 @@ export class ChatEngine {
           message: pending.issueMessage,
           harnessId: pending.harnessId,
           retryable: true,
-          ...(pending.retryAt === undefined ? {} : { retryAt: pending.retryAt }),
+          ...(pending.retryAt === undefined
+            ? {}
+            : { retryAt: pending.resetAt ?? pending.retryAt, autoResumeAt: pending.retryAt }),
           ...(pending.rawError === undefined ? {} : { rawError: pending.rawError }),
           ...(pending.attempt === undefined ? {} : { attempt: pending.attempt })
         }
@@ -22624,6 +22626,7 @@ export class ChatEngine {
       // auto-resume record for it (a re-reported error re-tracks it).
       if (event.status.state === 'working' || event.status.state === 'idle') {
         this.retryScheduler?.clear(event.sessionId)
+        this.retryScheduler?.resumed(event.sessionId)
       }
     } else {
       if (
@@ -24274,7 +24277,6 @@ export class ChatEngine {
     if (!driver) return false
     // Allow the failed turn to finish tearing down before admitting a continuation.
     let retryAt = issue.kind === 'network' ? Date.now() + 3_000 : issue.retryAt
-    if (retryAt !== undefined && issue.kind !== 'network') retryAt += RETRY_FIRE_GRACE_MS
     if (retryAt === undefined) {
       // Some harnesses surface a usage reset without attaching it to the error
       // (e.g. Codex reports windows via account/rateLimits/read, OpenCode Go via
@@ -24291,6 +24293,8 @@ export class ChatEngine {
       // is still limited, the next failure re-tracks with a fresh cooldown.
       retryAt = Date.now() + USAGE_RESET_FALLBACK_RETRY_MS
     }
+    const resetAt = retryAt
+    if (retryAt !== undefined && issue.kind !== 'network') retryAt += RETRY_FIRE_GRACE_MS
     const hasRetryAt = typeof retryAt === 'number' && Number.isFinite(retryAt)
     if (!hasRetryAt && !usageResetWait) return false
     // A deliberate user stop is never overwritten by a new wait. This is the
@@ -24314,7 +24318,7 @@ export class ChatEngine {
       projectId: info.projectId,
       threadId: info.threadId,
       harnessId: issue.harnessId ?? info.driverId,
-      ...(hasRetryAt ? { retryAt } : {}),
+      ...(hasRetryAt ? { retryAt, resetAt } : {}),
       issueKind: issue.kind,
       issueMessage: issue.message,
       ...(issue.rawError === undefined ? {} : { rawError: issue.rawError }),
@@ -24331,6 +24335,15 @@ export class ChatEngine {
         errorDetail: issue.rawError
       })
       return false
+    }
+    const current = this.sessionStatuses.get(sessionId)
+    if (current?.state === 'waiting' || current?.state === 'error') {
+      const status: AgentSessionStatus = {
+        ...current,
+        issue: { ...current.issue, retryAt: resetAt, autoResumeAt: retryAt }
+      }
+      this.sessionStatuses.set(sessionId, status)
+      this.broadcast({ type: 'session.status', sessionId, status })
     }
     return true
   }

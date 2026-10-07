@@ -1,6 +1,5 @@
-import { mkdtemp, rm } from 'fs/promises'
+import { mkdir, mkdtemp, rm } from 'fs/promises'
 import { join } from 'path'
-import { tmpdir } from 'os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
 import {
@@ -22,12 +21,16 @@ afterEach(async () => {
   // routine-scheduler-service and claude-code-driver tests).
   await new Promise((resolve) => setTimeout(resolve, 25))
   await Promise.all(
-    roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }))
+    roots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }))
   )
 })
 
 async function storage(): Promise<StorageEngine> {
-  const root = await mkdtemp(join(tmpdir(), 'codeinoven-retry-scheduler-'))
+  const scratch = join(process.cwd(), '.cio/tmp')
+  await mkdir(scratch, { recursive: true })
+  const root = await mkdtemp(join(scratch, 'codeinoven-retry-scheduler-'))
   roots.push(root)
   const value = new StorageEngine(root)
   await value.initialize()
@@ -75,19 +78,34 @@ describe('RetrySchedulerService', () => {
     restarted.stop()
   })
 
-  it('fires a due retry once through the attached resume callback', async () => {
+  it('admits all six due retries in pairs without waiting for their turns to finish', async () => {
     const scheduler = new RetrySchedulerService(await storage())
     await scheduler.start()
-    const resume = vi.fn(async () => undefined)
+    scheduler.setEnabled(false)
+    const due = Array.from({ length: 6 }, (_, index) =>
+      record({
+        sessionId: `session-${index}`,
+        threadId: `thread-${index}`,
+        retryAt: Date.now() - 1_000
+      })
+    )
+    for (const pending of due) await scheduler.track(pending)
+    const finishers: Array<() => void> = []
+    const resume = vi.fn(() => new Promise<void>((resolve) => finishers.push(resolve)))
     await scheduler.attachContinue(resume)
-    const due = record({ retryAt: Date.now() - 1_000 })
-    await scheduler.track(due)
+    scheduler.setEnabled(true)
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(resume).toHaveBeenCalledTimes(1)
-    expect(resume).toHaveBeenCalledWith(due)
-    expect(scheduler.getPendingRetry('session-1')).toBeUndefined()
-    // Drain the fire-and-forget persists queued by track/fire so the temp-root
-    // removal in afterEach cannot race an in-flight atomic write on Windows.
+    expect(resume).toHaveBeenCalledTimes(2)
+    for (const pending of due) {
+      scheduler.clear(pending.sessionId)
+      scheduler.resumed(pending.sessionId)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    expect(resume).toHaveBeenCalledTimes(6)
+    for (const pending of due) expect(resume).toHaveBeenCalledWith(pending)
+    for (const finish of finishers) finish()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(scheduler.size).toBe(0)
     await scheduler.flush()
     scheduler.stop()
   })

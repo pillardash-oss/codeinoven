@@ -113,6 +113,16 @@
   const withinAutoScheduleWindow = $derived(
     issue.retryAt !== undefined && issue.retryAt - now <= AUTO_SCHEDULE_WINDOW_MS
   )
+  const settling = $derived(
+    autoRetryEnabled &&
+      issue.retryAt !== undefined &&
+      issue.autoResumeAt !== undefined &&
+      now >= issue.retryAt &&
+      now < issue.autoResumeAt
+  )
+  const queued = $derived(
+    autoRetryEnabled && issue.autoResumeAt !== undefined && now >= issue.autoResumeAt
+  )
   const rawError = $derived(issue.rawError?.trim() || issue.message.trim())
   /**
    * The card body is display copy, never diagnostic detail. A harness that
@@ -307,14 +317,21 @@
 <div
   class={[
     'rounded-xl border px-4 py-3',
-    waiting || autoResume ? 'border-warning/25 bg-warning/5' : 'border-danger/20 bg-danger/5'
+    settling || queued
+      ? 'border-info/25 bg-info/5'
+      : waiting || autoResume
+        ? 'border-warning/25 bg-warning/5'
+        : 'border-danger/20 bg-danger/5'
   ]}
   role={waiting ? 'status' : 'alert'}
   aria-live="polite"
 >
   <div class="flex items-start gap-3">
     {#if waiting || autoResume}
-      <Clock3 size={16} class="mt-0.5 shrink-0 text-warning" />
+      <Clock3
+        size={16}
+        class={['mt-0.5 shrink-0', settling || queued ? 'text-info' : 'text-warning']}
+      />
     {:else}
       <AlertTriangle size={16} class="mt-0.5 shrink-0 text-danger" />
     {/if}
@@ -360,6 +377,15 @@
         <p class="mt-2 text-xs font-medium text-foreground">
           Waiting for connection. Will resume automatically when the device reconnects.
         </p>
+      {:else if settling && issue.autoResumeAt}
+        <p class="mt-2 text-xs font-medium text-info tabular-nums">
+          Reset buffer · auto-resume in {Math.max(
+            0,
+            Math.ceil((issue.autoResumeAt - now) / 1_000)
+          )}s
+        </p>
+      {:else if queued}
+        <p class="mt-2 text-xs font-medium text-info">Queued for auto-resume</p>
       {:else if waiting && issue.retryAt && autoRetryEnabled && withinAutoScheduleWindow}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           <span aria-live="polite">

@@ -38,6 +38,8 @@ export interface AgentProviderIssue {
   harnessId: string
   retryable: boolean
   retryAt?: number
+  /** App admission deadline, including the provider reset buffer. */
+  autoResumeAt?: number
   attempt?: number
   statusCode?: number
 }
