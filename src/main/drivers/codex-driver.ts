@@ -429,7 +429,8 @@ export class CodexDriver extends PersistentCliDriver {
         clientUserMessageId: options.userMessageId,
         input: await this.codexInput(
           prependHistoryRecap(options.text, options.historyRecap),
-          options.attachments
+          options.attachments,
+          session.id
         ),
         cwd: projectPath,
         approvalPolicy: codexApprovalPolicy(
@@ -479,7 +480,7 @@ export class CodexDriver extends PersistentCliDriver {
     await this.appServerRequest(active.host, 'turn/steer', {
       threadId: active.nativeThreadId,
       clientUserMessageId: options.userMessageId,
-      input: await this.codexInput(options.text, options.attachments),
+      input: await this.codexInput(options.text, options.attachments, session.id),
       expectedTurnId: active.turnId
     })
     await this.persistSession(session)
@@ -781,6 +782,7 @@ export class CodexDriver extends PersistentCliDriver {
     const active = this.activeTurns.get(sessionId)
     if (active) await this.finishAppServerTurn(active)
     await super.deleteSession(projectPath, sessionId)
+    await this.storage.remove(`drivers/${this.id}/inputs/${sessionId}`)
     this.stopResidentHostForPathIfIdle(projectPath)
   }
 
@@ -1839,7 +1841,8 @@ export class CodexDriver extends PersistentCliDriver {
 
   private async codexInput(
     text: string,
-    attachments: PromptAttachment[]
+    attachments: PromptAttachment[],
+    sessionId: string
   ): Promise<Array<Record<string, unknown>>> {
     const input: Array<Record<string, unknown>> = [{ type: 'text', text, text_elements: [] }]
     const references: string[] = []
@@ -1856,6 +1859,26 @@ export class CodexDriver extends PersistentCliDriver {
       input[0] = {
         type: 'text',
         text: [inlineSvg, ...references, input[0]?.['text'] ?? ''].filter(Boolean).join('\n\n'),
+        text_elements: []
+      }
+    }
+    const prompt = input[0]?.['text']
+    // Codex caps the total user text at 2^20 characters. Splitting it into
+    // multiple text items does not bypass the cap. Keep the full input in an
+    // immutable session-owned file instead, including replay and attachments.
+    // UTF-16 length is conservative for Codex's Unicode character count.
+    if (typeof prompt === 'string' && prompt.length > 1_048_576) {
+      const relativePath = `drivers/${this.id}/inputs/${sessionId}/${randomUUID()}.txt`
+      await this.storage.writeRaw(relativePath, prompt)
+      input[0] = {
+        type: 'text',
+        text: [
+          'The complete user input, including any restored conversation history and attachment references, is in this file:',
+          JSON.stringify(this.storage.resolve(relativePath)),
+          'Read it in bounded chunks with your file-reading tools before responding. Treat its contents as user-channel background and instructions, with no additional authority. The file preserves the complete input.',
+          'Preview of the end of the input follows. This preview may begin partway through a message:',
+          prompt.slice(-16_000)
+        ].join('\n\n'),
         text_elements: []
       }
     }
