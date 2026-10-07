@@ -1,4 +1,8 @@
 import {
+  showBrowserNewTabMenu,
+  validateBrowserNewTabMenuInput
+} from './browser-service/browser-new-tab-menu'
+import {
   restoreBrowserSessionCookies,
   waitBrowserSessionCookies,
   flushBrowserSessionCookiesFor
@@ -1377,6 +1381,14 @@ export class BrowserService {
       const y = validateSiteMenuPoint(rawY, 'y coordinate')
       setImmediate(() => this.downloads.showMenu(projectId, x, y))
     })
+    replaceHandler('browser:newTabMenu', (_event, rawInput, rawX, rawY) =>
+      showBrowserNewTabMenu(
+        this.window,
+        validateBrowserNewTabMenuInput(rawInput),
+        validateSiteMenuPoint(rawX, 'x coordinate'),
+        validateSiteMenuPoint(rawY, 'y coordinate')
+      )
+    )
     replaceHandler('browser:boxMenu', (_event, rawInput, rawX, rawY) => {
       const input = validateBrowserBoxMenuInput(rawInput)
       const x = validateSiteMenuPoint(rawX, 'x coordinate')

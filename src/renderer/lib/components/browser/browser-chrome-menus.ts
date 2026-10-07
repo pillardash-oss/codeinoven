@@ -1,4 +1,9 @@
+import type {
+  BrowserNewTabMenuInput,
+  BrowserNewTabMenuChoice
+} from '$shared/browser/browser-new-tab-menu'
 import { invoke } from '$lib/ipc.svelte'
+import { logRendererError } from '$lib/system/renderer-logger'
 import type { BrowserBoxMenuChoice, BrowserBoxMenuInput } from '$shared/browser/browser-box-menu'
 
 /**
@@ -118,4 +123,21 @@ export function openBrowserSiteMenuAt(
     () => true,
     () => false
   )
+}
+
+/** The ambient new-tab menu is an OS popup, so it stays above native pages. */
+export function openBrowserNewTabMenu(
+  input: BrowserNewTabMenuInput,
+  x: number,
+  y: number
+): Promise<BrowserNewTabMenuChoice | null> {
+  return invoke(
+    'browser:newTabMenu',
+    input,
+    Math.max(0, Math.round(x)),
+    Math.max(0, Math.round(y))
+  ).catch((error: unknown) => {
+    logRendererError('The new tab menu could not open', error)
+    return null
+  })
 }

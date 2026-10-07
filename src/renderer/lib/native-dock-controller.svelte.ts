@@ -9,6 +9,7 @@ import {
   type NativeDockInteraction
 } from '$shared/native-dock'
 import type { BrowserViewBounds } from '$shared/ipc-contract'
+import { OVERLAY_ACK_TIMEOUT_MS } from '$shared/browser-overlay'
 
 /** The original controls remain the owners of their actions and live updates. */
 export class NativeDockController {
@@ -27,7 +28,8 @@ export class NativeDockController {
   constructor(
     private id: string,
     private interact: (report: NativeDockInteraction) => void,
-    private measuredBounds: (width: number, height: number) => BrowserViewBounds
+    private measuredBounds: (width: number, height: number) => BrowserViewBounds,
+    private passive = false
   ) {}
 
   mount(root: HTMLElement): () => void {
@@ -144,6 +146,7 @@ export class NativeDockController {
         .filter((child) => child !== null)
       const content = {
         bounds: this.bounds,
+        passive: this.passive,
         nodes,
         theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light'
       }
@@ -156,7 +159,7 @@ export class NativeDockController {
         revision: ++this.revision
       })
       clearTimeout(this.timer)
-      this.timer = setTimeout(() => this.refuse(), 2000)
+      this.timer = setTimeout(() => this.refuse(), this.passive ? OVERLAY_ACK_TIMEOUT_MS : 2000)
       void invoke('browser:setDockOverlay', this.id, request)
         .then((accepted) => {
           if (!accepted && this.active) this.refuse()

@@ -9,6 +9,8 @@ export interface NativeDockNode {
 export interface NativeDockRequest {
   id: string
   revision: number
+  /** Painted content that never receives pointer or keyboard input. */
+  passive?: boolean
   bounds: BrowserViewBounds
   theme: 'light' | 'dark'
   nodes: Array<NativeDockNode | string>
@@ -25,6 +27,7 @@ export type NativeDockInteraction =
 export const NATIVE_DOCK_TAGS = new Set([
   'div',
   'span',
+  'kbd',
   'button',
   'svg',
   'path',
@@ -72,6 +75,7 @@ export const NATIVE_DOCK_ATTRIBUTES = new Set([
   'xmlns',
   'src',
   'alt',
+  'data-shortcut',
   'data-native-dock-action',
   'data-native-dock-handle',
   'data-popover-drag-handle'
@@ -150,7 +154,15 @@ export function validateNativeDockRequest(value: unknown): NativeDockRequest {
     height: finite(bounds.height)
   }
   if (rect.width <= 0 || rect.height <= 0) throw new TypeError('Invalid native dock dimensions')
-  return { ...ack, bounds: rect, theme: input.theme, nodes: nodes(input.nodes) }
+  if (input.passive !== undefined && typeof input.passive !== 'boolean')
+    throw new TypeError('Invalid native dock passive flag')
+  return {
+    ...ack,
+    bounds: rect,
+    theme: input.theme,
+    nodes: nodes(input.nodes),
+    passive: input.passive === true
+  }
 }
 export function validateNativeDockInteraction(value: unknown): NativeDockInteraction {
   const input = record(value)

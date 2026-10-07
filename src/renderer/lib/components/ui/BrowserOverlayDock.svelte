@@ -121,7 +121,8 @@
 <div
   role="group"
   data-native-overlay-dock
-  class="fixed z-50 flex items-stretch gap-1.5"
+  data-native-overlay-passive={dock.passive || undefined}
+  class={['fixed z-50 flex items-stretch gap-1.5', dock.passive && 'pointer-events-none']}
   style:left={`${dock.bounds.x}px`}
   style:top={`${dock.bounds.y - TOAST_OVERLAY_TOP}px`}
   {@attach events}

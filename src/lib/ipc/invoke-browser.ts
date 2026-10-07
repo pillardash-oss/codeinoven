@@ -1,3 +1,7 @@
+import type {
+  BrowserNewTabMenuInput,
+  BrowserNewTabMenuChoice
+} from '../browser/browser-new-tab-menu'
 import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
 import type {
   BrowserCompositionPlayback,
@@ -45,6 +49,10 @@ import type {
 } from '../browser-overlay'
 
 export const invokeBrowserContract = {
+  'browser:newTabMenu': {} as Contract<
+    [input: BrowserNewTabMenuInput, x: number, y: number],
+    BrowserNewTabMenuChoice | null
+  >,
   'browser:setDockOverlay': {} as Contract<
     [id: string, request: NativeDockRequest | null],
     boolean
