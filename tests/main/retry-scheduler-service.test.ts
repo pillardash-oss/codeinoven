@@ -15,8 +15,15 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks()
   // Let any pending asynchronously-persisted scheduler snapshot settle first.
+  // Recursive `rm` is not atomic: a fire-and-forget scheduler write (track/fire
+  // persisting `scheduler/retry-scheduler.json`) can land between the directory
+  // listing and the final `rmdir`, which then fails with ENOTEMPTY on Windows.
+  // Retry briefly so late writes can settle (same precedent as
+  // routine-scheduler-service and claude-code-driver tests).
   await new Promise((resolve) => setTimeout(resolve, 25))
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
+  await Promise.all(
+    roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }))
+  )
 })
 
 async function storage(): Promise<StorageEngine> {
@@ -47,6 +54,7 @@ describe('RetrySchedulerService', () => {
     const saved = record()
     expect(await scheduler.track(saved)).toBe(true)
     expect(scheduler.getPendingRetry('session-1')).toEqual(saved)
+    await scheduler.flush()
     scheduler.stop()
   })
 
@@ -71,22 +79,26 @@ describe('RetrySchedulerService', () => {
     const scheduler = new RetrySchedulerService(await storage())
     await scheduler.start()
     const resume = vi.fn(async () => undefined)
-    scheduler.attachContinue(resume)
+    await scheduler.attachContinue(resume)
     const due = record({ retryAt: Date.now() - 1_000 })
-    scheduler.track(due)
+    await scheduler.track(due)
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(resume).toHaveBeenCalledTimes(1)
     expect(resume).toHaveBeenCalledWith(due)
     expect(scheduler.getPendingRetry('session-1')).toBeUndefined()
+    // Drain the fire-and-forget persists queued by track/fire so the temp-root
+    // removal in afterEach cannot race an in-flight atomic write on Windows.
+    await scheduler.flush()
     scheduler.stop()
   })
 
   it('clears a pending record explicitly (e.g. native resume / stop)', async () => {
     const scheduler = new RetrySchedulerService(await storage())
     await scheduler.start()
-    scheduler.track(record())
+    await scheduler.track(record())
     scheduler.clear('session-1')
     expect(scheduler.getPendingRetry('session-1')).toBeUndefined()
+    await scheduler.flush()
     scheduler.stop()
   })
 
@@ -95,7 +107,7 @@ describe('RetrySchedulerService', () => {
     await scheduler.start()
     scheduler.setEnabled(false)
     const resume = vi.fn(async () => undefined)
-    scheduler.attachContinue(resume)
+    await scheduler.attachContinue(resume)
     // The wait is still recorded (it backs the manual "Waiting to retry"
     // card), but with the toggle off `tick` never fires it: the resume
     // callback must not be invoked.
@@ -103,5 +115,7 @@ describe('RetrySchedulerService', () => {
     expect(scheduler.getPendingRetry('session-1')).toBeDefined()
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(resume).not.toHaveBeenCalled()
+    await scheduler.flush()
+    scheduler.stop()
   })
 })

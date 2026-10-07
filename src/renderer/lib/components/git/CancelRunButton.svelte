@@ -45,16 +45,19 @@
   const cancellable = $derived(runStatus === 'queued' || runStatus === 'in_progress')
 
   async function confirmCancel(): Promise<void> {
+    // Dismiss first so the blocking confirm never holds the window while the
+    // request runs and never survives its own failure. The outcome reports
+    // where the run already lives: a toast plus the panel's error line.
+    confirmOpen = false
+    if (busy) return
     const ok = await gitState.cancelWorkflowRun(projectId, identity.owner, identity.repo, runId)
     if (ok) {
-      confirmOpen = false
       toast.success('Workflow run cancellation requested')
       onCancelled?.()
       return
     }
     // A permission refusal already has its own panel notice with the fix link,
-    // so it must not also raise a toast. Keep the dialog open so the operator can
-    // act on that notice without the choice being lost.
+    // so it must not also raise a toast.
     if (gitState.githubPermission) return
     showToastError(gitState.error ?? 'The workflow run could not be cancelled')
   }
@@ -85,7 +88,6 @@
     open
     title="Cancel this workflow run?"
     confirmLabel="Cancel run"
-    {busy}
     onCancel={() => (confirmOpen = false)}
     onConfirm={confirmCancel}
   >
