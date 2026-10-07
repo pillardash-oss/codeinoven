@@ -8,7 +8,8 @@ import type {
   UtilityKind,
   PermissionLevel,
   NativeMcpPublicationResult,
-  NativeMcpUtilityBinding
+  NativeMcpUtilityBinding,
+  AgentUtilitySuggestionEntry
 } from '../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
@@ -35,7 +36,8 @@ import {
   UTILITY_INVOKE_TOOL_NAME,
   UTILITY_DOCS_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
-  UTILITY_DIAGNOSTICS_TOOL_NAME
+  UTILITY_DIAGNOSTICS_TOOL_NAME,
+  UTILITY_SUGGEST_TOOL_NAME
 } from '../../lib/gateway-tools'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
@@ -127,7 +129,11 @@ import {
   requiredDatabase,
   requiredString
 } from './utility-orchestration/utility-input'
-import { normalizeBundleDefinitions } from './utility-orchestration/utility-bundle-input'
+import {
+  normalizeBundleDefinitions,
+  normalizeBundleName
+} from './utility-orchestration/utility-bundle-input'
+import type { UtilitySuggestionDecision } from '../../lib/utility-suggestion'
 import { RemoteMcpClient } from './utility-orchestration/remote-mcp-client'
 import {
   connectMcpServer,
@@ -384,6 +390,27 @@ export interface SecretRequestContext {
   harnessId: string
 }
 
+/**
+ * Runs one `cio_util_suggest` gateway request for the turn that made it: it
+ * surfaces the suggestion card, awaits the user's decision and returns it. The
+ * chat engine supplies it because it owns the pending-question machinery. The
+ * install itself stays with the gateway, which owns the registry, so the card
+ * only ever reports a decision and an abandoned card can never install anything.
+ */
+export type UtilitySuggestionExecutor = (
+  entry: AgentUtilitySuggestionEntry,
+  context: UtilitySuggestionContext
+) => Promise<UtilitySuggestionDecision>
+
+/** Which turn is proposing, so the card is bound to the right thread and session. */
+export interface UtilitySuggestionContext {
+  projectId: string
+  threadId: string
+  projectPath: string
+  sessionId: string
+  harnessId: string
+}
+
 interface TurnState {
   id: string
   request: UtilityTurnRequest
@@ -484,6 +511,7 @@ export class UtilityOrchestrationService {
   private expertSettings: ExpertSettingsService | null = null
   private scopeToolExecutor: ScopeToolExecutor | null = null
   private secretRequestExecutor: SecretRequestExecutor | null = null
+  private utilitySuggestionExecutor: UtilitySuggestionExecutor | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
   private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
@@ -567,6 +595,8 @@ export class UtilityOrchestrationService {
         return (state, input) => this.runDiagnostics(state, input)
       case ASK_SECRET_TOOL_NAME:
         return (state, input) => this.askSecret(state, input)
+      case UTILITY_SUGGEST_TOOL_NAME:
+        return (state, input) => this.suggestUtility(state, input)
       default:
         return null
     }
@@ -679,6 +709,17 @@ export class UtilityOrchestrationService {
    */
   setSecretRequestExecutor(executor: SecretRequestExecutor | null): void {
     this.secretRequestExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-owned `cio_util_suggest` gateway tool.
+   * A suggestion is an app capability rather than a utility operation: the agent
+   * offers a capability it found, the user accepts or declines on the card, and
+   * the app installs it through Utilities only on acceptance. The chat engine
+   * supplies the executor because it owns the pending-question machinery.
+   */
+  setUtilitySuggestionExecutor(executor: UtilitySuggestionExecutor | null): void {
+    this.utilitySuggestionExecutor = executor
   }
 
   /**
@@ -847,6 +888,11 @@ export class UtilityOrchestrationService {
       // every turn that carries the gateway at all, plus every explicit setup
       // turn, where the capability being installed is what needs the value.
       if (name === ASK_SECRET_TOOL_NAME) return hasOnDemand || request.allowManagement === true
+      // Proposing a capability is likewise an app capability, not a utility
+      // operation: an agent that finds something the task needs but the user
+      // does not have must be able to offer it instead of dead-ending on a
+      // harness-native suggestion the app cannot render.
+      if (name === UTILITY_SUGGEST_TOOL_NAME) return hasOnDemand || request.allowManagement === true
       return hasOnDemand
     })
     if (gatewayTools.length === 0) {
@@ -900,6 +946,7 @@ export class UtilityOrchestrationService {
     const toolInstructions = [
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
+      `When a search finds a capability the task needs but the user does not have, offer it with ${UTILITY_SUGGEST_TOOL_NAME} instead of telling the user it is connected: it surfaces an actionable card, and the app installs it through Utilities only if they accept. Never say a capability is installed, available, or connected before ${UTILITY_SUGGEST_TOOL_NAME} returns "accepted".`,
       ...(hasScopeCapability
         ? [
             `The app-owned scope and Git-worktree capability (utility \`${APP_SCOPE_UTILITY_ID}\`) is deliberately not in your tool list. Only when the user explicitly asks you to work in a separate worktree: search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result, then invoke it with ${UTILITY_INVOKE_TOOL_NAME}. Never create a worktree on your own initiative, and never run raw \`git worktree add\`.`
@@ -1269,6 +1316,68 @@ export class UtilityOrchestrationService {
       environment: Object.fromEntries(
         resolution.secrets.map((secret) => [secret.environmentVariable, secret.value])
       )
+    }
+  }
+
+  /**
+   * Offer one capability the agent found for the user to install.
+   *
+   * The card owns the decision, so the install happens here and not in the
+   * engine: the executor surfaces the proposal and reports back only what the
+   * user chose. Installing software is never automatic, so a declined, expired
+   * or abandoned card leaves the registry untouched, and the bundle is always
+   * secret-free   a credential is collected afterwards with `cio_ask_secret`.
+   */
+  private async suggestUtility(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const executor = this.utilitySuggestionExecutor
+    if (!executor) throw new Error('Utility suggestions are unavailable in this deployment')
+    const reason = requiredString(input['reason'], 'reason', 1_000)
+    const name = normalizeBundleName(input['bundle'])
+    const definitions = normalizeBundleDefinitions(input['bundle'])
+    const entry: AgentUtilitySuggestionEntry = {
+      id: randomUUID().replace(/-/gu, '').slice(0, 8).toUpperCase(),
+      name,
+      kinds: [...new Set(definitions.map((definition) => definition.kind))],
+      reason
+    }
+    const decision = await executor(entry, {
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      harnessId: state.request.harnessId
+    })
+    await this.audit(state, 'utility.suggested', { name, kinds: entry.kinds, decision })
+    if (decision !== 'accepted') {
+      return {
+        status: 'declined',
+        message:
+          'The user declined the proposed capability. Do not install it, and never claim it is available. Continue without it, or say plainly what is missing.'
+      }
+    }
+    const outcomes = await this.registry.installMany(definitions, { consolidate: true })
+    await this.footprint()
+      ?.reconcile(await this.registry.list())
+      .catch((error: unknown) =>
+        Logger.dev('Suggested utility install folder was not written:', error)
+      )
+    state.managedUtilities.push(...outcomes.map((outcome) => outcome.utility))
+    // Hot reload: what the user just accepted is reachable by the next search or
+    // activation in this same turn, without waiting for a reload.
+    await this.refreshEligible(state, { force: true })
+    const describe = (outcome: (typeof outcomes)[number]) => ({
+      id: outcome.utility.id,
+      kind: outcome.utility.kind,
+      name: outcome.utility.name
+    })
+    return {
+      status: 'accepted',
+      installed: outcomes.filter((outcome) => outcome.action === 'installed').map(describe),
+      updated: outcomes.filter((outcome) => outcome.action === 'updated').map(describe),
+      message:
+        'Installed and available for the rest of this turn. If it needs a credential, collect it with ' +
+        ASK_SECRET_TOOL_NAME +
+        ' using the installed id and the variable the connection reads.'
     }
   }
 
