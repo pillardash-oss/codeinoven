@@ -1,0 +1,58 @@
+name: Download metrics
+
+on:
+  schedule:
+    - cron: '15 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: download-metrics
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      CODEINOVEN_POSTHOG_TOKEN: ${{ vars.CODEINOVEN_POSTHOG_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: Restore previous successful snapshot
+        shell: bash
+        run: |
+          mkdir -p .cio/tmp/download-metrics/previous
+          previous_run=$(gh run list --workflow download-metrics.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$previous_run" ]; then
+            artifact_available=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$previous_run/artifacts" --jq '[.artifacts[] | select(.name == "download-metrics" and .expired == false)] | length')
+            if [ "$artifact_available" -gt 0 ]; then
+              gh run download "$previous_run" --name download-metrics --dir .cio/tmp/download-metrics/previous
+            fi
+          fi
+      - name: Collect installer counts
+        run: bun scripts/collect-download-metrics.ts
+      - name: Publish job summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f .cio/tmp/download-metrics/summary.md ]; then
+            cat .cio/tmp/download-metrics/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: download-metrics
+          path: |
+            .cio/tmp/download-metrics/snapshot.json
+            .cio/tmp/download-metrics/summary.md
+          include-hidden-files: true
+          retention-days: 90
+          if-no-files-found: ignore

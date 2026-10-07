@@ -113,6 +113,7 @@ jobs:
     needs: version
     env:
       CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
+      CODEINOVEN_POSTHOG_TOKEN: ${{ vars.CODEINOVEN_POSTHOG_TOKEN }}
       CODEINOVEN_BUILD_VERSION: ${{ needs.version.outputs.full }}
     strategy:
       fail-fast: false

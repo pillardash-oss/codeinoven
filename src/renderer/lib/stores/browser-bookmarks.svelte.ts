@@ -35,6 +35,7 @@ import {
   type BrowserBookmarksSnapshot
 } from '$shared/browser/browser-library'
 import {
+  DEFAULT_BOX_ID,
   MAX_BROWSER_GROUP_NAME_LENGTH,
   MAX_BROWSER_TAB_PAGE_TITLE_LENGTH,
   isStorableBrowserFavicon,
@@ -97,7 +98,7 @@ export class BrowserBookmarkState {
     // record never got fills itself in. It rides a report the app is already
     // sending, so it is not a lookup of its own, and it is the only way the list
     // is ever filled in later.
-    subscribe('browser:state', (state) => this.notePageIcon(state.url, state.favicon))
+    subscribe('browser:state', (state) => this.notePageIcon(state.url, state.favicon, state.boxId))
     void this.hydrate()
   }
 
@@ -107,14 +108,19 @@ export class BrowserBookmarkState {
   }
 
   /** The saved page for an address, or null. */
-  find(url: string): BrowserBookmark | null {
+  find(url: string, boxId: string | null = null): BrowserBookmark | null {
     const normalized = normalizeBrowserLibraryUrl(url)
     if (normalized === null) return null
-    return this.bookmarks.find((bookmark) => bookmark.url === normalized) ?? null
+    const box = boxId === DEFAULT_BOX_ID ? null : boxId
+    return (
+      this.bookmarks.find(
+        (bookmark) => bookmark.url === normalized && (bookmark.boxId ?? null) === box
+      ) ?? null
+    )
   }
 
-  isBookmarked(url: string): boolean {
-    return this.find(url) !== null
+  isBookmarked(url: string, boxId: string | null = null): boolean {
+    return this.find(url, boxId) !== null
   }
 
   /** The loaded data URL for a saved page's picked image icon, when it has one. */
@@ -146,27 +152,38 @@ export class BrowserBookmarkState {
    * whether the page is bookmarked afterwards, so a surface that toggles can say
    * what happened without re-reading the list.
    */
-  toggle(url: string, title: string, favicon: string | null = null): boolean {
-    const existing = this.find(url)
+  toggle(
+    url: string,
+    title: string,
+    favicon: string | null = null,
+    boxId: string | null = null
+  ): boolean {
+    const existing = this.find(url, boxId)
     if (existing) {
       this.remove(existing.id)
       return false
     }
-    return this.add(url, title, favicon) !== null
+    return this.add(url, title, favicon, boxId) !== null
   }
 
   /** Save a page. A page already saved is left as it is, so clicking the star
    *  twice never makes two rows for one address. */
-  add(url: string, title: string, favicon: string | null = null): BrowserBookmark | null {
+  add(
+    url: string,
+    title: string,
+    favicon: string | null = null,
+    boxId: string | null = null
+  ): BrowserBookmark | null {
     const normalized = normalizeBrowserLibraryUrl(url)
     if (normalized === null) return null
-    const existing = this.find(normalized)
+    const existing = this.find(normalized, boxId)
     if (existing) return existing
     if (this.bookmarks.length >= MAX_BROWSER_BOOKMARKS) return null
     const trimmed = title.trim()
     const bookmark: BrowserBookmark = {
       id: `bookmark:${crypto.randomUUID()}`,
       url: normalized,
+      boxId: boxId === DEFAULT_BOX_ID ? null : boxId,
       // A page that never reported a title is still worth saving: its host is the
       // label every surface shows in that case.
       title: trimmed === '' ? browserLibraryHost(normalized) : trimmed,
@@ -199,7 +216,14 @@ export class BrowserBookmarkState {
     if (!existing) return null
     const url = normalizeBookmarkAddress(edit.url)
     if (url === null) return 'Enter a web address, like https://example.com.'
-    if (this.bookmarks.some((candidate) => candidate.id !== id && candidate.url === url)) {
+    if (
+      this.bookmarks.some(
+        (candidate) =>
+          candidate.id !== id &&
+          candidate.url === url &&
+          (candidate.boxId ?? null) === (existing.boxId ?? null)
+      )
+    ) {
       return 'Another saved page already has that address.'
     }
     const trimmed = edit.title.trim()
@@ -485,9 +509,9 @@ export class BrowserBookmarkState {
    * from the next visit to that page. Only a record with no icon at all is filled,
    * and only its own address, so an icon the user chose is never overwritten.
    */
-  private notePageIcon(url: string, favicon: string | null): void {
+  private notePageIcon(url: string, favicon: string | null, boxId: string | null): void {
     if (!isStorableBrowserFavicon(favicon)) return
-    const bookmark = this.find(url)
+    const bookmark = this.find(url, boxId)
     if (!bookmark) return
     if (
       bookmark.favicon !== null ||
@@ -529,11 +553,14 @@ export class BrowserBookmarkState {
    *  the file held that it did not. */
   private merge(stored: readonly BrowserBookmark[]): BrowserBookmark[] {
     // eslint-disable-next-line svelte/prefer-svelte-reactivity
-    const known = new Set(this.bookmarks.map((bookmark) => bookmark.url))
+    const known = new Set(
+      this.bookmarks.map((bookmark) => JSON.stringify([bookmark.boxId ?? null, bookmark.url]))
+    )
     const merged = [...this.bookmarks]
     for (const bookmark of stored) {
-      if (known.has(bookmark.url)) continue
-      known.add(bookmark.url)
+      const identity = JSON.stringify([bookmark.boxId ?? null, bookmark.url])
+      if (known.has(identity)) continue
+      known.add(identity)
       merged.push(bookmark)
     }
     return merged

@@ -15,6 +15,7 @@
   } from '$shared/browser-overlay'
   import type { NativeDockRequest } from '$shared/native-dock'
   import BrowserOverlayDock from './BrowserOverlayDock.svelte'
+  import TooltipHost from './TooltipHost.svelte'
   import ToastStack from './ToastStack.svelte'
   import BrowserOverlayStrip from './BrowserOverlayStrip.svelte'
 
@@ -244,7 +245,7 @@
    */
   function afterDraw(): void {
     pointerOverContent = false
-    setPointerWatch(drawn.size > 0 || strip !== null || docks.length > 0)
+    setPointerWatch(drawn.size > 0 || strip !== null || docks.some((dock) => !dock.passive))
     syncPointerFromCursor(true)
     reportDrawn()
   }
@@ -271,17 +272,17 @@
 
   function reportPointer(force = false): void {
     if (!pointer.known) return
-    const overDock = [...document.querySelectorAll('[data-native-overlay-dock]')].some(
-      (element) => {
-        const rect = element.getBoundingClientRect()
-        return (
-          pointer.x >= rect.left &&
-          pointer.x <= rect.right &&
-          pointer.y >= rect.top &&
-          pointer.y <= rect.bottom
-        )
-      }
-    )
+    const overDock = [
+      ...document.querySelectorAll('[data-native-overlay-dock]:not([data-native-overlay-passive])')
+    ].some((element) => {
+      const rect = element.getBoundingClientRect()
+      return (
+        pointer.x >= rect.left &&
+        pointer.x <= rect.right &&
+        pointer.y >= rect.top &&
+        pointer.y <= rect.bottom
+      )
+    })
     const over =
       dockDragging || overDock || overCard(pointer.x, pointer.y) || overStrip(pointer.x, pointer.y)
     if (!force && over === pointerOverContent) return
@@ -427,3 +428,5 @@
     }}
   />
 {/each}
+
+<TooltipHost nativeOverlay={false} />

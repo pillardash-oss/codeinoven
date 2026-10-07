@@ -269,7 +269,8 @@ export class SidebarBrowserTabs {
     projectId: string,
     threadId: string,
     requestedTabId?: string,
-    reveal = false
+    reveal = false,
+    requestedBoxId?: string | null
   ): string {
     const id = requestedTabId ?? `browser:${crypto.randomUUID()}`
     const existing = this.tabs.find((tab) => tab.id === id && tab.projectId === projectId)
@@ -302,7 +303,10 @@ export class SidebarBrowserTabs {
       favicon: null,
       // The box the scope is currently creating tabs in, or the scope's own jar
       // when the user has not picked one this session.
-      boxId: this.boxForScope(this.host.threadScopeId(projectId, threadId))
+      boxId:
+        requestedBoxId !== undefined
+          ? requestedBoxId
+          : this.boxForScope(this.host.threadScopeId(projectId, threadId))
     }
     // A tab a page asked for (a link, an image, a popup) belongs beside the page
     // that asked, exactly as a browser places it: next to the tab in use, not at
@@ -556,7 +560,7 @@ export class SidebarBrowserTabs {
     return removedIds
   }
 
-  /** Close one browser tab and fall back to the last remaining tab of the
+  /** Close one browser tab and fall back to its previous neighbour in the
    *  active container (a project's threads or the open chat). A close the user
    *  asked for is remembered so it can be reopened; a close that replaces the
    *  tab (a reopen in another box) opts out, because nothing left the strip. */
@@ -564,12 +568,13 @@ export class SidebarBrowserTabs {
     const browserIndex = this.tabs.findIndex((tab) => tab.id === id)
     if (browserIndex < 0) return
     const closing = this.tabs[browserIndex]
+    const activeIndex = this.activeTabs.findIndex((tab) => tab.id === id)
     if (options.recordForReopen !== false) this.rememberClosedTab(closing, browserIndex)
     this.tabs = this.tabs.filter((tab) => tab.id !== id)
     this.forgetRuntime([id])
     this.pruneScopeBoxChoices()
     if (this.activeTabId === id) {
-      this.activeTabId = this.activeTabs.at(-1)?.id ?? null
+      this.activeTabId = this.activeTabs[Math.max(0, activeIndex - 1)]?.id ?? null
     }
     if (this.activeTabs.length === 0) this.visible = false
     this.persist()

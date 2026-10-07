@@ -1,5 +1,6 @@
 <script lang="ts">
   import { X } from '@lucide/svelte'
+  import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { registerOverlayClose } from '$lib/overlay-close.svelte'
@@ -22,7 +23,7 @@
    * never differ between surfaces:
    *
    *   - the portal and the scrim
-   *   - the stacking layer (`z-60`), above the app's floating panels
+   *   - the stacking layer, with palettes able to rise above page surfaces
    *   - the panel shell: header, scrolling body, and a footer that never scrolls
    *   - initial focus: the first text field, else the primary action
    *   - Escape, the backdrop, and Cmd/Ctrl+W (`registerOverlayClose`), with
@@ -51,7 +52,7 @@
   ].join(',')
 
   /** The scrim is shared by every placement. A full screen panel covers it. */
-  const OVERLAY_CLASS = 'fixed inset-0 z-60 bg-overlay/70 backdrop-blur-[1px]'
+  const OVERLAY_CLASS = 'fixed inset-0 bg-overlay/70 backdrop-blur-[1px]'
 
   /**
    * How the fixed wrapper positions the panel. Padding lives here rather than on
@@ -104,6 +105,10 @@
 
   interface Props {
     open: boolean
+    /** Nonmodal browser peek leaves the surrounding app interactive. */
+    modal?: boolean
+    /** Optional viewport rectangle limiting the shell to a page frame. */
+    bounds?: BrowserViewBounds | null
     /** The panel's accessible name. Rendered in the canonical header, or
      *  screen-reader-only when the surface draws its own header. */
     title: string
@@ -111,6 +116,8 @@
      *  whose title alone is not enough. */
     description?: string
     onClose: () => void
+    /** Override Cmd/Mod+W without changing backdrop or Escape dismissal. */
+    onCloseShortcut?: () => void
     children: Snippet
     /** The fixed action bar. Only rendered with the canonical chrome. */
     footer?: Snippet
@@ -166,6 +173,8 @@
      *  surface that hosts the view itself: the full screen browser must not
      *  suppress the very page it exists to display. */
     blocksBrowserView?: boolean
+    /** Render above browser page shells and Peek flight animations. */
+    abovePage?: boolean
     /** Claim the initial focus. Return true when you focused something. */
     claimInitialFocus?: (panel: HTMLElement) => boolean
     /** Runs as the panel closes, before focus is restored. Call
@@ -178,9 +187,12 @@
 
   let {
     open,
+    modal = true,
+    bounds = null,
     title,
     description,
     onClose,
+    onCloseShortcut,
     children,
     footer,
     placement = 'center',
@@ -196,11 +208,13 @@
     onEscapeKeydown,
     scrim = true,
     blocksBrowserView = true,
+    abovePage = false,
     claimInitialFocus,
     onCloseAutoFocus,
     panelEl = $bindable(null)
   }: Props = $props()
 
+  const stackingClass = $derived(abovePage ? 'z-80' : 'z-60')
   let alignment = $derived(ALIGNMENTS[placement])
   let layout = $derived(panelLayout(placement, fill))
   let widthClass = $derived(
@@ -223,7 +237,7 @@
 
   $effect(() => {
     if (!open) return
-    return registerOverlayClose(() => onClose())
+    return registerOverlayClose(() => (onCloseShortcut ?? onClose)(), modal)
   })
 
   // ⌘/Ctrl+Enter runs this modal's primary action. This instance registers a
@@ -261,12 +275,19 @@
 <Dialog.Root {open} onOpenChange={(next) => !next && onClose()}>
   <Dialog.Portal>
     {#if scrim}
-      <Dialog.Overlay class={OVERLAY_CLASS} />
+      <Dialog.Overlay class="{OVERLAY_CLASS} {stackingClass}" />
     {/if}
-    <div class="pointer-events-none fixed inset-0 z-60 flex {alignment}">
+    <div
+      class="pointer-events-none fixed {stackingClass} flex {bounds ? '' : 'inset-0'} {alignment}"
+      style={bounds
+        ? `left: ${bounds.x}px; top: ${bounds.y}px; width: ${bounds.width}px; height: ${bounds.height}px;`
+        : undefined}
+    >
       <Dialog.Content
         bind:ref={panelEl}
         {trapFocus}
+        preventScroll={modal}
+        preventOverflowTextSelection={modal}
         onOpenAutoFocus={focusInitialElement}
         {onCloseAutoFocus}
         onEscapeKeydown={(event) => {
@@ -285,42 +306,46 @@
         }}
         class="{PANEL_BASE} {layout} {widthClass} {panelClass}"
       >
-        {#if chrome}
-          <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
-            <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>
-            {#if description}
-              <Dialog.Description class="sr-only">{description}</Dialog.Description>
-            {/if}
-            <Dialog.Close
-              class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Close"
-              title="Close"
-            >
-              <X size={16} />
-            </Dialog.Close>
-          </div>
+        {#snippet child({ props })}
+          <div {...props} aria-modal={modal}>
+            {#if chrome}
+              <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
+                <Dialog.Title class="text-base font-semibold">{title}</Dialog.Title>
+                {#if description}
+                  <Dialog.Description class="sr-only">{description}</Dialog.Description>
+                {/if}
+                <Dialog.Close
+                  class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  aria-label="Close"
+                  title="Close"
+                >
+                  <X size={16} />
+                </Dialog.Close>
+              </div>
 
-          <div class="min-h-0 flex-1 {contentClass}">
-            {@render children()}
-          </div>
+              <div class="min-h-0 flex-1 {contentClass}">
+                {@render children()}
+              </div>
 
-          {#if footer}
-            <div
-              class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-6 py-4"
-              data-modal-footer
-            >
-              {@render footer()}
-            </div>
-          {/if}
-        {:else}
-          <!-- A surface with its own header still needs a dialog name, so the
+              {#if footer}
+                <div
+                  class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-6 py-4"
+                  data-modal-footer
+                >
+                  {@render footer()}
+                </div>
+              {/if}
+            {:else}
+              <!-- A surface with its own header still needs a dialog name, so the
                title is rendered here, out of sight, exactly once. -->
-          <Dialog.Title class="sr-only">{title}</Dialog.Title>
-          {#if description}
-            <Dialog.Description class="sr-only">{description}</Dialog.Description>
-          {/if}
-          {@render children()}
-        {/if}
+              <Dialog.Title class="sr-only">{title}</Dialog.Title>
+              {#if description}
+                <Dialog.Description class="sr-only">{description}</Dialog.Description>
+              {/if}
+              {@render children()}
+            {/if}
+          </div>
+        {/snippet}
       </Dialog.Content>
     </div>
   </Dialog.Portal>

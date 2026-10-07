@@ -877,7 +877,7 @@
         align="start"
         sideOffset={4}
         collisionPadding={12}
-        class="z-90 flex w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
+        class="z-90 flex w-72 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
         role="dialog"
         aria-label={multiSelect ? 'Select models' : 'Select model'}
         tabindex={-1}

@@ -6,6 +6,7 @@ import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
+import { usageAnalytics } from './system/usage-analytics'
 import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
 import { StorageEngine } from './storage/storage-engine'
@@ -477,7 +478,11 @@ function createWindow(): BrowserWindow {
       // defaults already applied
     })
 
+  window.webContents.on('before-mouse-event', (_event, mouse) => {
+    if (mouse.type === 'mouseDown') usageAnalytics.activity()
+  })
   window.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown') usageAnalytics.activity()
     // A key pressed while a browser toolbar holds focus arrives here, not on the
     // native page view. Claim the browser's own chords first, so a page-scoped
     // key acts on the page instead of on the app around it (Cmd/Ctrl+R would
@@ -709,6 +714,8 @@ void app
       // serializing behind the heavier startup work.
       warmTrafficLightDetection()
     ])
+    // Analytics never delays window creation and never runs in a probe.
+    usageAnalytics.start(storage, __CODEINOVEN_APP_VERSION__)
     startupTelemetry.mark('storage:ready')
     startupTelemetry.mark('database:ready')
     await windowStateService.load()
@@ -899,6 +906,7 @@ app.on('before-quit', (event) => {
     return
   }
   state.quitCleanupStarted = true
+  usageAnalytics.stop()
 
   // Notify every window that the application is shutting down so the
   // renderer can unsubscribe from IPC events and release resources.

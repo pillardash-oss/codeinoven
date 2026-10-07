@@ -1,3 +1,7 @@
+import type {
+  BrowserNewTabMenuInput,
+  BrowserNewTabMenuChoice
+} from '../browser/browser-new-tab-menu'
 import type { NativeDockAck, NativeDockInteraction, NativeDockRequest } from '../native-dock'
 import type {
   BrowserCompositionPlayback,
@@ -45,6 +49,10 @@ import type {
 } from '../browser-overlay'
 
 export const invokeBrowserContract = {
+  'browser:newTabMenu': {} as Contract<
+    [input: BrowserNewTabMenuInput, x: number, y: number],
+    BrowserNewTabMenuChoice | null
+  >,
   'browser:setDockOverlay': {} as Contract<
     [id: string, request: NativeDockRequest | null],
     boolean
@@ -272,6 +280,8 @@ export const invokeBrowserContract = {
   /** Route a mouse history button to the focused browser page when one owns focus. */
   'browser:mouseHistoryNavigation': {} as Contract<[direction: 'back' | 'forward'], boolean>,
   'browser:reload': {} as Contract<[tabId: string], void>,
+  /** Current page state, including a peek that loaded before its surface mounted. */
+  'browser:pageState': {} as Contract<[tabId: string], BrowserPageState | null>,
   /**
    * Run one playback action on a composition tab and answer with the state it
    * left behind, so the panel shows what happened rather than what it asked for.

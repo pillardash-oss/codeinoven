@@ -359,6 +359,8 @@ export interface AppConfig {
   zoomLevel: number
   /** True after the user finishes or dismisses the first-run setup guide. */
   onboardingCompleted: boolean
+  /** Explicit consent for anonymous installation usage statistics. */
+  shareAnonymousUsage?: boolean
   threadLimit: number
   /** Time before a pending agent question automatically selects its recommendation. */
   questionTimeoutMs: number
@@ -527,6 +529,7 @@ export type AppConfigPatch = Partial<
     | 'fontWeight'
     | 'zoomLevel'
     | 'onboardingCompleted'
+    | 'shareAnonymousUsage'
     | 'threadLimit'
     | 'questionTimeoutMs'
     | 'agentQuestionCap'

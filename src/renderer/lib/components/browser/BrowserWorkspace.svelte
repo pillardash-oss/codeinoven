@@ -64,6 +64,13 @@
    *  hidden workspace shell, a modal), which surface owns the single native view,
    *  and whether a floating overlay covers this frame   so this surface never
    *  combines them itself. */
+  $effect(() => {
+    const bounds = contentRect
+    if (bounds) browserVisibility.publishPageFrame(nativeFrameKey, tabId, bounds)
+    else browserVisibility.clearPageFrame(nativeFrameKey)
+    return () => browserVisibility.clearPageFrame(nativeFrameKey)
+  })
+
   let pageVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
 
   /** Whether the page may actually be attached: the store's decision, held back
@@ -143,8 +150,8 @@
       await invoke(
         'browser:show',
         tabId,
-        GLOBAL_BROWSER_CONTEXT.projectId,
-        GLOBAL_BROWSER_CONTEXT.threadId,
+        globalBrowser.peekContext(tabId)?.projectId ?? GLOBAL_BROWSER_CONTEXT.projectId,
+        globalBrowser.peekContext(tabId)?.threadId ?? GLOBAL_BROWSER_CONTEXT.threadId,
         tab.url,
         bounds,
         // The tab's jar, so main builds (or reattaches) this page in the box it

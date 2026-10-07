@@ -866,6 +866,7 @@ export function validateBrowserTabContextMenuInput(value: unknown): BrowserTabCo
     groupId,
     boxId,
     canReopenClosedTab,
+    threadScoped: record['threadScoped'] === true,
     groups,
     boxes
   }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick, untrack } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {
     ArrowLeft,
@@ -123,6 +123,7 @@
    *  opened is a gesture, not a state this panel holds. */
   let addressBar = $state<BrowserAddressBar | undefined>(undefined)
   let pageState = $state<BrowserPageState>(initialPageState())
+  let stateRevision = 0
   /** The panel's current on-screen content rectangle, refreshed by the same
    *  observers that align the native view. */
   let contentRect = $state<BrowserViewBounds | null>(null)
@@ -131,6 +132,13 @@
    *  surface, an inactive workspace, the thread switcher), which surface owns
    *  the single native view, and whether a floating DOM overlay covers this
    *  frame   so this panel never has to combine them itself. */
+  $effect(() => {
+    const bounds = contentRect
+    if (bounds) browserVisibility.publishPageFrame(nativeFrameKey, tabId, bounds)
+    else browserVisibility.clearPageFrame(nativeFrameKey)
+    return () => browserVisibility.clearPageFrame(nativeFrameKey)
+  })
+
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
   let devToolsOpen = $state(false)
   /**
@@ -333,8 +341,9 @@
     // empty native view back over the card.
     if (pageState.loadError) return
     try {
-      const currentUrl = untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl)
-      pageState = await invoke(
+      const currentUrl = (tab as BrowserContextTab | null)?.url ?? tabInitialUrl
+      const revision = stateRevision
+      const snapshot = await invoke(
         'browser:show',
         tabId,
         tabProjectId,
@@ -345,6 +354,7 @@
         // that jar rather than the scope's own.
         tabBoxId
       )
+      if (stateRevision === revision) applyPageState(snapshot)
       // The store's answer can change while that call is in flight: another
       // surface may claim the view, an overlay may appear, or the sidebar may
       // move on. Only one native view can exist at a time, so a stale attach
@@ -369,6 +379,7 @@
 
   function applyPageState(next: BrowserPageState): void {
     if (next.tabId !== tabId) return
+    stateRevision++
     pageState = next
     if (next.url) address = next.url
     // Also routes the audio and capture state into the tab strip, so the tab's

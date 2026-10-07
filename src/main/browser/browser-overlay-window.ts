@@ -137,7 +137,9 @@ export class BrowserOverlayWindow {
     if (request === null) {
       this.docks.delete(id)
       this.settle()
-      if (!this.hasContent()) this.dispose()
+      // Keep the one tooltip overlay warm between hovers instead of creating
+      // and destroying a renderer for every title. It stays hidden and inert.
+      if (!this.hasContent() && id !== 'app-tooltip') this.dispose()
       return true
     }
     if (!this.docks.has(id) && this.docks.size >= 32) return false

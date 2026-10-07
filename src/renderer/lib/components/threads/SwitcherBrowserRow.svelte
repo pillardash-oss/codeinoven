@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Globe, Loader2 } from '@lucide/svelte'
+  import { Eye, Globe, Loader2 } from '@lucide/svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
@@ -62,6 +62,14 @@
       {/if}
     </span>
     <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">{label}</span>
+    {#if globalBrowser.hasPeek(tab.id)}
+      <span
+        role="img"
+        class="flex shrink-0 items-center text-accent"
+        title="Peek open on this tab"
+        aria-label="Peek open on this tab"><Eye size={12} /></span
+      >
+    {/if}
     {#if box}
       <span
         role="img"

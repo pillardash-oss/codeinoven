@@ -6,6 +6,7 @@ export interface BrowserTabContextMenuGroup {
 }
 
 export interface BrowserTabContextMenuInput {
+  threadScoped?: boolean
   tabId: string
   title: string
   url: string

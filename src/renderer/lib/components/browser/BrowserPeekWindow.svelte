@@ -1,7 +1,10 @@
 <script lang="ts">
   import { Portal } from 'bits-ui'
-  import { onDestroy, onMount, tick } from 'svelte'
-  import { Maximize2, X } from '@lucide/svelte'
+  import { onMount, tick } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
+  import { Copy, Maximize2, X } from '@lucide/svelte'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { motionDuration } from '$lib/motion'
@@ -52,6 +55,12 @@
   /** The flying shell, or null while the peek is where it belongs. */
   let shell = $state<PeekShell | null>(null)
   let shellEl = $state<HTMLElement | null>(null)
+  const attachShell: Attachment<HTMLDivElement> = (element) => {
+    shellEl = element
+    return () => {
+      if (shellEl === element) shellEl = null
+    }
+  }
 
   /** One flight's shell: the rectangle it is laid out at, the picture of the page
    *  it carries, and the transform it is drawn with before its animation takes
@@ -90,7 +99,7 @@
   const flying = $derived(shell !== null || (phase !== null && phase !== 'open'))
 
   const panelClass = $derived(
-    `h-[85vh] bg-app origin-top-left ${flying ? 'pointer-events-none' : ''} ${shell ? 'invisible' : ''}`
+    `h-full bg-app origin-top-left ${flying ? 'pointer-events-none' : ''} ${shell ? 'invisible' : ''}`
   )
 
   /** The shell's box and the transform it opens on, in one style. Both are written
@@ -106,9 +115,22 @@
       if (tabId === globalBrowser.peekTab?.id && action === 'close-tab') globalBrowser.closePeek()
     })
   )
-  // The surface itself is going away, so there is nothing left to animate a close
-  // into and a flight would be run by a component that no longer exists.
-  onDestroy(() => globalBrowser.dropPeek())
+  // Follow the source page layout even while its native page is parked.
+  const bounds = $derived(
+    browserVisibility.sourceTabId
+      ? browserVisibility.pageBoundsFor(browserVisibility.sourceTabId)
+      : null
+  )
+
+  async function copyAddress(): Promise<void> {
+    const url = tab?.url
+    if (!url) return
+    try {
+      await invoke('clipboard:writeText', url)
+    } catch (error: unknown) {
+      reportError(error, 'Peek address could not be copied.')
+    }
+  }
 
   function rectOf(element: Element | null): PeekRect | null {
     if (!(element instanceof HTMLElement)) return null
@@ -294,6 +316,7 @@
     const flightPhase = phase
     if (!tabId || !flightPhase || flightPhase === 'open') return
     void playFlight(tabId, flightPhase)
+    return stopFlight
   })
 </script>
 
@@ -302,6 +325,16 @@
        in one place: the shell has to stand in for the panel exactly, and two copies
        would be two things to keep in step. -->
   <div class="flex shrink-0 items-center justify-end gap-1 border-b px-2 py-1">
+    <span class="min-w-0 flex-1 truncate text-xs text-text-muted" title={tab?.url}>{tab?.url}</span>
+    <button
+      type="button"
+      class="rounded-md p-2 text-text-muted hover:bg-hover hover:text-text"
+      title="Copy current Peek address"
+      aria-label="Copy current Peek address"
+      disabled={!tab?.url}
+      onclick={() => void copyAddress()}><Copy size={16} /></button
+    >
+
     <button
       type="button"
       class="rounded-md p-2 text-text-muted hover:bg-hover hover:text-text"
@@ -320,41 +353,48 @@
   </div>
 {/snippet}
 
-{#if tab}
-  <Modal
-    open
-    title="Take a Peek"
-    chrome={false}
-    blocksBrowserView={false}
-    trapFocus={false}
-    size="full"
-    panelWidth="max-w-[85vw]"
-    {panelClass}
-    bind:panelEl
-    onClose={() => globalBrowser.closePeek()}
-  >
-    {@render peekControls()}
-    <div class="relative flex min-h-0 flex-1 flex-col">
-      {#key tab.id}
-        <BrowserWorkspace {tab} surface="peek" {holdPage} />
-      {/key}
-      {#if holdPage && !loadError}
-        <!-- The page is a native view above the DOM, so this is what the user sees
+{#if tab && bounds}
+  {#key tab.id}
+    <Modal
+      open
+      modal={false}
+      {bounds}
+      scrim={false}
+      closeOnBackdrop={false}
+      onCloseAutoFocus={(event) => event.preventDefault()}
+      title="Take a Peek"
+      chrome={false}
+      blocksBrowserView={false}
+      trapFocus={false}
+      size="full"
+      panelWidth="max-w-none"
+      {panelClass}
+      bind:panelEl
+      onClose={() => globalBrowser.closePeek()}
+    >
+      {@render peekControls()}
+      <div class="relative flex min-h-0 flex-1 flex-col">
+        {#key tab.id}
+          <BrowserWorkspace {tab} surface="peek" {holdPage} />
+        {/key}
+        {#if holdPage && !loadError}
+          <!-- The page is a native view above the DOM, so this is what the user sees
              until it has painted: the surface holds the view off screen and draws
              the wait in the rectangle the page is about to take. -->
-        <div class="pointer-events-none absolute inset-0">
-          <BrowserPeekLoading url={tab.url} />
-        </div>
-      {/if}
-    </div>
-  </Modal>
+          <div class="pointer-events-none absolute inset-0">
+            <BrowserPeekLoading url={tab.url} />
+          </div>
+        {/if}
+      </div>
+    </Modal>
+  {/key}
   {#if shell}
     <Portal>
       <!-- Portaled for the same reason the modal is: the shell flies over the modal
            layer, and a stacking context anywhere between here and the body would
            trap it behind the very surface it is replacing. -->
       <div
-        bind:this={shellEl}
+        {@attach attachShell}
         inert
         aria-hidden="true"
         class="pointer-events-none fixed z-70 flex flex-col origin-top-left overflow-hidden rounded-2xl border bg-app shadow-xl will-change-transform"

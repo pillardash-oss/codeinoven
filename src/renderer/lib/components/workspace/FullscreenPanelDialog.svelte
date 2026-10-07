@@ -35,6 +35,8 @@
     /** Close a tab. Omit to hide the per-tab close button, for a surface whose
      *  tabs are sections of one panel and cannot be dismissed. */
     onCloseTab?: (id: string) => void
+    onTabContextMenu?: (id: string, event: MouseEvent) => void
+    onMoveTab?: (id: string, targetId: string, position: 'before' | 'after') => void
     children: Snippet
     /** This surface displays the browser's native view inside itself.
      *
@@ -68,6 +70,8 @@
     onMinimize,
     onSelect,
     onCloseTab,
+    onTabContextMenu,
+    onMoveTab,
     children,
     hostsBrowserView = false,
     scrim = true
@@ -78,7 +82,6 @@
   let dialogTitle = $derived(
     tabs.find((tab) => tab.id === activeTabId)?.title ?? 'Full screen panel'
   )
-
 </script>
 
 <!--
@@ -120,6 +123,11 @@
   open
   title={dialogTitle}
   onClose={onMinimize}
+  onCloseShortcut={hostsBrowserView && activeTabId && onCloseTab
+    ? () => {
+        if (activeTabId) onCloseTab?.(activeTabId)
+      }
+    : undefined}
   placement="fullscreen"
   chrome={false}
   panelClass="bg-app"
@@ -133,7 +141,7 @@
     {activeTabId}
     trailingLabel={minimizeLabel}
     onTrailingAction={onMinimize}
-    onSelect={onSelect}
+    {onSelect}
     {newLabel}
     {icon}
     {tabIcon}
@@ -141,6 +149,8 @@
     {actions}
     {onNew}
     {onCloseTab}
+    {onTabContextMenu}
+    {onMoveTab}
     titlebar
   >
     {#snippet trailingIcon()}

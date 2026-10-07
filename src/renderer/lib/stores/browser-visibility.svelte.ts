@@ -92,6 +92,39 @@ class BrowserVisibilityState {
    *  `isCovered`: that is the decision to hide the page, and feeding the page's
    *  own rectangle back into it would hide it on every write. */
   private nativeFrames = new SvelteMap<string, BrowserViewBounds>()
+  private pageFrames = new SvelteMap<string, { tabId: string; bounds: BrowserViewBounds }>()
+
+  /** Layout frames stay available when a peek parks its source's native page. */
+  publishPageFrame(key: string, tabId: string, bounds: BrowserViewBounds): void {
+    this.pageFrames.set(key, { tabId, bounds })
+  }
+
+  clearPageFrame(key: string): void {
+    this.pageFrames.delete(key)
+  }
+
+  get sourceTabId(): string | null {
+    if (this.claims.has('workspace')) return this.claims.get('workspace') ?? null
+    if ([...this.blocks.values()].includes('workspace-inactive')) return null
+    if (this.claims.has('fullscreen')) return this.claims.get('fullscreen') ?? null
+    const tabId = this.claims.get('sidebar')
+    return contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tabId
+      ? (tabId ?? null)
+      : null
+  }
+
+  pageBoundsFor(tabId: string): BrowserViewBounds | null {
+    // The fullscreen frame has precedence over the still-mounted sidebar frame.
+    const key =
+      this.claims.get('fullscreen') === tabId && !this.claims.has('workspace')
+        ? `native-fullscreen-${tabId}`
+        : null
+    if (key && this.pageFrames.has(key)) return this.pageFrames.get(key)?.bounds ?? null
+    for (const frame of this.pageFrames.values()) {
+      if (frame.tabId === tabId) return frame.bounds
+    }
+    return null
+  }
 
   /**
    * Keep the native view hidden while `hidden` is true, for as long as the
@@ -248,7 +281,11 @@ class BrowserVisibilityState {
    * the published blocks plus occlusion, and nothing else.
    */
   popupHideReasonFor(bounds: BrowserViewBounds | null): BrowserHideReason | null {
-    if (this.claims.has('peek')) return 'owned-elsewhere'
+    if (this.claims.has('peek') && bounds) {
+      const sourceId = this.sourceTabId
+      const sourceBounds = sourceId ? this.pageBoundsFor(sourceId) : null
+      if (sourceBounds && intersects(sourceBounds, bounds)) return 'owned-elsewhere'
+    }
     for (const reason of this.blocks.values()) {
       // The popup panel lives in the browser's own top-level view, which is not
       // inside the workspace shell, so the shell's own hidden state says nothing

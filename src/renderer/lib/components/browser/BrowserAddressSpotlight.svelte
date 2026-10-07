@@ -3,8 +3,11 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
+  import { boxIdForJar } from '$lib/stores/global-browser-types'
+  import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { BROWSER_HISTORY_GLOBAL_SCOPE, browserHistory } from '$lib/stores/browser-history.svelte'
+  import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
   import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
 
   interface Props {
@@ -66,6 +69,16 @@
     )
   )
   const secure = $derived(initialValue.startsWith('https:'))
+
+  /** The box the tab on screen runs in, so the palette names the identity the
+   *  address will open in. A tab with no box runs in the default jar. */
+  const spotlightBox = $derived(
+    globalBrowser.boxById(boxIdForJar(boxId)) ?? globalBrowser.activeBox
+  )
+  const spotlightBoxIcon = $derived(
+    browserAppearanceIconUrl(spotlightBox, globalBrowser.boxIconUrl(spotlightBox.id))
+  )
+  const spotlightBoxAccent = $derived(browserAppearanceAccent(spotlightBox))
 
   function open(url: string): void {
     onOpen(url)
@@ -151,7 +164,20 @@
     {#if error}
       <span class="shrink-0 pr-1 text-[0.6875rem] text-danger">{error}</span>
     {:else}
-      <span class="shrink-0 pr-1 text-[0.6875rem] text-dimmed">Enter to open</span>
+      <span
+        class="flex shrink-0 items-center gap-1.5 py-1 pr-1"
+        title={`In box: ${spotlightBox.name}`}
+        aria-label={`In box ${spotlightBox.name}`}
+      >
+        <span class="flex h-4 w-4 items-center justify-center" aria-hidden="true">
+          {#if spotlightBoxIcon}
+            <img src={spotlightBoxIcon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+          {:else}
+            <span class="h-2 w-2 rounded-full" style:background-color={spotlightBoxAccent}></span>
+          {/if}
+        </span>
+        <span class="max-w-24 truncate text-[0.6875rem] text-muted">{spotlightBox.name}</span>
+      </span>
     {/if}
   </div>
 

@@ -76,6 +76,20 @@ export interface ModelPickerProfilesGroup {
   onRequestDelete: (profile: ModelProfile) => void
 }
 
+/**
+ * The icon rail's selected section inside the model picker.
+ *
+ * `all` is the picker as it reads today, `favorites` narrows the list to
+ * favorited models, `profiles` swaps the list for the saved profiles surface,
+ * and `harness` narrows the list to one harness's models (the replacement for
+ * the old harness filter chips).
+ */
+export type PickerRailView =
+  | { kind: 'all' }
+  | { kind: 'favorites' }
+  | { kind: 'profiles' }
+  | { kind: 'harness'; harnessId: string }
+
 /** Cap the trigger label at this length, suffixing an ellipsis when exceeded. */
 export const MODEL_LABEL_MAX_LENGTH = 40
 

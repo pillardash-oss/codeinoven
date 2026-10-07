@@ -1,14 +1,12 @@
 <script lang="ts">
   import BrowserPanel from '$lib/components/browser/BrowserPanel.svelte'
+  import { browserStore } from '$lib/stores/browser-access.svelte'
   import BrowserTabIndicator from '$lib/components/browser/BrowserTabIndicator.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
-  import { subscribe } from '$lib/ipc.svelte'
-  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
   import { browserTabIndicators } from '$lib/stores/browser-tab-status'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
-  import { threadBrowserTabs } from '$lib/stores/thread-browser-tabs.svelte'
   import { GlobeCode } from '@lucide/svelte'
 
   interface Props {
@@ -24,9 +22,10 @@
      */
     onNewBrowser: () => void
     onCloseTab: (id: string) => void
+    onTabContextMenu: (id: string, event: MouseEvent) => void
   }
 
-  let { tabId, onTabIdChange, onNewBrowser, onCloseTab }: Props = $props()
+  let { tabId, onTabIdChange, onNewBrowser, onCloseTab, onTabContextMenu }: Props = $props()
 
   let browserTabs = $derived(contextSidebarState.tabs.filter((tab) => tab.kind === 'browser'))
 
@@ -36,7 +35,10 @@
       title: tab.title,
       // The strip hides the globe for a tab that is playing audio or
       // recording, and the dialog sizes that tab's icon slot from this count.
-      indicatorCount: browserTabIndicators(contextSidebarState.browserRuntime(tab.id)).length
+      indicatorCount: browserTabIndicators(
+        contextSidebarState.browserRuntime(tab.id),
+        browserStore()?.hasPeek(tab.id)
+      ).length
     }))
   )
 
@@ -71,74 +73,19 @@
     return () => browserKeyboardFocus.setClaim('fullscreen', null)
   })
 
-  // Publish which tab this surface shows, so the thread switcher knows the
-  // Ctrl+Tab gesture belongs to the browser while it is up, and record it as the
-  // tab in use so a cycle can reach the one before it.
-  $effect(() => {
-    threadBrowserTabs.setFullscreen(tabId)
-    if (tabId) threadBrowserTabs.record(tabId)
-    return () => threadBrowserTabs.setFullscreen(null)
-  })
-
   /**
    * Settle the full screen surface onto one tab.
    *
    * The sidebar's own strip and the overlay record the tab separately, so both
    * are told here: focusing the store is what makes minimizing land back on the
    * tab the user was reading instead of the one that was active when the
-   * fullscreen opened. Every in-surface gesture (a strip selection, a Ctrl+Tab
-   * step) goes through this one function, so the two can never drift apart.
+   * fullscreen opened. Each strip selection goes through this one function.
    */
   function showTab(id: string): void {
     contextSidebarState.focus(id)
     onTabIdChange(id)
   }
-
-  /**
-   * Walk the browser's recently-used tabs, exactly as the browser's own Ctrl+Tab
-   * does: the first press goes to the tab in use before this one, each further
-   * press keeps walking the order that was frozen when the gesture began, and
-   * the Control release settles on the tab it landed on.
-   */
-  function cycleTabs(direction: 1 | -1): void {
-    const liveIds = browserTabs.map((tab) => tab.id)
-    const target = threadBrowserTabs.cycle(direction, liveIds, tabId)
-    if (!target || target === tabId) return
-    // Focus keeps the sidebar's own strip on the tab the browser settled on, and
-    // the overlay follows the same id.
-    showTab(target)
-  }
-
-  function handleWindowKeydown(event: KeyboardEvent): void {
-    if (!tabId) return
-    if (!keymapState.matches('thread-switcher', event)) return
-    event.preventDefault()
-    event.stopPropagation()
-    cycleTabs(event.shiftKey ? -1 : 1)
-  }
-
-  function handleWindowKeyup(event: KeyboardEvent): void {
-    if (event.key !== 'Control') return
-    threadBrowserTabs.commit()
-  }
-
-  // A key pressed in a native page never reaches this DOM, so main claims the
-  // gesture there and forwards it here (see the thread switcher, which owns the
-  // same gesture everywhere else). The Control release then reaches this window
-  // and commits, exactly as a DOM press would.
-  $effect(() =>
-    subscribe('browser:switcherKey', ({ backward }) => {
-      if (!tabId) return
-      cycleTabs(backward ? -1 : 1)
-    })
-  )
 </script>
-
-<svelte:window
-  onkeydown={handleWindowKeydown}
-  onkeyup={handleWindowKeyup}
-  onblur={() => threadBrowserTabs.commit()}
-/>
 
 {#if tabId}
   {@const browserTab = contextSidebarState.tabs.find((tab) => tab.id === tabId)}
@@ -149,7 +96,9 @@
       newLabel="New browser tab"
       minimizeLabel="Minimize browser"
       hostsBrowserView
+      onMoveTab={(id, targetId, position) => contextSidebarState.reorder(id, targetId, position)}
       onSelect={showTab}
+      {onTabContextMenu}
       onCloseTab={(id) => onCloseTab(id)}
       onNew={onNewBrowser}
       onMinimize={() => onTabIdChange(null)}

@@ -32,6 +32,8 @@
     /** Markdown source   may be an incomplete, still-streaming message. */
     text: string
     class?: string
+    /** Preferred app-browser surface, while respecting the user's link setting. */
+    browserDestination?: 'context' | 'global'
     /**
      * Render raw HTML tags in the source instead of showing them as text.
      * Only for content authored on a provider whose markdown dialect includes
@@ -65,6 +67,7 @@
   let {
     text,
     class: className = '',
+    browserDestination = 'context',
     allowHtml = false,
     repository = null,
     inlineFileTags = [],
@@ -386,7 +389,7 @@
     if (href.startsWith('http://') || href.startsWith('https://')) {
       event.preventDefault()
       clearTooltip()
-      void openInBrowser(href)
+      void openInBrowser(href, browserDestination)
     }
   }
 

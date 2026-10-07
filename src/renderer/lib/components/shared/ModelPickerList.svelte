@@ -16,7 +16,8 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { peakHoursBadgeFor } from '$shared/peak-hours'
   import type { ProviderCatalog } from '$shared/types'
-  import ModelPickerSidePanel from './ModelPickerSidePanel.svelte'
+  import ModelPickerRail from './ModelPickerRail.svelte'
+  import ModelPickerProfiles from './ModelPickerProfiles.svelte'
   import ModelPickerVendorIcons from './ModelPickerVendorIcons.svelte'
   import {
     buildPickerLayout,
@@ -35,8 +36,8 @@
     visiblePickerItems,
     type ModelEntry,
     type ModelPickerProfilesGroup,
-    type PickerHarnessFilterControls,
-    type PickerListItem
+    type PickerListItem,
+    type PickerRailView
   } from './model-picker-helpers'
 
   interface Props {
@@ -116,17 +117,14 @@
   let search = $state('')
   let searchInput: HTMLInputElement | undefined
   let modelList: HTMLDivElement | undefined
-  /**
-   * The side panel, so the picker can open it directly.
-   *
-   * The `/profile` slash action asks for the profiles surface rather than the model
-   * list, and this list is what renders that surface; the picker reaches it through
-   * here instead of reaching around the list into the panel.
-   */
-  let profilesPanel: ModelPickerSidePanel | undefined = $state(undefined)
   const collapsedGroups = new SvelteSet<string>()
-  const selectedHarnesses = new SvelteSet<string>()
-  let showAllHarnesses = $state(true)
+  /**
+   * The rail's selected section. `all` is the picker as it reads today,
+   * `favorites` narrows to favorited models, `profiles` swaps the list for the
+   * saved profiles surface, and `harness` narrows to one harness's models (the
+   * replacement for the old harness filter chips).
+   */
+  let railView = $state<PickerRailView>({ kind: 'all' })
   let pickerListScrollTop = $state(0)
   let pickerViewport = $state(240)
   /** True right after an arrow-key press, until the mouse physically moves.
@@ -207,7 +205,6 @@
             )
             return entry &&
               passesPropHarnessFilter(entry.provider.harnessId) &&
-              passesHarnessFilter(entry.provider.harnessId) &&
               passesVisionFilter(entry.model, visionOnly)
               ? entry
               : null
@@ -221,7 +218,7 @@
     const words = searchWords(search)
     return displayProviders
       .filter((provider) => passesPropHarnessFilter(provider.harnessId))
-      .filter((provider) => passesHarnessFilter(provider.harnessId))
+      .filter((provider) => passesRailHarness(provider.harnessId))
       .map((provider) => ({
         ...provider,
         models:
@@ -265,41 +262,44 @@
       }))
       .sort((left, right) => harnessOrder(left.id) - harnessOrder(right.id))
   )
-  const effectiveHarnessCount = $derived(showAllHarnesses ? 0 : selectedHarnesses.size || 0)
-  const harnessFilterActive = $derived(effectiveHarnessCount > 0)
-  const harnessFilterLabel = $derived(
-    harnessFilterActive
-      ? effectiveHarnessCount === 1
-        ? '1 harness'
-        : `${effectiveHarnessCount} harnesses`
-      : 'All harnesses'
-  )
+  /** True while the user has favorited models, which decides the star rail item. */
+  const hasFavorites = $derived(favoriteModels.length > 0)
+  /** True while this picker can apply profiles, which decides the profiles rail item. */
+  const showProfilesRail = $derived(profiles !== null)
+  /** Harness icons are worth a rail section only when there is a choice to make. */
+  const showHarnessesRail = $derived(harnessOptions.length > 1)
   /**
-   * The harness filter as the side panel draws it, or null when the catalog holds
-   * a single harness and there is nothing to narrow.
-   *
-   * Rebuilt on every change rather than stored: the selection stays in this
-   * component's reactive set, and the panel receives it as one object so the row at
-   * the top of the picker and the chips inside the panel can never disagree.
+   * The rail section actually driving the list. A view whose content vanished
+   * (last favorite removed, profiles hidden, harness gone from the catalog)
+   * falls back to `all` rather than stranding the list on an empty section.
    */
-  const harnessFilterControls = $derived<PickerHarnessFilterControls | null>(
-    harnessOptions.length > 1
-      ? {
-          options: harnessOptions,
-          label: harnessFilterLabel,
-          active: harnessFilterActive,
-          selected: selectedHarnesses,
-          onToggle: toggleHarness,
-          onClear: clearHarnessFilter
-        }
-      : null
-  )
+  const effectiveView = $derived.by<PickerRailView>(() => {
+    const current: PickerRailView = railView
+    if (current.kind === 'favorites' && !hasFavorites) return { kind: 'all' }
+    if (current.kind === 'profiles' && !showProfilesRail) return { kind: 'all' }
+    if (
+      current.kind === 'harness' &&
+      !harnessOptions.some((option) => option.id === current.harnessId)
+    ) {
+      return { kind: 'all' }
+    }
+    return current
+  })
+  const isProfilesView = $derived(effectiveView.kind === 'profiles')
   const pickerLayout = $derived(
     buildPickerLayout({
-      favoriteModelsList,
-      recentModelsList,
-      unavailableFavoriteModels,
-      filteredProviders,
+      favoriteModelsList:
+        effectiveView.kind === 'favorites'
+          ? favoriteModelsList
+          : effectiveView.kind === 'all'
+            ? favoriteModelsList
+            : [],
+      recentModelsList: effectiveView.kind === 'all' ? recentModelsList : [],
+      unavailableFavoriteModels:
+        effectiveView.kind === 'favorites' || effectiveView.kind === 'all'
+          ? unavailableFavoriteModels
+          : [],
+      filteredProviders: isProfilesView ? [] : filteredProviders,
       collapsedGroups,
       search,
       canReorderFavorites: Boolean(onReorderFavorite)
@@ -316,10 +316,11 @@
     visiblePickerItems(pickerLayout, pickerListScrollTop, pickerViewport)
   )
 
-  function passesHarnessFilter(candidateHarnessId: string): boolean {
-    if (showAllHarnesses) return true
-    if (selectedHarnesses.size === 0) return true
-    return selectedHarnesses.has(candidateHarnessId)
+  /** The rail's harness section narrows the list to one harness; every other
+   *  section shows every harness the caller allows. */
+  function passesRailHarness(candidateHarnessId: string): boolean {
+    if (effectiveView.kind !== 'harness') return true
+    return candidateHarnessId === effectiveView.harnessId
   }
 
   /** Restrict to the caller-supplied harness. Unset/null is a no-op. */
@@ -336,21 +337,12 @@
     return unavailableHarnessReason ?? `${harnessName(candidateHarnessId)} is not available here`
   }
 
-  function toggleHarness(nextHarnessId: string): void {
-    // A harness the target does not have cannot narrow the list to anything
-    // runnable, so the chip is inert rather than offering a dead filter.
-    if (isUnavailableHarness(nextHarnessId)) return
-    if (showAllHarnesses) showAllHarnesses = false
-    if (selectedHarnesses.has(nextHarnessId)) {
-      if (selectedHarnesses.size > 1) selectedHarnesses.delete(nextHarnessId)
-      return
-    }
-    selectedHarnesses.add(nextHarnessId)
-  }
-
-  function clearHarnessFilter(): void {
-    selectedHarnesses.clear()
-    showAllHarnesses = true
+  /** Select a rail section, resetting scroll and returning focus to the search
+   *  box for model sections. */
+  function selectRailView(next: PickerRailView): void {
+    railView = next
+    scrollPickerListTo(0)
+    if (next.kind !== 'profiles') focusPickerSearch()
   }
 
   /**
@@ -425,14 +417,17 @@
     }
   }
 
-  /** Open the side panel, for a caller that asked for profiles directly. */
+  /** Open the profiles rail section, for a caller that asked for profiles directly. */
   export function openProfilesPanel(): void {
-    profilesPanel?.openPanel()
+    if (!profiles) return
+    railView = { kind: 'profiles' }
+    scrollPickerListTo(0)
   }
 
   /** Reset the list surface when the popover opens or closes. */
   export function resetPicker(): void {
     search = ''
+    railView = { kind: 'all' }
     pickerListScrollTop = 0
     keyboardNavActive = false
   }
@@ -493,140 +488,177 @@
   }
 </script>
 
-<div class="flex items-center gap-2 border-b px-2.5 py-2">
-  <Search size={12} class="shrink-0 text-dimmed" />
-  <input
-    id={searchId}
-    {@attach attachSearchInput}
-    bind:value={search}
-    oninput={() => scrollPickerListTo(0)}
-    type="text"
-    class="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
-    placeholder="Search models..."
-    aria-label="Search models"
-    onkeydown={(event: KeyboardEvent) => {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault()
-        keyboardNavActive = true
-        // Anchor the first arrow-key press on the active model so nav
-        // starts from what's selected, not the top of the list   but
-        // once the user has typed a search, "top of the results" is
-        // the more useful anchor.
-        const targetKey = search ? undefined : pickerKeyForSelectedModel()
-        if (targetKey) {
-          const targetIndex = pickerLayout.items.findIndex((item) => item.key === targetKey)
-          if (targetIndex !== -1) scrollPickerListTo(pickerLayout.offsets[targetIndex] - 60)
-          void tick().then(() => {
-            modelList
-              ?.querySelector<HTMLElement>(`[data-model-key="${CSS.escape(targetKey)}"]`)
-              ?.focus()
-          })
-          return
-        }
-        scrollPickerListTo(0)
-        void tick().then(() => {
-          const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
-          if (firstBtn instanceof HTMLElement) firstBtn.focus()
-        })
-        return
-      }
-      if (keymapState.matches('palette-close', event)) {
-        event.stopPropagation()
-        onClose()
-      }
-    }}
+<div class="flex min-h-0 items-stretch">
+  <ModelPickerRail
+    view={effectiveView}
+    showFavorites={hasFavorites}
+    showProfiles={showProfilesRail}
+    {harnessOptions}
+    showHarnesses={showHarnessesRail}
+    onSelect={selectRailView}
   />
-  {#if search}
-    <button
-      type="button"
-      class="shrink-0 text-dimmed transition-colors hover:text-foreground"
-      title="Clear model search"
-      aria-label="Clear model search"
-      onclick={() => (search = '')}
-    >
-      <X size={11} />
-    </button>
-  {/if}
-  {#if canRefresh}
-    <button
-      type="button"
-      class="shrink-0 cursor-pointer text-dimmed transition-colors hover:text-foreground disabled:cursor-default disabled:opacity-60"
-      title="Refresh model list"
-      aria-label="Refresh model list"
-      disabled={refreshing}
-      onclick={onRefresh}
-    >
-      <RefreshCw size={12} class={refreshing ? 'animate-spin text-primary' : ''} />
-    </button>
-  {/if}
-</div>
 
-<ModelPickerSidePanel bind:this={profilesPanel} filter={harnessFilterControls} {profiles} />
-
-<div
-  id={listId}
-  {@attach (node) => {
-    modelList = node
-    const cleanup = measurePickerList(node)
-    return () => {
-      cleanup()
-      if (modelList === node) modelList = undefined
-    }
-  }}
-  class="max-h-60 overflow-y-auto p-1"
->
-  {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
-    <div class="px-2 py-2">
-      <p class="text-[0.6875rem] text-dimmed">No providers connected</p>
-      <button
-        type="button"
-        class="mt-1.5 inline-flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-semibold text-on-primary transition-colors hover:bg-primary-hover"
-        onclick={onOpenConnectFlow}
-      >
-        <Plug size={12} />
-        Connect your AI account
-      </button>
-    </div>
-  {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
-    <p class="px-2 py-2 text-[0.6875rem] text-dimmed">
-      {search
-        ? `No models match “${search}”${harnessFilterActive ? ' in the selected harnesses' : ''}`
-        : visionOnly
-          ? 'No vision-capable models found'
-          : 'No models in the selected harnesses'}
-    </p>
-  {:else}
-    <div style:height={`${pickerLayout.total}px`} style:position="relative">
-      {#each pickerVisibleItems.items as item (item.key)}
-        <div
-          style:position="absolute"
-          style:left="0"
-          style:right="0"
-          style:top={`${item.offset}px`}
-          style:height={`${PICKER_ROW_HEIGHT[item.kind]}px`}
-          class="overflow-hidden"
-        >
-          {@render renderPickerItem(item)}
+  <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+    {#if isProfilesView}
+      {#if profiles}
+        <div class="flex max-h-60 min-h-52 flex-col overflow-hidden">
+          <ModelPickerProfiles {...profiles} />
         </div>
-      {/each}
-    </div>
-  {/if}
-</div>
-{#if multiSelect}
-  <div class="flex items-center justify-between gap-2 border-t px-2.5 py-1.5">
-    <span class="text-[0.625rem] text-dimmed">
-      {selectedModelKeys.length} selected · choose one or more
-    </span>
-    <button
-      type="button"
-      class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
-      title="Finish selecting models"
-      onclick={onClose}
-    >
-      Done
-    </button>
+      {/if}
+    {:else}
+      <div class="flex items-center gap-2 border-b px-2.5 py-2">
+        <Search size={12} class="shrink-0 text-dimmed" />
+        <input
+          id={searchId}
+          {@attach attachSearchInput}
+          bind:value={search}
+          oninput={() => scrollPickerListTo(0)}
+          type="text"
+          class="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
+          placeholder={effectiveView.kind === 'favorites'
+            ? 'Search favorites...'
+            : effectiveView.kind === 'harness'
+              ? `Search ${harnessName(effectiveView.harnessId)} models...`
+              : 'Search models...'}
+          aria-label={effectiveView.kind === 'favorites'
+            ? 'Search favorite models'
+            : effectiveView.kind === 'harness'
+              ? `Search ${harnessName(effectiveView.harnessId)} models`
+              : 'Search models'}
+          onkeydown={(event: KeyboardEvent) => {
+            if (event.key === 'ArrowDown') {
+              event.preventDefault()
+              keyboardNavActive = true
+              // Anchor the first arrow-key press on the active model so nav
+              // starts from what's selected, not the top of the list   but
+              // once the user has typed a search, "top of the results" is
+              // the more useful anchor.
+              const targetKey = search ? undefined : pickerKeyForSelectedModel()
+              if (targetKey) {
+                const targetIndex = pickerLayout.items.findIndex((item) => item.key === targetKey)
+                if (targetIndex !== -1) scrollPickerListTo(pickerLayout.offsets[targetIndex] - 60)
+                void tick().then(() => {
+                  modelList
+                    ?.querySelector<HTMLElement>(`[data-model-key="${CSS.escape(targetKey)}"]`)
+                    ?.focus()
+                })
+                return
+              }
+              scrollPickerListTo(0)
+              void tick().then(() => {
+                const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
+                if (firstBtn instanceof HTMLElement) firstBtn.focus()
+              })
+              return
+            }
+            if (keymapState.matches('palette-close', event)) {
+              event.stopPropagation()
+              onClose()
+            }
+          }}
+        />
+        {#if search}
+          <button
+            type="button"
+            class="shrink-0 text-dimmed transition-colors hover:text-foreground"
+            title="Clear model search"
+            aria-label="Clear model search"
+            onclick={() => (search = '')}
+          >
+            <X size={11} />
+          </button>
+        {/if}
+        {#if canRefresh}
+          <button
+            type="button"
+            class="shrink-0 cursor-pointer text-dimmed transition-colors hover:text-foreground disabled:cursor-default disabled:opacity-60"
+            title="Refresh model list"
+            aria-label="Refresh model list"
+            disabled={refreshing}
+            onclick={onRefresh}
+          >
+            <RefreshCw size={12} class={refreshing ? 'animate-spin text-primary' : ''} />
+          </button>
+        {/if}
+      </div>
+
+      <div
+        id={listId}
+        {@attach (node) => {
+          modelList = node
+          const cleanup = measurePickerList(node)
+          return () => {
+            cleanup()
+            if (modelList === node) modelList = undefined
+          }
+        }}
+        class="max-h-60 overflow-y-auto p-1"
+      >
+        {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
+          <div class="px-2 py-2">
+            <p class="text-[0.6875rem] text-dimmed">No providers connected</p>
+            <button
+              type="button"
+              class="mt-1.5 inline-flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-semibold text-on-primary transition-colors hover:bg-primary-hover"
+              onclick={onOpenConnectFlow}
+            >
+              <Plug size={12} />
+              Connect your AI account
+            </button>
+          </div>
+        {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
+          <p class="px-2 py-2 text-[0.6875rem] text-dimmed">
+            {#if effectiveView.kind === 'favorites'}
+              {search ? `No favorite models match “${search}”` : 'No favorite models yet'}
+            {:else if effectiveView.kind === 'harness'}
+              {search
+                ? `No ${harnessName(effectiveView.harnessId)} models match “${search}”`
+                : visionOnly
+                  ? `No vision-capable ${harnessName(effectiveView.harnessId)} models found`
+                  : `No ${harnessName(effectiveView.harnessId)} models found`}
+            {:else}
+              {search
+                ? `No models match “${search}”`
+                : visionOnly
+                  ? 'No vision-capable models found'
+                  : 'No models found'}
+            {/if}
+          </p>
+        {:else}
+          <div style:height={`${pickerLayout.total}px`} style:position="relative">
+            {#each pickerVisibleItems.items as item (item.key)}
+              <div
+                style:position="absolute"
+                style:left="0"
+                style:right="0"
+                style:top={`${item.offset}px`}
+                style:height={`${PICKER_ROW_HEIGHT[item.kind]}px`}
+                class="overflow-hidden"
+              >
+                {@render renderPickerItem(item)}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+      {#if multiSelect}
+        <div class="flex items-center justify-between gap-2 border-t px-2.5 py-1.5">
+          <span class="text-[0.625rem] text-dimmed">
+            {selectedModelKeys.length} selected · choose one or more
+          </span>
+          <button
+            type="button"
+            class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            title="Finish selecting models"
+            onclick={onClose}
+          >
+            Done
+          </button>
+        </div>
+      {/if}
+    {/if}
   </div>
-{/if}
+</div>
 
 {#snippet groupHeader(
   Icon: typeof Star,

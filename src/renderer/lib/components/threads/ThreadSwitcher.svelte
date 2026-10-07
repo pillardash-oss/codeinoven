@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
+  import { on } from 'svelte/events'
   import { SvelteMap } from 'svelte/reactivity'
   import { getProjectIcon } from '$lib/project-icons'
   import { contentFamilyIcon } from '$lib/content-view-icons'
   import ThreadRow from './ThreadRow.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
-  import { threadBrowserTabs } from '$lib/stores/thread-browser-tabs.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { subscribe } from '$lib/ipc.svelte'
@@ -93,12 +93,35 @@
    * read landing, an entry leaving) from putting focus on a row that is no
    * longer the highlighted one.
    */
-  function focusHighlightedEntry(key: string | null): void {
+  /**
+   * Focus the highlighted row right now. Returns whether it landed.
+   *
+   * Rows can lag the highlight: the panel mounts a frame after opening and
+   * browser rows arrive through a dynamic import, so a single attempt leaves
+   * focus where it was (the browser's back button) until the next cycle.
+   * Callers retry on animation frames instead.
+   */
+  function focusRowNow(key: string): boolean {
+    const index = entries.findIndex((entry) => threadSwitcherEntryKey(entry) === key)
+    if (index < 0) return false
+    const row = contentElement?.querySelector<HTMLElement>(`[data-entry-index="${index}"]`)
+    if (!row) return false
+    row.focus()
+    return true
+  }
+
+  function focusHighlightedEntry(key: string | null, attempts = 8): void {
     if (key === null) return
     void tick().then(() => {
-      const index = entries.findIndex((entry) => threadSwitcherEntryKey(entry) === key)
-      if (index < 0) return
-      contentElement?.querySelector<HTMLElement>(`[data-entry-index="${index}"]`)?.focus()
+      if (!open || highlightedKey !== key) return
+      if (focusRowNow(key)) return
+      if (attempts <= 0) {
+        // Rows still missing (a slow dynamic import): hold focus inside the
+        // panel so it cannot fall back to the browser chrome behind it.
+        contentElement?.focus()
+        return
+      }
+      requestAnimationFrame(() => focusHighlightedEntry(key, attempts - 1))
     })
   }
 
@@ -191,19 +214,19 @@
    * page exactly as it does from the app's own chrome. From here on the real
    * Control release reaches the DOM and commits the highlight like any other.
    */
-  onMount(() =>
-    subscribe('browser:switcherKey', ({ backward }) => {
-      // The full screen thread browser owns the gesture while it is up: there,
-      // Ctrl+Tab steps through its own tabs rather than opening this switcher.
-      if (threadBrowserTabs.fullscreenActive) return
+  onMount(() => {
+    const unsubscribe = subscribe('browser:switcherKey', ({ backward }) => {
       cycle(backward ? -1 : 1)
     })
-  )
+    // Claim the chord before dialog focus scopes interpret Tab as focus traversal.
+    const removeKeydown = on(window, 'keydown', handleWindowKeydown, { capture: true })
+    return () => {
+      unsubscribe()
+      removeKeydown()
+    }
+  })
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    // The full screen thread browser owns Ctrl+Tab while it is up (see the
-    // subscription above); everywhere else the switcher keeps the gesture.
-    if (threadBrowserTabs.fullscreenActive) return
     if (keymapState.matches('thread-switcher', event)) {
       // No "nothing to show" guard before the cycle: an empty list is exactly the
       // state the cycle's own stored-list read is there to fill, so returning
@@ -233,7 +256,6 @@
 </script>
 
 <svelte:window
-  onkeydown={handleWindowKeydown}
   onkeyup={handleWindowKeyup}
   onpointermove={handleWindowPointerMove}
   onblur={handleWindowBlur}
@@ -244,10 +266,15 @@
   title="Switch to"
   onClose={cancel}
   placement="palette"
+  abovePage
   panelWidth="max-w-lg"
   chrome={false}
   bind:panelEl={contentElement}
-  claimInitialFocus={() => {
+  claimInitialFocus={(panel) => {
+    // Rows may not exist yet on the opening frame, so park focus inside the
+    // panel first and let the retry above land it on the row once rendered.
+    if (highlightedKey !== null && focusRowNow(highlightedKey)) return true
+    panel.focus()
     focusHighlightedEntry(highlightedKey)
     return true
   }}

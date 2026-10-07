@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { SUPPORT_EMAIL } from '$shared/brand'
   import { onMount } from 'svelte'
   import {
     ClipboardPaste,
@@ -41,7 +42,14 @@
   }
 
   let target = $state<TextMenuTarget | null>(null)
-  let menuEl: HTMLDivElement | null = $state(null)
+  let menuEl: HTMLDivElement | null = null
+
+  function captureMenu(element: HTMLDivElement): () => void {
+    menuEl = element
+    return () => {
+      menuEl = null
+    }
+  }
   let menuWidth = $state(0)
   let menuHeight = $state(0)
   /** The thread browser takes a page only while a project thread is on screen to
@@ -83,7 +91,12 @@
   function externalUrl(value: string): string | null {
     try {
       const url = new URL(value)
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+      if (
+        url.protocol !== 'http:' &&
+        url.protocol !== 'https:' &&
+        !(url.protocol === 'mailto:' && url.pathname === SUPPORT_EMAIL)
+      )
+        return null
       return url.toString()
     } catch {
       return null
@@ -399,7 +412,7 @@
 
 {#if target}
   <div
-    bind:this={menuEl}
+    {@attach captureMenu}
     bind:clientWidth={menuWidth}
     bind:clientHeight={menuHeight}
     class="fixed z-50 min-w-44 rounded-lg border border-border bg-surface p-1 shadow-xl"
@@ -493,51 +506,53 @@
           onclick={() => openInBrowser(target!.linkHref!)}
         >
           <ExternalLink class="size-3.5 shrink-0 text-text-muted" />
-          Open in Default Browser
+          {target.linkHref.startsWith('mailto:') ? 'Open in Email App' : 'Open in Default Browser'}
         </button>
-        {#if browsingInApp}
-          <button
-            type="button"
-            class={itemClass}
-            role="menuitem"
-            title="Open in a new tab of the app-wide browser"
-            onclick={() => openLinkInGlobalCioBrowser(target!.linkHref!)}
-          >
-            <Globe class="size-3.5 shrink-0 text-text-muted" />
-            Open in New Tab
-          </button>
-          <button
-            type="button"
-            class={itemClass}
-            role="menuitem"
-            title="Open in the browser tab already on screen"
-            onclick={() => openLinkInActiveBrowserTab(target!.linkHref!)}
-          >
-            <GlobeCode class="size-3.5 shrink-0 text-text-muted" />
-            Open in Current Tab
-          </button>
-        {:else}
-          <button
-            type="button"
-            class={itemClass}
-            role="menuitem"
-            title="Open in the app-wide global browser"
-            onclick={() => openLinkInGlobalCioBrowser(target!.linkHref!)}
-          >
-            <Globe class="size-3.5 shrink-0 text-text-muted" />
-            Open in Global CIO Browser
-          </button>
-          {#if cioBrowserAvailable}
+        {#if !target.linkHref.startsWith('mailto:')}
+          {#if browsingInApp}
             <button
               type="button"
               class={itemClass}
               role="menuitem"
-              title="Open in the CIO browser tab for this project"
-              onclick={() => openLinkInCioBrowser(target!.linkHref!)}
+              title="Open in a new tab of the app-wide browser"
+              onclick={() => openLinkInGlobalCioBrowser(target!.linkHref!)}
+            >
+              <Globe class="size-3.5 shrink-0 text-text-muted" />
+              Open in New Tab
+            </button>
+            <button
+              type="button"
+              class={itemClass}
+              role="menuitem"
+              title="Open in the browser tab already on screen"
+              onclick={() => openLinkInActiveBrowserTab(target!.linkHref!)}
             >
               <GlobeCode class="size-3.5 shrink-0 text-text-muted" />
-              Open in Thread Browser
+              Open in Current Tab
             </button>
+          {:else}
+            <button
+              type="button"
+              class={itemClass}
+              role="menuitem"
+              title="Open in the app-wide global browser"
+              onclick={() => openLinkInGlobalCioBrowser(target!.linkHref!)}
+            >
+              <Globe class="size-3.5 shrink-0 text-text-muted" />
+              Open in Global CIO Browser
+            </button>
+            {#if cioBrowserAvailable}
+              <button
+                type="button"
+                class={itemClass}
+                role="menuitem"
+                title="Open in the CIO browser tab for this project"
+                onclick={() => openLinkInCioBrowser(target!.linkHref!)}
+              >
+                <GlobeCode class="size-3.5 shrink-0 text-text-muted" />
+                Open in Thread Browser
+              </button>
+            {/if}
           {/if}
         {/if}
         <button

@@ -28,7 +28,7 @@ export const IDLE_BROWSER_TAB_RUNTIME: BrowserTabRuntime = Object.freeze({
  * - `capture`: the tab is recording (microphone, camera or screen).
  * - `audio`: the tab is playing audio, or the user muted it and can unmute it.
  */
-export type BrowserTabIndicator = 'capture' | 'audio'
+export type BrowserTabIndicator = 'capture' | 'audio' | 'peek'
 
 /**
  * Which indicators a tab shows, in paint order. Capture leads, because a tab
@@ -37,8 +37,12 @@ export type BrowserTabIndicator = 'capture' | 'audio'
  * audio indicator so the crossed speaker stays on screen as the way back to
  * sound once the page goes quiet.
  */
-export function browserTabIndicators(runtime: BrowserTabRuntime): BrowserTabIndicator[] {
+export function browserTabIndicators(
+  runtime: BrowserTabRuntime,
+  peek = false
+): BrowserTabIndicator[] {
   const indicators: BrowserTabIndicator[] = []
+  if (peek) indicators.push('peek')
   if (runtime.capturing) indicators.push('capture')
   if (runtime.audible || runtime.muted) indicators.push('audio')
   return indicators
@@ -57,7 +61,7 @@ export const BROWSER_TAB_CAPTURE_LABEL = 'This tab is recording audio or screen'
  * the tab's icon-to-title spacing.
  */
 export function browserTabIndicatorSlotClass(count: number): string {
-  return count > 1 ? 'w-[1.625rem]' : 'w-3'
+  return count > 2 ? 'w-[2.75rem]' : count > 1 ? 'w-[1.625rem]' : 'w-3'
 }
 
 /** Accessible name and tooltip of the audio indicator, which is also the mute

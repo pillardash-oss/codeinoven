@@ -25,6 +25,7 @@
     onNew?: () => void
     onCloseTab?: (id: string) => void
     onTabContextMenu?: (id: string, event: MouseEvent) => void
+    onMoveTab?: (id: string, targetId: string, position: 'before' | 'after') => void
     titlebar?: boolean
   }
 
@@ -43,10 +44,22 @@
     onNew,
     onCloseTab,
     onTabContextMenu,
+    onMoveTab,
     titlebar = false
   }: Props = $props()
 
   let stripElement = $state<HTMLDivElement>()
+  let draggedId: string | null = null
+  let dropTarget = $state<string | null>(null)
+  let dropPosition = $state<'before' | 'after'>('after')
+
+  function dragOver(event: DragEvent, id: string): void {
+    if (!onMoveTab || !draggedId || draggedId === id) return
+    event.preventDefault()
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    dropTarget = id
+    dropPosition = event.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+  }
 
   $effect(() => {
     if (!activeTabId || !stripElement) return
@@ -67,10 +80,46 @@
       ? 'titlebar-no-drag flex min-w-0 flex-1 overflow-x-auto'
       : 'flex min-w-0 flex-1 overflow-x-auto'}
   >
-    <div class={titlebar ? 'ml-auto flex min-w-max items-center gap-1' : 'flex min-w-max items-center gap-1'}>
+    <div
+      class={titlebar
+        ? 'ml-auto flex min-w-max items-center gap-1'
+        : 'flex min-w-max items-center gap-1'}
+    >
       {#each tabs as tab (tab.id)}
         {@const indicatorCount = tabIndicator ? (tab.indicatorCount ?? 0) : 0}
-        <div class="relative flex shrink-0 items-center">
+        <div
+          class="relative flex shrink-0 items-center"
+          role="listitem"
+          draggable={Boolean(onMoveTab)}
+          ondragstart={(event) => {
+            draggedId = tab.id
+            event.dataTransfer?.setData('text/plain', tab.id)
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+          }}
+          ondragover={(event) => dragOver(event, tab.id)}
+          ondrop={(event) => {
+            if (!draggedId || !onMoveTab || dropTarget !== tab.id) return
+            event.preventDefault()
+            onMoveTab(draggedId, tab.id, dropPosition)
+            draggedId = null
+            dropTarget = null
+          }}
+          ondragend={() => {
+            draggedId = null
+            dropTarget = null
+          }}
+          ondragleave={() => {
+            if (dropTarget === tab.id) dropTarget = null
+          }}
+        >
+          {#if dropTarget === tab.id}
+            <span
+              class="pointer-events-none absolute inset-y-0 w-0.5 bg-accent {dropPosition ===
+              'before'
+                ? 'left-0'
+                : 'right-0'}"
+            ></span>
+          {/if}
           <button
             type="button"
             data-active={tab.id === activeTabId ? 'true' : undefined}
@@ -111,9 +160,7 @@
             </button>
           {/if}
           {#if indicatorCount > 0 && tabIndicator}
-            <div
-              class="absolute left-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5"
-            >
+            <div class="absolute left-1.5 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
               {@render tabIndicator({ id: tab.id, title: tab.title })}
             </div>
           {/if}
@@ -123,7 +170,11 @@
   </div>
 
   {#if actions}
-    <div class={titlebar ? 'titlebar-no-drag flex shrink-0 items-center gap-1' : 'flex shrink-0 items-center gap-1'}>
+    <div
+      class={titlebar
+        ? 'titlebar-no-drag flex shrink-0 items-center gap-1'
+        : 'flex shrink-0 items-center gap-1'}
+    >
       {@render actions()}
     </div>
   {/if}
@@ -136,7 +187,7 @@
         : 'flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground'}
       aria-label={newLabel}
       title={newLabel}
-      onclick={onNew}
+      onclick={() => onNew?.()}
     >
       <Plus size={14} />
     </button>

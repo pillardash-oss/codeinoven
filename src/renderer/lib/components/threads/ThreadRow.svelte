@@ -30,6 +30,7 @@
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
@@ -58,6 +59,7 @@
   import { LOCAL_OVEN_ID } from '$shared/ovens'
   import {
     AppWindow,
+    Eye,
     Check,
     Clock,
     GitBranch,
@@ -776,6 +778,17 @@
   }
 </script>
 
+{#snippet peekIndicator()}
+  {#if browserStore()?.hasThreadPeek(thread.projectId, thread.id)}
+    <span
+      role="img"
+      class="flex shrink-0 items-center text-accent"
+      title="Peek open in this thread"
+      aria-label="Peek open in this thread"><Eye size={12} /></span
+    >
+  {/if}
+{/snippet}
+
 {#snippet authoredWorkMarker(kind: AuthoredWorkKind | null)}
   {#if kind}
     {@const WorkIcon = AUTHORED_WORK_ICON_BY_KIND[kind]}
@@ -930,6 +943,7 @@
       >
         {displayTitle}
       </span>
+      {@render peekIndicator()}
       {#if !showBottomRow}
         {#if indicator}
           <ThreadIndicatorSlot {indicator} />
@@ -1100,6 +1114,7 @@
         <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">
           {displayTitle}
         </span>
+        {@render peekIndicator()}
 
         <!-- Single-line default: time rides on the top line, swapped for the
            working model's provider icon while the thread is working -->
@@ -1282,6 +1297,7 @@
       <span class="flex w-full min-w-0 items-center gap-2">
         {@render threadStatusSlot(true)}
         <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">{displayTitle}</span>
+        {@render peekIndicator()}
         {#if currentModelProviderName}
           <span
             class="flex shrink-0 items-center transition-opacity duration-150 {hovered

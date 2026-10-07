@@ -44,13 +44,20 @@
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { isBrowserLoaded, loadBrowser, withBrowser } from '$lib/stores/browser-access.svelte'
+  import {
+    browserStore,
+    isBrowserLoaded,
+    loadBrowser,
+    withBrowser
+  } from '$lib/stores/browser-access.svelte'
   import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { schemeState } from '$lib/stores/scheme.svelte'
   import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
+  import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
@@ -1224,6 +1231,17 @@
   }
 
   function handleFind(): void {
+    const browserTabId = browserKeyboardFocus.tabId
+    if (browserTabId) {
+      browserFindState.open(browserTabId)
+      return
+    }
+    if (activeView === 'browser') {
+      void withBrowser((store) => {
+        if (store.activeTab) browserFindState.open(store.activeTab.id)
+      })
+      return
+    }
     const active = document.activeElement instanceof Element ? document.activeElement : null
     if (active?.closest('[data-region="file-tree"]')) {
       findNavState.focusFileTreeFilter++
@@ -1317,6 +1335,29 @@
       handleCloseShortcut()
       return
     }
+    // DOM focus in browser chrome must answer the same bindings as the native
+    // page. This also covers the interval before its main-process claim lands.
+    const browserTabId = browserKeyboardFocus.tabId
+    if (browserTabId || activeView === 'browser') {
+      if (keymapState.matches('browser-find', e)) {
+        e.preventDefault()
+        if (!e.repeat) handleFind()
+        return
+      }
+      const previous = keymapState.matches('browser-find-previous', e)
+      if (previous || keymapState.matches('browser-find-next', e)) {
+        e.preventDefault()
+        if (!e.repeat) {
+          if (browserTabId) browserFindState.step(browserTabId, previous ? 'previous' : 'next')
+          else
+            void withBrowser((store) => {
+              if (store.activeTab)
+                browserFindState.step(store.activeTab.id, previous ? 'previous' : 'next')
+            })
+        }
+        return
+      }
+    }
     if (keymapState.matches('nav-find', e)) {
       e.preventDefault()
       if (e.repeat) return
@@ -1346,8 +1387,8 @@
     if (keymapState.matches('nav-toggle-left-sidebar', e)) {
       // The browser view's left sidebar is the app's own sidebar (its chrome and
       // tab strip), so the chord folds it the same way it folds the workspace
-      // one. (While the browser owns the keyboard this chord belongs to Save
-      // page, which is why the browser entry in the header also toggles it.)
+      // one. Page save is unbound by default, so the chord reaches this handler
+      // instead of the browser.
       if (activeView === 'browser') {
         e.preventDefault()
         if (e.repeat) return
@@ -1680,6 +1721,13 @@
       {/if}
       {#if activeView === 'scope' || isSettingsView(activeView)}
         <GlobalContextSidebar />
+      {/if}
+      {#if browserStore()?.peekTab}
+        {#key browserStore()?.peekTab?.id}
+          {#await import('$lib/components/browser/BrowserPeekWindow.svelte') then { default: BrowserPeekWindow }}
+            <BrowserPeekWindow />
+          {/await}
+        {/key}
       {/if}
     </main>
   </div>

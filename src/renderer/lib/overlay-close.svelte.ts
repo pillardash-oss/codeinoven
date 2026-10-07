@@ -16,6 +16,8 @@
  * the shortcut would be swallowed and never close the active thread.
  */
 
+import { SvelteSet } from 'svelte/reactivity'
+
 type CloseHandler = () => void
 
 /** Register a menu for the lifetime of its open state and dismiss it before
@@ -45,14 +47,17 @@ export function trackEscapeMenu(isOpen: () => boolean, close: CloseHandler): voi
 }
 
 const closeHandlers: CloseHandler[] = []
+const nonBlockingHandlers = new SvelteSet<CloseHandler>()
 
 /** Register an overlay's close behavior. Returns an unsubscribe function. */
-export function registerOverlayClose(handler: CloseHandler): () => void {
+export function registerOverlayClose(handler: CloseHandler, blocksSwitching = true): () => void {
   closeHandlers.push(handler)
+  if (!blocksSwitching) nonBlockingHandlers.add(handler)
   let removed = false
   return () => {
     if (removed) return
     removed = true
+    nonBlockingHandlers.delete(handler)
     const index = closeHandlers.indexOf(handler)
     if (index !== -1) closeHandlers.splice(index, 1)
   }
@@ -116,5 +121,8 @@ export function closeTopVisibleDialog(): boolean {
  * duration of that event.
  */
 export function isOverlayOpen(): boolean {
-  return closeHandlers.length > 0 || findTopVisibleDialog() !== null
+  return (
+    closeHandlers.some((handler) => !nonBlockingHandlers.has(handler)) ||
+    findTopVisibleDialog() !== null
+  )
 }

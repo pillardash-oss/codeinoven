@@ -27,14 +27,16 @@ export function showBrowserTabContextMenu(
 
     menu.append(new MenuItem({ label: input.title || input.url || 'Blank tab', enabled: false }))
     appendSeparator()
-    append('Edit tab', { action: 'edit' })
-    append(input.pinned ? 'Unpin tab' : 'Pin tab', { action: 'togglePin' })
+    if (!input.threadScoped) {
+      append('Edit tab', { action: 'edit' })
+      append(input.pinned ? 'Unpin tab' : 'Pin tab', { action: 'togglePin' })
+    }
     append(
       input.bookmarked ? 'Remove bookmark' : 'Bookmark tab',
       { action: 'toggleBookmark' },
       input.bookmarkAvailable
     )
-    append('Duplicate tab', { action: 'duplicate' }, input.url !== '')
+    append('Duplicate tab', { action: 'duplicate' })
     appendSeparator()
     append('New tab before this tab', { action: 'newBefore' })
     append('New tab', { action: 'newTab' })
@@ -74,52 +76,54 @@ export function showBrowserTabContextMenu(
     }
     menu.append(new MenuItem({ label: 'New tab in box', submenu: boxPlacement }))
 
-    const groupPlacement = new Menu()
-    if (input.groupId === null) {
-      groupPlacement.append(
-        new MenuItem({
-          label: 'Ungrouped',
-          click: () => choose({ action: 'newPlaced', groupId: null, boxId: input.boxId })
-        })
+    if (!input.threadScoped) {
+      const groupPlacement = new Menu()
+      if (input.groupId === null) {
+        groupPlacement.append(
+          new MenuItem({
+            label: 'Ungrouped',
+            click: () => choose({ action: 'newPlaced', groupId: null, boxId: input.boxId })
+          })
+        )
+      } else {
+        const currentGroup = input.groups.find((group) => group.id === input.groupId)
+        groupPlacement.append(
+          new MenuItem({
+            label: currentGroup?.name ?? 'Current group',
+            click: () => choose({ action: 'newPlaced', groupId: input.groupId, boxId: input.boxId })
+          })
+        )
+      }
+      for (const group of input.groups.filter((candidate) => candidate.id !== input.groupId)) {
+        groupPlacement.append(
+          new MenuItem({
+            label: group.name,
+            click: () => choose({ action: 'newPlaced', groupId: group.id, boxId: input.boxId })
+          })
+        )
+      }
+      if (input.groupId !== null) {
+        groupPlacement.append(
+          new MenuItem({
+            label: 'Ungrouped',
+            click: () => choose({ action: 'newPlaced', groupId: null, boxId: input.boxId })
+          })
+        )
+      }
+      menu.append(new MenuItem({ label: 'New tab in group', submenu: groupPlacement }))
+      appendSeparator()
+      append(
+        'New tab group',
+        { action: 'createGroup' },
+        input.groups.length < MAX_GLOBAL_BROWSER_GROUPS
       )
-    } else {
-      const currentGroup = input.groups.find((group) => group.id === input.groupId)
-      groupPlacement.append(
-        new MenuItem({
-          label: currentGroup?.name ?? 'Current group',
-          click: () => choose({ action: 'newPlaced', groupId: input.groupId, boxId: input.boxId })
-        })
-      )
-    }
-    for (const group of input.groups.filter((candidate) => candidate.id !== input.groupId)) {
-      groupPlacement.append(
-        new MenuItem({
-          label: group.name,
-          click: () => choose({ action: 'newPlaced', groupId: group.id, boxId: input.boxId })
-        })
-      )
-    }
-    if (input.groupId !== null) {
-      groupPlacement.append(
-        new MenuItem({
-          label: 'Ungrouped',
-          click: () => choose({ action: 'newPlaced', groupId: null, boxId: input.boxId })
-        })
-      )
-    }
-    menu.append(new MenuItem({ label: 'New tab in group', submenu: groupPlacement }))
-    appendSeparator()
-    append(
-      'New tab group',
-      { action: 'createGroup' },
-      input.groups.length < MAX_GLOBAL_BROWSER_GROUPS
-    )
-    if (input.groupId !== null) {
-      append('Edit tab group', { action: 'editGroup' })
-      append('Remove from group', { action: 'removeFromGroup' })
-    }
-    for (const group of input.groups.filter((candidate) => candidate.id !== input.groupId)) {
-      append(`Move to ${group.name}`, { action: 'moveToGroup', groupId: group.id })
+      if (input.groupId !== null) {
+        append('Edit tab group', { action: 'editGroup' })
+        append('Remove from group', { action: 'removeFromGroup' })
+      }
+      for (const group of input.groups.filter((candidate) => candidate.id !== input.groupId)) {
+        append(`Move to ${group.name}`, { action: 'moveToGroup', groupId: group.id })
+      }
     }
 
     if (input.boxes.length > 0 || input.boxId !== null) {
