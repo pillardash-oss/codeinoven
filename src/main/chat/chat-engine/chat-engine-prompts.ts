@@ -152,6 +152,12 @@ export const MERMAID_OUTPUT_INSTRUCTION = [
   'Do not add decorative diagrams.'
 ].join(' ')
 
+export const ARTIFACT_OUTPUT_INSTRUCTION = [
+  'Only when the user explicitly asks for a rendered visual (a diagram, mockup, or illustration) or when an HTML/SVG diagram is materially clearer than Mermaid, emit a fenced `artifact-html` or `artifact-svg` block.',
+  'Keep the block complete and self-contained: one document, inline `<style>` allowed, no `<script>`, no external URLs, under 64000 characters.',
+  'An artifact supplements the required explanation; it never replaces it. Otherwise answer in prose with Mermaid diagrams as usual.'
+].join(' ')
+
 export const DEPLOYMENT_URL_SYSTEM_INSTRUCTION = [
   'Before planning canonical URLs, cross-service links, callback URLs, public asset origins, or deployment URLs, inspect the project for existing URL configuration in `.env.example`, public environment declarations, framework configuration, deployment manifests, and URL constants.',
   'Inspect only relevant public URL keys and never expose unrelated environment values or secrets.',
@@ -642,7 +648,7 @@ export function formatOpenAnnotations(
 /**
  * Final composition of the per-turn system prompt for the implement/chat path.
  * `behaviorPrompt` is the assembler-owned behavior layer and already carries the
- * planning or implementation instruction exactly once; mermaid and question
+ * planning or implementation instruction exactly once; mermaid, artifact and question
  * instructions are injected here for the conversational modes (`chat` and
  * `assistant`), where no app layer supplies them.
  *
@@ -679,6 +685,7 @@ export function composeTurnSystemPrompt(input: {
     input.utilityInstructions,
     input.routineInstruction,
     conversational ? MERMAID_OUTPUT_INSTRUCTION : undefined,
+    conversational ? ARTIFACT_OUTPUT_INSTRUCTION : undefined,
     conversational ? QUESTION_TOOL_INSTRUCTION : undefined
   ]
     .filter(Boolean)
