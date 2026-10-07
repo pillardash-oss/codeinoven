@@ -291,7 +291,8 @@ class BrowserStripOverlayState {
         globalBrowser.openAddressSpotlight()
         return
       case 'toggle-bookmark':
-        if (tab.url !== '') browserBookmarks.toggle(tab.url, browserTabLabel(tab), tab.favicon)
+        if (tab.url !== '')
+          browserBookmarks.toggle(tab.url, browserTabLabel(tab), tab.favicon, tab.boxId)
         return
       case 'open-site-menu':
         // The overlay document's own point, translated into the app window's

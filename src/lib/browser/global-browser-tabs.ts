@@ -133,6 +133,7 @@ export interface PersistedBrowserGroup extends BrowserAppearance {
   name: string
   description: string
   pinned: boolean
+  collapsed?: boolean
 }
 
 /**
@@ -338,6 +339,7 @@ function parseGroups(value: unknown): PersistedBrowserGroup[] {
       name: name === '' ? 'Group' : name,
       description: boundedString(entry['description'], MAX_BROWSER_GROUP_DESCRIPTION_LENGTH),
       pinned: entry['pinned'] === true,
+      collapsed: entry['collapsed'] === true,
       ...parseAppearance(entry)
     })
   }

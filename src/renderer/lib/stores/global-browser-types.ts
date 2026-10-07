@@ -63,6 +63,7 @@ export interface GlobalBrowserGroup extends BrowserAppearance {
   description: string
   /** A pinned fold stays at the top of the strip, like a pinned thread. */
   pinned: boolean
+  collapsed?: boolean
 }
 
 /**

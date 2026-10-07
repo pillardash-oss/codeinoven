@@ -98,6 +98,7 @@ export interface BrowserBookmarkGroup extends BrowserAppearance {
 
 /** One saved page. */
 export interface BrowserBookmark {
+  boxId?: string | null
   id: string
   url: string
   title: string
@@ -264,6 +265,8 @@ function bookmark(value: unknown, groupIds: ReadonlySet<string>): BrowserBookmar
   const appearance = parseAppearance(value)
   return {
     id: id ?? `bookmark:${crypto.randomUUID()}`,
+    boxId:
+      isBrowserBoxId(value['boxId']) && value['boxId'] !== DEFAULT_BOX_ID ? value['boxId'] : null,
     url,
     title: title === '' ? browserLibraryHost(url) : title,
     createdAt: safeTimestamp(value['createdAt'], Date.now()),
@@ -332,8 +335,9 @@ export function parseBrowserBookmarksSnapshot(value: unknown): BrowserBookmarksS
     while (seenIds.has(id)) id = `bookmark:${crypto.randomUUID()}`
     // One saved page is one row: a duplicate address would render twice and
     // removing either copy would look like nothing happened.
-    if (seenUrls.has(parsed.url)) continue
-    seenUrls.add(parsed.url)
+    const identity = JSON.stringify([parsed.boxId ?? null, parsed.url])
+    if (seenUrls.has(identity)) continue
+    seenUrls.add(identity)
     seenIds.add(id)
     bookmarks.push({ ...parsed, id })
   }

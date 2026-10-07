@@ -194,7 +194,9 @@
           title: browserTabLabel(currentTab),
           url: currentTab.url,
           bookmarkAvailable: currentTab.url !== '',
-          bookmarked: currentTab.url !== '' && browserBookmarks.isBookmarked(currentTab.url),
+          bookmarked:
+            currentTab.url !== '' &&
+            browserBookmarks.isBookmarked(currentTab.url, currentTab.boxId),
           pinned: currentTab.pinned,
           groupId: currentTab.groupId,
           boxId: currentTab.boxId,
@@ -219,7 +221,8 @@
                 browserBookmarks.toggle(
                   currentTab.url,
                   browserTabLabel(currentTab),
-                  currentTab.favicon
+                  currentTab.favicon,
+                  currentTab.boxId
                 )
               }
               return

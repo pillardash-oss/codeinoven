@@ -1246,7 +1246,7 @@ export class GlobalBrowserState {
   /** Open a blank tab and put the caret in the address field, which is what a
    *  new tab is for. A box is named here, so the empty strip's new-tab menu can
    *  start a tab directly inside one. */
-  openNewTabAddress(groupId: string | null = null, boxId: string | null = null): void {
+  openNewTabAddress(groupId?: string | null, boxId?: string | null): void {
     this.createTab('', groupId, boxId)
     this.addressSpotlightOpen = true
   }
@@ -1398,14 +1398,14 @@ export class GlobalBrowserState {
    */
   createTab(
     url: string,
-    groupId: string | null = null,
-    boxId: string | null = null,
+    groupId: string | null | undefined = undefined,
+    boxId: string | null | undefined = undefined,
     anchor: { tabId: string; position: 'before' | 'after' } | null = null
   ): string {
     this.enforceTabCap()
-    const anchorTab = anchor ? this.tabById(anchor.tabId) : null
-    const targetGroupId = groupId ?? anchorTab?.groupId ?? null
-    const targetBoxId = boxId ?? anchorTab?.boxId ?? null
+    const anchorTab = anchor ? this.tabById(anchor.tabId) : this.activeTab
+    const targetGroupId = groupId === undefined ? (anchorTab?.groupId ?? null) : groupId
+    const targetBoxId = boxId === undefined ? (anchorTab?.boxId ?? null) : boxId
     const now = Date.now()
     const tab: GlobalBrowserTab = {
       id: `browser:${crypto.randomUUID()}`,
@@ -1720,6 +1720,7 @@ export class GlobalBrowserState {
         name: name.trim().slice(0, MAX_BROWSER_GROUP_NAME_LENGTH) || 'New group',
         description: description.trim(),
         pinned: false,
+        collapsed: false,
         color: appearance.color ?? null,
         iconType: appearance.iconType ?? null,
         customSvg: appearance.customSvg ?? null,
@@ -1777,6 +1778,27 @@ export class GlobalBrowserState {
     for (const tab of this.tabs) {
       if (tab.groupId === id) tab.groupId = null
     }
+    this.persist()
+  }
+
+  /** Fold a group without changing the active tab or loading its pages. */
+  toggleGroupCollapsed(groupId: string): void {
+    const group = this.groupById(groupId)
+    if (!group) return
+    group.collapsed = !group.collapsed
+    this.persist()
+  }
+
+  reorderGroup(groupId: string, targetId: string, position: 'before' | 'after'): void {
+    if (groupId === targetId) return
+    const group = this.groupById(groupId)
+    const target = this.groupById(targetId)
+    if (!group || !target) return
+    group.pinned = target.pinned
+    const ordered = this.groups.filter((candidate) => candidate.id !== groupId)
+    const index = ordered.findIndex((candidate) => candidate.id === targetId)
+    ordered.splice(index + (position === 'after' ? 1 : 0), 0, group)
+    this.groups = ordered
     this.persist()
   }
 

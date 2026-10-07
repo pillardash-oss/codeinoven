@@ -26,7 +26,7 @@
     trigger: Snippet
   }
 
-  let { groupId = null, boxId = null, anchorTabId = null, trigger }: Props = $props()
+  let { groupId, boxId, anchorTabId = null, trigger }: Props = $props()
 
   const itemClass =
     'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
@@ -44,7 +44,10 @@
   }
 
   function createPlaced(choice: { boxId?: string | null; groupId?: string | null }): void {
-    globalBrowser.openNewTabAddress(choice.groupId ?? groupId, choice.boxId ?? boxId)
+    globalBrowser.openNewTabAddress(
+      choice.groupId === undefined ? groupId : choice.groupId,
+      choice.boxId === undefined ? boxId : choice.boxId
+    )
   }
 </script>
 

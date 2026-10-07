@@ -9,6 +9,7 @@
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import BrowserLibraryRow from './BrowserLibraryRow.svelte'
+  import { DEFAULT_BOX_ID } from '$shared/browser/global-browser-tabs'
   import { relativeTime } from '$lib/format/relative-time'
 
   /**
@@ -50,7 +51,19 @@
 
   /** Which addresses are already saved, as one set: a row asking the bookmark list
    *  per render would be a linear scan per row over a list this panel does not own. */
-  const bookmarkedUrls = $derived(new SvelteSet(browserBookmarks.bookmarks.map((b) => b.url)))
+  const bookmarkBoxId = $derived(
+    scopeKey === BROWSER_HISTORY_GLOBAL_SCOPE ? null : (globalBrowser.activeTab?.boxId ?? null)
+  )
+  const bookmarkedUrls = $derived(
+    new SvelteSet(
+      browserBookmarks.bookmarks
+        .filter(
+          (bookmark) =>
+            (bookmark.boxId ?? null) === (bookmarkBoxId === DEFAULT_BOX_ID ? null : bookmarkBoxId)
+        )
+        .map((bookmark) => bookmark.url)
+    )
+  )
 
   const matching = $derived(entries.filter((entry) => browserHistoryMatches(entry, query)))
   const visible = $derived(matching.slice(0, VISIBLE_LIMIT))
@@ -132,7 +145,7 @@
                   : `Bookmark ${entry.title}`}
                 aria-pressed={bookmarked}
                 title={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
-                onclick={() => browserBookmarks.toggle(entry.url, entry.title)}
+                onclick={() => browserBookmarks.toggle(entry.url, entry.title, null, bookmarkBoxId)}
               >
                 <Star size={12} class={bookmarked ? 'fill-current' : ''} />
               </button>

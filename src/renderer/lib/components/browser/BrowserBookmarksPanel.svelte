@@ -21,6 +21,7 @@
     type BrowserBookmark,
     type BrowserBookmarkGroup
   } from '$shared/browser/browser-library'
+  import { DEFAULT_BOX_ID } from '$shared/browser/global-browser-tabs'
   import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
@@ -304,9 +305,9 @@
     {/if}
     <BrowserLibraryRow
       title={bookmark.title}
-      meta={browserLibraryHost(bookmark.url)}
+      meta={`${browserLibraryHost(bookmark.url)} · ${globalBrowser.boxById(bookmark.boxId ?? DEFAULT_BOX_ID)?.name ?? 'Default'}`}
       url={bookmark.url}
-      onOpen={() => globalBrowser.createTab(bookmark.url)}
+      onOpen={() => globalBrowser.createTab(bookmark.url, undefined, bookmark.boxId ?? null)}
     >
       {#snippet icon()}
         {@render BookmarkIcon({ bookmark })}
