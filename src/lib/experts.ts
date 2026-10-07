@@ -243,20 +243,22 @@ const SESSION_WORK: Readonly<Record<ExpertSessionKind, string>> = {
  * can never disagree about whether delegation is available or who answers it.
  *
  * The three availability states are deliberately distinct. `available` names the
- * list; `none-assigned` tells the agent the user has not made this decision and to
- * ask; `muted` tells it the user made it and turned it off, so it does the work
+ * list; `none-assigned` keeps responsibility with the current agent; `muted` tells it the user made it and turned it off, so it does the work
  * itself and stops proposing a delegation the thread already refused.
  */
+export const EXPERT_FALLBACK_GUIDANCE =
+  "When an expert or generation model is unassigned, responsibility stays with you, the current agent. Use your native image, video or audio generation tools and other available capabilities to produce the requested artifact. A missing Design assignment only prevents app-managed delegation; it does not prevent your own generation tools. Do not ask the user to configure an expert before trying your available tools, and do not repeatedly call an operation that requires an unassigned expert. Preserve the requested medium: an image request needs an image file, not HTML, SVG source or a prose substitute. Save or attach the actual output and render it inline when requested. Only after checking your available capabilities and finding no way to produce that medium should you explain the specific limitation and ask for the missing capability. Never invent success or present a placeholder as the requested asset. Do not change the user's expert assignments or select an app-managed model on their behalf."
+
 export function expertDelegationGuidance(
   experts: EffectiveExperts,
   kind: ExpertSessionKind
 ): string {
   const work = SESSION_WORK[kind]
   if (experts.availability === 'muted') {
-    return `The user turned the experts off for this thread, so \`delegate\` refuses here and no assigned model will run in this session. That is their decision for this thread rather than a missing setting: do the work you can with your own tools, and where ${work} genuinely needs a model, say which work needs one and that they can turn the experts back on for this thread from the design coordinator, or assign one in Settings, Design. Never choose a model yourself, and never fill the gap with a placeholder presented as the real thing.`
+    return `The user turned the experts off for this thread. Do not delegate to assigned experts. ${EXPERT_FALLBACK_GUIDANCE}`
   }
   if (experts.availability === 'none-assigned') {
-    return `No expert is assigned yet: the user has not put a model on any of the craft work ${work} needs. The experts are app-wide, so this is true of every project rather than of this one. Produce what you can with your own tools, and when ${work} needs something you cannot produce, say which work needs a model and that the user assigns one in Settings, Design. Never choose a model yourself, and never fill the gap with a placeholder presented as the real thing.`
+    return `No expert is assigned for ${work}. ${EXPERT_FALLBACK_GUIDANCE}`
   }
   const lines: string[] = ['The user assigned:']
   for (const output of DESIGN_ASSIGNMENT_OUTPUTS) {
@@ -273,7 +275,8 @@ export function expertDelegationGuidance(
   }
   lines.push(
     '',
-    "`delegate` answers with text, so it runs the copywriting work. A picture, a clip or a track is a file rather than an answer, so it comes from a generation capability in the app's utilities bank, and the model listed against that craft is the one the user had in mind: prefer a capability that reaches it, say which one you used, and save what it returns with `save-media`, because a generation link expires and the saved file does not. When no capability is installed, name the one that is needed and the model the user already chose. Two assignments that cover the same craft are the user's own alternatives, and `delegate` tries them in the user's order and reports which one answered. When the work is not in that list at all, do not pick a model yourself: name the work and tell the user to assign a model to it in Settings, Design."
+    "`delegate` answers with text, so it runs the copywriting work. A picture, a clip or a track is a file rather than an answer, so it comes from a generation capability in the app's utilities bank, and the model listed against that craft is the one the user had in mind: prefer a capability that reaches it, say which one you used, and save what it returns with `save-media`, because a generation link expires and the saved file does not. When no capability is installed, name the one that is needed and the model the user already chose. Two assignments that cover the same craft are the user's own alternatives, and `delegate` tries them in the user's order and reports which one answered. When the work is not in that list, use your own available generation capabilities."
   )
+  lines.push(EXPERT_FALLBACK_GUIDANCE)
   return lines.join('\n')
 }

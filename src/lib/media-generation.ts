@@ -213,3 +213,24 @@ export function buildMediaGenerationInput(
   const field = request.promptField?.trim() || MEDIA_PROMPT_INPUT_FIELD
   return { ...(request.options ?? {}), [field]: request.prompt }
 }
+
+/** Replicate model choices by output. Custom references remain supported.
+ * Sources: https://replicate.com/black-forest-labs/flux-2-pro,
+ * https://replicate.com/black-forest-labs/flux-schnell,
+ * https://replicate.com/wan-video/wan-2.2-t2v-fast,
+ * https://replicate.com/minimax/speech-02-hd,
+ * https://replicate.com/minimax/speech-02-turbo.
+ */
+export const MEDIA_MODEL_CHOICES: Readonly<
+  Record<DesignMediaKind, readonly { id: string; label: string }[]>
+> = {
+  image: [
+    { id: 'black-forest-labs/flux-2-pro', label: 'FLUX.2 Pro' },
+    { id: 'black-forest-labs/flux-schnell', label: 'FLUX.1 Schnell' }
+  ],
+  video: [{ id: 'wan-video/wan-2.2-t2v-fast', label: 'Wan 2.2 Fast' }],
+  audio: [
+    { id: 'minimax/speech-02-hd', label: 'MiniMax Speech 02 HD' },
+    { id: 'minimax/speech-02-turbo', label: 'MiniMax Speech 02 Turbo' }
+  ]
+}
