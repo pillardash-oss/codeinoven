@@ -519,8 +519,7 @@
     }
     pickerList?.resetPicker()
     void tick().then(() => {
-      pickerList?.focusPickerSearch()
-      pickerList?.revealSelectedModel()
+      void pickerList?.focusPickerEntries()
     })
     // Revalidate exactly once per open. Keeping this outside a reactive effect
     // prevents catalog updates from snapping the user's scroll position back
@@ -877,7 +876,12 @@
         align="start"
         sideOffset={4}
         collisionPadding={12}
-        class="z-90 flex w-72 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
+        class="z-90 flex w-72 max-h-[calc(100dvh-1.5rem)] flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
+        style="height: var(--bits-popover-content-available-height)"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          void pickerList?.focusPickerEntries()
+        }}
         role="dialog"
         aria-label={multiSelect ? 'Select models' : 'Select model'}
         tabindex={-1}

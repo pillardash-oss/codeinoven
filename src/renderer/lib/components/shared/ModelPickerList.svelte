@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import { on } from 'svelte/events'
   import { SvelteSet } from 'svelte/reactivity'
   import {
     Check,
@@ -115,6 +116,8 @@
   const listId = `model-list-${pickerId}`
 
   let search = $state('')
+  let lastFocusedModelKey: string | undefined
+  let pickerRoot: HTMLDivElement | undefined
   let searchInput: HTMLInputElement | undefined
   let modelList: HTMLDivElement | undefined
   const collapsedGroups = new SvelteSet<string>()
@@ -300,9 +303,7 @@
           ? unavailableFavoriteModels
           : [],
       filteredProviders:
-        effectiveView.kind === 'all' || effectiveView.kind === 'harness'
-          ? filteredProviders
-          : [],
+        effectiveView.kind === 'all' || effectiveView.kind === 'harness' ? filteredProviders : [],
       collapsedGroups,
       search,
       canReorderFavorites: Boolean(onReorderFavorite)
@@ -340,12 +341,11 @@
     return unavailableHarnessReason ?? `${harnessName(candidateHarnessId)} is not available here`
   }
 
-  /** Select a rail section, resetting scroll and returning focus to the search
-   *  box for model sections. */
+  /** Select a rail section without stealing focus from its button. */
   function selectRailView(next: PickerRailView): void {
     railView = next
+    lastFocusedModelKey = undefined
     scrollPickerListTo(0)
-    if (next.kind !== 'profiles') focusPickerSearch()
   }
 
   /**
@@ -430,6 +430,7 @@
   /** Reset the list surface when the popover opens or closes. */
   export function resetPicker(): void {
     search = ''
+    lastFocusedModelKey = undefined
     railView = { kind: 'all' }
     pickerListScrollTop = 0
     keyboardNavActive = false
@@ -438,6 +439,75 @@
   /** Focus the search box once the popover has rendered. */
   export function focusPickerSearch(): void {
     searchInput?.focus()
+  }
+
+  /** Focus the selected row after virtualized entries have rendered. */
+  export async function focusPickerEntries(): Promise<void> {
+    if (isProfilesView) {
+      const active = pickerRoot?.querySelector<HTMLElement>(
+        '[data-picker-entry][aria-pressed="true"]'
+      )
+      const first = pickerRoot?.querySelector<HTMLElement>('ul [data-picker-entry]:not(:disabled)')
+      const fallback = pickerRoot?.querySelector<HTMLElement>('[data-picker-entry]:not(:disabled)')
+      ;(active ?? first ?? fallback)?.focus()
+      return
+    }
+    const selectedKey = lastFocusedModelKey ?? (search ? undefined : pickerKeyForSelectedModel())
+    const targetKey =
+      selectedKey && pickerModelKeys.includes(selectedKey) ? selectedKey : pickerModelKeys[0]
+    if (targetKey) {
+      const index = pickerLayout.items.findIndex((item) => item.key === targetKey)
+      if (index >= 0) scrollPickerListTo(pickerLayout.offsets[index] - 60)
+      await tick()
+      keyboardNavActive = true
+      modelList?.querySelector<HTMLElement>(`[data-model-key="${CSS.escape(targetKey)}"]`)?.focus()
+    } else {
+      searchInput?.focus()
+    }
+  }
+
+  function onPickerKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented || event.isComposing) return
+    const target = event.target
+    if (!(target instanceof HTMLElement)) return
+    if (target.closest('input, textarea, [contenteditable="true"]')) return
+    const inRail = Boolean(target.closest('nav'))
+    if (keymapState.matches('palette-model-rail', event) && !inRail) {
+      event.preventDefault()
+      pickerRoot?.querySelector<HTMLElement>('nav button[aria-current="true"]')?.focus()
+      return
+    }
+    if (keymapState.matches('palette-model-entries', event) && inRail) {
+      event.preventDefault()
+      void focusPickerEntries()
+      return
+    }
+    if (keymapState.matches('palette-model-nav', event)) {
+      event.preventDefault()
+      const entries = Array.from(
+        pickerRoot?.querySelectorAll<HTMLButtonElement>(
+          inRail ? 'nav button:not(:disabled)' : '[data-picker-entry]:not(:disabled)'
+        ) ?? []
+      )
+      const index = entries.indexOf(target as HTMLButtonElement)
+      const next =
+        entries[
+          Math.max(0, Math.min(entries.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
+        ]
+      if (next) {
+        next.focus()
+        next.scrollIntoView({ block: 'nearest' })
+        if (inRail) next.click()
+      }
+      return
+    }
+    if (isTypeableKey(event)) {
+      event.preventDefault()
+      if (isProfilesView) railView = { kind: 'all' }
+      search += event.key
+      scrollPickerListTo(0)
+      void tick().then(() => focusSearchInput())
+    }
   }
 
   /** Scroll the selected model into view, if it is listed. */
@@ -491,7 +561,19 @@
   }
 </script>
 
-<div class="flex min-h-0 items-stretch">
+<div
+  role="group"
+  aria-label="Model picker"
+  {@attach (node) => {
+    pickerRoot = node
+    const cleanup = on(node, 'keydown', onPickerKeydown)
+    return () => {
+      cleanup()
+      if (pickerRoot === node) pickerRoot = undefined
+    }
+  }}
+  class="flex min-h-0 flex-1 items-stretch"
+>
   <ModelPickerRail
     view={effectiveView}
     showFavorites={hasFavorites}
@@ -504,12 +586,12 @@
   <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
     {#if isProfilesView}
       {#if profiles}
-        <div class="flex max-h-60 min-h-52 flex-col overflow-hidden">
+        <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ModelPickerProfiles {...profiles} />
         </div>
       {/if}
     {:else}
-      <div class="flex items-center gap-2 border-b px-2.5 py-2">
+      <div class="flex shrink-0 items-center gap-2 border-b px-2.5 py-2">
         <Search size={12} class="shrink-0 text-dimmed" />
         <input
           id={searchId}
@@ -529,7 +611,7 @@
               ? `Search ${harnessName(effectiveView.harnessId)} models`
               : 'Search models'}
           onkeydown={(event: KeyboardEvent) => {
-            if (event.key === 'ArrowDown') {
+            if (keymapState.matches('palette-model-nav', event)) {
               event.preventDefault()
               keyboardNavActive = true
               // Anchor the first arrow-key press on the active model so nav
@@ -595,7 +677,9 @@
             if (modelList === node) modelList = undefined
           }
         }}
-        class="max-h-60 overflow-y-auto p-1"
+        class="min-h-0 flex-1 overflow-y-auto p-1"
+        role="group"
+        aria-label="Model entries"
       >
         {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
           <div class="px-2 py-2">
@@ -806,6 +890,7 @@
       : `Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
+    onfocus={() => (lastFocusedModelKey = rowKey)}
     disabled={unavailable}
     onclick={() => {
       if (!unavailable) onChoose(entry)
@@ -841,13 +926,6 @@
       if (keymapState.matches('palette-model-select', event)) {
         event.preventDefault()
         if (!unavailable) onChoose(entry)
-        return
-      }
-      // Editing intent: left/right moves the caret and characters/backspace edit
-      // the query. Return focus to the search box so typing continues naturally.
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-        event.preventDefault()
-        focusSearchInput(event.key === 'ArrowLeft' ? -1 : 0)
         return
       }
       if (event.key === 'Backspace') {

@@ -35,7 +35,7 @@ export interface ModelProfileSettings {
   harnessId: string
   providerId: string
   modelId: string
-  /** Kept while the harness is unchanged; never stored by a profile itself. */
+  /** Selected account handle. */
   accountId?: string
   thinkingLevel: ThinkingLevel
   inferenceMode?: InferenceMode
@@ -174,22 +174,13 @@ export function usableModelProfiles(
   return (Array.isArray(profiles) ? profiles : []).filter(isUsableModelProfile)
 }
 
-/**
- * The account a profile resolves to.
- *
- * A profile stores no account, so one is chosen at apply time. Staying on the
- * current harness keeps whatever credential the user already selected, because
- * they deliberately chose it and it works for that harness. Crossing harnesses
- * cannot keep it: the account belongs to the harness it was created under and
- * means nothing to the new one, so the target harness's conventional default is
- * used instead. A custom base URL provider carries its credential in the
- * provider record and never takes an account at all.
- */
+/** Restore the saved account, retaining the old fallback for legacy profiles. */
 export function modelProfileAccountId(
   profile: ModelProfile,
   current: Pick<ModelProfileSettings, 'harnessId' | 'accountId'>
 ): string | undefined {
   if (isCodeInOvenCustomProviderId(profile.providerId)) return undefined
+  if (profile.accountId) return profile.accountId
   if (profile.harnessId === current.harnessId) {
     return current.accountId ?? `${profile.harnessId}.default`
   }
@@ -242,19 +233,26 @@ export function applyModelProfile<T extends ModelProfileSettings>(
     thinkingLevel,
     inferenceMode,
     permissionLevel: profile.permissionLevel,
-    ...(modelChanged
+    ...(profile.contextWindow !== undefined || profile.accountId !== undefined
       ? {
-          // An unset window belongs to the harness. Only an explicit choice the new
-          // model actually offers is carried over; anything else is dropped so the
-          // picker falls back to that model's own window rather than running a
-          // budget belonging to the model the user just left.
           contextWindow:
-            current.contextWindow !== undefined &&
-            model?.contextWindows?.includes(current.contextWindow)
-              ? current.contextWindow
+            !model || model.contextWindows?.includes(profile.contextWindow ?? 0)
+              ? (profile.contextWindow ?? undefined)
               : undefined
         }
-      : {})
+      : modelChanged
+        ? {
+            // An unset window belongs to the harness. Only an explicit choice the new
+            // model actually offers is carried over; anything else is dropped so the
+            // picker falls back to that model's own window rather than running a
+            // budget belonging to the model the user just left.
+            contextWindow:
+              current.contextWindow !== undefined &&
+              model?.contextWindows?.includes(current.contextWindow)
+                ? current.contextWindow
+                : undefined
+          }
+        : {})
   }
 }
 
@@ -310,38 +308,36 @@ export function modelProfileModelId(profile: ModelProfile): string {
     : profile.modelId
 }
 
-/**
- * The profile currently in force for these settings, if any.
- *
- * A profile matches on everything it stores, so a row is only ticked once the
- * whole preset is live. Two comparisons are deliberately loose:
- *
- * - The account is ignored. A profile never stores one, and the account resolved
- *   when it was applied can differ from the current one without the preset itself
- *   being different.
- * - The model id matches either the stored id or its fast variant, because that is
- *   what applying a fast profile commits. Comparing the raw ids alone would leave
- *   a fast profile permanently unticked.
- */
+/** Match all saved settings, including context window and account. */
 export function activeModelProfile(
   profiles: readonly ModelProfile[] | undefined | null,
   settings: Pick<
     ModelProfileSettings,
-    'harnessId' | 'providerId' | 'modelId' | 'thinkingLevel' | 'inferenceMode' | 'permissionLevel'
+    | 'harnessId'
+    | 'providerId'
+    | 'modelId'
+    | 'thinkingLevel'
+    | 'inferenceMode'
+    | 'permissionLevel'
+    | 'accountId'
+    | 'contextWindow'
   >
 ): ModelProfile | null {
   const inferenceMode = settings.inferenceMode ?? 'normal'
+  const matching = usableModelProfiles(profiles).filter(
+    (profile) =>
+      profile.harnessId === settings.harnessId &&
+      profile.providerId === settings.providerId &&
+      (settings.modelId === profile.modelId || settings.modelId === modelProfileModelId(profile)) &&
+      profile.thinkingLevel === settings.thinkingLevel &&
+      profile.inferenceMode === inferenceMode &&
+      profile.permissionLevel === settings.permissionLevel &&
+      (profile.contextWindow ?? undefined) === settings.contextWindow
+  )
   return (
-    usableModelProfiles(profiles).find(
-      (profile) =>
-        profile.harnessId === settings.harnessId &&
-        profile.providerId === settings.providerId &&
-        (settings.modelId === profile.modelId ||
-          settings.modelId === modelProfileModelId(profile)) &&
-        profile.thinkingLevel === settings.thinkingLevel &&
-        profile.inferenceMode === inferenceMode &&
-        profile.permissionLevel === settings.permissionLevel
-    ) ?? null
+    matching.find((profile) => profile.accountId === settings.accountId) ??
+    matching.find((profile) => profile.accountId === undefined) ??
+    null
   )
 }
 
@@ -394,7 +390,13 @@ export function modelProfileSummary(
   catalogs: readonly ProviderCatalog[] = []
 ): string {
   const display = modelProfileDisplay(profile, catalogs)
-  return [display.modelName, display.thinkingLabel, display.inferenceLabel]
+  return [
+    display.modelName,
+    display.thinkingLabel,
+    display.inferenceLabel,
+    profile.contextWindow ? `${profile.contextWindow.toLocaleString()} tokens` : undefined,
+    profile.accountId
+  ]
     .filter((part): part is string => Boolean(part))
     .join(' · ')
 }
