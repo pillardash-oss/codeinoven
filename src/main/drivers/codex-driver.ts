@@ -29,6 +29,7 @@ import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment } from './cli-environment'
 import { prependHistoryRecap } from './history-recap-prompt'
+import { formatHistoryRecap } from '../chat/chat-engine/chat-engine-message-text'
 import { attachmentReference } from './attachment-reference'
 import type {
   GenerateTitleOptions,
@@ -389,33 +390,66 @@ export class CodexDriver extends PersistentCliDriver {
               }
             }
           : {}
-      const threadResult = session.nativeSessionId
-        ? await this.appServerRequest(host, 'thread/resume', {
-            threadId: session.nativeSessionId,
-            // The app keeps its own transcript. Fetching unused native turns
-            // can fail when Codex's history projection schema is unavailable.
+      const startThread = (): Promise<Record<string, unknown>> =>
+        this.appServerRequest(host, 'thread/start', {
+          ...contextConfig,
+          cwd: projectPath,
+          dynamicTools,
+          developerInstructions,
+          model: options.settings.modelId,
+          approvalPolicy: codexApprovalPolicy(
+            options.readOnly === true,
+            options.settings.permissionLevel
+          ),
+          ...(codexApprovalPolicy(options.readOnly === true, options.settings.permissionLevel) ===
+          'on-request'
+            ? { approvalsReviewer: 'user' }
+            : {}),
+          sandbox: sandboxFor(options.readOnly === true, options.settings.permissionLevel),
+          serviceName: 'codeinoven'
+        })
+      const restoredHistory = (): string => {
+        const currentMessageId = options.userMessageId ?? session.messages.at(-1)?.id
+        return formatHistoryRecap(
+          session.messages.filter((message) => message.id !== currentMessageId)
+        )
+      }
+      let historyRecap = options.historyRecap
+      let threadResult: Record<string, unknown>
+      const previousNativeId = session.nativeSessionId
+      if (previousNativeId) {
+        try {
+          threadResult = await this.appServerRequest(host, 'thread/resume', {
+            threadId: previousNativeId,
+            // The app keeps its own transcript; native turn projection is unused.
             excludeTurns: true,
             ...contextConfig,
             dynamicTools,
             developerInstructions
           })
-        : await this.appServerRequest(host, 'thread/start', {
-            ...contextConfig,
-            cwd: projectPath,
-            dynamicTools,
-            developerInstructions,
-            model: options.settings.modelId,
-            approvalPolicy: codexApprovalPolicy(
-              options.readOnly === true,
-              options.settings.permissionLevel
-            ),
-            ...(codexApprovalPolicy(options.readOnly === true, options.settings.permissionLevel) ===
-            'on-request'
-              ? { approvalsReviewer: 'user' }
-              : {}),
-            sandbox: sandboxFor(options.readOnly === true, options.settings.permissionLevel),
-            serviceName: 'codeinoven'
+        } catch (error) {
+          // Recover only an explicitly missing rollout. Auth, transport and
+          // projection errors must retain the binding and their original error.
+          if (
+            !(error instanceof Error) ||
+            error.message.trim() !== `no rollout found for thread id ${previousNativeId}`
+          ) {
+            throw error
+          }
+          historyRecap ||= restoredHistory()
+          delete session.nativeSessionId
+          this.threadSessionsByNativeId.delete(previousNativeId)
+          await this.persistSession(session)
+          Logger.info('Codex native rollout is missing; restoring mirrored history', {
+            sessionId: session.id,
+            nativeThreadId: previousNativeId
           })
+          threadResult = await startThread()
+        }
+      } else {
+        historyRecap ||= restoredHistory()
+        threadResult = await startThread()
+      }
       const thread = recordValue(threadResult['thread'])
       const nativeThreadId = stringValue(thread?.['id']) ?? session.nativeSessionId
       if (!nativeThreadId) throw new Error('Codex app-server did not return a thread ID')
@@ -428,7 +462,7 @@ export class CodexDriver extends PersistentCliDriver {
         threadId: nativeThreadId,
         clientUserMessageId: options.userMessageId,
         input: await this.codexInput(
-          prependHistoryRecap(options.text, options.historyRecap),
+          prependHistoryRecap(options.text, historyRecap),
           options.attachments,
           session.id
         ),
