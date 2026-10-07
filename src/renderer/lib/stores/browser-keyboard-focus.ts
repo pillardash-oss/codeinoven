@@ -54,9 +54,15 @@ class BrowserKeyboardFocus {
     this.publish()
   }
 
-  private publish(): void {
-    const effective =
+  /** The browser tab whose chrome currently owns renderer keyboard shortcuts. */
+  get tabId(): string | null {
+    return (
       this.claims.peek ?? this.claims.workspace ?? this.claims.fullscreen ?? this.claims.sidebar
+    )
+  }
+
+  private publish(): void {
+    const effective = this.tabId
     if (this.published === effective) return
     this.published = effective
     // A failure is silent: the feature handlers are not registered until after
