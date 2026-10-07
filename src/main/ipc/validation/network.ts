@@ -5,6 +5,7 @@ import type { WebFrameMain } from 'electron'
 import type { GitHubAvatarRequest } from '../../../lib/types'
 import { isLocalDevelopmentUrl } from '../../../lib/local-development-url'
 import { Logger } from '../../system/logger'
+import { SUPPORT_EMAIL } from '../../../lib/brand'
 
 const HOSTNAME_PATTERN =
   /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::\d{1,5})?$/iu
@@ -322,6 +323,14 @@ export class PrivilegedIpcValidator {
       parsed = new URL(value)
     } catch {
       throw new TypeError('External URL is malformed')
+    }
+    // Only the product support mailbox may launch an email client. Keep all
+    // other non-web schemes outside the privileged external-open boundary.
+    if (parsed.protocol === 'mailto:' && parsed.pathname === SUPPORT_EMAIL) {
+      if ([...parsed.searchParams.keys()].some((key) => key !== 'subject' && key !== 'body')) {
+        throw new TypeError('Support email accepts only a subject and body')
+      }
+      return parsed.toString()
     }
     if (!WEB_PROTOCOLS.has(parsed.protocol)) {
       throw new TypeError(`External URL scheme "${parsed.protocol}" is not supported`)

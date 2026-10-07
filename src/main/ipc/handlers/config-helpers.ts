@@ -184,6 +184,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'fontWeight',
   'zoomLevel',
   'onboardingCompleted',
+  'shareAnonymousUsage',
   'threadLimit',
   'questionTimeoutMs',
   'agentQuestionCap',
@@ -742,6 +743,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Zoom level must be between 0.5 and 2')
     }
     patch.zoomLevel = value.zoomLevel
+  }
+
+  if ('shareAnonymousUsage' in value) {
+    if (typeof value.shareAnonymousUsage !== 'boolean') {
+      throw new TypeError('shareAnonymousUsage must be a boolean')
+    }
+    patch.shareAnonymousUsage = value.shareAnonymousUsage
   }
 
   if ('onboardingCompleted' in value) {

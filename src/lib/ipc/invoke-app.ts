@@ -22,6 +22,7 @@ export interface SaveFileInput {
 export const invokeAppContract = {
   'network:restored': {} as Contract<[], void>,
   'config:get': {} as Contract<[], AppConfig>,
+  'community:getIssueUrl': {} as Contract<[], string>,
   'config:update': {} as Contract<[patch: AppConfigPatch], AppConfig>,
   'config:syncAgentRole': {} as Contract<
     [role: AgentRole, selection: AgentModelSelection],

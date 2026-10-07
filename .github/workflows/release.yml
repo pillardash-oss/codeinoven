@@ -74,6 +74,7 @@ jobs:
     needs: validate
     env:
       CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
+      CODEINOVEN_POSTHOG_TOKEN: ${{ vars.CODEINOVEN_POSTHOG_TOKEN }}
     strategy:
       fail-fast: false
       matrix:

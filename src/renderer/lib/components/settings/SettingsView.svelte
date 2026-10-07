@@ -69,6 +69,7 @@
   import UpdateBlockersModal from '../layout/UpdateBlockersModal.svelte'
   import Switch from '../ui/Switch.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
+  import AboutCommunity from './AboutCommunity.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import BrowserSettingsTab from './BrowserSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
@@ -1735,6 +1736,8 @@
             </div>
           </div>
         </div>
+
+        <AboutCommunity {config} {settingsReady} {updateConfig} />
 
         <!-- Latest release notes, channel-aware, rendered as markdown -->
         <AboutChangelog />

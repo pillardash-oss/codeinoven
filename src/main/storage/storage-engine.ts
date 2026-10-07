@@ -82,6 +82,7 @@ const DEFAULT_CONFIG: AppConfig = {
   fontWeight: 200,
   zoomLevel: 1,
   onboardingCompleted: false,
+  shareAnonymousUsage: false,
   threadLimit: 70,
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
@@ -219,6 +220,7 @@ export class StorageEngine {
     return {
       ...DEFAULT_CONFIG,
       ...(config ?? {}),
+      shareAnonymousUsage: config?.shareAnonymousUsage === true,
       agentDefaults: {
         ...DEFAULT_CONFIG.agentDefaults,
         ...(config?.agentDefaults ?? {})

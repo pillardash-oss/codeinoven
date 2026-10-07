@@ -3,7 +3,7 @@ import { lstat, readFile, writeFile, mkdir } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
-import { APP_NAME, APP_SLUG } from '../../../lib/brand'
+import { APP_NAME, APP_SLUG, GITHUB_URL } from '../../../lib/brand'
 import { atomicWrite } from '../../../lib/utils'
 import { ICON_MIME, storeAppearanceImage } from '../../../lib/icon-file'
 import { Logger } from '../../system/logger'
@@ -32,6 +32,23 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     privileged,
     attachmentStorageDirectory
   } = ctx
+
+  ipcMain.handle('community:getIssueUrl', () => {
+    const platform =
+      process.platform === 'darwin'
+        ? process.arch === 'arm64'
+          ? 'macOS (Apple Silicon)'
+          : 'macOS (Intel)'
+        : process.platform === 'win32'
+          ? 'Windows'
+          : 'Linux'
+    const url = new URL(`${GITHUB_URL}/issues/new`)
+    url.searchParams.set('template', 'bug_report.yml')
+    url.searchParams.set('version', app.getVersion())
+    url.searchParams.set('platform', platform)
+    url.searchParams.set('logs', `OS: ${process.platform}\nArchitecture: ${process.arch}`)
+    return url.toString()
+  })
 
   ipcMain.handle('network:restored', () => {
     if (net.isOnline()) ctx.chatEngine?.connectionRestored()
@@ -322,10 +339,10 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     return { path: stored, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` }
   })
 
-  privileged('shell:openExternal', (_event, url: unknown) => {
+  privileged('shell:openExternal', async (_event, url: unknown) => {
     try {
       const safeUrl = privilegedIpc.validateExternalUrl(url)
-      void shell.openExternal(safeUrl)
+      await shell.openExternal(safeUrl)
     } catch (error) {
       Logger.error('shell:openExternal rejected unsafe URL:', error)
     }

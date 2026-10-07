@@ -213,6 +213,8 @@ export default defineConfig(({ mode }) => {
         // Keep the splash copy tied to the package version used to build the
         // Electron bundle (or the CI-resolved nightly prerelease version).
         __CODEINOVEN_APP_VERSION__: JSON.stringify(resolvedAppVersion),
+        // Public ingestion token, never a PostHog personal API key.
+        __CODEINOVEN_POSTHOG_TOKEN__: JSON.stringify(env.CODEINOVEN_POSTHOG_TOKEN ?? ''),
         // Bake the GitHub App client ID into the main bundle at build time.
         // The identifier is replaced by Vite's `define` from the shared
         // CODEINOVEN_GITHUB_CLIENT_ID value. Public by design — never a secret.
