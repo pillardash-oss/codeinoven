@@ -87,6 +87,16 @@
     return { path, ...(line ? { line: Number(line) } : {}) }
   }
 
+  /** The trusted inline `@path` file chip under the event, if any. Chips are
+   *  injected HTML rather than anchors, so the menu reaches them by their data
+   *  attribute and treats them exactly like a citation link. */
+  function citationFromChip(event: MouseEvent): CitationTarget | null {
+    const chip = (event.target as Element | null)?.closest('[data-file-chip]')
+    if (!(chip instanceof HTMLElement)) return null
+    const path = chip.dataset.fileChip
+    return path ? { path } : null
+  }
+
   /**
    * Gate for right-clicks. Citation links let bits-ui's trigger open the menu at
    * the pointer (this handler only records the target); everything else (plain
@@ -103,13 +113,14 @@
     }
     const link = (event.target as Element | null)?.closest('a')
     const linkCitation = link instanceof HTMLAnchorElement ? citationFromLink(link) : null
-    if (!linkCitation) {
+    const target = linkCitation ?? citationFromChip(event)
+    if (!target) {
       event.stopPropagation()
       return
     }
-    pendingTarget = linkCitation
-    void resolveCitation(linkCitation).then((value) => {
-      if (pendingTarget === linkCitation) resolved = value
+    pendingTarget = target
+    void resolveCitation(target).then((value) => {
+      if (pendingTarget === target) resolved = value
     })
   }
 
