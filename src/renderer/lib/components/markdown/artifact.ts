@@ -42,19 +42,24 @@ export function artifactNeedsCodeFallback(code: string): boolean {
  * `sandbox=""`. SVG is sanitized to the SVG profile and embedded as an
  * `<img>` data URL, so embedded scripts can never execute.
  */
-export function buildArtifactSrcdoc(kind: ArtifactKind, code: string): string {
-  if (kind === 'html') return htmlPreviewFrame(code)
+export function buildArtifactSrcdoc(kind: ArtifactKind, code: string, themeStyles = ''): string {
+  if (kind === 'html') return htmlPreviewFrame(code, undefined, themeStyles)
   const svg = DOMPurify.sanitize(code.trim(), {
     USE_PROFILES: { svg: true, svgFilters: true }
   })
-  const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+  const themedSvg = svg.replace(
+    /<svg\b[^>]*>/iu,
+    (opening) =>
+      `${opening}<style>${themeStyles}svg{font-family:var(--font-app);color:var(--color-foreground);fill:currentColor;}</style>`
+  )
+  const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(themedSvg)}`
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <style>
-:root { color-scheme: light; }
-body { box-sizing: border-box; display: flex; min-height: 100vh; margin: 0; padding: 1.25rem; align-items: center; justify-content: center; background: #fff; }
+${themeStyles}
+body { box-sizing: border-box; display: flex; min-height: 100vh; margin: 0; padding: 1.25rem; align-items: center; justify-content: center; background: var(--color-app); }
 img { max-width: 100%; height: auto; }
 </style>
 </head>

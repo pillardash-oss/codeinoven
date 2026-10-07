@@ -153,6 +153,8 @@ export const MERMAID_OUTPUT_INSTRUCTION = [
 ].join(' ')
 
 export const ARTIFACT_OUTPUT_INSTRUCTION = [
+  'Default artifact styling must use the live app CSS tokens from src/renderer/app.css. HTML and SVG previews receive these tokens and update with the active theme and Appearance settings. Use var(--color-app), var(--color-surface), var(--color-elevated), var(--color-foreground), var(--color-muted), var(--color-border), var(--color-primary), var(--color-on-primary), and semantic status colors. Use var(--font-app) and var(--font-mono), inherit base font size/weight, and use rem for typography and spacing. SVG fill/stroke may use these variables; use currentColor for text. Do not redefine app tokens, hardcode a light/dark palette, or use external fonts by default. Only use a different palette or typography when the user explicitly requests it; authored styles can override the defaults. Raster image pixels cannot react to theme changes, so prefer token-based HTML/SVG for theme-adaptive diagrams.',
+
   'Only when the user explicitly asks for a rendered visual (a diagram, mockup, or illustration) or when an HTML/SVG diagram is materially clearer than Mermaid, emit a fenced `artifact-html` or `artifact-svg` block.',
   'Keep the block complete and self-contained: one document, inline `<style>` allowed, no `<script>`, no external URLs, under 64000 characters.',
   'An artifact supplements the required explanation; it never replaces it. Otherwise answer in prose with Mermaid diagrams as usual.'
@@ -729,7 +731,9 @@ export function composeBrainstormSystemPrompt(input: {
     input.imageDescriptorNote,
     input.behaviorPrompt,
     input.utilityInstructions,
-    input.routineInstruction
+    input.routineInstruction,
+    ARTIFACT_OUTPUT_INSTRUCTION,
+    'In studio output, keep artifact fences inside the appropriate Markdown string field and preserve the required structured output contract.'
   ]
     .filter(Boolean)
     .join('\n\n')

@@ -19,7 +19,7 @@ import DOMPurify from 'dompurify'
  * through the `appfile://` origin. That scheme deliberately serves media only,
  * so project stylesheets and scripts still never load.
  */
-export function htmlPreviewFrame(html: string, baseHref?: string): string {
+export function htmlPreviewFrame(html: string, baseHref?: string, themeStyles?: string): string {
   const sanitized = DOMPurify.sanitize(html, {
     FORBID_ATTR: ['ping', 'srcdoc', 'formaction'],
     FORBID_TAGS: ['base', 'link', 'meta', 'script'],
@@ -27,8 +27,8 @@ export function htmlPreviewFrame(html: string, baseHref?: string): string {
   })
   const head = `${baseHref ? `<base href="${baseHref}">` : ''}
     <style>
-      :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      body { box-sizing: border-box; min-height: 100vh; margin: 0; padding: 1.25rem; color: #202124; background: #fff; line-height: 1.55; }
+      ${themeStyles ?? ':root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }'}
+      body { box-sizing: border-box; min-height: 100vh; margin: 0; padding: 1.25rem; ${themeStyles === undefined ? 'color: #202124; background: #fff; line-height: 1.55;' : ''} }
       img, video { max-width: 100%; height: auto; }
     </style>`
   // DOMPurify serializes a parsed document, so the output always carries the

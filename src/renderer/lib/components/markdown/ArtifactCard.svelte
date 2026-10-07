@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
+  import { artifactThemeStyles } from './artifact-theme'
   import { Check, Code2, Copy, Expand, Eye, WrapText } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
@@ -19,10 +21,10 @@
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
   const label = $derived(kind === 'html' ? 'HTML artifact' : 'SVG artifact')
-  const srcdoc = $derived(buildArtifactSrcdoc(kind, code))
+  const srcdoc = $derived(buildArtifactSrcdoc(kind, code, artifactThemeStyles()))
   const wrapped = $derived(wrapTextState.wrapped)
 
-  $effect(() => () => clearTimeout(copyResetTimer))
+  onDestroy(() => clearTimeout(copyResetTimer))
 
   async function copySource(): Promise<void> {
     try {
@@ -46,7 +48,7 @@
       title="{label} preview"
       sandbox=""
       {srcdoc}
-      class={['block w-full border-0 bg-white', fullscreen ? 'h-full min-h-0' : 'h-80']}
+      class={['block w-full border-0 bg-app', fullscreen ? 'h-full min-h-0' : 'h-80']}
     ></iframe>
   {/if}
 {/snippet}
