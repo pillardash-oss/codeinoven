@@ -323,6 +323,12 @@ export interface PendingPermissionInfo {
   request: PermissionRequest
   policy: PermissionDecisionResult
   resumeStatus: Extract<ThreadStatus, 'planning' | 'executing'>
+  /**
+   * Set for an app-owned browser action on the page the user is viewing. The
+   * gateway tool call that asked is still open, so it settles here instead of
+   * being answered through a harness.
+   */
+  settleBrowserAction?: (approved: boolean, alternative?: string) => void
 }
 
 export interface PendingQuestionInfo {

@@ -328,6 +328,8 @@ export type BrowserUtilityExecutor = (
     projectId: string
     threadId: string
     permissionLevel: PermissionLevel
+    /** Harness session owning the turn, so attached-page approvals surface on its permission card. */
+    sessionId?: string
   }
 ) => Promise<unknown>
 
@@ -2006,7 +2008,8 @@ export class UtilityOrchestrationService {
       result = await executor(operation, operationInput, {
         projectId: state.request.projectId,
         threadId: state.request.threadId,
-        permissionLevel: state.request.permissionLevel
+        permissionLevel: state.request.permissionLevel,
+        sessionId: state.request.sessionId
       })
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
       // One capability, four operation groups with different owners: `preview`

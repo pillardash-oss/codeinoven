@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Files, Globe } from '@lucide/svelte'
+  import { Globe } from '@lucide/svelte'
   import ThreadView from '../threads/ThreadView.svelte'
   import { BrowserAssistantChatController } from './BrowserAssistantChatController.svelte'
   import { browserAssistant, type BrowserAssistantChat } from '$lib/stores/browser-assistant.svelte'
@@ -10,10 +10,9 @@
   interface Props {
     /** The conversation thread this panel shows. */
     threadId: string
-    onShowFiles: () => void
   }
 
-  let { threadId, onShowFiles }: Props = $props()
+  let { threadId }: Props = $props()
 
   /**
    * A browser tab's assistant conversation, rendered in the browser's right rail.
@@ -62,9 +61,6 @@
   // address rather than of a document. The tab carries one itself whenever the app
   // has seen it; this is the same question asked of the shared cache for the
   // address, which is what covers a tab the app has no icon for yet.
-  $effect(() => {
-    if (pageUrl !== '') faviconState.ensureResolved([pageUrl])
-  })
 
   /** What a reader wants from a page they did not write, in the order they want
    *  it: what it says, then plainly, then what it means. */
@@ -77,6 +73,9 @@
 
 {#snippet pageEmptyStateHeading()}
   <h1
+    {@attach () => {
+      if (pageUrl !== '') faviconState.ensureResolved([pageUrl])
+    }}
     class="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[1.375rem] font-semibold tracking-tight text-foreground"
   >
     <span>What can I help you with on</span>
@@ -104,20 +103,6 @@
 {/snippet}
 
 <div class="browser-assistant-chat bg-app flex h-full min-h-0 w-full flex-col overflow-hidden">
-  {#if thread}
-    <div class="flex h-9 shrink-0 items-center justify-end border-b border-border px-2">
-      <button
-        type="button"
-        class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-foreground"
-        title="Open files created in this conversation"
-        aria-label="Open files created in this conversation"
-        onclick={onShowFiles}
-      >
-        <Files size={13} />
-        Files
-      </button>
-    </div>
-  {/if}
   {#if thread && controller}
     <ThreadView
       {thread}

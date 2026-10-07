@@ -623,7 +623,7 @@ describe('opencodePermissionTools', () => {
       permissionLevel
     }) as const
 
-  it('maps full_access to an allow-all bypass so nothing is asked or denied', () => {
+  it('maps unrestricted full_access to allow-all while preserving explicit tool limits', () => {
     expect(
       opencodePermissionTools({ settings: settings('full_access'), allowedTools: undefined })
     ).toEqual({
@@ -631,7 +631,14 @@ describe('opencodePermissionTools', () => {
     })
     expect(
       opencodePermissionTools({ settings: settings('full_access'), allowedTools: ['read', 'bash'] })
-    ).toEqual({ '*': true })
+    ).toEqual({ '*': false, read: true, bash: true, external_directory: true })
+    expect(
+      opencodePermissionTools({
+        settings: settings('full_access'),
+        readOnly: true,
+        allowedTools: ['read']
+      })
+    ).toEqual({ '*': false, read: true, external_directory: false })
   })
 
   it('auto-approves external directories while keeping the app allow-list restrictive', () => {

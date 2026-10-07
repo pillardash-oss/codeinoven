@@ -24,14 +24,19 @@ export const STANDARD_THINKING_VARIANTS: ReadonlyArray<{ id: string; label: stri
  *    permission, so nothing is ever asked or denied.
  *  - `auto_review` → auto-approve: the app's tool allow-list stays a hard deny
  *    for non-listed tools, but `external_directory` is allowed outright so
- *    external reads are auto-approved instead of hard-denied.
+ *    external reads are auto-approved unless the turn is read-only.
+ * Explicit allowlists and read-only boundaries apply even in Full Access.
  *
  * Returns `undefined` when the prompt should not constrain tools at all.
  */
 export function opencodePermissionTools(
-  opts: Pick<SendPromptOptions, 'settings' | 'allowedTools'>
+  opts: Pick<SendPromptOptions, 'settings' | 'allowedTools' | 'readOnly'>
 ): Record<string, boolean> | undefined {
-  if (opts.settings.permissionLevel === 'full_access') {
+  if (
+    opts.settings.permissionLevel === 'full_access' &&
+    opts.allowedTools === undefined &&
+    !opts.readOnly
+  ) {
     return { '*': true }
   }
   const tools: Record<string, boolean> = {}
@@ -39,7 +44,7 @@ export function opencodePermissionTools(
     tools['*'] = false
     for (const tool of opts.allowedTools) tools[tool] = true
   }
-  tools['external_directory'] = true
+  tools['external_directory'] = opts.readOnly !== true
   return tools
 }
 

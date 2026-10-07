@@ -448,6 +448,29 @@ const ATTACHED_PAGE_MUTATION_OPERATIONS = new Set([
   'upload'
 ])
 
+/** Approval request for an agent mutation on the page the user is viewing. */
+export interface BrowserAgentActionApproval {
+  projectId: string
+  threadId: string
+  sessionId?: string
+  operation: string
+  /** Human-readable description shown on the permission card. */
+  action: string
+  origin: string
+  pageUrl: string
+}
+
+/** Outcome of a permission-card approval. An alternative carries the user's correction. */
+export interface BrowserAgentActionDecision {
+  approved: boolean
+  alternative?: string
+}
+
+/** Resolves an attached-page mutation through the permission card. */
+export type BrowserAgentActionApprover = (
+  request: BrowserAgentActionApproval
+) => Promise<BrowserAgentActionDecision | boolean>
+
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
   private readonly tabs = new Map<string, BrowserTab>()
@@ -680,6 +703,13 @@ export class BrowserService {
    * the feature is per live jar, not per app launch.
    */
   private readonly extensions: BrowserExtensionService
+  /**
+   * Permission-card approver for attached-page mutations, supplied by the app
+   * at boot. When present, Auto Review routes through the thread's permission
+   * card instead of the native dialog, so the request sets `awaiting_approval`,
+   * notifies attention, and stays covered by policy automation.
+   */
+  private agentActionApprover: BrowserAgentActionApprover | null = null
 
   constructor(
     private readonly window: BrowserWindow,
@@ -1578,6 +1608,11 @@ export class BrowserService {
   setTabMarkRecogniser(recogniser: TabMarkRecogniser | null): void {
     this.tabMarkRecogniser = recogniser
   }
+
+  /** Register the permission-card approver for attached-page mutations. */
+  setAgentActionApprover(approver: BrowserAgentActionApprover | null): void {
+    this.agentActionApprover = approver
+  }
   /**
    * Set the search engine the context menu's web search uses.
    *
@@ -1706,6 +1741,7 @@ export class BrowserService {
       // design and video preview sessions) omit it, and the upload fallback then
       // treats the missing level as review-required rather than full access.
       permissionLevel?: PermissionLevel
+      sessionId?: string
     }
   ): Promise<unknown> {
     const projectId = validateProjectId(context.projectId)
@@ -1770,7 +1806,11 @@ export class BrowserService {
       if (
         context.permissionLevel === 'auto_review' &&
         operation !== 'upload' &&
-        !(await this.approveAttachedPageOperation(operation, input, tab))
+        !(await this.approveAttachedPageOperation(operation, input, tab, {
+          projectId,
+          threadId,
+          sessionId: context.sessionId
+        }))
       ) {
         return { ...this.utilityTabContext(tabId, tab), page: 'user', cancelled: true }
       }
@@ -1896,7 +1936,8 @@ export class BrowserService {
   private async approveAttachedPageOperation(
     operation: string,
     input: Record<string, unknown>,
-    tab: BrowserTab
+    tab: BrowserTab,
+    context: { projectId: string; threadId: string; sessionId?: string }
   ): Promise<boolean> {
     const contents = tab.view.webContents
     if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
@@ -1917,17 +1958,20 @@ export class BrowserService {
       throw new Error(`Auto Review does not support the browser action "${operation}"`)
     }
 
-    const approval = await dialog.showMessageBox(this.window, {
-      type: 'warning',
-      title: 'Approve browser action',
-      message: `Allow the agent to act on ${safeOrigin(pageUrl)}?`,
-      detail: action,
-      buttons: ['Cancel', 'Allow'],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true
+    const approver = this.agentActionApprover
+    if (!approver) throw new Error('Browser conversation approval is unavailable')
+    const decision = await approver({
+      ...context,
+      operation,
+      action,
+      origin: safeOrigin(pageUrl),
+      pageUrl
     })
-    if (approval.response !== 1) return false
+    const approved = typeof decision === 'boolean' ? decision : decision.approved
+    if (typeof decision !== 'boolean' && decision.alternative) {
+      throw new Error(`Browser action rejected. User instruction: ${decision.alternative}`)
+    }
+    if (!approved) return false
     if (
       contents.isDestroyed() ||
       tab.navigationGeneration !== pageGeneration ||

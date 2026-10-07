@@ -14,6 +14,7 @@
     type BrowserExtensionsContextTab,
     type BrowserHistoryContextTab,
     type ContextSidebarTab,
+    type FilesContextTab,
     STICKY_NOTES_TAB
   } from '$lib/stores/context-sidebar.svelte'
   import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
@@ -64,6 +65,37 @@
     activeTab ? contextSidebarState.noteTabFor(GLOBAL_BROWSER_PROJECT_ID, activeTab.id) : null
   )
   const agentChat = $derived(activeTab ? globalBrowser.agentChatFor(activeTab.id) : null)
+  const artifactTab = $derived<FilesContextTab | null>(
+    agentChat && browserAssistant.hasArtifacts(agentChat.threadId)
+      ? {
+          id: `files:${GLOBAL_BROWSER_PROJECT_ID}:browser`,
+          kind: 'files',
+          title: 'Artifacts',
+          projectId: GLOBAL_BROWSER_PROJECT_ID,
+          threadId: agentChat.threadId,
+          fileTabId: null,
+          path: null,
+          preview: false
+        }
+      : null
+  )
+  const artifactFileTabs = $derived(
+    contextSidebarState.sidebarTabs.filter(
+      (tab): tab is FilesContextTab =>
+        tab.kind === 'files' &&
+        tab.projectId === GLOBAL_BROWSER_PROJECT_ID &&
+        tab.threadId === agentChat?.threadId
+    )
+  )
+  const activeFilesTab = $derived(
+    browserAssistant.artifactThreadId === agentChat?.threadId &&
+      contextSidebarState.sidebarActiveTab?.kind === 'files' &&
+      contextSidebarState.sidebarActiveTab.projectId === GLOBAL_BROWSER_PROJECT_ID &&
+      contextSidebarState.sidebarActiveTab.threadId === agentChat?.threadId
+      ? contextSidebarState.sidebarActiveTab
+      : null
+  )
+
   /**
    * The active tab's assistant conversation as a rail tab.
    *
@@ -181,11 +213,13 @@
     downloadsTab,
     ...(noteTab ? [noteTab] : []),
     ...(agentTab ? [agentTab] : []),
+    ...(artifactTab ? (artifactFileTabs.length ? artifactFileTabs : [artifactTab]) : []),
     ...(notificationsTab ? [notificationsTab] : []),
     ...(stickyNotesTab ? [stickyNotesTab] : [])
   ] satisfies ContextSidebarTab[])
   const activeTabId = $derived(
-    notificationsTab?.id ??
+    (globalBrowser.agentSidebarShown && artifactTab ? activeFilesTab?.id : null) ??
+      notificationsTab?.id ??
       stickyNotesTab?.id ??
       (globalBrowser.agentSidebarShown
         ? (agentTab?.id ?? null)
@@ -216,6 +250,18 @@
    *  it, so a browser tab's agent chat closes the rail rather than dropping the
    *  conversation (closing the browser tab does). */
   function selectTool(tabId: string): void {
+    if (
+      artifactTab &&
+      (tabId === artifactTab.id || artifactFileTabs.some((tab) => tab.id === tabId))
+    ) {
+      if (tabId === artifactTab.id) {
+        contextSidebarState.activateThread(artifactTab.projectId, artifactTab.threadId)
+        contextSidebarState.openFiles(artifactTab.projectId, artifactTab.threadId)
+      } else contextSidebarState.focus(tabId)
+      globalBrowser.showAgentSidebar()
+      browserAssistant.showArtifacts(artifactTab.threadId)
+      return
+    }
     if (notificationsTab && tabId === notificationsTab.id) return
     if (stickyNotesTab && tabId === stickyNotesTab.id) {
       contextSidebarState.showStickyNotes()
@@ -251,6 +297,10 @@
   }
 
   function closeTab(tabId: string): void {
+    if (activeFilesTab && tabId === activeFilesTab.id) {
+      contextSidebarState.close(tabId)
+      return
+    }
     if (notificationsTab && tabId === notificationsTab.id) {
       contextSidebarState.toggleNotifications()
       return
@@ -440,18 +490,16 @@
       {/key}
     {/if}
   {:else if globalBrowser.agentSidebarShown}
-    {#if agentChat}
+    {#if artifactTab && activeFilesTab}
+      {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
+        <ProjectFilesPanel projectId={GLOBAL_BROWSER_PROJECT_ID} projectName="Artifacts" />
+      {/await}
+    {:else if agentChat}
       <!-- Keyed by thread id so switching browser tabs swaps the whole
            conversation, including the controller, which binds once at mount. -->
       {#key agentChat.threadId}
         {#await import('./BrowserAssistantChatView.svelte') then { default: BrowserAssistantChatView }}
-          <BrowserAssistantChatView
-            threadId={agentChat.threadId}
-            onShowFiles={() => {
-              contextSidebarState.openFiles(agentChat.thread.projectId, agentChat.thread.id)
-              globalBrowser.showAgentSidebar()
-            }}
-          />
+          <BrowserAssistantChatView threadId={agentChat.threadId} />
         {/await}
       {/key}
     {:else}
@@ -478,7 +526,13 @@
   {/if}
 {/snippet}
 
-<div class="min-h-0 min-w-0 shrink-0" style:width="{contextSidebarState.width}px">
+<div
+  {@attach () => {
+    if (agentChat) void browserAssistant.refreshArtifacts(agentChat.threadId)
+  }}
+  class="min-h-0 min-w-0 shrink-0"
+  style:width="{contextSidebarState.width}px"
+>
   <ContextSidebar
     {tabs}
     {activeTabId}
@@ -489,8 +543,8 @@
     onSelect={selectTool}
     onClose={closeTab}
     onTabContextMenu={(id, event) => void handleAgentTabContextMenu(id, event)}
-    renamingTabId={renamingTabId}
-    renameValue={renameValue}
+    {renamingTabId}
+    {renameValue}
     onRenameValueChange={(value) => (renameValue = value)}
     onRenameCommit={() => void commitRename()}
     onRenameCancel={cancelRename}

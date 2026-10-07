@@ -112,6 +112,7 @@ async function attachBrowserService(
       )
     )
     .catch(() => {})
+  service.setAgentActionApprover((request) => chatEngine.requestBrowserActionApproval(request))
   chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
     service.executeUtility(operation, input, browserContext)
   )
