@@ -245,75 +245,84 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     progress?: (event: ScopeWorktreeProgress) => void
   ): Promise<ManagedWorktreeDescriptor> {
     return this.enqueue(target.projectId, async () => {
-      const project = await this.projects.getProject(target.projectId)
-      if (!project || project.source !== 'local' || !project.path) {
-        throw new Error('Managed worktrees require a local project repository')
-      }
-      const repoPath = project.path
+      try {
+        const project = await this.projects.getProject(target.projectId)
+        if (!project || project.source !== 'local' || !project.path) {
+          throw new Error('Managed worktrees require a local project repository')
+        }
+        const repoPath = project.path
 
-      progress?.({ stage: 'discovering-repository' })
-      if (!isGitRepository(repoPath)) {
-        throw new Error(`${repoPath} is not a Git repository`)
-      }
-      if (await hasTrackedSubmodules(repoPath)) {
-        progress?.({ stage: 'failed', detail: 'submodules' })
-        throw new Error(
-          'Repositories with tracked submodules are not supported for managed worktrees in this release'
-        )
-      }
+        progress?.({ stage: 'discovering-repository' })
+        if (!isGitRepository(repoPath)) {
+          throw new Error(`${repoPath} is not a Git repository`)
+        }
+        if (await hasTrackedSubmodules(repoPath)) {
+          progress?.({ stage: 'failed', detail: 'submodules' })
+          throw new Error(
+            'Repositories with tracked submodules are not supported for managed worktrees in this release'
+          )
+        }
 
-      const baseRef = input.baseBranch?.trim() || undefined
-      const base =
-        baseRef === undefined
-          ? await currentBranchAndCommit(repoPath)
-          : await branchToCommit(repoPath, baseRef)
+        const baseRef = input.baseBranch?.trim() || undefined
+        const base =
+          baseRef === undefined
+            ? await currentBranchAndCommit(repoPath)
+            : await branchToCommit(repoPath, baseRef)
 
-      const {
-        directoryName,
-        branch: createdBranch,
-        path
-      } = await this.deriveNames(target.projectId, repoPath, input.title, progress)
+        const {
+          directoryName,
+          branch: createdBranch,
+          path
+        } = await this.deriveNames(target.projectId, repoPath, input.title, progress)
 
-      progress?.({ stage: 'creating-worktree', detail: createdBranch })
-      await ensureParentDir(path)
-      await runGit(['worktree', 'add', '-b', createdBranch, path, base.commit], {
-        cwd: repoPath,
-        timeoutMs: 120_000
-      }).catch(async (error) => {
-        await rm(path, { recursive: true, force: true }).catch(() => undefined)
+        progress?.({ stage: 'creating-worktree', detail: createdBranch })
+        await ensureParentDir(path)
+        await runGit(['worktree', 'add', '-b', createdBranch, path, base.commit], {
+          cwd: repoPath,
+          timeoutMs: 120_000
+        }).catch(async (error) => {
+          await rm(path, { recursive: true, force: true }).catch(() => undefined)
+          throw error
+        })
+
+        // Ensure the scope bucket exists before persisting the association.
+        const board = this.scopes.getBoard(target.projectId)
+        let bucketId = target.scopeBucketId
+        if (!board.buckets.some((candidate) => candidate.id === bucketId)) {
+          // A project-root scope was created eagerly; fall back to the default.
+          bucketId = bucketId === 'default' ? 'default' : bucketId
+        }
+
+        const descriptor: ManagedWorktreeDescriptor = {
+          kind: 'worktree',
+          directoryName,
+          branch: createdBranch,
+          baseBranch: base.branch,
+          baseCommit: base.commit,
+          createdAt: Date.now(),
+          environmentMode: input.environmentMode,
+          setup: { state: 'not_run', commands: [] }
+        }
+        progress?.({ stage: 'persisting-association' })
+        this.scopes.attachManagedRoot(target.projectId, bucketId, descriptor)
+
+        if (input.runSetup) {
+          const commands = input.setupCommands ?? this.setupCommands(target.projectId)
+          await this.runEnvironmentAndSetup(target.projectId, path, descriptor, commands, progress)
+        } else {
+          await this.propagateEnvironment(target.projectId, path, input.environmentMode, progress)
+        }
+
+        progress?.({ stage: 'done' })
+        return descriptor
+      } catch (error) {
+        // The setup step already reported `failed` with the executable name;
+        // every other throw still needs a terminal stage so an agent run's
+        // docked job (which has no renderer-owned runner) can settle instead
+        // of spinning forever. A duplicate `failed` is ignored by the dock.
+        progress?.({ stage: 'failed' })
         throw error
-      })
-
-      // Ensure the scope bucket exists before persisting the association.
-      const board = this.scopes.getBoard(target.projectId)
-      let bucketId = target.scopeBucketId
-      if (!board.buckets.some((candidate) => candidate.id === bucketId)) {
-        // A project-root scope was created eagerly; fall back to the default.
-        bucketId = bucketId === 'default' ? 'default' : bucketId
       }
-
-      const descriptor: ManagedWorktreeDescriptor = {
-        kind: 'worktree',
-        directoryName,
-        branch: createdBranch,
-        baseBranch: base.branch,
-        baseCommit: base.commit,
-        createdAt: Date.now(),
-        environmentMode: input.environmentMode,
-        setup: { state: 'not_run', commands: [] }
-      }
-      progress?.({ stage: 'persisting-association' })
-      this.scopes.attachManagedRoot(target.projectId, bucketId, descriptor)
-
-      if (input.runSetup) {
-        const commands = input.setupCommands ?? this.setupCommands(target.projectId)
-        await this.runEnvironmentAndSetup(target.projectId, path, descriptor, commands, progress)
-      } else {
-        await this.propagateEnvironment(target.projectId, path, input.environmentMode, progress)
-      }
-
-      progress?.({ stage: 'done' })
-      return descriptor
     })
   }
 
@@ -352,43 +361,51 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     progress?: (event: ScopeWorktreeProgress) => void
   ): Promise<ManagedWorktreeDescriptor> {
     return this.enqueue(target.projectId, async () => {
-      const descriptor = this.requireManaged(target)
-      const path = getScopeRootPath(target.projectId, descriptor.directoryName)
-      if (!options.runSetup) {
-        await this.propagateEnvironment(
+      try {
+        const descriptor = this.requireManaged(target)
+        const path = getScopeRootPath(target.projectId, descriptor.directoryName)
+        if (!options.runSetup) {
+          await this.propagateEnvironment(
+            target.projectId,
+            path,
+            descriptor.environmentMode,
+            progress
+          )
+          progress?.({ stage: 'done' })
+          return descriptor
+        }
+        const records = descriptor.setup.commands
+        const firstPending = records.findIndex((record) => record.state !== 'succeeded')
+        if (records.length > 0 && firstPending === -1) {
+          // Everything already succeeded; nothing left to retry.
+          await this.propagateEnvironment(
+            target.projectId,
+            path,
+            descriptor.environmentMode,
+            progress
+          )
+          progress?.({ stage: 'done' })
+          return descriptor
+        }
+        const startIndex = records.length === 0 ? 0 : Math.max(firstPending, 0)
+        const commands: ScopeSetupCommandSpec[] =
+          records.length > 0
+            ? records.map((record) => ({ executable: record.executable, args: record.args }))
+            : this.setupCommands(target.projectId)
+        await this.runEnvironmentAndSetup(
           target.projectId,
           path,
-          descriptor.environmentMode,
-          progress
+          descriptor,
+          commands,
+          progress,
+          records.length > 0 ? { startIndex } : undefined
         )
+        progress?.({ stage: 'done' })
         return descriptor
+      } catch (error) {
+        progress?.({ stage: 'failed' })
+        throw error
       }
-      const records = descriptor.setup.commands
-      const firstPending = records.findIndex((record) => record.state !== 'succeeded')
-      if (records.length > 0 && firstPending === -1) {
-        // Everything already succeeded; nothing left to retry.
-        await this.propagateEnvironment(
-          target.projectId,
-          path,
-          descriptor.environmentMode,
-          progress
-        )
-        return descriptor
-      }
-      const startIndex = records.length === 0 ? 0 : Math.max(firstPending, 0)
-      const commands: ScopeSetupCommandSpec[] =
-        records.length > 0
-          ? records.map((record) => ({ executable: record.executable, args: record.args }))
-          : this.setupCommands(target.projectId)
-      await this.runEnvironmentAndSetup(
-        target.projectId,
-        path,
-        descriptor,
-        commands,
-        progress,
-        records.length > 0 ? { startIndex } : undefined
-      )
-      return descriptor
     })
   }
 
@@ -538,79 +555,84 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     progress?: (event: ScopeWorktreeProgress) => void
   ): Promise<ManagedWorktreeDescriptor> {
     return this.enqueue(target.projectId, async () => {
-      progress?.({ stage: 'discovering-repository' })
-      const project = await this.requireLocalProject(target.projectId)
-      const board = this.scopes.getBoard(target.projectId)
-      const bucket = board.buckets.find((candidate) => candidate.id === target.scopeBucketId)
-      if (!bucket || bucket.root.kind === 'worktree') {
-        throw new Error('Choose a scope that does not already own a worktree')
-      }
-      const info = await this.detectAdoptable(target.projectId, input.sourcePath)
-      if (!info.adoptable || !info.branch || !info.path) {
-        throw new Error(info.reason ?? 'This checkout cannot be adopted')
-      }
-      for (const candidate of board.buckets) {
-        if (candidate.root.kind === 'worktree' && candidate.root.branch === info.branch) {
-          throw new Error(`Branch ${info.branch} is already managed by scope "${candidate.name}"`)
-        }
-      }
-
-      progress?.({ stage: 'naming' })
-      const directoryName = await this.deriveDirectoryNameForBranch(
-        target.projectId,
-        project.path,
-        info.branch
-      )
-      const destination = getScopeRootPath(target.projectId, directoryName)
-
-      progress?.({ stage: 'creating-worktree', detail: info.branch })
-      await ensureParentDir(destination)
       try {
-        await runGit(['worktree', 'move', info.path, destination], {
-          cwd: project.path,
-          timeoutMs: 120_000
-        })
+        progress?.({ stage: 'discovering-repository' })
+        const project = await this.requireLocalProject(target.projectId)
+        const board = this.scopes.getBoard(target.projectId)
+        const bucket = board.buckets.find((candidate) => candidate.id === target.scopeBucketId)
+        if (!bucket || bucket.root.kind === 'worktree') {
+          throw new Error('Choose a scope that does not already own a worktree')
+        }
+        const info = await this.detectAdoptable(target.projectId, input.sourcePath)
+        if (!info.adoptable || !info.branch || !info.path) {
+          throw new Error(info.reason ?? 'This checkout cannot be adopted')
+        }
+        for (const candidate of board.buckets) {
+          if (candidate.root.kind === 'worktree' && candidate.root.branch === info.branch) {
+            throw new Error(`Branch ${info.branch} is already managed by scope "${candidate.name}"`)
+          }
+        }
+
+        progress?.({ stage: 'naming' })
+        const directoryName = await this.deriveDirectoryNameForBranch(
+          target.projectId,
+          project.path,
+          info.branch
+        )
+        const destination = getScopeRootPath(target.projectId, directoryName)
+
+        progress?.({ stage: 'creating-worktree', detail: info.branch })
+        await ensureParentDir(destination)
+        try {
+          await runGit(['worktree', 'move', info.path, destination], {
+            cwd: project.path,
+            timeoutMs: 120_000
+          })
+        } catch (error) {
+          await rm(destination, { recursive: true, force: true }).catch(() => undefined)
+          throw error instanceof Error ? error : new Error(String(error))
+        }
+
+        const defaults = this.scopes.getBoard(target.projectId).worktreeDefaults
+        const metadata = await adoptionMetadata(project.path, info.branch).catch(() => ({
+          baseBranch: '',
+          baseCommit: ''
+        }))
+        const descriptor: ManagedWorktreeDescriptor = {
+          kind: 'worktree',
+          directoryName,
+          branch: info.branch,
+          ...metadata,
+          createdAt: Date.now(),
+          environmentMode: defaults.environmentMode,
+          setup: { state: 'not_run', commands: [] }
+        }
+        progress?.({ stage: 'persisting-association' })
+        this.scopes.attachManagedRoot(target.projectId, target.scopeBucketId, descriptor)
+
+        if (input.runSetup && defaults.setupCommands.length > 0) {
+          await this.runEnvironmentAndSetup(
+            target.projectId,
+            destination,
+            descriptor,
+            defaults.setupCommands.map((command) => ({ ...command })),
+            progress
+          )
+        } else {
+          await this.propagateEnvironment(
+            target.projectId,
+            destination,
+            descriptor.environmentMode,
+            progress
+          )
+        }
+
+        progress?.({ stage: 'done' })
+        return descriptor
       } catch (error) {
-        await rm(destination, { recursive: true, force: true }).catch(() => undefined)
-        throw error instanceof Error ? error : new Error(String(error))
+        progress?.({ stage: 'failed' })
+        throw error
       }
-
-      const defaults = this.scopes.getBoard(target.projectId).worktreeDefaults
-      const metadata = await adoptionMetadata(project.path, info.branch).catch(() => ({
-        baseBranch: '',
-        baseCommit: ''
-      }))
-      const descriptor: ManagedWorktreeDescriptor = {
-        kind: 'worktree',
-        directoryName,
-        branch: info.branch,
-        ...metadata,
-        createdAt: Date.now(),
-        environmentMode: defaults.environmentMode,
-        setup: { state: 'not_run', commands: [] }
-      }
-      progress?.({ stage: 'persisting-association' })
-      this.scopes.attachManagedRoot(target.projectId, target.scopeBucketId, descriptor)
-
-      if (input.runSetup && defaults.setupCommands.length > 0) {
-        await this.runEnvironmentAndSetup(
-          target.projectId,
-          destination,
-          descriptor,
-          defaults.setupCommands.map((command) => ({ ...command })),
-          progress
-        )
-      } else {
-        await this.propagateEnvironment(
-          target.projectId,
-          destination,
-          descriptor.environmentMode,
-          progress
-        )
-      }
-
-      progress?.({ stage: 'done' })
-      return descriptor
     })
   }
 
