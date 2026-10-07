@@ -1387,8 +1387,8 @@
     if (keymapState.matches('nav-toggle-left-sidebar', e)) {
       // The browser view's left sidebar is the app's own sidebar (its chrome and
       // tab strip), so the chord folds it the same way it folds the workspace
-      // one. (While the browser owns the keyboard this chord belongs to Save
-      // page, which is why the browser entry in the header also toggles it.)
+      // one. Page save is unbound by default, so the chord reaches this handler
+      // instead of the browser.
       if (activeView === 'browser') {
         e.preventDefault()
         if (e.repeat) return
