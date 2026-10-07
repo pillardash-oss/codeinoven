@@ -572,7 +572,7 @@
       if (pickerRoot === node) pickerRoot = undefined
     }
   }}
-  class="flex min-h-0 items-stretch"
+  class="flex min-h-0 flex-1 items-stretch"
 >
   <ModelPickerRail
     view={effectiveView}
@@ -583,10 +583,10 @@
     onSelect={selectRailView}
   />
 
-  <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     {#if isProfilesView}
       {#if profiles}
-        <div class="flex max-h-60 min-h-52 flex-col overflow-hidden">
+        <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ModelPickerProfiles {...profiles} />
         </div>
       {/if}
@@ -677,7 +677,7 @@
             if (modelList === node) modelList = undefined
           }
         }}
-        class="max-h-60 overflow-y-auto p-1"
+        class="min-h-0 flex-1 overflow-y-auto p-1"
         role="group"
         aria-label="Model entries"
       >
@@ -729,7 +729,7 @@
         {/if}
       </div>
       {#if multiSelect}
-        <div class="flex items-center justify-between gap-2 border-t px-2.5 py-1.5">
+        <div class="flex shrink-0 items-center justify-between gap-2 border-t px-2.5 py-1.5">
           <span class="text-[0.625rem] text-dimmed">
             {selectedModelKeys.length} selected · choose one or more
           </span>

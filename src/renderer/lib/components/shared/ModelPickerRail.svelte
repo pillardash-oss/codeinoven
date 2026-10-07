@@ -28,7 +28,7 @@
   }
 
   function buttonClass(active: boolean, disabled = false): string {
-    return `relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-150 ${
+    return `relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg outline-none transition-colors duration-150 focus-visible:outline-none ${
       active ? 'text-foreground' : 'text-muted hover:bg-elevated hover:text-foreground'
     } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`
   }
@@ -41,7 +41,7 @@
   (shared elevated surface + brightened glyph + `aria-current`).
 -->
 <nav
-  class="relative flex w-10 shrink-0 flex-col items-center gap-0.5 self-stretch border-r border-border py-2"
+  class="relative flex min-h-0 w-10 shrink-0 flex-col items-center gap-0.5 self-stretch border-r border-border py-2"
   aria-label="Model picker sections"
 >
   <RailHighlight revision={revisionKey()} currentValue="true" accentSide="right" />
